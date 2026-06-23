@@ -1,0 +1,29 @@
+{
+  "name": "ask_question",
+  "description": "Ask any question about a GitHub repository and get an AI-powered, context-grounded response.\n\nArgs:\n    repoName: GitHub repository or list of repositories (max 10) in owner/repo format\n    question: The question to ask about the repository",
+  "inputSchema": {
+    "properties": {
+      "repoName": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        ]
+      },
+      "question": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "repoName",
+      "question"
+    ],
+    "type": "object"
+  }
+}

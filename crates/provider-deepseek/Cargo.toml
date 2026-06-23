@@ -1,0 +1,19 @@
+[package]
+name = "liberado-provider-deepseek"
+version = "0.1.0"
+description = "A thin DeepSeek (OpenAI-compatible) implementation of the Liberado `Provider` trait: chat completions with tool-calling and JSON mode, over reqwest."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+liberado-provider = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

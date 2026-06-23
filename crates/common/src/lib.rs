@@ -1,0 +1,42 @@
+//! # liberado-common
+//!
+//! The shared vocabulary of the Liberado system. Every other crate (daemon, dispatcher,
+//! MCPs, ACPs, TUI) compiles against these types, so this crate is deliberately
+//! dependency-light and free of any I/O or runtime concerns — it is *types and pure
+//! functions* only.
+//!
+//! Modules map onto the resolved architecture decisions:
+//!
+//! - [`capability`] — Zones, capabilities, and the narrow-only `CapabilitySet` (Decision 4,
+//!   `liberado-permissions-idea.md`). The containment foundation.
+//! - [`provenance`] — [`provenance::WriteProvenance`], attached to Turbovault audit entries
+//!   so reactive consumers can attribute writes and break loops (Decision 5).
+//! - [`event`] — the standardized [`event::Event`] payload that flows from every trigger
+//!   source (vault subscription, timers, homelab hooks) into ACPs (`life-os-architecture.md`
+//!   §5).
+//! - [`dispatch`] — [`dispatch::DispatchDecision`] / [`dispatch::Report`] and the execution
+//!   model the dispatcher emits (Decision 1, `liberado-dispatch-logic-spec.md`).
+//! - [`proposal`] — the [`proposal::Proposal`] human-in-the-loop artifact (Decision 11).
+//! - [`model`] — [`model::ModelProfile`] + role capability floors (Decision 13).
+//! - [`config`] — the typed config model and its specced `Default`s (Decision 14).
+//! - [`error`] — the crate's error type.
+
+pub mod capability;
+pub mod config;
+pub mod dispatch;
+pub mod error;
+pub mod event;
+pub mod model;
+pub mod proposal;
+pub mod provenance;
+
+pub use capability::{Capability, CapabilitySet, WriteClass, Zone};
+pub use dispatch::{
+    BlockReason, DispatchAction, DispatchDecision, ExecMode, JobHandle, JobStatus, Outcome, Report,
+    ToolCall, mcp_of,
+};
+pub use error::{Error, Result};
+pub use event::{Event, EventPayload, event_source};
+pub use model::{ModelChoice, ModelProfile, ModelRole, ModelTier, RequiredCaps};
+pub use proposal::{Proposal, ProposalStatus, ProposedAction};
+pub use provenance::{HUMAN_SOURCE, PROVENANCE_KEY, WriteProvenance};

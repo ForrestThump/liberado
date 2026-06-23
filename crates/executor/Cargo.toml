@@ -1,0 +1,20 @@
+[package]
+name = "liberado-executor"
+version = "0.1.0"
+description = "The Liberado agent execution engine: a bounded, adaptive tool loop that drives a Provider through real tool calls until it files a typed Report (delegated work) or answers in prose (conversational)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+liberado-common = { workspace = true }
+liberado-provider = { workspace = true }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

@@ -1,0 +1,15 @@
+{
+  "name": "read_wiki_contents",
+  "description": "View documentation about a GitHub repository.\n\nArgs:\n    repoName: GitHub repository in owner/repo format (e.g. \"facebook/react\")",
+  "inputSchema": {
+    "properties": {
+      "repoName": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "repoName"
+    ],
+    "type": "object"
+  }
+}

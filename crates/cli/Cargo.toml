@@ -1,0 +1,25 @@
+[package]
+name = "liberado-cli"
+version = "0.1.0"
+description = "The `liberado` binary: wires the concrete provider (DeepSeek) into the daemon + dispatcher and runs the watch loop. Keeps the daemon library free of an HTTP stack."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "liberado"
+path = "src/main.rs"
+
+[dependencies]
+liberado-common = { workspace = true }
+liberado-dispatcher = { workspace = true }
+liberado-orchestrator = { workspace = true }
+liberado-mcp = { workspace = true }
+liberado-daemon = { workspace = true }
+liberado-provider = { workspace = true }
+liberado-provider-deepseek = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

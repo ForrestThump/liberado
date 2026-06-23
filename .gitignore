@@ -1,0 +1,18 @@
+# Rust
+/target
+**/target
+Cargo.lock.bak
+
+# Machine-local daemon state (Decision 12 trace sink, idempotency markers)
+.liberado/
+
+# Editor / OS
+.DS_Store
+*.swp
+Thumbs.db
+desktop.ini
+
+# Sub-repos (standalone git repos nested inside this repo)
+/liberado-tool-helper-mcp/
+/turbomcp/
+/turbovault/

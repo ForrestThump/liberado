@@ -1,0 +1,27 @@
+[package]
+name = "liberado-mcp"
+version = "0.1.0"
+description = "The production `ToolRuntime` for Liberado: a turbomcp-client-backed adapter that exposes an MCP server's tools to the executor and injects write provenance into each call's `_meta` so tool-mediated vault writes are self-attributed (loop-broken)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+liberado-common = { workspace = true }
+liberado-provider = { workspace = true }
+liberado-executor = { workspace = true }
+liberado-orchestrator = { workspace = true }
+turbomcp-client = { workspace = true, features = ["http"] }
+turbomcp-transport = { workspace = true }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+turbomcp-server = { workspace = true, features = ["channel"] }
+turbomcp-core = { workspace = true, features = ["std"] }
+turbomcp-types = { workspace = true }

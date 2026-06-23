@@ -1,0 +1,20 @@
+[package]
+name = "liberado-provider"
+version = "0.1.0"
+description = "The provider-agnostic inference interface for Liberado: a narrow async `Provider` trait (tool-calling + structured output) plus a scriptable mock for deterministic tests."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

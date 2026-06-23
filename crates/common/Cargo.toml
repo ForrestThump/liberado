@@ -1,0 +1,20 @@
+[package]
+name = "liberado-common"
+version = "0.1.0"
+description = "Shared types for the Liberado system: capabilities/zones, write provenance, events, dispatch decisions, proposals, model profiles, and the config model."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }

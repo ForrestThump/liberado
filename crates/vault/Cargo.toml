@@ -1,0 +1,26 @@
+[package]
+name = "liberado-vault"
+version = "0.1.0"
+description = "Liberado's thin adapter over Turbovault: provenance-tagged writes (Decision 5) and consumer-side hash-join attribution for loop-breaking. The single place the upstream-dependency fallbacks (concurrency spec §8.1) are isolated."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+liberado-common = { workspace = true }
+turbovault-core = { workspace = true }
+turbovault-vault = { workspace = true }
+turbovault-audit = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
+# End-to-end capstone: drive a real turbovault MCP server write and attribute it back.
+turbovault = { workspace = true }
+turbomcp = { workspace = true }

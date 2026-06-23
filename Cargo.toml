@@ -1,0 +1,73 @@
+# Liberado — Rust-native personal AI Life OS.
+#
+# One Cargo workspace for the Liberado system (Decision 7). External dependencies
+# (turbovault, turbomcp) are NOT members — they are consumed as path dependencies
+# during co-development (checked out as siblings) and pinned to crates.io for release
+# builds. They live in their own workspaces, so they are excluded here.
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+exclude = [
+    "turbovault",
+    "turbomcp",
+    "liberado-tool-helper-mcp", # folded in as the `liberado-memory-mcp` crate later (Decision 7)
+    "mcps",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+authors = ["Shiloh Mangus"]
+repository = "https://github.com/shilohmangus/liberado"
+
+[workspace.dependencies]
+# --- shared third-party ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+tempfile = "3"
+reqwest = { version = "0.12", features = ["json"] }
+
+# --- internal crates ---
+liberado-common = { path = "crates/common" }
+liberado-provider = { path = "crates/provider" }
+liberado-provider-deepseek = { path = "crates/provider-deepseek" }
+liberado-vault = { path = "crates/vault" }
+liberado-dispatcher = { path = "crates/dispatcher" }
+liberado-executor = { path = "crates/executor" }
+liberado-mcp = { path = "crates/mcp" }
+liberado-orchestrator = { path = "crates/orchestrator" }
+liberado-daemon = { path = "crates/daemon" }
+liberado-cli = { path = "crates/cli" }
+
+# --- co-developed path dependencies (Decision 7) ---
+# Pinned to whatever is checked out in the sibling directories (currently the
+# `develop` staging branch). Swap to crates.io versions for release builds.
+turbovault-core = { path = "turbovault/crates/turbovault-core" }
+turbovault-vault = { path = "turbovault/crates/turbovault-vault" }
+turbovault-audit = { path = "turbovault/crates/turbovault-audit" }
+turbovault-tools = { path = "turbovault/crates/turbovault-tools" }
+turbovault-batch = { path = "turbovault/crates/turbovault-batch" }
+turbovault = { path = "turbovault/crates/turbovault" } # umbrella (ObsidianMcpServer) — test-only
+turbomcp = { path = "turbomcp/crates/turbomcp" }
+turbomcp-client = { path = "turbomcp/crates/turbomcp-client" }
+turbomcp-transport = { path = "turbomcp/crates/turbomcp-transport" } # ChildProcessTransport (stdio connector)
+turbomcp-server = { path = "turbomcp/crates/turbomcp-server" } # test-only (in-process channel server)
+turbomcp-core = { path = "turbomcp/crates/turbomcp-core" }     # test-only (McpHandler)
+turbomcp-types = { path = "turbomcp/crates/turbomcp-types" }   # test-only (handler types)
+
+# Co-development: our path-dep turbovault still declares `turbomcp = "3.1.5"` from crates.io.
+# Redirect that to the local turbomcp fork so the whole tree builds against one turbomcp (the one
+# carrying the request `_meta` pass-through). Remove once turbomcp publishes the change.
+[patch.crates-io]
+turbomcp = { path = "turbomcp/crates/turbomcp" }
+
+[profile.release]
+lto = true
+codegen-units = 1

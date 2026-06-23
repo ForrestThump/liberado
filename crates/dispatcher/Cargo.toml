@@ -1,0 +1,19 @@
+[package]
+name = "liberado-dispatcher"
+version = "0.1.0"
+description = "The Liberado dispatcher (Decision 1): the out-of-band router that classifies a goal into a DispatchDecision, then applies the deterministic downgrade-only guard pipeline (Decision 6) that engineers safety regardless of classifier error."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+liberado-common = { workspace = true }
+liberado-provider = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

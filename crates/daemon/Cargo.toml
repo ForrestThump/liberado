@@ -1,0 +1,25 @@
+[package]
+name = "liberado-daemon"
+version = "0.1.0"
+description = "The Liberado daemon (Decision 2, daemon-first): the long-running core that watches the vault, attributes changes (loop-breaking), and emits reactable events. v1 vertical slice."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+liberado-common = { workspace = true }
+liberado-vault = { workspace = true }
+liberado-dispatcher = { workspace = true }
+liberado-orchestrator = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+liberado-provider = { workspace = true }
+liberado-executor = { workspace = true }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
