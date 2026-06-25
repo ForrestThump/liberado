@@ -270,6 +270,10 @@ Unchanged core strength:
 ## Implementation Guidelines
 
 **Crate / Binary Layout (Cargo workspace recommended)**:
+
+> **Note**: this is the original planned layout (v0.3). The actual crate map is in `AGENTS.md`
+> (Workspace layout section) and `ARCHITECTURE.md` (Crate map table).
+
 ```
 liberado/
 ├── Cargo.toml (workspace)
@@ -346,6 +350,10 @@ This v1 already delivers token-efficient reasoning, real background autonomy for
 ---
 
 ## Next Steps (Implementation Roadmap)
+
+> **For current implementation status, see `ARCHITECTURE.md` § "Current status".** Several
+> steps below are realized: the workspace exists (step 1), the reactive pipeline with
+> dispatcher+orchestrator+executor is end-to-end wired (steps 3, 6, 7), and tests are in place (step 9).
 
 1. **Set up workspace** — Create Cargo workspace with `common`, `acp-common`, `main-agent`, `liberado-dispatcher` crates.
 2. **Implement ContextPolicy** — Define the struct and loading logic (always high-signal + on-demand Turbovault).

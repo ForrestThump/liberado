@@ -1,0 +1,20 @@
+[package]
+name = "liberado-eval"
+version = "0.1.0"
+description = "The heuristic-tuning instrument (testing-and-eval-spec §4.2): runs the real dispatcher over a labeled set of routing scenarios and reports routing accuracy, safe-default rate, and the safety-regression gate — used to A/B the system prompt and tune the guards."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "liberado-eval"
+path = "src/main.rs"
+
+[dependencies]
+liberado-common = { workspace = true }
+liberado-dispatcher = { workspace = true }
+liberado-provider = { workspace = true }
+liberado-provider-deepseek = { workspace = true }
+tokio = { workspace = true }

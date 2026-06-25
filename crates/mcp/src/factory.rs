@@ -26,13 +26,23 @@ impl McpRegistry {
     }
 
     /// Register a server under `name` (the namespace its tools are exposed under). Chainable.
-    pub fn register(mut self, name: impl Into<String>, connector: impl McpConnector + 'static) -> Self {
+    pub fn register(
+        mut self,
+        name: impl Into<String>,
+        connector: impl McpConnector + 'static,
+    ) -> Self {
         self.connectors.insert(name.into(), Box::new(connector));
         self
     }
 
     pub fn is_empty(&self) -> bool {
         self.connectors.is_empty()
+    }
+
+    /// The names of the registered MCP connectors (the routable surface). Lets a caller assert the
+    /// config→registry mapping without spawning a server.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.connectors.keys().map(String::as_str)
     }
 
     pub fn len(&self) -> usize {

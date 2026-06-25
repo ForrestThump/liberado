@@ -37,7 +37,7 @@ traced to *that* goal. Both ride the loop-breaking + idempotency machinery.
 
 - Depends on: `liberado-common` (decision/report types), `liberado-provider` (`Arc<dyn Provider>`),
   `liberado-executor` (`Executor`/`Task`/`ToolRuntime`).
-- Depended on by: the daemon wiring (forthcoming).
+- Depended on by: `daemon`, `cli`.
 
 ## Tests
 

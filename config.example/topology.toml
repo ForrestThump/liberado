@@ -1,0 +1,41 @@
+# topology.toml — TEMPLATE. Copy to your config dir (LIBERADO_CONFIG_DIR, or the platform
+# config dir's `liberado/` subfolder) and edit. All three config files are OPTIONAL; an absent
+# file leaves that section at its built-in defaults.
+#
+# Topology is the deployment wiring: where the vault is, which provider/models are in play, and
+# which MCP/ACP components are enabled. Defaults live in code — set only what differs here.
+
+# The Obsidian vault, the source of truth. REQUIRED (validation fails without it). The CLI's
+# `serve <vault-path>` argument overrides this when given.
+vault_path = "/home/shiloh/vault"
+
+# Unix domain socket the daemon listens on for client attach (optional; has a default).
+# daemon_socket = "/run/liberado/daemon.sock"
+
+# Inference provider (provider-agnostic scaffolding). Defaults to "deepseek".
+# provider = "deepseek"
+
+# Enabled MCP servers. Each `name` here is what a policy grant's `ExecuteMcp` must reference, and
+# it is ALSO the name the runtime connects to — `topology.mcps` is the single source for both the
+# dispatcher catalog and the actual MCP connection. `description` (what the dispatcher routes over),
+# `consequence` (our risk rating — the consequence guard gates direct action on it), and `transport`
+# (how the runtime reaches the server) are all REQUIRED: declaring an MCP means rating and wiring it.
+# `consequence` is one of: read_only, reversible, irreversible, external.
+# `transport` is either:
+#   { kind = "stdio", command = "...", args = [...] }   # spawn a child process, speak MCP over stdio
+#   { kind = "http",  url = "https://..." }              # connect to a remote MCP endpoint
+[[mcps]]
+name = "tasks-mcp"
+description = "create, complete, and query tasks"
+consequence = "reversible"        # git-tracked vault writes are undoable
+transport = { kind = "stdio", command = "npx", args = ["-y", "@liberado/tasks-mcp"] }
+# enabled = true
+
+# An external-effect MCP (leaves the system / can't be taken back) is rated `external`, the
+# highest risk — the consequence guard will gate direct action toward it. A remote server is reached
+# over http instead of a spawned process:
+# [[mcps]]
+# name = "email-mcp"
+# description = "send email on the user's behalf"
+# consequence = "external"
+# transport = { kind = "http", url = "https://mcp.example.com/mcp" }

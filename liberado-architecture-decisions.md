@@ -2,7 +2,7 @@
 
 **Purpose**: Consolidated, prioritized list of key architectural and design decisions. Grouped by importance so we can resolve them in sequence before writing code that would be expensive to change.  
 **Status**: Living document. Each decision includes current state, open questions, and a recommended path based on our principles (loose coupling, security-first containment, token efficiency via context partitioning, low overhead, maintainability alongside real life, provider-agnostic scaffolding).  
-**Last Updated**: June 21, 2026
+**Last Updated**: June 24, 2026
 
 ---
 
@@ -354,6 +354,8 @@ Decision 11: A **Proposal** is a structured vault artifact — the typed output 
 - **Approval lifecycle (closes through the same machinery)**: agent writes proposal → ContextPolicy Job B surfaces it → user approves via the **TUI command *or* by editing `status: approved`** (so approval also works directly from Obsidian) → the approval is a human-sourced vault write that the daemon's subscription picks up → the daemon executes the `proposed_action` (now authorized) with the **proposal's `correlation_id`**, marks the proposal `done`, and links the resulting artifact. The execution write is agent-sourced and de-looped normally (concurrency spec §6). Expired/rejected proposals are never executed.
 - **v1 conservative posture**: most ACP reactions emit proposals or plain structured notes; only explicitly low-risk, `shared`/`agent_writable` actions execute directly.
 
+**Status update (emit AND approve→execute landed, June 24, 2026)**: the full propose→approve→execute loop is closed. The EMIT path is wired — high-consequence *concrete* actions (an `ExecuteDirect` with a non-empty seed call list whose MCP is `External`/`Irreversible`) downgrade through `DispatchAction::Propose` → `Disposition::Propose(Proposal)` → a `proposals/<id>.md` artifact. The daemon writes it with **agent provenance**, so attribution suppresses the write (no self-reaction). On the APPROVE→EXECUTE side, a human's `status: approved` edit is picked up by the daemon's watch loop: `react()` checks for the `proposals/` path prefix before dispatching, routes to `handle_proposal_change`, which parses the frontmatter, validates it is Approved + non-expired + non-terminal, then calls `orchestrator.execute_approved()` with the proposal's `correlation_id` as provenance. Execution runs the approved `ToolCalls` directly against a runtime scoped to their MCPs (no classifier, no guards — the human edit is the authorization). On success the daemon flips `status` to `done` with agent provenance (loop-broken). Idempotency: terminal proposals (Done/Rejected/Expired) and non-actionable proposals (Pending) are left alone; infra errors from execution propagate (not marked done, retriable on the next watch cycle). Fuzzier high-consequence cases (empty-seed `ExecuteDirect`, `DispatchSubagent`, the magnitude-gate goal signal) still downgrade to `Clarify` for now.
+
 ### 12. Runtime Audit / Tracing Substrate
 **Why it matters**: "Fully auditable" currently only covers code + git state. Runtime behavior (dispatch decisions, tool calls, ACP reactions) is invisible.
 
@@ -421,6 +423,68 @@ Create a mocked-provider / recorded-fixture harness early so liberado's classifi
 
 Decision 16: **Integration tests injected at the two ingress points** — a simulated **user prompt** or a simulated **vault event** — run through the live pipeline with externals mocked (mock provider behind the provider trait, mock MCP servers, a real temp vault, injected clock + correlation-ID source), asserting on observable outcomes (vault writes, proposals, the `Report`, which tool calls fired or were suppressed). The key enabler: safety lives in **deterministic guards that run *after* the model**, so most of the system is exactly assertable and only classification *quality* (never safety) is probabilistic. Two verification methods inside scenarios: **mock-provider replay** (deterministic CI regression) and a **real-model eval suite** reporting routing accuracy + safe-default rate + a **safety-regression metric that must never increase**. **Logging is the fixture pipeline**: the Decision 12 trace → `record` mode → golden scenario → permanent regression test.
 
+### 17. Conversation History Store
+**Why it matters**: The chat agent (`main-agent`) holds conversation history in memory only — it is
+lost on restart and exists as a single session. How we persist it is load-bearing *not* for v1 chat
+but for everything the vision wants next: conversation **branching**, **parallel subagent dispatch**,
+**fan-out conversations**, **debate** systems, and user **interruption**. Pick the wrong storage
+*shape* now (a flat list, random ids, a mandatory DB daemon) and those become rewrites; pick the
+right *seams* and they become additive.
+
+**Open questions**:
+- Does conversation history live in the vault (Pillar 1) or outside it?
+- Linear list or a branchable structure on disk?
+- What engine — JSON/JSONL, SQLite, Postgres, DuckDB — and does "future-proof for concurrent users"
+  force a networked DB?
+- How is it searched (grep vs FTS vs vectors)?
+
+**Status**: Complete (full design in `liberado-conversation-store-spec.md`).
+
+Decision 17: **An append-only log of message *nodes*, JSONL outside the vault, behind a
+`ConversationStore` trait.** Key points:
+- **Operational data, not vault knowledge.** Conversation history is the **same category as the
+  Decision 12 runtime trace** — append-only JSONL *outside* the vault Markdown, for the identical
+  reason: high-volume chat writes would pollute the change-stream the daemon reacts to. Pillar 1
+  ("vault is source of truth") is about *knowledge*; it is not a claim that chat logs are notes. The
+  vault bridge is a **one-way derived Markdown export** (a view, git-tracked, human/vector-friendly),
+  never the system of record and never on the live write path.
+- **One log, everything else is a rebuildable projection** — the line-offset index, the leaf-path
+  slice the executor consumes, the Markdown export, the vector index, the recency/list index are all
+  *derived from* the log. So parallel storage is neither a consistency liability nor a real cost.
+- **Messages are a DAG (`id` + `parent_id`), not a `Vec`.** Linear chat is the degenerate case. This
+  is the seam that makes branching / loop-back / debate additive. The executor still sees a flat
+  leaf-path slice, so it never changes. Conversation headers carry **lineage**
+  (`parent_conversation`, `spawned_by`) for subagent trees; nodes carry an **`author`** identity (not
+  just user/assistant/tool) for multi-agent/debate.
+- **Node ids are time-sortable (ULID/UUIDv7), assigned at append time.** *This is the one choice that
+  can't be retrofitted.* It makes the log intrinsically id-sorted, so random node lookup is
+  O(log n) binary-search over a line-offset array (parents always earlier → seek backward only), with
+  no persisted secondary index. Random UUIDv4 would force a real maintained index. The control plane
+  genuinely needs this lookup: a branch can outgrow the context window while orchestration must still
+  resolve an arbitrary earlier fork node.
+- **Daemonless by default, on purpose.** The v1 impl is JSONL; **SQLite (WAL)** is a drop-in
+  graduation (one process, real index/FTS, still daemonless); **Postgres + pgvector** is a swap-in
+  *only if* we ever go multi-process/multi-tenant (it also folds in vectors); **DuckDB** is an
+  analytics sidecar over the JSONL, not a store. A background-daemon DB is *anti-modular* — it would
+  drag a running server into every composition of the crate set, against the "glue into LibreChat or
+  an autonomous agent" substrate goal. The trait lets the rare multi-process deployer opt into
+  Postgres without touching the agent loop.
+- **Concurrency = per-conversation single-writer actor.** Participants (user, subagents, debaters)
+  *send* to the conversation; the actor serializes appends (safe regardless of line size) and
+  persists a node **only when complete** (so a cancelled streaming turn is a clean no-op on disk —
+  the `turn_stream` rollback stays purely in-memory). Interruption is a control message — the
+  generalization of the stream-cancel primitive already built. Different conversations are
+  independent logs (no contention), which is the *only* "concurrency" the foreseen features actually
+  need — none of them require multiple OS processes.
+- **Search**: at API-request scale, ripgrep over JSONL is functionally equivalent to a DB index, so
+  search performance gets zero weight; the long-conversation case is a *retrieval* problem (vector +
+  recency projections), not a faster-traversal problem.
+
+**Decided now**: JSONL-outside-vault; append-only log of DAG nodes; **sortable ids assigned at
+append**; the `ConversationStore` trait; single-writer-per-conversation. **Deferred (additive, no
+schema change)**: the persisted index, the Markdown/vector/recency projections, SQLite/Postgres/
+DuckDB impls, and the branching/debate/parallel UX.
+
 ---
 
 ## Tier 4: Lower-Regret / Polish Decisions
@@ -434,7 +498,7 @@ Decision 16: **Integration tests injected at the two ingress points** — a simu
 
 ## Next Actions
 
-**All decisions resolved — Tier 1 (1–5), Tier 2 (6–12), Tier 3 (13–16), and the Tier 4 naming item.**
+**All decisions resolved — Tier 1 (1–5), Tier 2 (6–12), Tier 3 (13–16), Decision 17, and the Tier 4 naming item.**
 
 Companion specs:
 - `liberado-permissions-idea.md` — Decision 4 (capability/zone model)
@@ -445,11 +509,12 @@ Companion specs:
 - `liberado-vault-maintenance-and-git-spec.md` — git backstop + maintenance tasks
 - `liberado-config-spec.md` — Decision 14 (config topology)
 - `liberado-testing-and-eval-spec.md` — Decision 16 (integration-test harness)
+- `liberado-conversation-store-spec.md` — Decision 17 (conversation history store)
 
 Remaining Tier 4 (lower-regret, can settle during implementation): exact initial model/provider + SDK choice; v1 scope boundaries; doc location for system prompts.
 
-Next concrete steps:
-1. **Core shared types file** (`crates/common`): `Zone`, `Capability`/`CapabilitySet`, `WriteProvenance`, the standardized `Event`, `DispatchDecision`/`Report`, `Proposal`, `ModelProfile`, guard signatures, config model + tunable `Default`s. High-leverage first artifact to compile against — every spec's types converge here.
-2. **Sequence a v1 vertical slice**: daemon + dispatcher + one MCP + one ACP end-to-end.
+These two steps are realized (June 24, 2026):
+1. **Core shared types** — `crates/common` holds the full type vocabulary (provenance, capability, dispatch, event, model, config, proposal).
+2. **V1 vertical slice** — The daemon→dispatcher→orchestrator→executor pipeline is end-to-end wired, tested, and the proposal approve→execute loop is closed.
 
 This log is updated after each decision is resolved.

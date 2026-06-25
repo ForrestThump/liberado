@@ -97,3 +97,42 @@ async fn move_attributes_at_new_path_and_clears_old() {
         Attribution::Missing
     );
 }
+
+#[tokio::test]
+async fn root_returns_vault_root() {
+    let (vault, dir) = temp_vault().await;
+    assert!(vault.root().exists());
+    assert!(vault.root().is_dir());
+    // Canonicalize both to handle symlinks/temp dir aliasing.
+    let expected = dir.path().canonicalize().unwrap();
+    let got = vault.root().canonicalize().unwrap();
+    assert_eq!(got, expected);
+}
+
+#[tokio::test]
+async fn to_relative_resolves_inside_vault() {
+    let (vault, dir) = temp_vault().await;
+    let file_path = dir.path().join("sub/note.md");
+    tokio::fs::create_dir_all(file_path.parent().unwrap())
+        .await
+        .unwrap();
+    tokio::fs::write(&file_path, "content").await.unwrap();
+    let rel = vault.to_relative(&file_path).expect("should resolve");
+    assert_eq!(rel, std::path::PathBuf::from("sub/note.md"));
+}
+
+#[tokio::test]
+async fn to_relative_outside_vault_returns_none() {
+    let (vault, dir) = temp_vault().await;
+    let outside = dir.path().parent().unwrap().join("outside.md");
+    tokio::fs::write(&outside, "outside").await.unwrap();
+    assert!(vault.to_relative(&outside).is_none());
+}
+
+#[tokio::test]
+async fn to_relative_nonexistent_path_returns_none() {
+    let (vault, dir) = temp_vault().await;
+    // A path that doesn't exist can't be canonicalized → None.
+    let nowhere = dir.path().parent().unwrap().join("does-not-exist.md");
+    assert!(vault.to_relative(&nowhere).is_none());
+}

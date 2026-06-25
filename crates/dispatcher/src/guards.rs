@@ -12,9 +12,16 @@
 //! where they would slot in.
 
 use liberado_common::config::DispatchTuning;
-use liberado_common::{BlockReason, DispatchAction, DispatchDecision, mcp_of};
+use liberado_common::{
+    BlockReason, Consequence, DispatchAction, DispatchDecision, is_sweeping_destructive, mcp_of,
+};
 
 use crate::DispatchRequest;
+
+/// At or above this consequence, a direct action is gated to a `Clarify` for confirmation. Set to
+/// `Irreversible` so anything that can't be undone — and everything `External` — needs a human, while
+/// `Reversible` (git-tracked) writes and `ReadOnly` lookups flow.
+const CONSEQUENCE_GATE: Consequence = Consequence::Irreversible;
 
 /// Evaluate the guards against a classified decision. Returns the [`BlockReason`] of the first
 /// (highest-priority) violation, or `None` if the decision passes unchanged. The caller downgrades
@@ -41,8 +48,22 @@ pub(crate) fn evaluate(
         }
     }
 
-    // §6 #2 (zone write-class) and #3 (consequence gate) would slot in here, downgrading writes to
-    // `proposal_only`/`human_only` zones and high-consequence actions to a proposal. Deferred.
+    // (2) Consequence gate (§6 #3) — a permitted action that would touch something irreversible or
+    // external (an email/message, an unversioned delete) needs human confirmation, even at high
+    // confidence. A git-tracked vault write is `Reversible` and passes; `External`/`Irreversible`
+    // does not. (Zone write-class §6 #2 — proposal forcing — is still deferred.)
+    if max_consequence(&decision.action, req) >= CONSEQUENCE_GATE {
+        return Some(BlockReason::HighConsequence);
+    }
+
+    // (3) Magnitude gate — a *sweeping destructive* action is high-stakes by reach even when each
+    // change is reversible ("delete all my notes" in a git-tracked vault). Read from the goal: it's
+    // the tool-independent signal available pre-execution, and (unlike a specific tool name) it
+    // survives the model routing the work to a subagent. Liberado owns this classification because
+    // MCP tools don't declare their own risk. Per-call, args-aware enforcement is a later layer.
+    if is_sweeping_destructive(&req.goal) {
+        return Some(BlockReason::HighConsequence);
+    }
 
     // (4) Reaction-depth guard — halt runaway background cascades.
     if req.reaction_depth >= max_reaction_depth {
@@ -72,15 +93,33 @@ fn referenced_mcps(action: &DispatchAction) -> Vec<&str> {
         DispatchAction::DispatchSubagent { allowed_mcps, .. } => {
             allowed_mcps.iter().map(String::as_str).collect()
         }
-        DispatchAction::Clarify { .. } => Vec::new(),
+        // Clarify carries no calls; Propose is a post-guard output the guards never receive.
+        DispatchAction::Clarify { .. } | DispatchAction::Propose { .. } => Vec::new(),
     }
+}
+
+/// The highest consequence among the MCPs an action would touch, looked up from the catalog. An MCP
+/// the catalog doesn't describe contributes nothing (`ReadOnly`). Like the capability check, this is
+/// a pre-flight read of the action's declared scope; runtime gating of an `ExecuteDirect`'s adaptive
+/// calls is a separate, later boundary.
+fn max_consequence(action: &DispatchAction, req: &DispatchRequest) -> Consequence {
+    referenced_mcps(action)
+        .into_iter()
+        .filter_map(|mcp| {
+            req.catalog
+                .iter()
+                .find(|d| d.name == mcp)
+                .map(|d| d.consequence)
+        })
+        .max()
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::McpDescriptor;
-    use liberado_common::{Capability, CapabilitySet, ToolCall, Zone};
+    use liberado_common::{Capability, CapabilitySet, Consequence, ToolCall, Zone};
 
     fn req(capabilities: CapabilitySet, reaction_depth: u32) -> DispatchRequest {
         DispatchRequest {
@@ -88,6 +127,7 @@ mod tests {
             catalog: vec![McpDescriptor {
                 name: "tasks-mcp".into(),
                 description: "task ops".into(),
+                consequence: Consequence::Reversible,
             }],
             capabilities,
             reaction_depth,
@@ -154,6 +194,65 @@ mod tests {
                 4
             ),
             None
+        );
+    }
+
+    #[test]
+    fn external_action_is_gated_by_consequence() {
+        // Granted and confident — but it would send a message out of the system. Confirm first.
+        let request = DispatchRequest {
+            goal: "email my boss".into(),
+            catalog: vec![McpDescriptor {
+                name: "email".into(),
+                description: "send email".into(),
+                consequence: Consequence::External,
+            }],
+            capabilities: granted("email"),
+            reaction_depth: 0,
+        };
+        let d = execute_direct("email:send", 0.95);
+        assert_eq!(
+            evaluate(&d, &request, &DispatchTuning::default(), 4),
+            Some(BlockReason::HighConsequence)
+        );
+    }
+
+    #[test]
+    fn reversible_git_tracked_write_is_not_gated() {
+        // A write to a git-tracked vault is recoverable — reversibility is the safety net, so the
+        // consequence gate lets it flow even at the same confidence the email was blocked at.
+        let request = DispatchRequest {
+            goal: "write a note".into(),
+            catalog: vec![McpDescriptor {
+                name: "vault".into(),
+                description: "git-tracked Obsidian vault".into(),
+                consequence: Consequence::Reversible,
+            }],
+            capabilities: granted("vault"),
+            reaction_depth: 0,
+        };
+        let d = execute_direct("vault:write", 0.95);
+        assert_eq!(evaluate(&d, &request, &DispatchTuning::default(), 4), None);
+    }
+
+    #[test]
+    fn sweeping_destructive_goal_is_gated_by_magnitude() {
+        // The eval's case: a git-tracked vault (Reversible, so the consequence gate passes), but the
+        // goal is sweeping-destructive — the magnitude gate must still downgrade it.
+        let request = DispatchRequest {
+            goal: "delete all of my notes".into(),
+            catalog: vec![McpDescriptor {
+                name: "vault".into(),
+                description: "git-tracked vault".into(),
+                consequence: Consequence::Reversible,
+            }],
+            capabilities: granted("vault"),
+            reaction_depth: 0,
+        };
+        let d = execute_direct("vault:delete", 0.95);
+        assert_eq!(
+            evaluate(&d, &request, &DispatchTuning::default(), 4),
+            Some(BlockReason::HighConsequence)
         );
     }
 

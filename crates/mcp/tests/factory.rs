@@ -12,7 +12,9 @@ use turbomcp_core::context::RequestContext;
 use turbomcp_core::error::{McpError, McpResult};
 use turbomcp_core::handler::McpHandler;
 use turbomcp_core::marker::MaybeSend;
-use turbomcp_types::{Prompt, PromptResult, Resource, ResourceResult, ServerInfo, Tool, ToolResult};
+use turbomcp_types::{
+    Prompt, PromptResult, Resource, ResourceResult, ServerInfo, Tool, ToolResult,
+};
 
 /// A one-tool server (bare tool name + canned reply), so a registry can namespace it.
 #[derive(Clone)]
@@ -81,9 +83,10 @@ impl McpConnector for ChannelConnector {
         &self,
         provenance: WriteProvenance,
     ) -> Result<Box<dyn liberado_executor::ToolRuntime>, RuntimeSetupError> {
-        let (transport, _server) = turbomcp_server::transport::channel::run_in_process(&self.server)
-            .await
-            .map_err(|e| RuntimeSetupError(e.to_string()))?;
+        let (transport, _server) =
+            turbomcp_server::transport::channel::run_in_process(&self.server)
+                .await
+                .map_err(|e| RuntimeSetupError(e.to_string()))?;
         let runtime = TurbomcpRuntime::connect(Client::new(transport), provenance)
             .await
             .map_err(|e| RuntimeSetupError(e.to_string()))?;
@@ -131,7 +134,10 @@ async fn registry_namespaces_tools_across_servers_and_routes_calls() {
 
     // Each namespaced call routes to the owning server (prefix stripped before it arrives).
     assert_eq!(runtime.invoke(&call("tasks:add")).await.unwrap(), "added");
-    assert_eq!(runtime.invoke(&call("memory:store")).await.unwrap(), "stored");
+    assert_eq!(
+        runtime.invoke(&call("memory:store")).await.unwrap(),
+        "stored"
+    );
 }
 
 #[tokio::test]

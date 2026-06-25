@@ -37,13 +37,19 @@ pub enum DispatchAction {
 
     /// Hand off to a narrowly-scoped subagent with a disjoint context slice.
     DispatchSubagent {
-        /// Restated, self-contained goal.
+        /// Restated, self-contained goal. The **only** field the classifier must produce; the rest
+        /// default so a terse model reply still decodes (and routes) instead of degrading to a
+        /// spurious `Clarify`.
         goal: String,
-        /// `base ∩ narrowing` — never widened (Decision 4 invariant).
+        /// `base ∩ narrowing` — never widened (Decision 4 invariant). Not produced by the model;
+        /// the executor narrows from the request's ceiling + `allowed_mcps`.
+        #[serde(default)]
         capabilities: CapabilitySet,
-        /// Filtered MCP catalog the subagent may see.
+        /// Filtered MCP catalog the subagent may see. Empty = all in-scope MCPs.
+        #[serde(default)]
         allowed_mcps: Vec<String>,
         /// How the subagent knows it is done.
+        #[serde(default)]
         success_criteria: Vec<String>,
         /// Target zone for any produced artifact (e.g. `"reviews/"`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -51,7 +57,9 @@ pub enum DispatchAction {
         /// Model for this subagent; may differ from dispatcher/main.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<ModelChoice>,
-        /// Ties writes to this goal (loop-breaking + idempotency).
+        /// Ties writes to this goal (loop-breaking + idempotency). The dispatcher mints this when the
+        /// model omits it — it is an internal id, not the model's to invent.
+        #[serde(default)]
         correlation_id: String,
     },
 
@@ -59,6 +67,15 @@ pub enum DispatchAction {
     Clarify {
         questions: Vec<String>,
         what_blocked: BlockReason,
+    },
+
+    /// Emit a [`Proposal`](crate::proposal::Proposal) for human approval instead of acting — the
+    /// terminal disposition for a high-consequence action the guards won't auto-run (Decision 11).
+    /// This is a post-guard downgrade output, never produced by the classifier, so the guards only
+    /// route *into* it and never receive it.
+    Propose {
+        proposed_action: crate::proposal::ProposedAction,
+        rationale: String,
     },
 }
 
@@ -70,6 +87,7 @@ impl DispatchAction {
             DispatchAction::ExecuteDirect { .. } => "ExecuteDirect",
             DispatchAction::DispatchSubagent { .. } => "DispatchSubagent",
             DispatchAction::Clarify { .. } => "Clarify",
+            DispatchAction::Propose { .. } => "Propose",
         }
     }
 }
@@ -95,14 +113,16 @@ pub fn mcp_of(tool: &str) -> &str {
     tool.split_once(':').map(|(mcp, _)| mcp).unwrap_or(tool)
 }
 
-/// Why a [`DispatchAction::Clarify`] was raised. The first three are model-judged; the last two
-/// are produced by the deterministic guards (§6), not the classifier.
+/// Why a [`DispatchAction::Clarify`] was raised. The first two are model-judged; the rest are
+/// produced by the deterministic guards (§6), not the classifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockReason {
     Ambiguous,
     MissingParam,
     CapabilityGap,
+    /// The action would touch something irreversible or external (consequence guard, §6 #3).
+    HighConsequence,
     LowConfidence,
     DepthLimit,
 }

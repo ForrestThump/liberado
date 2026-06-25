@@ -21,7 +21,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::capability::{Capability, WriteClass};
+use crate::capability::{Capability, CapabilitySet, Consequence, WriteClass};
 use crate::error::{Error, Result};
 use crate::model::{ModelProfile, ModelRole};
 
@@ -52,8 +52,8 @@ pub struct Topology {
     pub models: Vec<ModelProfile>,
     /// Which model (by name) fills each role. Validated against the capability floors.
     pub model_roles: HashMap<ModelRole, String>,
-    /// Enabled MCP servers.
-    pub mcps: Vec<ComponentConfig>,
+    /// Enabled MCP servers (each carries the routing + risk metadata the dispatcher needs).
+    pub mcps: Vec<McpConfig>,
     /// Enabled ACP webhook receivers.
     pub acps: Vec<ComponentConfig>,
 }
@@ -72,7 +72,8 @@ impl Default for Topology {
     }
 }
 
-/// A wired component (MCP or ACP): how it's reached and whether it's on.
+/// A wired component (ACP): how it's reached and whether it's on. MCPs use [`McpConfig`], which
+/// additionally carries the routing description + risk rating the dispatcher needs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentConfig {
     pub name: String,
@@ -81,6 +82,41 @@ pub struct ComponentConfig {
     /// Transport endpoint: a socket path, `http://…`, or webhook URL depending on component.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
+}
+
+/// A wired MCP server: how it's reached, plus the routing description and risk classification the
+/// dispatcher needs. Description and consequence are REQUIRED — declaring an MCP means rating it.
+/// (Liberado owns risk classification; MCPs don't declare their own risk, and `Consequence::default()`
+/// is the *unsafe* `ReadOnly`, so we never let it default silently.)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpConfig {
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Short description the dispatcher routes over.
+    pub description: String,
+    /// Our reversibility/externality rating; the consequence guard gates on it.
+    pub consequence: Consequence,
+    /// How the runtime actually reaches this server. Same source (`topology.mcps`) drives both the
+    /// dispatcher catalog and the connection, so a name routed to is a name we can connect to.
+    pub transport: McpTransport,
+}
+
+/// How to reach an MCP server. Stdio spawns a child process; Http connects to a URL (Decision 3).
+/// Adjacently tagged so the variant key is a plain `kind` field — that round-trips cleanly through
+/// TOML inline tables (`transport = { kind = "stdio", command = "npx", args = [...] }`), which an
+/// internally-tagged enum does not.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum McpTransport {
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+    Http {
+        url: String,
+    },
 }
 
 fn default_true() -> bool {
@@ -110,6 +146,16 @@ impl Policy {
             .find(|z| z.zone == zone)
             .map(|z| z.write_class)
             .unwrap_or_default()
+    }
+
+    /// The daemon's base capability set: the union of all granted capabilities. The dispatcher
+    /// holds this maximal authority and only ever NARROWS it per dispatch (Decision 4 invariant).
+    /// v1 unions across components; per-component narrowing for subagents is a later refinement.
+    pub fn base_capabilities(&self) -> CapabilitySet {
+        self.grants
+            .iter()
+            .flat_map(|g| g.capabilities.iter().cloned())
+            .collect()
     }
 }
 
@@ -348,7 +394,40 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability::Zone;
     use crate::model::ModelTier;
+
+    #[test]
+    fn base_capabilities_unions_grants_and_dedups() {
+        let policy = Policy {
+            zones: Vec::new(),
+            grants: vec![
+                Grant {
+                    component: "tasks-mcp".into(),
+                    capabilities: vec![
+                        Capability::Read(Zone::vault("tasks")),
+                        Capability::Write(Zone::vault("tasks")),
+                    ],
+                },
+                Grant {
+                    component: "memory-mcp".into(),
+                    capabilities: vec![
+                        // Overlaps with the first grant — the union must de-duplicate.
+                        Capability::Read(Zone::vault("tasks")),
+                        Capability::ExecuteMcp("memory-mcp".into()),
+                    ],
+                },
+            ],
+            secret_refs: Vec::new(),
+        };
+
+        let caps = policy.base_capabilities();
+        assert!(caps.contains(&Capability::Read(Zone::vault("tasks"))));
+        assert!(caps.contains(&Capability::Write(Zone::vault("tasks"))));
+        assert!(caps.contains(&Capability::ExecuteMcp("memory-mcp".into())));
+        // Read(tasks) appeared twice across grants but is held once.
+        assert_eq!(caps.capabilities.len(), 3);
+    }
 
     #[test]
     fn defaults_match_specced_values() {
@@ -379,6 +458,38 @@ mod tests {
         let mut cfg = Config::default();
         cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
         assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn mcp_transport_both_variants_deserialize_from_toml() {
+        // Stdio + Http must each round-trip through a TOML `[[mcps]]` inline table — the runtime
+        // builds connectors directly off this, so the representation has to load from real config.
+        let toml = r#"
+[[mcps]]
+name = "tasks-mcp"
+description = "create and complete tasks"
+consequence = "reversible"
+transport = { kind = "stdio", command = "npx", args = ["-y", "@scope/tasks"] }
+
+[[mcps]]
+name = "wiki-mcp"
+description = "query external docs"
+consequence = "read_only"
+transport = { kind = "http", url = "https://mcp.deepwiki.com/mcp" }
+"#;
+        let topology: Topology = toml::from_str(toml).expect("transport variants must deserialize");
+        assert_eq!(topology.mcps.len(), 2);
+        match &topology.mcps[0].transport {
+            McpTransport::Stdio { command, args } => {
+                assert_eq!(command, "npx");
+                assert_eq!(args, &["-y", "@scope/tasks"]);
+            }
+            other => panic!("expected stdio, got {other:?}"),
+        }
+        match &topology.mcps[1].transport {
+            McpTransport::Http { url } => assert_eq!(url, "https://mcp.deepwiki.com/mcp"),
+            other => panic!("expected http, got {other:?}"),
+        }
     }
 
     #[test]

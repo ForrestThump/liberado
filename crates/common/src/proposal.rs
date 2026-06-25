@@ -9,8 +9,13 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::dispatch::ToolCall;
+
+/// The fence that separates YAML frontmatter from the note body. A proposal note is exactly one
+/// fenced block at the top followed by the human-readable body.
+const FRONTMATTER_FENCE: &str = "---";
 
 /// Lifecycle state of a proposal. Lives in the note's frontmatter so it is editable from
 /// Obsidian. `Done` marks a proposal whose action has been executed.
@@ -94,6 +99,72 @@ impl Proposal {
     pub fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
         self.expires.is_some_and(|e| now >= e)
     }
+
+    /// Render this proposal as a Markdown note: YAML frontmatter (the full struct, so `status` is
+    /// editable in Obsidian and the daemon can parse the action back) + a human-readable body. The
+    /// body is for the human — `from_note` reads only the frontmatter, so editing it is harmless.
+    pub fn to_note(&self) -> String {
+        // serde_yaml emits a trailing newline; the struct serializes infallibly (all fields are
+        // plain serde types), so the unwrap can't trip on real data.
+        let yaml = serde_yaml::to_string(self).expect("Proposal serializes to YAML");
+        format!(
+            "{fence}\n{yaml}{fence}\n\n# Proposal: {id}\n\n{rationale}\n\n**Proposed action:** {action}\n\nTo approve, change `status: pending` to `status: approved` above (or use the TUI).\n",
+            fence = FRONTMATTER_FENCE,
+            id = self.id,
+            rationale = self.rationale,
+            action = self.proposed_action.summary(),
+        )
+    }
+
+    /// Parse a proposal note (read its frontmatter). Ignores the body — a human editing the
+    /// `status:` line in Obsidian is exactly how approval flows back, so only the frontmatter is
+    /// authoritative.
+    pub fn from_note(content: &str) -> Result<Proposal, ProposalNoteError> {
+        let frontmatter =
+            extract_frontmatter(content).ok_or(ProposalNoteError::MissingFrontmatter)?;
+        Ok(serde_yaml::from_str(frontmatter)?)
+    }
+}
+
+impl ProposedAction {
+    /// A one-line human summary of the action, for the note body. Not parsed back — `from_note`
+    /// reconstructs the structured action from the frontmatter, not this text.
+    pub fn summary(&self) -> String {
+        match self {
+            ProposedAction::ToolCalls(calls) => {
+                let tools = calls
+                    .iter()
+                    .map(|c| c.tool.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("run {} tool call(s): {tools}", calls.len())
+            }
+            ProposedAction::VaultWrite { path, .. } => format!("write vault note `{path}`"),
+            ProposedAction::External { description } => format!("external action: {description}"),
+            ProposedAction::Other(value) => format!("other action: {value}"),
+        }
+    }
+}
+
+/// Split out the YAML between the leading `---` fences. Returns `None` when the note has no
+/// frontmatter block (so the caller reports [`ProposalNoteError::MissingFrontmatter`]).
+fn extract_frontmatter(content: &str) -> Option<&str> {
+    let rest = content.strip_prefix(FRONTMATTER_FENCE)?;
+    // Skip to the end of the opening fence line, then find the closing fence on its own line.
+    let after_open = rest
+        .strip_prefix('\n')
+        .or_else(|| rest.strip_prefix("\r\n"))?;
+    let close = after_open.find(&format!("\n{FRONTMATTER_FENCE}"))?;
+    Some(&after_open[..close])
+}
+
+/// Errors from parsing a proposal note back into a [`Proposal`].
+#[derive(Debug, Error)]
+pub enum ProposalNoteError {
+    #[error("proposal note has no YAML frontmatter")]
+    MissingFrontmatter,
+    #[error("malformed proposal frontmatter: {0}")]
+    Yaml(#[from] serde_yaml::Error),
 }
 
 #[cfg(test)]
@@ -107,6 +178,63 @@ mod tests {
         assert!(ProposalStatus::Rejected.is_terminal());
         assert!(ProposalStatus::Done.is_terminal());
         assert!(!ProposalStatus::Pending.is_terminal());
+    }
+
+    #[test]
+    fn note_round_trips_tool_calls() {
+        let p = Proposal::pending(
+            "vault-change:inbox/x.md:abc",
+            "vault-change:inbox/x.md:abc",
+            "liberado",
+            ProposedAction::ToolCalls(vec![ToolCall {
+                tool: "email:send".into(),
+                args: serde_json::json!({ "to": "boss@example.com" }),
+            }]),
+            "The note asks to email the boss",
+        );
+        let back = Proposal::from_note(&p.to_note()).unwrap();
+        assert_eq!(back, p);
+        assert_eq!(back.status, ProposalStatus::Pending);
+    }
+
+    #[test]
+    fn note_round_trips_external() {
+        let p = Proposal::pending(
+            "prop-2",
+            "review-2026-06-21",
+            "decisions-acp",
+            ProposedAction::External {
+                description: "Add family calendar event".into(),
+            },
+            "Detected a schedulable item",
+        );
+        assert_eq!(Proposal::from_note(&p.to_note()).unwrap(), p);
+    }
+
+    #[test]
+    fn human_approval_edit_parses() {
+        // A human flips `status: pending` to `status: approved` in the frontmatter text — exactly
+        // how approval flows back from Obsidian. The parsed status must reflect the edit.
+        let p = Proposal::pending(
+            "prop-3",
+            "c3",
+            "liberado",
+            ProposedAction::External {
+                description: "Send the email".into(),
+            },
+            "rationale",
+        );
+        let approved = p.to_note().replace("status: pending", "status: approved");
+        let back = Proposal::from_note(&approved).unwrap();
+        assert_eq!(back.status, ProposalStatus::Approved);
+    }
+
+    #[test]
+    fn missing_frontmatter_is_an_error() {
+        assert!(matches!(
+            Proposal::from_note("# just a body, no frontmatter"),
+            Err(ProposalNoteError::MissingFrontmatter)
+        ));
     }
 
     #[test]

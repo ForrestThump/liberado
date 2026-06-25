@@ -1,29 +1,21 @@
-//! The `liberado` binary — the composition root: wires concrete implementations into the daemon and
-//! runs the watch loop.
+//! The `liberado` binary — the single entry point: a thin client + launcher over the daemon server
+//! (`liberado_server`). It owns nothing but argument dispatch and tracing-subscriber init; all daemon
+//! and chat logic lives in libraries.
 //!
 //! Usage:
-//!   liberado <vault-path>
-//!   LIBERADO_VAULT=<vault-path> liberado
+//!   liberado serve <vault-path>      run the daemon + HTTP/SSE API in the foreground
+//!   liberado <vault-path>            back-compat alias for `serve`
+//!   LIBERADO_VAULT=<vault> liberado  same, taking the vault from the environment
+//!   liberado chat [session-id]       the streaming terminal client of a running daemon
+//!   liberado config check            load + validate config, print a summary (or an error)
 //!
-//! Modes, by what's configured:
-//!   - no `DEEPSEEK_API_KEY`               → watch-only (observe changes, no dispatch).
-//!   - key set, no `LIBERADO_MCP_CMD`      → decide-only (dispatch decisions, no execution).
-//!   - key + `LIBERADO_MCP_CMD` (+ `_ARGS`)→ act: dispatch decisions are executed against the MCP
-//!     server spawned from that command (tool-mediated writes carry provenance and are loop-broken).
-//!
-//! Reactions are logged to stderr; stdout is left for data.
+//! `serve` runs in the foreground, hosting the vault watch loop and the chat/HTTP/SSE API until
+//! killed. `chat` is a thin HTTP/SSE client of a separately-running daemon (see [`chat_client`]).
+//! `config check` resolves the config dir (`LIBERADO_CONFIG_DIR` or the platform default) and runs
+//! the loader, reporting what it found or the first actionable error. Reactions are logged to stderr
+//! by the server; stdout is left for data.
 
-use std::sync::Arc;
-
-use liberado_common::CapabilitySet;
-use liberado_common::config::{ConcurrencyTuning, DispatchTuning};
-use liberado_daemon::{Daemon, Reaction};
-use liberado_dispatcher::Dispatcher;
-use liberado_mcp::{StdioConnector, TurbomcpRuntimeFactory};
-use liberado_orchestrator::Orchestrator;
-use liberado_provider::Provider;
-use liberado_provider_deepseek::DeepSeekProvider;
-use tokio::sync::mpsc::unbounded_channel;
+mod chat_client;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,70 +27,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let vault_path = std::env::args()
-        .nth(1)
-        .or_else(|| std::env::var("LIBERADO_VAULT").ok())
-        .ok_or("usage: liberado <vault-path>  (or set LIBERADO_VAULT)")?;
-
-    let daemon = Daemon::open("vault", &vault_path).await?;
-
-    let daemon = match DeepSeekProvider::from_env() {
-        Ok(provider) => {
-            let provider: Arc<dyn Provider> = Arc::new(provider);
-            tracing::info!(model = provider.model(), "dispatcher enabled (DeepSeek)");
-
-            let dispatcher = Dispatcher::new(
-                provider.clone(),
-                DispatchTuning::default(),
-                ConcurrencyTuning::default().max_reaction_depth,
-            );
-            let daemon = daemon.with_dispatcher(dispatcher, Vec::new(), CapabilitySet::empty());
-
-            // Execution requires an MCP server to run tools against. With one configured, decisions
-            // are orchestrated end-to-end; without one, the daemon decides but cannot act.
-            attach_orchestrator(daemon, provider)
+    // First-arg dispatch: `chat` is the streaming client; `serve` (or a bare vault path, for
+    // back-compat) launches the daemon server. With no arg, fall back to `LIBERADO_VAULT`.
+    let mut args = std::env::args().skip(1);
+    match args.next().as_deref() {
+        Some("chat") => chat_client::run(args.next()).await,
+        Some("config") => match args.next().as_deref() {
+            // `config check` is synchronous (no daemon): resolve the default dir via bootstrap
+            // (passing None) and run the loader. Routed through the server so the cli keeps a single
+            // dependency.
+            Some("check") => liberado_server::config_check(None),
+            _ => Err("usage: liberado config check".into()),
+        },
+        Some("serve") => {
+            let vault = args
+                .next()
+                .or_else(|| std::env::var("LIBERADO_VAULT").ok())
+                .ok_or("usage: liberado serve <vault-path>  (or set LIBERADO_VAULT)")?;
+            liberado_server::run(vault).await
         }
-        Err(_) => {
-            tracing::warn!("DEEPSEEK_API_KEY not set — running watch-only (no dispatch)");
-            daemon
-        }
-    };
-
-    let (reactions, mut rx) = unbounded_channel::<Reaction>();
-    tokio::spawn(async move {
-        while let Some(reaction) = rx.recv().await {
-            tracing::info!(
-                event_type = %reaction.event.event_type,
-                path = reaction.event.payload.path.as_deref().unwrap_or_default(),
-                correlation_id = %reaction.event.correlation_id,
-                outcome = reaction.outcome.label(),
-                "REACTION"
-            );
-        }
-    });
-
-    daemon.run(reactions).await?;
-    Ok(())
-}
-
-/// Attach an orchestrator (execution) when `LIBERADO_MCP_CMD` names an MCP server to spawn;
-/// otherwise leave the daemon decide-only. `LIBERADO_MCP_ARGS` (optional, whitespace-separated)
-/// supplies the server's arguments.
-fn attach_orchestrator(daemon: Daemon, provider: Arc<dyn Provider>) -> Daemon {
-    match std::env::var("LIBERADO_MCP_CMD") {
-        Ok(command) if !command.trim().is_empty() => {
-            let args = std::env::var("LIBERADO_MCP_ARGS")
-                .unwrap_or_default()
-                .split_whitespace()
-                .map(String::from)
-                .collect();
-            tracing::info!(%command, "orchestrator enabled (MCP execution)");
-            let factory = TurbomcpRuntimeFactory::new(StdioConnector::new(command, args));
-            daemon.with_orchestrator(Orchestrator::new(provider, factory))
-        }
-        _ => {
-            tracing::warn!("LIBERADO_MCP_CMD not set — decide-only (no MCP execution)");
-            daemon
+        Some(vault) => liberado_server::run(vault.to_string()).await, // back-compat: bare vault == serve
+        None => {
+            let vault = std::env::var("LIBERADO_VAULT").map_err(
+                |_| "usage: liberado [serve <vault>|chat [session]]  (or set LIBERADO_VAULT)",
+            )?;
+            liberado_server::run(vault).await
         }
     }
 }

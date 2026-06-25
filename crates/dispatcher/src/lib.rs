@@ -22,9 +22,12 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use liberado_common::config::DispatchTuning;
-use liberado_common::{BlockReason, CapabilitySet, DispatchAction, DispatchDecision};
+use liberado_common::{
+    BlockReason, CapabilitySet, Consequence, DispatchAction, DispatchDecision, ProposedAction,
+};
 use liberado_provider::{CompletionRequest, Message, Provider, ProviderError, complete_json};
 use thiserror::Error;
+use tracing::Instrument;
 
 /// What the dispatcher needs to route a single goal. The dispatcher deliberately runs with *less*
 /// context than the main agent (disjoint partitions); this is everything it sees.
@@ -45,6 +48,9 @@ pub struct DispatchRequest {
 pub struct McpDescriptor {
     pub name: String,
     pub description: String,
+    /// How risky this MCP's effects are (reversibility/externality) — the consequence guard gates
+    /// direct action that would touch a high-consequence MCP. Declared per server when registered.
+    pub consequence: Consequence,
 }
 
 /// Errors that abort a dispatch. Malformed model output does **not** appear here — it is handled
@@ -81,56 +87,88 @@ impl Dispatcher {
     /// Route a goal to a guarded [`DispatchDecision`].
     pub async fn dispatch(&self, req: &DispatchRequest) -> Result<DispatchDecision, DispatchError> {
         let goal_hash = goal_hash(&req.goal);
+        let reaction_depth = req.reaction_depth;
 
-        let classified = self.classify(req).await?;
+        let span = tracing::info_span!(
+            "dispatch",
+            goal_hash,
+            reaction_depth,
+            action = tracing::field::Empty,
+            confidence = tracing::field::Empty,
+            downgrade = tracing::field::Empty,
+        );
 
-        let decision =
-            match guards::evaluate(&classified, req, &self.tuning, self.max_reaction_depth) {
-                Some(reason) => {
-                    tracing::info!(
-                        goal_hash,
-                        classified = %classified.action,
-                        confidence = classified.confidence,
-                        downgrade = ?reason,
-                        "dispatch decision downgraded by guard"
-                    );
-                    downgrade_to_clarify(classified.confidence, reason)
-                }
-                None => {
-                    tracing::info!(
-                        goal_hash,
-                        action = %classified.action,
-                        confidence = classified.confidence,
-                        "dispatch decision"
-                    );
-                    classified
-                }
-            };
+        async {
+            let mut classified = self.classify(req).await?;
+            ensure_correlation(&mut classified, goal_hash);
 
-        Ok(decision)
+            let decision =
+                match guards::evaluate(&classified, req, &self.tuning, self.max_reaction_depth) {
+                    Some(reason) => {
+                        tracing::Span::current().record("downgrade", &format_args!("{reason:?}"));
+                        tracing::info!(
+                            classified = %classified.action,
+                            confidence = classified.confidence,
+                            "dispatch decision downgraded by guard"
+                        );
+                        downgrade(classified, reason)
+                    }
+                    None => {
+                        tracing::info!(
+                            action = %classified.action,
+                            confidence = classified.confidence,
+                            "dispatch decision"
+                        );
+                        classified
+                    }
+                };
+
+            tracing::Span::current().record("action", &format_args!("{}", decision.action.label()));
+            tracing::Span::current().record("confidence", &decision.confidence);
+
+            Ok(decision)
+        }
+        .instrument(span)
+        .await
     }
 
     /// The classification step: one structured-output inference at temperature 0. Malformed or
     /// empty output is treated like very low confidence and degraded to a safe `Clarify`
     /// (Decision 13 resilience); a real provider failure propagates.
     async fn classify(&self, req: &DispatchRequest) -> Result<DispatchDecision, DispatchError> {
-        let request = self.build_request(req);
-        match complete_json::<dyn Provider, DispatchDecision>(
-            self.provider.as_ref(),
-            request,
-            decision_schema(),
-        )
-        .await
-        {
-            Ok(decision) => Ok(decision),
-            // The model responded, but unusably → safe default, don't crash.
-            Err(ProviderError::Decode(_)) | Err(ProviderError::EmptyResponse) => {
-                tracing::warn!("classification produced unusable output; degrading to Clarify");
-                Ok(clarify_fallback())
+        let span = tracing::info_span!("classify", provider = %self.provider.model());
+
+        async {
+            let request = self.build_request(req);
+            match complete_json::<dyn Provider, DispatchDecision>(
+                self.provider.as_ref(),
+                request,
+                decision_schema(),
+            )
+            .await
+            {
+                Ok(decision) => {
+                    tracing::debug!(
+                        action = %decision.action,
+                        confidence = decision.confidence,
+                        "classification succeeded"
+                    );
+                    Ok(decision)
+                }
+                // The model responded, but unusably → safe default, don't crash.
+                Err(ProviderError::Decode(_)) | Err(ProviderError::EmptyResponse) => {
+                    tracing::warn!("classification produced unusable output; degrading to Clarify");
+                    Ok(clarify_fallback())
+                }
+                // A genuine provider failure — let the caller decide (retry/backoff).
+                Err(e) => {
+                    tracing::error!(error = %e, "classification failed");
+                    Err(DispatchError::Provider(e))
+                }
             }
-            // A genuine provider failure — let the caller decide (retry/backoff).
-            Err(e) => Err(DispatchError::Provider(e)),
         }
+        .instrument(span)
+        .await
     }
 
     fn build_request(&self, req: &DispatchRequest) -> CompletionRequest {
@@ -165,10 +203,13 @@ let the executor decide every step. Use this only when a few steps clearly suffi
 Bias to safety: when uncertain, or when consequences are high, prefer Clarify or DispatchSubagent \
 over ExecuteDirect. Set `confidence` honestly in [0,1].
 
-Return ONLY JSON of the form:
+Return ONLY JSON of the form (use exactly these fields — nothing else):
 {\"action\":{\"ExecuteDirect\":{\"seed_calls\":[{\"tool\":\"mcp:tool\",\"args\":{}}]}},\"confidence\":0.9,\"rationale\":\"...\"}
-{\"action\":{\"DispatchSubagent\":{\"goal\":\"...\",\"capabilities\":{\"capabilities\":[]},\"allowed_mcps\":[\"...\"],\"success_criteria\":[\"...\"],\"correlation_id\":\"...\"}},\"confidence\":0.8,\"rationale\":\"...\"}
-{\"action\":{\"Clarify\":{\"questions\":[\"...\"],\"what_blocked\":\"ambiguous\"}},\"confidence\":0.4,\"rationale\":\"...\"}";
+{\"action\":{\"DispatchSubagent\":{\"goal\":\"...\",\"allowed_mcps\":[\"...\"],\"success_criteria\":[\"...\"]}},\"confidence\":0.8,\"rationale\":\"...\"}
+{\"action\":{\"Clarify\":{\"questions\":[\"...\"],\"what_blocked\":\"ambiguous\"}},\"confidence\":0.4,\"rationale\":\"...\"}
+
+For DispatchSubagent, emit only goal, allowed_mcps (names from the catalog), and success_criteria. \
+`seed_calls` may be omitted (empty). Do not invent ids or capability objects.";
 
 /// Loose schema for v1 — the prompt carries the shape. A precise JSON Schema (e.g. via `schemars`)
 /// is a follow-up that improves real-provider reliability.
@@ -190,6 +231,40 @@ fn clarify_fallback() -> DispatchDecision {
     }
 }
 
+/// Resolve a guard violation to a downgraded decision. A high-consequence block on a *concrete*
+/// `ExecuteDirect` (a non-empty seed call list — a known action like "send this email") becomes a
+/// `Propose`, carrying the action for human approval (Decision 11). Every other case stays a
+/// `Clarify` — the most conservative output when there is nothing concrete to propose.
+///
+/// TODO: broaden proposal production to the fuzzier high-consequence cases (an empty-seed
+/// `ExecuteDirect`, a `DispatchSubagent`, the magnitude-gate goal signal). v1 covers only the
+/// concrete-tool-call path — the primary "send an email" scenario.
+fn downgrade(classified: DispatchDecision, reason: BlockReason) -> DispatchDecision {
+    if reason == BlockReason::HighConsequence
+        && let DispatchAction::ExecuteDirect { seed_calls } = &classified.action
+        && !seed_calls.is_empty()
+    {
+        return downgrade_to_propose(classified);
+    }
+    downgrade_to_clarify(classified.confidence, reason)
+}
+
+/// Build the `Propose` a high-consequence concrete action downgrades to, preserving the original
+/// decision's seed calls (as the proposed action), confidence, and rationale.
+fn downgrade_to_propose(classified: DispatchDecision) -> DispatchDecision {
+    let DispatchAction::ExecuteDirect { seed_calls } = classified.action else {
+        unreachable!("downgrade_to_propose is only called for a concrete ExecuteDirect");
+    };
+    DispatchDecision {
+        action: DispatchAction::Propose {
+            proposed_action: ProposedAction::ToolCalls(seed_calls),
+            rationale: classified.rationale.clone(),
+        },
+        confidence: classified.confidence,
+        rationale: classified.rationale,
+    }
+}
+
 /// Build the conservative `Clarify` a guard downgrade resolves to, preserving the model's
 /// confidence for the trace.
 fn downgrade_to_clarify(confidence: f32, reason: BlockReason) -> DispatchDecision {
@@ -207,6 +282,9 @@ fn clarify_question(reason: BlockReason) -> String {
     match reason {
         BlockReason::CapabilityGap => {
             "This needs a capability I wasn't granted — should I be given access, or handle it differently?".into()
+        }
+        BlockReason::HighConsequence => {
+            "This is far-reaching or hard to undo (a sweeping change, or something that leaves the system like an email) — should I go ahead?".into()
         }
         BlockReason::DepthLimit => {
             "This reaction chain has gone deep enough that I'm pausing it — should it continue?".into()
@@ -227,6 +305,17 @@ fn goal_hash(goal: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     goal.hash(&mut hasher);
     hasher.finish()
+}
+
+/// Mint a correlation id for a `DispatchSubagent` whose id the model omitted (it now defaults to
+/// empty so terse replies still decode). Derived from the goal hash so retries of the same goal
+/// share an id (idempotency + loop-breaking); never the model's to invent.
+fn ensure_correlation(decision: &mut DispatchDecision, goal_hash: u64) {
+    if let DispatchAction::DispatchSubagent { correlation_id, .. } = &mut decision.action
+        && correlation_id.is_empty()
+    {
+        *correlation_id = format!("sub:{goal_hash:x}");
+    }
 }
 
 #[cfg(test)]
@@ -250,6 +339,7 @@ mod tests {
             catalog: vec![McpDescriptor {
                 name: "tasks-mcp".into(),
                 description: "task ops".into(),
+                consequence: Consequence::Reversible,
             }],
             capabilities,
             reaction_depth,
@@ -321,6 +411,69 @@ mod tests {
                 assert_eq!(what_blocked, BlockReason::LowConfidence)
             }
             other => panic!("expected Clarify(LowConfidence), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn high_consequence_concrete_action_is_downgraded_to_propose() {
+        // A granted, confident ExecuteDirect whose seed call hits an External MCP: the consequence
+        // gate must turn it into a Propose carrying the call — NOT a Clarify (Decision 11 emit path).
+        let request = DispatchRequest {
+            goal: "email my boss the update".into(),
+            catalog: vec![McpDescriptor {
+                name: "email".into(),
+                description: "send email".into(),
+                consequence: Consequence::External,
+            }],
+            capabilities: caps("email"),
+            reaction_depth: 0,
+        };
+        let mock = scripted(&execute_direct("email:send", 0.95));
+        let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
+
+        let out = dispatcher.dispatch(&request).await.unwrap();
+        match out.action {
+            DispatchAction::Propose {
+                proposed_action: liberado_common::ProposedAction::ToolCalls(calls),
+                ..
+            } => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].tool, "email:send");
+            }
+            other => panic!("expected Propose(ToolCalls), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn high_consequence_without_concrete_call_stays_clarify() {
+        // A sweeping-destructive goal trips the magnitude gate, but with an *empty* seed list there
+        // is no concrete action to propose — so it stays the conservative Clarify.
+        let request = DispatchRequest {
+            goal: "delete all of my notes".into(),
+            catalog: vec![McpDescriptor {
+                name: "vault".into(),
+                description: "git-tracked vault".into(),
+                consequence: Consequence::Reversible,
+            }],
+            capabilities: caps("vault"),
+            reaction_depth: 0,
+        };
+        let decision = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: Vec::new(),
+            },
+            confidence: 0.95,
+            rationale: "test".into(),
+        };
+        let mock = scripted(&decision);
+        let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
+
+        let out = dispatcher.dispatch(&request).await.unwrap();
+        match out.action {
+            DispatchAction::Clarify { what_blocked, .. } => {
+                assert_eq!(what_blocked, BlockReason::HighConsequence)
+            }
+            other => panic!("expected Clarify(HighConsequence), got {other:?}"),
         }
     }
 

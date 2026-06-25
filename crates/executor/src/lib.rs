@@ -25,12 +25,51 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use liberado_common::{Outcome, Report, ToolCall};
 use liberado_provider::{
-    CompletionRequest, CompletionResponse, Message, Provider, ProviderError, Role, ToolDef,
-    ToolInvocation,
+    CompletionRequest, CompletionResponse, Message, Provider, ProviderError, Role, StreamItem,
+    ToolDef, ToolInvocation,
 };
 use thiserror::Error;
+use tokio::sync::mpsc::Sender;
+use tracing::Instrument;
+
+/// A high-level event emitted while [`Executor::converse_stream`] runs, for a client to render as it
+/// happens. The executor itself emits [`Token`](AgentEvent::Token) and
+/// [`ToolStarted`](AgentEvent::ToolStarted); the terminal [`Done`](AgentEvent::Done) /
+/// [`Error`](AgentEvent::Error) are conventionally sent by the caller once the call returns.
+#[derive(Debug, Clone)]
+pub enum AgentEvent {
+    /// An incremental text delta of the answer.
+    Token(String),
+    /// A tool call is starting — its name and a compact preview of the arguments — emitted before
+    /// the tool runs so the call is legible while it's in flight.
+    ToolStarted { name: String, args: String },
+    /// A tool call finished — its name, whether it succeeded, and a short preview of the result (or
+    /// the error) — so the outcome is legible, not just the attempt.
+    ToolFinished {
+        name: String,
+        ok: bool,
+        preview: String,
+    },
+    /// The answer is complete.
+    Done,
+    /// Something failed.
+    Error(String),
+}
+
+/// Cap a free-text preview (tool args or result) so a single chunky payload can't flood the stream
+/// or the UI. Truncation is on `char` boundaries, with an ellipsis to signal there's more.
+fn preview(text: &str) -> String {
+    const MAX: usize = 200;
+    if text.chars().count() <= MAX {
+        text.to_string()
+    } else {
+        let cut: String = text.chars().take(MAX).collect();
+        format!("{cut}…")
+    }
+}
 
 /// Name of the synthetic finish-tool the engine injects in report mode. A real [`ToolRuntime`]
 /// must not expose a tool with this name (it would be shadowed by the engine's terminator).
@@ -144,6 +183,7 @@ enum Mode {
 }
 
 /// The bounded, adaptive tool-loop engine. Cheap to clone-share via the inner `Arc`.
+#[derive(Clone)]
 pub struct Executor {
     provider: Arc<dyn Provider>,
     budget: Budget,
@@ -162,12 +202,40 @@ impl Executor {
         runtime: &dyn ToolRuntime,
         task: Task,
     ) -> Result<Report, ExecError> {
-        match self.drive(runtime, task, Mode::Report).await {
-            Ok(Terminal::Filed(report)) => Ok(report),
-            Ok(Terminal::Spoke(_)) => Err(ExecError::Internal("report mode returned prose")),
-            Err(ExecError::BudgetExceeded { turns }) => Ok(budget_failed_report(turns)),
-            Err(e) => Err(e),
+        let span = tracing::info_span!(
+            "execute",
+            mode = "report",
+            goal = %task.goal,
+            budget = self.budget.max_turns,
+            has_seed = !task.seed_calls.is_empty(),
+            outcome = tracing::field::Empty,
+        );
+        async {
+            match self.drive(runtime, task, Mode::Report).await {
+                Ok(Terminal::Filed(report)) => {
+                    tracing::Span::current()
+                        .record("outcome", &format_args!("{:?}", report.outcome));
+                    tracing::info!(summary = %report.summary, "execution filed report");
+                    Ok(report)
+                }
+                Ok(Terminal::Spoke(_)) => {
+                    tracing::Span::current().record("outcome", "internal_error");
+                    Err(ExecError::Internal("report mode returned prose"))
+                }
+                Err(ExecError::BudgetExceeded { turns }) => {
+                    tracing::Span::current().record("outcome", "budget_exceeded");
+                    tracing::warn!(turns, "execution budget exceeded; returning failed report");
+                    Ok(budget_failed_report(turns))
+                }
+                Err(e) => {
+                    tracing::Span::current().record("outcome", "error");
+                    tracing::error!(error = %e, "execution aborted");
+                    Err(e)
+                }
+            }
         }
+        .instrument(span)
+        .await
     }
 
     /// Run a conversational turn to a prose answer (conversational mode). Terminates when the model
@@ -177,16 +245,36 @@ impl Executor {
         runtime: &dyn ToolRuntime,
         task: Task,
     ) -> Result<String, ExecError> {
-        match self.drive(runtime, task, Mode::Conversational).await {
-            Ok(Terminal::Spoke(text)) => Ok(text),
-            Ok(Terminal::Filed(_)) => {
-                Err(ExecError::Internal("conversational mode filed a report"))
+        let span = tracing::info_span!(
+            "converse",
+            mode = "conversational",
+            goal = %task.goal,
+            budget = self.budget.max_turns,
+            outcome = tracing::field::Empty,
+        );
+        async {
+            match self.drive(runtime, task, Mode::Conversational).await {
+                Ok(Terminal::Spoke(text)) => {
+                    tracing::Span::current().record("outcome", "spoke");
+                    tracing::info!("conversation completed");
+                    Ok(text)
+                }
+                Ok(Terminal::Filed(_)) => {
+                    tracing::Span::current().record("outcome", "internal_error");
+                    Err(ExecError::Internal("conversational mode filed a report"))
+                }
+                Err(e) => {
+                    tracing::Span::current().record("outcome", "error");
+                    tracing::error!(error = %e, "conversation aborted");
+                    Err(e)
+                }
             }
-            Err(e) => Err(e),
         }
+        .instrument(span)
+        .await
     }
 
-    /// The shared core: seed the conversation, then loop turns until termination or budget.
+    /// Build the initial conversation from `task`, then run the loop.
     async fn drive(
         &self,
         runtime: &dyn ToolRuntime,
@@ -204,20 +292,140 @@ impl Executor {
         self.run_seed(runtime, &mut messages, &task.seed_calls)
             .await;
 
-        let mut nudged = false;
+        self.run_loop(runtime, &mut messages, &tools, mode).await
+    }
+
+    /// Run a conversational turn over an existing message history (multi-turn chat). The caller owns
+    /// `messages` — the system prompt, prior turns, and the new user message — and this drives the
+    /// model + tools until it replies in prose, appending every turn (including tool calls/results)
+    /// so context carries forward, and returns that prose. No `submit_report` (the consumer is a
+    /// human, so prose *is* the answer — termination follows the consumer, like [`converse`]).
+    ///
+    /// [`converse`]: Self::converse
+    pub async fn converse_messages(
+        &self,
+        runtime: &dyn ToolRuntime,
+        messages: &mut Vec<Message>,
+    ) -> Result<String, ExecError> {
+        let tools = runtime.catalog();
+        match self
+            .run_loop(runtime, messages, &tools, Mode::Conversational)
+            .await?
+        {
+            Terminal::Spoke(text) => Ok(text),
+            Terminal::Filed(_) => Err(ExecError::Internal("conversational mode filed a report")),
+        }
+    }
+
+    /// Streaming multi-turn chat: like [`converse_messages`](Self::converse_messages), but emits
+    /// [`AgentEvent`]s as they happen — answer tokens as the model produces them, and a
+    /// `ToolStarted` before each tool call — over `events`. The history in `messages` is updated as
+    /// it goes (model turns + tool results), so the conversation carries forward. Returns when the
+    /// model replies in prose (the answer was streamed) or the budget is exhausted. The caller sends
+    /// the terminal `Done`/`Error` based on the result.
+    pub async fn converse_stream(
+        &self,
+        runtime: &dyn ToolRuntime,
+        messages: &mut Vec<Message>,
+        events: &Sender<AgentEvent>,
+    ) -> Result<(), ExecError> {
+        let tools = runtime.catalog();
         for turn in 1..=self.budget.max_turns {
             let request = CompletionRequest::new(messages.clone()).with_tools(tools.clone());
-            let response = self.provider.complete(request).await?;
+            let mut stream = self.provider.complete_stream(request).await?;
+
+            let mut response = None;
+            while let Some(item) = stream.next().await {
+                match item? {
+                    StreamItem::Token(text) => {
+                        // A dropped receiver (client disconnected) just means no one is listening.
+                        let _ = events.send(AgentEvent::Token(text)).await;
+                    }
+                    StreamItem::Done(resp) => response = Some(resp),
+                }
+            }
+            let response =
+                response.ok_or(ExecError::Internal("stream ended without a final response"))?;
+
+            messages.push(assistant_turn(&response));
+            if response.tool_calls.is_empty() {
+                return Ok(()); // the prose answer was streamed as tokens
+            }
+
+            for call in &response.tool_calls {
+                // A dropped receiver (client disconnected) just means no one is listening.
+                let _ = events
+                    .send(AgentEvent::ToolStarted {
+                        name: call.name.clone(),
+                        args: preview(&call.arguments.to_string()),
+                    })
+                    .await;
+                // Invoke directly (not via `run_tool`) so the outcome's ok/err is legible as its own
+                // event; the history still gets the same string `run_tool` would have produced.
+                let (ok, result) = match runtime.invoke(call).await {
+                    Ok(content) => (true, content),
+                    Err(message) => (false, format!("tool error: {message}")),
+                };
+                let _ = events
+                    .send(AgentEvent::ToolFinished {
+                        name: call.name.clone(),
+                        ok,
+                        preview: preview(&result),
+                    })
+                    .await;
+                messages.push(Message::tool_result(&call.id, result));
+            }
+            tracing::debug!(
+                turn,
+                tools = response.tool_calls.len(),
+                "stream turn used tools"
+            );
+        }
+
+        Err(ExecError::BudgetExceeded {
+            turns: self.budget.max_turns,
+        })
+    }
+
+    /// The turn loop shared by [`drive`](Self::drive) and
+    /// [`converse_messages`](Self::converse_messages): provider call → record the turn → on prose,
+    /// terminate per `mode`; on tool calls, run them and continue — until the turn budget.
+    async fn run_loop(
+        &self,
+        runtime: &dyn ToolRuntime,
+        messages: &mut Vec<Message>,
+        tools: &[ToolDef],
+        mode: Mode,
+    ) -> Result<Terminal, ExecError> {
+        let mut nudged = false;
+        for turn in 1..=self.budget.max_turns {
+            let turn_span = tracing::debug_span!(
+                "turn",
+                turn,
+                tool_calls = tracing::field::Empty,
+                finish_reason = tracing::field::Empty,
+            );
+            let response = async {
+                let request = CompletionRequest::new(messages.clone()).with_tools(tools.to_vec());
+                self.provider.complete(request).await
+            }
+            .instrument(tracing::debug_span!("provider_complete", turn))
+            .await?;
 
             // Record the model's turn (content and/or tool calls) so it sees its own history.
             messages.push(assistant_turn(&response));
 
             if response.tool_calls.is_empty() {
                 let text = response.content.unwrap_or_default();
+                turn_span.record("finish_reason", "prose");
                 match mode {
                     Mode::Conversational => return Ok(Terminal::Spoke(text)),
                     Mode::Report if !nudged => {
                         nudged = true;
+                        tracing::debug!(
+                            turn,
+                            "model replied with prose; nudging to use submit_report"
+                        );
                         messages.push(Message::user(REPORT_NUDGE));
                         continue;
                     }
@@ -231,17 +439,26 @@ impl Executor {
                 }
             }
 
+            let tool_count = response.tool_calls.len();
+            turn_span.record("tool_calls", tool_count);
+            turn_span.record("finish_reason", "tool_calls");
+
             for call in &response.tool_calls {
                 if call.name == SUBMIT_REPORT_TOOL {
+                    tracing::info!(turn, "subagent filed report");
                     let report = serde_json::from_value::<Report>(call.arguments.clone())
                         .map_err(|e| ExecError::Decode(e.to_string()))?;
                     return Ok(Terminal::Filed(report));
                 }
-                let result = run_tool(runtime, call).await;
+                let tool_span = tracing::debug_span!("tool_call", name = %call.name, id = %call.id);
+                let result = async { run_tool(runtime, call).await }
+                    .instrument(tool_span)
+                    .await;
                 messages.push(Message::tool_result(&call.id, result));
             }
         }
 
+        tracing::warn!(turns = self.budget.max_turns, "execution budget exhausted");
         Err(ExecError::BudgetExceeded {
             turns: self.budget.max_turns,
         })
@@ -258,6 +475,8 @@ impl Executor {
         if seed_calls.is_empty() {
             return;
         }
+        let count = seed_calls.len();
+        tracing::debug!(count, "executing seed calls");
         let invocations: Vec<ToolInvocation> = seed_calls
             .iter()
             .enumerate()
@@ -271,7 +490,10 @@ impl Executor {
             tool_call_id: None,
         });
         for inv in &invocations {
-            let result = run_tool(runtime, inv).await;
+            let span = tracing::debug_span!("seed_call", tool = %inv.name, id = %inv.id);
+            let result = async { run_tool(runtime, inv).await }
+                .instrument(span)
+                .await;
             messages.push(Message::tool_result(&inv.id, result));
         }
     }
@@ -478,6 +700,84 @@ mod tests {
         assert_eq!(answer, "the answer is 42");
         // Conversational mode must NOT inject the finish-tool — its consumer is a human.
         assert!(!offered_tools(&provider).contains(&SUBMIT_REPORT_TOOL.to_string()));
+    }
+
+    #[tokio::test]
+    async fn stream_emits_tool_started_and_finished_around_the_call() {
+        let (_provider, exec) = executor(
+            vec![call_tool("search"), CompletionResponse::text("found it")],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+
+        let mut messages = vec![
+            Message::system("you are a helpful assistant"),
+            Message::user("find the thing"),
+        ];
+        exec.converse_stream(&runtime, &mut messages, &tx)
+            .await
+            .unwrap();
+        drop(tx);
+
+        let mut events = Vec::new();
+        while let Some(e) = rx.recv().await {
+            events.push(e);
+        }
+
+        // The tool's start and outcome both surface, in order, bracketing the run.
+        let started = events
+            .iter()
+            .position(|e| matches!(e, AgentEvent::ToolStarted { name, .. } if name == "search"));
+        let finished = events.iter().position(
+            |e| matches!(e, AgentEvent::ToolFinished { name, ok, .. } if name == "search" && *ok),
+        );
+        let (started, finished) = (started.unwrap(), finished.unwrap());
+        assert!(started < finished, "ToolStarted must precede ToolFinished");
+
+        // The result preview rode along on the finish event.
+        assert!(events.iter().any(|e| matches!(
+            e,
+            AgentEvent::ToolFinished { preview, .. } if preview == "3 hits"
+        )));
+        // The prose answer streamed as tokens after the tool.
+        let answer: String = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::Token(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(answer, "found it");
+    }
+
+    #[tokio::test]
+    async fn stream_marks_a_failed_tool_call_not_ok() {
+        let (_provider, exec) = executor(
+            vec![call_tool("search"), CompletionResponse::text("recovered")],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Err("boom".into()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+
+        let mut messages = vec![Message::system("sys"), Message::user("go")];
+        exec.converse_stream(&runtime, &mut messages, &tx)
+            .await
+            .unwrap();
+        drop(tx);
+
+        let mut saw_failed = false;
+        while let Some(e) = rx.recv().await {
+            if let AgentEvent::ToolFinished { ok, preview, .. } = e {
+                assert!(!ok, "a failed invoke must report ok=false");
+                assert!(preview.contains("boom"));
+                saw_failed = true;
+            }
+        }
+        assert!(
+            saw_failed,
+            "expected a ToolFinished event for the failed call"
+        );
     }
 
     #[tokio::test]

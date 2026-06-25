@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use liberado_common::{
-    BlockReason, CapabilitySet, DispatchAction, DispatchDecision, Outcome, WriteProvenance,
+    BlockReason, CapabilitySet, DispatchAction, DispatchDecision, Outcome, Proposal,
+    ProposalStatus, ProposedAction, ToolCall, WriteProvenance,
 };
 use liberado_executor::{SUBMIT_REPORT_TOOL, ToolRuntime};
 use liberado_orchestrator::{Disposition, Orchestrator, RuntimeFactory, RuntimeSetupError};
@@ -46,6 +47,41 @@ impl RuntimeFactory for RecordingFactory {
             .unwrap()
             .push((allowed_mcps.to_vec(), provenance));
         Ok(Box::new(MockRuntime))
+    }
+}
+
+/// A runtime that records every `invoke` so `execute_approved` tests can assert the exact approved
+/// calls ran. Shares its log so a handle survives the move into the factory.
+#[derive(Clone, Default)]
+struct RecordingRuntime {
+    invoked: Arc<Mutex<Vec<ToolInvocation>>>,
+}
+
+#[async_trait]
+impl ToolRuntime for RecordingRuntime {
+    fn catalog(&self) -> Vec<ToolDef> {
+        Vec::new()
+    }
+    async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
+        self.invoked.lock().unwrap().push(call.clone());
+        Ok("ok".to_string())
+    }
+}
+
+/// A factory that hands out clones of one [`RecordingRuntime`], so the test can read back what the
+/// orchestrator invoked.
+struct RecordingRuntimeFactory {
+    runtime: RecordingRuntime,
+}
+
+#[async_trait]
+impl RuntimeFactory for RecordingRuntimeFactory {
+    async fn runtime_for(
+        &self,
+        _allowed_mcps: &[String],
+        _provenance: WriteProvenance,
+    ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+        Ok(Box::new(self.runtime.clone()))
     }
 }
 
@@ -139,6 +175,45 @@ async fn dispatch_subagent_uses_its_own_correlation_and_allowed_mcps() {
 }
 
 #[tokio::test]
+async fn propose_builds_a_pending_proposal_without_executing() {
+    // No scripted responses + no runtime: proves nothing ran (the orchestrator only builds the
+    // artifact; the daemon writes it).
+    let (calls, orch) = orchestrator(vec![]);
+
+    let action = ProposedAction::ToolCalls(vec![ToolCall {
+        tool: "email:send".into(),
+        args: serde_json::json!({ "to": "boss@example.com" }),
+    }]);
+    let decision = DispatchDecision {
+        action: DispatchAction::Propose {
+            proposed_action: action.clone(),
+            rationale: "the note asks to email the boss".into(),
+        },
+        confidence: 0.95,
+        rationale: "guard downgrade".into(),
+    };
+
+    let disposition = orch
+        .run(decision, "email the boss", "vault-change:inbox/x.md:abc")
+        .await
+        .expect("run");
+
+    match disposition {
+        Disposition::Propose(p) => {
+            assert_eq!(p.proposed_action, action);
+            assert_eq!(p.correlation_id, "vault-change:inbox/x.md:abc");
+            assert_eq!(p.id, "vault-change:inbox/x.md:abc");
+            assert_eq!(p.status, ProposalStatus::Pending);
+        }
+        other => panic!("expected Propose, got {other:?}"),
+    }
+    assert!(
+        calls.lock().unwrap().is_empty(),
+        "Propose must not build a runtime or execute"
+    );
+}
+
+#[tokio::test]
 async fn clarify_short_circuits_without_executing() {
     // No scripted responses + no runtime: proves nothing ran.
     let (calls, orch) = orchestrator(vec![]);
@@ -171,4 +246,39 @@ async fn clarify_short_circuits_without_executing() {
         calls.lock().unwrap().is_empty(),
         "Clarify must not build a runtime or execute"
     );
+}
+
+#[tokio::test]
+async fn execute_approved_runs_the_exact_calls_without_a_classifier_or_guard() {
+    // No scripted provider responses: execute_approved must NOT go through any classifier/guard — it
+    // runs the approved calls straight against the runtime. A scripted call would panic if consumed.
+    let runtime = RecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        Vec::<CompletionResponse>::new(),
+    ));
+    let orch = Orchestrator::new(provider, RecordingRuntimeFactory { runtime });
+
+    let call = ToolCall {
+        tool: "email:send".into(),
+        args: serde_json::json!({ "to": "boss@example.com", "body": "hi" }),
+    };
+    let mut proposal = Proposal::pending(
+        "vault-change:inbox/x.md:abc",
+        "vault-change:inbox/x.md:abc",
+        "liberado",
+        ProposedAction::ToolCalls(vec![call.clone()]),
+        "the note asks to email the boss",
+    );
+    proposal.status = ProposalStatus::Approved;
+
+    let report = orch.execute_approved(&proposal).await.expect("execute");
+    assert_eq!(report.outcome, Outcome::Succeeded);
+
+    // The runtime saw exactly the approved call, with the approved args.
+    let invoked = invoked.lock().unwrap();
+    assert_eq!(invoked.len(), 1);
+    assert_eq!(invoked[0].name, "email:send");
+    assert_eq!(invoked[0].arguments, call.args);
 }

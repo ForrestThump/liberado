@@ -226,3 +226,14 @@ impl CompletionResponse {
         }
     }
 }
+
+/// One item from a streamed completion ([`Provider::complete_stream`](crate::Provider::complete_stream)).
+/// Tokens arrive first (incremental text), then exactly one `Done` carries the fully assembled
+/// response (content + tool calls + finish reason) so the caller's loop can act on it.
+#[derive(Debug, Clone)]
+pub enum StreamItem {
+    /// An incremental text delta of the assistant's content.
+    Token(String),
+    /// The turn is complete — the assembled response.
+    Done(CompletionResponse),
+}

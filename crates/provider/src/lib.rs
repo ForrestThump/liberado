@@ -19,8 +19,8 @@ mod types;
 
 pub use error::{ProviderError, ProviderResult};
 pub use mock::MockProvider;
-pub use provider::{Provider, complete_json};
+pub use provider::{CompletionStream, Provider, complete_json};
 pub use types::{
-    CompletionRequest, CompletionResponse, FinishReason, Message, ResponseFormat, Role, ToolDef,
-    ToolInvocation, Usage,
+    CompletionRequest, CompletionResponse, FinishReason, Message, ResponseFormat, Role, StreamItem,
+    ToolDef, ToolInvocation, Usage,
 };

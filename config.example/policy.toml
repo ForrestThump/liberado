@@ -1,0 +1,52 @@
+# policy.toml — TEMPLATE. Copy to your config dir and edit. OPTIONAL (absent => no zones, no
+# grants; the daemon runs with zero authority).
+#
+# This is the SECURITY SURFACE (Decision 4 / 5). Two things are declared here:
+#   1. Per-zone write classes — how much agents may mutate a given area.
+#   2. Capability grants — the explicit, named permissions the daemon holds. The dispatcher takes
+#      the UNION of all grants as its maximal authority and only ever NARROWS it per dispatch.
+# An UNLISTED zone fails safe to `proposal_only` (agents can never silently write somewhere
+# undeclared). Every zone named in a grant MUST be declared below, and every `ExecuteMcp` MUST
+# name an MCP in topology.toml — `liberado config check` enforces both.
+
+# --- Zones and their write classes -----------------------------------------------------------
+# write_class: agent_writable | shared | human_only | proposal_only
+
+[[zones]]
+zone = "tasks"
+write_class = "agent_writable"   # agents write directly (with provenance + optimistic hash)
+
+[[zones]]
+zone = "decisions"
+write_class = "agent_writable"
+
+[[zones]]
+zone = "proposals"
+write_class = "agent_writable"
+
+[[zones]]
+zone = "inbox"
+write_class = "shared"           # both humans and agents write; optimistic-concurrency handles conflicts
+
+[[zones]]
+zone = "finance"
+write_class = "human_only"       # a named, sensitive zone: agents may read but never write
+
+# --- Capability grants ------------------------------------------------------------------------
+# Capabilities: Read / Write / ReadSummary over a zone, or ExecuteMcp by name.
+# Zone form: { Vault = "<folder>" } for a vault folder, { Named = "<name>" } for an external zone.
+
+[[grants]]
+component = "agent"
+capabilities = [
+    { Read = { Vault = "tasks" } },
+    { Write = { Vault = "tasks" } },
+    { Read = { Vault = "decisions" } },
+    { Write = { Vault = "decisions" } },
+    { ReadSummary = { Named = "finance" } },   # finance is human_only: read a summary, never the detail
+    { ExecuteMcp = "tasks-mcp" },              # must match a [[mcps]] name in topology.toml
+]
+
+# Names of secrets the components need, resolved from the environment (never inlined). Each entry
+# must be present as an env var at boot — `config check` reports any that are missing.
+# secret_refs = ["DEEPSEEK_API_KEY"]

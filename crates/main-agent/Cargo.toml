@@ -1,0 +1,23 @@
+[package]
+name = "liberado-main-agent"
+version = "0.1.0"
+description = "The conversational main agent: a multi-turn Conversation that carries context across turns and drives the executor's tool-calling loop. The thing a chat UI talks to."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+liberado-conversation-store = { workspace = true }
+liberado-executor = { workspace = true }
+liberado-provider = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+futures = { workspace = true }
+tempfile = { workspace = true }

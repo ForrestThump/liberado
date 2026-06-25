@@ -30,7 +30,10 @@ pub mod model;
 pub mod proposal;
 pub mod provenance;
 
-pub use capability::{Capability, CapabilitySet, WriteClass, Zone};
+pub use capability::{
+    Capability, CapabilitySet, Consequence, Magnitude, WriteClass, Zone, assess_magnitude,
+    is_sweeping_destructive, mentions_destructive,
+};
 pub use dispatch::{
     BlockReason, DispatchAction, DispatchDecision, ExecMode, JobHandle, JobStatus, Outcome, Report,
     ToolCall, mcp_of,
@@ -38,5 +41,5 @@ pub use dispatch::{
 pub use error::{Error, Result};
 pub use event::{Event, EventPayload, event_source};
 pub use model::{ModelChoice, ModelProfile, ModelRole, ModelTier, RequiredCaps};
-pub use proposal::{Proposal, ProposalStatus, ProposedAction};
+pub use proposal::{Proposal, ProposalNoteError, ProposalStatus, ProposedAction};
 pub use provenance::{HUMAN_SOURCE, PROVENANCE_KEY, WriteProvenance};

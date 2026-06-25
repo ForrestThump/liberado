@@ -62,6 +62,82 @@ impl WriteClass {
     }
 }
 
+/// How reversible and contained an action's effects are — the axis the consequence guard gates on
+/// (dispatch spec §6 #3). Ordered by risk (the derived `Ord` follows declaration order), so the
+/// guard can compare against a threshold.
+///
+/// The distinction that matters: a **git-tracked vault write is `Reversible`** (a `git revert` away),
+/// while **sending an email or message is `External`** — it leaves the system and can never be taken
+/// back. Reversibility, not just "is it a write", is what separates low-risk from high-risk.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Consequence {
+    /// No side effects — reads, queries, lookups. Always safe to run.
+    #[default]
+    ReadOnly,
+    /// A change that can be undone *within the system* — e.g. a write/delete in a git-tracked vault,
+    /// recoverable from history. Low risk: the safety net is the version control.
+    Reversible,
+    /// Hard to undo: a write or delete to an **unversioned** store with no recovery path.
+    Irreversible,
+    /// Leaves the system / is externally visible — sending an email or message, calling an external
+    /// API with side effects. The highest risk: irreversible *and* it touches the outside world.
+    External,
+}
+
+/// How far-reaching an action is — a separate axis from [`Consequence`]. "Delete one note" and
+/// "delete *all* notes" have the same (reversible) consequence but very different magnitude; the
+/// second is high-stakes even though git makes it recoverable.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Magnitude {
+    /// A specific, scoped change (one note, one task).
+    #[default]
+    Bounded,
+    /// Affects everything / an unbounded set ("all", "every", a wildcard).
+    Sweeping,
+}
+
+/// Verbs that destroy or overwrite data. Liberado owns this classification because MCP tools don't
+/// declare their own risk — we read the intent from the goal (and from a tool's name/description).
+const DESTRUCTIVE_STEMS: &[&str] = &[
+    "delet", "remov", "wipe", "purge", "clear", "eras", "destroy", "drop", "truncat", "overwrit",
+];
+
+/// Whole-word quantifiers that make an action sweeping.
+const SWEEPING_WORDS: &[&str] = &["all", "every", "everything", "entire", "each", "any"];
+
+fn words(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_ascii_lowercase())
+}
+
+/// Whether `text` (a goal, or a tool name + description) expresses a destructive operation.
+pub fn mentions_destructive(text: &str) -> bool {
+    words(text).any(|w| DESTRUCTIVE_STEMS.iter().any(|stem| w.starts_with(stem)))
+}
+
+/// Classify how far-reaching `text` is. `Sweeping` when a universal quantifier is present as a whole
+/// word (so "install" does not match "all").
+pub fn assess_magnitude(text: &str) -> Magnitude {
+    if words(text).any(|w| SWEEPING_WORDS.contains(&w.as_str())) {
+        Magnitude::Sweeping
+    } else {
+        Magnitude::Bounded
+    }
+}
+
+/// The combined high-stakes signal magnitude contributes to the consequence gate: a **sweeping
+/// destructive** action ("delete all …") — dangerous by reach even when each change is reversible.
+pub fn is_sweeping_destructive(text: &str) -> bool {
+    assess_magnitude(text) == Magnitude::Sweeping && mentions_destructive(text)
+}
+
 /// An explicit permission within a zone (or to invoke a specific MCP).
 ///
 /// There is no ambient authority: if a `Capability` is not present in the active
@@ -154,6 +230,23 @@ impl FromIterator<Capability> for CapabilitySet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sweeping_destructive_classification() {
+        // The case the eval found: reversible (git) but high-magnitude.
+        assert!(is_sweeping_destructive("Delete all of my notes."));
+        assert!(is_sweeping_destructive("wipe every task"));
+        assert!(is_sweeping_destructive("Clear the entire inbox"));
+
+        // Bounded destructive — a single scoped change is not gated by magnitude.
+        assert!(!is_sweeping_destructive("delete the note tmp.md"));
+        // Sweeping but not destructive — reading everything is fine.
+        assert!(!is_sweeping_destructive("summarize all my notes"));
+        // Whole-word matching: "install" must not trip the "all" quantifier.
+        assert!(!is_sweeping_destructive("install all the packages")); // not destructive anyway
+        assert_eq!(assess_magnitude("install the app"), Magnitude::Bounded);
+        assert_eq!(assess_magnitude("delete every file"), Magnitude::Sweeping);
+    }
 
     #[test]
     fn narrowing_never_widens() {

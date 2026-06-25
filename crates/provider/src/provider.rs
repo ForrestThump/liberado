@@ -1,10 +1,17 @@
 //! The [`Provider`] trait — Liberado's narrow waist for all inference.
 
+use std::pin::Pin;
+
 use async_trait::async_trait;
+use futures::Stream;
 use serde::de::DeserializeOwned;
 
 use crate::error::{ProviderError, ProviderResult};
-use crate::types::{CompletionRequest, CompletionResponse};
+use crate::types::{CompletionRequest, CompletionResponse, StreamItem};
+
+/// A streamed completion: a sequence of [`StreamItem`]s (incremental tokens, then a final `Done`).
+/// Boxed so the [`Provider`] trait stays dyn-compatible.
+pub type CompletionStream = Pin<Box<dyn Stream<Item = ProviderResult<StreamItem>> + Send>>;
 
 /// A provider-agnostic inference backend.
 ///
@@ -22,6 +29,25 @@ pub trait Provider: Send + Sync {
 
     /// Run one completion turn.
     async fn complete(&self, request: CompletionRequest) -> ProviderResult<CompletionResponse>;
+
+    /// Run one completion turn, **streaming** the result. The default forwards to
+    /// [`complete`](Self::complete) and emits the whole answer as a single token then `Done`, so a
+    /// non-streaming provider (a mock, or one without an SSE API) is transparently usable by the
+    /// streaming agent loop. Real backends (DeepSeek) override this with token-by-token SSE.
+    async fn complete_stream(
+        &self,
+        request: CompletionRequest,
+    ) -> ProviderResult<CompletionStream> {
+        let response = self.complete(request).await?;
+        let mut items: Vec<ProviderResult<StreamItem>> = Vec::new();
+        if let Some(content) = &response.content
+            && !content.is_empty()
+        {
+            items.push(Ok(StreamItem::Token(content.clone())));
+        }
+        items.push(Ok(StreamItem::Done(response)));
+        Ok(Box::pin(futures::stream::iter(items)))
+    }
 }
 
 /// Run a completion in structured-output mode and deserialize the reply into `T`.

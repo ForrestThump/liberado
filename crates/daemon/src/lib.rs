@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use debounce::Debouncer;
 use liberado_common::{CapabilitySet, DispatchDecision, Event, EventPayload, event_source};
 use liberado_dispatcher::{DispatchRequest, Dispatcher, McpDescriptor};
-use liberado_orchestrator::{Disposition, Orchestrator};
+use liberado_orchestrator::{Disposition, Orchestrator, OrchestratorError};
 use liberado_vault::{Attribution, Vault, VaultError, VaultEvent};
 use thiserror::Error;
 use tokio::sync::mpsc::UnboundedSender;
@@ -33,6 +33,15 @@ const DEFAULT_REACTION_DEPTH: u32 = 1;
 /// content hash to append (enough to distinguish edits; the full id stays short for logs/journals).
 const CORRELATION_PREFIX: &str = "vault-change";
 const CORRELATION_HASH_LEN: usize = 12;
+
+/// Provenance source recorded for the daemon's own vault writes (e.g. a proposal artifact). Agent
+/// provenance is what makes attribution suppress the write, so the daemon won't react to the
+/// proposal it just wrote (loop-break, Decision 5).
+const DAEMON_SOURCE: &str = "liberado";
+
+/// Directory under which proposal artifacts live. Used to route external edits on proposal notes
+/// through the approve→execute path instead of the dispatcher.
+const PROPOSALS_DIR: &str = "proposals";
 
 /// What the daemon produces for each external change it reacts to: the standardized event plus how
 /// far it took the reaction.
@@ -59,6 +68,7 @@ impl ReactionOutcome {
             ReactionOutcome::Decided(d) => d.action.label(),
             ReactionOutcome::Acted(Disposition::Reported(_)) => "acted:reported",
             ReactionOutcome::Acted(Disposition::Clarify { .. }) => "acted:clarify",
+            ReactionOutcome::Acted(Disposition::Propose(_)) => "acted:proposed",
         }
     }
 }
@@ -94,6 +104,8 @@ pub const VAULT_NOTE_CHANGED: &str = "VaultNoteChanged";
 pub enum DaemonError {
     #[error(transparent)]
     Vault(#[from] VaultError),
+    #[error("orchestration failed: {0}")]
+    Orchestrator(#[from] OrchestratorError),
 }
 
 /// The Liberado daemon.
@@ -190,7 +202,31 @@ impl Daemon {
 
     /// Take a reactable change as far as the attached components allow: observe → decide → act.
     /// Failures at any stage are logged and degrade the outcome (never abort the watch loop).
+    ///
+    /// Edits under `proposals/` bypass the dispatcher — they are evaluated directly as potential
+    /// proposal approvals (the human's Obsidian edit is the authorization).
     async fn react(&self, event: &Event) -> ReactionOutcome {
+        // Before any dispatch: check if this is a proposal note change. The human's edit (status
+        // approval) is the authorization — no need to re-dispatch (which would re-propose).
+        if let Some(path) = event.payload.path.as_deref() {
+            // The path was normalized to forward slashes in build_event, so starts_with works on
+            // both platforms. Exclude the exact `proposals` directory path to avoid attempting to
+            // read a directory as a proposal note on directory-creation watch events.
+            if path.starts_with(PROPOSALS_DIR) && path != Path::new(PROPOSALS_DIR) {
+                // Infra errors (orchestrator runtime_for failure) are logged but degraded to
+                // Observed so the watch loop never crashes. The proposal is NOT marked done when an
+                // error occurs, so a human re-triggering the file (or a future retry mechanism) can
+                // pick it up again.
+                return self
+                    .handle_proposal_change(Path::new(path))
+                    .await
+                    .unwrap_or_else(|e| {
+                        tracing::error!(error = %e, "proposal change handling failed — not marked done, retriable");
+                        ReactionOutcome::Observed
+                    });
+            }
+        }
+
         let Some(ctx) = self.dispatcher.as_ref() else {
             return ReactionOutcome::Observed; // watch-only
         };
@@ -212,6 +248,16 @@ impl Daemon {
             .run(decision.clone(), &request.goal, &event.correlation_id)
             .await
         {
+            // A proposal is an artifact the orchestrator built but cannot persist (no vault). Write
+            // it here, with agent provenance so attribution suppresses the write (no self-reaction).
+            Ok(Disposition::Propose(proposal)) => match self.write_proposal(&proposal).await {
+                Ok(()) => ReactionOutcome::Acted(Disposition::Propose(proposal)),
+                Err(e) => {
+                    // Couldn't persist the artifact — surface the decision rather than claim it acted.
+                    tracing::warn!(error = %e, "writing proposal failed");
+                    ReactionOutcome::Decided(decision)
+                }
+            },
             Ok(disposition) => ReactionOutcome::Acted(disposition),
             Err(e) => {
                 // Couldn't execute — surface the decision we did reach.
@@ -219,6 +265,87 @@ impl Daemon {
                 ReactionOutcome::Decided(decision)
             }
         }
+    }
+
+    /// Persist a proposal as a Markdown note under `proposals/`. Tagged with agent provenance for
+    /// the daemon's own source, so the resulting change is attributed to us and not re-reacted to.
+    /// The proposal's `id` (a correlation id with `:`/`/`) is slugified for the *filename* only —
+    /// the authoritative id stays intact in the frontmatter for idempotency.
+    async fn write_proposal(
+        &self,
+        proposal: &liberado_common::Proposal,
+    ) -> Result<(), DaemonError> {
+        let path = format!("proposals/{}.md", slugify(&proposal.id));
+        let provenance =
+            liberado_common::WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
+        self.vault
+            .write(&path, &proposal.to_note(), None, &provenance)
+            .await?;
+        Ok(())
+    }
+
+    /// A human edited a note under `proposals/`. If it is an APPROVED, non-expired, non-terminal
+    /// proposal, execute its action and flip it to `done`. Anything else (still pending, rejected,
+    /// expired, already done, or not a parseable proposal) is observed and left alone.
+    async fn handle_proposal_change(
+        &self,
+        rel_path: &Path,
+    ) -> Result<ReactionOutcome, DaemonError> {
+        // 1. Read the current content (may have vanished — VaultError propagates).
+        let content = self.vault.read(rel_path).await?;
+
+        // 2. Parse. A non-parseable note is just observed (likely a non-proposal file in proposals/,
+        //    or a note whose frontmatter was temporarily mangled during an edit).
+        let mut proposal = match liberado_common::Proposal::from_note(&content) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::debug!(error = %e, "proposals/ change is not a parseable proposal");
+                return Ok(ReactionOutcome::Observed);
+            }
+        };
+
+        // 3. Terminal states are never re-executed (at-most-once journal marker, Decision 6).
+        if proposal.status.is_terminal() {
+            tracing::debug!(status = ?proposal.status, "proposal is already terminal");
+            return Ok(ReactionOutcome::Observed);
+        }
+
+        // 4. Expired proposals are never executed.
+        if proposal.is_expired_at(chrono::Utc::now()) {
+            tracing::debug!("proposal is expired");
+            return Ok(ReactionOutcome::Observed);
+        }
+
+        // 5. Only Approved is actionable — the human edited something other than approving.
+        if !proposal.status.is_actionable() {
+            tracing::debug!(status = ?proposal.status, "proposal is not actionable");
+            return Ok(ReactionOutcome::Observed);
+        }
+
+        // 6. Execute. An orchestration error is an infra failure and propagates (so it can be
+        //    retried on the next watch cycle). We do NOT mark done on failure.
+        let Some(orch) = self.orchestrator.as_ref() else {
+            tracing::warn!("approved proposal but no orchestrator attached to execute it");
+            return Ok(ReactionOutcome::Observed);
+        };
+        let report = orch.execute_approved(&proposal).await?;
+
+        // 7. Mark done and persist. The write carries agent provenance (DAEMON_SOURCE) so
+        //    attribution suppresses it — no self-reaction (loop-break, Decision 5).
+        proposal.status = liberado_common::ProposalStatus::Done;
+        let provenance =
+            liberado_common::WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
+        self.vault
+            .write(rel_path, &proposal.to_note(), None, &provenance)
+            .await?;
+
+        tracing::info!(
+            proposal_id = %proposal.id,
+            outcome = ?report.outcome,
+            "executed approved proposal and marked done"
+        );
+
+        Ok(ReactionOutcome::Acted(Disposition::Reported(report)))
     }
 
     /// Run the watch loop until the watcher shuts down. Raw filesystem events are debounced per
@@ -275,6 +402,24 @@ impl Daemon {
 
         Ok(())
     }
+}
+
+/// Turn a correlation id into a single safe path segment for a proposal filename. Correlation ids
+/// carry `:` and `/` (e.g. `vault-change:inbox/x.md:abc`), neither valid in a Windows filename and
+/// the latter a directory separator — collapse every non-alphanumeric run to a single `-`.
+fn slugify(id: &str) -> String {
+    let mut out = String::with_capacity(id.len());
+    let mut last_dash = false;
+    for ch in id.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    out.trim_matches('-').to_string()
 }
 
 /// Sleep until `deadline`, or forever when `None` (so the watch loop's select only wakes on
@@ -518,6 +663,314 @@ mod tests {
             panic!("expected Acted/Reported, got {}", reaction.outcome.label());
         };
         assert_eq!(report.outcome, Outcome::Succeeded);
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn daemon_emits_a_proposal_for_a_high_consequence_action() {
+        use liberado_common::config::DispatchTuning;
+        use liberado_common::{
+            Capability, Consequence, DispatchAction, DispatchDecision, Proposal, ProposalStatus,
+            ProposedAction, ToolCall,
+        };
+        use liberado_executor::ToolRuntime;
+        use liberado_orchestrator::{Orchestrator, RuntimeFactory, RuntimeSetupError};
+        use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
+        use std::sync::Arc;
+
+        // The orchestrator never builds a runtime for a Propose; this factory just satisfies the type.
+        struct UnusedRuntime;
+        #[async_trait::async_trait]
+        impl ToolRuntime for UnusedRuntime {
+            fn catalog(&self) -> Vec<ToolDef> {
+                Vec::new()
+            }
+            async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+                Ok("ok".into())
+            }
+        }
+        struct UnusedFactory;
+        #[async_trait::async_trait]
+        impl RuntimeFactory for UnusedFactory {
+            async fn runtime_for(
+                &self,
+                _allowed_mcps: &[String],
+                _provenance: WriteProvenance,
+            ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+                Ok(Box::new(UnusedRuntime))
+            }
+        }
+
+        let (daemon, dir) = temp_daemon().await;
+
+        // Classifier picks a concrete external action: an ExecuteDirect with an `email:send` seed
+        // call. Granted + confident, but External → the consequence gate downgrades it to Propose.
+        let decision = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: vec![ToolCall {
+                    tool: "email:send".into(),
+                    args: serde_json::json!({ "to": "boss@example.com" }),
+                }],
+            },
+            confidence: 0.95,
+            rationale: "send the requested email".into(),
+        };
+        let dispatch_provider = Arc::new(MockProvider::with_script(
+            "dispatch",
+            [CompletionResponse::text(
+                serde_json::to_string(&decision).unwrap(),
+            )],
+        ));
+        let dispatcher = Dispatcher::new(dispatch_provider, DispatchTuning::default(), 4);
+
+        // Catalog declares the External MCP; capabilities grant it so the only block is consequence.
+        let catalog = vec![McpDescriptor {
+            name: "email".into(),
+            description: "send email".into(),
+            consequence: Consequence::External,
+        }];
+        let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("email".into())]);
+        let orchestrator = Orchestrator::new(
+            Arc::new(MockProvider::with_script("exec", Vec::new())),
+            UnusedFactory,
+        );
+
+        let daemon = daemon
+            .with_debounce(Duration::from_millis(80))
+            .with_dispatcher(dispatcher, catalog, capabilities)
+            .with_orchestrator(orchestrator);
+
+        let vault_dir = dir.path().to_path_buf();
+        let (tx, mut rx) = unbounded_channel();
+        let handle = tokio::spawn(daemon.run(tx));
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        std::fs::write(vault_dir.join("email-me.md"), "please email the boss").unwrap();
+
+        let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+
+        let ReactionOutcome::Acted(Disposition::Propose(proposal)) = reaction.outcome else {
+            panic!("expected Acted/Propose, got {}", reaction.outcome.label());
+        };
+
+        // The proposal artifact landed in the vault and round-trips back to a Pending proposal
+        // carrying the email tool call.
+        let proposals_dir = vault_dir.join("proposals");
+        let entries: Vec<_> = std::fs::read_dir(&proposals_dir)
+            .expect("proposals/ should exist")
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(entries.len(), 1, "exactly one proposal note");
+        let contents = std::fs::read_to_string(&entries[0]).unwrap();
+        let parsed = Proposal::from_note(&contents).expect("proposal note round-trips");
+        assert_eq!(parsed, proposal);
+        assert_eq!(parsed.status, ProposalStatus::Pending);
+        match parsed.proposed_action {
+            ProposedAction::ToolCalls(calls) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].tool, "email:send");
+            }
+            other => panic!("expected ToolCalls, got {other:?}"),
+        }
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn daemon_executes_an_approved_proposal() {
+        use liberado_common::{Proposal, ProposalStatus, ProposedAction, ToolCall};
+        use liberado_executor::ToolRuntime;
+        use liberado_orchestrator::{Orchestrator, RuntimeFactory, RuntimeSetupError};
+        use liberado_provider::{MockProvider, ToolDef, ToolInvocation};
+        use std::sync::{Arc, Mutex};
+
+        // A runtime that records every invoke call.
+        #[derive(Clone, Default)]
+        struct RecordingRuntime {
+            invoked: Arc<Mutex<Vec<ToolInvocation>>>,
+        }
+        #[async_trait::async_trait]
+        impl ToolRuntime for RecordingRuntime {
+            fn catalog(&self) -> Vec<ToolDef> {
+                Vec::new()
+            }
+            async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
+                self.invoked.lock().unwrap().push(call.clone());
+                Ok("ok".into())
+            }
+        }
+        #[derive(Clone)]
+        struct RecordingFactory {
+            runtime: RecordingRuntime,
+        }
+        #[async_trait::async_trait]
+        impl RuntimeFactory for RecordingFactory {
+            async fn runtime_for(
+                &self,
+                _allowed_mcps: &[String],
+                _provenance: WriteProvenance,
+            ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+                Ok(Box::new(self.runtime.clone()))
+            }
+        }
+
+        let runtime = RecordingRuntime::default();
+        let invoked = runtime.invoked.clone();
+        let orch = Orchestrator::new(
+            Arc::new(MockProvider::with_script(
+                "mock",
+                Vec::<liberado_provider::CompletionResponse>::new(),
+            )),
+            RecordingFactory { runtime },
+        );
+
+        let (daemon, dir) = temp_daemon().await;
+        let daemon = daemon
+            .with_debounce(Duration::from_millis(80))
+            .with_orchestrator(orch);
+
+        // Pre-create proposals/ so the watcher doesn't react to directory creation.
+        let proposals_dir = dir.path().join("proposals");
+        std::fs::create_dir_all(&proposals_dir).unwrap();
+
+        let (tx, mut rx) = unbounded_channel();
+        let handle = tokio::spawn(daemon.run(tx));
+
+        // Let the watcher establish before writing the proposal file.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // Write an approved proposal (simulates a human editing status to approved).
+        let mut proposal = Proposal::pending(
+            "vault-change:test-proposal:abc",
+            "vault-change:test-proposal:abc",
+            "test",
+            ProposedAction::ToolCalls(vec![ToolCall {
+                tool: "tasks:create".into(),
+                args: serde_json::json!({ "summary": "test task" }),
+            }]),
+            "a test proposal",
+        );
+        proposal.status = ProposalStatus::Approved;
+        std::fs::write(proposals_dir.join("approved.md"), &proposal.to_note()).unwrap();
+
+        // Wait for the daemon to react to the proposal change.
+        let _reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out waiting for reaction")
+            .expect("reaction channel closed");
+
+        // (a) The runtime recorded the approved tool invocation.
+        let recorded = invoked.lock().unwrap();
+        assert_eq!(
+            recorded.len(),
+            1,
+            "approved proposal must execute the tool call"
+        );
+        assert_eq!(recorded[0].name, "tasks:create");
+
+        // (b) The proposal note was flipped to Done.
+        let contents = std::fs::read_to_string(proposals_dir.join("approved.md")).unwrap();
+        let parsed = Proposal::from_note(&contents).unwrap();
+        assert_eq!(parsed.status, ProposalStatus::Done);
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn daemon_does_not_execute_a_pending_proposal() {
+        use liberado_common::{Proposal, ProposalStatus, ProposedAction, ToolCall};
+        use liberado_executor::ToolRuntime;
+        use liberado_orchestrator::{Orchestrator, RuntimeFactory, RuntimeSetupError};
+        use liberado_provider::{MockProvider, ToolDef, ToolInvocation};
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct SilentRuntime {
+            invoked: Arc<Mutex<Vec<ToolInvocation>>>,
+        }
+        #[async_trait::async_trait]
+        impl ToolRuntime for SilentRuntime {
+            fn catalog(&self) -> Vec<ToolDef> {
+                Vec::new()
+            }
+            async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
+                self.invoked.lock().unwrap().push(call.clone());
+                Ok("ok".into())
+            }
+        }
+        #[derive(Clone)]
+        struct SilentFactory {
+            runtime: SilentRuntime,
+        }
+        #[async_trait::async_trait]
+        impl RuntimeFactory for SilentFactory {
+            async fn runtime_for(
+                &self,
+                _allowed_mcps: &[String],
+                _provenance: WriteProvenance,
+            ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+                Ok(Box::new(self.runtime.clone()))
+            }
+        }
+
+        let runtime = SilentRuntime::default();
+        let invoked = runtime.invoked.clone();
+        let orch = Orchestrator::new(
+            Arc::new(MockProvider::with_script(
+                "mock",
+                Vec::<liberado_provider::CompletionResponse>::new(),
+            )),
+            SilentFactory { runtime },
+        );
+
+        let (daemon, dir) = temp_daemon().await;
+        let daemon = daemon
+            .with_debounce(Duration::from_millis(80))
+            .with_orchestrator(orch);
+
+        let proposals_dir = dir.path().join("proposals");
+        std::fs::create_dir_all(&proposals_dir).unwrap();
+
+        let (tx, mut rx) = unbounded_channel();
+        let handle = tokio::spawn(daemon.run(tx));
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // Write a PENDING proposal (not approved).
+        let proposal = Proposal::pending(
+            "pending-test",
+            "pending-correlation",
+            "test",
+            ProposedAction::ToolCalls(vec![ToolCall {
+                tool: "tasks:create".into(),
+                args: serde_json::json!({ "summary": "should-not-run" }),
+            }]),
+            "a pending proposal",
+        );
+        std::fs::write(proposals_dir.join("pending-test.md"), &proposal.to_note()).unwrap();
+
+        // Wait for the daemon to process the change (reaction should arrive quickly).
+        let _reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out waiting for reaction")
+            .expect("reaction channel closed");
+
+        // Runtime recorded nothing — the pending proposal is not actionable.
+        let recorded = invoked.lock().unwrap();
+        assert!(
+            recorded.is_empty(),
+            "pending proposal must NOT invoke any tool"
+        );
+
+        // Proposal status is still Pending.
+        let contents = std::fs::read_to_string(proposals_dir.join("pending-test.md")).unwrap();
+        let parsed = Proposal::from_note(&contents).unwrap();
+        assert_eq!(parsed.status, ProposalStatus::Pending);
 
         handle.abort();
     }

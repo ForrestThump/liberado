@@ -7,9 +7,12 @@ own work. This document is the cold-start map. Each crate has its own zoomed-in
 
 ## Two pillars
 
-1. **The vault is the source of truth.** State lives as Obsidian Markdown, managed through Turbovault.
-   The system perceives by watching the vault and acts by writing back to it. There is no separate
-   database of record.
+1. **The vault is the source of truth.** *Knowledge* state — notes, decisions, goals — lives as
+   Obsidian Markdown, managed through Turbovault. The system perceives by watching the vault and acts
+   by writing back to it. There is no separate database of record *for knowledge*. **Operational
+   data** (the runtime trace — Decision 12; conversation history — Decision 17) deliberately lives
+   *outside* the vault as append-only JSONL, so high-volume writes don't pollute the change-stream
+   the daemon reacts to; it reaches the vault only as a one-way, derived Markdown export.
 2. **Safety is engineered, not prompted.** The LLM *proposes*; deterministic code *disposes*, and only
    ever toward less autonomy. Capabilities only narrow, never widen. Provenance is best-effort and is
    never treated as a trust boundary — security is the capability/zone model.
@@ -50,8 +53,13 @@ Bottom-up (each depends roughly on those above it):
 | Act | [`executor`](crates/executor/ARCHITECTURE.md) | The agent loop: drive a `Provider` over a `ToolRuntime` to a `Report`. MCP-agnostic. |
 | Act | [`mcp`](crates/mcp/ARCHITECTURE.md) | `TurbomcpRuntime`: the `ToolRuntime` over real MCP tools; injects provenance into `_meta`. |
 | Act | [`orchestrator`](crates/orchestrator/ARCHITECTURE.md) | Bridges a `DispatchDecision` to an execution; chooses the provenance correlation. |
+| Converse | [`main-agent`](crates/main-agent/Cargo.toml) | Multi-turn `Conversation`: drives the executor's conversational loop, carries context across turns, streams `AgentEvent`s (tokens, tool start/result), atomic-under-cancel turns. The thing a chat client talks to. |
 | Core | [`daemon`](crates/daemon/ARCHITECTURE.md) | The long-running watch→debounce→attribute→dispatch loop. |
-| Root | [`cli`](crates/cli/ARCHITECTURE.md) | The `liberado` binary — the composition root. |
+| Compose | [`bootstrap`](crates/bootstrap/Cargo.toml) | Builds provider/dispatcher/orchestrator from the environment — the shared composition logic for the `cli` and server binaries. |
+| Root | [`cli`](crates/cli/ARCHITECTURE.md) | The single `liberado` binary — client + launcher (`serve` runs the daemon, `chat` streams). |
+| Server | [`server`](crates/server/Cargo.toml) | The daemon process — watch loop + chat + HTTP/SSE API (`docs/interface.md`); run via `liberado serve`. |
+| Web UI | [`webui`](crates/webui/Cargo.toml) | Dioxus WASM frontend — dashboard, reactions feed, vault panel, streaming chat. Excluded from workspace native builds; built with `dx build`. |
+| Eval | [`eval`](crates/eval/Cargo.toml) | Real-model routing/safety eval suite (routing accuracy, safe-default rate, UNSAFE-acts that must never increase). Not a build dependency of the system. |
 
 ## Cross-cutting concepts
 
@@ -76,20 +84,28 @@ changes live on feature branches and have a draft issue in `turbomcp-request-met
 
 ## Current status
 
-Every box above exists, is **independently tested**, and is now **wired end-to-end**: the daemon
-watches → attributes → dispatches → orchestrates → executes, with both wiring seams complete.
+The reactive backbone, the web UI, a **streaming conversational chat loop**, and **persisted,
+session-keyed conversations** (Decision 17) are complete, all hosted by **one `liberado` binary**
+(daemon-first, Decision 2 — `serve` hosts everything; `chat` is a client). The next work is deepening
+the main agent (context policy + dispatcher integration) and the TUI.
 
-1. ✅ **Concrete `RuntimeFactory`** — `liberado-mcp`'s `TurbomcpRuntimeFactory` connects via a
-   `ClientConnector` (production: spawn an MCP server subprocess over stdio), builds a
-   provenance-bound `TurbomcpRuntime`, and scopes it to the allowed MCPs.
-2. ✅ **Daemon → orchestrator** — the daemon's `react()` runs dispatch → orchestrate; a `Reaction`
-   carries a `ReactionOutcome` (`Observed` / `Decided` / `Acted(Disposition)`). The `cli` assembles
-   a `StdioConnector`-backed orchestrator when `LIBERADO_MCP_CMD` is configured.
+**Done:**
+1. ✅ **Reactive pipeline** — daemon watches → attributes → dispatches → orchestrates → executes, end-to-end wired and tested.
+2. ✅ **Concrete `RuntimeFactory`** — `liberado-mcp`'s `TurbomcpRuntimeFactory` connects via stdio, builds a provenance-bound `TurbomcpRuntime`, scopes it to allowed MCPs.
+3. ✅ **Daemon → orchestrator** — `react()` runs dispatch → orchestrate; `Reaction` carries `ReactionOutcome` (`Observed` / `Decided` / `Acted(Disposition)`). The server assembles the orchestrator from the enabled `[[mcps]]` in `topology.toml`, each connected by `transport` (`crates/bootstrap`'s `mcp_registry_from_config`).
+4. ✅ **Single-binary consolidation** — one `liberado` binary with subcommands: `liberado serve [vault]` (daemon + chat + HTTP/SSE API), `liberado chat [session]` (client), bare `liberado <vault>` aliases `serve`. `crates/server` (`liberado-server`) is a **library** exposing `pub async fn run(vault)`, not a binary. This concretely realizes daemon-first (Decision 2): one process hosts everything; every interface is a client.
+5. ✅ **Web UI** — `liberado-server` (Axum, `:4201`, run via `liberado serve`) hosts the daemon and serves a JSON API; `liberado-webui` (Dioxus WASM) is the browser dashboard showing daemon status, reactions, and vault info. LAN-accessible. Build with `dx build --release --package liberado-webui --web` (see `AGENTS.md`).
+6. ✅ **Conversational chat loop** — `crates/main-agent`'s `Conversation` drives the executor's conversational tool-calling loop with context carried across turns. Served over the shared chat/SSE contract (`docs/interface.md`): `POST /api/chat` and the streaming `GET`/`POST /api/chat/stream` with token streaming, tool-call visibility (`tool`/`tool_result`), and stop/cancel (close the stream → turn aborts + history rolls back, persisting nothing).
+7. ✅ **Conversation persistence** — Decision 17 landed: `crates/conversation-store` (`liberado-conversation-store`) is the append-only JSONL log of DAG message-nodes (ULIDs minted at append time inside a per-conversation lock, so file-order == id-order), outside the vault under `<LIBERADO_DATA_DIR>/conversations`. `main-agent`'s `ChatSessions` rehydrates per turn from the store and **persists only on success**, so the server holds no in-memory conversation cache and a cancelled turn is a clean on-disk no-op. Sessions are keyed by a `session` SSE event; `GET /api/conversations` + `GET /api/conversations/{id}` list and reopen them.
+8. ✅ **`liberado chat` CLI client** — a `reqwest`/SSE terminal REPL (`crates/cli/chat_client.rs`), the first native (non-browser) client of the shared chat API and the seed of the future TUI.
+9. ✅ **Config-driven substrate** — the daemon boots on one validated `Config` (Decision 14, `crates/bootstrap`): the dispatcher holds `policy.toml`'s grants as its base authority, and `topology.mcps` is now the **single source** for both the dispatcher's catalog AND the runtime's MCP connection. Each `[[mcps]]` entry declares a required `description` (routing), `consequence` (the risk gate), and `transport` (`stdio` command/args or `http` url — how the runtime reaches it); the dispatcher routes over the enabled MCPs and the orchestrator connects to those same names by transport, so a routed name is always a name the runtime can reach (slice 2b done — no env path remains).
 
-What's deliberately *not* done yet (future slices, not seams): connection **pooling/reuse** (today
-one connection per execution) and a **multi-server** MCP registry (today one server per connector);
-the dispatcher's classifier prompt **hardening** (delegation bias); ACP event sources beyond the
-vault watcher; proposal production for high-consequence writes (Decision 11).
+10. ✅ **Proposal workflow (Decision 11, emit AND approve→execute)** — the full propose→approve→execute loop is closed. The EMIT path writes a `proposals/<id>.md` artifact for high-consequence concrete actions (YAML frontmatter with `status: pending`); the APPROVE→EXECUTE half picks up a human `status: approved` edit via the watch loop, calls `orchestrator.execute_approved()` with the proposal's `correlation_id` as provenance (no re-dispatch, no guards — the edit is the authorization), and flips `status` to `done` (loop-broken, idempotent).
+
+**Not yet built (next slice):**
+- **Main-agent depth** — the conversational loop exists, but the fuller design (ContextPolicy header, dispatcher integration so chat routes through the same guards as reactions, per-turn background surfacing) is not wired yet; chat currently drives the executor directly.
+- `crates/tui/` — ratatui TUI client that attaches to the daemon over the same chat/SSE contract (`liberado chat` already proves the contract is client-agnostic).
+- Inbox ACP, ACPs generally, multi-MCP registry, connection pooling.
 
 ## Where to start reading
 

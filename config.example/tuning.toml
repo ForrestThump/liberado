@@ -1,0 +1,33 @@
+# tuning.toml — TEMPLATE. Copy to your config dir and edit. OPTIONAL (absent => every knob at its
+# specced default). These are benign behavior knobs; each field below shows its default, commented
+# out. Uncomment and change only what you want to deviate.
+#
+# Durations are plain seconds (unambiguous in TOML).
+
+[dispatch]
+# small_fanout = 3                 # max tool calls in a direct dispatch before it becomes a subagent
+# clarify_threshold_read = 0.5     # below this confidence on a read, downgrade to Clarify
+# clarify_threshold_write = 0.7    # higher bar before an agent_writable write
+# max_concurrent_subagents = 2     # in-flight subagent cap (KV-cache / homelab bound)
+# detach_soft_timeout_secs = 20    # foreground Await -> Detach promotion point
+# guidance_match_floor = 0.8       # procedural-memory score that short-circuits classification
+# subagent_isolation = "in_process" # in_process | out_of_process
+
+[context]
+# max_goals = 5
+# max_decisions = 5
+# decision_recency_days = 7
+
+[concurrency]
+# window_secs = 60                 # recency window for "this audit entry explains this event"
+# max_reaction_depth = 4           # cascade depth cap (shared with dispatch); halts runaway chains
+# retry_max = 3                    # optimistic-write retries before escalating
+
+[capture]
+# inbox_settle_window_secs = 900   # quiescence before an actionable note is processed
+# ready_now_settle_secs = 120      # shorter quiescence for #ready-now notes
+
+[maintenance]
+# git_commit_schedule = "per-batch+hourly"
+# maintenance_schedule = "weekly"
+# prune_requires_proposal = true   # pruning human-authored content always proposes first
