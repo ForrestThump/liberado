@@ -4,7 +4,7 @@
 //! of the crate never touches raw JSON. The client is a thin `reqwest` wrapper — no
 //! caching, no retry (the poller in `main.rs` handles timing).
 
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 
 /// Response shape from `GET /api/status`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -16,6 +16,15 @@ pub struct DaemonStatus {
     pub dispatcher_attached: bool,
     pub orchestrator_attached: bool,
     pub reactions_seen: u64,
+    /// Model name (e.g. "deepseek-chat") — available when server wires it.
+    #[serde(default)]
+    pub model_name: Option<String>,
+    /// Total tokens consumed in the current session (prompt + completion).
+    #[serde(default)]
+    pub token_usage_total: Option<u64>,
+    /// Provider context window size in tokens.
+    #[serde(default)]
+    pub context_window: Option<u64>,
 }
 
 /// One entry from `GET /api/reactions`.
@@ -30,11 +39,17 @@ pub struct ReactionEvent {
 }
 
 /// One conversation header from `GET /api/conversations`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ConvHeader {
     pub id: String,
     pub title: String,
     pub created_at: String,
+    /// Parent conversation id — set when this conversation was forked/spawned from another.
+    #[serde(default)]
+    pub parent_conversation: Option<String>,
+    /// The message node that spawned this conversation, when applicable.
+    #[serde(default)]
+    pub spawned_by: Option<String>,
 }
 
 /// A message from `GET /api/conversations/{id}` history.
@@ -46,6 +61,12 @@ pub struct ChatMessage {
     pub tool_calls: Option<serde_json::Value>,
     #[serde(default)]
     pub tool_call_id: Option<String>,
+}
+
+/// Wrapper for `GET /api/conversations/{id}` response: `{"messages": […]}`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ConversationHistory {
+    messages: Vec<ChatMessage>,
 }
 
 /// A tool-call chip rendered inline in the chat: `[tool] name(args preview)`.
@@ -64,8 +85,13 @@ pub struct ToolResultChip {
 }
 
 /// Fetch `GET /api/status` and return the parsed `DaemonStatus`.
-pub async fn fetch_status(client: &Client, server: &str) -> Result<DaemonStatus, reqwest::Error> {
-    todo!("fetch_status")
+pub async fn fetch_status(client: &Client, server: &str) -> Result<Option<DaemonStatus>, reqwest::Error> {
+    let resp = client.get(format!("{server}/api/status")).send().await?;
+    if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
+        return Ok(None);
+    }
+    resp.error_for_status_ref()?;
+    Ok(Some(resp.json().await?))
 }
 
 /// Fetch `GET /api/reactions?limit=N` and return the tail entries.
@@ -74,7 +100,16 @@ pub async fn fetch_reactions(
     server: &str,
     limit: usize,
 ) -> Result<Vec<ReactionEvent>, reqwest::Error> {
-    todo!("fetch_reactions")
+    let resp = client
+        .get(format!("{server}/api/reactions"))
+        .query(&[("limit", limit)])
+        .send()
+        .await?;
+    if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
+        return Ok(Vec::new());
+    }
+    resp.error_for_status_ref()?;
+    resp.json().await
 }
 
 /// Fetch `GET /api/conversations` and return the header list.
@@ -82,7 +117,12 @@ pub async fn fetch_conversations(
     client: &Client,
     server: &str,
 ) -> Result<Vec<ConvHeader>, reqwest::Error> {
-    todo!("fetch_conversations")
+    let resp = client.get(format!("{server}/api/conversations")).send().await?;
+    if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
+        return Ok(Vec::new());
+    }
+    resp.error_for_status_ref()?;
+    resp.json().await
 }
 
 /// Fetch `GET /api/conversations/{id}` and return the message history.
@@ -90,8 +130,17 @@ pub async fn fetch_conversation_history(
     client: &Client,
     server: &str,
     id: &str,
-) -> Result<Vec<ChatMessage>, reqwest::Error> {
-    todo!("fetch_conversation_history")
+) -> Result<Option<Vec<ChatMessage>>, reqwest::Error> {
+    let resp = client
+        .get(format!("{server}/api/conversations/{id}"))
+        .send()
+        .await?;
+    if resp.status() == StatusCode::NOT_FOUND || resp.status() == StatusCode::SERVICE_UNAVAILABLE {
+        return Ok(None);
+    }
+    resp.error_for_status_ref()?;
+    let history: ConversationHistory = resp.json().await?;
+    Ok(Some(history.messages))
 }
 
 /// Open a streaming `POST /api/chat/stream` with `message` and optional `session`, and
@@ -102,5 +151,175 @@ pub async fn post_chat_stream(
     message: &str,
     session: Option<&str>,
 ) -> Result<reqwest::Response, reqwest::Error> {
-    todo!("post_chat_stream")
+    let body = serde_json::json!({ "message": message, "session": session });
+    client
+        .post(format!("{server}/api/chat/stream"))
+        .json(&body)
+        .send()
+        .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn daemon_status_serde_roundtrip() {
+        let status = DaemonStatus {
+            running: true,
+            vault_path: "/home/user/vault".into(),
+            uptime_seconds: 3600,
+            watcher_active: false,
+            dispatcher_attached: true,
+            orchestrator_attached: true,
+            reactions_seen: 42,
+            model_name: Some("deepseek-chat".into()),
+            token_usage_total: Some(1500),
+            context_window: Some(128000),
+        };
+        let json = serde_json::to_value(&status).unwrap();
+        let back: DaemonStatus = serde_json::from_value(json).unwrap();
+        assert!(back.running);
+        assert_eq!(back.vault_path, "/home/user/vault");
+        assert_eq!(back.uptime_seconds, 3600);
+        assert!(back.dispatcher_attached);
+        assert_eq!(back.reactions_seen, 42);
+        assert_eq!(back.model_name, Some("deepseek-chat".into()));
+        assert_eq!(back.token_usage_total, Some(1500));
+        assert_eq!(back.context_window, Some(128000));
+    }
+
+    #[test]
+    fn daemon_status_missing_model_fields_defaults_to_none() {
+        let json = serde_json::json!({
+            "running": true,
+            "vault_path": "/v",
+            "uptime_seconds": 100,
+            "watcher_active": false,
+            "dispatcher_attached": false,
+            "orchestrator_attached": false,
+            "reactions_seen": 0
+        });
+        let status: DaemonStatus = serde_json::from_value(json).unwrap();
+        assert_eq!(status.model_name, None);
+        assert_eq!(status.token_usage_total, None);
+        assert_eq!(status.context_window, None);
+    }
+
+    #[test]
+    fn reaction_event_serde_roundtrip() {
+        let event = ReactionEvent {
+            event_type: "file_changed".into(),
+            timestamp: "2025-06-25T12:00:00Z".into(),
+            source: "watcher".into(),
+            correlation_id: "abc-123".into(),
+            path: Some("/docs/notes.md".into()),
+            outcome: "dispatched".into(),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        let back: ReactionEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(back.event_type, "file_changed");
+        assert_eq!(back.path, Some("/docs/notes.md".into()));
+        assert_eq!(back.outcome, "dispatched");
+    }
+
+    #[test]
+    fn reaction_event_null_path_deserializes() {
+        let json = serde_json::json!({
+            "event_type": "noop",
+            "timestamp": "2025-06-25T12:00:00Z",
+            "source": "watcher",
+            "correlation_id": "x",
+            "path": null,
+            "outcome": "observed"
+        });
+        let event: ReactionEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(event.path, None);
+    }
+
+    #[test]
+    fn conv_header_serde_roundtrip_with_parent() {
+        let header = ConvHeader {
+            id: "c1".into(),
+            title: "test conversation".into(),
+            created_at: "2025-06-25T12:00:00Z".into(),
+            parent_conversation: Some("c0".into()),
+            spawned_by: Some("msg-5".into()),
+        };
+        let json = serde_json::to_value(&header).unwrap();
+        let back: ConvHeader = serde_json::from_value(json).unwrap();
+        assert_eq!(back.id, "c1");
+        assert_eq!(back.parent_conversation, Some("c0".into()));
+        assert_eq!(back.spawned_by, Some("msg-5".into()));
+    }
+
+    #[test]
+    fn conv_header_missing_parent_fields_defaults_to_none() {
+        let json = serde_json::json!({
+            "id": "c2",
+            "title": "plain",
+            "created_at": "2025-06-25T12:00:00Z"
+        });
+        let header: ConvHeader = serde_json::from_value(json).unwrap();
+        assert_eq!(header.id, "c2");
+        assert_eq!(header.parent_conversation, None);
+        assert_eq!(header.spawned_by, None);
+    }
+
+    #[test]
+    fn conv_header_default_is_all_empty() {
+        let header = ConvHeader::default();
+        assert!(header.id.is_empty());
+        assert!(header.title.is_empty());
+        assert!(header.parent_conversation.is_none());
+    }
+
+    #[test]
+    fn chat_message_serde_roundtrip_with_tool_calls() {
+        let msg = ChatMessage {
+            role: "assistant".into(),
+            content: "Let me search...".into(),
+            tool_calls: Some(serde_json::json!([
+                {"function": {"name": "search", "arguments": "{\"q\":\"test\"}"}}
+            ])),
+            tool_call_id: None,
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        let back: ChatMessage = serde_json::from_value(json).unwrap();
+        assert_eq!(back.role, "assistant");
+        assert_eq!(back.content, "Let me search...");
+        let tc = back.tool_calls.unwrap();
+        assert_eq!(tc[0]["function"]["name"], "search");
+    }
+
+    #[test]
+    fn chat_message_missing_tool_fields_defaults() {
+        let json = serde_json::json!({"role": "user", "content": "hello"});
+        let msg: ChatMessage = serde_json::from_value(json).unwrap();
+        assert_eq!(msg.role, "user");
+        assert_eq!(msg.tool_calls, None);
+        assert_eq!(msg.tool_call_id, None);
+    }
+
+    #[test]
+    fn conversation_history_deserialization() {
+        let json = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"}
+            ]
+        });
+        let history: super::ConversationHistory = serde_json::from_value(json).unwrap();
+        assert_eq!(history.messages.len(), 2);
+        assert_eq!(history.messages[0].role, "user");
+    }
+
+    #[test]
+    fn tool_call_result_chip_construction() {
+        let call = ToolCallChip { name: "search".into(), args: "{\"q\":\"test\"}".into() };
+        assert_eq!(call.name, "search");
+        let result = ToolResultChip { name: "search".into(), ok: true, preview: "3 results".into() };
+        assert!(result.ok);
+        assert_eq!(result.preview, "3 results");
+    }
 }

@@ -21,15 +21,15 @@ The terminal has a fixed layout; the user's focus shifts between areas, not page
 │                                   │  Daemon: ● running    │
 │  > What's on my calendar today?   │  Uptime: 3h 12m       │
 │                                   │  Vault: /notes        │
-│  You have two events:             │                        │
-│   • 10:00 — Standup               │  Recent reactions:     │
+│  You have two events:             │                       │
+│   • 10:00 — Standup               │  Recent reactions:    │
 │   • 14:00 — Dentist               │  → observed inbox/x   │
 │                                   │  → decided:clarify    │
 │                                   │  → acted:reported     │
-│                                   │                        │
+│                                   │                       │
 ├───────────────────────────────────┤  [1] conv-1 about...  │
 │  > _                              │  [2] conv-2 review... │
-└───────────────────────────────────┴────────────────────────┘
+└───────────────────────────────────┴───────────────────────┘
 ```
 
 ### Chat pane (left, 70%)

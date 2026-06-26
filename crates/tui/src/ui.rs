@@ -1,57 +1,87 @@
 //! Ratatui rendering for the Liberado TUI.
 //!
 //! Pure functions that read `App` and draw into a `Frame`. Never mutate state — all
-//! mutation goes through `App::update()` in `app.rs`. The layout is fixed:
+//! mutation goes through `App::update()` and `App::handle_key()` in `app.rs`.
 //!
-//! ```text
-//! ┌─ Chat pane (70%) ────────────────────┬─ Sidebar (30%) ──────┐
-//! │                                      │  Status               │
-//! │  messages + live stream              │  Reactions feed       │
-//! │                                      │  Conversations        │
-//! ├──────────────────────────────────────┤                       │
-//! │  Input line                          │                       │
-//! └──────────────────────────────────────┴───────────────────────┘
-//! ```
+//! Color resolution: every color comes from `app.theme` via [`resolve_colors`]. This
+//! means `/theme dark` or `/theme light` instantly changes every rendered element
+//! without a restart.
+//!
+//! The actual pane rendering is delegated to `crate::render`.
 
-use ratatui::{
-    Frame,
-    layout::{Constraint, Direction, Layout, Rect},
-};
+use ratatui::{Frame, style::Color};
+use liberado_theme::parse_hex;
 
 use crate::app::App;
+use crate::render;
 
-/// Top-level draw. Called by the ratatui event loop on each frame.
-pub fn draw(frame: &mut Frame, app: &App) {
-    todo!("draw: split into main vertical layout (chat + input) and sidebar, then delegate to sub-renderers")
+/// Resolve a themed hex key to a ratatui `Color`.
+pub(crate) fn c(key: &Option<String>, fallback: &str) -> Color {
+    let hex = key.clone().unwrap_or_else(|| fallback.to_string());
+    if let Some((r, g, b)) = parse_hex(&hex) {
+        Color::Rgb(r, g, b)
+    } else {
+        Color::Gray
+    }
 }
 
-/// Render the chat message area — scrollback history plus the in-flight streaming
-/// buffer.
-fn draw_chat_pane(frame: &mut Frame, area: Rect, app: &App) {
-    todo!("draw_chat_pane: render messages from app.messages + app.assistant_buf, applying app.scroll_offset")
+/// Top-level draw — delegates to `crate::render::draw()`.
+pub fn draw(frame: &mut Frame, app: &mut App, spinner_tick: u8) {
+    render::draw(frame, app, spinner_tick);
 }
 
-/// Render the composer input line at the bottom of the chat area.
-fn draw_input(frame: &mut Frame, area: Rect, app: &App) {
-    todo!("draw_input: render prompt, input text with cursor, streaming indicator")
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::format::truncate_path;
 
-/// Render the right sidebar: status block, reactions feed, conversation list.
-fn draw_sidebar(frame: &mut Frame, area: Rect, app: &App) {
-    todo!("draw_sidebar: split sidebar into status / reactions / conversations blocks")
-}
+    #[test]
+    fn c_with_valid_hex_key() {
+        let key = Some("#ff0000".to_string());
+        let color = c(&key, "#000000");
+        assert_eq!(color, Color::Rgb(255, 0, 0));
+    }
 
-/// Render the daemon status block.
-fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
-    todo!("draw_status: running indicator, uptime, dispatcher/orchestrator attached")
-}
+    #[test]
+    fn c_with_none_uses_fallback() {
+        let color = c(&None, "#00ff00");
+        assert_eq!(color, Color::Rgb(0, 255, 0));
+    }
 
-/// Render the reactions tail.
-fn draw_reactions(frame: &mut Frame, area: Rect, app: &App) {
-    todo!("draw_reactions: one line per reaction event with outcome icon")
-}
+    #[test]
+    fn c_with_invalid_hex_returns_gray() {
+        let key = Some("not-a-color".to_string());
+        let color = c(&key, "#000000");
+        assert_eq!(color, Color::Gray);
+    }
 
-/// Render the conversation list with selection highlighting.
-fn draw_conversations(frame: &mut Frame, area: Rect, app: &App) {
-    todo!("draw_conversations: list conv headers, highlight selected, truncate long titles")
+    #[test]
+    fn c_with_invalid_fallback_returns_gray() {
+        let color = c(&None, "bad");
+        assert_eq!(color, Color::Gray);
+    }
+
+    #[test]
+    fn truncate_path_short_unchanged() {
+        assert_eq!(truncate_path("/a/b", 10), "/a/b");
+    }
+
+    #[test]
+    fn truncate_path_with_separator() {
+        let result = truncate_path("/home/user/projects/my-project", 20);
+        assert!(result.starts_with("..."));
+        assert!(result.contains("my-project") || result.contains("projects"));
+    }
+
+    #[test]
+    fn truncate_path_with_backslash() {
+        let result = truncate_path("C:\\Users\\Name\\Documents", 20);
+        assert!(result.starts_with("..."));
+    }
+
+    #[test]
+    fn truncate_path_no_separator() {
+        let result = truncate_path("a-very-long-filename-without-directories", 15);
+        assert!(result.starts_with("..."));
+    }
 }

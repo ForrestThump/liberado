@@ -59,6 +59,8 @@ liberado-daemon = { path = "crates/daemon" }
 liberado-cli = { path = "crates/cli" }
 liberado-server = { path = "crates/server" }
 liberado-tui = { path = "crates/tui" }
+liberado-theme = { path = "crates/theme" }
+liberado-markdown = { path = "crates/markdown" }
 
 # --- co-developed path dependencies (Decision 7) ---
 # Pinned to whatever is checked out in the sibling directories (currently the

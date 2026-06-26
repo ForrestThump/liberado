@@ -1,0 +1,18 @@
+[package]
+name = "liberado-theme"
+version = "0.1.0"
+description = "Shared theme definitions for Liberado UIs — color tokens consumed by ratatui, Dioxus/CSS, and terminal output. No UI dependency."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+dirs = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

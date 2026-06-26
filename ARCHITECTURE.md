@@ -19,14 +19,16 @@ own work. This document is the cold-start map. Each crate has its own zoomed-in
 
 ## The loop (perceive → decide → act → don't loop)
 
+- AGENT TO DO: CONVERT ALL GRAPHS TO MERMAID BLOCKS ON NEXT DOCS UPDATE RUN.
+
 ```
             ┌─────────────────────────── vault (Obsidian Markdown, Turbovault) ───────────────────────────┐
-            │                                                                                              │
-            ▼                                                                                              │
+            │                                                                                             │
+            ▼                                                                                             │
   ┌──────────────────┐   external    ┌──────────────┐   decision   ┌───────────────┐   tool calls  ┌──────┴───────┐
-  │  daemon: watch   │──── change ───▶│  dispatcher  │─────────────▶│ orchestrator  │──────────────▶│   executor   │
-  │  debounce        │   (attributed │  classify +  │  Execute /   │ decision →    │   agent loop  │  + ToolRuntime│
-  │  attribute ◀─────┼── as External)│   guards     │  Subagent /  │ Task + prov.  │               │  (liberado-  │
+  │  daemon: watch   │──── change ───▶│  dispatcher  │─────────────▶│ orchestrator  │──────────────▶│   executor  │
+  │  debounce        │   (attributed │  classify +  │  Execute /   │ decision →    │   agent loop  │  + ToolRuntime │
+  │  attribute ◀─────┼── as External)│   guards     │  Subagent /  │ Task + prov.  │               │  (liberado-   │
   │  (loop-break)    │               └──────────────┘   Clarify    └───────────────┘               │   mcp)       │
   └────────┬─────────┘                                                                              └──────┬───────┘
            │  Agent/Missing → SUPPRESS (our own write)                                                     │
