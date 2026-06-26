@@ -35,52 +35,63 @@ life-os/
 └── config.example/              # (kept or merged into per-crate + root examples)
 ```
 
-## Precedence & Resolution Order
-1. `LIBERADO_CONFIG_DIR` (explicit full override) — if set and non-empty, use exactly this directory. Stop.
-2. Root `config/` (if directory exists in workspace root) — treated as the unified workspace config.
-3. Falling back, each crate may look in its own `config/` sibling directory for crate-specific values (used when the crate runs stand-alone or in tests).
-4. Built-in defaults inside the crate (current `Default` impls).
+## Precedence & Resolution Order (per-file overlay)
+For **each** of `topology.toml`, `policy.toml`, `tuning.toml` independently:
 
-Result: downstream binary users still get the classic `%APPDATA%\liberado` behavior unless they set the env var. Workspace developers gain `config/` at the root. Individual crates keep autonomy.
+1. Start from built-in `Default`.
+2. Overlay `LIBERADO_CONFIG_DIR/<file>` (if the env var is set **and** the file exists there).
+3. Overlay root `config/<file>` (if present).
+4. Overlay `<crate>/config/<file>` (only for crate-local examples via compile-time `CARGO_MANIFEST_DIR`; runtime per-crate overrides require an explicit env var or absolute path).
+
+Higher layers win at the TOML table/key level. `LIBERADO_CONFIG_DIR` is now a **base directory**, not a short-circuit.
+
+Result: partial per-file overrides work naturally. Downstream binary users retain `%APPDATA%\liberado` fallback. Workspace and crate authors gain controlled layering without tight coupling.
 
 ## Environment Variables
-- `LIBERADO_CONFIG_DIR` — unchanged semantics (highest precedence).
-- Optional new var per crate (e.g. `LIBERADO_DAEMON_CONFIG_DIR`) — only if a crate demonstrates a genuine need for independent override; otherwise keep surface small.
+- `LIBERADO_CONFIG_DIR` — directory that can supply any of the three files (overlay, not stop).
+- Per-crate runtime overrides: use an explicit absolute path or a second env var only when genuinely required; otherwise rely on root `config/`.
 
 ## Discovery Rules
-- A directory is only considered a config source if it contains at least one of the three recognized files (`topology.toml` etc.). Empty directories are ignored.
-- Root `config/` wins over any per-crate `config/` when both would apply to the same process.
-- Per-crate `config/` is primarily intended for:
-  - crate-local example files
-  - unit / integration test fixtures
-  - crates used as libraries in other projects
+- Only directories containing at least one recognized file are sources.
+- Root `config/` and `LIBERADO_CONFIG_DIR` are runtime sources.
+- Per-crate `config/` is **compile-time only** (via `env!("CARGO_MANIFEST_DIR")`) for examples; runtime per-crate config always requires an explicit path.
 
 ## CLI / Tooling Impact
-- `liberado config check` should:
-  - Report which directory it resolved and why (env var, root/config, per-crate, or none).
-  - Support a `--crate <name>` flag to validate a single crate's local config in isolation.
-- `cargo test` inside a crate should automatically pick up that crate's `config/` for any test-only wiring.
+- `liberado config check` reports the exact source file for every loaded value (provenance) and validates the **merged** result only.
+- `--crate <name>` flag is dropped until crate-config discovery is designed.
+- Tests construct `Config` via `Config::from_str` / builder in `common`; filesystem fixtures are only for loader integration tests.
 
 ## Migration & Back-compat
-- Existing users with config in `%APPDATA%\liberado` are unaffected.
-- Workspace developers can copy `config.example/` into root `config/` and/or per-crate folders.
-- `config.example/` may be deprecated in favor of the new root + per-crate locations.
+- Existing users unchanged.
+- `config.example/` remains the committed starter location; root `config/` and per-crate `config/` hold only local overrides (git-ignored).
 
 ## Risks & Mitigations
-- Confusion about “which config wins” → clear precedence list + improved `config check` output.
-- Accidental shipping of dev configs → `.gitignore` the root `config/` (same as today for `.liberado/`).
-- Over-engineering for crates that never need separate config → make per-crate folders strictly opt-in; crates without a `config/` dir simply fall through.
+- Confusion about “which config wins” → per-file provenance in `config check` output.
+- Accidental shipping of dev configs → explicit `.gitignore` rules (see table below).
+- Over-engineering → per-crate runtime config strictly opt-in via explicit path; examples remain compile-time only.
 
-## Open Questions
-- Do we want a small `config-loader` crate that both the bootstrap and individual crates can depend on?
-- Should `config check` also validate cross-references between root and per-crate files (e.g., an MCP referenced in root topology but defined only in a crate)?
-- Naming: keep `config/` everywhere, or use `examples/config/` for non-active files?
+## `.gitignore` Policy
 
-## Next Steps (when approved)
-1. Write the plan into AGENTS.md or a dedicated decision record.
-2. Implement a thin resolver in `bootstrap` that follows the precedence above.
-3. Update `config check` output and docs.
-4. Seed root `config/` and one or two example per-crate configs.
-5. Remove or redirect `config.example/`.
+| Path                        | Git status     | Purpose                          |
+|-----------------------------|----------------|----------------------------------|
+| `config.example/`           | committed      | Starter files                    |
+| `config/*.toml`             | `.gitignore`   | Local deployment overrides       |
+| `crates/*/config.example/`  | committed      | Per-crate examples               |
+| `crates/*/config/*.toml`    | `.gitignore`   | Per-crate deployment overrides   |
 
-This plan keeps the system simple for end-users while giving crate authors the autonomy needed for a healthy mesh architecture.
+## Decisions (closed)
+- `config-loader` crate: **yes** — thin `ConfigSource` trait + `ChainLoader` in a new crate (`liberado-config-loader`).
+- Cross-reference validation: **validate merged config only**, never per-directory.
+- Naming: keep `config/` for runtime, `config.example/` for committed starters.
+
+## Next Steps (approved)
+1. Add `schema_version` (optional) to `tuning.toml` + deprecation warning path in loader.
+2. Create `liberado-config-loader` crate with `ConfigSource` trait + `ChainLoader`.
+3. Move merged-config validation into the loader crate.
+4. Add `Config::from_str` / `Config::builder` to `common`.
+5. Update `config check` to emit per-value provenance.
+6. Update `.gitignore` with explicit table (committed vs. local).
+7. Document compile-time example paths via `CARGO_MANIFEST_DIR`.
+8. Write plan into AGENTS.md decision record.
+
+This revised plan eliminates the previous critical and medium-severity issues while preserving mesh autonomy.
