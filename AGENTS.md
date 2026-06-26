@@ -260,3 +260,18 @@ provenance loop-breaking).
 | `LIBERADO_PORT`     | server               | Override listen port (default 4201)                      |
 | `LIBERADO_DATA_DIR` | server               | Operational-data root (default `.liberado`); conversation logs live under `<dir>/conversations` |
 | `RUST_LOG`          | all                  | Log level (e.g. `info`, `debug`, `liberado_daemon=trace`)|
+
+---
+
+## Configuration (Decision 14)
+
+Config is a **mesh**: each file (`topology.toml`, `policy.toml`, `tuning.toml`) is independently resolved from four overlay layers (bottom → top):
+
+1. Built-in `Default`
+2. `LIBERADO_CONFIG_DIR/<file>` (if the env var is set and the file exists)
+3. Root `config/<file>` (runtime override)
+4. `<crate>/config/<file>` (compile-time examples only via `CARGO_MANIFEST_DIR`; not runtime unless explicitly passed a path)
+
+Later layers win at the TOML table/key level. Per-value provenance is reported by `liberado config check`.
+
+See `config-plan.md` for the full rationale and next-step notes.

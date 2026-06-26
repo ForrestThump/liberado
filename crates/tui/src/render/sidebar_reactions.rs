@@ -35,18 +35,11 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
                     "→",
                     Style::default().fg(c(&th.reaction_dispatched, "#ffff00")),
                 ),
-                "acted" => Span::styled(
-                    "✓",
-                    Style::default().fg(c(&th.reaction_acted, "#00ff00")),
-                ),
-                "reported" => Span::styled(
-                    "✓",
-                    Style::default().fg(c(&th.reaction_acted, "#00ff00")),
-                ),
-                _ => Span::styled(
-                    "?",
-                    Style::default().fg(c(&th.reaction_unknown, "#808080")),
-                ),
+                "acted" => Span::styled("✓", Style::default().fg(c(&th.reaction_acted, "#00ff00"))),
+                "reported" => {
+                    Span::styled("✓", Style::default().fg(c(&th.reaction_acted, "#00ff00")))
+                }
+                _ => Span::styled("?", Style::default().fg(c(&th.reaction_unknown, "#808080"))),
             };
             let path = r.path.as_deref().unwrap_or("?").to_string();
             let label = format!(

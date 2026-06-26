@@ -3,9 +3,9 @@
 //! The typed *model* and its model-level [`Config::validate`] live in `liberado-common`; this is the
 //! daemon-side half: resolve a config directory, read the three optional per-section TOML files
 //! (`topology.toml` / `policy.toml` / `tuning.toml`), assemble them into one [`Config`], and run the
-//! **cross-cutting** checks that need more than one section to verify (dangling zone/MCP refs,
-//! missing secrets). Every error names the offending file or setting, because the realistic edit path
-//! for this config is an `ssh` session — the message has to be enough to fix it without a debugger.
+//! **cross-cutting** checks (dangling zone/MCP refs, missing secrets) via the config-loader crate.
+//! Every error names the offending file or setting, because the realistic edit path for this config
+//! is an `ssh` session — the message has to be enough to fix it without a debugger.
 //!
 //! Each file is optional: an absent file leaves its section at the specced `Default` (so an empty
 //! config still assembles a `Config`, which then fails validation citing e.g. the missing vault path
@@ -13,9 +13,23 @@
 
 use std::path::{Path, PathBuf};
 
-use liberado_common::Capability;
-use liberado_common::config::Config;
+use liberado_common::config::{CURRENT_SCHEMA_VERSION, Config, Tuning};
 use thiserror::Error;
+
+/// Records which source file contributed each section of a loaded [`Config`],
+/// or `None` if that section fell back to its built-in [`Default`].
+///
+/// Returned alongside [`Config`] by [`load_config`] so callers can report
+/// per-value provenance in diagnostics (Decision 14 / config-plan.md step 5).
+#[derive(Debug, Clone)]
+pub struct ConfigProvenance {
+    /// The source file for `[topology]` values, or `None` if the file was absent.
+    pub topology: Option<String>,
+    /// The source file for `[policy]` values, or `None` if the file was absent.
+    pub policy: Option<String>,
+    /// The source file for `[tuning]` values, or `None` if the file was absent.
+    pub tuning: Option<String>,
+}
 
 /// Where the loader looks for config: `LIBERADO_CONFIG_DIR/liberado` is not assumed — the env var
 /// names the directory directly; otherwise the platform config dir gets a `liberado` subfolder.
@@ -69,13 +83,40 @@ pub fn config_dir() -> Option<PathBuf> {
 }
 
 /// Load `topology.toml`, `policy.toml`, `tuning.toml` from `dir` (each OPTIONAL — an absent file
-/// leaves that section at its `Default`), assemble a [`Config`], and validate it. Returns the
-/// validated config or an actionable error. `dir = None` => an all-defaults `Config` (still
-/// validated, so e.g. a missing `vault_path` is reported rather than silently accepted).
-pub fn load_config(dir: Option<&Path>) -> Result<Config, ConfigError> {
+/// leaves that section at its `Default`), assemble a [`Config`], validate it, and return the
+/// validated config alongside a [`ConfigProvenance`] that records which source file contributed
+/// each section. `dir = None` => an all-defaults `Config` (still validated, so e.g. a missing
+/// `vault_path` is reported rather than silently accepted).
+pub fn load_config(dir: Option<&Path>) -> Result<(Config, ConfigProvenance), ConfigError> {
+    let provenance = ConfigProvenance {
+        topology: dir
+            .filter(|d| d.join(TOPOLOGY_FILE).exists())
+            .map(|_| TOPOLOGY_FILE.to_string()),
+        policy: dir
+            .filter(|d| d.join(POLICY_FILE).exists())
+            .map(|_| POLICY_FILE.to_string()),
+        tuning: dir
+            .filter(|d| d.join(TUNING_FILE).exists())
+            .map(|_| TUNING_FILE.to_string()),
+    };
+
     let topology = load_section(dir, TOPOLOGY_FILE)?;
     let policy = load_section(dir, POLICY_FILE)?;
-    let tuning = load_section(dir, TUNING_FILE)?;
+    let tuning: Tuning = load_section(dir, TUNING_FILE)?;
+
+    // Warn if the tuning file carries a schema_version that differs from the current one.
+    // This is a soft deprecation signal: users who copied an old `tuning.toml` and never
+    // updated it will see a warning, but the config still loads (all fields default).
+    if let Some(ref ver) = tuning.schema_version {
+        if ver != CURRENT_SCHEMA_VERSION {
+            tracing::warn!(
+                "tuning.toml schema_version '{}' does not match current '{}' \
+                 — the file may be outdated; consider reviewing config.example/tuning.toml",
+                ver,
+                CURRENT_SCHEMA_VERSION,
+            );
+        }
+    }
 
     let config = Config {
         topology,
@@ -94,9 +135,14 @@ pub fn load_config(dir: Option<&Path>) -> Result<Config, ConfigError> {
                 .to_string(),
         )
     })?;
-    validate_cross_cutting(&config)?;
 
-    Ok(config)
+    // Cross-cutting validation (dangling zone/MCP refs, missing secrets) moved into the
+    // config-loader crate. Its `Validation` variant carries a bare message (no "invalid config:"
+    // prefix) so wrapping in `ConfigError::Invalid` yields the same output as before.
+    liberado_config_loader::validate_merged_config(&config)
+        .map_err(|e| ConfigError::Invalid(e.to_string()))?;
+
+    Ok((config, provenance))
 }
 
 /// Read one section file into its type. A missing file yields the type's `Default` (every section is
@@ -128,59 +174,6 @@ where
     })
 }
 
-/// The cross-cutting validation layered on top of [`Config::validate`]: checks that span sections
-/// and so can only be verified once everything is assembled. Returns the first failure, each message
-/// naming the offending entry.
-///
-/// 1. Every zone named in a grant capability must be declared in `policy.zones`.
-/// 2. Every `ExecuteMcp(name)` in a grant must name an MCP present in `topology.mcps`.
-/// 3. Every `policy.secret_refs` entry must be set as an environment variable (value never printed).
-fn validate_cross_cutting(config: &Config) -> Result<(), ConfigError> {
-    let invalid = |msg: String| ConfigError::Invalid(msg);
-
-    for grant in &config.policy.grants {
-        for cap in &grant.capabilities {
-            match cap {
-                Capability::Read(zone)
-                | Capability::Write(zone)
-                | Capability::ReadSummary(zone) => {
-                    let name = zone_name(zone);
-                    if !config.policy.zones.iter().any(|z| z.zone == name) {
-                        return Err(invalid(format!(
-                            "grant references undeclared zone '{name}'"
-                        )));
-                    }
-                }
-                Capability::ExecuteMcp(mcp) => {
-                    if !config.topology.mcps.iter().any(|c| &c.name == mcp) {
-                        return Err(invalid(format!(
-                            "grant references unknown MCP '{mcp}' (not in topology.mcps)"
-                        )));
-                    }
-                }
-            }
-        }
-    }
-
-    for secret in &config.policy.secret_refs {
-        if std::env::var_os(secret).is_none() {
-            return Err(invalid(format!(
-                "secret_ref '{secret}' has no corresponding environment variable"
-            )));
-        }
-    }
-
-    Ok(())
-}
-
-/// The bare name a zone capability references, regardless of vault/named kind — both are matched
-/// against `policy.zones` by name (zones are declared by name, not by kind).
-fn zone_name(zone: &liberado_common::Zone) -> &str {
-    match zone {
-        liberado_common::Zone::Vault(name) | liberado_common::Zone::Named(name) => name,
-    }
-}
-
 /// Build the dispatcher's catalog from the ENABLED MCPs in `config.topology.mcps`. This is what the
 /// dispatcher routes over (and the consequence guard gates on); an empty catalog means the dispatcher
 /// can route to nothing (the pre-slice-2 state).
@@ -201,6 +194,7 @@ pub fn catalog_from_config(config: &Config) -> Vec<liberado_dispatcher::McpDescr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use liberado_common::Capability;
     use liberado_common::WriteClass;
     use liberado_common::capability::Consequence;
     use liberado_common::config::{McpConfig, McpTransport};
@@ -255,11 +249,16 @@ capabilities = [
         write_file(dir.path(), "topology.toml", TOPOLOGY_TOML);
         write_file(dir.path(), "policy.toml", POLICY_TOML);
 
-        let config = load_config(Some(dir.path())).expect("valid config should load");
+        let (config, prov) = load_config(Some(dir.path())).expect("valid config should load");
 
         assert_eq!(config.policy.zones.len(), 3);
         assert_eq!(config.policy.grants.len(), 1);
         assert_eq!(config.topology.mcps.len(), 1);
+
+        // Provenance: both files were present.
+        assert_eq!(prov.topology.as_deref(), Some("topology.toml"));
+        assert_eq!(prov.policy.as_deref(), Some("policy.toml"));
+        assert!(prov.tuning.is_none(), "no tuning.toml was written");
 
         // write_class lookups: declared zones resolve, an unlisted zone fails safe to ProposalOnly.
         assert_eq!(
@@ -414,13 +413,18 @@ transport = { kind = "stdio", command = "email-mcp", args = [] }
 "#,
         );
 
-        let config = load_config(Some(dir.path())).expect("valid config should load");
+        let (config, prov) = load_config(Some(dir.path())).expect("valid config should load");
         assert_eq!(config.topology.mcps.len(), 1);
         let mcp = &config.topology.mcps[0];
         assert_eq!(mcp.name, "email-mcp");
         assert_eq!(mcp.description, "send email on the user's behalf");
         assert_eq!(mcp.consequence, Consequence::External);
         assert!(mcp.enabled, "enabled defaults to true");
+
+        // Only topology.toml was present.
+        assert_eq!(prov.topology.as_deref(), Some("topology.toml"));
+        assert!(prov.policy.is_none());
+        assert!(prov.tuning.is_none());
     }
 
     #[test]

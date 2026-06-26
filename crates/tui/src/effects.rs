@@ -5,10 +5,10 @@
 //! polling, cancellation, etc.) is a named method, extracted from `main.rs` to keep the
 //! event loop focused on orchestration.
 
-use std::io;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use parking_lot::Mutex;
+use std::io;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossterm::execute;
 use crossterm::terminal::SetTitle;
@@ -62,7 +62,9 @@ impl EffectRunner {
     /// the caller should `.await` the returned future.
     pub async fn run(&self, effect: Effect) {
         match effect {
-            Effect::StartChatStream { message, session } => self.start_chat_stream(message, session).await,
+            Effect::StartChatStream { message, session } => {
+                self.start_chat_stream(message, session).await
+            }
             Effect::CancelStream => self.cancel_stream(),
             Effect::RefreshConversations => self.refresh_conversations().await,
             Effect::LoadConversationHistory(id) => self.load_conversation_history(id).await,
@@ -98,32 +100,32 @@ impl EffectRunner {
         let state = self.stream_state.clone();
 
         let handle = tokio::spawn(async move {
-            let response = match api::post_chat_stream(
-                &client,
-                &server,
-                &message,
-                session.as_deref(),
-            )
-            .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    if tx.try_send(Action::SseFailed(format!(
-                        "could not reach daemon at {server}: {e}"
-                    ))).is_err() {
-                        tracing::warn!("action channel full, dropping SseFailed");
+            let response =
+                match api::post_chat_stream(&client, &server, &message, session.as_deref()).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        if tx
+                            .try_send(Action::SseFailed(format!(
+                                "could not reach daemon at {server}: {e}"
+                            )))
+                            .is_err()
+                        {
+                            tracing::warn!("action channel full, dropping SseFailed");
+                        }
+                        state.lock().handle = None;
+                        return;
                     }
-                    state.lock().handle = None;
-                    return;
-                }
-            };
+                };
 
             if !response.status().is_success() {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
-                if tx.try_send(Action::SseFailed(format!(
-                    "server returned {status}: {body}"
-                ))).is_err() {
+                if tx
+                    .try_send(Action::SseFailed(format!(
+                        "server returned {status}: {body}"
+                    )))
+                    .is_err()
+                {
                     tracing::warn!("action channel full, dropping SseFailed");
                 }
                 state.lock().handle = None;
@@ -133,20 +135,13 @@ impl EffectRunner {
             let mut decoder = SseDecoder::default();
             let mut stream = response.bytes_stream();
             loop {
-                match tokio::time::timeout(
-                    crate::tuning::SSE_STREAM_TIMEOUT,
-                    stream.next(),
-                )
-                .await
-                {
+                match tokio::time::timeout(crate::tuning::SSE_STREAM_TIMEOUT, stream.next()).await {
                     Ok(Some(Ok(chunk))) => {
                         let text = String::from_utf8_lossy(&chunk);
                         for event in decoder.push(&text) {
                             let action = event.to_action().unwrap_or_else(Action::SseFailed);
-                            let is_terminal = matches!(
-                                action,
-                                Action::SseDone | Action::SseFailed(_)
-                            );
+                            let is_terminal =
+                                matches!(action, Action::SseDone | Action::SseFailed(_));
                             if tx.try_send(action).is_err() {
                                 tracing::warn!("action channel full, dropping SSE action");
                                 // SseDone/SseFailed are important — skip is_terminal check since the
@@ -160,9 +155,10 @@ impl EffectRunner {
                         }
                     }
                     Ok(Some(Err(e))) => {
-                        if tx.try_send(Action::SseFailed(format!(
-                            "stream error: {e}"
-                        ))).is_err() {
+                        if tx
+                            .try_send(Action::SseFailed(format!("stream error: {e}")))
+                            .is_err()
+                        {
                             tracing::warn!("action channel full, dropping SseFailed");
                         }
                         state.lock().handle = None;
@@ -173,9 +169,12 @@ impl EffectRunner {
                         break;
                     }
                     Err(_elapsed) => {
-                        if tx.try_send(Action::SseFailed(
-                            "stream timeout — no data for 60s".to_string(),
-                        )).is_err() {
+                        if tx
+                            .try_send(Action::SseFailed(
+                                "stream timeout — no data for 60s".to_string(),
+                            ))
+                            .is_err()
+                        {
                             tracing::warn!("action channel full, dropping SseFailed");
                         }
                         state.lock().handle = None;
@@ -223,16 +222,18 @@ impl EffectRunner {
                     }
                 }
                 Ok(None) => {
-                    if tx.try_send(Action::SseFailed(
-                        "conversation not found".to_string(),
-                    )).is_err() {
+                    if tx
+                        .try_send(Action::SseFailed("conversation not found".to_string()))
+                        .is_err()
+                    {
                         tracing::warn!("action channel full, dropping SseFailed");
                     }
                 }
                 Err(e) => {
-                    if tx.try_send(Action::SseFailed(format!(
-                        "failed to load history: {e}"
-                    ))).is_err() {
+                    if tx
+                        .try_send(Action::SseFailed(format!("failed to load history: {e}")))
+                        .is_err()
+                    {
                         tracing::warn!("action channel full, dropping SseFailed");
                     }
                 }
@@ -244,22 +245,22 @@ impl EffectRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use liberado_theme::ThemeRegistry;
+    use parking_lot::Mutex;
     use std::sync::Arc;
     use std::time::Duration;
-    use parking_lot::Mutex;
     use tokio::sync::mpsc;
-    use wiremock::{MockServer, Mock, ResponseTemplate};
     use wiremock::matchers::{method, path};
-    use liberado_theme::ThemeRegistry;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn make_app(server: &str) -> Arc<Mutex<App>> {
-        Arc::new(Mutex::new(App::new(server.to_string(), ThemeRegistry::new())))
+        Arc::new(Mutex::new(App::new(
+            server.to_string(),
+            ThemeRegistry::new(),
+        )))
     }
 
-    fn make_runner(
-        app: Arc<Mutex<App>>,
-        action_tx: mpsc::Sender<Action>,
-    ) -> EffectRunner {
+    fn make_runner(app: Arc<Mutex<App>>, action_tx: mpsc::Sender<Action>) -> EffectRunner {
         EffectRunner {
             app,
             should_quit: Arc::new(AtomicBool::new(false)),
@@ -342,7 +343,9 @@ mod tests {
         let (action_tx, mut action_rx) = mpsc::channel(256);
         let runner = make_runner(app, action_tx);
 
-        runner.run(Effect::LoadConversationHistory("c1".into())).await;
+        runner
+            .run(Effect::LoadConversationHistory("c1".into()))
+            .await;
 
         let action = tokio::time::timeout(Duration::from_secs(2), action_rx.recv())
             .await
@@ -373,7 +376,9 @@ mod tests {
         let (action_tx, mut action_rx) = mpsc::channel(256);
         let runner = make_runner(app, action_tx);
 
-        runner.run(Effect::LoadConversationHistory("c1".into())).await;
+        runner
+            .run(Effect::LoadConversationHistory("c1".into()))
+            .await;
 
         let action = tokio::time::timeout(Duration::from_secs(2), action_rx.recv())
             .await
@@ -440,6 +445,9 @@ mod tests {
 
         runner.run(Effect::Quit).await;
 
-        assert!(should_quit.load(Ordering::Relaxed), "should_quit should be true after Quit");
+        assert!(
+            should_quit.load(Ordering::Relaxed),
+            "should_quit should be true after Quit"
+        );
     }
 }

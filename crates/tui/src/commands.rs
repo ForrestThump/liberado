@@ -19,16 +19,26 @@ pub fn dispatch(app: &mut App, input: &str) -> Vec<Effect> {
         "/clear" => cmd_clear(app),
         "/help" => cmd_help(app),
         "/status" => cmd_status(app),
-        "/theme" => cmd_theme(app, parts.get(1).copied().unwrap_or(""), parts.get(2).copied()),
+        "/theme" => cmd_theme(
+            app,
+            parts.get(1).copied().unwrap_or(""),
+            parts.get(2).copied(),
+        ),
         "/model" => cmd_model(app),
-        "/session" => cmd_session(app, parts.get(1).copied().unwrap_or(""), parts.get(2).copied()),
+        "/session" => cmd_session(
+            app,
+            parts.get(1).copied().unwrap_or(""),
+            parts.get(2).copied(),
+        ),
         "/fork" => cmd_fork(app),
         _ => cmd_unknown(app, cmd),
     }
 }
 
 fn cmd_unknown(app: &mut App, cmd: &str) -> Vec<Effect> {
-    app.messages.push(Message::System(format!("Unknown command: {cmd}. Type /help for available commands.")));
+    app.messages.push(Message::System(format!(
+        "Unknown command: {cmd}. Type /help for available commands."
+    )));
     app.scroll_offset = 0;
     vec![Effect::None]
 }
@@ -46,7 +56,9 @@ fn cmd_new(app: &mut App) -> Vec<Effect> {
     app.scroll_offset = 0;
     app.focus = crate::app::Focus::Input;
     let mut effects = vec![Effect::RefreshConversations];
-    if was_streaming { effects.push(Effect::CancelStream); }
+    if was_streaming {
+        effects.push(Effect::CancelStream);
+    }
     effects
 }
 
@@ -85,7 +97,8 @@ Keybindings:
   n           new conversation (when sidebar focused)
   ← →         move cursor in input
   Home / End  jump to start/end of input
-  Del         delete character after cursor".into(),
+  Del         delete character after cursor"
+            .into(),
     ));
     app.scroll_offset = 0;
     vec![Effect::None]
@@ -94,10 +107,19 @@ Keybindings:
 fn cmd_status(app: &mut App) -> Vec<Effect> {
     if let Some(ref st) = app.status {
         let model = st.model_name.as_deref().unwrap_or("(unknown)");
-        let tokens = st.token_usage_total.map(|t| t.to_string()).unwrap_or_else(|| "--".into());
-        let window = st.context_window.map(|w| w.to_string()).unwrap_or_else(|| "--".into());
+        let tokens = st
+            .token_usage_total
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "--".into());
+        let window = st
+            .context_window
+            .map(|w| w.to_string())
+            .unwrap_or_else(|| "--".into());
         let fill = match (st.token_usage_total, st.context_window) {
-            (Some(u), Some(w)) if w > 0 => format!("{}%", (u as f64 / w as f64 * 100.0).min(CTX_PCT_DISPLAY_CAP) as u32),
+            (Some(u), Some(w)) if w > 0 => format!(
+                "{}%",
+                (u as f64 / w as f64 * 100.0).min(CTX_PCT_DISPLAY_CAP) as u32
+            ),
             _ => "--".to_string(),
         };
         let info = format!(
@@ -113,7 +135,9 @@ fn cmd_status(app: &mut App) -> Vec<Effect> {
         app.scroll_offset = 0;
         vec![Effect::None]
     } else {
-        app.messages.push(Message::System("Not connected to daemon — waiting for status poll...".into()));
+        app.messages.push(Message::System(
+            "Not connected to daemon — waiting for status poll...".into(),
+        ));
         app.scroll_offset = 0;
         vec![Effect::None]
     }
@@ -125,19 +149,24 @@ fn cmd_theme(app: &mut App, arg: &str, extra: Option<&str>) -> Vec<Effect> {
             if let Some(dir) = liberado_theme::user_themes_dir() {
                 let errors = app.theme_registry.reload(&dir);
                 for e in &errors {
-                    app.messages.push(Message::System(format!("theme error: {e}")));
+                    app.messages
+                        .push(Message::System(format!("theme error: {e}")));
                     app.scroll_offset = 0;
                 }
                 if errors.is_empty() {
                     let count = app.theme_registry.len();
-                    app.messages.push(Message::System(format!("Themes reloaded — {count} available")));
+                    app.messages.push(Message::System(format!(
+                        "Themes reloaded — {count} available"
+                    )));
                     app.scroll_offset = 0;
                     vec![Effect::None]
                 } else {
                     vec![Effect::None]
                 }
             } else {
-                app.messages.push(Message::System("Could not determine theme directory".into()));
+                app.messages.push(Message::System(
+                    "Could not determine theme directory".into(),
+                ));
                 app.scroll_offset = 0;
                 vec![Effect::None]
             }
@@ -145,19 +174,29 @@ fn cmd_theme(app: &mut App, arg: &str, extra: Option<&str>) -> Vec<Effect> {
         "" | "list" => {
             let names = app.theme_registry.names();
             let current = &app.theme.name;
-            let lines: Vec<String> = names.iter().map(|n| {
-                if *n == current.as_str() { format!("  * {n}  (active)") } else { format!("    {n}") }
-            }).collect();
-            app.messages.push(Message::System(
-                format!("Available themes:\n{}\n\nUsage: /theme set <name>  |  /theme reload", lines.join("\n")),
-            ));
+            let lines: Vec<String> = names
+                .iter()
+                .map(|n| {
+                    if *n == current.as_str() {
+                        format!("  * {n}  (active)")
+                    } else {
+                        format!("    {n}")
+                    }
+                })
+                .collect();
+            app.messages.push(Message::System(format!(
+                "Available themes:\n{}\n\nUsage: /theme set <name>  |  /theme reload",
+                lines.join("\n")
+            )));
             app.scroll_offset = 0;
             vec![Effect::None]
         }
         "set" => {
             let name = extra.unwrap_or("");
             if name.is_empty() {
-                app.messages.push(Message::System("Usage: /theme set <name>\nUse /theme list to see available themes".into()));
+                app.messages.push(Message::System(
+                    "Usage: /theme set <name>\nUse /theme list to see available themes".into(),
+                ));
                 app.scroll_offset = 0;
                 vec![Effect::None]
             } else if let Some(theme) = app.theme_registry.get(name).cloned() {
@@ -167,7 +206,10 @@ fn cmd_theme(app: &mut App, arg: &str, extra: Option<&str>) -> Vec<Effect> {
                 vec![Effect::None]
             } else {
                 let names = app.theme_registry.names();
-                app.messages.push(Message::System(format!("Unknown theme: {name}. Available: {}", names.join(", "))));
+                app.messages.push(Message::System(format!(
+                    "Unknown theme: {name}. Available: {}",
+                    names.join(", ")
+                )));
                 app.scroll_offset = 0;
                 vec![Effect::None]
             }
@@ -191,9 +233,17 @@ fn cmd_theme(app: &mut App, arg: &str, extra: Option<&str>) -> Vec<Effect> {
 fn cmd_model(app: &mut App) -> Vec<Effect> {
     if let Some(ref st) = app.status {
         if let Some(ref model) = st.model_name {
-            let tokens = st.token_usage_total.map(|t| t.to_string()).unwrap_or_else(|| "--".into());
-            let window = st.context_window.map(|w| w.to_string()).unwrap_or_else(|| "--".into());
-            app.messages.push(Message::System(format!("Model: {model}\nTokens used: {tokens} / {window}")));
+            let tokens = st
+                .token_usage_total
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| "--".into());
+            let window = st
+                .context_window
+                .map(|w| w.to_string())
+                .unwrap_or_else(|| "--".into());
+            app.messages.push(Message::System(format!(
+                "Model: {model}\nTokens used: {tokens} / {window}"
+            )));
             app.scroll_offset = 0;
             vec![Effect::None]
         } else {
@@ -202,7 +252,9 @@ fn cmd_model(app: &mut App) -> Vec<Effect> {
             vec![Effect::None]
         }
     } else {
-        app.messages.push(Message::System("Not connected to daemon.\nModel is configured server-side at daemon start.".into()));
+        app.messages.push(Message::System(
+            "Not connected to daemon.\nModel is configured server-side at daemon start.".into(),
+        ));
         app.scroll_offset = 0;
         vec![Effect::None]
     }
@@ -219,7 +271,8 @@ fn cmd_session(app: &mut App, sub: &str, extra: Option<&str>) -> Vec<Effect> {
                 app.scroll_offset = 0;
                 vec![Effect::None]
             } else {
-                app.messages.push(Message::System("No active session to close.".into()));
+                app.messages
+                    .push(Message::System("No active session to close.".into()));
                 app.scroll_offset = 0;
                 vec![Effect::None]
             }
@@ -231,15 +284,23 @@ fn cmd_session(app: &mut App, sub: &str, extra: Option<&str>) -> Vec<Effect> {
                 app.scroll_offset = 0;
                 vec![Effect::None]
             } else {
-                let match_id = app.conversations.iter().find(|c| c.id.starts_with(id))
-                    .map(|c| c.id.clone()).unwrap_or_else(|| id.to_string());
+                let match_id = app
+                    .conversations
+                    .iter()
+                    .find(|c| c.id.starts_with(id))
+                    .map(|c| c.id.clone())
+                    .unwrap_or_else(|| id.to_string());
                 app.pending_load = Some(match_id.clone());
                 app.scroll_offset = 0;
                 vec![Effect::LoadConversationHistory(match_id)]
             }
         }
         "list" | "" => {
-            let session_str = app.session.as_deref().map(|id| format!("Active session: {id}")).unwrap_or_else(|| "No active session".into());
+            let session_str = app
+                .session
+                .as_deref()
+                .map(|id| format!("Active session: {id}"))
+                .unwrap_or_else(|| "No active session".into());
             app.messages.push(Message::System(format!("{session_str}\n{} conversations in list.\n\nCommands:\n  /session info          show current session details\n  /session list          show this message\n  /session switch <id>   load a conversation by id\n  /session close         detach from current session", app.conversations.len())));
             app.scroll_offset = 0;
             vec![Effect::None]
@@ -248,13 +309,22 @@ fn cmd_session(app: &mut App, sub: &str, extra: Option<&str>) -> Vec<Effect> {
             if let Some(ref id) = app.session {
                 let conv = app.conversations.iter().find(|c| c.id == *id);
                 let title = conv
-                    .and_then(|c| if c.title.is_empty() { None } else { Some(c.title.clone()) })
+                    .and_then(|c| {
+                        if c.title.is_empty() {
+                            None
+                        } else {
+                            Some(c.title.clone())
+                        }
+                    })
                     .unwrap_or_else(|| "(untitled)".into());
                 let lineage = conv
                     .and_then(|c| c.parent_conversation.as_deref())
                     .map(|p| format!("Forked from: {p}"))
                     .unwrap_or_else(|| "Root conversation".into());
-                app.messages.push(Message::System(format!("Session: {id}\nTitle:   {title}\nMessages: {}\n{lineage}", app.messages.len())));
+                app.messages.push(Message::System(format!(
+                    "Session: {id}\nTitle:   {title}\nMessages: {}\n{lineage}",
+                    app.messages.len()
+                )));
                 app.scroll_offset = 0;
                 vec![Effect::None]
             } else {
@@ -264,7 +334,9 @@ fn cmd_session(app: &mut App, sub: &str, extra: Option<&str>) -> Vec<Effect> {
             }
         }
         _ => {
-            app.messages.push(Message::System(format!("Unknown session command: {sub}\nTry: /session info | list | switch <id> | close")));
+            app.messages.push(Message::System(format!(
+                "Unknown session command: {sub}\nTry: /session info | list | switch <id> | close"
+            )));
             app.scroll_offset = 0;
             vec![Effect::None]
         }

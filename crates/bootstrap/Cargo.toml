@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 liberado-common = { workspace = true }
+liberado-config-loader = { workspace = true }
 liberado-daemon = { workspace = true }
 liberado-dispatcher = { workspace = true }
 liberado-orchestrator = { workspace = true }

@@ -87,10 +87,8 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme, spinner
                             let line_spans: Vec<Span> = spans
                                 .iter()
                                 .map(|s| {
-                                    let mut style = Style::default().fg(c(
-                                        &th.chat_assistant_text,
-                                        "#c0c0c0",
-                                    ));
+                                    let mut style =
+                                        Style::default().fg(c(&th.chat_assistant_text, "#c0c0c0"));
                                     if s.style.bold {
                                         style = style
                                             .fg(c(&th.md_bold, "#ffffff"))
@@ -102,8 +100,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme, spinner
                                             .add_modifier(Modifier::ITALIC);
                                     }
                                     if s.style.code {
-                                        style = Style::default()
-                                            .fg(c(&th.md_code, "#ffff00"));
+                                        style = Style::default().fg(c(&th.md_code, "#ffff00"));
                                     }
                                     if s.style.link {
                                         style = Style::default()
@@ -156,8 +153,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme, spinner
                                 ),
                                 Span::styled(
                                     item,
-                                    Style::default()
-                                        .fg(c(&th.chat_assistant_text, "#c0c0c0")),
+                                    Style::default().fg(c(&th.chat_assistant_text, "#c0c0c0")),
                                 ),
                             ]));
                         }
@@ -190,12 +186,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme, spinner
                 let arrow = if is_expanded { "▼" } else { "▶" };
                 let bg = sel_bg;
                 lines.push(Line::from(vec![
-                    Span::styled(
-                        arrow,
-                        Style::default()
-                            .fg(c(&th.tool_ok, "#00ff00"))
-                            .bg(bg),
-                    ),
+                    Span::styled(arrow, Style::default().fg(c(&th.tool_ok, "#00ff00")).bg(bg)),
                     Span::styled(
                         " [tool] ",
                         Style::default()
@@ -242,12 +233,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme, spinner
                 };
                 let bg = sel_bg;
                 lines.push(Line::from(vec![
-                    Span::styled(
-                        arrow,
-                        Style::default()
-                            .fg(c(&th.tool_ok, "#00ff00"))
-                            .bg(bg),
-                    ),
+                    Span::styled(arrow, Style::default().fg(c(&th.tool_ok, "#00ff00")).bg(bg)),
                     Span::styled(
                         " [tool] ",
                         Style::default()

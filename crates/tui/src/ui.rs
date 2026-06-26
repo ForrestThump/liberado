@@ -9,8 +9,8 @@
 //!
 //! The actual pane rendering is delegated to `crate::render`.
 
-use ratatui::{Frame, style::Color};
 use liberado_theme::parse_hex;
+use ratatui::{Frame, style::Color};
 
 use crate::app::App;
 use crate::render;

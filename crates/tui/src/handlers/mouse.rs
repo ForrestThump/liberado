@@ -8,8 +8,10 @@ use crate::tuning::MOUSE_SCROLL_LINES;
 
 /// Returns `true` if the point at `(col, row)` lies inside rectangle `r`.
 fn point_in_rect(col: u16, row: u16, r: Rect) -> bool {
-    col >= r.x && col < r.x.saturating_add(r.width)
-        && row >= r.y && row < r.y.saturating_add(r.height)
+    col >= r.x
+        && col < r.x.saturating_add(r.width)
+        && row >= r.y
+        && row < r.y.saturating_add(r.height)
 }
 
 pub(crate) fn handle(app: &mut App, event: MouseEvent) -> Vec<Effect> {
@@ -21,21 +23,29 @@ pub(crate) fn handle(app: &mut App, event: MouseEvent) -> Vec<Effect> {
 
     match event.kind {
         MouseEventKind::ScrollDown => {
-            if point_in_rect(col, row, chat) { app.scroll_back(MOUSE_SCROLL_LINES); }
-            else if point_in_rect(col, row, sidebar_full) {
+            if point_in_rect(col, row, chat) {
+                app.scroll_back(MOUSE_SCROLL_LINES);
+            } else if point_in_rect(col, row, sidebar_full) {
                 let visible = app.visible_conversations();
-                if app.sidebar_selection + 1 < visible.len() { app.sidebar_selection += 1; }
+                if app.sidebar_selection + 1 < visible.len() {
+                    app.sidebar_selection += 1;
+                }
             }
             vec![Effect::None]
         }
         MouseEventKind::ScrollUp => {
-            if point_in_rect(col, row, chat) { app.scroll_forward(MOUSE_SCROLL_LINES); }
-            else if point_in_rect(col, row, sidebar_full) && app.sidebar_selection > 0 { app.sidebar_selection -= 1; }
+            if point_in_rect(col, row, chat) {
+                app.scroll_forward(MOUSE_SCROLL_LINES);
+            } else if point_in_rect(col, row, sidebar_full) && app.sidebar_selection > 0 {
+                app.sidebar_selection -= 1;
+            }
             vec![Effect::None]
         }
         MouseEventKind::Down(MouseButton::Left) => {
             if point_in_rect(col, row, input_rect) {
-                if col > input_rect.x { app.cursor = (col - input_rect.x - 1) as usize; }
+                if col > input_rect.x {
+                    app.cursor = (col - input_rect.x - 1) as usize;
+                }
                 app.cursor = app.cursor.min(app.input.len());
                 app.focus = Focus::Input;
                 return vec![Effect::None];
@@ -51,8 +61,11 @@ pub(crate) fn handle(app: &mut App, event: MouseEvent) -> Vec<Effect> {
                     if item_idx == prev {
                         let node = &visible[item_idx];
                         if node.has_children {
-                            if node.collapsed { app.collapsed_nodes.remove(&node.header.id); }
-                            else { app.collapsed_nodes.insert(node.header.id.clone()); }
+                            if node.collapsed {
+                                app.collapsed_nodes.remove(&node.header.id);
+                            } else {
+                                app.collapsed_nodes.insert(node.header.id.clone());
+                            }
                             return vec![Effect::None];
                         }
                         let id = node.header.id.clone();

@@ -13,8 +13,12 @@ Binary: `target\release\liberado.exe`
 
 ## Configuration
 
-**Config directory** (Windows): `%APPDATA%\liberado\`
-(source: `dirs::config_dir()/liberado` in `crates/bootstrap/src/config.rs:68`)
+Configuration uses a **mesh / layered precedence** (later wins):
+
+1. Built-in `Default`
+2. `LIBERADO_CONFIG_DIR/<file>` (optional env override)
+3. repo-root `config/<file>` (runtime overrides, git-ignored)
+4. `<crate>/config/<file>` (compile-time examples only)
 
 Three optional TOML files (all may be omitted):
 
@@ -26,17 +30,18 @@ Three optional TOML files (all may be omitted):
 
 Starter examples live in `config.example/`.
 
-### Without environment variables
-- Put `vault_path = "C:\\path\\to\\vault"` in `topology.toml`
-- No `DEEPSEEK_API_KEY` → daemon runs in **watch-only** mode
+### Minimal setup (no env vars)
+Drop a `config/topology.toml` next to the crate with:
+```
+vault_path = "C:\\path\\to\\vault"
+```
+Without `DEEPSEEK_API_KEY` the daemon runs in **watch-only** mode.
 
 ### With environment variables
 ```cmd
 set DEEPSEEK_API_KEY=sk-...
 set LIBERADO_VAULT=C:\path\to\vault
 ```
-
-`LIBERADO_CONFIG_DIR` may override the config directory.
 
 ## Run the background daemon
 ```cmd

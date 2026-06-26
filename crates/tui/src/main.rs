@@ -4,25 +4,23 @@
 //! HTTP polling and SSE streaming, reads keyboard input, and drives the ratatui draw
 //! loop against the shared `App` state.
 
-use std::io;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use parking_lot::Mutex;
+use std::io;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use crossterm::{
-    event::{self, Event as CEvent, KeyEventKind},
-};
-use ratatui::backend::CrosstermBackend;
+use crossterm::event::{self, Event as CEvent, KeyEventKind};
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
 
+use liberado_theme::ThemeRegistry;
 use liberado_tui::api;
 use liberado_tui::app::{Action, App, Effect};
 use liberado_tui::effects::{EffectRunner, StreamState};
 use liberado_tui::terminal::TerminalGuard;
 use liberado_tui::tuning::*;
 use liberado_tui::ui;
-use liberado_theme::ThemeRegistry;
 
 const DEFAULT_SERVER: &str = "http://127.0.0.1:4201";
 
@@ -78,13 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         stream_state: stream_state.clone(),
     };
 
-    run_loop(
-        &mut terminal,
-        &runner,
-        &mut action_rx,
-        &action_tx,
-    )
-    .await
+    run_loop(&mut terminal, &runner, &mut action_rx, &action_tx).await
 }
 
 async fn run_loop(
@@ -150,11 +142,7 @@ async fn run_loop(
     Ok(())
 }
 
-fn spawn_poller(
-    tx: mpsc::Sender<Action>,
-    server: String,
-    client: reqwest::Client,
-) {
+fn spawn_poller(tx: mpsc::Sender<Action>, server: String, client: reqwest::Client) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(BACKEND_POLL_INTERVAL);
         let mut connected = false;
@@ -165,9 +153,7 @@ fn spawn_poller(
             let status_result = api::fetch_status(&client, &server).await;
             match status_result {
                 Ok(Some(status)) => {
-                    if !connected
-                        && tx.try_send(Action::ConnectionStatus(true)).is_err()
-                    {
+                    if !connected && tx.try_send(Action::ConnectionStatus(true)).is_err() {
                         tracing::warn!("action channel full, dropping ConnectionStatus");
                     }
                     connected = true;

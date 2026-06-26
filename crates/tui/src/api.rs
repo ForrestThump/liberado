@@ -85,7 +85,10 @@ pub struct ToolResultChip {
 }
 
 /// Fetch `GET /api/status` and return the parsed `DaemonStatus`.
-pub async fn fetch_status(client: &Client, server: &str) -> Result<Option<DaemonStatus>, reqwest::Error> {
+pub async fn fetch_status(
+    client: &Client,
+    server: &str,
+) -> Result<Option<DaemonStatus>, reqwest::Error> {
     let resp = client.get(format!("{server}/api/status")).send().await?;
     if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
         return Ok(None);
@@ -117,7 +120,10 @@ pub async fn fetch_conversations(
     client: &Client,
     server: &str,
 ) -> Result<Vec<ConvHeader>, reqwest::Error> {
-    let resp = client.get(format!("{server}/api/conversations")).send().await?;
+    let resp = client
+        .get(format!("{server}/api/conversations"))
+        .send()
+        .await?;
     if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
         return Ok(Vec::new());
     }
@@ -316,9 +322,16 @@ mod tests {
 
     #[test]
     fn tool_call_result_chip_construction() {
-        let call = ToolCallChip { name: "search".into(), args: "{\"q\":\"test\"}".into() };
+        let call = ToolCallChip {
+            name: "search".into(),
+            args: "{\"q\":\"test\"}".into(),
+        };
         assert_eq!(call.name, "search");
-        let result = ToolResultChip { name: "search".into(), ok: true, preview: "3 results".into() };
+        let result = ToolResultChip {
+            name: "search".into(),
+            ok: true,
+            preview: "3 results".into(),
+        };
         assert!(result.ok);
         assert_eq!(result.preview, "3 results");
     }

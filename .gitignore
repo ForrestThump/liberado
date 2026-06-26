@@ -16,3 +16,9 @@ desktop.ini
 /liberado-tool-helper-mcp/
 /turbomcp/
 /turbovault/
+
+# Local configuration overrides (committed starters live in config.example/ and crates/*/config.example/)
+config/*.toml
+crates/*/config/*.toml
+
+.kilo

@@ -237,16 +237,21 @@ impl Theme {
     /// Fill in any `None` tokens from `base`. The returned theme has every token from
     /// `self`, with missing tokens inherited from `base`. Name comes from `self`.
     pub fn layered_on(&self, base: &Theme) -> Theme {
-        let inherit_string = |a: &Option<String>, b: &Option<String>| {
-            a.clone().or_else(|| b.clone())
-        };
+        let inherit_string =
+            |a: &Option<String>, b: &Option<String>| a.clone().or_else(|| b.clone());
         Theme {
             name: self.name.clone(),
             chat_user_prefix: inherit_string(&self.chat_user_prefix, &base.chat_user_prefix),
             chat_user_text: inherit_string(&self.chat_user_text, &base.chat_user_text),
-            chat_assistant_text: inherit_string(&self.chat_assistant_text, &base.chat_assistant_text),
+            chat_assistant_text: inherit_string(
+                &self.chat_assistant_text,
+                &base.chat_assistant_text,
+            ),
             chat_system_text: inherit_string(&self.chat_system_text, &base.chat_system_text),
-            chat_streaming_cursor: inherit_string(&self.chat_streaming_cursor, &base.chat_streaming_cursor),
+            chat_streaming_cursor: inherit_string(
+                &self.chat_streaming_cursor,
+                &base.chat_streaming_cursor,
+            ),
             tool_label: inherit_string(&self.tool_label, &base.tool_label),
             tool_name: inherit_string(&self.tool_name, &base.tool_name),
             tool_args: inherit_string(&self.tool_args, &base.tool_args),
@@ -255,23 +260,47 @@ impl Theme {
             code_block_header: inherit_string(&self.code_block_header, &base.code_block_header),
             code_block_bg: inherit_string(&self.code_block_bg, &base.code_block_bg),
             code_block_fg: inherit_string(&self.code_block_fg, &base.code_block_fg),
-            input_border_focused: inherit_string(&self.input_border_focused, &base.input_border_focused),
-            input_border_unfocused: inherit_string(&self.input_border_unfocused, &base.input_border_unfocused),
+            input_border_focused: inherit_string(
+                &self.input_border_focused,
+                &base.input_border_focused,
+            ),
+            input_border_unfocused: inherit_string(
+                &self.input_border_unfocused,
+                &base.input_border_unfocused,
+            ),
             input_placeholder: inherit_string(&self.input_placeholder, &base.input_placeholder),
             input_text: inherit_string(&self.input_text, &base.input_text),
             status_bar_text: inherit_string(&self.status_bar_text, &base.status_bar_text),
             status_dot_online: inherit_string(&self.status_dot_online, &base.status_dot_online),
             status_dot_offline: inherit_string(&self.status_dot_offline, &base.status_dot_offline),
-            status_dot_connecting: inherit_string(&self.status_dot_connecting, &base.status_dot_connecting),
+            status_dot_connecting: inherit_string(
+                &self.status_dot_connecting,
+                &base.status_dot_connecting,
+            ),
             reaction_observed: inherit_string(&self.reaction_observed, &base.reaction_observed),
-            reaction_dispatched: inherit_string(&self.reaction_dispatched, &base.reaction_dispatched),
+            reaction_dispatched: inherit_string(
+                &self.reaction_dispatched,
+                &base.reaction_dispatched,
+            ),
             reaction_acted: inherit_string(&self.reaction_acted, &base.reaction_acted),
             reaction_unknown: inherit_string(&self.reaction_unknown, &base.reaction_unknown),
-            sidebar_selected_bg: inherit_string(&self.sidebar_selected_bg, &base.sidebar_selected_bg),
-            sidebar_selected_fg: inherit_string(&self.sidebar_selected_fg, &base.sidebar_selected_fg),
+            sidebar_selected_bg: inherit_string(
+                &self.sidebar_selected_bg,
+                &base.sidebar_selected_bg,
+            ),
+            sidebar_selected_fg: inherit_string(
+                &self.sidebar_selected_fg,
+                &base.sidebar_selected_fg,
+            ),
             sidebar_text: inherit_string(&self.sidebar_text, &base.sidebar_text),
-            sidebar_border_focused: inherit_string(&self.sidebar_border_focused, &base.sidebar_border_focused),
-            sidebar_border_unfocused: inherit_string(&self.sidebar_border_unfocused, &base.sidebar_border_unfocused),
+            sidebar_border_focused: inherit_string(
+                &self.sidebar_border_focused,
+                &base.sidebar_border_focused,
+            ),
+            sidebar_border_unfocused: inherit_string(
+                &self.sidebar_border_unfocused,
+                &base.sidebar_border_unfocused,
+            ),
             sidebar_item_bg: inherit_string(&self.sidebar_item_bg, &base.sidebar_item_bg),
             md_bold: inherit_string(&self.md_bold, &base.md_bold),
             md_italic: inherit_string(&self.md_italic, &base.md_italic),
@@ -610,27 +639,38 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let theme_path = dir.path().join("mocha.toml");
         let mut f = fs::File::create(&theme_path).unwrap();
-        f.write_all(b"name = \"mocha\"\nchat_user_text = \"#ff0000\"\n").unwrap();
+        f.write_all(b"name = \"mocha\"\nchat_user_text = \"#ff0000\"\n")
+            .unwrap();
         drop(f);
 
         let mut reg = ThemeRegistry::new();
         reg.load_user_themes(dir.path());
         assert_eq!(reg.len(), 3);
         assert!(reg.get("mocha").is_some());
-        assert_eq!(reg.get("mocha").unwrap().chat_user_text, Some("#ff0000".into()));
+        assert_eq!(
+            reg.get("mocha").unwrap().chat_user_text,
+            Some("#ff0000".into())
+        );
     }
 
     #[test]
     fn registry_user_theme_overrides_builtin() {
         let dir = tempfile::tempdir().unwrap();
         let theme_path = dir.path().join("dark.toml");
-        fs::write(&theme_path, "name = \"custom\"\nchat_user_text = \"#123456\"\n").unwrap();
+        fs::write(
+            &theme_path,
+            "name = \"custom\"\nchat_user_text = \"#123456\"\n",
+        )
+        .unwrap();
 
         let mut reg = ThemeRegistry::new();
         reg.load_user_themes(dir.path());
         // User "dark.toml" overrides built-in dark
         assert!(reg.get("dark").is_some());
-        assert_eq!(reg.get("dark").unwrap().chat_user_text, Some("#123456".into()));
+        assert_eq!(
+            reg.get("dark").unwrap().chat_user_text,
+            Some("#123456".into())
+        );
     }
 
     #[test]
@@ -641,7 +681,10 @@ mod tests {
 
         let mut reg = ThemeRegistry::new();
         reg.load_user_themes(dir.path());
-        assert_eq!(reg.get("dark").unwrap().chat_user_text, Some("#ff0000".into()));
+        assert_eq!(
+            reg.get("dark").unwrap().chat_user_text,
+            Some("#ff0000".into())
+        );
 
         // Remove the file and reload — built-in dark comes back
         fs::remove_file(&theme_path).unwrap();

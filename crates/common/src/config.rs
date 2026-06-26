@@ -177,9 +177,18 @@ pub struct Grant {
 // Tuning — benign behavior knobs. Every field defaults to its specced value.
 // ---------------------------------------------------------------------------
 
+/// The current schema version for `tuning.toml`. Used by the loader to warn when a user's
+/// tuning file carries a different version (e.g. after an upgrade). Bump this when a
+/// backward-incompatible change is made to the tuning schema.
+pub const CURRENT_SCHEMA_VERSION: &str = "1.0";
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Tuning {
+    /// Optional schema version marker for deprecation detection. When set, the loader compares
+    /// this against [`CURRENT_SCHEMA_VERSION`] and warns if they differ. Absent => no check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_version: Option<String>,
     pub dispatch: DispatchTuning,
     pub context: ContextTuning,
     pub concurrency: ConcurrencyTuning,
@@ -346,7 +355,37 @@ impl Default for MaintenanceTuning {
 // Validation — the model-level slice of the Decision 14 fail-fast contract.
 // ---------------------------------------------------------------------------
 
+impl std::str::FromStr for Config {
+    type Err = Error;
+
+    /// Parse a TOML string and overlay it on [`Config::default()`].
+    ///
+    /// Any keys present in the TOML override the built-in defaults; absent keys keep
+    /// their default values. After deserialization the result is validated via
+    /// [`Config::validate`].
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`Error::Config`] if the TOML is malformed or fails to deserialize.
+    /// - Returns the first validation error from [`Config::validate`].
+    fn from_str(toml_str: &str) -> Result<Self> {
+        let config: Config =
+            toml::from_str(toml_str).map_err(|e| Error::Config(format!("parse error: {e}")))?;
+        config.validate()?;
+        Ok(config)
+    }
+}
+
 impl Config {
+    /// Return a [`ConfigBuilder`] initialised with [`Config::default()`].
+    ///
+    /// The builder provides ergonomic, chainable setters for test construction and
+    /// programmatic config creation. Call `.build()` to validate and produce the final
+    /// [`Config`].
+    pub fn builder() -> ConfigBuilder {
+        ConfigBuilder::default()
+    }
+
     /// Validate invariants checkable from the resolved model alone. The daemon's loader layers
     /// additional cross-cutting checks on top (port/socket collisions, dangling zone/secret
     /// refs, triggerless ACPs). Returns the first violation found.
@@ -391,11 +430,129 @@ impl Config {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ConfigBuilder — ergonomic programmatic construction for tests and wiring.
+// ---------------------------------------------------------------------------
+
+/// A builder for constructing [`Config`] values programmatically.
+///
+/// Start with [`Config::builder()`], chain setters, and finish with
+/// [`build`](ConfigBuilder::build) which validates the assembled config.
+///
+/// # Example
+///
+/// ```rust
+/// use liberado_common::config::Config;
+///
+/// let cfg = Config::builder()
+///     .vault_path("/home/test/vault")
+///     .provider("deepseek")
+///     .build()
+///     .expect("valid config");
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct ConfigBuilder {
+    config: Config,
+}
+
+impl ConfigBuilder {
+    // ── topology setters ────────────────────────────────────────────────────
+
+    /// Set the vault path (required; validation will fail if empty).
+    pub fn vault_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config.topology.vault_path = path.into();
+        self
+    }
+
+    /// Set the daemon socket path.
+    pub fn daemon_socket(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config.topology.daemon_socket = path.into();
+        self
+    }
+
+    /// Set the inference provider name.
+    pub fn provider(mut self, provider: impl Into<String>) -> Self {
+        self.config.topology.provider = provider.into();
+        self
+    }
+
+    /// Add a model profile.
+    pub fn model(mut self, model: crate::model::ModelProfile) -> Self {
+        self.config.topology.models.push(model);
+        self
+    }
+
+    /// Assign a model to a role (replaces any existing assignment for that role).
+    pub fn model_role(mut self, role: crate::model::ModelRole, name: impl Into<String>) -> Self {
+        self.config.topology.model_roles.insert(role, name.into());
+        self
+    }
+
+    /// Add an MCP server config.
+    pub fn mcp(mut self, mcp: McpConfig) -> Self {
+        self.config.topology.mcps.push(mcp);
+        self
+    }
+
+    /// Add an ACP component config.
+    pub fn acp(mut self, acp: ComponentConfig) -> Self {
+        self.config.topology.acps.push(acp);
+        self
+    }
+
+    // ── policy setters ──────────────────────────────────────────────────────
+
+    /// Add a zone policy entry.
+    pub fn zone(mut self, zone: ZonePolicy) -> Self {
+        self.config.policy.zones.push(zone);
+        self
+    }
+
+    /// Add a capability grant.
+    pub fn grant(mut self, grant: Grant) -> Self {
+        self.config.policy.grants.push(grant);
+        self
+    }
+
+    /// Add a secret reference.
+    pub fn secret_ref(mut self, secret: impl Into<String>) -> Self {
+        self.config.policy.secret_refs.push(secret.into());
+        self
+    }
+
+    // ── tuning setters (convenience for the most commonly-overridden fields) ─
+
+    /// Override the tuning section wholesale.
+    pub fn tuning(mut self, tuning: Tuning) -> Self {
+        self.config.tuning = tuning;
+        self
+    }
+
+    /// Set the schema version marker.
+    pub fn schema_version(mut self, version: impl Into<String>) -> Self {
+        self.config.tuning.schema_version = Some(version.into());
+        self
+    }
+
+    // ── finish ──────────────────────────────────────────────────────────────
+
+    /// Validate and return the constructed [`Config`].
+    ///
+    /// # Errors
+    ///
+    /// Delegates to [`Config::validate`]; returns the first validation error.
+    pub fn build(self) -> Result<Config> {
+        self.config.validate()?;
+        Ok(self.config)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::capability::Zone;
-    use crate::model::ModelTier;
+    use crate::model::{ModelProfile, ModelRole, ModelTier};
+    use std::str::FromStr;
 
     #[test]
     fn base_capabilities_unions_grants_and_dedups() {
@@ -512,5 +669,215 @@ transport = { kind = "http", url = "https://mcp.deepwiki.com/mcp" }
             cfg.validate(),
             Err(Error::ModelCapabilityFloor { .. })
         ));
+    }
+
+    // ── Config::from_str tests ──────────────────────────────────────────────
+
+    #[test]
+    fn from_str_parses_valid_toml() {
+        let toml = r#"
+[topology]
+vault_path = "/home/test/vault"
+provider = "test-provider"
+
+[[topology.mcps]]
+name = "my-mcp"
+description = "a test MCP"
+consequence = "read_only"
+transport = { kind = "stdio", command = "echo", args = ["hello"] }
+"#;
+        let cfg = Config::from_str(toml).expect("valid TOML should parse");
+        assert_eq!(cfg.topology.vault_path, PathBuf::from("/home/test/vault"));
+        assert_eq!(cfg.topology.provider, "test-provider");
+        assert_eq!(cfg.topology.mcps.len(), 1);
+        assert_eq!(cfg.topology.mcps[0].name, "my-mcp");
+
+        // Fields not in the TOML keep their defaults
+        assert_eq!(cfg.tuning.dispatch.small_fanout, 3);
+        assert!(cfg.policy.zones.is_empty());
+    }
+
+    #[test]
+    fn from_str_accepts_empty_toml_as_defaults() {
+        let cfg = Config::from_str("");
+        // All defaults → validation fails because vault_path is empty
+        assert!(cfg.is_err(), "empty TOML should parse but fail validation");
+        let msg = cfg.unwrap_err().to_string();
+        assert!(msg.contains("vault_path"), "got: {msg}");
+    }
+
+    #[test]
+    fn from_str_rejects_malformed_toml() {
+        let err = Config::from_str("not valid toml {{{").unwrap_err();
+        assert!(
+            matches!(err, Error::Config(_)),
+            "expected Config error, got: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(msg.contains("parse error"), "got: {msg}");
+    }
+
+    #[test]
+    fn from_str_rejects_config_with_missing_vault_path() {
+        let toml = r#"
+[topology]
+provider = "deepseek"
+"#;
+        let err = Config::from_str(toml).unwrap_err();
+        assert!(
+            matches!(err, Error::Config(_)),
+            "expected Config error, got: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(msg.contains("vault_path"), "got: {msg}");
+    }
+
+    #[test]
+    fn from_str_overrides_tuning_defaults() {
+        let toml = r#"
+[topology]
+vault_path = "/vault"
+
+[tuning.dispatch]
+small_fanout = 10
+clarify_threshold_read = 0.8
+"#;
+        let cfg = Config::from_str(toml).expect("valid TOML");
+        assert_eq!(cfg.tuning.dispatch.small_fanout, 10);
+        assert_eq!(cfg.tuning.dispatch.clarify_threshold_read, 0.8);
+        // Unset tuning fields keep defaults
+        assert_eq!(cfg.tuning.dispatch.clarify_threshold_write, 0.7);
+        assert_eq!(cfg.tuning.context.max_goals, 5);
+    }
+
+    // ── ConfigBuilder tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn builder_minimal_valid_config() {
+        let cfg = Config::builder()
+            .vault_path("/home/test/vault")
+            .build()
+            .expect("minimal config should validate");
+        assert_eq!(cfg.topology.vault_path, PathBuf::from("/home/test/vault"));
+        assert_eq!(cfg.topology.provider, "deepseek"); // default
+    }
+
+    #[test]
+    fn builder_sets_topology_fields() {
+        let cfg = Config::builder()
+            .vault_path("/vault")
+            .daemon_socket("/tmp/test.sock")
+            .provider("custom")
+            .build()
+            .expect("valid config");
+        assert_eq!(cfg.topology.daemon_socket, PathBuf::from("/tmp/test.sock"));
+        assert_eq!(cfg.topology.provider, "custom");
+    }
+
+    #[test]
+    fn builder_adds_models_and_roles() {
+        let cfg = Config::builder()
+            .vault_path("/vault")
+            .model(ModelProfile {
+                name: "my-model".into(),
+                tool_calling: true,
+                structured_output: true,
+                context_window: 16000,
+                tier: ModelTier::ControlPlane,
+                cost: None,
+            })
+            .model_role(ModelRole::Dispatcher, "my-model")
+            .build()
+            .expect("model profile and role should validate");
+        assert_eq!(cfg.topology.models.len(), 1);
+        assert_eq!(cfg.topology.models[0].name, "my-model");
+        assert_eq!(
+            cfg.topology.model_roles.get(&ModelRole::Dispatcher),
+            Some(&"my-model".to_string())
+        );
+    }
+
+    #[test]
+    fn builder_adds_mcp_and_acp() {
+        let cfg = Config::builder()
+            .vault_path("/vault")
+            .mcp(McpConfig {
+                name: "mcp1".into(),
+                enabled: true,
+                description: "test MCP".into(),
+                consequence: Consequence::Reversible,
+                transport: McpTransport::Stdio {
+                    command: "npx".into(),
+                    args: vec!["-y".into(), "@scope/mcp".into()],
+                },
+            })
+            .acp(ComponentConfig {
+                name: "acp1".into(),
+                enabled: true,
+                endpoint: Some("http://localhost:9000".into()),
+            })
+            .build()
+            .expect("valid config");
+        assert_eq!(cfg.topology.mcps.len(), 1);
+        assert_eq!(cfg.topology.acps.len(), 1);
+        assert_eq!(cfg.topology.mcps[0].name, "mcp1");
+        assert_eq!(cfg.topology.acps[0].name, "acp1");
+    }
+
+    #[test]
+    fn builder_adds_policy_items() {
+        let cfg = Config::builder()
+            .vault_path("/vault")
+            .zone(ZonePolicy {
+                zone: "tasks".into(),
+                write_class: WriteClass::AgentWritable,
+            })
+            .grant(Grant {
+                component: "agent".into(),
+                capabilities: vec![
+                    Capability::Read(Zone::vault("tasks")),
+                    Capability::Write(Zone::vault("tasks")),
+                ],
+            })
+            .secret_ref("MY_SECRET")
+            .build()
+            .expect("valid config");
+        assert_eq!(cfg.policy.zones.len(), 1);
+        assert_eq!(cfg.policy.grants.len(), 1);
+        assert_eq!(cfg.policy.secret_refs, vec!["MY_SECRET"]);
+    }
+
+    #[test]
+    fn builder_rejects_missing_vault_path() {
+        let err = Config::builder().build().unwrap_err();
+        assert!(
+            matches!(err, Error::Config(_)),
+            "expected Config error, got: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(msg.contains("vault_path"), "got: {msg}");
+    }
+
+    #[test]
+    fn builder_tuning_override() {
+        let cfg = Config::builder()
+            .vault_path("/vault")
+            .schema_version("2.0")
+            .build()
+            .expect("valid config");
+        assert_eq!(cfg.tuning.schema_version, Some("2.0".to_string()));
+    }
+
+    #[test]
+    fn builder_tuning_wholesale() {
+        let mut tuning = Tuning::default();
+        tuning.dispatch.small_fanout = 99;
+
+        let cfg = Config::builder()
+            .vault_path("/vault")
+            .tuning(tuning)
+            .build()
+            .expect("valid config");
+        assert_eq!(cfg.tuning.dispatch.small_fanout, 99);
     }
 }

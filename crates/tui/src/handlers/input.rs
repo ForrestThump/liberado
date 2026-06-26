@@ -32,27 +32,42 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> Vec<Effect> {
             app.scroll_offset = 0;
             vec![Effect::StartChatStream { message, session }]
         }
-        KeyCode::Char(c) => { app.input.insert(app.cursor, c); app.cursor += 1; vec![Effect::None] }
+        KeyCode::Char(c) => {
+            app.input.insert(app.cursor, c);
+            app.cursor += 1;
+            vec![Effect::None]
+        }
         KeyCode::Backspace => {
             if key.modifiers.contains(KeyModifiers::CONTROL) {
                 let boundary = crate::app::prev_word_boundary(&app.input, app.cursor);
-                for _ in boundary..app.cursor { app.input.remove(boundary); }
+                for _ in boundary..app.cursor {
+                    app.input.remove(boundary);
+                }
                 app.cursor = boundary;
                 return vec![Effect::None];
             }
-            if app.cursor > 0 { app.cursor -= 1; app.input.remove(app.cursor); }
+            if app.cursor > 0 {
+                app.cursor -= 1;
+                app.input.remove(app.cursor);
+            }
             vec![Effect::None]
         }
         KeyCode::Delete => {
             if key.modifiers.contains(KeyModifiers::CONTROL) {
                 let boundary = crate::app::next_word_boundary(&app.input, app.cursor);
-                for _ in app.cursor..boundary { app.input.remove(app.cursor); }
-                while app.cursor < app.input.len() && app.input.as_bytes()[app.cursor].is_ascii_whitespace() {
+                for _ in app.cursor..boundary {
+                    app.input.remove(app.cursor);
+                }
+                while app.cursor < app.input.len()
+                    && app.input.as_bytes()[app.cursor].is_ascii_whitespace()
+                {
                     app.input.remove(app.cursor);
                 }
                 return vec![Effect::None];
             }
-            if app.cursor < app.input.len() { app.input.remove(app.cursor); }
+            if app.cursor < app.input.len() {
+                app.input.remove(app.cursor);
+            }
             vec![Effect::None]
         }
         KeyCode::Left => {
@@ -60,7 +75,9 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> Vec<Effect> {
                 app.cursor = crate::app::prev_word_boundary(&app.input, app.cursor);
                 return vec![Effect::None];
             }
-            if app.cursor > 0 { app.cursor -= 1; }
+            if app.cursor > 0 {
+                app.cursor -= 1;
+            }
             vec![Effect::None]
         }
         KeyCode::Right => {
@@ -68,20 +85,39 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> Vec<Effect> {
                 app.cursor = crate::app::next_word_boundary(&app.input, app.cursor);
                 return vec![Effect::None];
             }
-            if app.cursor < app.input.len() { app.cursor += 1; }
+            if app.cursor < app.input.len() {
+                app.cursor += 1;
+            }
             vec![Effect::None]
         }
-        KeyCode::Home => { app.cursor = 0; vec![Effect::None] }
-        KeyCode::End => { app.cursor = app.input.len(); vec![Effect::None] }
+        KeyCode::Home => {
+            app.cursor = 0;
+            vec![Effect::None]
+        }
+        KeyCode::End => {
+            app.cursor = app.input.len();
+            vec![Effect::None]
+        }
         KeyCode::Esc => {
-            if app.streaming { return app.cancel_stream(); }
+            if app.streaming {
+                return app.cancel_stream();
+            }
             app.input.clear();
             app.cursor = 0;
             vec![Effect::None]
         }
-        KeyCode::Tab => { app.focus = Focus::SidebarConversations; vec![Effect::None] }
-        KeyCode::PageUp => { app.scroll_back(PAGE_SCROLL_LINES); vec![Effect::None] }
-        KeyCode::PageDown => { app.scroll_forward(PAGE_SCROLL_LINES); vec![Effect::None] }
+        KeyCode::Tab => {
+            app.focus = Focus::SidebarConversations;
+            vec![Effect::None]
+        }
+        KeyCode::PageUp => {
+            app.scroll_back(PAGE_SCROLL_LINES);
+            vec![Effect::None]
+        }
+        KeyCode::PageDown => {
+            app.scroll_forward(PAGE_SCROLL_LINES);
+            vec![Effect::None]
+        }
         _ => vec![Effect::None],
     }
 }

@@ -18,11 +18,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
     };
     let border_style = Style::default().fg(border_color);
 
-    let streaming_indicator = if app.streaming {
-        " [streaming…]"
-    } else {
-        ""
-    };
+    let streaming_indicator = if app.streaming { " [streaming…]" } else { "" };
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(

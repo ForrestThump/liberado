@@ -6,15 +6,14 @@
 use std::io::{self, Stdout};
 
 use crossterm::{
-    execute,
     event::{DisableMouseCapture, EnableMouseCapture},
+    execute,
     terminal::{
-        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
-        SetTitle,
+        EnterAlternateScreen, LeaveAlternateScreen, SetTitle, disable_raw_mode, enable_raw_mode,
     },
 };
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 
 /// RAII guard that enters raw mode + alternate screen + mouse capture on
 /// construction and restores the terminal on drop (even during panic).

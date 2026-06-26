@@ -47,7 +47,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
 
     // Load + validate the config up front (Decision 14 fail-fast). A bad config is a hard error
     // here rather than a half-booted daemon; the message names the file/setting to fix.
-    let config = liberado_bootstrap::load_config(liberado_bootstrap::config_dir().as_deref())?;
+    let (config, _) = liberado_bootstrap::load_config(liberado_bootstrap::config_dir().as_deref())?;
 
     // Resolve the vault path CLI-over-config: the `run` argument wins (the CLI always supplies one);
     // an empty argument falls back to `topology.vault_path`. Both empty is a hard error.
@@ -136,17 +136,44 @@ pub fn config_check(dir: Option<&Path>) -> Result<(), Box<dyn std::error::Error>
         .map(Path::to_path_buf)
         .or_else(liberado_bootstrap::config_dir);
     match liberado_bootstrap::load_config(resolved.as_deref()) {
-        Ok(config) => {
+        Ok((config, provenance)) => {
             let where_ = resolved
                 .as_deref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "(none — all defaults)".to_string());
             println!("config OK");
             println!("  config dir: {where_}");
-            println!("  vault_path: {}", config.topology.vault_path.display());
-            println!("  zones:      {}", config.policy.zones.len());
-            println!("  grants:     {}", config.policy.grants.len());
-            println!("  mcps:       {}", config.topology.mcps.len());
+            println!("  sources:");
+            println!(
+                "    topology:  {}",
+                provenance.topology.as_deref().unwrap_or("(default)")
+            );
+            println!(
+                "    policy:    {}",
+                provenance.policy.as_deref().unwrap_or("(default)")
+            );
+            println!(
+                "    tuning:    {}",
+                provenance.tuning.as_deref().unwrap_or("(default)")
+            );
+            let top_src = provenance.topology.as_deref().unwrap_or("(default)");
+            let pol_src = provenance.policy.as_deref().unwrap_or("(default)");
+            println!(
+                "  vault_path: {}    [{top_src}]",
+                config.topology.vault_path.display()
+            );
+            println!(
+                "  zones:      {}                  [{pol_src}]",
+                config.policy.zones.len()
+            );
+            println!(
+                "  grants:     {}                  [{pol_src}]",
+                config.policy.grants.len()
+            );
+            println!(
+                "  mcps:        {}                  [{top_src}]",
+                config.topology.mcps.len()
+            );
             Ok(())
         }
         Err(e) => {

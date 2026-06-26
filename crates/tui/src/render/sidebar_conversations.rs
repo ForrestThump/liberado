@@ -55,10 +55,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
                     c(&th.sidebar_selected_bg, "#00ffff"),
                 )
             } else if active {
-                (
-                    c(&th.accent, "#00ffff"),
-                    c(&th.sidebar_item_bg, "#000000"),
-                )
+                (c(&th.accent, "#00ffff"), c(&th.sidebar_item_bg, "#000000"))
             } else {
                 (
                     c(&th.sidebar_text, "#c0c0c0"),
@@ -91,9 +88,8 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
             };
             let active_mark = if active { "*" } else { " " };
             let loading = if is_pending { " …" } else { "" };
-            let text = format!(
-                "{prefix}{fold_icon}{active_mark} {display}{loading}  [{id_short}]  {rel}"
-            );
+            let text =
+                format!("{prefix}{fold_icon}{active_mark} {display}{loading}  [{id_short}]  {rel}");
             ListItem::new(text).style(Style::default().fg(fg).bg(bg))
         })
         .collect();

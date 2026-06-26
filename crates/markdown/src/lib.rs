@@ -158,7 +158,10 @@ pub fn markdown_to_lines(text: &str) -> Vec<MarkdownLine> {
             continue;
         }
 
-        if let Some(content) = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* ")) {
+        if let Some(content) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+        {
             result.push(MarkdownLine::Bullet(content.to_string()));
             continue;
         }
@@ -239,11 +242,7 @@ fn parse_inline(text: &str) -> Vec<StyledSpan> {
         }
 
         let start = i;
-        while i < len
-            && bytes[i] != b'*'
-            && bytes[i] != b'['
-            && bytes[i] != b'`'
-        {
+        while i < len && bytes[i] != b'*' && bytes[i] != b'[' && bytes[i] != b'`' {
             i += 1;
         }
         if i > start {
@@ -341,7 +340,11 @@ mod tests {
         let lines = markdown_to_lines("some *italic* here");
         match &lines[0] {
             MarkdownLine::Paragraph(spans) => {
-                assert!(spans.iter().any(|s| s.text == "italic" && s.style == SpanStyle::ITALIC));
+                assert!(
+                    spans
+                        .iter()
+                        .any(|s| s.text == "italic" && s.style == SpanStyle::ITALIC)
+                );
             }
             _ => panic!(),
         }
@@ -352,7 +355,11 @@ mod tests {
         let lines = markdown_to_lines("use `foo.bar()` function");
         match &lines[0] {
             MarkdownLine::Paragraph(spans) => {
-                assert!(spans.iter().any(|s| s.text == "foo.bar()" && s.style == SpanStyle::CODE));
+                assert!(
+                    spans
+                        .iter()
+                        .any(|s| s.text == "foo.bar()" && s.style == SpanStyle::CODE)
+                );
             }
             _ => panic!(),
         }
@@ -363,7 +370,11 @@ mod tests {
         let lines = markdown_to_lines("see [docs](https://example.com) for more");
         match &lines[0] {
             MarkdownLine::Paragraph(spans) => {
-                assert!(spans.iter().any(|s| s.text == "docs" && s.style == SpanStyle::LINK));
+                assert!(
+                    spans
+                        .iter()
+                        .any(|s| s.text == "docs" && s.style == SpanStyle::LINK)
+                );
             }
             _ => panic!(),
         }
@@ -375,7 +386,10 @@ mod tests {
         let lines = markdown_to_lines(input);
         assert_eq!(lines.len(), 3);
         match &lines[1] {
-            MarkdownLine::CodeBlock { language, lines: code } => {
+            MarkdownLine::CodeBlock {
+                language,
+                lines: code,
+            } => {
                 assert_eq!(language.as_deref(), Some("rust"));
                 assert_eq!(code, &["fn main() {}"]);
             }

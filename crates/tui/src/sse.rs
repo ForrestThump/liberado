@@ -32,9 +32,8 @@ impl SseEvent {
             "session" => Ok(Action::SseSession(self.data.clone())),
             "token" => Ok(Action::SseToken(self.data.clone())),
             "tool" => {
-                let v: serde_json::Value = serde_json::from_str(&self.data).map_err(|e| {
-                    format!("malformed tool SSE JSON ({e}): {}", self.data)
-                })?;
+                let v: serde_json::Value = serde_json::from_str(&self.data)
+                    .map_err(|e| format!("malformed tool SSE JSON ({e}): {}", self.data))?;
                 let name = v
                     .get("name")
                     .and_then(|n| n.as_str())
@@ -48,18 +47,14 @@ impl SseEvent {
                 Ok(Action::SseTool { name, args })
             }
             "tool_result" => {
-                let v: serde_json::Value = serde_json::from_str(&self.data).map_err(|e| {
-                    format!("malformed tool_result SSE JSON ({e}): {}", self.data)
-                })?;
+                let v: serde_json::Value = serde_json::from_str(&self.data)
+                    .map_err(|e| format!("malformed tool_result SSE JSON ({e}): {}", self.data))?;
                 let name = v
                     .get("name")
                     .and_then(|n| n.as_str())
                     .unwrap_or("?")
                     .to_string();
-                let ok = v
-                    .get("ok")
-                    .and_then(|o| o.as_bool())
-                    .unwrap_or(false);
+                let ok = v.get("ok").and_then(|o| o.as_bool()).unwrap_or(false);
                 let preview = v
                     .get("preview")
                     .and_then(|p| p.as_str())
@@ -208,10 +203,15 @@ mod tests {
     #[test]
     fn tool_event_with_json_data() {
         let mut decoder = SseDecoder::default();
-        let events = decoder.push("event: tool\ndata: {\"name\":\"search\",\"args\":\"{\\\"q\\\":\\\"test\\\"}\"}\n\n");
+        let events = decoder.push(
+            "event: tool\ndata: {\"name\":\"search\",\"args\":\"{\\\"q\\\":\\\"test\\\"}\"}\n\n",
+        );
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event, "tool");
-        assert_eq!(events[0].data, "{\"name\":\"search\",\"args\":\"{\\\"q\\\":\\\"test\\\"}\"}");
+        assert_eq!(
+            events[0].data,
+            "{\"name\":\"search\",\"args\":\"{\\\"q\\\":\\\"test\\\"}\"}"
+        );
         let action = events[0].to_action().unwrap();
         assert!(matches!(action, Action::SseTool { name, .. } if name == "search"));
     }
@@ -236,7 +236,10 @@ mod tests {
         let result = event.to_action();
         assert!(result.is_err(), "expected Err for malformed JSON");
         let err = result.unwrap_err();
-        assert!(err.contains("malformed tool SSE JSON"), "error should mention malformed JSON: {err}");
+        assert!(
+            err.contains("malformed tool SSE JSON"),
+            "error should mention malformed JSON: {err}"
+        );
     }
 
     #[test]

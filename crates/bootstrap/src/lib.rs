@@ -11,7 +11,7 @@
 
 mod config;
 
-pub use config::{ConfigError, catalog_from_config, config_dir, load_config};
+pub use config::{ConfigError, ConfigProvenance, catalog_from_config, config_dir, load_config};
 
 use std::sync::Arc;
 

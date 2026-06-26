@@ -51,11 +51,17 @@ fn flatten(
     }
 }
 
-pub fn visible_tree(convs: &[ConvHeader], collapsed: &HashSet<String>, filter: &str) -> Vec<VisibleNode> {
+pub fn visible_tree(
+    convs: &[ConvHeader],
+    collapsed: &HashSet<String>,
+    filter: &str,
+) -> Vec<VisibleNode> {
     let roots = tree_from_headers(convs, None);
     let mut out = Vec::new();
     flatten(&roots, collapsed, 0, &[], &mut out);
-    if filter.is_empty() { return out; }
+    if filter.is_empty() {
+        return out;
+    }
     let lower = filter.to_lowercase();
     out.into_iter()
         .filter(|n| n.header.title.to_lowercase().contains(&lower))
@@ -63,7 +69,12 @@ pub fn visible_tree(convs: &[ConvHeader], collapsed: &HashSet<String>, filter: &
 }
 
 pub fn filtered_list<'a>(convs: &'a [ConvHeader], filter: &str) -> Vec<&'a ConvHeader> {
-    if filter.is_empty() { return convs.iter().collect(); }
+    if filter.is_empty() {
+        return convs.iter().collect();
+    }
     let lower = filter.to_lowercase();
-    convs.iter().filter(|c| c.title.to_lowercase().contains(&lower)).collect()
+    convs
+        .iter()
+        .filter(|c| c.title.to_lowercase().contains(&lower))
+        .collect()
 }
