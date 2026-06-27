@@ -16,24 +16,25 @@ Obsidian vault, reasons about changes with an LLM, and acts via tools — safely
 to its own writes. It is a Cargo workspace (edition 2024, rust 1.90), co-developed with sibling repos
 `turbovault` and `turbomcp` (consumed as path deps, excluded from this workspace). **Daemon-first**:
 one `liberado` binary hosts the watch loop + chat + an HTTP/SSE API; every interface (web UI, the
-`liberado chat` CLI client, a future TUI) is a *client* of that API. Durable knowledge lives as
-Markdown at the repo root and under `docs/`.
+`liberado chat` CLI client, a future TUI) is a *client* of that API. Durable knowledge lives in
+the `docs/` wiki (see `docs/README.md`).
 
 ## The memory files (READ them yourself with your tools — they are NOT inlined here)
 
-**Primary orientation set** — consolidate and de-stale these:
-- `ARCHITECTURE.md` — cold-start system map, crate table, current status.
-- `liberado-architecture-decisions.md` — the **numbered Decision log** (load-bearing and
+**Primary orientation set** — consolidate and de-stale these (all live under `docs/`):
+- `docs/architecture/overview.md` — cold-start system map, crate table, current status.
+- `docs/specs/liberado-architecture-decisions.md` — the **numbered Decision log** (load-bearing and
   authoritative). Treat resolved Decisions as history: you may de-stale a reference, fix a broken
   link, or add a dated clarification, but do **not** rewrite a Decision's meaning.
-- `AGENTS.md` — build / run / extend guide (the `liberado` binary, env vars, endpoints).
-- `ROADMAP.md` — forward work + nice-to-haves.
-- `docs/interface.md` — the chat HTTP/SSE contract + interface roadmap.
-- `handoff.md` — the current-state handoff.
+- `docs/contributing/agents.md` — build / run / extend guide (the `liberado` binary, env vars, endpoints).
+- `docs/roadmap/current.md` — forward work + nice-to-haves.
+- `docs/reference/api.md` — the chat HTTP/SSE contract + interface roadmap.
+- `docs/ideas/handoff.md` — the current-state handoff.
 
 **Secondary** — scan for staleness, but do **not** wholesale-rewrite (these are stable design specs):
-- `liberado-*-spec.md` (conversation-store, dispatch-logic, context-policy, config,
+- `docs/specs/liberado-*-spec.md` (conversation-store, dispatch-logic, context-policy, config,
   vault-concurrency, testing-and-eval, inbox, maintenance-and-git, permissions).
+- `docs/specs/life-os-architecture.md`, `docs/specs/liberado-config-spec.md`, etc.
 - `crates/*/ARCHITECTURE.md` (per-crate maps).
 
 ## Gather your own recent signal

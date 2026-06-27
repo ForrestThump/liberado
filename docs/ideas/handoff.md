@@ -48,17 +48,66 @@ is green (all crates pass). The system is daemon-first and consolidated into **o
 - Shared env wiring: `crates/bootstrap/src/lib.rs`.
 - Chat/SSE contract: `docs/interface.md`. Endpoint table + env vars: `AGENTS.md`.
 
-## What's next
+## Matured vision (2026-06-26 planning session)
 
-1. **Main-agent depth** — wire the fuller design: ContextPolicy header, dispatcher integration so chat
-   routes through the same guards as reactions, per-turn background surfacing. Chat currently drives
-   the executor directly.
-2. **`crates/tui`** — ratatui client over the same chat/SSE contract. `liberado chat` already proves
-   the contract is client-agnostic; the TUI is the next client.
-3. **Web UI polish** — Markdown rendering of agent answers; a Stop button wired to
-   `EventSource.close()` (the backend cancel primitive already exists).
-4. Roadmap items: runtime tool gating, catalog population, zone write-class guard, MCP connection
-   pooling, multi-server registry UX (see `ROADMAP.md`).
+Liberado is a **modular MCP/ACP-first Rust agent substrate**, **vault-optional**, whose
+differentiation is **"self-improving autonomy with guarantees"**: the LLM proposes, deterministic
+code disposes, and self-extension can build new tools but can never widen its own authority. Full
+thesis + competitive grounding in [`docs/architecture/positioning.md`](../architecture/positioning.md);
+the three pillars in [`docs/architecture/overview.md`](../architecture/overview.md); the seam plan in
+[`docs/architecture/modularity.md`](../architecture/modularity.md).
+
+**The proposal loop (Decision 11) is fully landed** — both EMIT and APPROVE→EXECUTE. A
+high-consequence concrete action emits a `proposals/<id>.md` artifact; a human `status: approved`
+edit is picked up by the watch loop and executed via `orchestrator.execute_approved()` with the
+proposal's `correlation_id` (no re-dispatch, no guards — the edit is the authorization), then flipped
+to `done` (loop-broken, idempotent).
+
+**Four planning decisions agreed this session:**
+
+1. **General-agent-first** — the next milestone is the vault-agnostic general MCP agent, built
+   mesh-native and crate-independent (none of it touches the vault).
+2. **Incremental mesh with checkpoints** (Decision 18) — wrap seams behind an `EventBus` trait as
+   they are touched; new components are bus-native from day one; concrete "mesh is real now"
+   checkpoints tied to features guard against drift. Not a big-bang refactor.
+3. **Vault = hard-plugin destination, reached via the mesh** (Decision 19) — TurboVault is the
+   privileged *default* perception+storage plugin in the meantime, but the core is vault-agnostic;
+   the vault becomes a plugin behind an event-source/ACP trait in Phase 3.
+4. **Personal-first with framework-grade seams** — build what is objectively more useful for the
+   author than the free alternatives, but keep crate boundaries clean enough to reuse.
+
+## Known issues
+
+- **Known bug (Phase 1 blocker) — MCP tool names with `:` rejected by the provider API.** Symptom:
+  chat/TUI with an MCP configured returns HTTP 400 `Invalid 'tools[0].function.name': ... pattern
+  '^[a-zA-Z0-9_-]+$'`; the agent appears to see no tools. Root cause: Liberado namespaces MCP tools
+  as `<mcp>:<tool>` (the `mcp_of` convention), but the OpenAI/DeepSeek chat API requires
+  `tools[].function.name` to match `^[a-zA-Z0-9_-]+$` (no colon), so any tool-bearing request is
+  rejected before the model sees the tools. Fix: in the `provider-deepseek` adapter (the
+  OpenAI-compatible boundary), sanitize each tool name to the valid pattern on the way out while
+  keeping a per-request `sanitized -> original` map, and translate the model's returned tool-call name
+  back on the way in. Preserves the internal `:` convention; handles any invalid char
+  (colon/dot/slash). This is the next debugging task.
+
+## What's next — Phase 1: the general MCP agent
+
+(See [`docs/roadmap/current.md`](../roadmap/current.md) for the full four-phase plan.)
+
+The immediate Phase-1 work is (a) fix the MCP tool-name bug above, then (b) route chat through the
+dispatcher. Riggers integration is now roadmapped (use-as-MCP + Provider-trait adoption) as the
+Phase-2 self-improvement engine — see the roadmap.
+
+1. **Fix the MCP tool-name `:` bug** (see Known issues) — sanitize tool names at the
+   `provider-deepseek` boundary with a per-request reverse map. Unblocks every tool-bearing request.
+2. **Route chat through the dispatcher** — chat currently drives the executor directly, bypassing the
+   tool-advisor, guards, and sub-delegation; wiring chat -> dispatcher -> orchestrator gets all three
+   (and is the first bus-native seam: chat publishes a goal-event).
+3. **Live capability catalog + on-demand tool surfacing** — a live, bus-queryable registry (mesh
+   checkpoint #1), the token-efficiency core.
+4. **Multi-MCP + parallel, capability-narrowed sub-delegation** (closes Hermes gap #4).
+5. **`crates/tui`** — ratatui client over the same chat/SSE contract; the near-term modularity proof
+   is extracting a `chat-client-contract` crate the TUI depends on alone.
+6. Roadmap items still open: runtime tool gating, MCP connection pooling, multi-server registry UX.
 
 ## Working patterns that succeed (keep doing)
 

@@ -253,6 +253,8 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "dispatcher_attached": state.dispatcher_attached,
         "orchestrator_attached": state.orchestrator_attached,
         "reactions_seen": reactions_len as u64,
+        "chat_tools": state.chat_tools,
+        "chat_tool_names": state.chat_tool_names,
     }))
 }
 

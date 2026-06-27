@@ -2,7 +2,7 @@
 
 **Purpose**: Consolidated, prioritized list of key architectural and design decisions. Grouped by importance so we can resolve them in sequence before writing code that would be expensive to change.  
 **Status**: Living document. Each decision includes current state, open questions, and a recommended path based on our principles (loose coupling, security-first containment, token efficiency via context partitioning, low overhead, maintainability alongside real life, provider-agnostic scaffolding).  
-**Last Updated**: June 24, 2026
+**Last Updated**: 2026-06-26
 
 ---
 
@@ -448,6 +448,16 @@ Decision 17: **An append-only log of message *nodes*, JSONL outside the vault, b
   ("vault is source of truth") is about *knowledge*; it is not a claim that chat logs are notes. The
   vault bridge is a **one-way derived Markdown export** (a view, git-tracked, human/vector-friendly),
   never the system of record and never on the live write path.
+
+  > **Clarifying note (2026-06-26 — do not rewrite history):** the matured pillars demote
+  > "the vault is the source of truth." **The vault (TurboVault) is now the default, privileged
+  > perception+storage plugin, not a hard dependency.** The core (dispatch / execute / MCP runtime /
+  > chat / conversation-store) is vault-agnostic; the vault's coupling is isolated to the reactive
+  > subsystem (watch + provenance loop-breaking), which becomes the vault plugin behind an
+  > event-source trait (Decisions 18, 19). See the three pillars in
+  > [`docs/architecture/overview.md`](../architecture/overview.md) and
+  > [`docs/architecture/positioning.md`](../architecture/positioning.md). Wherever an earlier
+  > decision in this log says "the vault is the source of truth," read it through this clarification.
 - **One log, everything else is a rebuildable projection** — the line-offset index, the leaf-path
   slice the executor consumes, the Markdown export, the vector index, the recency/list index are all
   *derived from* the log. So parallel storage is neither a consistency liability nor a real cost.
@@ -487,6 +497,70 @@ DuckDB impls, and the branching/debate/parallel UX.
 
 ---
 
+## Tier 1 (matured vision, 2026-06-26): Modularity & Mesh
+
+These two decisions record the matured architectural vision agreed in the 2026-06-26 planning
+session. They are load-bearing because they reframe the substrate (event-driven, vault-optional) that
+every later feature builds on. See the three pillars in
+[`docs/architecture/overview.md`](../architecture/overview.md), the thesis in
+[`docs/architecture/positioning.md`](../architecture/positioning.md), the seam plan in
+[`docs/architecture/modularity.md`](../architecture/modularity.md), and the mesh source in
+[`docs/ideas/meshify.md`](../ideas/meshify.md).
+
+### 18. Incremental Event-Bus Mesh (with checkpoints)
+**Why it matters**: The single enabler for the whole modularity vision — vault-optional, multiple
+dispatchers/executors, cron, partial deploys, self-improvement-as-a-service — is that components
+publish/subscribe events rather than calling each other directly. *How* we get there determines
+whether the substrate ships at all.
+
+**Decision**: Adopt [`meshify.md`](../ideas/meshify.md)'s direction — components publish/subscribe
+events rather than calling each other — but **incrementally**, NOT as a big-bang refactor. Wrap seams
+behind an `EventBus` trait **as they are touched**; **new components are bus-native from day one**;
+old ones migrate when next touched (the chat -> dispatcher wiring in roadmap Phase 1 is the first
+seam). Safety (narrowing, zone checks, provenance stamping, magnitude gates) stays in the bus layer —
+services only consume or produce events the bus has already validated.
+
+**Guard against drift** with concrete "the mesh is real now" checkpoints tied to features, so the
+substrate doesn't quietly stall:
+- **Checkpoint #1 (Phase 1)** — the capability catalog is a **live, bus-queryable registry**, not
+  static config (the same registry the TUI/WebUI query).
+- **Checkpoint #2 (Phase 2)** — the **coding-agent is a bus service**; an MCP hot-reload re-registers
+  in the catalog.
+- **Checkpoint #3 (Phase 3)** — **cron and vault-watch are interchangeable event-sources**, and a
+  second dispatcher/executor is **config-enableable**.
+
+**Rationale**: The mesh is the single enabler for the modularity vision (vault-optional, multiple
+dispatchers/executors, cron, partial deploys, self-improvement-as-a-service). A foundation-first
+build risks months of plumbing with nothing shipped; incremental-with-checkpoints gets the substrate
+as a **side effect of feature work** while the checkpoints keep it honest. The public HTTP/SSE API and
+the TUI client never change during the migration.
+
+**Status**: Decided (2026-06-26). Realized incrementally across roadmap Phases 1–3.
+
+### 19. TurboVault as Privileged Plugin, not Hard Dependency
+**Why it matters**: The original Pillar 1 ("the vault is the source of truth") read as a system-wide
+invariant. The matured pillars demote it: the core must be usable without TurboVault, or the
+"modular MCP/ACP substrate" pillar and the general-MCP-agent milestone are not real.
+
+**Decision**: **The vault (TurboVault) is the default, privileged perception+storage plugin, not a
+hard dependency.** The core — dispatch / execute / MCP runtime / chat / conversation-store — is
+**vault-agnostic**. The vault's coupling is isolated to the **reactive subsystem** (watch +
+provenance loop-breaking), which becomes *the vault plugin* behind an **event-source / ACP trait**
+(the same trait cron implements — Decision 18). Privileged-default in the meantime: TurboVault stays
+the out-of-the-box perception+storage layer, but nothing in the core path requires it. This is the
+destination the mesh (Decision 18) reaches; vault-decoupling lands in roadmap Phase 3.
+
+**Supersedes**: the earlier framing that "the vault is the source of truth" as a system-wide
+invariant (see the dated clarifying note on Decision 17 above). Pillar 1 in
+[`docs/architecture/overview.md`](../architecture/overview.md) now reads "vault = default
+perception+storage plugin"; [`docs/architecture/positioning.md`](../architecture/positioning.md)
+states the differentiation this unlocks.
+
+**Status**: Decided (2026-06-26). Privileged-default now; hard-plugin via the event-source trait in
+Phase 3.
+
+---
+
 ## Tier 4: Lower-Regret / Polish Decisions
 
 - Exact initial model/provider and SDK choice (DeepSeek route, config approach).
@@ -498,7 +572,8 @@ DuckDB impls, and the branching/debate/parallel UX.
 
 ## Next Actions
 
-**All decisions resolved — Tier 1 (1–5), Tier 2 (6–12), Tier 3 (13–16), Decision 17, and the Tier 4 naming item.**
+**All decisions resolved — Tier 1 (1–5), Tier 2 (6–12), Tier 3 (13–16), Decision 17, the matured-vision
+mesh/modularity decisions (18–19, 2026-06-26), and the Tier 4 naming item.**
 
 Companion specs:
 - `liberado-permissions-idea.md` — Decision 4 (capability/zone model)

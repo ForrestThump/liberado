@@ -82,6 +82,8 @@ pub struct LayoutRects {
     pub sidebar_full: Rect,
     pub sidebar_conversations: Rect,
     pub input: Rect,
+    /// The available character-width inside the input box (area width minus borders).
+    pub input_content_width: usize,
 }
 
 /// A single node in the conversation tree, flattened for rendering.
@@ -158,8 +160,25 @@ impl App {
         }
     }
 
+    /// The 0-based column within the current logical line that the cursor is on
+    /// (characters since the last `\n`, or from the start).
+    pub fn cursor_col(&self) -> usize {
+        let line_start = self.input[..self.cursor]
+            .rfind('\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        self.input[line_start..self.cursor].chars().count()
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> Vec<Effect> {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            // Clear the input box if it has content, otherwise quit.
+            // This makes double-tap Ctrl+C a reliable exit path.
+            if self.focus == Focus::Input && !self.input.trim().is_empty() {
+                self.input.clear();
+                self.cursor = 0;
+                return vec![Effect::None];
+            }
             return vec![Effect::Quit];
         }
         if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -1549,6 +1568,8 @@ mod tests {
             model_name: Some("deepseek-chat".into()),
             token_usage_total: Some(500),
             context_window: Some(128000),
+            chat_tools: 1,
+            chat_tool_names: vec!["tasks:add".into()],
         });
         app.input = "/status".into();
         app.handle_key(key(KeyCode::Enter));
@@ -2067,6 +2088,8 @@ mod tests {
             model_name: None,
             token_usage_total: None,
             context_window: None,
+            chat_tools: 0,
+            chat_tool_names: Vec::new(),
         });
         let summary = app.status_summary();
         assert!(summary.model_name.is_none());
@@ -2087,6 +2110,8 @@ mod tests {
             model_name: Some("m".into()),
             token_usage_total: Some(10),
             context_window: Some(0),
+            chat_tools: 0,
+            chat_tool_names: Vec::new(),
         });
         app.input = "/status".into();
         app.handle_key(key(KeyCode::Enter));

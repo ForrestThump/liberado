@@ -25,6 +25,12 @@ pub struct DaemonStatus {
     /// Provider context window size in tokens.
     #[serde(default)]
     pub context_window: Option<u64>,
+    /// Number of tools available to the chat agent (0 = conversation-only).
+    #[serde(default)]
+    pub chat_tools: usize,
+    /// Names of the tools the chat agent can call.
+    #[serde(default)]
+    pub chat_tool_names: Vec<String>,
 }
 
 /// One entry from `GET /api/reactions`.
@@ -182,6 +188,8 @@ mod tests {
             model_name: Some("deepseek-chat".into()),
             token_usage_total: Some(1500),
             context_window: Some(128000),
+            chat_tools: 1,
+            chat_tool_names: vec!["tasks:add".into()],
         };
         let json = serde_json::to_value(&status).unwrap();
         let back: DaemonStatus = serde_json::from_value(json).unwrap();
@@ -193,6 +201,7 @@ mod tests {
         assert_eq!(back.model_name, Some("deepseek-chat".into()));
         assert_eq!(back.token_usage_total, Some(1500));
         assert_eq!(back.context_window, Some(128000));
+        assert_eq!(back.chat_tools, 1);
     }
 
     #[test]

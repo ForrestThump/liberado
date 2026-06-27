@@ -69,7 +69,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     let mcp = liberado_bootstrap::mcp_registry_from_config(&config);
     let orchestrator_attached = dispatcher_attached && mcp.is_some();
 
-    let chat = build_chat(provider.clone(), mcp).await;
+    let (chat, chat_tools, chat_tool_names) = build_chat(provider.clone(), mcp).await;
 
     let state = Arc::new(AppState {
         start_time: Instant::now(),
@@ -78,6 +78,8 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         orchestrator_attached,
         vault_path: vault_path.clone(),
         chat,
+        chat_tools,
+        chat_tool_names,
     });
 
     let daemon = Daemon::open("webui", &vault_path).await?;
@@ -184,14 +186,18 @@ pub fn config_check(dir: Option<&Path>) -> Result<(), Box<dyn std::error::Error>
 }
 
 /// Build the chat agent when a provider is available: a connected tool runtime (the configured MCP
-/// server, or none) + the executor + a durable conversation store. Returns `None` when there's no
+/// server, or none) + the executor + a durable conversation store. Returns `(chat, tool_count, tool_names)`
+/// so callers can surface tool availability in diagnostics. Returns `(None, 0, empty)` when there's no
 /// provider. This is the composition root — it injects the concrete [`JsonlStore`] so [`ChatSessions`]
 /// stays store-agnostic.
 async fn build_chat(
     provider: Option<Arc<dyn Provider>>,
     mcp: Option<McpRegistry>,
-) -> Option<Arc<ChatSessions>> {
-    let provider = provider?;
+) -> (Option<Arc<ChatSessions>>, usize, Vec<String>) {
+    let provider = match provider {
+        Some(p) => p,
+        None => return (None, 0, Vec::new()),
+    };
 
     // Connect a tool runtime once, reused for the chat's lifetime. Without an MCP, chat still works
     // as plain conversation.
@@ -209,8 +215,20 @@ async fn build_chat(
                 }
             }
         }
-        None => Arc::new(NoTools),
+        None => {
+            info!("chat: no MCP configured — chat will be conversation-only");
+            Arc::new(NoTools)
+        }
     };
+
+    let catalog = runtime.catalog();
+    let tool_names: Vec<String> = catalog.iter().map(|t| t.name.clone()).collect();
+    let tool_count = catalog.len();
+    if tool_count > 0 {
+        info!(count = tool_count, tools = ?tool_names, "chat: tool runtime ready");
+    } else {
+        info!("chat: no tools available — the model can only converse, not act");
+    }
 
     // Conversation logs live outside the vault (Decision 12 operational data), under
     // `<LIBERADO_DATA_DIR>/conversations`. `JsonlStore::new` creates the directory.
@@ -218,5 +236,5 @@ async fn build_chat(
     let store = Arc::new(JsonlStore::new(Path::new(&data_dir).join("conversations")));
 
     let sessions = ChatSessions::new(store, Executor::new(provider, Budget::default()), runtime);
-    Some(Arc::new(sessions))
+    (Some(Arc::new(sessions)), tool_count, tool_names)
 }

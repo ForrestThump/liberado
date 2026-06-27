@@ -375,10 +375,10 @@ impl Executor {
                     .await;
                 messages.push(Message::tool_result(&call.id, result));
             }
-            tracing::debug!(
+            tracing::info!(
                 turn,
                 tools = response.tool_calls.len(),
-                "stream turn used tools"
+                "turn used tools"
             );
         }
 
@@ -442,6 +442,10 @@ impl Executor {
             let tool_count = response.tool_calls.len();
             turn_span.record("tool_calls", tool_count);
             turn_span.record("finish_reason", "tool_calls");
+            if tool_count > 0 {
+                let names: Vec<&str> = response.tool_calls.iter().map(|c| c.name.as_str()).collect();
+                tracing::info!(turn, tool_count, ?names, "turn called tools");
+            }
 
             for call in &response.tool_calls {
                 if call.name == SUBMIT_REPORT_TOOL {

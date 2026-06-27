@@ -87,7 +87,7 @@ Slash commands:
 
 Keybindings:
   Enter       send message (Shift+Enter for newline)
-  Ctrl+C      quit
+  Ctrl+C      clear input, or quit when empty (press twice to exit)
   Ctrl+S      stop streaming (keep partial response)
   Tab         switch focus between input and sidebar
   Esc         clear input / cancel stream / return focus

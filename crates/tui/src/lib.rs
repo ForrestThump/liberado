@@ -60,7 +60,7 @@
 //! | `render` | Ratatui rendering — one module per pane. | `draw()`, `chat::draw`, `sidebar_status::draw`, `sidebar_reactions::draw`, `sidebar_conversations::draw`, `status_bar::draw`, `input::draw` |
 //! | `sse` | Incremental SSE parser. | `SseDecoder`, `SseEvent`, `SseEvent::to_action() -> Result<Action, String>` |
 //! | `terminal` | RAII terminal lifecycle guard. | `TerminalGuard` |
-//! | `tuning` | Compile-time constants for scroll, layout, timing, truncation. | `POLL_INTERVAL`, `MOUSE_SCROLL_LINES`, `INPUT_AREA_HEIGHT`, etc. |
+//! | `tuning` | Compile-time constants for scroll, layout, timing, truncation. | `POLL_INTERVAL`, `MOUSE_SCROLL_LINES`, `INPUT_MIN_HEIGHT`, etc. |
 //! | `ui` | Public `draw()` entry point; `c()` color resolver. | `draw()`, `c()` |
 //!
 //!

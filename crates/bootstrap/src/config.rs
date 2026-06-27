@@ -69,17 +69,62 @@ pub enum ConfigError {
     Invalid(String),
 }
 
-/// Resolve the config directory: `LIBERADO_CONFIG_DIR` if set, else the platform config dir
-/// (`dirs::config_dir()/liberado`). Returns `None` if neither is available (a headless environment
-/// with no env var and no home), in which case the caller boots on all-defaults.
+/// Resolve the config directory:
+///
+/// 1. `LIBERADO_CONFIG_DIR` env var — explicit intent, always wins.
+/// 2. Platform config dir (`dirs::config_dir()/liberado`), but only if it already contains at
+///    least one config section file.
+/// 3. Development convenience: walk up from the running binary, checking each ancestor for a
+///    `config/` subdirectory that has at least one config section file. This covers the common
+///    layout where `liberado.exe` lives in `target/release/` and config files sit in the
+///    project-root `config/` directory.
+/// 4. Platform config dir as final fallback (even if empty), so a fresh install gets a clear
+///    "vault_path is required" error rather than silent defaults.
+///
+/// Returns `None` if none of the above yields a directory (headless environment, no env var,
+/// no home, and no binary path).
 pub fn config_dir() -> Option<PathBuf> {
+    // 1. Explicit env var always wins.
     if let Some(dir) = std::env::var_os(CONFIG_DIR_ENV) {
         let dir = PathBuf::from(dir);
         if !dir.as_os_str().is_empty() {
             return Some(dir);
         }
     }
-    dirs::config_dir().map(|base| base.join(APP_DIR))
+
+    // 2. Platform config dir, but only if it already has config files.
+    let platform = dirs::config_dir().map(|base| base.join(APP_DIR));
+    if let Some(ref dir) = platform {
+        if has_any_config_file(dir) {
+            return Some(dir.clone());
+        }
+    }
+
+    // 3. Walk up from the binary checking for a `config/` subdirectory.
+    if let Ok(exe) = std::env::current_exe() {
+        let mut current = exe.parent().map(Path::to_path_buf);
+        for _ in 0..5 {
+            if let Some(ref dir) = current {
+                let candidate = dir.join("config");
+                if has_any_config_file(&candidate) {
+                    return Some(candidate);
+                }
+                current = dir.parent().map(Path::to_path_buf);
+            } else {
+                break;
+            }
+        }
+    }
+
+    // 4. Final fallback: platform config dir (may be empty — validated downstream).
+    platform
+}
+
+/// True when `dir` exists and contains at least one of the three known config section files.
+fn has_any_config_file(dir: &Path) -> bool {
+    dir.join(TOPOLOGY_FILE).exists()
+        || dir.join(POLICY_FILE).exists()
+        || dir.join(TUNING_FILE).exists()
 }
 
 /// Load `topology.toml`, `policy.toml`, `tuning.toml` from `dir` (each OPTIONAL — an absent file

@@ -127,10 +127,20 @@ pub struct Theme {
     #[serde(default)]
     pub md_rule: Option<String>,
 
+    // ── Input line ─────────────────────────────────────────
+    #[serde(default)]
+    pub input_bg: Option<String>,
+
     // ── General ────────────────────────────────────────────
     #[serde(default)]
     pub accent: Option<String>,
+    #[serde(default)]
     pub border: Option<String>,
+
+    /// The terminal background fill used to clear the frame before drawing.
+    /// Defaults to black for dark themes, white for light themes.
+    #[serde(default)]
+    pub app_bg: Option<String>,
 }
 
 impl Theme {
@@ -155,6 +165,7 @@ impl Theme {
             input_border_unfocused: Some("#404040".into()),
             input_placeholder: Some("#404040".into()),
             input_text: Some("#ffffff".into()),
+            input_bg: Some("#1a1a2e".into()),
             status_bar_text: Some("#808080".into()),
             status_dot_online: Some("#00ff00".into()),
             status_dot_offline: Some("#ff0000".into()),
@@ -178,6 +189,7 @@ impl Theme {
             md_rule: Some("#404040".into()),
             accent: Some("#00ffff".into()),
             border: Some("#808080".into()),
+            app_bg: Some("#0d0d1a".into()),
         }
     }
 
@@ -202,6 +214,7 @@ impl Theme {
             input_border_unfocused: Some("#c0c0c0".into()),
             input_placeholder: Some("#c0c0c0".into()),
             input_text: Some("#1a1a1a".into()),
+            input_bg: Some("#f5f5f5".into()),
             status_bar_text: Some("#808080".into()),
             status_dot_online: Some("#008000".into()),
             status_dot_offline: Some("#cc0000".into()),
@@ -225,6 +238,7 @@ impl Theme {
             md_rule: Some("#c0c0c0".into()),
             accent: Some("#008080".into()),
             border: Some("#c0c0c0".into()),
+            app_bg: Some("#ffffff".into()),
         }
     }
 
@@ -270,6 +284,7 @@ impl Theme {
             ),
             input_placeholder: inherit_string(&self.input_placeholder, &base.input_placeholder),
             input_text: inherit_string(&self.input_text, &base.input_text),
+            input_bg: inherit_string(&self.input_bg, &base.input_bg),
             status_bar_text: inherit_string(&self.status_bar_text, &base.status_bar_text),
             status_dot_online: inherit_string(&self.status_dot_online, &base.status_dot_online),
             status_dot_offline: inherit_string(&self.status_dot_offline, &base.status_dot_offline),
@@ -311,6 +326,7 @@ impl Theme {
             md_rule: inherit_string(&self.md_rule, &base.md_rule),
             accent: inherit_string(&self.accent, &base.accent),
             border: inherit_string(&self.border, &base.border),
+            app_bg: inherit_string(&self.app_bg, &base.app_bg),
         }
     }
 }

@@ -5,17 +5,32 @@ about changes with an LLM, and acts on your behalf through tools — safely, and
 own work. This document is the cold-start map. Each crate has its own zoomed-in
 `crates/<name>/ARCHITECTURE.md`.
 
-## Two pillars
+## Three pillars
 
-1. **The vault is the source of truth.** *Knowledge* state — notes, decisions, goals — lives as
-   Obsidian Markdown, managed through Turbovault. The system perceives by watching the vault and acts
-   by writing back to it. There is no separate database of record *for knowledge*. **Operational
-   data** (the runtime trace — Decision 12; conversation history — Decision 17) deliberately lives
-   *outside* the vault as append-only JSONL, so high-volume writes don't pollute the change-stream
-   the daemon reacts to; it reaches the vault only as a one-way, derived Markdown export.
-2. **Safety is engineered, not prompted.** The LLM *proposes*; deterministic code *disposes*, and only
-   ever toward less autonomy. Capabilities only narrow, never widen. Provenance is best-effort and is
-   never treated as a trust boundary — security is the capability/zone model.
+For how these pillars position Liberado against the free alternatives, see
+[Positioning](positioning.md).
+
+1. **Modular MCP/ACP substrate.** Loose-coupled components (perceive / decide / execute / store) that
+   talk through events; capability is composed from optional crates. TurboVault is the default,
+   privileged perception+storage plugin — not a hard dependency. Every crate aims to be independently
+   useful.
+
+2. **Safety is engineered, not prompted.** The LLM proposes; deterministic code disposes, only ever
+   toward less autonomy. The capability/zone boundary is the actual trust boundary — and it is what
+   makes self-extension safe: an agent can build new tools but can never widen its own authority. The
+   default boundaries are MCPs and ACPs: those are exactly how agents interact with real data, and
+   they are the first and primary point of security and control for the user.
+
+3. **Token efficiency via the dispatcher-as-tool-advisor.** Disjoint context; a compact catalog;
+   tools surfaced on-demand, never dumped into context. This applies beyond tool definitions to
+   context pollution in general — build everything asking: "are we adding more context than we need,
+   too quickly, and can it be surfaced later instead so it stays useful?" The caveat matters: context
+   is sometimes unexpectedly useful, so this can be taken too far in the conservative direction.
+   Empirical testing finds the balance.
+
+**Operational data** (the runtime trace — Decision 12; conversation history — Decision 17)
+deliberately lives *outside* the vault as append-only JSONL, so high-volume writes don't pollute the
+change-stream the daemon reacts to; it reaches the vault only as a one-way, derived Markdown export.
 
 ## The loop (perceive → decide → act → don't loop)
 

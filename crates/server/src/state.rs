@@ -16,6 +16,10 @@ pub struct AppState {
     /// Present when `DEEPSEEK_API_KEY` is set — the durable, session-keyed chat agent. All
     /// persistence orchestration lives inside [`ChatSessions`]; the HTTP handlers are thin adapters.
     pub chat: Option<Arc<ChatSessions>>,
+    /// Number of connected chat tools (0 when MCP is unconfigured or failed to connect).
+    pub chat_tools: usize,
+    /// Names of the tools available to chat, for diagnostic visibility.
+    pub chat_tool_names: Vec<String>,
 }
 
 /// A tool runtime with no tools — chat still works (just conversation) when no MCP is configured.

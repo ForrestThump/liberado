@@ -34,11 +34,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     });
 
+    // Only emit tracing output when the user explicitly opts in via RUST_LOG.
+    // The default ("off") keeps the terminal clean — log lines mixed into a
+    // TUI alternate screen corrupt the display.
     tracing_subscriber::fmt()
         .with_writer(io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "liberado_tui=info".into()),
+                .unwrap_or_else(|_| "off".into()),
         )
         .init();
 

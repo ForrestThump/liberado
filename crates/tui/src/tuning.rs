@@ -42,9 +42,14 @@ pub const CHAT_VISIBLE_LINES: usize = 20;
 
 // ── Layout ──────────────────────────────────────────────────────────
 
-pub const INPUT_AREA_HEIGHT: u16 = 3;
+/// Height of the status bar row at the bottom of the screen.
 pub const STATUS_BAR_HEIGHT: u16 = 1;
-pub const INPUT_ROW_HEIGHT: u16 = 2;
+
+/// Minimum height of the input area (1 content row + top/bottom borders).
+pub const INPUT_MIN_HEIGHT: u16 = 3;
+
+/// Maximum height of the input area before scrolling (10 content rows + borders).
+pub const INPUT_MAX_HEIGHT: u16 = 12;
 pub const CHAT_SIDEBAR_SPLIT_CHAT: u16 = 70;
 pub const CHAT_SIDEBAR_SPLIT_SIDEBAR: u16 = 30;
 pub const SIDEBAR_STATUS_HEIGHT: u16 = 6;

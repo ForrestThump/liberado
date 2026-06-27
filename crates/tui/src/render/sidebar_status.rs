@@ -57,6 +57,16 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
                 Style::default().fg(c(&th.status_dot_online, "#00ff00")),
             )));
         }
+
+        let tool_count = status.chat_tools;
+        if tool_count > 0 {
+            lines.push(Line::from(format!("  Chat tools: {tool_count}")));
+        } else {
+            lines.push(Line::from(Span::styled(
+                "  Chat tools: 0 (conversation-only)",
+                Style::default().fg(c(&th.status_dot_connecting, "#ffff00")),
+            )));
+        }
     } else {
         let s = &app.server;
         let short = if s.len() > 20 {
