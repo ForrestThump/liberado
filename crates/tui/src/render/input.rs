@@ -33,11 +33,17 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme) {
 
     let content_width = area.width.saturating_sub(2) as usize;
     let wrapped = wrap_input(&app.input, content_width);
-    let (cursor_line, cursor_col) = visual_cursor(&app.input, app.cursor, content_width);
+    let (mut cursor_line, cursor_col) = visual_cursor(&app.input, app.cursor, content_width);
+
+    let max_content_rows = area.height.saturating_sub(2) as usize;
+    let start = app.input_scroll;
+    let end = (start + max_content_rows).min(wrapped.len());
+    let visible: Vec<Line> = wrapped[start..end].to_vec();
+
+    cursor_line = cursor_line.saturating_sub(app.input_scroll);
 
     let input_fg = c(&th.input_text, "#ffffff");
-    // Apply colours to each pre-wrapped line.
-    let styled: Vec<Line> = wrapped
+    let styled: Vec<Line> = visible
         .into_iter()
         .map(|line| {
             let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
@@ -107,8 +113,10 @@ fn position_cursor(
     if app.focus != Focus::Input {
         return;
     }
+    let max_visible_rows = area.height.saturating_sub(2) as usize;
+    let clamped_line = cursor_visual_line.min(max_visible_rows.saturating_sub(1));
     let x = (area.x + 1 + cursor_visual_col as u16).min(area.right().saturating_sub(1));
-    let y = (area.y + 1 + cursor_visual_line as u16).min(area.bottom().saturating_sub(2));
+    let y = (area.y + 1 + clamped_line as u16).min(area.bottom().saturating_sub(2));
     frame.set_cursor_position((x, y));
 }
 

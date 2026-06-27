@@ -49,7 +49,7 @@ pub const STATUS_BAR_HEIGHT: u16 = 1;
 pub const INPUT_MIN_HEIGHT: u16 = 3;
 
 /// Maximum height of the input area before scrolling (10 content rows + borders).
-pub const INPUT_MAX_HEIGHT: u16 = 12;
+pub const INPUT_MAX_HEIGHT: u16 = 6;
 pub const CHAT_SIDEBAR_SPLIT_CHAT: u16 = 70;
 pub const CHAT_SIDEBAR_SPLIT_SIDEBAR: u16 = 30;
 pub const SIDEBAR_STATUS_HEIGHT: u16 = 6;

@@ -61,7 +61,7 @@ struct Layout {
 /// Compute every pane rectangle from the terminal area, adjusting the
 /// input height to fit the current text content.
 fn compute_layout(terminal: ratatui::layout::Rect, app: &App) -> Layout {
-    let input_height = compute_input_height(terminal.width, &app.input);
+    let input_height = compute_input_height(terminal.width, &app.input, app.input_max_height);
 
     // Outer: [main area | bottom strip (status + input)]
     let outer = ratatui::layout::Layout::default()
@@ -111,8 +111,8 @@ fn compute_layout(terminal: ratatui::layout::Rect, app: &App) -> Layout {
     }
 }
 
-/// How tall the input area must be to display `input` without clipping.
-fn compute_input_height(terminal_width: u16, input: &str) -> u16 {
+/// How tall the input area must be to display `input`, clamped to the configured max.
+fn compute_input_height(terminal_width: u16, input: &str, max_height: u16) -> u16 {
     let content_width = terminal_width.saturating_sub(2) as usize; // minus borders
     let content_lines: u16 = if input.is_empty() {
         1
@@ -131,7 +131,7 @@ fn compute_input_height(terminal_width: u16, input: &str) -> u16 {
             .sum::<u16>()
             .max(1)
     };
-    (content_lines + 2).clamp(INPUT_MIN_HEIGHT, INPUT_MAX_HEIGHT)
+    (content_lines + 2).clamp(INPUT_MIN_HEIGHT, max_height.max(INPUT_MIN_HEIGHT))
 }
 
 // ── State sync ───────────────────────────────────────────────────────

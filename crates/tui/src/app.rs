@@ -72,6 +72,8 @@ pub struct App {
     pub collapsed_nodes: HashSet<String>,
     pub expanded_messages: HashSet<usize>,
     pub chat_cursor: usize,
+    pub input_max_height: u16,
+    pub input_scroll: usize,
     pub layout: LayoutRects,
 }
 
@@ -139,6 +141,8 @@ impl App {
             collapsed_nodes: HashSet::new(),
             expanded_messages: HashSet::new(),
             chat_cursor: 0,
+            input_max_height: INPUT_MAX_HEIGHT,
+            input_scroll: 0,
             layout: LayoutRects::default(),
         }
     }
@@ -168,6 +172,54 @@ impl App {
             .map(|i| i + 1)
             .unwrap_or(0);
         self.input[line_start..self.cursor].chars().count()
+    }
+
+    pub fn cursor_visual_line(&self) -> usize {
+        let cw = self.layout.input_content_width.max(1);
+        let mut visual_line = 0usize;
+        let mut byte_pos = 0usize;
+        for logical in self.input.lines() {
+            let line_end = byte_pos + logical.len();
+            if self.cursor <= line_end {
+                let col = self.input[byte_pos..self.cursor].chars().count();
+                visual_line += if col == 0 { 0 } else { (col + cw - 1) / cw };
+                return visual_line;
+            }
+            let chars = logical.chars().count();
+            visual_line += if chars == 0 { 1 } else { (chars + cw - 1) / cw };
+            byte_pos = (line_end + 1).min(self.input.len());
+        }
+        visual_line
+    }
+
+    pub fn input_visual_lines(&self) -> usize {
+        let cw = self.layout.input_content_width;
+        if cw == 0 {
+            return self.input.lines().count().max(1);
+        }
+        self.input
+            .lines()
+            .map(|line| {
+                let chars = line.chars().count();
+                if chars == 0 { 1 } else { (chars + cw - 1) / cw }
+            })
+            .sum::<usize>()
+            .max(1)
+    }
+
+    pub fn scroll_input_to_cursor(&mut self) {
+        let max_visible = self.input_max_height.saturating_sub(2) as usize;
+        if max_visible == 0 {
+            return;
+        }
+        let cursor_line = self.cursor_visual_line();
+        let total_lines = self.input_visual_lines();
+        if cursor_line < self.input_scroll {
+            self.input_scroll = cursor_line;
+        } else if cursor_line >= self.input_scroll + max_visible {
+            self.input_scroll = cursor_line.saturating_sub(max_visible - 1);
+        }
+        self.input_scroll = self.input_scroll.min(total_lines.saturating_sub(max_visible));
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Vec<Effect> {

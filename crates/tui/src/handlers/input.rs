@@ -15,7 +15,7 @@ use crate::app::{App, Effect, Focus, Message};
 use crate::tuning::PAGE_SCROLL_LINES;
 
 pub(crate) fn handle(app: &mut App, key: KeyEvent) -> Vec<Effect> {
-    match key.code {
+    let effects = match key.code {
         KeyCode::Enter => handle_enter(app, key.modifiers),
         KeyCode::Char(c) => handle_char(app, c),
         KeyCode::Backspace => handle_backspace(app, key.modifiers),
@@ -29,7 +29,9 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> Vec<Effect> {
         KeyCode::PageUp => handle_pgup(app),
         KeyCode::PageDown => handle_pgdn(app),
         _ => vec![Effect::None],
-    }
+    };
+    app.scroll_input_to_cursor();
+    effects
 }
 
 // ── Enter ────────────────────────────────────────────────────────────
@@ -62,6 +64,7 @@ fn send_message(app: &mut App) -> Vec<Effect> {
     app.messages.push(Message::User(message.clone()));
     app.input.clear();
     app.cursor = 0;
+    app.input_scroll = 0;
     app.streaming = true;
     app.assistant_buf.clear();
     app.scroll_offset = 0;
@@ -166,6 +169,7 @@ fn handle_esc(app: &mut App) -> Vec<Effect> {
     }
     app.input.clear();
     app.cursor = 0;
+    app.input_scroll = 0;
     vec![Effect::None]
 }
 
