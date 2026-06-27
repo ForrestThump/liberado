@@ -26,6 +26,8 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> Vec<Effect> {
         KeyCode::End => handle_end(app),
         KeyCode::Esc => handle_esc(app),
         KeyCode::Tab => handle_tab(app),
+        KeyCode::Up => handle_up(app),
+        KeyCode::Down => handle_down(app),
         KeyCode::PageUp => handle_pgup(app),
         KeyCode::PageDown => handle_pgdn(app),
         _ => vec![Effect::None],
@@ -158,6 +160,27 @@ fn handle_home(app: &mut App) -> Vec<Effect> {
 
 fn handle_end(app: &mut App) -> Vec<Effect> {
     app.cursor = app.input.len();
+    vec![Effect::None]
+}
+
+fn handle_up(app: &mut App) -> Vec<Effect> {
+    let line = app.cursor_visual_line();
+    if line == 0 {
+        return vec![Effect::None];
+    }
+    let col = app.cursor_visual_col();
+    app.cursor = app.byte_offset_for_visual(line - 1, col);
+    vec![Effect::None]
+}
+
+fn handle_down(app: &mut App) -> Vec<Effect> {
+    let total = app.input_visual_lines();
+    let line = app.cursor_visual_line();
+    if line + 1 >= total {
+        return vec![Effect::None];
+    }
+    let col = app.cursor_visual_col();
+    app.cursor = app.byte_offset_for_visual(line + 1, col);
     vec![Effect::None]
 }
 

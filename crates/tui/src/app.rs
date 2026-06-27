@@ -182,7 +182,7 @@ impl App {
             let line_end = byte_pos + logical.len();
             if self.cursor <= line_end {
                 let col = self.input[byte_pos..self.cursor].chars().count();
-                visual_line += if col == 0 { 0 } else { (col + cw - 1) / cw };
+                visual_line += col / cw;
                 return visual_line;
             }
             let chars = logical.chars().count();
@@ -190,6 +190,41 @@ impl App {
             byte_pos = (line_end + 1).min(self.input.len());
         }
         visual_line
+    }
+
+    pub fn cursor_visual_col(&self) -> usize {
+        let cw = self.layout.input_content_width.max(1);
+        let line_start = self.input[..self.cursor]
+            .rfind('\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        self.input[line_start..self.cursor].chars().count() % cw
+    }
+
+    pub fn byte_offset_for_visual(&self, target_line: usize, target_col: usize) -> usize {
+        let cw = self.layout.input_content_width.max(1);
+        let mut visual_line = 0usize;
+        let mut byte_pos = 0usize;
+        for logical in self.input.lines() {
+            let line_end = byte_pos + logical.len();
+            let chars_in_logical = logical.chars().count();
+            let visual_lines_in_logical =
+                if chars_in_logical == 0 { 1 } else { (chars_in_logical + cw - 1) / cw };
+            if target_line < visual_line + visual_lines_in_logical {
+                let local_line = target_line.saturating_sub(visual_line);
+                let start_char = local_line * cw;
+                let end_char = (start_char + target_col).min(chars_in_logical);
+                let byte_in_logical = logical
+                    .char_indices()
+                    .nth(end_char)
+                    .map(|(i, _)| i)
+                    .unwrap_or(logical.len());
+                return (byte_pos + byte_in_logical).min(self.input.len());
+            }
+            visual_line += visual_lines_in_logical;
+            byte_pos = (line_end + 1).min(self.input.len());
+        }
+        self.input.len()
     }
 
     pub fn input_visual_lines(&self) -> usize {
@@ -2250,5 +2285,169 @@ mod tests {
         );
         app.handle_mouse(scroll_down(2, 22));
         assert_eq!(app.scroll_offset, 0);
+    }
+
+    fn set_content_width(app: &mut App, width: usize) {
+        app.layout.input_content_width = width;
+    }
+
+    #[test]
+    fn cursor_visual_line_start() {
+        let mut app = test_app();
+        set_content_width(&mut app, 10);
+        app.input = "hello world".to_string();
+        app.cursor = 0;
+        assert_eq!(app.cursor_visual_line(), 0);
+    }
+
+    #[test]
+    fn cursor_visual_line_within_line() {
+        let mut app = test_app();
+        set_content_width(&mut app, 10);
+        app.input = "hello world".to_string();
+        app.cursor = 7;
+        assert_eq!(app.cursor_visual_line(), 0);
+    }
+
+    #[test]
+    fn cursor_visual_line_wraps() {
+        let mut app = test_app();
+        set_content_width(&mut app, 5);
+        app.input = "hello world".to_string();
+        app.cursor = 7;
+        assert_eq!(app.cursor_visual_line(), 1);
+    }
+
+    #[test]
+    fn cursor_visual_line_newlines() {
+        let mut app = test_app();
+        set_content_width(&mut app, 10);
+        app.input = "abc\ndef\nghi".to_string();
+        app.cursor = 5;
+        assert_eq!(app.cursor_visual_line(), 1);
+    }
+
+    #[test]
+    fn input_visual_lines_empty() {
+        let mut app = test_app();
+        set_content_width(&mut app, 10);
+        assert_eq!(app.input_visual_lines(), 1);
+    }
+
+    #[test]
+    fn input_visual_lines_wraps() {
+        let mut app = test_app();
+        set_content_width(&mut app, 5);
+        app.input = "hello world".to_string();
+        assert_eq!(app.input_visual_lines(), 3);
+    }
+
+    #[test]
+    fn cursor_visual_col_start() {
+        let mut app = test_app();
+        set_content_width(&mut app, 10);
+        app.input = "hello world".to_string();
+        app.cursor = 0;
+        assert_eq!(app.cursor_visual_col(), 0);
+    }
+
+    #[test]
+    fn cursor_visual_col_wraps() {
+        let mut app = test_app();
+        set_content_width(&mut app, 5);
+        app.input = "hello world".to_string();
+        app.cursor = 7;
+        assert_eq!(app.cursor_visual_col(), 2);
+    }
+
+    #[test]
+    fn byte_offset_for_visual_start() {
+        let mut app = test_app();
+        set_content_width(&mut app, 10);
+        app.input = "hello world".to_string();
+        assert_eq!(app.byte_offset_for_visual(0, 0), 0);
+    }
+
+    #[test]
+    fn byte_offset_for_visual_mid_line() {
+        let mut app = test_app();
+        set_content_width(&mut app, 10);
+        app.input = "hello world".to_string();
+        assert_eq!(app.byte_offset_for_visual(0, 6), 6);
+    }
+
+    #[test]
+    fn byte_offset_for_visual_wrapped_line() {
+        let mut app = test_app();
+        set_content_width(&mut app, 5);
+        app.input = "hello world".to_string();
+        assert_eq!(app.byte_offset_for_visual(1, 0), 5);
+    }
+
+    #[test]
+    fn byte_offset_for_visual_past_end_clamps() {
+        let mut app = test_app();
+        set_content_width(&mut app, 10);
+        app.input = "hi".to_string();
+        assert_eq!(app.byte_offset_for_visual(0, 10), 2);
+    }
+
+    #[test]
+    fn handle_up_on_first_line_noop() {
+        let mut app = test_app();
+        set_content_width(&mut app, 10);
+        app.input = "hello".to_string();
+        app.cursor = 2;
+        let effects = app.handle_key(key(KeyCode::Up));
+        assert_eq!(app.cursor, 2);
+        assert!(matches!(effects.as_slice(), [Effect::None]));
+    }
+
+    #[test]
+    fn handle_up_moves_one_line() {
+        let mut app = test_app();
+        set_content_width(&mut app, 5);
+        app.input = "hello world".to_string();
+        app.cursor = 7;
+        let effects = app.handle_key(key(KeyCode::Up));
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(effects[0], Effect::None));
+        let moved_line = app.cursor_visual_line();
+        assert_eq!(moved_line, 0);
+    }
+
+    #[test]
+    fn handle_down_on_last_line_noop() {
+        let mut app = test_app();
+        set_content_width(&mut app, 5);
+        app.input = "hello world".to_string();
+        app.cursor = 10;
+        let effects = app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.cursor, 10);
+        assert!(matches!(effects.as_slice(), [Effect::None]));
+    }
+
+    #[test]
+    fn handle_down_moves_one_line() {
+        let mut app = test_app();
+        set_content_width(&mut app, 5);
+        app.input = "hello world".to_string();
+        app.cursor = 2;
+        let effects = app.handle_key(key(KeyCode::Down));
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(effects[0], Effect::None));
+        assert!(app.cursor_visual_line() >= 1);
+    }
+
+    #[test]
+    fn handle_up_roundtrip() {
+        let mut app = test_app();
+        set_content_width(&mut app, 3);
+        app.input = "abcdefghij".to_string();
+        app.cursor = 7;
+        let original_col = app.cursor_visual_col();
+        app.handle_key(key(KeyCode::Up));
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.cursor_visual_col(), original_col);
     }
 }

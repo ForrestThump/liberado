@@ -181,7 +181,7 @@ fn visual_cursor(input: &str, cursor: usize, content_width: usize) -> (usize, us
 
         if cursor <= line_end {
             let column = input[byte_pos..cursor].chars().count();
-            visual_line += visual_lines_for_offset(column, content_width);
+            visual_line += column / content_width.max(1);
             return (visual_line, column % content_width.max(1));
         }
 
