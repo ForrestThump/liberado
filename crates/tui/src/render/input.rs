@@ -41,7 +41,10 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme) {
         .into_iter()
         .map(|line| {
             let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-            Line::from(Span::styled(text, Style::default().fg(input_fg).bg(input_bg)))
+            Line::from(Span::styled(
+                text,
+                Style::default().fg(input_fg).bg(input_bg),
+            ))
         })
         .collect();
 

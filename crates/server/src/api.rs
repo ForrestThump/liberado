@@ -258,6 +258,19 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     }))
 }
 
+pub async fn catalog(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let descriptors = state.catalog.descriptors();
+    Json(serde_json::json!({
+        "mcps": descriptors.iter().map(|d| {
+            serde_json::json!({
+                "name": d.name,
+                "description": d.description,
+                "consequence": d.consequence,
+            })
+        }).collect::<Vec<_>>()
+    }))
+}
+
 pub async fn reactions(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ReactionsQuery>,

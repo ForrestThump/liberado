@@ -61,6 +61,7 @@ liberado-cli = { path = "crates/cli" }
 liberado-server = { path = "crates/server" }
 liberado-tui = { path = "crates/tui" }
 liberado-theme = { path = "crates/theme" }
+chat-client-contract = { path = "crates/chat-client-contract" }
 liberado-markdown = { path = "crates/markdown" }
 
 # --- co-developed path dependencies (Decision 7) ---

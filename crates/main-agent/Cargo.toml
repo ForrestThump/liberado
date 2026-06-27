@@ -9,8 +9,11 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
+liberado-common = { workspace = true }
 liberado-conversation-store = { workspace = true }
 liberado-executor = { workspace = true }
+liberado-mcp = { workspace = true }
 liberado-provider = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

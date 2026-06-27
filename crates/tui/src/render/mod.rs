@@ -10,8 +10,8 @@ pub mod sidebar_reactions;
 pub mod sidebar_status;
 pub mod status_bar;
 
-use ratatui::{Frame, style::Style};
 use ratatui::widgets::Block;
+use ratatui::{Frame, style::Style};
 
 use crate::app::App;
 use crate::tuning::*;
@@ -40,7 +40,10 @@ pub fn draw(frame: &mut Frame, app: &mut App, spinner_tick: u8) {
 
 fn fill_background(frame: &mut Frame, th: &liberado_theme::Theme) {
     let bg = c(&th.app_bg, "#0d0d1a");
-    frame.render_widget(Block::default().style(Style::default().bg(bg)), frame.area());
+    frame.render_widget(
+        Block::default().style(Style::default().bg(bg)),
+        frame.area(),
+    );
 }
 
 // ── Layout ───────────────────────────────────────────────────────────

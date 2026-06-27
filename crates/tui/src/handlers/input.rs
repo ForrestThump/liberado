@@ -90,7 +90,8 @@ fn auto_wrap_if_needed(app: &mut App) {
         .unwrap_or(0);
     let current = &app.input[line_start..app.cursor];
     if let Some(space) = current.rfind(' ') {
-        app.input.replace_range((line_start + space)..(line_start + space + 1), "\n");
+        app.input
+            .replace_range((line_start + space)..(line_start + space + 1), "\n");
     }
 }
 
@@ -117,8 +118,7 @@ fn handle_delete(app: &mut App, mods: KeyModifiers) -> Vec<Effect> {
             app.input.remove(app.cursor);
         }
         // Also eat trailing whitespace after the deleted word.
-        while app.cursor < app.input.len()
-            && app.input.as_bytes()[app.cursor].is_ascii_whitespace()
+        while app.cursor < app.input.len() && app.input.as_bytes()[app.cursor].is_ascii_whitespace()
         {
             app.input.remove(app.cursor);
         }

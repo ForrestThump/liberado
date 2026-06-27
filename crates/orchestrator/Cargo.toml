@@ -14,6 +14,7 @@ liberado-provider = { workspace = true }
 liberado-executor = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

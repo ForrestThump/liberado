@@ -15,7 +15,8 @@ use std::time::Instant;
 use std::path::Path;
 
 use axum::Router;
-use liberado_common::WriteProvenance;
+use liberado_bootstrap::catalog_from_config;
+use liberado_common::{CapabilityCatalog, WriteProvenance};
 use liberado_conversation_store::JsonlStore;
 use liberado_daemon::Daemon;
 use liberado_executor::{Budget, Executor, ToolRuntime};
@@ -69,7 +70,20 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     let mcp = liberado_bootstrap::mcp_registry_from_config(&config);
     let orchestrator_attached = dispatcher_attached && mcp.is_some();
 
-    let (chat, chat_tools, chat_tool_names) = build_chat(provider.clone(), mcp).await;
+    let (chat, chat_tools, chat_tool_names) = build_chat(provider.clone(), mcp, &config).await;
+
+    // Build the capability catalog for API exposure.
+    let capability_catalog = {
+        let cat = CapabilityCatalog::new();
+        for desc in catalog_from_config(&config) {
+            cat.register(liberado_common::McpDescriptor {
+                name: desc.name.clone(),
+                description: desc.description.clone(),
+                consequence: desc.consequence,
+            });
+        }
+        Arc::new(cat)
+    };
 
     let state = Arc::new(AppState {
         start_time: Instant::now(),
@@ -80,6 +94,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         chat,
         chat_tools,
         chat_tool_names,
+        catalog: capability_catalog,
     });
 
     let daemon = Daemon::open("webui", &vault_path).await?;
@@ -92,6 +107,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/api/status", axum::routing::get(api::status))
+        .route("/api/catalog", axum::routing::get(api::catalog))
         .route("/api/reactions", axum::routing::get(api::reactions))
         .route("/api/vault", axum::routing::get(api::vault))
         .route("/api/chat", axum::routing::post(api::chat))
@@ -190,9 +206,13 @@ pub fn config_check(dir: Option<&Path>) -> Result<(), Box<dyn std::error::Error>
 /// so callers can surface tool availability in diagnostics. Returns `(None, 0, empty)` when there's no
 /// provider. This is the composition root — it injects the concrete [`JsonlStore`] so [`ChatSessions`]
 /// stays store-agnostic.
+///
+/// When guard configuration (catalog, capabilities) is present, ChatSessions is configured with
+/// the tool-advisor and RiskGatedToolRuntime for every turn.
 async fn build_chat(
     provider: Option<Arc<dyn Provider>>,
     mcp: Option<McpRegistry>,
+    config: &liberado_common::config::Config,
 ) -> (Option<Arc<ChatSessions>>, usize, Vec<String>) {
     let provider = match provider {
         Some(p) => p,
@@ -235,6 +255,32 @@ async fn build_chat(
     let data_dir = std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into());
     let store = Arc::new(JsonlStore::new(Path::new(&data_dir).join("conversations")));
 
-    let sessions = ChatSessions::new(store, Executor::new(provider, Budget::default()), runtime);
+    // ── Build the guarded ChatSessions ───────────────────────────────────────
+    //
+    // Extract the MCP catalog from the config for consequence gating.
+    let dispatcher_catalog = catalog_from_config(config);
+
+    // Consequence catalog: (name, Consequence) pairs for risk gating.
+    let consequences: Vec<(String, liberado_common::Consequence)> = dispatcher_catalog
+        .iter()
+        .map(|d| (d.name.clone(), d.consequence))
+        .collect();
+
+    // Base capabilities from policy grants.
+    let capabilities = config.policy.base_capabilities();
+
+    // Proposal files directory.
+    let proposals_dir = Path::new(&data_dir).join("proposals");
+
+    let sessions = ChatSessions::new(store, Executor::new(provider, Budget::default()), runtime)
+        .with_guards(consequences, capabilities, proposals_dir);
+
+    if !dispatcher_catalog.is_empty() {
+        info!(
+            count = dispatcher_catalog.len(),
+            "chat: runtime safety guards enabled (capability-scoped tools + RiskGatedToolRuntime)"
+        );
+    }
+
     (Some(Arc::new(sessions)), tool_count, tool_names)
 }

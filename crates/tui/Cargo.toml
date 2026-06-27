@@ -25,6 +25,7 @@ crossterm = { workspace = true }
 chrono = { workspace = true }
 liberado-theme = { workspace = true }
 liberado-markdown = { workspace = true }
+chat-client-contract = { workspace = true }
 parking_lot = "0.12"
 ctrlc = "3.4"
 

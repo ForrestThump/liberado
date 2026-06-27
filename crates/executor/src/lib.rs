@@ -375,11 +375,7 @@ impl Executor {
                     .await;
                 messages.push(Message::tool_result(&call.id, result));
             }
-            tracing::info!(
-                turn,
-                tools = response.tool_calls.len(),
-                "turn used tools"
-            );
+            tracing::info!(turn, tools = response.tool_calls.len(), "turn used tools");
         }
 
         Err(ExecError::BudgetExceeded {
@@ -443,7 +439,11 @@ impl Executor {
             turn_span.record("tool_calls", tool_count);
             turn_span.record("finish_reason", "tool_calls");
             if tool_count > 0 {
-                let names: Vec<&str> = response.tool_calls.iter().map(|c| c.name.as_str()).collect();
+                let names: Vec<&str> = response
+                    .tool_calls
+                    .iter()
+                    .map(|c| c.name.as_str())
+                    .collect();
                 tracing::info!(turn, tool_count, ?names, "turn called tools");
             }
 

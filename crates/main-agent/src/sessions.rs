@@ -17,14 +17,26 @@
 //!
 //! We depend on the [`ConversationStore`] *trait*, never a concrete store: the composition root
 //! injects the engine (JSONL today, SQLite/Postgres later) so it stays swappable.
+//!
+//! # Slice 2 — runtime safety guards
+//!
+//! Each turn surfaces the full **capability-scoped** tool set: the runtime is wrapped in a
+//! [`ScopedRuntime`] (limiting the model's visible tools to the granted MCPs) and a
+//! [`RiskGatedToolRuntime`] (capability / consequence / magnitude checks). The model sees every
+//! granted tool regardless of how the message is phrased — robust, with no missed requests. (An
+//! earlier verb-keyword advisor was removed because it silently dropped legitimate requests phrased
+//! without a listed verb, e.g. "what's on my calendar?".)
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use liberado_common::{CapabilitySet, Consequence};
 use liberado_conversation_store::{
     Author, ConversationHeader, ConversationStore, NewConversation, NewNode, StoreError, Ulid,
 };
 use liberado_executor::{AgentEvent, ExecError, Executor, ToolRuntime};
+use liberado_mcp::{RiskGatedToolRuntime, ScopedRuntime};
 use liberado_provider::Message;
 use thiserror::Error;
 use tokio::sync::mpsc::Sender;
@@ -47,6 +59,9 @@ pub type SessionResult<T> = Result<T, SessionError>;
 /// Durable, session-keyed chat over a [`ConversationStore`]. One per host; cheap to share behind an
 /// `Arc`. Holds no conversation state — each turn rehydrates from the store and persists its tail on
 /// success.
+///
+/// When guard configuration is attached (via [`with_guards`](Self::with_guards)), each turn applies
+/// the tool-advisor to select relevant MCPs and wraps the runtime in safety guards.
 pub struct ChatSessions {
     store: Arc<dyn ConversationStore>,
     executor: Executor,
@@ -54,10 +69,20 @@ pub struct ChatSessions {
     system_prompt: String,
     /// Per-session turn serialization — one turn at a time per conversation.
     locks: Mutex<HashMap<Ulid, Arc<tokio::sync::Mutex<()>>>>,
+
+    // ── Slice 2: runtime safety guards ──────────────────────────────────────
+    /// `(mcp_name, consequence)` pairs for RiskGatedToolRuntime consequence gating.
+    consequences: Vec<(String, Consequence)>,
+    /// Capability grants for RiskGatedToolRuntime capability checking.
+    capabilities: CapabilitySet,
+    /// Directory under which `proposals/` subdirectory holds proposal files.
+    proposals_dir: PathBuf,
 }
 
 impl ChatSessions {
     /// Build over an injected store, executor, and tool runtime, using [`DEFAULT_SYSTEM_PROMPT`].
+    /// No safety guards are attached by default — call [`with_guards`](Self::with_guards) to enable
+    /// the tool-advisor and RiskGatedToolRuntime for every turn.
     pub fn new(
         store: Arc<dyn ConversationStore>,
         executor: Executor,
@@ -69,12 +94,38 @@ impl ChatSessions {
             runtime,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             locks: Mutex::new(HashMap::new()),
+            consequences: Vec::new(),
+            capabilities: CapabilitySet::empty(),
+            proposals_dir: PathBuf::new(),
         }
     }
 
     /// Override the system prompt written as the root node of new conversations.
     pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.system_prompt = prompt.into();
+        self
+    }
+
+    /// Attach runtime safety guard configuration.
+    ///
+    /// When configured, each turn:
+    /// 1. Scopes the runtime's visible tools to the granted MCPs (capability scoping).
+    /// 2. Wraps in [`RiskGatedToolRuntime`] for capability / consequence / magnitude checks.
+    ///
+    /// # Arguments
+    ///
+    /// * `consequences` - `(mcp_name, consequence)` pairs for consequence gating.
+    /// * `capabilities` - The base capability set for capability checks and tool scoping.
+    /// * `proposals_dir` - Base directory for proposal files (`proposals/proposals/<id>.md`).
+    pub fn with_guards(
+        mut self,
+        consequences: Vec<(String, Consequence)>,
+        capabilities: CapabilitySet,
+        proposals_dir: PathBuf,
+    ) -> Self {
+        self.consequences = consequences;
+        self.capabilities = capabilities;
+        self.proposals_dir = proposals_dir;
         self
     }
 
@@ -105,13 +156,18 @@ impl ChatSessions {
 
     /// One non-streaming turn: rehydrate, run the agent over the full history, and — on success —
     /// persist the turn's new messages. A failed turn (the `?` short-circuit) persists nothing.
+    ///
+    /// When guard configuration is attached, the tool-advisor runs before the turn to select
+    /// relevant MCPs, and the runtime is wrapped in [`RiskGatedToolRuntime`] for safety checks.
     pub async fn turn(&self, session: Ulid, user: &str) -> SessionResult<String> {
         let lock = self.session_lock(session);
         let _guard = lock.lock().await;
         let (mut convo, parent_leaf) = self.load(session).await?;
         let before = convo.len();
+
+        let turn_runtime = self.build_turn_runtime(user, session);
         let reply = convo
-            .turn(&self.executor, self.runtime.as_ref(), user)
+            .turn(&self.executor, turn_runtime.as_ref(), user)
             .await?;
         self.persist_tail(session, &convo.history()[before..], parent_leaf)
             .await?;
@@ -125,6 +181,9 @@ impl ChatSessions {
     /// as in the non-streaming path — nothing is written. The in-memory rollback in
     /// [`Conversation::turn_stream`] keeps the local history clean too; together they guarantee a
     /// stopped turn is a no-op against the store.
+    ///
+    /// When guard configuration is attached, the tool-advisor runs before the turn to select
+    /// relevant MCPs, and the runtime is wrapped in [`RiskGatedToolRuntime`] for safety checks.
     pub async fn turn_stream(
         &self,
         session: Ulid,
@@ -135,8 +194,10 @@ impl ChatSessions {
         let _guard = lock.lock().await;
         let (mut convo, parent_leaf) = self.load(session).await?;
         let before = convo.len();
+
+        let turn_runtime = self.build_turn_runtime(user, session);
         convo
-            .turn_stream(&self.executor, self.runtime.as_ref(), user, events)
+            .turn_stream(&self.executor, turn_runtime.as_ref(), user, events)
             .await?;
         self.persist_tail(session, &convo.history()[before..], parent_leaf)
             .await?;
@@ -153,6 +214,57 @@ impl ChatSessions {
     pub async fn history(&self, session: Ulid) -> SessionResult<Vec<Message>> {
         let nodes = self.store.leaf_path(session, None).await?;
         Ok(nodes.into_iter().map(|n| n.message).collect())
+    }
+
+    // ── private helpers ──────────────────────────────────────────────────────
+
+    /// Build a per-turn [`ToolRuntime`] that scopes the visible tool surface to the granted
+    /// capabilities and wraps the result in [`RiskGatedToolRuntime`] for capability / consequence /
+    /// magnitude guards.
+    ///
+    /// When no guard configuration is attached, returns the raw `self.runtime` unchanged.
+    fn build_turn_runtime(&self, user: &str, session: Ulid) -> Box<dyn ToolRuntime> {
+        if self.capabilities.capabilities.is_empty() && self.consequences.is_empty() {
+            // No guards configured — use the raw runtime directly.
+            // We wrap in a pass-through box so the caller's interface stays uniform.
+            return Box::new(PassThroughRuntime(self.runtime.clone()));
+        }
+
+        // TODO(tool-advisor): real on-demand surfacing — show a compact catalog (names+descriptions)
+        // and lazy-load full tool schemas only when routed (the OpenClaw/Hermes lazy-load pattern) —
+        // add this when the catalog is large enough that surfacing everything actually costs tokens.
+        // The verb-list heuristic was removed because it silently dropped legitimate requests.
+
+        // Capability scoping: surface only MCPs the chat agent is granted, every turn, regardless of
+        // how the message is phrased. The model sees the full granted tool set (robust — no missed
+        // requests). An empty grant set scopes to nothing (no tools visible).
+        let granted_mcps: Vec<String> = self
+            .capabilities
+            .capabilities
+            .iter()
+            .filter_map(|c| match c {
+                liberado_common::Capability::ExecuteMcp(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        // `ScopedRuntime` treats an empty allow-list as pass-through (its general-purpose default).
+        // For capability scoping that's the wrong sense — no grants must mean no tools — so route the
+        // empty case to a no-tools runtime instead of letting everything through.
+        let inner: Arc<dyn ToolRuntime> = if granted_mcps.is_empty() {
+            Arc::new(NoToolsRuntime)
+        } else {
+            Arc::new(ScopedRuntime::new(self.runtime.clone(), granted_mcps))
+        };
+
+        // Wrap in RiskGatedToolRuntime for safety guards (capability / consequence / magnitude).
+        Box::new(RiskGatedToolRuntime::new(
+            inner,
+            self.capabilities.clone(),
+            self.consequences.clone(),
+            self.proposals_dir.clone(),
+            user.to_string(),
+            session.to_string(),
+        ))
     }
 
     /// Get-or-insert the per-session turn lock, so two turns on the same conversation serialize
@@ -197,6 +309,36 @@ impl ChatSessions {
             parent = Some(node.id);
         }
         Ok(())
+    }
+}
+
+/// A thin pass-through wrapper that lets us return [`Arc<dyn ToolRuntime>`] as
+/// [`Box<dyn ToolRuntime>`] when no guards are configured.
+struct PassThroughRuntime(Arc<dyn ToolRuntime>);
+
+#[async_trait::async_trait]
+impl ToolRuntime for PassThroughRuntime {
+    fn catalog(&self) -> Vec<liberado_provider::ToolDef> {
+        self.0.catalog()
+    }
+
+    async fn invoke(&self, call: &liberado_provider::ToolInvocation) -> Result<String, String> {
+        self.0.invoke(call).await
+    }
+}
+
+/// A runtime that exposes no tools — used when the chat agent holds no MCP grants, so the model is
+/// shown an empty catalog (capability scoping, not `ScopedRuntime`'s empty-means-all default).
+struct NoToolsRuntime;
+
+#[async_trait::async_trait]
+impl ToolRuntime for NoToolsRuntime {
+    fn catalog(&self) -> Vec<liberado_provider::ToolDef> {
+        Vec::new()
+    }
+
+    async fn invoke(&self, _call: &liberado_provider::ToolInvocation) -> Result<String, String> {
+        Err("no tools are granted to this chat agent".into())
     }
 }
 
@@ -342,6 +484,117 @@ mod tests {
                 .iter()
                 .any(|h| h.title.as_deref() == Some("My chat")),
             "list did not return the created conversation"
+        );
+    }
+
+    #[tokio::test]
+    async fn guarded_turn_with_risk_gated_runtime_works() {
+        // Verify that a ChatSessions with guards configured can still run a turn successfully.
+        // The inner runtime has no tools, so the advisor should find nothing, and the turn
+        // should complete as a pure conversation.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(JsonlStore::new(dir.path()));
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [CompletionResponse::text("Hello!")],
+        ));
+        let executor = Executor::new(provider, Budget::default());
+
+        let sessions = ChatSessions::new(store, executor, Arc::new(NoTools))
+            .with_guards(
+                vec![("tasks-mcp".into(), Consequence::Reversible)],
+                liberado_common::CapabilitySet::empty(),
+                dir.path().join("proposals"),
+            );
+
+        let id = sessions.create(None).await.unwrap();
+        let reply = sessions.turn(id, "hello").await.unwrap();
+        assert_eq!(reply, "Hello!");
+    }
+
+    /// A runtime that always offers one tool, so we can assert what the model is shown.
+    struct OneTool(&'static str);
+    #[async_trait]
+    impl ToolRuntime for OneTool {
+        fn catalog(&self) -> Vec<ToolDef> {
+            vec![ToolDef::new(
+                self.0,
+                "a tool",
+                serde_json::json!({ "type": "object" }),
+            )]
+        }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn granted_mcp_tools_surface_regardless_of_phrasing() {
+        // A granted MCP's tools must be offered to the model even when the message is phrased
+        // without an action verb (the case the removed verb-list advisor used to drop).
+        use liberado_common::{Capability, CapabilitySet};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(JsonlStore::new(dir.path()));
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [CompletionResponse::text("It's empty.")],
+        ));
+        let executor = Executor::new(provider.clone(), Budget::default());
+
+        let sessions = ChatSessions::new(store, executor, Arc::new(OneTool("calendar-mcp:list")))
+            .with_guards(
+                vec![("calendar-mcp".into(), Consequence::Reversible)],
+                CapabilitySet::from_iter([Capability::ExecuteMcp("calendar-mcp".into())]),
+                dir.path().join("proposals"),
+            );
+
+        let id = sessions.create(None).await.unwrap();
+        // No action verb — the old advisor would have surfaced zero tools here.
+        sessions.turn(id, "what's on my calendar?").await.unwrap();
+
+        let offered: Vec<String> = provider.received_requests()[0]
+            .tools
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        assert!(
+            offered.contains(&"calendar-mcp:list".to_string()),
+            "granted MCP tool must be surfaced regardless of phrasing; got {offered:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ungranted_mcp_tools_are_scoped_out() {
+        // A configured-but-ungranted MCP must not be surfaced (capability scoping holds).
+        use liberado_common::CapabilitySet;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(JsonlStore::new(dir.path()));
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [CompletionResponse::text("ok")],
+        ));
+        let executor = Executor::new(provider.clone(), Budget::default());
+
+        let sessions = ChatSessions::new(store, executor, Arc::new(OneTool("email-mcp:send")))
+            .with_guards(
+                vec![("email-mcp".into(), Consequence::External)],
+                CapabilitySet::empty(), // nothing granted
+                dir.path().join("proposals"),
+            );
+
+        let id = sessions.create(None).await.unwrap();
+        sessions.turn(id, "list my email").await.unwrap();
+
+        let offered: Vec<String> = provider.received_requests()[0]
+            .tools
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        assert!(
+            offered.is_empty(),
+            "ungranted MCP tools must be scoped out; got {offered:?}"
         );
     }
 }

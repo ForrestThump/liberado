@@ -513,6 +513,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "chat-client-contract"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "ulid",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2797,6 +2810,7 @@ dependencies = [
 name = "liberado-cli"
 version = "0.1.0"
 dependencies = [
+ "chat-client-contract",
  "futures",
  "liberado-server",
  "reqwest 0.12.28",
@@ -2814,6 +2828,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "thiserror 2.0.18",
+ "tokio",
  "toml 0.8.23",
 ]
 
@@ -2906,8 +2921,10 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures",
+ "liberado-common",
  "liberado-conversation-store",
  "liberado-executor",
+ "liberado-mcp",
  "liberado-provider",
  "serde_json",
  "tempfile",
@@ -2929,6 +2946,7 @@ dependencies = [
  "liberado-orchestrator",
  "liberado-provider",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -3021,6 +3039,7 @@ dependencies = [
 name = "liberado-tui"
 version = "0.1.0"
 dependencies = [
+ "chat-client-contract",
  "chrono",
  "crossterm",
  "ctrlc",

@@ -27,6 +27,7 @@ use liberado_common::{
 use liberado_executor::{Budget, ExecError, Executor, Task, ToolRuntime};
 use liberado_provider::{Provider, ToolInvocation};
 use thiserror::Error;
+use tokio::sync::Semaphore;
 use tracing::Instrument;
 
 /// Default `source` recorded in write provenance for orchestrated executions.
@@ -63,6 +64,21 @@ pub enum Disposition {
 #[derive(Debug, Error)]
 #[error("{0}")]
 pub struct RuntimeSetupError(pub String);
+
+/// A single sub-goal to dispatch in parallel. Each is capability-narrowed to the MCPs its
+/// sub-goal actually needs.
+pub struct SubDispatch {
+    /// The goal the subagent should accomplish.
+    pub goal: String,
+    /// The MCP servers this subagent is allowed to use.
+    pub allowed_mcps: Vec<String>,
+    /// Criteria the subagent should meet before reporting success.
+    pub success_criteria: Vec<String>,
+    /// Correlation id for provenance — ties every tool write back to this dispatch.
+    pub correlation_id: String,
+    /// Human-readable label for the merged report.
+    pub label: String,
+}
 
 /// Errors from orchestrating a decision. (Tool-level failures are *not* here — the executor feeds
 /// those back to the model in-band; a `Failed` outcome still arrives as a [`Report`].)
@@ -285,6 +301,73 @@ impl Orchestrator {
         .await
     }
 
+    /// Run multiple subagent dispatches in parallel, each capability-narrowed to the MCPs
+    /// its sub-goal actually needs. Results are collected into a single merged Report.
+    /// Bounded by `max_concurrent` (from `tuning.dispatch.max_concurrent_subagents`).
+    pub async fn dispatch_parallel(
+        &self,
+        sub_dispatches: Vec<SubDispatch>,
+        max_concurrent: usize,
+    ) -> Result<Report, OrchestratorError> {
+        let semaphore = Arc::new(Semaphore::new(max_concurrent.max(1)));
+        let mut handles = Vec::with_capacity(sub_dispatches.len());
+
+        for sub in sub_dispatches {
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let provenance =
+                WriteProvenance::agent(self.source.clone(), &sub.correlation_id);
+            let runtime = self.factory.runtime_for(&sub.allowed_mcps, provenance).await?;
+            let task = Task::new(subagent_instructions(&sub.success_criteria), sub.goal);
+            let budget = self.subagent_budget;
+            let provider = self.provider.clone();
+            let label = sub.label.clone();
+
+            let handle = tokio::spawn(async move {
+                let result = Executor::new(provider, budget).execute(&*runtime, task).await;
+                drop(permit);
+                (label, result)
+            });
+            handles.push(handle);
+        }
+
+        // Collect results
+        let mut summaries = Vec::new();
+        let mut all_artifacts = Vec::new();
+        let mut all_facts = Vec::new();
+        let mut overall = Outcome::Succeeded;
+
+        for handle in handles {
+            match handle.await {
+                Ok((label, Ok(report))) => {
+                    summaries.push(format!("[{}] {}", label, report.summary));
+                    all_artifacts.extend(report.artifacts);
+                    all_facts.extend(report.new_high_signal_facts);
+                    if report.outcome == Outcome::Failed
+                        || report.outcome == Outcome::PartiallySucceeded
+                    {
+                        overall = Outcome::PartiallySucceeded;
+                    }
+                }
+                Ok((label, Err(e))) => {
+                    summaries.push(format!("[{}] failed: {e}", label));
+                    overall = Outcome::PartiallySucceeded;
+                }
+                Err(e) => {
+                    summaries.push(format!("[join error]: {e}"));
+                    overall = Outcome::PartiallySucceeded;
+                }
+            }
+        }
+
+        Ok(Report {
+            outcome: overall,
+            summary: summaries.join("\n"),
+            artifacts: all_artifacts,
+            new_high_signal_facts: all_facts,
+            follow_up: None,
+        })
+    }
+
     async fn execute(
         &self,
         budget: &Budget,
@@ -312,8 +395,11 @@ fn subagent_instructions(success_criteria: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
+    use liberado_executor::SUBMIT_REPORT_TOOL;
+    use liberado_provider::{CompletionResponse, MockProvider, ToolDef};
     use super::*;
-    use liberado_provider::MockProvider;
 
     #[test]
     fn subagent_instructions_with_criteria() {
@@ -348,5 +434,247 @@ mod tests {
         ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
             unreachable!("with_source test never calls run")
         }
+    }
+
+    // ------------------------------------------------------------------
+    // dispatch_parallel tests
+    // ------------------------------------------------------------------
+
+    type Calls = Arc<Mutex<Vec<(Vec<String>, WriteProvenance)>>>;
+
+    #[derive(Clone, Default)]
+    struct RecordingFactory {
+        calls: Calls,
+    }
+
+    #[async_trait]
+    impl RuntimeFactory for RecordingFactory {
+        async fn runtime_for(
+            &self,
+            allowed_mcps: &[String],
+            provenance: WriteProvenance,
+        ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((allowed_mcps.to_vec(), provenance));
+            Ok(Box::new(MockRuntime))
+        }
+    }
+
+    struct MockRuntime;
+
+    #[async_trait]
+    impl ToolRuntime for MockRuntime {
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".to_string())
+        }
+    }
+
+    fn submit_report_response(summary: &str, outcome: &str) -> CompletionResponse {
+        CompletionResponse::tool_calls(vec![ToolInvocation::new(
+            "c",
+            SUBMIT_REPORT_TOOL,
+            serde_json::json!({
+                "outcome": outcome,
+                "summary": summary,
+                "artifacts": [],
+                "new_high_signal_facts": [],
+            }),
+        )])
+    }
+
+    #[tokio::test]
+    async fn dispatch_parallel_spawns_multiple_subagents() {
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                submit_report_response("task A done", "succeeded"),
+                submit_report_response("task B done", "succeeded"),
+            ],
+        ));
+        let factory = RecordingFactory::default();
+        let calls = factory.calls.clone();
+        let orch = Orchestrator::new(provider, factory);
+
+        let sub_dispatches = vec![
+            SubDispatch {
+                goal: "do A".into(),
+                allowed_mcps: vec!["mcp-a".into()],
+                success_criteria: vec![],
+                correlation_id: "corr-a".into(),
+                label: "A".into(),
+            },
+            SubDispatch {
+                goal: "do B".into(),
+                allowed_mcps: vec!["mcp-b".into()],
+                success_criteria: vec![],
+                correlation_id: "corr-b".into(),
+                label: "B".into(),
+            },
+        ];
+
+        let report = orch
+            .dispatch_parallel(sub_dispatches, 2)
+            .await
+            .expect("dispatch_parallel");
+
+        // Both runtime_for calls should have been made
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        // Verify the scoped MCPs match what each sub-dispatch requested
+        assert_eq!(calls[0].0, vec!["mcp-a"]);
+        assert_eq!(calls[1].0, vec!["mcp-b"]);
+
+        // Verify the report merged both summaries
+        assert!(
+            report.summary.contains("task A done"),
+            "summary: {}",
+            report.summary
+        );
+        assert!(
+            report.summary.contains("task B done"),
+            "summary: {}",
+            report.summary
+        );
+        assert_eq!(report.outcome, Outcome::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn dispatch_parallel_merges_reports() {
+        // First sub-agent succeeds with artifacts + facts
+        let resp_a = CompletionResponse::tool_calls(vec![ToolInvocation::new(
+            "c",
+            SUBMIT_REPORT_TOOL,
+            serde_json::json!({
+                "outcome": "succeeded",
+                "summary": "task A done",
+                "artifacts": ["/path/a.md"],
+                "new_high_signal_facts": ["fact A"],
+            }),
+        )]);
+        // Second sub-agent partially succeeds with different artifacts + facts
+        let resp_b = CompletionResponse::tool_calls(vec![ToolInvocation::new(
+            "c",
+            SUBMIT_REPORT_TOOL,
+            serde_json::json!({
+                "outcome": "partially_succeeded",
+                "summary": "task B partial",
+                "artifacts": ["/path/b.md"],
+                "new_high_signal_facts": ["fact B"],
+            }),
+        )]);
+
+        let provider = Arc::new(MockProvider::with_script("mock", [resp_a, resp_b]));
+        let factory = RecordingFactory::default();
+        let orch = Orchestrator::new(provider, factory);
+
+        let sub_dispatches = vec![
+            SubDispatch {
+                goal: "do A".into(),
+                allowed_mcps: vec![],
+                success_criteria: vec![],
+                correlation_id: "corr-a".into(),
+                label: "A".into(),
+            },
+            SubDispatch {
+                goal: "do B".into(),
+                allowed_mcps: vec![],
+                success_criteria: vec![],
+                correlation_id: "corr-b".into(),
+                label: "B".into(),
+            },
+        ];
+
+        let report = orch
+            .dispatch_parallel(sub_dispatches, 2)
+            .await
+            .expect("dispatch_parallel");
+
+        // Summaries from both should appear
+        assert!(report.summary.contains("task A done"));
+        assert!(report.summary.contains("task B partial"));
+        // Artifacts and facts are merged
+        assert_eq!(report.artifacts, vec!["/path/a.md", "/path/b.md"]);
+        assert_eq!(
+            report.new_high_signal_facts,
+            vec!["fact A", "fact B"]
+        );
+        // Overall outcome reflects partial failure
+        assert_eq!(report.outcome, Outcome::PartiallySucceeded);
+    }
+
+    #[tokio::test]
+    async fn dispatch_parallel_semaphore_limits_concurrency() {
+        // Use max_concurrent=1 to verify sequential execution still works
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                submit_report_response("task 1", "succeeded"),
+                submit_report_response("task 2", "succeeded"),
+            ],
+        ));
+        let factory = RecordingFactory::default();
+        let calls = factory.calls.clone();
+        let orch = Orchestrator::new(provider, factory);
+
+        let sub_dispatches = vec![
+            SubDispatch {
+                goal: "task 1".into(),
+                allowed_mcps: vec![],
+                success_criteria: vec![],
+                correlation_id: "c1".into(),
+                label: "1".into(),
+            },
+            SubDispatch {
+                goal: "task 2".into(),
+                allowed_mcps: vec![],
+                success_criteria: vec![],
+                correlation_id: "c2".into(),
+                label: "2".into(),
+            },
+        ];
+
+        let report = orch
+            .dispatch_parallel(sub_dispatches, 1)
+            .await
+            .expect("dispatch_parallel");
+
+        // Both should have run (sequentially)
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(report.summary.contains("task 1"));
+        assert!(report.summary.contains("task 2"));
+        assert_eq!(report.outcome, Outcome::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn dispatch_parallel_with_zero_max_concurrent_uses_one() {
+        // max_concurrent=0 should be treated as 1 (no panic/deadlock)
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [submit_report_response("only task", "succeeded")],
+        ));
+        let factory = RecordingFactory::default();
+        let orch = Orchestrator::new(provider, factory);
+
+        let sub_dispatches = vec![SubDispatch {
+            goal: "only".into(),
+            allowed_mcps: vec![],
+            success_criteria: vec![],
+            correlation_id: "c1".into(),
+            label: "only".into(),
+        }];
+
+        let report = orch
+            .dispatch_parallel(sub_dispatches, 0)
+            .await
+            .expect("dispatch_parallel with max_concurrent=0");
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        assert!(report.summary.contains("only task"));
     }
 }

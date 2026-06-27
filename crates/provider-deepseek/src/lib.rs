@@ -9,6 +9,8 @@
 //! so the mapping is unit-tested deterministically without a network or an API key; a single
 //! `#[ignore]`d smoke test exercises the real endpoint.
 
+use std::collections::{HashMap, HashSet};
+
 use async_trait::async_trait;
 use futures::StreamExt;
 use liberado_provider::{
@@ -22,6 +24,51 @@ use serde_json::{Value, json};
 pub const DEFAULT_MODEL: &str = "deepseek-chat";
 /// DeepSeek's API base URL (overridable via [`DeepSeekProvider::with_base_url`]).
 pub const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
+
+/// Bidirectional mapping between original (internal `mcp:tool` convention) and sanitized
+/// (API-compatible `[a-zA-Z0-9_-]+`) tool names for a single request.
+#[derive(Debug, Clone)]
+struct ToolNameMap {
+    /// original → sanitized (for outgoing serialization).
+    forward: HashMap<String, String>,
+    /// sanitized → original (for incoming deserialization).
+    reverse: HashMap<String, String>,
+}
+
+/// Sanitize a single tool name: replace every character outside `[a-zA-Z0-9_-]` with `_`.
+fn basic_sanitize(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Build the per-request [`ToolNameMap`] from a tool catalog.  Collisions are resolved by
+/// appending `_1`, `_2`, … to the sanitized name, so the `reverse` map is always bijective.
+fn build_tool_name_map(tools: &[ToolDef]) -> ToolNameMap {
+    let mut forward = HashMap::new();
+    let mut reverse = HashMap::new();
+    let mut used = HashSet::new();
+
+    for tool in tools {
+        let base = basic_sanitize(&tool.name);
+        let mut sanitized = base.clone();
+        let mut suffix = 1u32;
+        while !used.insert(sanitized.clone()) {
+            sanitized = format!("{base}_{suffix}");
+            suffix += 1;
+        }
+        forward.insert(tool.name.clone(), sanitized.clone());
+        reverse.insert(sanitized, tool.name.clone());
+    }
+
+    ToolNameMap { forward, reverse }
+}
 
 /// A DeepSeek-backed provider.
 pub struct DeepSeekProvider {
@@ -68,7 +115,8 @@ impl Provider for DeepSeekProvider {
     }
 
     async fn complete(&self, request: CompletionRequest) -> ProviderResult<CompletionResponse> {
-        let body = to_openai_request(&self.model, &request);
+        let name_map = build_tool_name_map(&request.tools);
+        let body = to_openai_request(&self.model, &request, &name_map);
 
         let response = self
             .client
@@ -81,7 +129,6 @@ impl Provider for DeepSeekProvider {
 
         let status = response.status();
         if !status.is_success() {
-            // Preserve the diagnostic even if reading the body itself fails.
             let detail = response
                 .text()
                 .await
@@ -93,14 +140,15 @@ impl Provider for DeepSeekProvider {
             .json()
             .await
             .map_err(|e| ProviderError::Transport(format!("malformed response body: {e}")))?;
-        from_openai_response(&value)
+        from_openai_response(&value, &name_map)
     }
 
     async fn complete_stream(
         &self,
         request: CompletionRequest,
     ) -> ProviderResult<CompletionStream> {
-        let mut body = to_openai_request(&self.model, &request);
+        let name_map = build_tool_name_map(&request.tools);
+        let mut body = to_openai_request(&self.model, &request, &name_map);
         body["stream"] = json!(true);
 
         let response = self
@@ -161,7 +209,7 @@ impl Provider for DeepSeekProvider {
             }
 
             let tool_calls: Vec<ToolInvocation> =
-                tools.into_iter().filter_map(ToolAcc::into_invocation).collect();
+                tools.into_iter().filter_map(|acc| acc.into_invocation(&name_map)).collect();
             yield StreamItem::Done(CompletionResponse {
                 content: (!content.is_empty()).then_some(content),
                 tool_calls,
@@ -193,12 +241,17 @@ struct ToolAcc {
 }
 
 impl ToolAcc {
-    fn into_invocation(self) -> Option<ToolInvocation> {
+    fn into_invocation(self, name_map: &ToolNameMap) -> Option<ToolInvocation> {
         if self.name.is_empty() {
             return None;
         }
+        let original = name_map
+            .reverse
+            .get(&self.name)
+            .cloned()
+            .unwrap_or(self.name);
         let arguments = serde_json::from_str(&self.arguments).unwrap_or_else(|_| json!({}));
-        Some(ToolInvocation::new(self.id, self.name, arguments))
+        Some(ToolInvocation::new(self.id, original, arguments))
     }
 }
 
@@ -239,14 +292,23 @@ fn map_status(status: u16, body: String) -> ProviderError {
 }
 
 /// Translate a normalized request into the OpenAI chat-completions request body.
-pub fn to_openai_request(model: &str, req: &CompletionRequest) -> Value {
+pub(crate) fn to_openai_request(
+    model: &str,
+    req: &CompletionRequest,
+    name_map: &ToolNameMap,
+) -> Value {
     let mut body = json!({
         "model": model,
-        "messages": req.messages.iter().map(message_to_json).collect::<Vec<_>>(),
+        "messages": req.messages.iter().map(|m| message_to_json(m, name_map)).collect::<Vec<_>>(),
     });
 
     if !req.tools.is_empty() {
-        body["tools"] = Value::Array(req.tools.iter().map(tool_to_json).collect());
+        body["tools"] = Value::Array(
+            req.tools
+                .iter()
+                .map(|t| tool_to_json(t, name_map))
+                .collect(),
+        );
     }
     if matches!(req.response_format, ResponseFormat::Json { .. }) {
         // DeepSeek supports JSON object mode (the prompt must mention "json", which the
@@ -262,7 +324,7 @@ pub fn to_openai_request(model: &str, req: &CompletionRequest) -> Value {
     body
 }
 
-fn message_to_json(m: &Message) -> Value {
+fn message_to_json(m: &Message, name_map: &ToolNameMap) -> Value {
     let role = match m.role {
         Role::System => "system",
         Role::User => "user",
@@ -275,10 +337,15 @@ fn message_to_json(m: &Message) -> Value {
             m.tool_calls
                 .iter()
                 .map(|tc| {
+                    let sanitized = name_map
+                        .forward
+                        .get(&tc.name)
+                        .cloned()
+                        .unwrap_or_else(|| basic_sanitize(&tc.name));
                     json!({
                         "id": tc.id,
                         "type": "function",
-                        "function": { "name": tc.name, "arguments": tc.arguments.to_string() },
+                        "function": { "name": sanitized, "arguments": tc.arguments.to_string() },
                     })
                 })
                 .collect(),
@@ -290,11 +357,16 @@ fn message_to_json(m: &Message) -> Value {
     v
 }
 
-fn tool_to_json(t: &ToolDef) -> Value {
+fn tool_to_json(t: &ToolDef, name_map: &ToolNameMap) -> Value {
+    let sanitized = name_map
+        .forward
+        .get(&t.name)
+        .cloned()
+        .unwrap_or_else(|| basic_sanitize(&t.name));
     json!({
         "type": "function",
         "function": {
-            "name": t.name,
+            "name": sanitized,
             "description": t.description,
             "parameters": t.parameters,
         },
@@ -302,7 +374,10 @@ fn tool_to_json(t: &ToolDef) -> Value {
 }
 
 /// Translate an OpenAI chat-completions response body into a normalized [`CompletionResponse`].
-pub fn from_openai_response(v: &Value) -> ProviderResult<CompletionResponse> {
+pub(crate) fn from_openai_response(
+    v: &Value,
+    name_map: &ToolNameMap,
+) -> ProviderResult<CompletionResponse> {
     // Some OpenAI-compatible servers return 2xx with a top-level `error` object instead of
     // `choices`; surface it rather than the misleading "empty response".
     if let Some(error) = v.get("error") {
@@ -323,7 +398,7 @@ pub fn from_openai_response(v: &Value) -> ProviderResult<CompletionResponse> {
         .map(|arr| {
             arr.iter()
                 .filter_map(|tc| {
-                    let parsed = parse_tool_call(tc);
+                    let parsed = parse_tool_call(tc, name_map);
                     if parsed.is_none() {
                         tracing::warn!(tool_call = %tc, "dropping unparseable tool call");
                     }
@@ -346,16 +421,17 @@ pub fn from_openai_response(v: &Value) -> ProviderResult<CompletionResponse> {
     })
 }
 
-fn parse_tool_call(tc: &Value) -> Option<ToolInvocation> {
+fn parse_tool_call(tc: &Value, name_map: &ToolNameMap) -> Option<ToolInvocation> {
     let id = tc["id"].as_str()?.to_string();
     let function = &tc["function"];
-    let name = function["name"].as_str()?.to_string();
+    let raw_name = function["name"].as_str()?.to_string();
     // OpenAI encodes arguments as a JSON *string*; parse it back to a value (empty on failure).
     let arguments = function["arguments"]
         .as_str()
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or_else(|| json!({}));
-    Some(ToolInvocation::new(id, name, arguments))
+    let original = name_map.reverse.get(&raw_name).cloned().unwrap_or(raw_name);
+    Some(ToolInvocation::new(id, original, arguments))
 }
 
 fn parse_usage(u: &Value) -> Option<Usage> {
@@ -374,6 +450,50 @@ fn parse_usage(u: &Value) -> Option<Usage> {
 mod tests {
     use super::*;
 
+    fn empty_name_map() -> ToolNameMap {
+        ToolNameMap {
+            forward: HashMap::new(),
+            reverse: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn basic_sanitize_replaces_invalid_chars() {
+        assert_eq!(basic_sanitize("vault:read"), "vault_read");
+        assert_eq!(basic_sanitize("my.tool"), "my_tool");
+        assert_eq!(basic_sanitize("path/to/tool"), "path_to_tool");
+        assert_eq!(basic_sanitize("valid_name-123"), "valid_name-123");
+        assert_eq!(basic_sanitize(""), "");
+    }
+
+    #[test]
+    fn build_map_preserves_colon_names() {
+        let tools = vec![
+            ToolDef::new("vault:read", "", json!({})),
+            ToolDef::new("vault:write", "", json!({})),
+        ];
+        let map = build_tool_name_map(&tools);
+        assert_eq!(map.forward.get("vault:read").unwrap(), "vault_read");
+        assert_eq!(map.forward.get("vault:write").unwrap(), "vault_write");
+        assert_eq!(map.reverse.get("vault_read").unwrap(), "vault:read");
+        assert_eq!(map.reverse.get("vault_write").unwrap(), "vault:write");
+    }
+
+    #[test]
+    fn build_map_handles_collisions() {
+        let tools = vec![
+            ToolDef::new("vault:read", "", json!({})),
+            ToolDef::new("vault_read", "", json!({})),
+        ];
+        let map = build_tool_name_map(&tools);
+        // Both sanitize to "vault_read" base; second gets a suffix.
+        let first = map.forward.get("vault:read").unwrap();
+        let second = map.forward.get("vault_read").unwrap();
+        assert!(first == "vault_read" || first == "vault_read_1");
+        assert!(second == "vault_read_1" || second == "vault_read");
+        assert_ne!(first, second);
+    }
+
     #[test]
     fn request_maps_messages_temperature_and_json_mode() {
         let req = CompletionRequest::new(vec![Message::system("be terse"), Message::user("hi")])
@@ -381,7 +501,7 @@ mod tests {
             .with_max_tokens(64)
             .with_json_schema(json!({ "type": "object" }));
 
-        let body = to_openai_request("deepseek-chat", &req);
+        let body = to_openai_request("deepseek-chat", &req, &empty_name_map());
         assert_eq!(body["model"], "deepseek-chat");
         assert_eq!(body["messages"][0]["role"], "system");
         assert_eq!(body["messages"][1]["role"], "user");
@@ -408,7 +528,8 @@ mod tests {
                 json!({ "type": "object" }),
             )]);
 
-        let body = to_openai_request("deepseek-chat", &req);
+        let name_map = build_tool_name_map(&req.tools);
+        let body = to_openai_request("deepseek-chat", &req, &name_map);
         assert_eq!(body["tools"][0]["type"], "function");
         assert_eq!(body["tools"][0]["function"]["name"], "search");
         // The assistant's tool call is serialized with stringified arguments (OpenAI shape).
@@ -423,6 +544,35 @@ mod tests {
     }
 
     #[test]
+    fn request_sanitizes_colon_tool_names() {
+        let req = CompletionRequest::new(vec![Message::user("hello")])
+            .with_tools(vec![ToolDef::new("mcp:tool", "desc", json!({}))]);
+
+        let name_map = build_tool_name_map(&req.tools);
+        let body = to_openai_request("deepseek-chat", &req, &name_map);
+        assert_eq!(body["tools"][0]["function"]["name"], "mcp_tool");
+    }
+
+    #[test]
+    fn request_sanitizes_tool_call_names_in_messages() {
+        let assistant = Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_calls: vec![ToolInvocation::new("c1", "mcp:tool", json!({}))],
+            tool_call_id: None,
+        };
+        let req = CompletionRequest::new(vec![assistant, Message::tool_result("c1", "ok")])
+            .with_tools(vec![ToolDef::new("mcp:tool", "desc", json!({}))]);
+
+        let name_map = build_tool_name_map(&req.tools);
+        let body = to_openai_request("deepseek-chat", &req, &name_map);
+        assert_eq!(
+            body["messages"][0]["tool_calls"][0]["function"]["name"],
+            "mcp_tool"
+        );
+    }
+
+    #[test]
     fn response_parses_text_and_usage() {
         let v = json!({
             "choices": [{
@@ -431,7 +581,7 @@ mod tests {
             }],
             "usage": { "prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12 }
         });
-        let resp = from_openai_response(&v).unwrap();
+        let resp = from_openai_response(&v, &empty_name_map()).unwrap();
         assert_eq!(resp.content.as_deref(), Some("pong"));
         assert_eq!(resp.finish_reason, FinishReason::Stop);
         assert_eq!(resp.usage.unwrap().total_tokens, 12);
@@ -453,7 +603,7 @@ mod tests {
                 "finish_reason": "tool_calls"
             }]
         });
-        let resp = from_openai_response(&v).unwrap();
+        let resp = from_openai_response(&v, &empty_name_map()).unwrap();
         assert!(resp.content.is_none());
         assert_eq!(resp.finish_reason, FinishReason::ToolCalls);
         assert_eq!(resp.tool_calls.len(), 1);
@@ -462,10 +612,42 @@ mod tests {
     }
 
     #[test]
+    fn response_reverse_maps_sanitized_tool_names() {
+        let tools = vec![
+            ToolDef::new("vault:read", "", json!({})),
+            ToolDef::new("vault:write", "", json!({})),
+        ];
+        let name_map = build_tool_name_map(&tools);
+
+        let v = json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call-1",
+                        "type": "function",
+                        "function": { "name": "vault_read", "arguments": "{}" }
+                    }, {
+                        "id": "call-2",
+                        "type": "function",
+                        "function": { "name": "vault_write", "arguments": "{}" }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+        let resp = from_openai_response(&v, &name_map).unwrap();
+        assert_eq!(resp.tool_calls.len(), 2);
+        assert_eq!(resp.tool_calls[0].name, "vault:read");
+        assert_eq!(resp.tool_calls[1].name, "vault:write");
+    }
+
+    #[test]
     fn empty_choices_is_empty_response() {
         let v = json!({ "choices": [] });
         assert!(matches!(
-            from_openai_response(&v),
+            from_openai_response(&v, &empty_name_map()),
             Err(ProviderError::EmptyResponse)
         ));
     }

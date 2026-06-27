@@ -7,6 +7,8 @@ use liberado_main_agent::ChatSessions;
 use liberado_provider::{ToolDef, ToolInvocation};
 use tokio::sync::{Mutex, mpsc::UnboundedSender};
 
+use liberado_common::CapabilityCatalog;
+
 pub struct AppState {
     pub start_time: Instant,
     pub reactions: Arc<Mutex<Vec<ReactionEvent>>>,
@@ -20,6 +22,10 @@ pub struct AppState {
     pub chat_tools: usize,
     /// Names of the tools available to chat, for diagnostic visibility.
     pub chat_tool_names: Vec<String>,
+    /// Live capability catalog describing every registered MCP server's name, description,
+    /// and consequence. Populated at boot from `config.topology.mcps` and updated at runtime
+    /// as MCPs come and go. Exposed via `GET /api/catalog`.
+    pub catalog: Arc<CapabilityCatalog>,
 }
 
 /// A tool runtime with no tools — chat still works (just conversation) when no MCP is configured.
