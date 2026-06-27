@@ -14,7 +14,7 @@ pub fn dispatch(app: &mut App, input: &str) -> Vec<Effect> {
     app.input.clear();
     app.cursor = 0;
     match cmd {
-        "/quit" => vec![Effect::Quit],
+        "/quit" | "/exit" => vec![Effect::Quit],
         "/new" => cmd_new(app),
         "/clear" => cmd_clear(app),
         "/help" => cmd_help(app),
@@ -76,6 +76,7 @@ fn cmd_help(app: &mut App) -> Vec<Effect> {
         "\
 Slash commands:
   /quit       quit the TUI
+  /exit       quit the TUI (alias)
   /new        start a new conversation
   /clear      clear the chat display (local only)
   /help       show this help

@@ -691,6 +691,15 @@ mod tests {
         assert!(matches!(effects[0], Effect::Quit));
     }
     #[test]
+    fn slash_exit() {
+        let mut app = test_app();
+        app.input = "/exit".to_string();
+        let effects = app.handle_key(key(KeyCode::Enter));
+        assert!(app.input.is_empty());
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(effects[0], Effect::Quit));
+    }
+    #[test]
     fn slash_new() {
         let mut app = test_app();
         app.session = Some("old-session".into());
