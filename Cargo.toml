@@ -63,6 +63,7 @@ liberado-tui = { path = "crates/tui" }
 liberado-theme = { path = "crates/theme" }
 chat-client-contract = { path = "crates/chat-client-contract" }
 liberado-markdown = { path = "crates/markdown" }
+liberado-commands = { path = "crates/liberado-commands" }
 
 # --- co-developed path dependencies (Decision 7) ---
 # Pinned to whatever is checked out in the sibling directories (currently the

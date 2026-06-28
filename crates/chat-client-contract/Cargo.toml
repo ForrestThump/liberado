@@ -8,10 +8,16 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+# wasm-clean core — only serde and serde_json needed for wire types.
+# thiserror is a proc-macro with no runtime deps; it compiles to wasm32 fine.
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+# Native-only deps — tokio/futures/async-trait/ulid require non-WASM targets.
+# These power the ChatClient trait in src/native.rs.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 async-trait = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
 ulid = { workspace = true }
-thiserror = { workspace = true }

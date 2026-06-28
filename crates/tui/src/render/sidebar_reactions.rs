@@ -1,5 +1,6 @@
 //! Reactions panel rendering (recent daemon events with outcome icons).
 
+use chat_client_contract::ReactionOutcome;
 use liberado_theme::Theme;
 use ratatui::{
     Frame,
@@ -26,20 +27,18 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
         .rev()
         .take(area.height.saturating_sub(2) as usize)
         .map(|r| {
-            let icon = match r.outcome.as_str() {
-                "observed" => Span::styled(
+            let icon = match r.outcome {
+                ReactionOutcome::Observed => Span::styled(
                     "◉",
                     Style::default().fg(c(&th.reaction_observed, "#00ffff")),
                 ),
-                "dispatched" => Span::styled(
+                ReactionOutcome::Decided => Span::styled(
                     "→",
                     Style::default().fg(c(&th.reaction_dispatched, "#ffff00")),
                 ),
-                "acted" => Span::styled("✓", Style::default().fg(c(&th.reaction_acted, "#00ff00"))),
-                "reported" => {
+                ReactionOutcome::Acted => {
                     Span::styled("✓", Style::default().fg(c(&th.reaction_acted, "#00ff00")))
                 }
-                _ => Span::styled("?", Style::default().fg(c(&th.reaction_unknown, "#808080"))),
             };
             let path = r.path.as_deref().unwrap_or("?").to_string();
             let label = format!(

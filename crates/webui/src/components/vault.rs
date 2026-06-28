@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use crate::types::VaultInfo;
+use chat_client_contract::VaultInfo;
 
 async fn fetch_vault(api_base: String) -> Result<VaultInfo, String> {
     let url = format!("{api_base}/api/vault");

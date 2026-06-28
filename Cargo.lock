@@ -2820,6 +2820,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "liberado-commands"
+version = "0.1.0"
+dependencies = [
+ "liberado-theme",
+]
+
+[[package]]
 name = "liberado-common"
 version = "0.1.0"
 dependencies = [
@@ -3003,6 +3010,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "chat-client-contract",
  "chrono",
  "futures",
  "liberado-bootstrap",
@@ -3078,9 +3086,11 @@ dependencies = [
 name = "liberado-webui"
 version = "0.1.0"
 dependencies = [
+ "chat-client-contract",
  "chrono",
  "dioxus",
  "getrandom 0.2.17",
+ "liberado-commands",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

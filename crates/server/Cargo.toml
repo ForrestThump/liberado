@@ -9,6 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+chat-client-contract = { workspace = true }
 liberado-bootstrap = { workspace = true }
 liberado-common = { workspace = true }
 liberado-daemon = { workspace = true }

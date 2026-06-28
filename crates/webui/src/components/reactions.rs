@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use crate::types::ReactionEvent;
+use chat_client_contract::{ReactionEvent, ReactionOutcome};
 
 async fn fetch_reactions(api_base: String) -> Result<Vec<ReactionEvent>, String> {
     let url = format!("{api_base}/api/reactions?limit=20");
@@ -55,17 +55,20 @@ pub fn ReactionsPanel(api_base: String) -> Element {
 #[component]
 fn ReactionRow(event: ReactionEvent) -> Element {
     let outcome_color = match event.outcome {
-        crate::types::ReactionOutcome::Acted => "text-emerald-400",
-        crate::types::ReactionOutcome::Decided => "text-amber-400",
-        crate::types::ReactionOutcome::Observed => "text-gray-500",
+        ReactionOutcome::Acted => "text-emerald-400",
+        ReactionOutcome::Decided => "text-amber-400",
+        ReactionOutcome::Observed => "text-gray-500",
     };
     let outcome_label = match event.outcome {
-        crate::types::ReactionOutcome::Acted => "acted",
-        crate::types::ReactionOutcome::Decided => "decided",
-        crate::types::ReactionOutcome::Observed => "observed",
+        ReactionOutcome::Acted => "acted",
+        ReactionOutcome::Decided => "decided",
+        ReactionOutcome::Observed => "observed",
     };
     let path_str = event.path.clone().unwrap_or_else(|| "-".to_string());
-    let time_str = event.timestamp.format("%H:%M:%S").to_string();
+    // timestamp is now an ISO-8601 String (not DateTime<Utc>); parse for display.
+    let time_str = chrono::DateTime::parse_from_rfc3339(&event.timestamp)
+        .map(|dt| dt.format("%H:%M:%S").to_string())
+        .unwrap_or_else(|_| event.timestamp.clone());
 
     rsx! {
         div {

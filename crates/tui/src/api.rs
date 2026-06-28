@@ -3,71 +3,17 @@
 //! Every endpoint the TUI calls lives here, each returning a typed struct so the rest
 //! of the crate never touches raw JSON. The client is a thin `reqwest` wrapper — no
 //! caching, no retry (the poller in `main.rs` handles timing).
+//!
+//! Wire DTOs (`DaemonStatus`, `ReactionEvent`, `ConvHeader`, `ChatMessage`) are imported
+//! from `chat-client-contract` — the single source of truth. The display-only chips
+//! (`ToolCallChip`, `ToolResultChip`) remain here because they are constructed from
+//! `ChatEvent` data and never serialized.
 
 use reqwest::{Client, StatusCode};
 
-/// Response shape from `GET /api/status`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct DaemonStatus {
-    pub running: bool,
-    pub vault_path: String,
-    pub uptime_seconds: u64,
-    pub watcher_active: bool,
-    pub dispatcher_attached: bool,
-    pub orchestrator_attached: bool,
-    pub reactions_seen: u64,
-    /// Model name (e.g. "deepseek-chat") — available when server wires it.
-    #[serde(default)]
-    pub model_name: Option<String>,
-    /// Total tokens consumed in the current session (prompt + completion).
-    #[serde(default)]
-    pub token_usage_total: Option<u64>,
-    /// Provider context window size in tokens.
-    #[serde(default)]
-    pub context_window: Option<u64>,
-    /// Number of tools available to the chat agent (0 = conversation-only).
-    #[serde(default)]
-    pub chat_tools: usize,
-    /// Names of the tools the chat agent can call.
-    #[serde(default)]
-    pub chat_tool_names: Vec<String>,
-}
-
-/// One entry from `GET /api/reactions`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ReactionEvent {
-    pub event_type: String,
-    pub timestamp: String,
-    pub source: String,
-    pub correlation_id: String,
-    pub path: Option<String>,
-    pub outcome: String,
-}
-
-/// One conversation header from `GET /api/conversations`.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct ConvHeader {
-    pub id: String,
-    pub title: String,
-    pub created_at: String,
-    /// Parent conversation id — set when this conversation was forked/spawned from another.
-    #[serde(default)]
-    pub parent_conversation: Option<String>,
-    /// The message node that spawned this conversation, when applicable.
-    #[serde(default)]
-    pub spawned_by: Option<String>,
-}
-
-/// A message from `GET /api/conversations/{id}` history.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ChatMessage {
-    pub role: String,
-    pub content: String,
-    #[serde(default)]
-    pub tool_calls: Option<serde_json::Value>,
-    #[serde(default)]
-    pub tool_call_id: Option<String>,
-}
+// Re-export the shared wire types so the rest of the crate can still import them
+// from `crate::api::*` without changing call sites.
+pub use chat_client_contract::{ChatMessage, ConvHeader, DaemonStatus, ReactionEvent};
 
 /// Wrapper for `GET /api/conversations/{id}` response: `{"messages": […]}`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -76,6 +22,7 @@ struct ConversationHistory {
 }
 
 /// A tool-call chip rendered inline in the chat: `[tool] name(args preview)`.
+/// Display-only — constructed from `ChatEvent::Tool` data, never serialized to JSON.
 #[derive(Debug, Clone)]
 pub struct ToolCallChip {
     pub name: String,
@@ -83,6 +30,7 @@ pub struct ToolCallChip {
 }
 
 /// The outcome chip for a completed tool call: `[tool] name ok|err preview`.
+/// Display-only — constructed from `ChatEvent::ToolResult` data, never serialized.
 #[derive(Debug, Clone)]
 pub struct ToolResultChip {
     pub name: String,
@@ -174,6 +122,7 @@ pub async fn post_chat_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chat_client_contract::ReactionOutcome;
 
     #[test]
     fn daemon_status_serde_roundtrip() {
@@ -229,13 +178,13 @@ mod tests {
             source: "watcher".into(),
             correlation_id: "abc-123".into(),
             path: Some("/docs/notes.md".into()),
-            outcome: "dispatched".into(),
+            outcome: ReactionOutcome::Observed,
         };
         let json = serde_json::to_value(&event).unwrap();
         let back: ReactionEvent = serde_json::from_value(json).unwrap();
         assert_eq!(back.event_type, "file_changed");
         assert_eq!(back.path, Some("/docs/notes.md".into()));
-        assert_eq!(back.outcome, "dispatched");
+        assert_eq!(back.outcome, ReactionOutcome::Observed);
     }
 
     #[test]

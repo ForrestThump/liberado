@@ -160,20 +160,22 @@ fn open_stream(
     {
         let on_tool = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
             if let Some(data) = e.data().as_string() {
-                let v: serde_json::Value = serde_json::from_str(&data).unwrap_or_default();
-                let name = v["name"].as_str().unwrap_or("tool");
-                let args = v["args"].as_str().unwrap_or("");
-                let label = if args.is_empty() || args == "{}" {
-                    format!("🔧 {name}…")
-                } else {
-                    format!("🔧 {name}({args})…")
-                };
-                messages.with_mut(|m| {
-                    m.push(ChatMsg {
-                        role: "tool",
-                        content: label,
-                    })
-                });
+                if let Ok(chat_client_contract::ChatEvent::Tool { name, args }) =
+                    chat_client_contract::ChatEvent::from_sse_data("tool", &data)
+                {
+                    let args_str = args.to_string();
+                    let label = if args_str.is_empty() || args_str == "{}" || args_str == "null" {
+                        format!("🔧 {name}…")
+                    } else {
+                        format!("🔧 {name}({args_str})…")
+                    };
+                    messages.with_mut(|m| {
+                        m.push(ChatMsg {
+                            role: "tool",
+                            content: label,
+                        })
+                    });
+                }
             }
         });
         let _ = source.add_event_listener_with_callback("tool", on_tool.as_ref().unchecked_ref());
@@ -184,23 +186,23 @@ fn open_stream(
     {
         let on_result = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
             if let Some(data) = e.data().as_string() {
-                let v: serde_json::Value = serde_json::from_str(&data).unwrap_or_default();
-                let name = v["name"].as_str().unwrap_or("tool");
-                let ok = v["ok"].as_bool().unwrap_or(false);
-                let prev = v["preview"].as_str().unwrap_or("");
-                let mark = if ok { "✓" } else { "✗" };
-                let label = if prev.is_empty() {
-                    format!("🔧 {name} {mark}")
-                } else {
-                    format!("🔧 {name} {mark} {prev}")
-                };
-                messages.with_mut(|m| match m.iter_mut().rev().find(|x| x.role == "tool") {
-                    Some(chip) => chip.content = label,
-                    None => m.push(ChatMsg {
-                        role: "tool",
-                        content: label,
-                    }),
-                });
+                if let Ok(chat_client_contract::ChatEvent::ToolResult { name, ok, preview }) =
+                    chat_client_contract::ChatEvent::from_sse_data("tool_result", &data)
+                {
+                    let mark = if ok { "✓" } else { "✗" };
+                    let label = if preview.is_empty() {
+                        format!("🔧 {name} {mark}")
+                    } else {
+                        format!("🔧 {name} {mark} {preview}")
+                    };
+                    messages.with_mut(|m| match m.iter_mut().rev().find(|x| x.role == "tool") {
+                        Some(chip) => chip.content = label,
+                        None => m.push(ChatMsg {
+                            role: "tool",
+                            content: label,
+                        }),
+                    });
+                }
             }
         });
         let _ = source

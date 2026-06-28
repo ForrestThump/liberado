@@ -18,6 +18,8 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
+use chat_client_contract::{ApiError, CatalogResponse, DaemonStatus, McpInfo, VaultInfo};
+
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -163,7 +165,9 @@ pub async fn chat(
     let Some(sessions) = &state.chat else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "chat is disabled — set DEEPSEEK_API_KEY" })),
+            Json(ApiError {
+                error: "chat is disabled — set DEEPSEEK_API_KEY".into(),
+            }),
         )
             .into_response();
     };
@@ -177,8 +181,11 @@ pub async fn chat(
     };
 
     match sessions.turn(session, &req.message).await {
-        Ok(reply) => Json(serde_json::json!({ "reply": reply, "session": session.to_string() }))
-            .into_response(),
+        Ok(reply) => Json(chat_client_contract::ChatResponse {
+            reply,
+            session: session.to_string(),
+        })
+        .into_response(),
         Err(e) => {
             tracing::warn!(error = %e, "chat turn failed");
             chat_error(e)
@@ -190,7 +197,9 @@ pub async fn chat(
 fn chat_error(e: liberado_main_agent::SessionError) -> axum::response::Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
-        Json(serde_json::json!({ "error": e.to_string() })),
+        Json(ApiError {
+            error: e.to_string(),
+        }),
     )
         .into_response()
 }
@@ -201,7 +210,9 @@ pub async fn list_conversations(State(state): State<Arc<AppState>>) -> impl Into
     let Some(sessions) = &state.chat else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "chat is disabled — set DEEPSEEK_API_KEY" })),
+            Json(ApiError {
+                error: "chat is disabled — set DEEPSEEK_API_KEY".into(),
+            }),
         )
             .into_response();
     };
@@ -220,7 +231,9 @@ pub async fn get_conversation(
     let Some(sessions) = &state.chat else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "chat is disabled — set DEEPSEEK_API_KEY" })),
+            Json(ApiError {
+                error: "chat is disabled — set DEEPSEEK_API_KEY".into(),
+            }),
         )
             .into_response();
     };
@@ -230,7 +243,9 @@ pub async fn get_conversation(
             liberado_conversation_store::StoreError::NotFound(_),
         )) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "conversation not found" })),
+            Json(ApiError {
+                error: "conversation not found".into(),
+            }),
         )
             .into_response(),
         Err(e) => chat_error(e),
@@ -245,30 +260,50 @@ pub struct ReactionsQuery {
 pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let reactions_len = state.reactions.lock().await.len();
 
-    Json(serde_json::json!({
-        "running": true,
-        "vault_path": state.vault_path,
-        "uptime_seconds": state.start_time.elapsed().as_secs(),
-        "watcher_active": true,
-        "dispatcher_attached": state.dispatcher_attached,
-        "orchestrator_attached": state.orchestrator_attached,
-        "reactions_seen": reactions_len as u64,
-        "chat_tools": state.chat_tools,
-        "chat_tool_names": state.chat_tool_names,
-    }))
+    Json(DaemonStatus {
+        running: true,
+        vault_path: state.vault_path.clone(),
+        uptime_seconds: state.start_time.elapsed().as_secs(),
+        watcher_active: true,
+        dispatcher_attached: state.dispatcher_attached,
+        orchestrator_attached: state.orchestrator_attached,
+        reactions_seen: reactions_len as u64,
+        model_name: None,
+        token_usage_total: None,
+        context_window: None,
+        chat_tools: state.chat_tools,
+        chat_tool_names: state.chat_tool_names.clone(),
+    })
 }
 
 pub async fn catalog(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let descriptors = state.catalog.descriptors();
-    Json(serde_json::json!({
-        "mcps": descriptors.iter().map(|d| {
-            serde_json::json!({
-                "name": d.name,
-                "description": d.description,
-                "consequence": d.consequence,
-            })
-        }).collect::<Vec<_>>()
-    }))
+    let mcps = descriptors
+        .iter()
+        .map(|d| {
+            // Convert the Consequence enum to its snake_case string representation.
+            // We avoid depending on liberado-common in the contract crate, so we serialize
+            // through serde_json here on the server side.
+            let consequence = serde_json::to_value(&d.consequence)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_default();
+
+            McpInfo {
+                name: d.name.clone(),
+                description: d.description.clone(),
+                consequence,
+                // TODO: no per-MCP tool count source yet — McpDescriptor only has
+                // name/description/consequence; no per-MCP tool lists available.
+                tool_count: 0,
+                tool_names: Vec::new(),
+                // McpDescriptor currently has no provenance field.
+                provenance: None,
+            }
+        })
+        .collect();
+
+    Json(CatalogResponse { mcps })
 }
 
 pub async fn reactions(
@@ -282,9 +317,9 @@ pub async fn reactions(
 }
 
 pub async fn vault(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    Json(serde_json::json!({
-        "root": state.vault_path,
-        "note_count": 0,
-        "watcher_active": true,
-    }))
+    Json(VaultInfo {
+        root: state.vault_path.clone(),
+        note_count: 0,
+        watcher_active: true,
+    })
 }

@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 
 use crate::components::reactions::ReactionsPanel;
 use crate::components::vault::VaultPanel;
-use crate::types::DaemonStatus;
+use chat_client_contract::DaemonStatus;
 
 async fn fetch_status(api_base: String) -> Result<DaemonStatus, String> {
     let url = format!("{api_base}/api/status");
@@ -113,14 +113,9 @@ fn bool_label(v: bool) -> &'static str {
     if v { "✓ Enabled" } else { "✗ Disabled" }
 }
 
-fn format_uptime(secs: Option<u64>) -> String {
-    match secs {
-        Some(s) => {
-            let h = s / 3600;
-            let m = (s % 3600) / 60;
-            let sec = s % 60;
-            format!("{h}h {m}m {sec}s")
-        }
-        None => "—".into(),
-    }
+fn format_uptime(secs: u64) -> String {
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let sec = secs % 60;
+    format!("{h}h {m}m {sec}s")
 }

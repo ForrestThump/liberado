@@ -19,52 +19,35 @@ pub struct SseEvent {
     pub data: String,
 }
 
+use chat_client_contract::ChatEvent;
+
 use crate::app::Action;
 
 impl SseEvent {
     /// Convert this SSE event into the corresponding [`Action`] variant.
-    /// Handles all 6 event types from `docs/interface.md`:
-    /// `session`, `token`, `tool`, `tool_result`, `done`, `failed`.
-    /// Unknown event types default to `Ok(Action::SseToken(String::new()))`.
-    /// Returns `Err` with a description when `tool`/`tool_result` JSON is malformed.
+    /// Delegates JSON parsing to [`ChatEvent::from_sse_data`] (the shared wire helper).
+    ///
+    /// **Semantics preserved from the original hand-rolled implementation:**
+    /// - Unknown/future event types → `Ok(Action::SseToken(String::new()))` (benign no-op)
+    /// - Malformed JSON for a *known* `tool`/`tool_result` event → `Err(description)`
     pub fn to_action(&self) -> Result<Action, String> {
-        match self.event.as_str() {
-            "session" => Ok(Action::SseSession(self.data.clone())),
-            "token" => Ok(Action::SseToken(self.data.clone())),
-            "tool" => {
-                let v: serde_json::Value = serde_json::from_str(&self.data)
-                    .map_err(|e| format!("malformed tool SSE JSON ({e}): {}", self.data))?;
-                let name = v
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or("?")
-                    .to_string();
-                let args = v
-                    .get("args")
-                    .and_then(|a| a.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                Ok(Action::SseTool { name, args })
-            }
-            "tool_result" => {
-                let v: serde_json::Value = serde_json::from_str(&self.data)
-                    .map_err(|e| format!("malformed tool_result SSE JSON ({e}): {}", self.data))?;
-                let name = v
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or("?")
-                    .to_string();
-                let ok = v.get("ok").and_then(|o| o.as_bool()).unwrap_or(false);
-                let preview = v
-                    .get("preview")
-                    .and_then(|p| p.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                Ok(Action::SseToolResult { name, ok, preview })
-            }
-            "done" => Ok(Action::SseDone),
-            "failed" => Ok(Action::SseFailed(self.data.clone())),
-            _ => Ok(Action::SseToken(String::new())),
+        // from_sse_data maps unknown event types to ChatEvent::Token { text: "" } (benign),
+        // and returns Err only for malformed JSON on known tool/tool_result events.
+        match ChatEvent::from_sse_data(&self.event, &self.data) {
+            Ok(event) => Ok(match event {
+                ChatEvent::Session { id } => Action::SseSession(id),
+                ChatEvent::Token { text } => Action::SseToken(text),
+                ChatEvent::Tool { name, args } => Action::SseTool {
+                    name,
+                    args: args.to_string(),
+                },
+                ChatEvent::ToolResult { name, ok, preview } => {
+                    Action::SseToolResult { name, ok, preview }
+                }
+                ChatEvent::Done => Action::SseDone,
+                ChatEvent::Failed { message } => Action::SseFailed(message),
+            }),
+            Err(e) => Err(format!("malformed SSE data ({e}): {}", self.data)),
         }
     }
 }
@@ -237,8 +220,8 @@ mod tests {
         assert!(result.is_err(), "expected Err for malformed JSON");
         let err = result.unwrap_err();
         assert!(
-            err.contains("malformed tool SSE JSON"),
-            "error should mention malformed JSON: {err}"
+            err.contains("malformed SSE data"),
+            "error should mention malformed SSE data: {err}"
         );
     }
 

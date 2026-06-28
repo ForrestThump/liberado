@@ -9,6 +9,8 @@ use tokio::sync::{Mutex, mpsc::UnboundedSender};
 
 use liberado_common::CapabilityCatalog;
 
+use chat_client_contract::{ReactionEvent, ReactionOutcome};
+
 pub struct AppState {
     pub start_time: Instant,
     pub reactions: Arc<Mutex<Vec<ReactionEvent>>>,
@@ -41,16 +43,6 @@ impl ToolRuntime for NoTools {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct ReactionEvent {
-    pub event_type: String,
-    pub timestamp: String,
-    pub source: String,
-    pub correlation_id: String,
-    pub path: Option<String>,
-    pub outcome: &'static str,
-}
-
 impl AppState {
     pub fn reaction_tx(&self) -> UnboundedSender<Reaction> {
         let reactions = self.reactions.clone();
@@ -67,13 +59,23 @@ impl AppState {
                     outcome = reaction.outcome.label(),
                     "REACTION"
                 );
+
+                // Map the daemon's ReactionOutcome enum variants directly to the wire enum.
+                // The granular label() strings ("(observed)", "acted:reported", etc.) are kept
+                // in the tracing line above; only the wire outcome is the 3-variant enum.
+                let wire_outcome = match &reaction.outcome {
+                    liberado_daemon::ReactionOutcome::Observed => ReactionOutcome::Observed,
+                    liberado_daemon::ReactionOutcome::Decided(_) => ReactionOutcome::Decided,
+                    liberado_daemon::ReactionOutcome::Acted(_) => ReactionOutcome::Acted,
+                };
+
                 let event = ReactionEvent {
                     event_type: reaction.event.event_type.clone(),
                     timestamp: reaction.event.timestamp.to_rfc3339(),
                     source: reaction.event.source.clone(),
                     correlation_id: reaction.event.correlation_id.clone(),
                     path: reaction.event.payload.path.clone(),
-                    outcome: reaction.outcome.label(),
+                    outcome: wire_outcome,
                 };
                 let mut guard = reactions.lock().await;
                 guard.push(event);

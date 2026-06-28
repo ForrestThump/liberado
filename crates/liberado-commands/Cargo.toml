@@ -1,0 +1,12 @@
+[package]
+name = "liberado-commands"
+version = "0.1.0"
+description = "Shared slash-command parser and handlers for Liberado chat clients (TUI, WebUI, CLI)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+liberado-theme = { workspace = true }
