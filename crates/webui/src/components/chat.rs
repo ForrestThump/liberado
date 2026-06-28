@@ -43,46 +43,44 @@ pub fn Chat(api_base: String) -> Element {
 
     rsx! {
         div {
-            class: "flex flex-col h-[calc(100vh-9rem)] rounded-xl border border-gray-800 bg-gray-900/50 overflow-hidden",
+            class: "chat",
 
             // --- message list ---
             div {
-                class: "flex-1 overflow-y-auto p-4 space-y-4",
+                class: "messages",
                 if messages.read().is_empty() {
                     div {
-                        class: "h-full flex flex-col items-center justify-center text-gray-600",
-                        p { class: "text-sm", "Start a conversation with Liberado." }
-                        p { class: "text-xs mt-1 text-gray-700", "It has access to your tools." }
+                        class: "empty-state",
+                        p { "Start a conversation with Liberado." }
+                        p { "It has access to your tools." }
                     }
                 }
                 for (i, msg) in messages.read().iter().enumerate() {
                     Bubble { key: "{i}", role: msg.role, content: msg.content.clone() }
                 }
                 if sending() {
-                    div { class: "flex justify-start",
-                        div { class: "bg-gray-800 rounded-2xl px-4 py-2 text-sm text-gray-500 italic",
-                            "…"
-                        }
+                    div { class: "bubble-row assistant",
+                        div { class: "bubble-thinking", "…" }
                     }
                 }
             }
 
             // --- input ---
             form {
-                class: "border-t border-gray-800 p-3 flex gap-2 bg-gray-900/80",
+                class: "input-bar",
                 onsubmit: move |evt| {
                     evt.prevent_default();
                     submit();
                 },
                 input {
-                    class: "flex-1 bg-gray-800 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-600 outline-none focus:ring-1 focus:ring-indigo-500",
+                    class: "input",
                     placeholder: "Message Liberado…",
                     value: "{input}",
                     autofocus: true,
                     oninput: move |e| input.set(e.value()),
                 }
                 button {
-                    class: "bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
+                    class: "send-btn",
                     r#type: "submit",
                     disabled: sending(),
                     "Send"
@@ -257,32 +255,11 @@ fn open_stream(
 
 #[component]
 fn Bubble(role: &'static str, content: String) -> Element {
-    // Tool chips render compact and monospaced — a status line, not a speech bubble.
-    if role == "tool" {
-        return rsx! {
-            div {
-                class: "flex justify-start",
-                div {
-                    class: "max-w-[80%] rounded-lg px-3 py-1 text-xs font-mono text-gray-400 bg-gray-800/60 border border-gray-700/60 whitespace-pre-wrap",
-                    "{content}"
-                }
-            }
-        };
-    }
-
-    let (align, bubble) = match role {
-        "user" => ("justify-end", "bg-indigo-600 text-white"),
-        "error" => (
-            "justify-start",
-            "bg-red-950/60 text-red-300 border border-red-800",
-        ),
-        _ => ("justify-start", "bg-gray-800 text-gray-100"),
-    };
     rsx! {
         div {
-            class: "flex {align}",
+            class: "bubble-row {role}",
             div {
-                class: "max-w-[80%] rounded-2xl px-4 py-2 text-sm leading-relaxed whitespace-pre-wrap {bubble}",
+                class: "bubble {role}",
                 "{content}"
             }
         }

@@ -1,3 +1,4 @@
+/* ── Reset ──────────────────────────────────────────────────────────────── */
 * {
     margin: 0;
     padding: 0;
@@ -5,9 +6,9 @@
 }
 
 body {
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
-    background: #030712;
-    color: #f3f4f6;
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    background: var(--lib-app-bg, #0d0d1a);
+    color: var(--lib-chat-assistant-text, #c0c0c0);
     -webkit-font-smoothing: antialiased;
 }
 
@@ -18,9 +19,570 @@ body {
     background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-    background: #374151;
+    background: var(--lib-border, #808080);
     border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-    background: #4b5563;
+    background: var(--lib-sidebar-border-unfocused, #606060);
+}
+
+/* ── App shell ──────────────────────────────────────────────────────────── */
+
+.app {
+    min-height: 100vh;
+    background: var(--lib-app-bg);
+    color: var(--lib-chat-assistant-text);
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+
+.app-header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    border-bottom: 1px solid var(--lib-border);
+    background: color-mix(in srgb, var(--lib-app-bg) 90%, transparent);
+    backdrop-filter: blur(4px);
+}
+
+.app-header-inner {
+    max-width: 72rem;
+    margin: 0 auto;
+    padding: 0 1rem;
+    height: 3.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.brand-group {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.brand {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--lib-accent);
+    letter-spacing: -0.01em;
+}
+
+.brand-version {
+    font-size: 0.8125rem;
+    color: var(--lib-status-bar-text);
+}
+
+/* ── Nav ─────────────────────────────────────────────────────────────────── */
+
+.nav {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    background: var(--lib-surface);
+    border-radius: 0.5rem;
+    padding: 0.25rem;
+}
+
+.nav-btn {
+    padding: 0.25rem 0.75rem;
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    border: none;
+    cursor: pointer;
+    background: transparent;
+    color: var(--lib-sidebar-text);
+    transition: color 0.15s, background 0.15s;
+}
+
+.nav-btn:hover {
+    color: var(--lib-chat-assistant-text);
+}
+
+.nav-btn.active {
+    background: var(--lib-accent);
+    color: var(--lib-app-bg);
+}
+
+/* ── Main content area ───────────────────────────────────────────────────── */
+
+.main {
+    max-width: 72rem;
+    margin: 0 auto;
+    padding: 1.5rem 1rem;
+}
+
+/* ── Chat view ───────────────────────────────────────────────────────────── */
+
+.chat {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 8rem);
+    border-radius: 0.75rem;
+    border: 1px solid var(--lib-border);
+    background: color-mix(in srgb, var(--lib-surface) 60%, transparent);
+    overflow: hidden;
+}
+
+.messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25rem;
+    color: var(--lib-status-bar-text);
+}
+
+.empty-state p {
+    font-size: 0.875rem;
+}
+
+.empty-state p + p {
+    font-size: 0.75rem;
+    color: var(--lib-border);
+}
+
+/* ── Chat bubbles ────────────────────────────────────────────────────────── */
+
+.bubble-row {
+    display: flex;
+}
+
+.bubble-row.user {
+    justify-content: flex-end;
+}
+
+.bubble-row.assistant,
+.bubble-row.system,
+.bubble-row.tool,
+.bubble-row.error {
+    justify-content: flex-start;
+}
+
+.bubble {
+    max-width: 80%;
+    padding: 0.5rem 1rem;
+    border-radius: 1rem;
+    font-size: 0.875rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.bubble.user {
+    background: var(--lib-accent);
+    color: var(--lib-app-bg);
+    border-radius: 1rem 1rem 0.25rem 1rem;
+}
+
+.bubble.assistant {
+    background: var(--lib-surface);
+    color: var(--lib-chat-assistant-text);
+    border-radius: 1rem 1rem 1rem 0.25rem;
+}
+
+.bubble.system {
+    font-style: italic;
+    font-size: 0.8125rem;
+    color: var(--lib-chat-system-text);
+    background: transparent;
+    padding-left: 0.5rem;
+    border-left: 2px solid var(--lib-border);
+    border-radius: 0;
+}
+
+.bubble.tool {
+    font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 0.75rem;
+    color: var(--lib-tool-args);
+    background: var(--lib-surface-2);
+    border: 1px solid var(--lib-border);
+    border-radius: 0.5rem;
+    padding: 0.25rem 0.75rem;
+}
+
+.bubble.error {
+    color: var(--lib-tool-err);
+    border: 1px solid var(--lib-tool-err);
+    background: color-mix(in srgb, var(--lib-tool-err) 10%, transparent);
+    border-radius: 0.5rem;
+}
+
+/* Thinking indicator while waiting for the stream */
+.bubble-thinking {
+    background: var(--lib-surface);
+    color: var(--lib-status-bar-text);
+    font-style: italic;
+    font-size: 0.875rem;
+    padding: 0.5rem 1rem;
+    border-radius: 1rem 1rem 1rem 0.25rem;
+}
+
+/* ── Input bar ───────────────────────────────────────────────────────────── */
+
+.input-bar {
+    border-top: 1px solid var(--lib-border);
+    padding: 0.75rem;
+    display: flex;
+    gap: 0.5rem;
+    background: color-mix(in srgb, var(--lib-surface) 80%, transparent);
+}
+
+.input {
+    flex: 1;
+    background: var(--lib-input-bg);
+    color: var(--lib-input-text);
+    border: 1px solid var(--lib-input-border-unfocused);
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.input::placeholder {
+    color: var(--lib-input-placeholder);
+}
+
+.input:focus {
+    border-color: var(--lib-input-border-focused);
+}
+
+.send-btn {
+    background: var(--lib-accent);
+    color: var(--lib-app-bg);
+    border: none;
+    border-radius: 0.5rem;
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.send-btn:hover:not(:disabled) {
+    opacity: 0.85;
+}
+
+.send-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* ── Dashboard ───────────────────────────────────────────────────────────── */
+
+.dashboard {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+}
+
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+}
+
+@media (min-width: 64rem) {
+    .dashboard-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+/* ── Card (shared panel surface) ─────────────────────────────────────────── */
+
+.card {
+    border-radius: 0.75rem;
+    border: 1px solid var(--lib-border);
+    background: color-mix(in srgb, var(--lib-surface) 60%, transparent);
+}
+
+.card-header {
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--lib-border);
+}
+
+.card-header h2 {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.075em;
+    color: var(--lib-sidebar-text);
+}
+
+.card-body {
+    padding: 1.25rem;
+}
+
+.card-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+/* ── Status banner ───────────────────────────────────────────────────────── */
+
+.status-banner {
+    border-radius: 0.75rem;
+    border: 1px solid var(--lib-border);
+    padding: 1.5rem;
+}
+
+.status-banner.online {
+    border-color: var(--lib-status-dot-online);
+    background: color-mix(in srgb, var(--lib-status-dot-online) 8%, transparent);
+}
+
+.status-banner.offline {
+    border-color: var(--lib-tool-err);
+    background: color-mix(in srgb, var(--lib-tool-err) 8%, transparent);
+}
+
+.status-banner-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.status-banner-left {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.status-dot {
+    width: 0.75rem;
+    height: 0.75rem;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.status-dot.online {
+    background: var(--lib-status-dot-online);
+}
+
+.status-dot.offline {
+    background: var(--lib-status-dot-offline);
+}
+
+.status-dot.connecting {
+    background: var(--lib-status-dot-connecting);
+}
+
+.status-label {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--lib-chat-assistant-text);
+}
+
+.status-uptime {
+    font-size: 0.875rem;
+    color: var(--lib-status-bar-text);
+}
+
+.status-stats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+@media (min-width: 40rem) {
+    .status-stats {
+        grid-template-columns: repeat(4, 1fr);
+    }
+}
+
+/* ── Stat tile ───────────────────────────────────────────────────────────── */
+
+.stat-tile {
+    background: var(--lib-surface);
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+}
+
+.stat-tile .stat-label {
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--lib-status-bar-text);
+}
+
+.stat-tile .stat-value {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--lib-chat-assistant-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-top: 0.125rem;
+}
+
+/* ── Error card ──────────────────────────────────────────────────────────── */
+
+.error-card {
+    border-radius: 0.75rem;
+    border: 1px solid var(--lib-tool-err);
+    background: color-mix(in srgb, var(--lib-tool-err) 8%, transparent);
+    padding: 1.5rem;
+    text-align: center;
+}
+
+.error-card .error-title {
+    color: var(--lib-tool-err);
+    font-weight: 500;
+    margin-bottom: 0.25rem;
+}
+
+.error-card .error-detail {
+    font-size: 0.875rem;
+    color: color-mix(in srgb, var(--lib-tool-err) 70%, var(--lib-chat-assistant-text));
+    margin-bottom: 0.25rem;
+}
+
+.error-card .error-hint {
+    font-size: 0.75rem;
+    color: var(--lib-status-bar-text);
+    margin-top: 1rem;
+}
+
+/* ── Loading spinner ─────────────────────────────────────────────────────── */
+
+.loading-center {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 5rem 0;
+}
+
+.spinner {
+    width: 2.5rem;
+    height: 2.5rem;
+    border: 2px solid var(--lib-border);
+    border-top-color: var(--lib-accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ── Vault panel ─────────────────────────────────────────────────────────── */
+
+.vault-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.vault-row + .vault-row {
+    margin-top: 1rem;
+}
+
+.vault-row .vault-label {
+    font-size: 0.875rem;
+    color: var(--lib-status-bar-text);
+    flex-shrink: 0;
+}
+
+.vault-row .vault-value {
+    font-size: 0.875rem;
+    font-family: ui-monospace, 'Cascadia Code', monospace;
+    color: var(--lib-sidebar-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ── Reactions panel ─────────────────────────────────────────────────────── */
+
+.reactions-list {
+    max-height: 24rem;
+    overflow-y: auto;
+}
+
+.reaction-row {
+    padding: 0.75rem 1.25rem;
+    border-bottom: 1px solid var(--lib-border);
+    transition: background 0.12s;
+}
+
+.reaction-row:last-child {
+    border-bottom: none;
+}
+
+.reaction-row:hover {
+    background: color-mix(in srgb, var(--lib-surface) 80%, transparent);
+}
+
+.reaction-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.reaction-event-type {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--lib-chat-assistant-text);
+}
+
+.reaction-outcome {
+    font-size: 0.75rem;
+    font-family: ui-monospace, monospace;
+}
+
+.reaction-outcome.acted {
+    color: var(--lib-reaction-acted);
+}
+
+.reaction-outcome.decided {
+    color: var(--lib-reaction-dispatched);
+}
+
+.reaction-outcome.observed {
+    color: var(--lib-reaction-observed);
+}
+
+.reaction-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 0.25rem;
+}
+
+.reaction-path {
+    font-size: 0.75rem;
+    color: var(--lib-status-bar-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 60%;
+}
+
+.reaction-time {
+    font-size: 0.75rem;
+    color: var(--lib-border);
+}
+
+.empty-panel {
+    font-size: 0.875rem;
+    color: var(--lib-status-bar-text);
+    text-align: center;
+    padding: 2rem;
 }

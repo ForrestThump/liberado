@@ -15,28 +15,26 @@ pub fn VaultPanel(api_base: String) -> Element {
 
     rsx! {
         div {
-            class: "rounded-xl border border-gray-800 bg-gray-900/50",
+            class: "card",
             div {
-                class: "px-5 py-4 border-b border-gray-800",
-                h2 { class: "text-sm font-semibold uppercase tracking-wider text-gray-400",
-                    "Vault"
-                }
+                class: "card-header",
+                h2 { "Vault" }
             }
             div {
-                class: "p-5",
+                class: "card-body",
                 match &*info.read() {
                     Some(Ok(v)) => rsx! {
-                        div { class: "space-y-4",
+                        div {
                             VaultRow { label: "Root", value: &v.root }
                             VaultRow { label: "Notes", value: &v.note_count.to_string() }
                             VaultRow { label: "Watcher", value: if v.watcher_active { "Active" } else { "Inactive" } }
                         }
                     },
                     Some(Err(e)) => rsx! {
-                        p { class: "text-red-500 text-sm", "Error: {e}" }
+                        p { class: "empty-panel", "Error: {e}" }
                     },
                     None => rsx! {
-                        p { class: "text-gray-600 text-sm", "Loading..." }
+                        p { class: "empty-panel", "Loading..." }
                     },
                 }
             }
@@ -48,9 +46,9 @@ pub fn VaultPanel(api_base: String) -> Element {
 fn VaultRow(label: String, value: String) -> Element {
     rsx! {
         div {
-            class: "flex items-center justify-between",
-            span { class: "text-sm text-gray-500", "{label}" }
-            span { class: "text-sm font-mono text-gray-300 truncate ml-4", "{value}" }
+            class: "vault-row",
+            span { class: "vault-label", "{label}" }
+            span { class: "vault-value", "{value}" }
         }
     }
 }

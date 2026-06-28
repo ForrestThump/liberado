@@ -25,33 +25,31 @@ pub fn Dashboard(api_base: String) -> Element {
 
     rsx! {
         div {
-            class: "space-y-8",
+            class: "dashboard",
 
             match &*status.read() {
                 Some(Ok(s)) => rsx! {
                     StatusBanner { status: s.clone() }
                     div {
-                        class: "grid grid-cols-1 lg:grid-cols-2 gap-6",
+                        class: "dashboard-grid",
                         VaultPanel { api_base: api_base.clone() }
                         ReactionsPanel { api_base: api_base.clone() }
                     }
                 },
                 Some(Err(e)) => rsx! {
                     div {
-                        class: "rounded-xl border border-red-800 bg-red-950/50 p-6 text-center",
-                        p { class: "text-red-400 font-medium", "Connection Error" }
-                        p { class: "text-sm text-red-600 mt-1", "{e}" }
-                        p { class: "text-xs text-gray-600 mt-4",
+                        class: "error-card",
+                        p { class: "error-title", "Connection Error" }
+                        p { class: "error-detail", "{e}" }
+                        p { class: "error-hint",
                             "Ensure the daemon server is running (liberado serve <vault>)"
                         }
                     }
                 },
                 None => rsx! {
                     div {
-                        class: "flex items-center justify-center py-20",
-                        div {
-                            class: "animate-spin rounded-full h-10 w-10 border-2 border-indigo-500 border-t-transparent"
-                        }
+                        class: "loading-center",
+                        div { class: "spinner" }
                     }
                 },
             }
@@ -61,34 +59,34 @@ pub fn Dashboard(api_base: String) -> Element {
 
 #[component]
 fn StatusBanner(status: DaemonStatus) -> Element {
-    let color = if status.running {
-        "bg-emerald-950/50 border-emerald-800"
+    let banner_cls = if status.running {
+        "status-banner online"
     } else {
-        "bg-red-950/50 border-red-800"
+        "status-banner offline"
     };
-    let dot = if status.running {
-        "bg-emerald-400"
+    let dot_cls = if status.running {
+        "status-dot online"
     } else {
-        "bg-red-400"
+        "status-dot offline"
     };
     let text = if status.running { "Running" } else { "Stopped" };
 
     rsx! {
         div {
-            class: "rounded-xl border {color} p-6",
+            class: "{banner_cls}",
             div {
-                class: "flex items-center justify-between",
+                class: "status-banner-top",
                 div {
-                    class: "flex items-center gap-3",
-                    div { class: "w-3 h-3 rounded-full {dot}" }
-                    span { class: "text-lg font-semibold", "{text}" }
+                    class: "status-banner-left",
+                    div { class: "{dot_cls}" }
+                    span { class: "status-label", "{text}" }
                 }
-                span { class: "text-sm text-gray-500",
+                span { class: "status-uptime",
                     "uptime: {format_uptime(status.uptime_seconds)}"
                 }
             }
             div {
-                class: "mt-4 grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm",
+                class: "status-stats",
                 Stat { label: "Vault", value: &status.vault_path }
                 Stat { label: "Watcher", value: bool_label(status.watcher_active) }
                 Stat { label: "Dispatcher", value: bool_label(status.dispatcher_attached) }
@@ -102,9 +100,9 @@ fn StatusBanner(status: DaemonStatus) -> Element {
 fn Stat(label: String, value: String) -> Element {
     rsx! {
         div {
-            class: "bg-gray-900 rounded-lg px-3 py-2",
-            p { class: "text-xs text-gray-500 uppercase tracking-wider", "{label}" }
-            p { class: "text-sm font-medium text-gray-200 truncate", "{value}" }
+            class: "stat-tile",
+            p { class: "stat-label", "{label}" }
+            p { class: "stat-value", "{value}" }
         }
     }
 }

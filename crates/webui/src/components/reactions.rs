@@ -15,22 +15,18 @@ pub fn ReactionsPanel(api_base: String) -> Element {
 
     rsx! {
         div {
-            class: "rounded-xl border border-gray-800 bg-gray-900/50",
+            class: "card",
             div {
-                class: "px-5 py-4 border-b border-gray-800",
-                h2 { class: "text-sm font-semibold uppercase tracking-wider text-gray-400",
-                    "Recent Reactions"
-                }
+                class: "card-header",
+                h2 { "Recent Reactions" }
             }
             div {
-                class: "divide-y divide-gray-800 max-h-96 overflow-y-auto",
+                class: "reactions-list",
                 match &*reactions.read() {
                     Some(Ok(list)) => {
                         if list.is_empty() {
                             rsx! {
-                                p { class: "text-gray-600 text-sm text-center py-8",
-                                    "No reactions yet."
-                                }
+                                p { class: "empty-panel", "No reactions yet." }
                             }
                         } else {
                             rsx! {
@@ -41,10 +37,10 @@ pub fn ReactionsPanel(api_base: String) -> Element {
                         }
                     }
                     Some(Err(e)) => rsx! {
-                        p { class: "text-red-500 text-sm p-4", "Error: {e}" }
+                        p { class: "empty-panel", "Error: {e}" }
                     },
                     None => rsx! {
-                        p { class: "text-gray-600 text-sm text-center py-8", "Loading..." }
+                        p { class: "empty-panel", "Loading..." }
                     },
                 }
             }
@@ -54,10 +50,10 @@ pub fn ReactionsPanel(api_base: String) -> Element {
 
 #[component]
 fn ReactionRow(event: ReactionEvent) -> Element {
-    let outcome_color = match event.outcome {
-        ReactionOutcome::Acted => "text-emerald-400",
-        ReactionOutcome::Decided => "text-amber-400",
-        ReactionOutcome::Observed => "text-gray-500",
+    let outcome_cls = match event.outcome {
+        ReactionOutcome::Acted => "reaction-outcome acted",
+        ReactionOutcome::Decided => "reaction-outcome decided",
+        ReactionOutcome::Observed => "reaction-outcome observed",
     };
     let outcome_label = match event.outcome {
         ReactionOutcome::Acted => "acted",
@@ -72,22 +68,16 @@ fn ReactionRow(event: ReactionEvent) -> Element {
 
     rsx! {
         div {
-            class: "px-5 py-3 hover:bg-gray-800/50 transition-colors",
+            class: "reaction-row",
             div {
-                class: "flex items-center justify-between",
-                span { class: "text-sm font-medium text-gray-200",
-                    "{event.event_type}"
-                }
-                span { class: "text-xs font-mono {outcome_color}", "{outcome_label}" }
+                class: "reaction-top",
+                span { class: "reaction-event-type", "{event.event_type}" }
+                span { class: "{outcome_cls}", "{outcome_label}" }
             }
             div {
-                class: "flex items-center justify-between mt-1",
-                span { class: "text-xs text-gray-500 truncate max-w-[60%]",
-                    "{path_str}"
-                }
-                span { class: "text-xs text-gray-600",
-                    "{time_str}"
-                }
+                class: "reaction-bottom",
+                span { class: "reaction-path", "{path_str}" }
+                span { class: "reaction-time", "{time_str}" }
             }
         }
     }

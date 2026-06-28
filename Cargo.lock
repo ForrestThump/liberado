@@ -3091,6 +3091,7 @@ dependencies = [
  "dioxus",
  "getrandom 0.2.17",
  "liberado-commands",
+ "liberado-theme",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

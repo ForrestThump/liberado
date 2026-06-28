@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 
 mod components;
+mod theme;
 
 use components::chat::Chat;
 use components::dashboard::Dashboard;
@@ -45,34 +46,36 @@ fn App() -> Element {
     let base = api_base();
     let mut view = use_signal(|| "chat");
 
-    let active = "px-3 py-1 rounded-md text-sm font-medium bg-gray-800 text-indigo-300";
-    let inactive = "px-3 py-1 rounded-md text-sm font-medium text-gray-400 hover:text-gray-200";
-    let chat_cls = if view() == "chat" { active } else { inactive };
-    let status_cls = if view() == "status" { active } else { inactive };
+    let chat_cls = if view() == "chat" { "nav-btn active" } else { "nav-btn" };
+    let status_cls = if view() == "status" { "nav-btn active" } else { "nav-btn" };
 
     rsx! {
+        // Inject theme CSS variables before the main stylesheet so every selector
+        // can reference var(--lib-*).  Swapping the Theme arg here is all it takes
+        // to switch themes at runtime.
+        style { {crate::theme::theme_css_vars(&liberado_theme::Theme::default_dark())} }
+        style { {include_str!("./styles/main.css")} }
+
         div {
-            class: "min-h-screen bg-gray-950 text-gray-100 font-sans",
-            link { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" }
-            style { {include_str!("./styles/main.css")} }
+            class: "app",
             header {
-                class: "border-b border-gray-800 bg-gray-900/80 backdrop-blur-sm sticky top-0 z-10",
+                class: "app-header",
                 div {
-                    class: "max-w-6xl mx-auto px-4 h-14 flex items-center justify-between",
+                    class: "app-header-inner",
                     div {
-                        class: "flex items-center gap-3",
-                        span { class: "text-xl font-bold text-indigo-400", "Liberado" }
-                        span { class: "text-sm text-gray-500", "v0.1" }
+                        class: "brand-group",
+                        span { class: "brand", "Liberado" }
+                        span { class: "brand-version", "v0.1" }
                     }
                     nav {
-                        class: "flex items-center gap-1 bg-gray-900 rounded-lg p-1",
+                        class: "nav",
                         button { class: "{chat_cls}", onclick: move |_| view.set("chat"), "Chat" }
                         button { class: "{status_cls}", onclick: move |_| view.set("status"), "Status" }
                     }
                 }
             }
             main {
-                class: "max-w-6xl mx-auto px-4 py-6",
+                class: "main",
                 if view() == "chat" {
                     Chat { api_base: base.clone() }
                 } else {
