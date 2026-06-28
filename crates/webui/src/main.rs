@@ -9,8 +9,18 @@ use components::dashboard::Dashboard;
 /// without any hardcoded IP.  Falls back to localhost only as a dev default.
 #[cfg(target_arch = "wasm32")]
 fn api_base() -> String {
+    // The daemon's API always listens on port 4201. When the daemon also serves this
+    // page, that's the same origin; when `dx serve` serves it on another port (dev
+    // hot-reload), we still target the daemon's port on the same host — the daemon's
+    // permissive CORS allows the cross-port call. This keeps both serving models working.
+    const API_PORT: &str = "4201";
     web_sys::window()
-        .and_then(|w| w.location().origin().ok())
+        .and_then(|w| {
+            let loc = w.location();
+            let proto = loc.protocol().ok()?; // "http:" or "https:"
+            let host = loc.hostname().ok()?; // hostname, without any port
+            Some(format!("{proto}//{host}:{API_PORT}"))
+        })
         .unwrap_or_else(|| "http://127.0.0.1:4201".to_string())
 }
 
