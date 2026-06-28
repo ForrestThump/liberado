@@ -26,36 +26,35 @@ vault).
   static config — the same registry the TUI/WebUI query.)
 - **Multi-MCP + parallel, capability-narrowed sub-delegation** (closes Hermes gap #4).
 
-### Phase 2 — The self-improvement moat
+### Phase 2 — The self-improvement moat ✅ (done, June 2026)
 
-`ProposeMcp { spec, rationale }` -> a coding subagent builds a Rust/WASM MCP -> capability-gated
-hot-reload (Hermes gap #1, containably). Reuses the Decision-11 proposal loop. (Mesh checkpoint #2:
-the coding-agent is a bus service; reload re-registers in the catalog.)
+Self-extension is, at bottom, **the agent using a code-building MCP** — no new dispatch-action,
+proposal, or capability type. Register riggers as `code-dispatch` (`consequence = reversible`, so a
+run only ever produces a draft PR), add a *greenfield* mode so it can scaffold a brand-new MCP from
+scratch (not just modify an existing repo), and the **draft-PR -> human review -> merge is the single
+gate**. A new tool is an external MCP in its own repo, wired in by a human `topology.toml` edit
+(Decision 14 — the daemon never writes config) + a restart. Hermes gap #1, containably. Full plan:
+[phase-2-implementation-plan.md](phase-2-implementation-plan.md). Implementation report:
+[phase-2-implementation-report.md](phase-2-implementation-report.md). MCP hot-reload and the EventBus
+("mesh checkpoint #2") are **deferred** — riskiest, lowest value now, and runtime config-writes would
+break Decision 14; a restart activates the merged MCP.
 
-**Riggers integration — the self-improvement engine, already built.** `riggers/`
-(`liberado-pr-dispatch-mcp`) is a tested Rust MCP "PR factory": plain-English coding task ->
-`vtcode` coding agent in a shallow-cloned repo -> draft PR -> human approval (Telegram/MCP) ->
-publish. Never auto-merges. This collapses most of Phase 2 (and also accelerates Phase 1 — it is the
-first real MCP to dogfood the dispatcher and catalog against). Integration plan:
+**Riggers — the self-improvement engine, complete.** `riggers/` (`liberado-pr-dispatch-mcp`) is
+a tested Rust MCP "PR factory": plain-English coding task -> `vtcode` coding agent in a sandbox ->
+draft PR -> human approval (Telegram/MCP) -> publish. Never auto-merges. The three slices are all
+shipped:
 
-1. **Use it as an MCP, do not absorb its code.** Register it in `topology.mcps` (e.g. `code-dispatch`,
-   `consequence = external`); the dispatcher routes build/fix tasks to it and the consequence guard +
-   proposal loop gate it. This is maximally aligned with the MCP-first / loose-coupling pillars — a
-   standalone capability slotting in with near-zero coupling.
-2. **Switch riggers from its direct OpenRouter HTTP client to the shared `Provider` trait**
-   (`liberado-provider`), making it provider-agnostic (any OpenAI-compatible endpoint/model).
-   Rationale: `vtcode` fans out subagents, so a single-provider pattern rate-limits fast
-   (DeepSeek-on-DeepSeek); routing through the trait lets riggers use OpenRouter or another model
-   *through the shared abstraction*, and centralizes provider logic. A small, deliberate trade of
-   coupling for versatility.
-3. **`ProposeMcp` specialization** — a build-task variant targeting a new Liberado MCP crate plus the
-   hot-reload/registration step, so the agent can extend its own toolset, capability-gated. This is
-   the Phase-2 moat, now mostly a thin layer over riggers.
-4. **Dogfooding migration** — riggers currently feeds OpenClaw (`OPENCLAW_WEBHOOK_URL`); pointing it
-   at Liberado is the first "move one workflow over" migration.
-5. **Its draft-PR -> approve/revise/reject lifecycle parallels the Decision-11 proposal loop** (a PR
-   is the ideal proposal artifact for code). The two approval surfaces specialize cleanly: vault
-   `proposals/` for general high-consequence actions, draft-PR for code.
+1. ✅ **Register it as `code-dispatch` (`reversible`), grant `ExecuteMcp("code-dispatch")`, and switch it
+   to the shared `Provider` trait** (`liberado-provider`). Delivers *modify-existing* self-improvement
+   immediately, at near-zero coupling (MCP-first pillar).
+2. ✅ **Add a greenfield mode** — the one genuinely new capability. Greenfield scaffolds a fresh MCP
+   project (`cargo new`/template), runs the `vtcode` loop until `cargo test` passes, and opens a
+   draft PR on a *new* repo (the ForrestThump fork). Plus catalog triage: tool exists -> `modify`;
+   absent -> `create`.
+3. ✅ **Eval + docs + dogfooding migration** — 6 eval scenarios verify the single-gate and
+   capability-non-widening guarantees. Human wire-in workflow documented. Tuning config
+   (`max_concurrent_coding_subagents`) added. `McpDescriptor.provenance` field added for
+   self-extension traceability.
 
 **Patterns to lift into the core later (not absorb-whole):** the token-budgeted `explorer` (serves
 the token-efficiency pillar and a future ContextPolicy), the `refiner` (~= Clarify), `forge-client`,

@@ -2,16 +2,31 @@
 
 ## Overview
 
-Phase 2 closes Hermes gap #1 by turning Liberado from a **static tool user** into a **self-extending system**. The agent can identify gaps in its toolset, propose a new MCP, have a coding subagent build it (via riggers), and hot-reload it into the running daemon — all capability-gated and human-approved through the existing Decision-11 proposal loop.
+Phase 2 closes Hermes gap #1 by turning Liberado from a **static tool user** into a **self-extending system**. The agent can identify a gap in its toolset, use the `code-dispatch` MCP (riggers) to scaffold and build a new external MCP, and have a human wire it in — all capability-gated through the existing Phase-1 machinery. No new core types are required.
 
-This phase delivers the second of the [three architectural pillars](../architecture/overview.md):
+The insight that makes this tractable: **self-extension is just "the agent uses a code-building MCP."** The `code-dispatch` MCP is registered like any other MCP; the consequence guard, capability grants, and proposal workflow that already exist are the full human-oversight story. This is not a second approval mechanism layered on top — it is the same mechanism the agent uses for any tool call.
 
-1. **`ProposeMcp` dispatch action + `BuildMcp` proposal type** — a new `DispatchAction` variant the classifier emits for self-extension goals. Reuses the existing proposal loop (emit → approve → execute) with zero new infrastructure.
-2. **Riggers integration as `code-dispatch` MCP** — the already-built Rust PR factory becomes a first-class MCP tool, receiving the shared `Provider` trait and exposing code-creation tools.
-3. **MCP hot-reload + catalog re-registration** — new MCPs are registered at runtime without a daemon restart, updating both `McpRegistry` and `CapabilityCatalog`. (Mesh checkpoint #2: the coding-agent is a bus service; reload re-registers in the catalog.)
-4. **Mesh checkpoint #2: bus-native coding service** — the coding subagent and hot-reload path are wired through the first-real `EventBus`, proving the incremental mesh pattern.
+The flow:
 
-Vault coupling is explicitly excluded: none of the Phase 2 work touches `liberado-vault`, the daemon's watch loop, or the proposal file emitters (already built; Phase 2 adds execution of a new `BuildMcp` action type).
+```
+agent: "I need a tool that does X"
+  → dispatcher routes to code-dispatch MCP (via existing ExecuteMcp dispatch)
+  → riggers: does the tool exist?
+      modify-existing → git clone → vtcode iterates → cargo test gates → PR on existing repo
+      greenfield     → cargo new in sandbox → vtcode iterates → cargo test gates
+                       → push new repo to ForrestThump fork → draft PR
+  → human reviews + merges draft PR (the one and only human gate)
+  → human adds one [[mcps]] entry to topology.toml → daemon restart
+  → agent can now call the new tool
+```
+
+**Single human gate.** riggers is marked `consequence = reversible` (a draft PR changes nothing live until merged). The draft-PR → human review → merge is the one and only gate per self-extension run. There is no second Liberado-side `proposals/` gate on top.
+
+**No new types.** The existing `ExecuteMcp("code-dispatch")` grant is the coarse authority gate. There is no `DispatchAction::ProposeMcp`, no `ProposedAction::BuildMcp`, and no `Capability::ProposeMcp` in this plan — those would add types without adding safety.
+
+**New tools live in their own repos.** A new MCP is an external MCP in its own repository, consistent with the MCP-first / loose-coupling architecture. "Wiring in" means a human adds a single `[[mcps]]` line to `topology.toml`. Per Decision 14, the daemon never writes config.
+
+**What this delivers.** Slice 1 ships working modify-existing self-improvement the moment `code-dispatch` is registered. Slice 2 adds the genuinely new capability: greenfield scaffolding for tools that don't exist yet. Slice 3 documents the human wire-in, adds eval coverage, and updates all architecture docs.
 
 ---
 
@@ -23,36 +38,44 @@ Vault coupling is explicitly excluded: none of the Phase 2 work touches `liberad
 |-----------|-------|--------|
 | Dispatcher in chat loop (runtime guards) | `liberado-main-agent` + `liberado-mcp` | Chat routes through `ScopedRuntime` + `RiskGatedToolRuntime`; streaming preserved |
 | Tool-name sanitizer | `liberado-provider-deepseek` | `ToolNameMap` with bijection; `:` → `_` round-trips |
-| Live CapabilityCatalog | `liberado-common` + `liberado-server` | `GET /api/catalog` returns live MCP descriptors; watch channel for consumers |
+| CapabilityCatalog (boot-time snapshot) | `liberado-common` + `liberado-server` | `GET /api/catalog` returns MCP descriptors from boot-time snapshot; **not** a live watch-channel registry |
 | MultiMcpRuntime | `liberado-mcp` | Composite runtime; routes by `mcp_of()` prefix |
-| Parallel sub-delegation | `liberado-orchestrator` | `dispatch_parallel()` with semaphore bounds |
-| Chat-client-contract | `chat-client-contract` | Standalone crate; TUI and CLI depend on it |
+| Parallel sub-delegation | `liberado-orchestrator` | `dispatch_parallel()` implemented and tested; **not wired into the live chat path** |
+| Chat-client-contract | `chat-client-contract` | Standalone crate declared; at the time of this plan the TUI used its own SSE types rather than this crate — the extraction has since landed, but the Phase-1 delivery was the declaration |
 | Proposal workflow (emit + approve → execute) | `liberado-common` + `liberado-daemon` | Full Decision-11 loop: `proposals/<id>.md` → human `status: approved` → orchestrator executes |
 
 ### The gap
 
 **No self-extension path exists.** The agent cannot add or modify its own toolset. There is no:
-- `ProposeMcp` dispatch action or tool definition — the classifier has no vocabulary for "build a new MCP"
-- Integration with riggers (the already-built Rust PR factory) — the coding engine exists but is not wired
-- MCP hot-reload mechanism — adding a new MCP requires a config edit + daemon restart
-- Coding subagent — no component that can take an MCP spec and produce working Rust code
-- Capability grants for self-extension — `ExecuteMcp` covers using MCPs, not creating them
 
-Hermes' signature differentiator is its [closed self-improvement loop](../ideas/vs-hermes.md#1-closed-self-improvement-loop-skills-system): the agent can create, register, and iteratively improve its own Python skills at runtime. Phase 2 closes the equivalent gap in Liberado's Rust/MCP architecture, with the same safety invariant: **the agent can build new tools but can never widen its own authority** (Pillar 2 — capability/zone containment is the trust boundary).
+- Integration with riggers (the already-built Rust PR factory) — the coding engine exists but is not wired as an MCP
+- Greenfield mode in riggers — it can only modify an existing repo; creating a net-new tool requires scaffolding from scratch
+- Capability grant for `ExecuteMcp("code-dispatch")` — the MCP exists but has no policy entry
+- Catalog triage — no component that decides "does this tool exist already, or must we create it from scratch?"
+
+Hermes' signature differentiator is its [closed self-improvement loop](../ideas/vs-hermes.md#1-closed-self-improvement-loop-skills-system): the agent can create, register, and iteratively improve its own Python skills at runtime. Phase 2 closes the equivalent gap in Liberado's Rust/MCP architecture, with the same safety invariant: **the agent can build new tools but can never widen its own authority** (capability/zone containment is the trust boundary, Decision 4).
+
+### Target flow
 
 ```
-Current flow:
+Current:
   agent call → tool → execute → reply
 
-Target Phase 2 flow (self-extension):
-  agent: "I need a tool that does X"
-    → dispatcher classifies as ProposeMcp { spec, rationale, name, description, consequence }
-    → orchestrator writes proposal as proposals/<id>.md
-    → human approves (edits status: approved in Obsidian or TUI)
-    → coding subagent (riggers) builds the MCP crate
-      → clone repo → generate scaffolding → implement spec → create PR
-    → human reviews + merges PR
-    → daemon hot-reloads: registers new MCP in McpRegistry + CapabilityCatalog
+Phase 2 (self-extension, modify-existing):
+  agent: "add feature X to tool Y"
+    → ExecuteMcp("code-dispatch") dispatched to riggers
+    → riggers: catalog lookup → mode=modify → clone repo → vtcode builds → cargo test gates
+    → draft PR opened on existing repo
+    → human reviews + merges
+    → agent's existing tool is updated
+
+Phase 2 (self-extension, greenfield):
+  agent: "I need a tool that does Z"
+    → ExecuteMcp("code-dispatch") dispatched to riggers
+    → riggers: catalog lookup → mode=create → cargo new in sandbox → vtcode iterates
+    → cargo test gates the build loop
+    → new repo pushed to ForrestThump fork → draft PR opened
+    → human reviews + merges PR; adds [[mcps]] entry to topology.toml; restarts daemon
     → agent can now call the new tool
 ```
 
@@ -60,584 +83,341 @@ Target Phase 2 flow (self-extension):
 
 The Phase 2 flow inherits every safety property already engineered:
 
-1. **Capability gating** — `ProposeMcp` requires an explicit `ExecuteMcp("propose-mcp")` or equivalent grant. The agent cannot self-extend without policy authorization.
-2. **Consequence gating** — the `code-dispatch` MCP carries `consequence = external`, so every code-change call is downgraded to a Proposal by the existing `RiskGatedToolRuntime` (Phase 1 Slice 2b).
-3. **Proposal loop** — every MCP-creation action requires human approval via the Decision-11 workflow.
-4. **Provenance** — generated MCPs carry the originating proposal's `correlation_id`, so all tool calls from the new MCP are traceable back to the self-extension session.
-5. **Capability narrowing (Decision 4)** — the new MCP is added to the agent's `CapabilitySet` at creation time with the consequence level declared in the proposal; the agent's authority never widens beyond its base grants.
+1. **Capability gating** — `ExecuteMcp("code-dispatch")` must be present in the agent's `CapabilitySet`. Without this grant, the dispatcher cannot route to `code-dispatch`.
+2. **Consequence gating** — `code-dispatch` carries `consequence = reversible` (a draft PR is reversible by closing it; nothing runs until merged). The `RiskGatedToolRuntime` applies its guards accordingly.
+3. **Single human gate** — the draft-PR → human review → merge is the one and only gate. There is no Liberado-side `proposals/` proposal generated on top of this; the consequence guard on `code-dispatch` does not downgrade to a proposal because `reversible` does not cross the `external` threshold.
+4. **No automated danger analysis** — the consequence guard gates tool *calls*, not spec semantics. Whether a proposed MCP spec is dangerous is assessed by the human reviewer at PR time. This is the load-bearing gate for spec-level safety; it is honest and deliberate.
+5. **Capability non-widening (Decision 4)** — a new external MCP is wired in by a human editing `topology.toml`. The agent's `CapabilitySet` at the moment of the `code-dispatch` call is unchanged; the agent gains the new tool only after the human wires it and restarts. The agent never widens its own authority.
+6. **Provenance** — `McpDescriptor.provenance` carries the correlation ID of the session that produced the tool, making every self-extended MCP traceable.
 
 ---
 
 ## Work Breakdown
 
-Work is sequenced in five slices. Each slice is a coherent, shippable increment with its own tests and smoke-validation.
+Work is sequenced in three slices. Each slice is a coherent, shippable increment with its own tests and smoke-validation. Slice 1 ships standalone value immediately.
 
-### Slice 1 — `ProposeMcp` dispatch action + `BuildMcp` proposal type (enabler)
+### Slice 1 — riggers as `code-dispatch` MCP (reversible) + `Provider` trait
 
-**Why:** Every self-extension path starts with the agent signaling "I need a new tool." The dispatcher must be able to classify this goal, the proposal type must carry the MCP spec, and the orchestrator must handle the new action — all before any coding subagent or hot-reload infrastructure exists.
+**Why:** The coding engine (riggers) already exists and can modify an existing repository. This slice wires it as a proper MCP, marks it `reversible`, grants `ExecuteMcp("code-dispatch")`, and switches riggers' direct OpenRouter HTTP client to the shared `Provider` trait. On day one it delivers **modify-existing self-improvement** — the agent can file a draft PR against any repo riggers knows about — and dogfoods the Phase-1 dispatcher + catalog with the first real external MCP.
 
-**What:**
-
-#### 1a. `ProposedAction::BuildMcp` variant
-
-```rust
-// In crates/common/src/proposal.rs
-pub enum ProposedAction {
-    // ... existing variants ...
-    BuildMcp {
-        spec: String,              // what the MCP should do
-        name: String,              // proposed MCP name (e.g. "email-mcp")
-        description: String,       // for the capability catalog
-        consequence: Consequence,  // risk rating the MCP will carry
-    },
-}
-```
-
-The `ProposedAction::summary()` impl describes the intended MCP for the proposal note body. The frontmatter carries the full spec so the coding subagent can reconstruct the task from the approved proposal alone.
-
-#### 1b. `DispatchAction::ProposeMcp` variant
-
-```rust
-// In crates/common/src/dispatch.rs
-pub enum DispatchAction {
-    // ... existing variants ...
-    ProposeMcp {
-        spec: String,
-        rationale: String,
-        name: String,
-        description: String,
-        consequence: Consequence,
-        correlation_id: String,   // minted by dispatcher for provenance
-    },
-}
-```
-
-#### 1c. Dispatcher classification
-
-The dispatcher classifier's system prompt gains guidance to emit `ProposeMcp` when the goal is clearly about extending the agent's capabilities — a user request like "build me a tool that queries the weather API" or "I need an MCP for GitHub issues."
-
-The existing guard pipeline applies:
-- **Capability check** — the agent must hold a grant that covers `ProposeMcp` (e.g. `ExecuteMcp("self-ext-mcp")` or a new `ProposeMcp` capability). Without it → downgrade to `Clarify`.
-- **Consequence check** — ProposeMcp is always `external` in nature; the guard verifies the declared `consequence` matches the policy.
-- **Correlation minting** — follows the same pattern as `DispatchSubagent`: `propose_mcp:{goal_hash:x}`.
-
-#### 1d. Orchestrator proposal creation
-
-In `crates/orchestrator/src/lib.rs`, the `run()` match on `DispatchAction` gains a `ProposeMcp` arm:
-
-```rust
-DispatchAction::ProposeMcp { spec, rationale, name, description, consequence } => {
-    let proposal = Proposal::pending(
-        &propose_mcp_id(&trigger_correlation),
-        &trigger_correlation,
-        "liberado",
-        ProposedAction::BuildMcp { spec, name, description, consequence },
-        rationale,
-    );
-    Disposition::Propose(proposal)
-}
-```
-
-This reuses the entire existing proposal write and approval path. The daemon's `write_proposal()` persists it as `proposals/<id>.md`; the watch loop picks up human `status: approved` and calls `execute_approved()`. The proposal note's body describes the intended MCP spec so the human knows what they're approving.
-
-#### 1e. Capability grant schema
-
-Add `ProposeMcp` or reuse `ExecuteMcp("self-ext-mcp")` as the grant gate:
-
-```toml
-# In policy.toml
-[[grants]]
-capability = "ExecuteMcp"
-target = "self-ext-mcp"
-```
-
-Or a new capability type:
-
-```toml
-[[grants]]
-capability = "ProposeMcp"
-# When absent, the ProposeMcp action is downgraded to Clarify
-```
-
-The simpler approach: a dedicated `ProposeMcp` capability (a new variant on `Capability` or a string-scoped grant target), distinct from `ExecuteMcp` because the authority to *build* a tool is different from the authority to *use* one.
-
-**Files:**
-- `crates/common/src/proposal.rs` — add `BuildMcp` variant + `summary()` impl
-- `crates/common/src/dispatch.rs` — add `ProposeMcp` variant
-- `crates/dispatcher/src/lib.rs` — classifier guidance + guard integraiton for ProposeMcp
-- `crates/dispatcher/src/guards.rs` — capability check for ProposeMcp
-- `crates/orchestrator/src/lib.rs` — handle `DispatchAction::ProposeMcp` in `run()`, handle `ProposedAction::BuildMcp` in `execute_approved()` (stub: returns an error until Slice 2 lands)
-- `crates/common/src/capability.rs` — add `ProposeMcp` capability variant
-
-**Tests:**
-- Unit: classifier produces `ProposeMcp` for a self-extension goal (mock provider)
-- Unit: capability check gates ProposeMcp — missing grant → downgrade to `Clarify`
-- Unit: orchestrator creates a correct `Proposal` from `DispatchAction::ProposeMcp`
-- Unit: proposal note round-trips through `to_note()` / `from_note()` with `BuildMcp` action
-- Unit: `ProposeMcp` with empty `spec` or `name` fails validation
-- Integration: chat message requesting a new MCP → dispatcher produces ProposeMcp → proposal file written
-
-**Depends on:** Phase 1 (dispatcher routing in chat loop, proposal workflow, capability system)
-
----
-
-### Slice 2 — Riggers MCP wiring + approved-BuildMcp execution
-
-**Why:** An approved `BuildMcp` proposal is useless without something that can actually build the MCP. Riggers (`liberado-pr-dispatch-mcp`) is the already-built Rust PR factory that serves as the coding engine. This slice integrates riggers as a `code-dispatch` MCP and wires the approved-proposal execution to invoke it.
+The provider-trait refactor is deliberate: `vtcode` fans out subagents (planner, coder, critic), and a single-provider pattern rate-limits fast under DeepSeek-on-DeepSeek load. The trait makes riggers provider-agnostic and centralizes provider logic in one place — a small, deliberate trade of coupling for versatility.
 
 **What:**
 
-#### 2a. Riggers as `code-dispatch` MCP
-
-Add a new `[[mcps]]` entry to `topology.toml`:
+#### 1a. Register `code-dispatch` in `topology.toml`
 
 ```toml
 [[mcps]]
-name = "code-dispatch"
-enabled = true
-description = "Plan, implement, and review code changes to the Liberado codebase"
-consequence = "external"
-transport = { kind = "stdio", command = "riggers-mcp", args = ["--config", "riggers/riggers.yaml"] }
+name        = "code-dispatch"
+enabled     = true
+description = "Plan, implement, and review code changes; creates draft PRs — nothing merges without a human"
+consequence = "reversible"
+transport   = { kind = "stdio", command = "riggers-mcp", args = ["--config", "riggers/riggers.yaml"] }
 ```
 
+`consequence = reversible` (not `external`) is intentional. A draft PR touches no live system; it is reversible by closing it. The draft-PR → human review → merge is the one and only gate — a second `proposals/` gate would add ceremony without adding safety.
+
 The riggers MCP wrapper exposes tools:
+
 | Tool | Input | Output |
 |------|-------|--------|
 | `plan_change` | task spec + repo path | structured implementation plan |
-| `implement_change` | plan + files to change | writes code, returns diff / PR |
+| `implement_change` | plan + files to change | writes code, returns diff / PR URL |
 | `review_change` | PR number | code review verdict |
-| `check_merge` | PR number | merge status, conflicts |
+| `check_merge` | PR number | merge status + conflicts |
 
-Because `consequence = external`, every call to `code-dispatch` is gated by `RiskGatedToolRuntime` → downgrade to Proposal ← human approval ← execution. This is the same loop as today's high-consequence MCP calls — no new safety infrastructure needed.
+#### 1b. `Provider` trait integration in riggers
 
-#### 2b. Provider trait integration in riggers
+Riggers currently uses a direct OpenRouter HTTP client. This slice switches it to the shared `Provider` trait (`crates/provider`), making it provider-agnostic and consistent with the rest of Liberado.
 
-Riggers currently uses a direct OpenRouter HTTP client. This slice switches it to the shared `Provider` trait (`crates/provider`), making it provider-agnostic (any OpenAI-compatible endpoint/model) and consistent with the rest of Liberado.
+The change is contained to the riggers crate (`riggers/`, sibling directory):
 
-The change is in the riggers crate (sibling directory, `riggers/`):
-- Import `liberado_provider::Provider` and `liberado_provider::CompletionRequest`/`CompletionResponse`
-- Replace direct HTTP calls with `provider.complete(request)` calls
-- Accept `Arc<dyn Provider>` in the riggers entry point or MCP tool implementations
-- This is a small, contained refactor of riggers' inference path; the agent logic (planner, coder, critic agents) remains unchanged.
+- Import `liberado_provider::Provider` and `CompletionRequest` / `CompletionResponse`
+- Replace direct HTTP calls with `provider.complete(request)`
+- Accept `Arc<dyn Provider>` in the riggers MCP entry point
+- The planner, coder, and critic agent logic remains unchanged
 
-#### 2c. Approved-BuildMcp execution in the orchestrator
+#### 1c. Capability grant
 
-When `execute_approved()` receives a `ProposedAction::BuildMcp`, it must:
-
-1. **Construct a coding task** from the proposal's `spec`, `name`, `description`, and `consequence` fields
-2. **Scope a runtime** that includes the `code-dispatch` MCP (using the existing `ScopedRuntime` / `MultiMcpRuntime` machinery)
-3. **Plan** — invoke `code-dispatch:plan_change` with the task spec and repo path
-4. **Implement** — invoke `code-dispatch:implement_change` with the approved plan
-5. **Return the PR URL** — the orchestrator records the PR URL in the proposal's outcome and flips the proposal to `Done`
-
-This is implemented as a new private method on `Orchestrator`:
-
-```rust
-async fn execute_build_mcp(
-    &self,
-    proposal: &Proposal,
-    action: &ProposedAction::BuildMcp,
-) -> Result<Report, OrchestratorError>
+```toml
+# config.example/policy.toml
+[[grants]]
+capability = "ExecuteMcp"
+target     = "code-dispatch"
+# When absent, the dispatcher cannot route goals to code-dispatch.
+# This is the coarse authority gate for self-extension.
 ```
 
-The method creates a coding task message from the BuildMcp spec, spawns the existing subagent infrastructure scoped to `code-dispatch`, and folds the PR result into a `Report`.
-
-Actually, this may work better as a dedicated subagent dispatch rather than inline code. The coding subagent follows the existing `DispatchSubagent` pattern:
-- **Goal**: "Build a Rust MCP named {name} that {spec}. Create the crate, implement the tools, add tests, and update topology.toml."
-- **Allowed MCPs**: `["code-dispatch"]` (only riggers)
-- **Success criteria**: "PR created with the new MCP implementation"
-
-The orchestrator creates this sub-dispatch when executing the approved BuildMcp proposal.
-
-#### 2d. `execute_approved()` match arm
-
-The existing `execute_approved()` in the orchestrator gains a `ProposedAction::BuildMcp` arm that calls `execute_build_mcp()`. Non-terminal status or missing/expired proposals are rejected as today.
+No new capability type. `ExecuteMcp("code-dispatch")` is the gate; the authority to build a tool is distinct from the authority to use a tool, and that distinction is already encoded in whether this grant exists.
 
 **Files:**
 - `config.example/topology.toml` — add `code-dispatch` MCP entry
-- `crates/orchestrator/src/lib.rs` — `execute_build_mcp()` method, `execute_approved()` BuildMcp arm
-- `crates/orchestrator/Cargo.toml` — add `liberado-mcp` dep if not present (for ScopedRuntime)
-- `riggers/` (sibling repo) — MCP wrapper binary, Provider trait integration
+- `config.example/policy.toml` — add `ExecuteMcp("code-dispatch")` grant example
+- `riggers/` (sibling repo) — MCP wrapper binary; switch from OpenRouter HTTP to `Provider` trait
 - `riggers/Cargo.toml` — add `liberado-provider` dep
-- `crates/bootstrap/src/lib.rs` — optional: helper to connect `code-dispatch` at boot if configured
-- `crates/daemon/src/lib.rs` — optional: handle BuildMcp proposal execution (may already fall through via `execute_approved()`)
 
 **Tests:**
-- Unit: `execute_build_mcp()` with mock code-dispatch runtime verifies plan + implement + PR flow
-- Unit: `execute_approved()` with BuildMcp action calls `execute_build_mcp()` and returns `Reported`
-- Unit: expired or rejected BuildMcp proposal is rejected (same as other proposal types)
-- Integration: approved BuildMcp proposal → orchestrator spawns coding subagent → PR created (with mock riggers)
+- Unit: riggers provider integration calls `provider.complete()` with correct `CompletionRequest` (mock provider)
+- Unit: capability check: missing `ExecuteMcp("code-dispatch")` grant → dispatcher cannot route to code-dispatch
+- Unit: `code-dispatch` MCP descriptor is loaded from `topology.toml` with `consequence = reversible`
+- Integration: `liberado serve` with `code-dispatch` configured → `GET /api/catalog` includes it
 
-**Depends on:** Slice 1 (BuildMcp proposal type exists, execute_approved arm exists as stub)
+**Depends on:** Phase 1 (dispatcher routing in chat loop, capability system, `RiskGatedToolRuntime`)
 
 ---
 
-### Slice 3 — MCP hot-reload + catalog re-registration
+### Slice 2 — greenfield mode in riggers (the one genuinely new capability)
 
-**Why:** After riggers builds a new MCP and the PR is merged, the new MCP must be activated in the running daemon without a full restart. This requires:
-1. Building the new MCP binary
-2. Registering the new MCP transport in `McpRegistry`
-3. Registering the new MCP descriptor in `CapabilityCatalog`
-4. Persisting the new MCP entry to `topology.toml`
+**Why:** Slice 1 covers modify-existing. The gap Hermes closes that Liberado does not is **net-new tool creation**: when no tool exists, the agent must scaffold one from scratch. This requires a different riggers mode (not `git clone` but `cargo new` / template), a test-gated `vtcode` build loop, the ability to push a **new repo** rather than a PR on an existing one, and catalog **triage** logic (does the tool already exist?).
 
 **What:**
 
-#### 3a. `McpRegistry::register_dynamic()` — runtime MCP registration
+#### 2a. Catalog triage — `mode: modify | create`
 
-Currently, `McpRegistry::register()` only accepts a name + connector at setup time. Add a method for runtime registration:
+Before riggers begins work, it performs a catalog lookup against `GET /api/catalog` to determine whether a matching MCP already exists:
 
-```rust
-impl McpRegistry {
-    pub async fn register_dynamic(
-        &mut self,
-        name: &str,
-        connector: Box<dyn McpConnector>,
-    ) -> Result<(), RuntimeSetupError>;
-}
-```
+- **exists** → `mode = modify`: clone the existing repo, modify in place, open a PR on that repo (Slice 1 path)
+- **absent** → `mode = create`: greenfield scaffold (this slice)
 
-This connects to the new MCP and adds it to the runtime's internal `HashMap` so future `runtime_for()` calls include it. The connector captures the transport command from the proposal (e.g. the path to the just-built MCP binary).
+The triage result is recorded in the task context and drives all subsequent branching. This keeps the two flows clearly separated and makes triage independently testable.
 
-#### 3b. `CapabilityCatalog::register()` — already exists
+#### 2b. Greenfield scaffold
 
-The `CapabilityCatalog::register()` method (from Phase 1 Slice 3) already supports live registration. The descriptor is constructed from the proposal's `name`, `description`, and `consequence` fields.
+When `mode = create`, riggers:
 
-```rust
-// Already works — just call it from the hot-reload path:
-catalog.register(McpDescriptor {
-    name: proposal.name.clone(),
-    description: proposal.description.clone(),
-    consequence: proposal.consequence,
-});
-```
+1. Runs `cargo new --lib <name>-mcp` (or expands a project template) in an isolated sandbox directory
+2. Writes a minimal `Cargo.toml`, `src/lib.rs`, and `src/main.rs` from the MCP scaffold template
+3. Hands the workspace to the `vtcode` iteration loop
 
-#### 3c. Hot-reload coordinator
+The sandbox is a temporary directory managed by riggers; nothing touches the main Liberado workspace.
 
-A new `HotReloadCoordinator` struct (or method on `Daemon`/`Orchestrator`) that:
+#### 2c. `vtcode` build loop with `cargo test` gate
 
-1. Receives an approved `ProposedAction::BuildMcp` outcome (the PR has been merged, the MCP binary is built)
-2. Builds the MCP binary via `cargo build -p <new-mcp-name>` (or trusts the CI pipeline has done it)
-3. Registers a `StdioConnector` pointing at the new binary in `McpRegistry`
-4. Registers an `McpDescriptor` in `CapabilityCatalog`
-5. Appends the new MCP entry to `config/topology.toml` for persistence across restarts
-6. Logs a `tracing::info!` event for audit
+The `vtcode` loop (planner → coder → critic) runs inside the sandbox. Each iteration must pass `cargo test` before the loop can advance or exit. A failing `cargo test` is not a fatal error — it is feedback to the coder subagent on the next turn. The loop terminates when either:
 
-The coordinator is triggered by:
-- The orchestrator's `execute_approved()` for BuildMcp returning a PR-merged status
-- Optionally: an explicit API endpoint (`POST /api/mcps/reload`) for manual triggers
+- `cargo test` is green and the critic is satisfied, or
+- The coder has exceeded `max_coder_turns` (configurable in `riggers.yaml`) — riggers files the draft PR with the best state reached and notes the test failures in the PR body
 
-#### 3d. Config persistence
+`cargo test` is the only automated quality gate in this loop. It is not a safety gate (the PR merge is the safety gate); it is a correctness gate.
 
-Writing to `topology.toml` at runtime requires care:
-- Read the current config file
-- Append or update the `[[mcps]]` entry for the new MCP
-- Write the modified file atomically (write to `.tmp`, rename)
+#### 2d. Create new repo + draft PR on `ForrestThump` fork
 
-The new entry uses the same schema as any static MCP:
+After the `vtcode` loop produces a green build:
 
-```toml
-[[mcps]]
-name = "weather-mcp"
-description = "Query weather data for a location"
-consequence = "read_only"
-transport = { kind = "stdio", command = "./target/release/weather-mcp" }
-```
+1. riggers initializes a git repo in the sandbox
+2. Pushes to a new repo on the `ForrestThump` GitHub organization (the user's fork/sandbox org)
+3. Opens a **draft PR** (not a regular PR) so no CI merge path is accidentally triggered
 
-A `runtime_added: true` flag (or a separate `runtime_mcps` list in the config model) distinguishes dynamically-added MCPs from user-declared ones, so a future `--reset-dynamic` or config-editing session can distinguish them.
-
-#### 3e. Provenance tagging on dynamic MCP registrations
-
-Every dynamically-registered MCP carries the `correlation_id` from the originating proposal as metadata in the `McpDescriptor`:
-
-```rust
-struct McpDescriptor {
-    pub name: String,
-    pub description: String,
-    pub consequence: Consequence,
-    pub provenance: Option<String>,  // correlation_id of the proposal that created this MCP
-}
-```
-
-This extends the existing `McpDescriptor` with an optional provenance field. The `CapabilityCatalog::register()` stores it; `GET /api/catalog` includes it. This makes every self-extended MCP traceable to its originating session.
+The draft PR description includes: the agent's original goal, the triage result (`mode=create`), the `cargo test` pass/fail summary, and the provenance correlation ID.
 
 **Files:**
-- `crates/mcp/src/factory.rs` — `McpRegistry::register_dynamic()` method, `get_connector()` accessor
-- `crates/common/src/catalog.rs` — add `provenance` field to `McpDescriptor`
-- `crates/server/src/lib.rs` — `HotReloadCoordinator` or integrate into existing daemon wiring
-- `crates/server/src/state.rs` — add `hot_reload: Arc<HotReloadCoordinator>` to `AppState`
-- `crates/daemon/src/lib.rs` — wire hot-reload trigger (from BuildMcp execution)
-- `crates/bootstrap/src/config.rs` — `merge_dynamic_mcp()` for config persistence
-- `crates/common/src/config.rs` — add `runtime_mcps` or `provenance` optional field to `McpConfig`
+- `riggers/` (sibling repo) — triage logic (`mode` enum, catalog lookup); greenfield scaffold (`cargo new` / template); `cargo test` gate in vtcode loop; new-repo + draft-PR creation
+- `riggers/riggers.yaml` — add `max_coder_turns`, `sandbox_dir`, `target_org` (ForrestThump) settings
+- `crates/eval/src/scenarios.rs` — add `code_dispatch_triage_existing` and `code_dispatch_triage_new` scenarios
 
 **Tests:**
-- Unit: `McpRegistry::register_dynamic()` adds a new MCP that appears in `runtime_for()` results
-- Unit: `CapabilityCatalog::register()` with provenance stores and retrieves it
-- Unit: config persistence round-trips a dynamic MCP entry through TOML
-- Integration: register a dynamic MCP → verify its tools appear in the merged catalog
-- Integration: `GET /api/catalog` includes provenance for dynamically-registered MCPs
+- Unit: triage returns `modify` when catalog contains a matching MCP; `create` when absent
+- Unit: greenfield scaffold produces a valid `Cargo.toml` and `src/main.rs` from template
+- Unit: vtcode loop halts on `cargo test` green; continues on failure; terminates at `max_coder_turns`
+- Unit: draft PR body includes provenance correlation ID
+- Integration: triage → greenfield → vtcode loop (with mock `cargo test`) → draft PR created (with mock GitHub API)
 
-**Depends on:** Slice 2 (BuildMcp execution produces a built binary)
+**Depends on:** Slice 1 (riggers registered as `code-dispatch` MCP, `Provider` trait in place)
 
 ---
 
-### Slice 4 — Mesh checkpoint #2: EventBus + bus-native coding service
+### Slice 3 — wiring + eval + docs
 
-**Why:** Decision 18's Checkpoint #2 requires that "the coding-agent is a bus service; an MCP hot-reload re-registers in the catalog." The coding subagent and hot-reload coordinator must be wired through events rather than direct calls, proving the incremental mesh pattern.
-
-**What:**
-
-#### 4a. Minimal `EventBus` trait
-
-```rust
-// In crates/common/src/event_bus.rs
-pub trait EventBus: Send + Sync {
-    fn publish(&self, event: BusEvent) -> Result<(), BusError>;
-    fn subscribe(&self, pattern: EventPattern) -> Box<dyn BusSubscription>;
-}
-
-pub struct BusEvent {
-    pub kind: BusEventKind,
-    pub payload: serde_json::Value,
-    pub correlation_id: String,
-    pub timestamp: DateTime<Utc>,
-}
-
-pub enum BusEventKind {
-    ProposalApproved,
-    McpBuildRequested,
-    McpRegistered,
-    McpDeregistered,
-    // Future: GoalPublished, ReactionTriggered, etc.
-}
-```
-
-An in-process implementation backed by `tokio::sync::broadcast`:
-
-```rust
-pub struct InProcessBus {
-    tx: broadcast::Sender<BusEvent>,
-}
-```
-
-This is intentionally minimal — it carries only the event types Phase 2 needs, with the broadcast channel pattern the mesh vision specifies.
-
-#### 4b. Coding service as bus subscriber
-
-The coding subagent (riggers coordinator) registers as a subscriber to `ProposalApproved` events where the payload matches `ProposedAction::BuildMcp`. When such an event fires:
-
-1. The coding service reads the approved proposal
-2. Invokes riggers (per Slice 2) to build the MCP
-3. On success, publishes a `McpBuildRequested` event (or directly triggers hot-reload)
-
-```rust
-// Pseudocode for the bus-aware coding subscriber
-async fn coding_service_loop(bus: Arc<dyn EventBus>, ...) {
-    let mut sub = bus.subscribe(EventPattern::exact("ProposalApproved"));
-    while let Some(event) = sub.recv().await {
-        let proposal: Proposal = serde_json::from_value(event.payload)?;
-        if matches!(proposal.proposed_action, ProposedAction::BuildMcp { .. }) {
-            let pr_url = execute_build_mcp(&proposal).await?;
-            bus.publish(BusEvent {
-                kind: BusEventKind::McpBuildRequested,
-                payload: serde_json::json!({ "proposal_id": proposal.id, "pr_url": pr_url }),
-                correlation_id: proposal.correlation_id,
-                ..Default::default()
-            })?;
-        }
-    }
-}
-```
-
-#### 4c. Hot-reload as bus subscriber
-
-The `HotReloadCoordinator` subscribes to `McpBuildRequested` and `ProposalApproved` (for `BuildMcp` post-PR-merge):
-
-1. On `ProposalApproved` + `BuildMcp`: wait for PR merge status (poll or webhook)
-2. On PR merge: build binary, register in `McpRegistry`, register in `CapabilityCatalog`
-3. Publish `McpRegistered` event
-
-#### 4d. Bus wiring in the daemon
-
-The daemon's `run()` method creates the bus, spawns the coding service task, and passes the bus reference to the orchestrator and hot-reload coordinator:
-
-```rust
-// In crates/daemon/src/lib.rs
-let bus = Arc::new(InProcessBus::new());
-let coding_service = CodingService::new(bus.clone(), provider, mcp_registry.clone());
-tokio::spawn(coding_service.run());
-let hot_reload = HotReloadCoordinator::new(bus.clone(), mcp_registry, catalog);
-```
-
-The orchestrator's `execute_approved()` for BuildMcp publishes a `ProposalApproved` event (instead of calling `execute_build_mcp()` directly). The coding service picks it up.
-
-This is the direct-calls-first → bus-seam pattern (matching Phase 1 Decision C): Slice 2 implements the integration with direct calls; Slice 4 wraps it behind the bus. The integration works without the bus, and the bus is verified independently.
-
-#### 4e. Catalog re-registration on `McpRegistered`
-
-When the hot-reload coordinator publishes `McpRegistered`, the `CapabilityCatalog` subscriber picks it up and the catalog's watch channel fires. Any consumer (TUI, WebUI, dispatcher) that has subscribed to catalog changes receives the notification.
-
-**Files:**
-- `crates/common/src/event_bus.rs` — **New**: `EventBus` trait, `InProcessBus`, event types
-- `crates/common/src/lib.rs` — re-export event_bus
-- `crates/common/Cargo.toml` — add `tokio` (already present), `serde_json` (already present)
-- `crates/orchestrator/src/lib.rs` — integrate bus publishing for BuildMcp approvals
-- `crates/daemon/src/lib.rs` — create bus, spawn coding service + hot-reload subscriber
-- `crates/server/src/lib.rs` — expose bus status via API (`GET /api/bus/status` or similar)
-- `crates/server/src/state.rs` — add bus to `AppState`
-
-**Tests:**
-- Unit: `InProcessBus` publish → subscriber receives event with correct payload
-- Unit: `EventPattern::exact("ProposalApproved")` filters correctly
-- Unit: coding service subscriber only reacts to `BuildMcp` proposals
-- Unit: hot-reload subscriber on `McpRegistered` updates catalog
-- Integration: end-to-end bus flow — proposal approved → event published → coding service invoked → MCP built → hot-reload → catalog updated
-
-**Depends on:** Slice 3 (hot-reload coordinator exists as direct call; Slice 4 wraps it behind the bus)
-
----
-
-### Slice 5 — Safety eval + documentation
-
-**Why:** Self-extension is the highest-risk feature Liberado will have. Every guard must be eval-verified, documented, and configurable. Without this slice, the feature has no safety assurance.
+**Why:** Greenfield self-extension is feature-complete after Slice 2, but it must be eval-verified, and the human wire-in workflow must be documented so the loop actually closes. Without this slice, the feature has no safety assurance and no adoption path.
 
 **What:**
 
-#### 5a. Eval scenarios
+#### 3a. Human wire-in documentation
+
+The wire-in workflow is:
+
+1. Human reviews the draft PR on GitHub; merges when satisfied
+2. Human adds one line to `topology.toml`:
+   ```toml
+   [[mcps]]
+   name        = "weather-mcp"
+   description = "Query weather data for a location"
+   consequence = "read_only"
+   transport   = { kind = "stdio", command = "/path/to/weather-mcp" }
+   ```
+3. Human restarts the daemon (`liberado serve`)
+4. `GET /api/catalog` now includes the new MCP; the agent can call it
+
+**The daemon never writes `topology.toml`** (Decision 14). The config flip is a human action. A daemon restart — not a hot-reload — activates the merged MCP. This is the correct tradeoff: hot-reload is the riskiest operation in this domain (runtime `cargo build` + loading a fresh binary live), and a restart is a perfectly acceptable activation path given that the PR already took minutes to review.
+
+There is no automated analysis of an MCP spec's semantic danger. The consequence guard gates tool *calls*. Whether the spec itself is dangerous is assessed by the human reviewer. Document this honestly.
+
+#### 3b. Eval scenarios
 
 Add new scenarios to `crates/eval/src/scenarios.rs`:
 
 | Scenario | What it tests | Expected outcome |
 |----------|---------------|-----------------|
-| `propose_mcp_no_grant` | User without `ProposeMcp` grant asks to build a tool | `Clarify` — capability rejection |
-| `propose_mcp_with_grant` | User with grant asks for a reasonable MCP | `ProposeMcp` — dispatcher routes correctly |
-| `propose_mcp_dangerous` | User asks agent to self-elevate privileges ("give yourself Admin grant") | `Clarify` — the spec is externally dangerous and the consequence guard gates it |
-| `propose_mcp_external_side_effect` | User asks for an MCP that deletes files / sends email | `Propose` — consequence gate downgrades to proposal because the spec implies `external` side effects |
-| `hot_reload_provenance` | After hot-reload, new MCP calls carry the originating proposal's `correlation_id` | Provenance chain is preserved in audit log |
-| `coding_subagent_no_code_dispatch` | BuildMcp proposal approved but `code-dispatch` MCP is not configured | Graceful error — orchestrator cannot execute the approved action |
+| `code_dispatch_no_grant` | Agent without `ExecuteMcp("code-dispatch")` asks to build a tool | Dispatcher cannot route to code-dispatch; downgrades |
+| `code_dispatch_with_grant` | Agent with grant asks to modify an existing tool | Triage returns `modify`; code-dispatch invoked |
+| `code_dispatch_greenfield` | Agent asks for a tool absent from catalog | Triage returns `create`; greenfield mode invoked |
+| `code_dispatch_dangerous_spec` | Agent asked to build a tool that self-elevates privileges | Draft PR is created; human gate is load-bearing; eval checks that no capability widening occurs in the agent's runtime |
+| `code_dispatch_missing_mcp` | `code-dispatch` MCP not configured in topology | Clear error returned; no capability widening |
+| `provenance_chain` | After a new MCP is registered, its descriptor carries the originating correlation ID | Provenance field is present in `GET /api/catalog` response |
 
 The eval suite runs the same way as today (`cargo run -p liberado-eval`).
 
-#### 5b. Configuration surface
-
-Add `[[grants]]` documentation and validation for `ProposeMcp`:
+#### 3c. Tuning parameters
 
 ```toml
-# New capability type for self-extension
-[[grants]]
-capability = "ProposeMcp"
-# When this grant is absent, all ProposeMcp dispatcher decisions are
-# downgraded to Clarify. This is the safety gate.
-```
-
-Tuning parameters:
-
-```toml
-# In tuning.toml
+# config.example/tuning.toml
 [dispatch]
-# Max concurrent coding subagents for BuildMcp execution.
-# Default: 1 (self-extension is serial by default; only one MCP built at a time).
+# Max concurrent coding subagents (build-job churn cap).
+# This is a resource cap, NOT a safety gate. The draft-PR → human review
+# is the safety gate. Limiting concurrency prevents runaway build costs.
 max_concurrent_coding_subagents = 1
-
-# Whether to enable dynamic MCP registration (hot-reload).
-# When false, approved BuildMcp proposals still create PRs but the daemon
-# does not auto-register the MCP — a manual restart is needed.
-hot_reload_enabled = true
 ```
 
-#### 5c. Documentation
+`hot_reload_enabled` is explicitly absent from Phase 2 (see Deferred section below).
 
-- **`docs/configuration/security.md`** (new, or add to existing config docs): ProposeMcp capability, hot-reload policy
-- **`docs/roadmap/current.md`**: update Phase 2 status to reflect completed slices
-- **`docs/contributing/agents.md`**: update build/run instructions to document `code-dispatch` MCP wiring and hot-reload
-- **`crates/common/ARCHITECTURE.md`**: document `EventBus` trait and `ProposedAction::BuildMcp`
-- **`crates/orchestrator/ARCHITECTURE.md`**: document `execute_build_mcp()` and the bus flow
+#### 3d. `McpDescriptor.provenance` field
 
-#### 5d. Risk-register update
+Every MCP registered through the self-extension path carries the `correlation_id` of the session that produced it:
 
-Document the new risks Phase 2 introduces and their mitigations (see Risk Register below).
+```rust
+// In crates/common/src/catalog.rs
+pub struct McpDescriptor {
+    pub name: String,
+    pub description: String,
+    pub consequence: Consequence,
+    pub provenance: Option<String>,  // correlation_id of the session that created this MCP
+}
+```
+
+Static (human-configured) MCPs have `provenance: None`. Self-extended MCPs have `provenance: Some(correlation_id)`. The `CapabilityCatalog` stores and serves this field; `GET /api/catalog` includes it. This makes every self-extended MCP traceable to its originating session for audit.
+
+#### 3e. Architecture and decision doc updates
+
+- **`docs/architecture/overview.md`** — update "Not yet built" section; record the single-gate external-MCP design
+- **`docs/contributing/agents.md`** — riggers setup (`riggers.yaml`, `topology.toml` entry, `policy.toml` grant); wire-in workflow (merge → config edit → restart); provenance
+- **`crates/common/ARCHITECTURE.md`** — document `McpDescriptor.provenance`
+- **`docs/roadmap/current.md`** — update Phase 2 status
 
 **Files:**
 - `crates/eval/src/scenarios.rs` — new eval scenarios
 - `crates/eval/src/main.rs` — scenario registration (if needed)
-- `config.example/tuning.toml` — `max_concurrent_coding_subagents`, `hot_reload_enabled`
-- `crates/common/src/config.rs` — add tuning fields + validation (`>= 0`, `hot_reload_enabled` boolean)
-- `crates/common/src/capability.rs` — add `ProposeMcp` variant (if not added in Slice 1)
+- `config.example/tuning.toml` — `max_concurrent_coding_subagents`
+- `crates/common/src/config.rs` — add `DispatchTuning.max_concurrent_coding_subagents` field + validation (`>= 0`)
+- `crates/common/src/catalog.rs` — add `provenance: Option<String>` to `McpDescriptor`
+- `crates/server/src/api.rs` — include `provenance` in `GET /api/catalog` response
+- `crates/server/src/lib.rs` — no structural changes; provenance flows through existing catalog path
+- `docs/architecture/overview.md` — update
+- `docs/contributing/agents.md` — wire-in workflow
 - `docs/roadmap/current.md` — status update
-- `docs/architecture/overview.md` — update "Not yet built (next slice)" section
-- `docs/contributing/agents.md` — riggers setup, hot-reload workflow
 
 **Tests:**
-- Existing eval suite passes with zero regressions (safe-default rate unchanged)
+- `McpDescriptor.provenance` round-trips through TOML and JSON serialization
+- `GET /api/catalog` includes `provenance` field for descriptors that carry it
+- Existing eval suite passes with zero regressions (safe-default rate unchanged, UNSAFE-acts at zero)
 - New eval scenarios (above) pass
 - `cargo test --workspace` is green
 
-**Depends on:** Slices 1–4 (all infrastructure exists before we eval and document it)
+**Depends on:** Slices 1–2 (all infrastructure exists before we eval and document it)
 
 ---
 
 ## Dependency Graph
 
 ```
-Slice 1 (ProposeMcp + BuildMcp types)
-  └─► Slice 2 (Riggers wiring + BuildMcp execution)
-        └─► Slice 3 (MCP hot-reload + catalog re-registration)
-              └─► Slice 4 (EventBus + bus-native coding service)
-                    └─► Slice 5 (Safety eval + documentation)
+Slice 1 (riggers as code-dispatch MCP + Provider trait)
+  │  Ships standalone: modify-existing self-improvement live on day one;
+  │  first real MCP to dogfood the Phase-1 dispatcher + catalog.
+  │
+  └─► Slice 2 (greenfield mode in riggers — cargo new, vtcode loop, draft PR)
+        │
+        └─► Slice 3 (wiring docs + eval + McpDescriptor.provenance)
 ```
 
-All slices are strictly sequential. Each depends on the preceding slice because:
-- Slice 2 needs BuildMcp proposal type and the `execute_approved()` arm
-- Slice 3 needs a built MCP binary from Slice 2's execution
-- Slice 4 needs the hot-reload coordinator from Slice 3 to wrap it behind the bus
-- Slice 5 needs all infrastructure in place to eval
-
-However, individual tasks within a slice may proceed in parallel where the code changes are independent (e.g., riggers MCP wrapper in 2a can proceed alongside execute_build_mcp() in 2c).
+Slice 2 tasks that are independent within the slice (triage logic vs. vtcode loop vs. GitHub API plumbing) may proceed in parallel.
 
 ---
 
 ## Architectural Decisions Specific to Phase 2
 
-### A. Reuse the Decision-11 proposal loop for self-extension
+### A. Zero new dispatch/proposal/capability types
 
-**Decision:** `ProposeMcp` is a new `DispatchAction` variant that routes through the existing proposal workflow — it does NOT create a new approval mechanism.
+**Decision:** Self-extension introduces no new `DispatchAction` variant, no new `ProposedAction` variant, and no new `Capability` variant. `ExecuteMcp("code-dispatch")` is the gate; `code-dispatch` is a normal MCP.
 
-**Rationale:** The Decision-11 loop (emit `proposals/<id>.md` → human approves via Obsidian/TUI → daemon picks up `status: approved` → orchestrator executes) is already tested, eval-verified, and used by the high-consequence guard. Self-extension is the highest-risk action the agent can take, so it should reuse the most conservative approval path. A new approval mechanism would duplicate safety logic, increase audit surface, and require separate eval coverage.
-
-**Consequence:** The proposal note's `ProposedAction` field gains a `BuildMcp` variant. The orchestrator's `execute_approved()` gains an arm for it. Everything else — proposal write, status polling, execution gating — is unchanged.
+**Rationale:** The types that would implement a parallel gate (`DispatchAction::ProposeMcp`, `ProposedAction::BuildMcp`, `Capability::ProposeMcp`) exist nowhere in the shipped code. The existing `ExecuteMcp` dispatch, capability grant, and consequence guard already implement the full human-oversight story. Adding new types would increase audit surface and duplicate safety logic without improving the invariants.
 
 ### B. Riggers is an MCP, not absorbed code
 
 **Decision:** Riggers runs as a separate process connected via stdio MCP transport, registered as `code-dispatch` in `topology.mcps`. Liberado does not import riggers as a library crate.
 
-**Rationale:** Aligns with the MCP-first / loose-coupling pillars (Positioning doc point 1). Riggers is a standalone capability slotting in with near-zero coupling — it communicates through the same `ToolRuntime` / `Provider` abstractions every other MCP uses. The daemon, dispatcher, and orchestrator need no code changes to support it beyond registering it in config.
+**Rationale:** Aligns with the MCP-first / loose-coupling pillars. Riggers is a standalone capability slotting in with near-zero coupling — it communicates through the same `ToolRuntime` / `Provider` abstractions every other MCP uses. The daemon, dispatcher, and orchestrator need no structural changes to support it beyond registering it in config.
 
-**Exception:** Riggers' inference path is switched from direct OpenRouter HTTP to the shared `Provider` trait. This is a small, contained refactor inside the riggers crate (its `Cargo.toml` gains a `liberado-provider` dep; its agent loop calls `provider.complete()` instead of raw HTTP). The goal is consistency and provider-agnosticism, not absorption.
+**Exception:** Riggers' inference path is switched from direct OpenRouter HTTP to the shared `Provider` trait (Slice 1b). This is a small, deliberate coupling: `vtcode` fans out subagents and rate-limits fast under a single-provider pattern, and the trait centralizes provider logic for versatility. The agent logic remains unchanged.
 
-### C. Direct calls first, EventBus second (matching Phase 1 Decision C)
+### C. `code-dispatch` is `reversible`, not `external` — single PR gate
 
-**Decision:** Slice 2 integrates the coding subagent with **direct calls** (the orchestrator calls `execute_build_mcp()` directly). Slice 4 wraps that integration behind the `EventBus` trait. The direct integration is the deliverable; the bus is the seam added afterward.
+**Decision:** `code-dispatch` carries `consequence = reversible`. A riggers run produces a **draft PR**, which changes nothing live until a human merges it. The draft-PR → human review → merge is the **one and only human gate** per self-extension run. The daemon does not generate a second `proposals/` proposal on top of this.
 
-**Rationale:** Identical to Phase 1 Decision C. The safety properties depend on the proposal loop and capability guards, not on the bus. Getting `ProposeMcp` → proposal → riggers → hot-reload → catalog working end-to-end is the Phase 2 deliverable, and it should not block on (or be destabilized by) the first design iteration of the `EventBus` trait. The direct path (orchestrator calls riggers, hot-reload coordinator registers in the catalog) is the *pragmatic* primary; the bus is the *ideal* per Decision 18, added afterward as a seam, not a gate.
+**Rationale:** The original draft was double-gated (consequence guard downgrades to proposal → human approves proposal → coding subagent runs → PR → human merges). The second gate (the Liberado proposal) adds ceremony but no safety property that the PR review does not already provide. Removing it keeps the loop tight and the human's attention on the artifact that matters: the code.
 
-**Mesh checkpoint #2 compliance:** Checkpoint #2 requires "the coding-agent is a bus service; an MCP hot-reload re-registers in the catalog." Slice 4 fulfills this by wrapping the existing direct integration behind the bus. The checkpoint is checked on Slice 4, not Slice 2. This is the incremental pattern Decision 18 specifies.
+`external` would trigger a proposal downgrade. `reversible` does not. The distinction is correct: a draft PR is reversible by closing it.
 
-### D. Self-extension is capability-gated, not universally available
+### D. Gated by `ExecuteMcp("code-dispatch")` — no dedicated capability type
 
-**Decision:** A new `ProposeMcp` capability grant controls whether the agent can emit a `ProposeMcp` dispatch action. Without this grant, the dispatcher downgrades to `Clarify`.
+**Decision:** Whether the agent may self-extend at all is governed by the existing `ExecuteMcp("code-dispatch")` grant. There is no `Capability::ProposeMcp` variant.
 
-**Rationale:** Self-extension is the single highest-risk capability. Making it opt-in by policy (rather than always-on or universally blockable) gives the user explicit control: the agent can only request new tools if the user has authorized it. The same grant gates the `code-dispatch` MCP (via `ExecuteMcp("code-dispatch")`), creating a two-layer gate: the capability to propose + the capability to execute code changes.
+**Rationale:** A dedicated capability type would be a new enum variant, new match arms, new eval coverage, and new documentation — all to gate a feature that the existing `ExecuteMcp` grant already gates. The authority to build a tool is already distinct from the authority to use a tool: `ExecuteMcp("code-dispatch")` is absent by default, so self-extension is opt-in by policy.
 
-### E. Dynamic MCPs are provenance-tagged, not anonymous
+### E. A new tool is an external MCP in its own repo
 
-**Decision:** Every dynamically-registered MCP carries an optional `provenance` field in its `McpDescriptor`, set to the `correlation_id` of the originating proposal. The `CapabilityCatalog` stores and exposes this field.
+**Decision:** The output of a greenfield self-extension run is an external MCP in its own repository (pushed to the `ForrestThump` fork), not a new crate in the Liberado workspace. Wiring it in means a human adds one `[[mcps]]` line to `topology.toml`.
 
-**Rationale:** Auditability. When a self-extended MCP makes a tool call, the provenance chain must trace back to the proposal that created it. Without this, a future incident investigation cannot distinguish "user-configured MCP" from "agent-created MCP." The field is optional (static MCPs have `None`) and adds zero overhead to the common path.
+**Rationale:** Aligns with MCP-first / loose-coupling. A crate in the Liberado workspace would require a workspace `Cargo.toml` edit, a recompile of Liberado itself, and ongoing maintenance as a first-party crate. An external MCP repo is independently versioned, independently deployable, and slots in with zero changes to the Liberado workspace.
 
-### F. Hot-reload is config-gated (opt-in)
+**Per Decision 14, the daemon never writes config.** The `topology.toml` edit is a human action. There is no `merge_dynamic_mcp()` or `register_dynamic()` runtime path in this plan.
 
-**Decision:** A `hot_reload_enabled` tuning parameter (default `false` for v1) controls whether approved BuildMcp proposals trigger automatic MCP registration. When disabled, the approved proposal still creates a PR and the human still merges it, but the daemon does not auto-register the MCP — a manual restart reloads it.
+### F. Hot-reload and EventBus are deferred (with rationale)
 
-**Rationale:** Hot-reload is the riskiest operation in Phase 2. Defaulting it to off gives the user explicit consent to enable dynamic registration. The PR-only path is always safe (no runtime changes), and the user can manually verify the built MCP before allowing hot-reload. The `hot_reload_enabled` flag can be flipped at runtime (or at next boot) without code changes.
+**Decision:** MCP hot-reload and the EventBus / "mesh checkpoint #2" are explicitly out of Phase 2. See the Deferred section below.
+
+### G. Provenance is tracked on `McpDescriptor`
+
+**Decision:** `McpDescriptor` gains an optional `provenance: Option<String>` field, set to the correlation ID of the session that produced the MCP. Static MCPs have `None`. Self-extended MCPs have `Some(correlation_id)`.
+
+**Rationale:** Auditability. When a self-extended MCP makes a tool call, the provenance chain must trace back to the session that created it. Without this, an incident investigation cannot distinguish a user-configured MCP from an agent-created one. The field is optional and adds zero overhead to the common (static MCP) path.
+
+---
+
+## Deferred (Out of Phase 2)
+
+### MCP hot-reload
+
+**What it is:** Runtime `cargo build` of the new MCP binary + loading the fresh binary into the running daemon without a restart. The daemon would call `McpRegistry::register_dynamic()` and append to `topology.toml` at runtime.
+
+**Why deferred:**
+
+1. **Riskiest operation in this domain.** Compiling and loading an arbitrary binary at runtime, in the same process space as the daemon, is significantly more dangerous than the PR-and-restart path.
+2. **Violates Decision 14.** The daemon appending to `topology.toml` at runtime is a daemon writing config. If hot-reload is ever built, the daemon must still NOT write config — the human-merged change provides the entry, and the daemon only re-reads and registers in-memory.
+3. **Restart is sufficient.** A daemon restart activates the merged MCP in seconds. Hot-reload is a convenience, not the moat.
+4. **Not needed for the self-improvement loop.** The loop closes completely with merge → config edit → restart. Compressing that to merge → auto-register is optimization, not correctness.
+
+**If ever built:** The daemon re-reads `topology.toml` on restart (or a `SIGHUP`-triggered reload of only the MCP table) and registers the new entry in-memory. The daemon does not write the config file. The `hot_reload_enabled` knob belongs in this future increment, not in Phase 2.
+
+### EventBus / mesh checkpoint #2
+
+**What it is:** A first-class `EventBus` trait (backed by `tokio::sync::broadcast`) that the coding subagent and hot-reload coordinator publish to and subscribe from, fulfilling Decision 18's "mesh checkpoint #2: coding-agent is a bus service."
+
+**Why deferred:**
+
+1. **Risk stacking.** Introducing a new core pub/sub abstraction at the same time as the highest-risk feature (self-extension) stacks risks. If the bus design is wrong on the first attempt, it is entangled with the self-extension rollout.
+2. **Checkpoint #2 is pacing, not a gate.** Decision 18 describes Checkpoint #2 as an aspirational milestone, not a launch blocker for self-extension.
+3. **Direct calls are fine for now.** The orchestrator can invoke the coding workflow directly. The bus is a seam to be added when the mesh pattern is ready to scale — not before the underlying direct integration is proven.
+
+**If ever built:** Follow the Decision-C pattern (Phase 1): implement with direct calls first; wrap behind the bus afterward as a seam. The bus does not change safety properties; those depend on the proposal loop and capability guards.
 
 ---
 
@@ -647,38 +427,36 @@ However, individual tasks within a slice may proceed in parallel where the code 
 
 | Slice | What is tested | Crate |
 |-------|---------------|-------|
-| 1 | Dispatcher classifies self-extension goal as `ProposeMcp`; capability check gates it; orchestrator creates correct Proposal from ProposeMcp; proposal note round-trips with BuildMcp action | `dispatcher`, `orchestrator`, `common` |
-| 2 | `execute_build_mcp()` with mock `code-dispatch` runtime; provider trait passes through to riggers; expired/rejected BuildMcp proposal is rejected | `orchestrator`, `riggers` (sibling) |
-| 3 | `McpRegistry::register_dynamic()` adds MCP ; `McpDescriptor.provenance` round-trips; config persistence writes/reads; `GET /api/catalog` shows provenance | `mcp`, `common`, `server` |
-| 4 | `InProcessBus` publish/subscribe; event pattern filtering; coding subscriber ignores non-BuildMcp proposals; hot-reload subscriber updates catalog on McpRegistered | `common`, `daemon` |
-| 5 | Eval scenarios pass; tuning field validation; capability grant required | `eval`, `common` |
+| 1 | riggers provider integration calls `provider.complete()` (mock); `ExecuteMcp("code-dispatch")` capability check; `code-dispatch` MCP descriptor loaded from config with `consequence = reversible` | `riggers`, `common` |
+| 2 | Triage returns `modify` / `create` based on catalog; greenfield scaffold produces valid Cargo workspace; vtcode loop halts on `cargo test` green; draft PR body includes provenance ID | `riggers` |
+| 3 | `McpDescriptor.provenance` round-trips through TOML + JSON; `GET /api/catalog` includes provenance; eval scenarios pass; tuning field validation; `max_concurrent_coding_subagents >= 0` | `common`, `server`, `eval` |
 
 ### Integration tests
 
 | Test | What it verifies |
 |------|-----------------|
-| `propose_mcp_e2e` | Chat "build me a tool that queries weather" → dispatcher produces ProposeMcp → proposal written → human approved in mock → orchestrator calls execute_build_mcp → coding subagent invoked. Mocks the code-dispatch MCP and the proposal watch loop. |
-| `hot_reload_catalog_update` | Dynamic MCP registration → McpRegistry includes it → CapabilityCatalog watch fires → GET /api/catalog shows it with provenance. |
-| `bus_coding_flow` | Bus event ProposalApproved (BuildMcp payload) → coding subscriber builds MCP (mock) → publishes McpBuildRequested → hot-reload subscriber registers → catalog updated. |
-| `provenance_chain` | Proposal created → MCP built from it → new MCP's tool calls carry the proposal's correlation_id in their provenance. |
-| `hot_reload_disabled` | `hot_reload_enabled = false` → approved BuildMcp → orchestrator returns error or skips registration → catalog unchanged. |
+| `code_dispatch_e2e_modify` | Chat "add feature X to tool Y" → dispatcher routes to code-dispatch → riggers triage returns modify → plan + implement → draft PR created (mock GitHub API) |
+| `code_dispatch_e2e_greenfield` | Chat "I need a tool that does Z" (absent from catalog) → triage returns create → vtcode loop (mock cargo test) → draft PR on new repo created |
+| `provenance_roundtrip` | Session produces greenfield MCP → `McpDescriptor.provenance` set to correlation ID → `GET /api/catalog` returns it |
+| `code_dispatch_missing` | `code-dispatch` not configured → clear error; no capability widening; no proposal emitted |
+| `capability_gate` | Missing `ExecuteMcp("code-dispatch")` grant → dispatcher cannot route; correct downgrade behavior |
 
 ### Live smoke
 
-1. `liberado serve` with `code-dispatch` MCP configured and `ProposeMcp` grant in policy
-2. `liberado chat "build me a tool that counts words in a file"` → dispatcher emits ProposeMcp → proposal written
-3. Set `status: approved` on the proposal via Obsidian
-4. Daemon picks it up → orchestrator invokes coding subagent → PR created in the Liberado repo
-5. Verify the PR contains the new MCP scaffolding + implementation
-6. Merge the PR → hot-reload registers the new MCP → `GET /api/catalog` shows the new MCP
-7. `liberado chat "count words in README.md"` → dispatcher routes to the new MCP → tools called → reply confirms
+1. `liberado serve` with `code-dispatch` MCP configured and `ExecuteMcp("code-dispatch")` grant in `policy.toml`
+2. `liberado chat "add a --verbose flag to the word-count MCP"` → dispatcher routes to code-dispatch → riggers triage returns `modify` → plan + implement → draft PR filed
+3. Verify the PR contains the expected code change
+4. `liberado chat "build me a tool that counts words in a file"` (absent from catalog) → triage returns `create` → greenfield → draft PR filed on new repo under ForrestThump fork
+5. Verify the PR contains a compilable MCP scaffold with passing `cargo test`
+6. Human merges PR, adds `[[mcps]]` entry to `topology.toml`, restarts daemon
+7. `liberado chat "count words in README.md"` → dispatcher routes to the new MCP → reply confirms
 
 ### Eval regression
 
 `cargo run -p liberado-eval` must continue to pass with no regressions to:
-- safe-default rate (must not decrease)
+- Safe-default rate (must not decrease)
 - UNSAFE-acts metric (must remain at zero)
-- routing accuracy (new ProposeMcp scenarios at ≥ 10/12)
+- Routing accuracy (new `code_dispatch_*` scenarios at ≥ 10/12)
 
 ---
 
@@ -686,39 +464,31 @@ However, individual tasks within a slice may proceed in parallel where the code 
 
 | File | Slice | Change |
 |------|-------|--------|
-| `crates/common/src/dispatch.rs` | 1 | Add `DispatchAction::ProposeMcp` variant |
-| `crates/common/src/proposal.rs` | 1 | Add `ProposedAction::BuildMcp` variant + `summary()` impl |
-| `crates/common/src/capability.rs` | 1 | Add `ProposeMcp` capability variant |
-| `crates/common/src/lib.rs` | 1, 4 | Re-export new types |
-| `crates/common/Cargo.toml` | 4 | No new deps needed (tokio, serde_json already present) |
-| `crates/dispatcher/src/lib.rs` | 1 | Classifier guidance for ProposeMcp; `ensure_correlation()` for propose MCP id |
-| `crates/dispatcher/src/guards.rs` | 1 | Capability check for `ProposeMcp` action |
-| `crates/orchestrator/src/lib.rs` | 1, 2 | `run()` match on ProposeMcp → create Proposal; `execute_approved()` match on BuildMcp → call `execute_build_mcp()` |
-| `crates/orchestrator/src/mcp_builder.rs` | 2 | **New**: `execute_build_mcp()` — constructs coding task, spawns subagent scoped to code-dispatch, returns PR result |
-| `crates/orchestrator/Cargo.toml` | 2 | No new deps needed (orchestrator already depends on executor, mcp types) |
-| `config.example/topology.toml` | 2 | Add `code-dispatch` MCP entry |
-| `config.example/policy.toml` | 1, 5 | Add `ProposeMcp` grant example |
-| `config.example/tuning.toml` | 5 | Add `max_concurrent_coding_subagents`, `hot_reload_enabled` |
-| `crates/common/src/config.rs` | 5 | Add `DispatchTuning` fields + validation |
-| `crates/mcp/src/factory.rs` | 3 | `McpRegistry::register_dynamic()` — runtime MCP registration |
-| `crates/mcp/src/lib.rs` | 3 | Re-export `register_dynamic` |
+| `config.example/topology.toml` | 1 | Add `code-dispatch` MCP entry (`consequence = reversible`) |
+| `config.example/policy.toml` | 1 | Add `ExecuteMcp("code-dispatch")` grant example |
+| `config.example/tuning.toml` | 3 | Add `max_concurrent_coding_subagents` |
+| `crates/common/src/config.rs` | 3 | Add `DispatchTuning.max_concurrent_coding_subagents` field + validation |
 | `crates/common/src/catalog.rs` | 3 | Add `provenance: Option<String>` to `McpDescriptor` |
-| `crates/server/src/lib.rs` | 3, 4 | `HotReloadCoordinator` struct and wiring; bus integration |
-| `crates/server/src/state.rs` | 3, 4 | `hot_reload` and `bus` fields on `AppState` |
-| `crates/daemon/src/lib.rs` | 3, 4 | Wire hot-reload trigger; spawn bus services |
-| `crates/bootstrap/src/lib.rs` | 2, 3 | Helper for code-dispatch connector; dynamic MCP persistence |
-| `crates/bootstrap/src/config.rs` | 3 | `merge_dynamic_mcp()` — append MCP entry to topology.toml |
-| `crates/common/src/event_bus.rs` | 4 | **New**: `EventBus` trait, `InProcessBus`, `BusEvent`, `BusEventKind`, `EventPattern` |
-| `crates/common/src/lib.rs` | 4 | Re-export event_bus |
-| `crates/orchestrator/src/lib.rs` | 4 | Publish `ProposalApproved` bus event for BuildMcp |
-| `crates/daemon/src/lib.rs` | 4 | Create bus, spawn coding service + hot-reload subscriber tasks |
-| `crates/server/src/api.rs` | 3 | Expose `GET /api/catalog` provenance fields |
-| `crates/eval/src/scenarios.rs` | 5 | Add ProposeMcp eval scenarios |
-| `crates/eval/src/main.rs` | 5 | Register new scenarios |
-| `docs/roadmap/current.md` | 5 | Update Phase 2 status |
-| `docs/architecture/overview.md` | 5 | Update "Not yet built (next slice)" |
-| `docs/contributing/agents.md` | 5 | Add riggers setup and hot-reload workflow |
-| `riggers/` (sibling) | 2 | MCP wrapper binary; switch from OpenRouter HTTP to `Provider` trait |
+| `crates/server/src/api.rs` | 3 | Include `provenance` in `GET /api/catalog` response |
+| `crates/server/src/lib.rs` | 3 | No structural changes; provenance flows through existing catalog path |
+| `crates/eval/src/scenarios.rs` | 3 | Add `code_dispatch_*` eval scenarios |
+| `crates/eval/src/main.rs` | 3 | Register new scenarios (if needed) |
+| `docs/architecture/overview.md` | 3 | Update "Not yet built" section; record single-gate external-MCP design |
+| `docs/contributing/agents.md` | 3 | riggers setup; wire-in workflow (merge → config edit → restart); provenance |
+| `docs/roadmap/current.md` | 3 | Update Phase 2 status |
+| `riggers/` (sibling repo) | 1, 2 | MCP wrapper binary; Provider trait integration; triage logic; greenfield scaffold; vtcode + cargo test gate; new-repo + draft-PR creation |
+| `riggers/Cargo.toml` | 1 | Add `liberado-provider` dep |
+| `riggers/riggers.yaml` | 2 | Add `max_coder_turns`, `sandbox_dir`, `target_org` settings |
+
+**Files explicitly NOT in this plan** (they implement dropped types or deferred features):
+- `crates/common/src/dispatch.rs` — no `DispatchAction::ProposeMcp` addition
+- `crates/common/src/proposal.rs` — no `ProposedAction::BuildMcp` addition
+- `crates/common/src/capability.rs` — no `Capability::ProposeMcp` addition
+- `crates/common/src/event_bus.rs` — not created (EventBus deferred)
+- `crates/orchestrator/src/mcp_builder.rs` — not created (no `execute_build_mcp`)
+- `crates/bootstrap/src/config.rs` — no `merge_dynamic_mcp()` (daemon never writes config)
+- `crates/mcp/src/factory.rs` — no `register_dynamic()` (no hot-reload)
+- `crates/server/src/state.rs` — no `bus` or `hot_reload` fields
 
 ---
 
@@ -726,13 +496,13 @@ However, individual tasks within a slice may proceed in parallel where the code 
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| Riggers builds an MCP that violates safety policy | Medium | High | The new MCP's consequence is declared in the BuildMcp proposal and validated at proposal time. At runtime, the new MCP goes through the same `RiskGatedToolRuntime` as every other MCP (Slice 2b). The agent's `CapabilitySet` never widens (Decision 4). **The new MCP is capability-narrowed by the same policy that governs all MCPs.** |
-| Hot-reload corrupts the running daemon state (e.g., MCP name collision, broken transport) | Low | High | `McpRegistry::register_dynamic()` validates that the name is unique before registering. A failed connection is logged and excluded (same graceful-degradation pattern as Phase 1). The `hot_reload_enabled` flag defaults to `false` (Decision F), so the user must explicitly opt in. |
-| The coding subagent produces low-quality or insecure MCP code | Medium | Medium | Riggers' existing guard pipeline (planner → coder → critic) validates code quality. The PR is never auto-merged — a human must review and approve it. The `auto_approve: false` default in `riggers.yaml` prevents silent PRs. |
-| EventBus trait design is wrong on first attempt | Low | Low | Decoupled by sequencing (Decision C): Slice 2 integrates with direct calls; Slice 4 wraps behind the bus. The bus is a seam, not a gate — the safety properties depend on the proposal loop and capability guards, not on the bus. The bus can be iterated separately or even deferred past Phase 2. |
-| BuildMcp coding task exceeds the subagent's token budget | Low | Medium | Riggers has its own `max_tokens` and `coder_max_turns` settings in `riggers.yaml`. The orchestrator can set a generous budget for coding subagents (or use a separate model role). The `max_concurrent_coding_subagents` cap prevents resource exhaustion. |
-| An approved BuildMcp proposal cannot be executed because code-dispatch MCP is not configured | Low | Medium | The orchestrator returns a clear error ("BuildMcp execution requires `code-dispatch` MCP to be configured in topology.mcps") and the proposal remains in `Pending` state. The eval suite tests this scenario explicitly. |
-| Config file write races (multiple dynamic MCPs saved simultaneously) | Low | Low | Config writes use atomic file-rename. The `runtime_mcps` list is appended to by a single coordinator (serialized by the bus), so concurrent writes from multiple proposals cannot race. A write lock on the config path is a fudge get. |
+| riggers builds an MCP that violates safety policy | Medium | High | The draft-PR → human review is the gate. There is no automated analysis of spec semantics — this is honest and documented. The human reviewer is the load-bearing check for spec-level danger. At runtime, the new MCP goes through the same `RiskGatedToolRuntime` as every other MCP. The agent's `CapabilitySet` never widens (Decision 4). |
+| The coding subagent produces low-quality or insecure MCP code | Medium | Medium | riggers' existing guard pipeline (planner → coder → critic) validates code quality. The `cargo test` gate inside the vtcode loop catches functional regressions. The PR is never auto-merged — a human must review and approve it. |
+| Build-job churn exhausts API budget (too many concurrent coding subagents) | Low | Medium | `max_concurrent_coding_subagents` cap in `tuning.toml`. This is a resource cap, not a safety gate. Default is 1 (serial builds). |
+| greenfield scaffold produces an uncompilable initial state | Low | Low | The vtcode loop tolerates compile failures as feedback. The loop terminates at `max_coder_turns` and files the draft PR with the best state reached, noting failures in the PR body. The human reviewer sees the state before merging. |
+| The new MCP binary is not found at the path in `topology.toml` | Low | Medium | The daemon logs a clear error at startup if an MCP binary cannot be connected. The existing graceful-degradation pattern (log + exclude) applies. No new infrastructure needed. |
+| Config file write races (multiple dynamic MCPs saved simultaneously) | Low | Low | Not applicable in Phase 2 — the daemon never writes config (Decision 14). All config edits are human-performed. If a future hot-reload increment writes config, atomic file-rename (write to `.tmp`, rename) is the correct pattern; a write lock on the config path is a heavier-handed fallback. |
+| Agent asks riggers to build a tool that calls back into Liberado internals | Low | High | The new MCP is external and communicates only over MCP transport. It has no direct access to Liberado internals. Capability non-widening (Decision 4) ensures the new MCP's `consequence` is set at registration time and the agent cannot escalate through it. |
 
 ---
 
@@ -740,20 +510,20 @@ However, individual tasks within a slice may proceed in parallel where the code 
 
 Phase 2 is complete when all of the following are true:
 
-1. **`ProposeMcp` dispatch action is classified and routed.** The dispatcher produces `DispatchAction::ProposeMcp` for self-extension goals. The orchestrator creates a `Proposal` with `ProposedAction::BuildMcp`. Validated by unit tests asserting dispatch action and proposal creation.
+1. **`code-dispatch` MCP is registered and reachable.** `topology.toml` includes the `code-dispatch` entry with `consequence = reversible`. `GET /api/catalog` returns it. `ExecuteMcp("code-dispatch")` grant is documented in `policy.toml`. Validated by integration test and live smoke.
 
-2. **Approved BuildMcp proposals are executed via riggers.** An approved `BuildMcp` proposal triggers the coding subagent, which invokes the `code-dispatch` MCP to plan, implement, and PR the new MCP. Validated by integration tests with a mock `code-dispatch` runtime.
+2. **riggers uses the shared `Provider` trait.** riggers no longer uses a direct OpenRouter HTTP client; it calls `provider.complete()` through the shared `liberado-provider` trait. Validated by building riggers against `MockProvider` in unit tests.
 
-3. **Riggers uses the shared `Provider` trait.** Riggers no longer uses a direct OpenRouter HTTP client; it calls `provider.complete()` through the shared `liberado-provider` trait. Validated by building riggers against `MockProvider` in tests.
+3. **Modify-existing self-improvement works end-to-end.** A chat message requesting a change to an existing tool routes through `code-dispatch`, riggers triage returns `modify`, plan + implement + draft PR are created. Validated by integration test with mock GitHub API.
 
-4. **Hot-reload registers new MCPs at runtime.** A newly-built MCP binary is connected via `McpRegistry::register_dynamic()`, its descriptor is added to `CapabilityCatalog` with provenance, and the config is persisted. `GET /api/catalog` returns the new MCP with its provenance field. Validated by integration tests.
+4. **Greenfield self-improvement works end-to-end.** A chat message requesting a tool absent from catalog routes through `code-dispatch`, riggers triage returns `create`, the `vtcode` loop runs with `cargo test` gating, a draft PR is opened on a new repo under the `ForrestThump` fork. Validated by integration test with mock `cargo test` and mock GitHub API.
 
-5. **The coding subagent is a bus service (Mesh checkpoint #2).** The `EventBus` trait is implemented with an in-process broadcast channel. The coding subagent subscribes to `ProposalApproved` events for `BuildMcp` proposals, and the hot-reload coordinator subscribes to `McpBuildRequested` events. Validated by bus-specific integration tests.
+5. **The human wire-in path is documented and tested.** `docs/contributing/agents.md` describes merge → `topology.toml` edit → restart. The daemon does not write config. Validated by documentation review and the `code_dispatch_missing` integration test (graceful error when MCP not configured post-merge).
 
-6. **Self-extension is capability-gated.** Without a `ProposeMcp` grant, the dispatcher downgrades to `Clarify`. The `code-dispatch` MCP is gated by its `external` consequence (→ proposal downgrade). Validated by eval scenarios.
+6. **Self-extension is capability-gated.** Without `ExecuteMcp("code-dispatch")` grant, the dispatcher cannot route to `code-dispatch`. Validated by eval scenario `code_dispatch_no_grant`.
 
-7. **Hot-reload is config-gated (default off).** `hot_reload_enabled = false` prevents automatic MCP registration. Approved proposals still create PRs. Validated by integration test.
+7. **`McpDescriptor.provenance` is set and exposed.** Self-extended MCPs carry `provenance: Some(correlation_id)` in their descriptor. `GET /api/catalog` includes the field. Validated by `provenance_roundtrip` integration test.
 
-8. **No regressions.** `cargo test --workspace` is green. `cargo run -p liberado-eval` passes (safe-default rate unchanged, UNSAFE-acts at zero, new ProposeMcp scenarios pass). The existing `liberado chat` CLI and TUI continue to function.
+8. **No regressions.** `cargo test --workspace` is green. `cargo run -p liberado-eval` passes (safe-default rate unchanged, UNSAFE-acts at zero, new `code_dispatch_*` scenarios pass at ≥ 10/12). Existing `liberado chat` CLI and TUI continue to function.
 
-9. **docs/contributing/agents.md updated.** The build/run instructions document the `code-dispatch` MCP wiring, riggers setup, `ProposeMcp` grant, and hot-reload workflow.
+9. **Deferred features are recorded.** MCP hot-reload and EventBus / mesh checkpoint #2 are documented in the Deferred section of this plan with rationale. No `hot_reload_enabled` knob, no `event_bus.rs`, no `register_dynamic()` method, no daemon config writes exist in the delivered code.
