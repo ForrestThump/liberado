@@ -34,6 +34,9 @@ pub struct McpDescriptor {
     pub description: String,
     /// How risky this MCP's effects are (reversibility/externality).
     pub consequence: Consequence,
+    /// The correlation_id of the session that created this MCP via self-extension (riggers).
+    /// `None` for human-configured static MCPs declared in `topology.toml`.
+    pub provenance: Option<String>,
 }
 
 /// A live, queryable capability catalog. Multiple consumers can independently query
@@ -120,6 +123,7 @@ mod tests {
             name: name.into(),
             description: format!("{name} description"),
             consequence: Consequence::Reversible,
+            provenance: None,
         }
     }
 
@@ -192,6 +196,7 @@ mod tests {
             name: "mcp".into(),
             description: "v1".into(),
             consequence: Consequence::ReadOnly,
+            provenance: None,
         });
 
         // Re-register with updated fields.
@@ -199,6 +204,7 @@ mod tests {
             name: "mcp".into(),
             description: "v2".into(),
             consequence: Consequence::External,
+            provenance: None,
         });
 
         let desc = catalog.get("mcp").unwrap();

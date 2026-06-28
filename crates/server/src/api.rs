@@ -294,11 +294,10 @@ pub async fn catalog(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 description: d.description.clone(),
                 consequence,
                 // TODO: no per-MCP tool count source yet — McpDescriptor only has
-                // name/description/consequence; no per-MCP tool lists available.
+                // name/description/consequence/provenance; no per-MCP tool lists available.
                 tool_count: 0,
                 tool_names: Vec::new(),
-                // McpDescriptor currently has no provenance field.
-                provenance: None,
+                provenance: d.provenance.clone(),
             }
         })
         .collect();

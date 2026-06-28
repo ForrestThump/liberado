@@ -226,6 +226,9 @@ pub struct DispatchTuning {
     /// Procedural-memory score above which the classification short-circuit fires.
     pub guidance_match_floor: f32,
     pub subagent_isolation: SubagentIsolation,
+    /// Resource cap for in-flight code-dispatch (riggers) jobs. Not a safety gate — the capability
+    /// grant is the authority gate; this limits build-job churn on homelab hardware.
+    pub max_concurrent_coding_subagents: u32,
 }
 
 impl Default for DispatchTuning {
@@ -238,6 +241,7 @@ impl Default for DispatchTuning {
             detach_soft_timeout_secs: 20,
             guidance_match_floor: 0.8,
             subagent_isolation: SubagentIsolation::InProcess,
+            max_concurrent_coding_subagents: 2,
         }
     }
 }
@@ -396,6 +400,11 @@ impl Config {
         if self.tuning.dispatch.max_concurrent_subagents == 0 {
             return Err(Error::Config(
                 "tuning.dispatch.max_concurrent_subagents must be >= 1".into(),
+            ));
+        }
+        if self.tuning.dispatch.max_concurrent_coding_subagents == 0 {
+            return Err(Error::Config(
+                "tuning.dispatch.max_concurrent_coding_subagents must be >= 1".into(),
             ));
         }
         if self.tuning.concurrency.max_reaction_depth == 0 {

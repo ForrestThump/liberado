@@ -80,6 +80,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
                 name: desc.name.clone(),
                 description: desc.description.clone(),
                 consequence: desc.consequence,
+                provenance: None,
             });
         }
         Arc::new(cat)

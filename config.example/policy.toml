@@ -45,6 +45,7 @@ capabilities = [
     { Write = { Vault = "decisions" } },
     { ReadSummary = { Named = "finance" } },   # finance is human_only: read a summary, never the detail
     { ExecuteMcp = "tasks-mcp" },              # must match a [[mcps]] name in topology.toml
+    { ExecuteMcp = "code-dispatch" },          # agent self-extension via riggers MCP
 ]
 
 # Names of secrets the components need, resolved from the environment (never inlined). Each entry

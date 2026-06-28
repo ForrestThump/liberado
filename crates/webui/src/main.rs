@@ -1,7 +1,6 @@
 use dioxus::prelude::*;
 
 mod components;
-mod types;
 
 use components::chat::Chat;
 use components::dashboard::Dashboard;

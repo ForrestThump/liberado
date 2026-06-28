@@ -31,6 +31,12 @@ consequence = "reversible"        # git-tracked vault writes are undoable
 transport = { kind = "stdio", command = "npx", args = ["-y", "@liberado/tasks-mcp"] }
 # enabled = true
 
+[[mcps]]
+name = "code-dispatch"
+description = "Plan, implement, and review code changes; scaffold and build new MCP tools"
+consequence = "reversible"
+transport = { kind = "stdio", command = "riggers-mcp", args = ["--config", "riggers/riggers.yaml"] }
+
 # An external-effect MCP (leaves the system / can't be taken back) is rated `external`, the
 # highest risk — the consequence guard will gate direct action toward it. A remote server is reached
 # over http instead of a spawned process:
