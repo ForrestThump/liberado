@@ -115,14 +115,13 @@ body {
 
 /* ── Chat view ───────────────────────────────────────────────────────────── */
 
+/* Two distinct boxes: the conversation-history panel and the input bar,
+   separated by a gap. */
 .chat {
     display: flex;
     flex-direction: column;
+    gap: 0.75rem;
     height: calc(100vh - 8rem);
-    border-radius: 0.75rem;
-    border: 1px solid var(--lib-border);
-    background: color-mix(in srgb, var(--lib-surface) 60%, transparent);
-    overflow: hidden;
 }
 
 .messages {
@@ -132,6 +131,9 @@ body {
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+    border: 1px solid var(--lib-border);
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, var(--lib-surface) 60%, transparent);
 }
 
 .empty-state {
@@ -232,10 +234,11 @@ body {
 /* ── Input bar ───────────────────────────────────────────────────────────── */
 
 .input-bar {
-    border-top: 1px solid var(--lib-border);
-    padding: 0.75rem;
     display: flex;
     gap: 0.5rem;
+    padding: 0.75rem;
+    border: 1px solid var(--lib-border);
+    border-radius: 0.75rem;
     background: color-mix(in srgb, var(--lib-surface) 80%, transparent);
 }
 

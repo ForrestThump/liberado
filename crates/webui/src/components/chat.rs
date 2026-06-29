@@ -3,13 +3,29 @@ use dioxus::prelude::*;
 /// One rendered chat message.
 #[derive(Clone, PartialEq)]
 struct ChatMsg {
-    role: &'static str, // "user" | "assistant" | "tool" | "error"
+    role: &'static str, // "user" | "assistant" | "tool" | "system" | "error"
     content: String,
+}
+
+/// Pre-handoff "hello world" seed: a short demo conversation so the styled
+/// history/turn boxes (user right, assistant left, tool chips, system notes)
+/// are visible without a live daemon.
+///
+/// TODO(handoff): replace this with real history loaded from
+/// `GET /api/conversations/{id}` — this seed is purely a styling showcase.
+fn demo_seed() -> Vec<ChatMsg> {
+    vec![
+        ChatMsg { role: "user", content: "Hello! Can you show me the conversation styling?".into() },
+        ChatMsg { role: "assistant", content: "Of course. Your messages sit on the right; mine on the left. This whole scrolling panel is the conversation-history box, and the input below it is its own box.".into() },
+        ChatMsg { role: "tool", content: "🔧 tasks-mcp:search_memory ✓ 3 results".into() },
+        ChatMsg { role: "assistant", content: "Tool calls render as compact monospaced chips, like the one just above, before the reply they belong to.".into() },
+        ChatMsg { role: "system", content: "System notices look like this.".into() },
+    ]
 }
 
 #[component]
 pub fn Chat(api_base: String) -> Element {
-    let mut messages = use_signal(Vec::<ChatMsg>::new);
+    let mut messages = use_signal(demo_seed);
     let mut input = use_signal(String::new);
     let mut sending = use_signal(|| false);
     // The conversation this chat is bound to. `None` until the first turn, when the server creates a
