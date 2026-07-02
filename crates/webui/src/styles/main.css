@@ -10,6 +10,13 @@ body {
     background: var(--lib-app-bg, #0d0d1a);
     color: var(--lib-chat-assistant-text, #c0c0c0);
     -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+    height: 100vh;
+}
+
+html {
+    overflow: hidden;
+    height: 100%;
 }
 
 ::-webkit-scrollbar {
@@ -29,9 +36,12 @@ body {
 /* ── App shell ──────────────────────────────────────────────────────────── */
 
 .app {
-    min-height: 100vh;
+    height: 100vh;
     background: var(--lib-app-bg);
     color: var(--lib-chat-assistant-text);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 /* ── Header ─────────────────────────────────────────────────────────────── */
@@ -43,11 +53,12 @@ body {
     border-bottom: 1px solid var(--lib-border);
     background: color-mix(in srgb, var(--lib-app-bg) 90%, transparent);
     backdrop-filter: blur(4px);
+    flex-shrink: 0;
 }
 
 .app-header-inner {
-    max-width: 72rem;
-    margin: 0 auto;
+    max-width: none;
+    margin: 0;
     padding: 0 1rem;
     height: 3.5rem;
     display: flex;
@@ -71,6 +82,24 @@ body {
 .brand-version {
     font-size: 0.8125rem;
     color: var(--lib-status-bar-text);
+}
+
+/* ── Sidebar toggle in header ────────────────────────────────────────────── */
+
+.sidebar-toggle-pill {
+    background: none;
+    border: none;
+    color: var(--lib-sidebar-text);
+    font-size: 1.25rem;
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.375rem;
+    line-height: 1;
+    transition: background 0.12s;
+}
+
+.sidebar-toggle-pill:hover {
+    background: var(--lib-surface);
 }
 
 /* ── Nav ─────────────────────────────────────────────────────────────────── */
@@ -105,23 +134,175 @@ body {
     color: var(--lib-app-bg);
 }
 
+/* ── App layout (sidebar + main) ─────────────────────────────────────────── */
+
+.app-layout {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────── */
+
+.sidebar {
+    width: 280px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--lib-border);
+    background: var(--lib-sidebar-item-bg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: width 0.2s ease;
+}
+
+.sidebar-collapsed {
+    width: 40px;
+    align-items: center;
+}
+
+.sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem;
+    border-bottom: 1px solid var(--lib-border);
+    flex-shrink: 0;
+}
+
+.sidebar-new-chat-btn {
+    flex: 1;
+    padding: 0.4rem 0.75rem;
+    border: 1px dashed var(--lib-border);
+    border-radius: 0.5rem;
+    background: transparent;
+    color: var(--lib-sidebar-text);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.12s, color 0.12s;
+}
+
+.sidebar-new-chat-btn:hover {
+    border-color: var(--lib-accent);
+    color: var(--lib-accent);
+}
+
+.sidebar-collapse-btn {
+    background: none;
+    border: none;
+    color: var(--lib-sidebar-text);
+    cursor: pointer;
+    font-size: 0.875rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.375rem;
+    line-height: 1;
+    margin-left: 0.5rem;
+    transition: background 0.12s;
+}
+
+.sidebar-collapse-btn:hover {
+    background: var(--lib-surface);
+}
+
+.sidebar-toggle-btn {
+    background: none;
+    border: none;
+    color: var(--lib-sidebar-text);
+    cursor: pointer;
+    font-size: 1.25rem;
+    padding: 0.5rem;
+    border-radius: 0.375rem;
+    line-height: 1;
+    margin-top: 0.75rem;
+    transition: background 0.12s;
+}
+
+.sidebar-toggle-btn:hover {
+    background: var(--lib-surface);
+}
+
+.sidebar-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.sidebar-empty {
+    font-size: 0.8125rem;
+    color: var(--lib-status-bar-text);
+    text-align: center;
+    padding: 2rem 1rem;
+}
+
+/* ── Conversation items ──────────────────────────────────────────────────── */
+
+.conv-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border: none;
+    border-radius: 0.5rem;
+    background: transparent;
+    cursor: pointer;
+    color: var(--lib-sidebar-text);
+    transition: background 0.1s;
+}
+
+.conv-item:hover {
+    background: var(--lib-surface);
+}
+
+.conv-item-active {
+    background: var(--lib-sidebar-selected-bg);
+    color: var(--lib-sidebar-selected-fg);
+}
+
+.conv-item-active:hover {
+    background: var(--lib-sidebar-selected-bg);
+}
+
+.conv-item-title {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.conv-item-time {
+    font-size: 0.6875rem;
+    color: var(--lib-status-bar-text);
+    margin-top: 0.125rem;
+}
+
+.conv-item-active .conv-item-time {
+    color: color-mix(in srgb, var(--lib-sidebar-selected-fg) 60%, transparent);
+}
+
 /* ── Main content area ───────────────────────────────────────────────────── */
 
-.main {
-    max-width: 72rem;
-    margin: 0 auto;
-    padding: 1.5rem 1rem;
+.main-content {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
 
 /* ── Chat view ───────────────────────────────────────────────────────────── */
 
-/* Two distinct boxes: the conversation-history panel and the input bar,
-   separated by a gap. */
 .chat {
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
-    height: calc(100vh - 8rem);
+    flex: 1;
+    min-height: 0;
+    padding: 1rem;
 }
 
 .messages {
@@ -221,7 +402,6 @@ body {
     border-radius: 0.5rem;
 }
 
-/* Thinking indicator while waiting for the stream */
 .bubble-thinking {
     background: var(--lib-surface);
     color: var(--lib-status-bar-text);
@@ -231,15 +411,124 @@ body {
     border-radius: 1rem 1rem 1rem 0.25rem;
 }
 
+/* ── Bubble wrap (for assistant messages with thinking steps) ─────────────── */
+
+.bubble-wrap {
+    max-width: 80%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+/* ── Thinking steps group (collapsible) ──────────────────────────────────── */
+
+.thinking-group {
+    border: 1px solid var(--lib-border);
+    border-radius: 0.5rem;
+    background: var(--lib-surface-2);
+    overflow: hidden;
+    font-size: 0.75rem;
+}
+
+.thinking-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.4rem 0.75rem;
+    border: none;
+    background: transparent;
+    color: var(--lib-tool-args);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.75rem;
+    text-align: left;
+    transition: background 0.12s;
+}
+
+.thinking-header:hover {
+    background: color-mix(in srgb, var(--lib-surface) 50%, transparent);
+}
+
+.thinking-arrow {
+    flex-shrink: 0;
+    font-size: 0.625rem;
+    color: var(--lib-sidebar-text);
+}
+
+.thinking-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.thinking-body {
+    border-top: 1px solid var(--lib-border);
+    display: flex;
+    flex-direction: column;
+}
+
+.thinking-step {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.75rem;
+    font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 0.6875rem;
+    color: var(--lib-tool-args);
+}
+
+.thinking-step + .thinking-step {
+    border-top: 1px solid color-mix(in srgb, var(--lib-border) 40%, transparent);
+}
+
+.thinking-step.pending {
+    color: var(--lib-tool-name);
+}
+
+.thinking-step.pending .thinking-step-mark {
+    animation: spin 1.2s linear infinite;
+    display: inline-block;
+}
+
+.thinking-step.ok {
+    color: var(--lib-tool-ok);
+}
+
+.thinking-step.err {
+    color: var(--lib-tool-err);
+}
+
+.thinking-step-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.thinking-step-mark {
+    flex-shrink: 0;
+    font-size: 0.625rem;
+}
+
+.thinking-step-preview {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--lib-status-bar-text);
+    font-style: italic;
+}
+
 /* ── Input bar ───────────────────────────────────────────────────────────── */
 
 .input-bar {
     display: flex;
+    align-items: flex-end;
     gap: 0.5rem;
     padding: 0.75rem;
     border: 1px solid var(--lib-border);
     border-radius: 0.75rem;
     background: color-mix(in srgb, var(--lib-surface) 80%, transparent);
+    flex-shrink: 0;
 }
 
 .input {
@@ -251,7 +540,12 @@ body {
     padding: 0.5rem 0.75rem;
     font-size: 0.875rem;
     font-family: inherit;
+    line-height: 1.4;
     outline: none;
+    resize: none;
+    overflow-y: auto;
+    min-height: 2.25rem;
+    max-height: 10rem;
     transition: border-color 0.15s;
 }
 
@@ -285,12 +579,31 @@ body {
     cursor: not-allowed;
 }
 
+/* ── Stop button ─────────────────────────────────────────────────────────── */
+
+.stop-btn {
+    background: var(--lib-tool-err);
+    color: #ffffff;
+    border: none;
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.stop-btn:hover {
+    opacity: 0.85;
+}
+
 /* ── Dashboard ───────────────────────────────────────────────────────────── */
 
 .dashboard {
     display: flex;
     flex-direction: column;
     gap: 2rem;
+    padding: 1.5rem 1rem;
+    overflow-y: auto;
 }
 
 .dashboard-grid {
@@ -588,4 +901,344 @@ body {
     color: var(--lib-status-bar-text);
     text-align: center;
     padding: 2rem;
+}
+
+/* ── Sidebar footer (MCP panel area) ─────────────────────────────────────── */
+
+.sidebar-footer {
+    border-top: 1px solid var(--lib-border);
+    flex-shrink: 0;
+}
+
+/* ── MCP panel ───────────────────────────────────────────────────────────── */
+
+.mcp-panel {
+    display: flex;
+    flex-direction: column;
+}
+
+.mcp-panel-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border: none;
+    background: transparent;
+    color: var(--lib-sidebar-text);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    text-align: left;
+    transition: background 0.12s;
+}
+
+.mcp-panel-header:hover {
+    background: var(--lib-surface);
+}
+
+.mcp-panel-arrow {
+    flex-shrink: 0;
+    font-size: 0.625rem;
+}
+
+.mcp-panel-title {
+    flex: 1;
+}
+
+.mcp-panel-count {
+    font-size: 0.625rem;
+    color: var(--lib-status-bar-text);
+    background: var(--lib-surface);
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+}
+
+.mcp-panel-body {
+    display: flex;
+    flex-direction: column;
+    max-height: 16rem;
+    overflow-y: auto;
+}
+
+.mcp-empty {
+    font-size: 0.6875rem;
+    color: var(--lib-status-bar-text);
+    padding: 0.5rem 0.75rem 0.75rem;
+}
+
+/* ── MCP server item ─────────────────────────────────────────────────────── */
+
+.mcp-server {
+    border-top: 1px solid color-mix(in srgb, var(--lib-border) 40%, transparent);
+}
+
+.mcp-server-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.4rem 0.75rem;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.6875rem;
+    text-align: left;
+    color: var(--lib-sidebar-text);
+    transition: background 0.12s;
+}
+
+.mcp-server-header:hover {
+    background: var(--lib-surface);
+}
+
+.mcp-server-arrow {
+    flex-shrink: 0;
+    font-size: 0.5rem;
+    color: var(--lib-status-bar-text);
+}
+
+.mcp-server-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+}
+
+.mcp-server-name {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mcp-server-tool-count {
+    font-size: 0.5625rem;
+    color: var(--lib-status-bar-text);
+    flex-shrink: 0;
+}
+
+/* ── Consequence badge ───────────────────────────────────────────────────── */
+
+.consequence-badge {
+    font-size: 0.5625rem;
+    font-weight: 500;
+    padding: 0.0625rem 0.375rem;
+    border-radius: 0.25rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+}
+
+.consequence-badge.read-only {
+    background: color-mix(in srgb, var(--lib-reaction-observed) 20%, transparent);
+    color: var(--lib-reaction-observed);
+}
+
+.consequence-badge.reversible {
+    background: color-mix(in srgb, var(--lib-reaction-acted) 20%, transparent);
+    color: var(--lib-reaction-acted);
+}
+
+.consequence-badge.irreversible,
+.consequence-badge.external {
+    background: color-mix(in srgb, var(--lib-tool-err) 20%, transparent);
+    color: var(--lib-tool-err);
+}
+
+.consequence-badge.unknown {
+    background: color-mix(in srgb, var(--lib-border) 20%, transparent);
+    color: var(--lib-border);
+}
+
+/* ── MCP server expanded body ────────────────────────────────────────────── */
+
+.mcp-server-body {
+    padding: 0.25rem 0.75rem 0.5rem 1.25rem;
+}
+
+.mcp-server-desc {
+    font-size: 0.625rem;
+    color: var(--lib-status-bar-text);
+    margin-bottom: 0.25rem;
+    line-height: 1.4;
+}
+
+.mcp-tool-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+}
+
+.mcp-tool {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+}
+
+.mcp-tool-bullet {
+    flex-shrink: 0;
+    font-size: 0.5rem;
+    color: var(--lib-accent);
+}
+
+.mcp-tool-name {
+    font-size: 0.625rem;
+    font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+    color: var(--lib-sidebar-text);
+}
+
+.mcp-server-provenance {
+    font-size: 0.5625rem;
+    color: var(--lib-border);
+    margin-top: 0.375rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ── Markdown rendered content ──────────────────────────────────────────── */
+
+.markdown-body {
+    line-height: 1.6;
+    word-wrap: break-word;
+}
+
+.markdown-body p {
+    margin: 0.25em 0;
+}
+
+.markdown-body p:first-child {
+    margin-top: 0;
+}
+
+.markdown-body p:last-child {
+    margin-bottom: 0;
+}
+
+.markdown-body strong {
+    color: var(--lib-md-bold);
+    font-weight: 600;
+}
+
+.markdown-body em {
+    color: var(--lib-md-italic);
+    font-style: italic;
+}
+
+.markdown-body code {
+    font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 0.8125em;
+    color: var(--lib-md-code);
+    background: var(--lib-surface-2);
+    padding: 0.125rem 0.25rem;
+    border-radius: 0.25rem;
+}
+
+.markdown-body pre {
+    margin: 0.5em 0;
+    background: var(--lib-surface-2);
+    border: 1px solid var(--lib-border);
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+    overflow-x: auto;
+}
+
+.markdown-body pre code {
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+    font-size: 0.8125em;
+    color: var(--lib-code-block-fg);
+}
+
+.markdown-body a {
+    color: var(--lib-md-link);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.markdown-body a:hover {
+    opacity: 0.85;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+    margin: 0.25em 0;
+    padding-left: 1.5rem;
+}
+
+.markdown-body li {
+    margin: 0.125em 0;
+}
+
+.markdown-body li::marker {
+    color: var(--lib-md-bullet);
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+    color: var(--lib-md-heading);
+    font-weight: 600;
+    margin: 0.75em 0 0.25em;
+    line-height: 1.3;
+}
+
+.markdown-body h1 { font-size: 1.25rem; }
+.markdown-body h2 { font-size: 1.125rem; }
+.markdown-body h3 { font-size: 1rem; }
+.markdown-body h4 { font-size: 0.9375rem; }
+.markdown-body h5 { font-size: 0.875rem; }
+.markdown-body h6 { font-size: 0.8125rem; }
+
+.markdown-body hr {
+    border: none;
+    border-top: 1px solid var(--lib-md-rule);
+    margin: 0.75em 0;
+}
+
+.markdown-body blockquote {
+    border-left: 3px solid var(--lib-border);
+    margin: 0.5em 0;
+    padding: 0.25em 0.75em;
+    color: var(--lib-status-bar-text);
+    font-style: italic;
+}
+
+.markdown-body table {
+    border-collapse: collapse;
+    margin: 0.5em 0;
+    font-size: 0.8125em;
+    width: 100%;
+}
+
+.markdown-body th,
+.markdown-body td {
+    border: 1px solid var(--lib-border);
+    padding: 0.375rem 0.5rem;
+    text-align: left;
+}
+
+.markdown-body th {
+    background: var(--lib-surface);
+    font-weight: 600;
+    color: var(--lib-md-heading);
+}
+
+.markdown-body td {
+    color: var(--lib-chat-assistant-text);
+}
+
+.markdown-body img {
+    max-width: 100%;
+    border-radius: 0.375rem;
 }

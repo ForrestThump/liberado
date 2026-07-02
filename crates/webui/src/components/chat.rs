@@ -1,70 +1,225 @@
 use dioxus::prelude::*;
 
+use chat_client_contract::ChatMessage;
+
+use crate::components::markdown::MarkdownText;
+use crate::components::slash_commands::handle_slash_command;
+use liberado_commands::CommandResult;
+
+// ── Data types ──────────────────────────────────────────────────────────────
+
+/// A tool call + its result, grouped as a thinking step under an assistant message.
+#[derive(Clone, PartialEq)]
+pub struct ThinkingStep {
+    pub tool_name: String,
+    pub tool_args: String,
+    pub ok: Option<bool>, // None = still running, Some(true) = success, Some(false) = fail
+    pub preview: String,
+}
+
 /// One rendered chat message.
 #[derive(Clone, PartialEq)]
-struct ChatMsg {
-    role: &'static str, // "user" | "assistant" | "tool" | "system" | "error"
-    content: String,
+pub struct ChatMsg {
+    pub role: &'static str, // "user" | "assistant" | "tool" | "system" | "error"
+    pub content: String,
+    /// Tool calls that happened during this assistant turn. Only populated during
+    /// live SSE streaming; historical messages loaded from the API have empty vecs.
+    pub thinking_steps: Vec<ThinkingStep>,
 }
 
-/// Pre-handoff "hello world" seed: a short demo conversation so the styled
-/// history/turn boxes (user right, assistant left, tool chips, system notes)
-/// are visible without a live daemon.
-///
-/// TODO(handoff): replace this with real history loaded from
-/// `GET /api/conversations/{id}` — this seed is purely a styling showcase.
-fn demo_seed() -> Vec<ChatMsg> {
-    vec![
-        ChatMsg { role: "user", content: "Hello! Can you show me the conversation styling?".into() },
-        ChatMsg { role: "assistant", content: "Of course. Your messages sit on the right; mine on the left. This whole scrolling panel is the conversation-history box, and the input below it is its own box.".into() },
-        ChatMsg { role: "tool", content: "🔧 tasks-mcp:search_memory ✓ 3 results".into() },
-        ChatMsg { role: "assistant", content: "Tool calls render as compact monospaced chips, like the one just above, before the reply they belong to.".into() },
-        ChatMsg { role: "system", content: "System notices look like this.".into() },
-    ]
+impl ChatMsg {
+    fn new_user(content: String) -> Self {
+        ChatMsg { role: "user", content, thinking_steps: Vec::new() }
+    }
+
+    fn new_assistant(content: String) -> Self {
+        ChatMsg { role: "assistant", content, thinking_steps: Vec::new() }
+    }
+
+    fn new_error(content: String) -> Self {
+        ChatMsg { role: "error", content, thinking_steps: Vec::new() }
+    }
+
+    fn from_wire(msg: &ChatMessage) -> Self {
+        let role = match msg.role.as_str() {
+            "assistant" => "assistant",
+            "tool" => "tool",
+            "system" => "system",
+            _ => "user",
+        };
+        ChatMsg {
+            role,
+            content: msg.content.clone(),
+            thinking_steps: Vec::new(),
+        }
+    }
 }
+
+// ── History loading ─────────────────────────────────────────────────────────
+
+async fn fetch_conversation(
+    api_base: &str,
+    conv_id: &str,
+) -> Result<Vec<ChatMsg>, String> {
+    let url = format!("{api_base}/api/conversations/{conv_id}");
+    let resp = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Bad response: {e}"))?;
+    let wire_msgs: Vec<ChatMessage> = serde_json::from_value(
+        json.get("messages")
+            .cloned()
+            .unwrap_or(serde_json::Value::Array(Vec::new())),
+    )
+    .map_err(|e| format!("Bad messages shape: {e}"))?;
+    Ok(wire_msgs.iter().map(ChatMsg::from_wire).collect())
+}
+
+// ── Chat component ──────────────────────────────────────────────────────────
 
 #[component]
-pub fn Chat(api_base: String) -> Element {
-    let mut messages = use_signal(demo_seed);
+pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Element {
+    let mut messages = use_signal(Vec::new);
     let mut input = use_signal(String::new);
     let mut sending = use_signal(|| false);
-    // The conversation this chat is bound to. `None` until the first turn, when the server creates a
-    // conversation and announces its id via the `session` SSE event; we then send it back on every
-    // subsequent turn so they continue the same conversation rather than starting fresh.
-    let session = use_signal(|| None::<String>);
+    let mut session = use_signal(|| None::<String>);
+    let mut should_set_title = use_signal(|| false);
 
-    let mut submit = move || {
+    let base_for_effect = api_base.clone();
+    let base_for_submit = api_base.clone();
+    let base_for_title = api_base.clone();
+    let base_for_slash = api_base.clone();
+
+    use_effect(move || {
+        if sending() {
+            return;
+        }
+        let id = active_conv_id.read().clone();
+        let base = base_for_effect.clone();
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(ref conv_id) = id {
+                session.set(Some(conv_id.clone()));
+                let conv_id = conv_id.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    if let Ok(msgs) = fetch_conversation(&base, &conv_id).await {
+                        messages.set(msgs);
+                    }
+                });
+            } else {
+                messages.set(Vec::new());
+                session.set(None);
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = &id;
+            let _ = &base;
+        }
+    });
+
+    let mut stop_stream = move || {
+        #[cfg(target_arch = "wasm32")]
+        crate::components::chat::close_current_stream();
+        sending.set(false);
+    };
+
+    // `use_callback` (not a plain closure) so the same handle is `Copy` and can be moved into both
+    // `onsubmit` and the textarea's `onkeydown` without a "closure moved twice" conflict.
+    let submit = use_callback(move |_: ()| {
         let text = input.read().trim().to_string();
         if text.is_empty() || sending() {
             return;
         }
-        messages.write().push(ChatMsg {
-            role: "user",
-            content: text.clone(),
-        });
-        // The assistant bubble is created lazily on the first `token`, so any `tool` chips for this
-        // turn land *before* the answer (tool events precede the prose that follows them).
+
+        if text.starts_with('/') {
+            let session_snapshot = session.read().clone();
+            let sending_snapshot = sending();
+            let message_count = messages.read().len();
+            let base = base_for_slash.clone();
+            let text_owned = text.clone();
+
+            #[cfg(target_arch = "wasm32")]
+            wasm_bindgen_futures::spawn_local(async move {
+                let (cmd_msgs, new_session, results) = handle_slash_command(
+                    &text_owned,
+                    &base,
+                    session_snapshot,
+                    sending_snapshot,
+                    message_count,
+                )
+                .await;
+                for msg in cmd_msgs {
+                    messages.write().push(msg);
+                }
+                if let Some(id) = new_session {
+                    session.set(Some(id));
+                }
+                for result in &results {
+                    match result {
+                        CommandResult::NewConversation { .. } => {
+                            messages.set(Vec::new());
+                            session.set(None);
+                            active_conv_id.set(None);
+                        }
+                        CommandResult::ChatCleared => {
+                            messages.set(Vec::new());
+                        }
+                        CommandResult::SessionSwitched { id } => {
+                            session.set(Some(id.clone()));
+                            active_conv_id.set(Some(id.clone()));
+                        }
+                        CommandResult::SessionClosed { .. } => {
+                            session.set(None);
+                        }
+                        _ => {}
+                    }
+                }
+            });
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let _ = (base, text_owned, session_snapshot, sending_snapshot, message_count);
+            }
+
+            input.set(String::new());
+            resize_input_to_content();
+            return;
+        }
+
+        messages.write().push(ChatMsg::new_user(text.clone()));
         input.set(String::new());
+        resize_input_to_content();
         sending.set(true);
 
+        if session.read().is_none() {
+            should_set_title.set(true);
+        }
+
         #[cfg(target_arch = "wasm32")]
-        open_stream(&api_base, &text, messages, sending, session);
+        open_stream(&base_for_submit, &text, messages, sending, session, active_conv_id, should_set_title, &base_for_title);
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let _ = &api_base;
+            let _ = &base_for_submit;
             let _ = &session;
+            let _ = &active_conv_id;
+            let _ = &should_set_title;
+            let _ = &base_for_title;
             sending.set(false);
         }
-    };
+    });
+
+    let conv_id = active_conv_id.read().clone();
 
     rsx! {
         div {
             class: "chat",
 
-            // --- message list ---
             div {
                 class: "messages",
-                if messages.read().is_empty() {
+                if messages.read().is_empty() && conv_id.is_none() && !sending() {
                     div {
                         class: "empty-state",
                         p { "Start a conversation with Liberado." }
@@ -72,28 +227,47 @@ pub fn Chat(api_base: String) -> Element {
                     }
                 }
                 for (i, msg) in messages.read().iter().enumerate() {
-                    Bubble { key: "{i}", role: msg.role, content: msg.content.clone() }
+                    MessageRow { key: "{i}", msg: msg.clone() }
                 }
                 if sending() {
                     div { class: "bubble-row assistant",
-                        div { class: "bubble-thinking", "…" }
+                        div { class: "bubble-thinking", "\u{2026}" }
                     }
                 }
             }
 
-            // --- input ---
             form {
                 class: "input-bar",
                 onsubmit: move |evt| {
                     evt.prevent_default();
-                    submit();
+                    submit.call(());
                 },
-                input {
+                textarea {
+                    id: "chat-input",
                     class: "input",
-                    placeholder: "Message Liberado…",
+                    placeholder: "Message Liberado\u{2026}",
                     value: "{input}",
+                    rows: 1,
                     autofocus: true,
-                    oninput: move |e| input.set(e.value()),
+                    oninput: move |e| {
+                        input.set(e.value());
+                        resize_input_to_content();
+                    },
+                    onkeydown: move |e: Event<KeyboardData>| {
+                        if e.key() == Key::Enter && !e.modifiers().contains(Modifiers::SHIFT) {
+                            e.prevent_default();
+                            submit.call(());
+                        }
+                    },
+                }
+                if sending() {
+                    button {
+                        class: "stop-btn",
+                        r#type: "button",
+                        onclick: move |_| stop_stream(),
+                        title: "Stop generating",
+                        "\u{23F9}"
+                    }
                 }
                 button {
                     class: "send-btn",
@@ -106,9 +280,159 @@ pub fn Chat(api_base: String) -> Element {
     }
 }
 
-/// Open an SSE stream for one turn and pipe its events into the signals. Browser-only: uses the
-/// native `EventSource` (the `GET` variant of `/api/chat/stream`). The closures are `forget`-leaked
-/// so they outlive this call; the stream closes itself on `done`/`failed`.
+// ── Message row — renders a message + optional thinking steps ───────────────
+
+#[component]
+fn MessageRow(msg: ChatMsg) -> Element {
+    let has_steps = !msg.thinking_steps.is_empty();
+
+    rsx! {
+        div {
+            class: "bubble-row {msg.role}",
+            div {
+                class: "bubble-wrap",
+                if has_steps {
+                    ThinkingGroup { steps: msg.thinking_steps.clone() }
+                }
+                if !msg.content.is_empty() || !has_steps {
+                    match msg.role {
+                        "assistant" | "user" => rsx! {
+                            div { class: "bubble {msg.role}",
+                                MarkdownText { content: msg.content.clone() }
+                            }
+                        },
+                        _ => rsx! {
+                            div { class: "bubble {msg.role}",
+                                "{msg.content}"
+                            }
+                        },
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Collapsible thinking-steps group ────────────────────────────────────────
+
+#[component]
+fn ThinkingGroup(steps: Vec<ThinkingStep>) -> Element {
+    let mut expanded = use_signal(|| steps.iter().any(|s| s.ok.is_none()));
+
+    let has_pending = steps.iter().any(|s| s.ok.is_none());
+    let toggle = move |_| expanded.set(!expanded());
+
+    let count = steps.len();
+    let summary: Vec<String> = steps.iter().map(|s| s.tool_name.clone()).collect();
+    let summary_text = summary.join(", ");
+
+    let header_arrow = if expanded() { "\u{25BC}" } else { "\u{25B8}" };
+    let header_label = if has_pending {
+        format!("Thinking ({count} step{plural}): {summary_text} \u{2026}",
+            plural = if count == 1 { "" } else { "s" })
+    } else {
+        format!("Thinking ({count} step{plural}): {summary_text}",
+            plural = if count == 1 { "" } else { "s" })
+    };
+
+    rsx! {
+        div {
+            class: "thinking-group",
+            button {
+                class: "thinking-header",
+                onclick: toggle,
+                span { class: "thinking-arrow", "{header_arrow}" }
+                span { class: "thinking-label", "{header_label}" }
+            }
+            if expanded() {
+                div {
+                    class: "thinking-body",
+                    for step in steps.iter() {
+                        ThinkingStepRow { step: step.clone() }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ThinkingStepRow(step: ThinkingStep) -> Element {
+    let status_cls = match step.ok {
+        None => "thinking-step pending",
+        Some(true) => "thinking-step ok",
+        Some(false) => "thinking-step err",
+    };
+
+    let args_display = if step.tool_args.is_empty()
+        || step.tool_args == "{}"
+        || step.tool_args == "null"
+    {
+        String::new()
+    } else {
+        format!("({})", step.tool_args)
+    };
+
+    let mark = match step.ok {
+        None => "\u{23F3}",
+        Some(true) => "\u{2713}",
+        Some(false) => "\u{2717}",
+    };
+
+    let name_text = format!("\u{1F527} {}{}", step.tool_name, args_display);
+
+    rsx! {
+        div {
+            class: "{status_cls}",
+            span { class: "thinking-step-name", "{name_text}" }
+            span { class: "thinking-step-mark", "{mark}" }
+            if !step.preview.is_empty() {
+                span { class: "thinking-step-preview", "{step.preview}" }
+            }
+        }
+    }
+}
+
+// ── Input auto-grow (browser-only) ──────────────────────────────────────────
+
+/// Grow the `#chat-input` textarea to fit its content. Resets to `auto` first so deleting text
+/// shrinks it back down (reading `scroll_height` without that reset would just echo the current,
+/// already-grown height). The CSS `max-height` on `.input` silently caps the visible box and
+/// turns on the scrollbar once content exceeds it — this only needs to set the natural height.
+#[cfg(target_arch = "wasm32")]
+fn resize_input_to_content() {
+    use wasm_bindgen::JsCast;
+
+    let Some(el) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id("chat-input"))
+        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+    else {
+        return;
+    };
+    let style = el.style();
+    let _ = style.set_property("height", "auto");
+    let _ = style.set_property("height", &format!("{}px", el.scroll_height()));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn resize_input_to_content() {}
+
+// ── SSE streaming (browser-only) ────────────────────────────────────────────
+
+#[cfg(target_arch = "wasm32")]
+static mut CURRENT_SOURCE: Option<std::rc::Rc<web_sys::EventSource>> = None;
+
+#[cfg(target_arch = "wasm32")]
+fn close_current_stream() {
+    unsafe {
+        if let Some(ref s) = CURRENT_SOURCE {
+            s.close();
+            CURRENT_SOURCE = None;
+        }
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 fn open_stream(
     api_base: &str,
@@ -116,6 +440,9 @@ fn open_stream(
     mut messages: Signal<Vec<ChatMsg>>,
     mut sending: Signal<bool>,
     mut session: Signal<Option<String>>,
+    mut active_conv_id: Signal<Option<String>>,
+    mut should_set_title: Signal<bool>,
+    api_base_for_title: &str,
 ) {
     use std::rc::Rc;
     use wasm_bindgen::JsCast;
@@ -123,8 +450,6 @@ fn open_stream(
     use web_sys::{EventSource, MessageEvent};
 
     let encoded = urlencoding::encode(message);
-    // Continue the existing conversation when we have its id; the first turn omits it and the server
-    // creates one, returning the id on the `session` event below.
     let url = match session.read().as_ref() {
         Some(id) => format!("{api_base}/api/chat/stream?message={encoded}&session={id}"),
         None => format!("{api_base}/api/chat/stream?message={encoded}"),
@@ -136,14 +461,17 @@ fn open_stream(
             return;
         }
     };
+    unsafe {
+        CURRENT_SOURCE = Some(source.clone());
+    }
 
-    // session → the server's conversation id for this stream; record it so subsequent turns send it
-    // back as `?session=…` and continue this conversation instead of creating a new one.
+    // session -> record it and update active_conv_id so the sidebar highlights it.
     {
         let on_session = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
             if let Some(data) = e.data().as_string() {
                 if !data.is_empty() {
-                    session.set(Some(data));
+                    session.set(Some(data.clone()));
+                    active_conv_id.set(Some(data));
                 }
             }
         });
@@ -152,25 +480,22 @@ fn open_stream(
         on_session.forget();
     }
 
-    // token → append the delta, creating the assistant bubble on first sight (so tool chips for
-    // this turn precede it).
+    // token -> append delta to the last assistant message, creating one on first sight.
     {
         let on_token = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
             if let Some(data) = e.data().as_string() {
                 messages.with_mut(|m| match m.last_mut() {
                     Some(last) if last.role == "assistant" => last.content.push_str(&data),
-                    _ => m.push(ChatMsg {
-                        role: "assistant",
-                        content: data,
-                    }),
+                    _ => m.push(ChatMsg::new_assistant(data)),
                 });
             }
         });
-        let _ = source.add_event_listener_with_callback("token", on_token.as_ref().unchecked_ref());
+        let _ =
+            source.add_event_listener_with_callback("token", on_token.as_ref().unchecked_ref());
         on_token.forget();
     }
 
-    // tool → a chip for the call starting: `data` is JSON `{name, args}`.
+    // tool -> append a pending ThinkingStep to the last assistant message (creating one if needed).
     {
         let on_tool = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
             if let Some(data) = e.data().as_string() {
@@ -178,43 +503,64 @@ fn open_stream(
                     chat_client_contract::ChatEvent::from_sse_data("tool", &data)
                 {
                     let args_str = args.to_string();
-                    let label = if args_str.is_empty() || args_str == "{}" || args_str == "null" {
-                        format!("🔧 {name}…")
+                    let clean_args = if args_str == "{}" || args_str == "null" {
+                        String::new()
                     } else {
-                        format!("🔧 {name}({args_str})…")
+                        args_str
                     };
-                    messages.with_mut(|m| {
-                        m.push(ChatMsg {
-                            role: "tool",
-                            content: label,
-                        })
+                    messages.with_mut(|m| match m.last_mut() {
+                        Some(last) if last.role == "assistant" => {
+                            last.thinking_steps.push(ThinkingStep {
+                                tool_name: name,
+                                tool_args: clean_args,
+                                ok: None,
+                                preview: String::new(),
+                            });
+                        }
+                        _ => {
+                            let mut msg = ChatMsg::new_assistant(String::new());
+                            msg.thinking_steps.push(ThinkingStep {
+                                tool_name: name,
+                                tool_args: clean_args,
+                                ok: None,
+                                preview: String::new(),
+                            });
+                            m.push(msg);
+                        }
                     });
                 }
             }
         });
-        let _ = source.add_event_listener_with_callback("tool", on_tool.as_ref().unchecked_ref());
+        let _ =
+            source.add_event_listener_with_callback("tool", on_tool.as_ref().unchecked_ref());
         on_tool.forget();
     }
 
-    // tool_result → resolve the most recent tool chip with its outcome: JSON `{name, ok, preview}`.
+    // tool_result -> resolve the most recent pending ThinkingStep with matching name.
     {
         let on_result = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
             if let Some(data) = e.data().as_string() {
                 if let Ok(chat_client_contract::ChatEvent::ToolResult { name, ok, preview }) =
                     chat_client_contract::ChatEvent::from_sse_data("tool_result", &data)
                 {
-                    let mark = if ok { "✓" } else { "✗" };
-                    let label = if preview.is_empty() {
-                        format!("🔧 {name} {mark}")
-                    } else {
-                        format!("🔧 {name} {mark} {preview}")
-                    };
-                    messages.with_mut(|m| match m.iter_mut().rev().find(|x| x.role == "tool") {
-                        Some(chip) => chip.content = label,
-                        None => m.push(ChatMsg {
-                            role: "tool",
-                            content: label,
-                        }),
+                    messages.with_mut(|m| {
+                        // Find the last assistant message that has a pending step matching `name`.
+                        let found = m.iter_mut().rev().find_map(|msg| {
+                            if msg.role == "assistant" {
+                                msg.thinking_steps
+                                    .iter_mut()
+                                    .rev()
+                                    .find(|s| s.ok.is_none() && s.tool_name == name)
+                                    .map(|step| (step as *mut ThinkingStep, msg.role))
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some((ptr, _)) = found {
+                            let step = unsafe { &mut *ptr };
+                            step.ok = Some(ok);
+                            step.preview = preview;
+                        }
                     });
                 }
             }
@@ -224,18 +570,65 @@ fn open_stream(
         on_result.forget();
     }
 
-    // done → close + stop.
+    // done -> close + stop + optionally set title.
     {
         let source_done = source.clone();
+        let title_base = api_base_for_title.to_string();
         let on_done = Closure::<dyn FnMut(MessageEvent)>::new(move |_e: MessageEvent| {
             source_done.close();
             sending.set(false);
+            unsafe { CURRENT_SOURCE = None; }
+
+            if should_set_title() {
+                should_set_title.set(false);
+                let title_opt = messages
+                    .read()
+                    .iter()
+                    .find(|m| m.role == "user")
+                    .map(|m| {
+                        let t = m.content.trim();
+                        if t.len() > 60 {
+                            // Byte-length slicing panics if 57 lands mid-codepoint (any curly
+                            // quote, em-dash, etc.) — walk back to the nearest char boundary.
+                            let mut cut = 57;
+                            while cut > 0 && !t.is_char_boundary(cut) {
+                                cut -= 1;
+                            }
+                            format!("{}…", &t[..cut])
+                        } else {
+                            t.to_string()
+                        }
+                    });
+                let conv_id_opt = session.read().clone();
+                if let (Some(title), Some(conv_id)) = (title_opt, conv_id_opt) {
+                    let base = title_base.clone();
+                    web_sys::console::log_1(&format!("[title] setting title for {}: {}", conv_id, title).into());
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let url = format!("{base}/api/conversations/{conv_id}");
+                        let body = serde_json::json!({ "title": title });
+                        let client = reqwest::Client::new();
+                        match client.patch(&url).json(&body).send().await {
+                            Ok(resp) => {
+                                if !resp.status().is_success() {
+                                    web_sys::console::log_1(&format!("[title] PATCH failed: {} - {}", resp.status(), resp.text().await.unwrap_or_default()).into());
+                                }
+                            }
+                            Err(e) => {
+                                web_sys::console::log_1(&format!("[title] PATCH error: {}", e).into());
+                            }
+                        }
+                    });
+                } else {
+                    web_sys::console::log_1(&"[title] should_set_title was true but no user message or session".into());
+                }
+            }
         });
-        let _ = source.add_event_listener_with_callback("done", on_done.as_ref().unchecked_ref());
+        let _ =
+            source.add_event_listener_with_callback("done", on_done.as_ref().unchecked_ref());
         on_done.forget();
     }
 
-    // failed → replace the in-flight message with the error, close + stop.
+    // failed -> replace in-flight message with error, close + stop.
     {
         let source_fail = source.clone();
         let on_fail = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
@@ -244,40 +637,26 @@ fn open_stream(
                 .as_string()
                 .unwrap_or_else(|| "stream error".into());
             messages.with_mut(|m| {
-                m.push(ChatMsg {
-                    role: "error",
-                    content: msg,
-                })
+                m.push(ChatMsg::new_error(msg))
             });
             source_fail.close();
             sending.set(false);
+            unsafe { CURRENT_SOURCE = None; }
         });
-        let _ = source.add_event_listener_with_callback("failed", on_fail.as_ref().unchecked_ref());
+        let _ =
+            source.add_event_listener_with_callback("failed", on_fail.as_ref().unchecked_ref());
         on_fail.forget();
     }
 
-    // Native EventSource error (connection dropped). Close to stop auto-reconnect; don't overwrite
-    // a message we may already have streamed.
+    // Native EventSource error (connection dropped).
     {
         let source_err = source.clone();
         let on_err = Closure::<dyn FnMut(MessageEvent)>::new(move |_e: MessageEvent| {
             source_err.close();
             sending.set(false);
+            unsafe { CURRENT_SOURCE = None; }
         });
         source.set_onerror(Some(on_err.as_ref().unchecked_ref()));
         on_err.forget();
-    }
-}
-
-#[component]
-fn Bubble(role: &'static str, content: String) -> Element {
-    rsx! {
-        div {
-            class: "bubble-row {role}",
-            div {
-                class: "bubble {role}",
-                "{content}"
-            }
-        }
     }
 }
