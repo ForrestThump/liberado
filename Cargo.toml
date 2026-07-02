@@ -54,6 +54,7 @@ liberado-vault = { path = "crates/vault" }
 liberado-dispatcher = { path = "crates/dispatcher" }
 liberado-executor = { path = "crates/executor" }
 liberado-mcp = { path = "crates/mcp" }
+liberado-mcp-forge = { path = "crates/mcp-forge" }
 liberado-orchestrator = { path = "crates/orchestrator" }
 liberado-main-agent = { path = "crates/main-agent" }
 liberado-daemon = { path = "crates/daemon" }

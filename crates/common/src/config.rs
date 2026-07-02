@@ -17,7 +17,7 @@
 //! can be checked from these types alone.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -102,7 +102,11 @@ pub struct McpConfig {
     pub transport: McpTransport,
 }
 
-/// How to reach an MCP server. Stdio spawns a child process; Http connects to a URL (Decision 3).
+/// How to reach an MCP server. Stdio spawns a child process; Http connects to a URL (Decision 3);
+/// Managed spawns a child process too, but at a binary path resolved by convention (see
+/// [`managed_binary_path`]) instead of a literal `command` — for MCPs built and installed by
+/// `liberado-mcp-forge` from a git URL, so the binary's location doesn't need hand-editing into
+/// `topology.toml` every time it's rebuilt.
 /// Adjacently tagged so the variant key is a plain `kind` field — that round-trips cleanly through
 /// TOML inline tables (`transport = { kind = "stdio", command = "npx", args = [...] }`), which an
 /// internally-tagged enum does not.
@@ -117,10 +121,37 @@ pub enum McpTransport {
     Http {
         url: String,
     },
+    Managed,
 }
 
 fn default_true() -> bool {
     true
+}
+
+/// Where `liberado-mcp-forge` installs a managed MCP's binary (`cargo install --root
+/// <install_dir>/<name>`), and where [`McpTransport::Managed`] resolution looks for it at
+/// connect-time. Single source of truth shared by both, so the two can never drift — `name` is
+/// the owning [`McpConfig::name`], not a separate field, so there's nothing to keep in sync.
+pub fn managed_binary_path(install_dir: &Path, name: &str) -> PathBuf {
+    install_dir
+        .join(name)
+        .join("bin")
+        .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+}
+
+#[cfg(test)]
+mod managed_binary_path_tests {
+    use super::*;
+
+    #[test]
+    fn joins_install_dir_name_bin_and_platform_suffix() {
+        let path = managed_binary_path(Path::new("/opt/liberado/mcp-bin"), "liberado-weather-mcp");
+        let expected = PathBuf::from("/opt/liberado/mcp-bin")
+            .join("liberado-weather-mcp")
+            .join("bin")
+            .join(format!("liberado-weather-mcp{}", std::env::consts::EXE_SUFFIX));
+        assert_eq!(path, expected);
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,23 @@
+# mcp-sources.toml — TEMPLATE. Copy to your config dir (same place as topology.toml) and edit.
+# Read by `liberado-mcp-forge sync`, NOT by the daemon — this file only tells the build tool where
+# to get source and how to build it. Each `name` here must match a `[[mcps]]` entry in
+# topology.toml with `transport = { kind = "managed" }`; that's how the daemon finds the binary
+# this tool installs. See crates/mcp-forge/ARCHITECTURE.md.
+
+[[source]]
+name = "liberado-weather-mcp"
+git = "https://github.com/ForrestThump/liberado-weather-mcp"
+# rev = "main"    # branch/tag/commit to install; omitted = track the remote default branch
+
+[[source]]
+name = "liberado-tool-helper-mcp"
+git = "https://github.com/ForrestThump/liberado-tool-helper-mcp"
+
+# `liberado-pdf-mcp` is a Cargo virtual workspace (multiple packages, no default) whose real
+# server binary is package `mcp-pdf-server`, not a package named after the repo — `package` tells
+# `cargo install --git` which one to build (passed as its trailing positional CRATE argument;
+# `cargo install` has no `-p`/`--package` flag).
+[[source]]
+name = "liberado-pdf-mcp"
+git = "https://github.com/ForrestThump/liberado-pdf-mcp"
+package = "mcp-pdf-server"

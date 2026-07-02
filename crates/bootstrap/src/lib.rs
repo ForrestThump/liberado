@@ -13,15 +13,34 @@ mod config;
 
 pub use config::{ConfigError, ConfigProvenance, catalog_from_config, config_dir, load_config};
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use liberado_common::config::{Config, McpTransport};
+use liberado_common::config::{Config, McpTransport, managed_binary_path};
 use liberado_daemon::Daemon;
 use liberado_dispatcher::Dispatcher;
 use liberado_mcp::{HttpConnector, McpRegistry, StdioConnector};
 use liberado_orchestrator::Orchestrator;
 use liberado_provider::Provider;
 use liberado_provider_deepseek::DeepSeekProvider;
+
+/// Where `liberado-mcp-forge` installs managed MCP binaries, and where
+/// [`McpTransport::Managed`] resolution looks for them (Decision: convention over mutation —
+/// `topology.toml` never gets a file path written into it; a `name` resolves to a path by this
+/// one rule, on both the forge tool's and the daemon's side).
+///
+/// 1. `LIBERADO_MCP_INSTALL_DIR` env var — explicit intent, always wins.
+/// 2. Platform data dir (`dirs::data_dir()/liberado/mcp-bin`), mirroring how [`config_dir`]
+///    resolves `LIBERADO_CONFIG_DIR`.
+pub fn mcp_install_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("LIBERADO_MCP_INSTALL_DIR") {
+        return PathBuf::from(dir);
+    }
+    dirs::data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("liberado")
+        .join("mcp-bin")
+}
 
 /// Build the shared inference provider from the environment (`DEEPSEEK_API_KEY`). `None` means no key
 /// is set, so the daemon runs watch-only and chat is disabled.
@@ -49,6 +68,10 @@ pub fn mcp_registry_from_config(config: &Config) -> Option<McpRegistry> {
             }
             McpTransport::Http { url } => {
                 registry.register(&m.name, HttpConnector::new(url.clone()))
+            }
+            McpTransport::Managed => {
+                let bin = managed_binary_path(&mcp_install_dir(), &m.name);
+                registry.register(&m.name, StdioConnector::new(bin.to_string_lossy(), vec![]))
             }
         },
     );
@@ -150,6 +173,16 @@ mod tests {
         let mut names: Vec<&str> = registry.names().collect();
         names.sort_unstable();
         assert_eq!(names, vec!["tasks-mcp", "wiki-mcp"]);
+    }
+
+    #[test]
+    fn managed_transport_registers_by_name_too() {
+        let mut config = Config::default();
+        config.topology.mcps = vec![mcp("weather-mcp", true, McpTransport::Managed)];
+
+        let registry = mcp_registry_from_config(&config).expect("one enabled MCP => Some");
+        let names: Vec<&str> = registry.names().collect();
+        assert_eq!(names, vec!["weather-mcp"]);
     }
 
     #[test]

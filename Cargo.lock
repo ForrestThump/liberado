@@ -2965,6 +2965,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "liberado-mcp-forge"
+version = "0.1.0"
+dependencies = [
+ "liberado-bootstrap",
+ "liberado-common",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "liberado-orchestrator"
 version = "0.1.0"
 dependencies = [

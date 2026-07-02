@@ -21,15 +21,28 @@ vault_path = "/home/shiloh/vault"
 # `consequence` (our risk rating — the consequence guard gates direct action on it), and `transport`
 # (how the runtime reaches the server) are all REQUIRED: declaring an MCP means rating and wiring it.
 # `consequence` is one of: read_only, reversible, irreversible, external.
-# `transport` is either:
+# `transport` is one of:
 #   { kind = "stdio", command = "...", args = [...] }   # spawn a child process, speak MCP over stdio
 #   { kind = "http",  url = "https://..." }              # connect to a remote MCP endpoint
+#   { kind = "managed" }                                 # spawn a binary that `liberado-mcp-forge`
+#                                                         # built from a git URL (see mcp-sources.toml)
+#                                                         # — resolved by `name`, no path to hand-edit
 [[mcps]]
 name = "tasks-mcp"
 description = "create, complete, and query tasks"
 consequence = "reversible"        # git-tracked vault writes are undoable
 transport = { kind = "stdio", command = "npx", args = ["-y", "@liberado/tasks-mcp"] }
 # enabled = true
+
+# A managed MCP: `liberado-mcp-forge sync` (with a matching entry in mcp-sources.toml) installs
+# the binary; `name` here is the join key it resolves against. No `command`/`args` to keep in sync
+# with wherever the binary was last built to — see mcp-sources.toml and
+# crates/mcp-forge/ARCHITECTURE.md.
+[[mcps]]
+name = "liberado-weather-mcp"
+description = "current weather and forecast for a location"
+consequence = "read_only"
+transport = { kind = "managed" }
 
 [[mcps]]
 name = "code-dispatch"
