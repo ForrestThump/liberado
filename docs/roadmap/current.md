@@ -93,12 +93,13 @@ always-on.
   classifier (`Magnitude`, `is_sweeping_destructive` in `common` — reads the goal/tool text, needs no
   MCP metadata) gates **sweeping-destructive** goals even when reversible. Closed the eval's UNSAFE=1:
   "delete all my notes" → `Clarify` (0.90, guard downgrade) while "delete tmp.md" still flows.
-  - **Remaining: per-call runtime enforcement.** The dispatcher only sees the *goal* (the signal that
-    survives the model routing to a subagent); the fuller layer classifies the **actual tool call +
-    args** at the runtime (a `RiskGatedToolRuntime` wrapping the executor's `ToolRuntime`), where a
-    subagent's concrete `vault:delete` with a wildcard arg is visible. Same liberado-owned classifier,
-    enforced in-band (refuse → the model must report/confirm). This is where per-tool *args-aware*
-    magnitude lives.
+  - ✅ **Per-call runtime enforcement — done (2026-07-02).** `Orchestrator`'s `ExecuteDirect` /
+    `DispatchSubagent` / `dispatch_parallel` paths now wrap their runtime in `RiskGatedToolRuntime`
+    (relocated to `liberado-executor` to avoid a circular crate dependency with `liberado-mcp`), so
+    the executor's *adaptive* (non-seed) tool calls get the same capability/consequence/magnitude
+    checking the dispatcher's pre-flight guard only ever applied to the seed call.
+    `execute_approved` is deliberately left ungated (approval is already the authorization). 5 new
+    integration tests in `crates/orchestrator/tests/orchestrate.rs` prove the gap is closed.
 - **Proposal workflow (Decision 11)** — ✅ *done (emit AND approve→execute landed, June 24, 2026).*
   The full propose→approve→execute loop is closed: a human `status: approved` edit on a
   `proposals/<id>.md` note is picked up by the daemon, executed via the orchestrator with the
@@ -111,9 +112,8 @@ always-on.
   catalog (names + descriptions + consequence) from the registered `McpRegistry` servers so the
   dispatcher can actually route in production. (Phase 1 graduates this into a live bus-queryable
   registry.)
-- **Runtime tool gating** — enforce capability/consequence on the executor's *adaptive* calls (not
-  just the classifier's pre-flight opening move), since an `ExecuteDirect` with empty `seed_calls`
-  can call anything in scope.
+- ✅ **Runtime tool gating** — done, see "Per-call runtime enforcement" above (same item, noted twice
+  in this doc).
 
 ## Nice to haves
 

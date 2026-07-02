@@ -151,7 +151,10 @@ higher-level dispatch-bridging crate.
 `mcp → orchestrator` edge entirely — `mcp` would then depend only on `provider` + the narrow
 provenance piece from finding 3.
 
-**Status**: Deferred — not started.
+**Status**: Deferred — not started. Independently re-found by
+[`hygiene-audit-2026-07-02.md`](hygiene-audit-2026-07-02.md)'s coupling pass (its item 6) after this
+same edge nearly forced a circular dependency during that session's runtime-gating work — good
+cross-confirmation this is real, still the next pick once that doc's Tier 1 is done.
 
 ---
 
@@ -172,7 +175,12 @@ capability model at all.
 capability vocabulary lands after finding 3's split). `liberado-mcp` itself then only needs
 `provider` + the narrow provenance crate.
 
-**Status**: Deferred — not started.
+**Status**: Partially resolved (2026-07-02) — `risk_gated.rs` moved out of `liberado-mcp` into
+`liberado-executor` as part of that session's runtime-gating work (`RiskGatedToolRuntime` needed to be
+reachable from `liberado-orchestrator`, which can't depend on `mcp`). Not "its own crate" as this
+finding originally proposed, but the effect is the same: `mcp` no longer bundles the safety-gating type
+surface. See [`hygiene-audit-2026-07-02.md`](hygiene-audit-2026-07-02.md) for the follow-on audit that
+session's work prompted.
 
 ---
 
