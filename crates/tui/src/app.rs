@@ -286,7 +286,75 @@ impl App {
     }
 
     pub(crate) fn handle_slash_command(&mut self, input: &str) -> Vec<Effect> {
-        crate::commands::dispatch(self, input)
+        let Some(cmd) = liberado_commands::parse(input) else {
+            self.input.clear();
+            self.cursor = 0;
+            self.input_scroll = 0;
+            self.messages.push(Message::System(format!(
+                "Unknown command: {input}. Type /help for available commands."
+            )));
+            self.scroll_offset = 0;
+            return vec![Effect::None];
+        };
+
+        let is_help = matches!(cmd, liberado_commands::SlashCommand::Help);
+        let results = liberado_commands::dispatch(&cmd, self);
+
+        let mut effects = Vec::new();
+        for result in &results {
+            match result {
+                liberado_commands::CommandResult::Quit => effects.push(Effect::Quit),
+                liberado_commands::CommandResult::NewConversation { was_streaming } => {
+                    effects.push(Effect::RefreshConversations);
+                    if *was_streaming {
+                        effects.push(Effect::CancelStream);
+                    }
+                }
+                liberado_commands::CommandResult::SessionSwitched { id } => {
+                    self.pending_load = Some(id.clone());
+                    effects.push(Effect::LoadConversationHistory(id.clone()));
+                }
+                liberado_commands::CommandResult::ForkRequested { parent_id } => {
+                    effects.push(Effect::ForkConversation(parent_id.clone()));
+                }
+                liberado_commands::CommandResult::ShowOptions { title, options } => {
+                    let mut text = format!("{title}:\n");
+                    for (label, _id) in options {
+                        text.push_str("  ");
+                        text.push_str(label);
+                        text.push('\n');
+                    }
+                    self.messages.push(Message::System(text));
+                }
+                _ => {}
+            }
+        }
+        // The shared help text is client-agnostic; the TUI's keybindings are not, so they're
+        // appended here rather than baked into `liberado-commands`.
+        if is_help {
+            self.messages.push(Message::System(
+                "\
+Keybindings:
+  Enter       send message (Shift+Enter for newline)
+  Ctrl+C      clear input, or quit when empty (press twice to exit)
+  Ctrl+S      stop streaming (keep partial response)
+  Tab         switch focus between input and sidebar
+  Esc         clear input / cancel stream / return focus
+  PgUp/PgDn   scroll chat
+  j / k       navigate sidebar conversations
+  Space       toggle tree fold (on sidebar parent nodes)
+  n           new conversation (when sidebar focused)
+  ← →         move cursor in input
+  Home / End  jump to start/end of input
+  Del         delete character after cursor"
+                    .into(),
+            ));
+        }
+        self.scroll_offset = 0;
+        if effects.is_empty() {
+            effects.push(Effect::None);
+        }
+        effects
     }
 
     pub(crate) fn scroll_to_chat_cursor(&mut self) {
@@ -595,7 +663,7 @@ mod tests {
     fn conv(id: &str, title: &str) -> ConvHeader {
         ConvHeader {
             id: id.into(),
-            title: title.into(),
+            title: Some(title.into()),
             created_at: String::new(),
             parent_conversation: None,
             spawned_by: None,
@@ -604,7 +672,7 @@ mod tests {
     fn child_conv(id: &str, title: &str, parent: &str) -> ConvHeader {
         ConvHeader {
             id: id.into(),
-            title: title.into(),
+            title: Some(title.into()),
             created_at: String::new(),
             parent_conversation: Some(parent.into()),
             spawned_by: None,
@@ -1185,11 +1253,13 @@ mod tests {
     #[test]
     fn slash_session_list() {
         let mut app = test_app();
-        app.conversations = vec![conv("c1", "a"), conv("c2", "b")];
+        app.conversations = vec![conv("c1", "alpha"), conv("c2", "beta")];
         app.input = "/session list".into();
         app.handle_key(key(KeyCode::Enter));
         let last = app.messages.last().unwrap();
-        assert!(matches!(last, Message::System(m) if m.contains("2 conversations")));
+        assert!(
+            matches!(last, Message::System(m) if m.contains("Conversations") && m.contains("alpha") && m.contains("beta"))
+        );
     }
     #[test]
     fn connection_status_flips_connected() {
@@ -1704,9 +1774,11 @@ mod tests {
         let mut app = test_app();
         app.conversations = vec![conv("abc123", "test")];
         app.input = "/session switch xyz".into();
-        app.handle_key(key(KeyCode::Enter));
-        let last = app.messages.last().unwrap();
-        assert!(matches!(last, Message::System(m) if m.contains("Unknown session command")));
+        let effects = app.handle_key(key(KeyCode::Enter));
+        // No conversation's id starts with "xyz" — falls back to using it verbatim (matches the
+        // sidebar behavior: an unrecognized id still attempts a load rather than erroring).
+        assert!(effects.iter().any(|e| matches!(e, Effect::LoadConversationHistory(id) if id == "xyz")));
+        assert_eq!(app.pending_load, Some("xyz".to_string()));
     }
     #[test]
     fn slash_session_close_no_session() {
@@ -2237,7 +2309,7 @@ mod tests {
         app.input = "/session".into();
         app.handle_key(key(KeyCode::Enter));
         let last = app.messages.last().unwrap();
-        assert!(matches!(last, Message::System(m) if m.contains("No active session")));
+        assert!(matches!(last, Message::System(m) if m.contains("No conversations in list")));
     }
 
     #[test]
@@ -2254,9 +2326,11 @@ mod tests {
         let mut app = test_app();
         app.conversations = vec![conv("abc123xx", "test")];
         app.input = "/session switch abc".into();
-        app.handle_key(key(KeyCode::Enter));
-        let last = app.messages.last().unwrap();
-        assert!(matches!(last, Message::System(m) if m.contains("Unknown session command")));
+        let effects = app.handle_key(key(KeyCode::Enter));
+        // "abc" is a prefix of "abc123xx" — resolves to the full id, matching the sidebar's
+        // "type the first few characters" convention.
+        assert!(effects.iter().any(|e| matches!(e, Effect::LoadConversationHistory(id) if id == "abc123xx")));
+        assert_eq!(app.pending_load, Some("abc123xx".to_string()));
     }
 
     #[test]

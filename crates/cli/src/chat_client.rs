@@ -1,7 +1,7 @@
 //! The `liberado chat` terminal client — a thin REPL over a running daemon server's chat API.
 //!
 //! This module embeds **no** agent logic: no `ChatSessions`, no provider, no store. It is purely an
-//! HTTP/SSE client of `POST /api/chat/stream` (the shared client contract — see `docs/interface.md`),
+//! HTTP/SSE client of `POST /api/chat/stream` (the shared client contract — see `docs/reference/api.md`),
 //! streaming the answer back token-by-token and printing tool activity as it happens. It is the first
 //! *native* (`reqwest`/SSE) client of that API, seeding the future TUI: same bytes, same parser.
 //!
@@ -9,6 +9,7 @@
 //! the `session` event the server emits first — and sends it back on each subsequent turn so the
 //! daemon continues the same conversation.
 
+use chat_client_contract::native::{SseDecoder, SseEvent};
 use futures::StreamExt;
 use std::io::Write as _;
 use tokio::io::{AsyncBufReadExt, BufReader, stdin};
@@ -173,126 +174,3 @@ fn truncate(text: &str, max: usize) -> String {
     format!("{head}...")
 }
 
-/// A decoded Server-Sent Event. `event` defaults to `"message"` when the block has no `event:` line.
-#[derive(Debug, PartialEq)]
-struct SseEvent {
-    event: String,
-    data: String,
-}
-
-/// An incremental SSE parser: feed it response-body chunks via [`push`](Self::push) and it returns
-/// whatever complete events have arrived, buffering any trailing partial event for the next chunk.
-/// Not a dependency — the contract we consume is small and stable.
-#[derive(Default)]
-struct SseDecoder {
-    buf: String,
-}
-
-impl SseDecoder {
-    /// Append a chunk and split off every complete event (an event ends at a blank line). A trailing
-    /// partial event stays in the buffer until its terminating blank line arrives.
-    fn push(&mut self, chunk: &str) -> Vec<SseEvent> {
-        // Normalise CRLF so blank-line detection and line splitting are newline-only.
-        self.buf
-            .push_str(&chunk.replace("\r\n", "\n").replace('\r', "\n"));
-
-        let mut events = Vec::new();
-        while let Some(idx) = self.buf.find("\n\n") {
-            let block: String = self.buf.drain(..idx + 2).collect();
-            if let Some(event) = parse_block(&block) {
-                events.push(event);
-            }
-        }
-        events
-    }
-}
-
-/// Parse one SSE event block (the lines up to and including its terminating blank line) into an
-/// [`SseEvent`]. Returns `None` if the block holds no `data:`/`event:` lines (e.g. only comments).
-fn parse_block(block: &str) -> Option<SseEvent> {
-    let mut event_type: Option<String> = None;
-    let mut data_lines: Vec<&str> = Vec::new();
-    let mut saw_field = false;
-
-    for line in block.lines() {
-        if line.is_empty() || line.starts_with(':') {
-            continue; // blank terminator or comment
-        }
-        if let Some(value) = line.strip_prefix("event:") {
-            event_type = Some(strip_one_space(value).to_string());
-            saw_field = true;
-        } else if let Some(value) = line.strip_prefix("data:") {
-            data_lines.push(strip_one_space(value));
-            saw_field = true;
-        }
-    }
-
-    if !saw_field {
-        return None;
-    }
-    Some(SseEvent {
-        event: event_type.unwrap_or_else(|| "message".to_string()),
-        data: data_lines.join("\n"),
-    })
-}
-
-/// Strip a single optional leading space from an SSE field value (per the spec).
-fn strip_one_space(value: &str) -> &str {
-    value.strip_prefix(' ').unwrap_or(value)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn single_event_in_one_chunk() {
-        let mut decoder = SseDecoder::default();
-        let events = decoder.push("event: token\ndata: Hello\n\n");
-        assert_eq!(
-            events,
-            vec![SseEvent {
-                event: "token".to_string(),
-                data: "Hello".to_string(),
-            }]
-        );
-    }
-
-    #[test]
-    fn multi_line_data_joins_with_newline() {
-        let mut decoder = SseDecoder::default();
-        let events = decoder.push("event: token\ndata: line1\ndata: line2\n\n");
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].data, "line1\nline2");
-    }
-
-    #[test]
-    fn event_split_across_pushes_assembles() {
-        let mut decoder = SseDecoder::default();
-        // First chunk cuts the event mid-data — no complete event yet.
-        assert!(decoder.push("event: token\ndata: Hel").is_empty());
-        // The remainder completes it.
-        let events = decoder.push("lo\n\n");
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event, "token");
-        assert_eq!(events[0].data, "Hello");
-    }
-
-    #[test]
-    fn comment_line_is_ignored_and_does_not_corrupt_following_event() {
-        let mut decoder = SseDecoder::default();
-        let events = decoder.push(":no session\n\nevent: token\ndata: Hi\n\n");
-        // The comment-only block yields no event; the real one parses cleanly.
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event, "token");
-        assert_eq!(events[0].data, "Hi");
-    }
-
-    #[test]
-    fn handles_crlf_line_endings() {
-        let mut decoder = SseDecoder::default();
-        let events = decoder.push("event: done\r\ndata: \r\n\r\n");
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event, "done");
-    }
-}

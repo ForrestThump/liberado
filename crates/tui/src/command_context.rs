@@ -49,13 +49,7 @@ impl CommandContext for App {
         self.conversations
             .iter()
             .find(|c| c.id == id)
-            .and_then(|c| {
-                if c.title.is_empty() {
-                    None
-                } else {
-                    Some(c.title.clone())
-                }
-            })
+            .and_then(|c| c.title.as_ref().filter(|t| !t.is_empty()).cloned())
     }
 
     fn conversation_parent_for(&self, id: &str) -> Option<String> {
@@ -73,7 +67,7 @@ impl CommandContext for App {
         self.conversations
             .iter()
             .map(|c| {
-                let title = if c.title.is_empty() { "(untitled)" } else { &c.title };
+                let title = c.title.as_deref().unwrap_or("(untitled)");
                 (title.to_string(), c.id.clone())
             })
             .collect()
@@ -105,11 +99,7 @@ impl CommandContext for App {
     }
 
     fn push_system_message(&mut self, msg: String) {
-        if let Some(ref mut capture) = self.dialog_capture {
-            capture.push(msg);
-        } else {
-            self.messages.push(Message::System(msg));
-        }
+        self.messages.push(Message::System(msg));
         self.scroll_offset = 0;
     }
 

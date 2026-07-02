@@ -72,13 +72,6 @@ pub fn short_id(id: &str) -> &str {
     safe_truncate(id, id.len().min(SHORT_ID_LEN))
 }
 
-pub(crate) fn state_label(running: bool) -> &'static str {
-    if running { "running" } else { "stopped" }
-}
-pub(crate) fn attached_label(attached: bool) -> &'static str {
-    if attached { "attached" } else { "detached" }
-}
-
 pub fn truncate_path(path: &str, max: usize) -> String {
     if path.len() <= max {
         return path.to_string();

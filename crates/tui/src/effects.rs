@@ -18,7 +18,7 @@ use tokio::task::AbortHandle;
 
 use crate::api;
 use crate::app::{Action, App, Effect};
-use crate::sse::SseDecoder;
+use crate::sse::{SseDecoder, ToAction};
 
 /// Holds the `AbortHandle` for an in-flight SSE streaming task.
 /// Cleared on completion, error, or `CancelStream`.
@@ -300,7 +300,7 @@ mod tests {
             Action::ConversationsUpdate(convs) => {
                 assert_eq!(convs.len(), 1);
                 assert_eq!(convs[0].id, "c1");
-                assert_eq!(convs[0].title, "test");
+                assert_eq!(convs[0].title, Some("test".into()));
             }
             other => panic!("expected ConversationsUpdate, got {other:?}"),
         }

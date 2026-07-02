@@ -1,7 +1,7 @@
 [package]
 name = "liberado-tui"
 version = "0.1.0"
-description = "ratatui TUI client for Liberado — chat pane, status line, reactions feed; drives the shared HTTP/SSE API (docs/interface.md)"
+description = "ratatui TUI client for Liberado — chat pane, status line, reactions feed; drives the shared HTTP/SSE API (docs/reference/api.md)"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -25,6 +25,7 @@ crossterm = { workspace = true }
 chrono = { workspace = true }
 liberado-theme = { workspace = true }
 liberado-markdown = { workspace = true }
+liberado-commands = { workspace = true }
 chat-client-contract = { workspace = true }
 parking_lot = "0.12"
 ctrlc = "3.4"

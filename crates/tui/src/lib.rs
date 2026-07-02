@@ -1,7 +1,7 @@
 //! # liberado-tui — ratatui terminal client for Liberado
 //!
 //! A native terminal UI that attaches to a running daemon server over the
-//! **same shared HTTP/SSE contract** (`docs/interface.md`) as the web UI and the
+//! **same shared HTTP/SSE contract** (`docs/reference/api.md`) as the web UI and the
 //! `liberado chat` REPL. Embeds **no** agent logic — it is purely a renderer and an
 //! input box.
 //!
@@ -52,13 +52,13 @@
 //! |--------|---------------|-----------------|
 //! | `app` | State machine, Action→Effect reducer, stream/scroll/tree utilities. | `App`, `Action`, `Effect`, `Message`, `Focus`, `StatusSummary`, `VisibleNode`, `LayoutRects` |
 //! | `api` | Typed HTTP client. Serde structs for every endpoint response. | `DaemonStatus`, `ConvHeader`, `ReactionEvent` |
-//! | `commands` | Slash-command handlers (`/new`, `/help`, `/theme`, `/session`, etc.). | `dispatch()` |
+//! | `command_context` | `impl CommandContext for App` — wires the shared `liberado-commands` slash-command crate (`/new`, `/help`, `/theme`, `/session`, etc.) to TUI state. | `CommandContext for App` |
 //! | `conversations` | Conversation tree builder and flattener. | `visible_tree()`, `filtered_list()` |
 //! | `effects` | Side-effect execution runtime. Spawns SSE/HTTP tokio tasks. | `EffectRunner`, `StreamState` |
 //! | `format` | Shared formatting utilities (no App dependency). | `relative_time`, `format_uptime`, `truncate_for_display`, `short_id`, `truncate_path` |
 //! | `handlers` | Keyboard/mouse input handlers, one module per focus/device. | `input::handle`, `sidebar::handle`, `chat::handle`, `mouse::handle`, `point_in_rect` |
 //! | `render` | Ratatui rendering — one module per pane. | `draw()`, `chat::draw`, `sidebar_status::draw`, `sidebar_reactions::draw`, `sidebar_conversations::draw`, `status_bar::draw`, `input::draw` |
-//! | `sse` | Incremental SSE parser. | `SseDecoder`, `SseEvent`, `SseEvent::to_action() -> Result<Action, String>` |
+//! | `sse` | TUI-specific `SseEvent -> Action` conversion. The decoder itself (`SseDecoder`/`SseEvent`) lives in `chat_client_contract::native`, shared with the CLI. | `ToAction::to_action() -> Result<Action, String>` |
 //! | `terminal` | RAII terminal lifecycle guard. | `TerminalGuard` |
 //! | `tuning` | Compile-time constants for scroll, layout, timing, truncation. | `POLL_INTERVAL`, `MOUSE_SCROLL_LINES`, `INPUT_MIN_HEIGHT`, etc. |
 //! | `ui` | Public `draw()` entry point; `c()` color resolver. | `draw()`, `c()` |
@@ -181,10 +181,12 @@
 //! * **New keyboard shortcut** — Add a handler in `handlers/input.rs`, `handlers/sidebar.rs`,
 //!   or `handlers/chat.rs`, depending on the active focus. Each handler is a free function
 //!   `pub(crate) fn handle(app: &mut App, key: KeyEvent) → Vec<Effect>`.
-//! * **New slash commands** — Add a handler to `commands::dispatch()` in `commands.rs`.
-//!   The handler takes `&mut App` and returns `Vec<Effect>`.
-//! * **New SSE event types** — Add a variant to `Action`, a branch in
-//!   `SseEvent::to_action()` in `sse.rs`, and a handler in `App::update()`.
+//! * **New slash commands** — Add it to the shared `liberado-commands` crate (a variant on
+//!   `SlashCommand`, a case in `parse()`, a handler in `handlers/`, a route in `dispatch()`).
+//!   `App::handle_slash_command()` in `app.rs` maps the resulting `CommandResult`s to `Effect`s;
+//!   `command_context.rs` (`impl CommandContext for App`) is where state access is wired up.
+//! * **New SSE event types** — Add a variant to `ChatEvent` (`chat-client-contract`), a branch
+//!   in `ToAction::to_action()` in `sse.rs`, a variant to `Action`, and a handler in `App::update()`.
 //! * **New effects** — Add a variant to `Effect`, a branch in `EffectRunner::run()`,
 //!   and return it from `App::update()` or `App::handle_key()`.
 //! * **New daemon status fields** — Add to `DaemonStatus` with `#[serde(default)]`
@@ -226,7 +228,7 @@
 
 pub mod api;
 pub mod app;
-pub mod commands;
+pub mod command_context;
 pub mod conversations;
 pub mod effects;
 pub mod format;
