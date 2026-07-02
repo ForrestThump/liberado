@@ -11,11 +11,15 @@
 
 mod config;
 
-pub use config::{ConfigError, ConfigProvenance, catalog_from_config, config_dir, load_config};
+pub use config::{
+    ConfigError, ConfigProvenance, capability_catalog_from_config, catalog_from_config, config_dir,
+    load_config,
+};
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use liberado_common::CapabilityCatalog;
 use liberado_common::config::{Config, McpTransport, managed_binary_path};
 use liberado_daemon::Daemon;
 use liberado_dispatcher::Dispatcher;
@@ -79,17 +83,24 @@ pub fn mcp_registry_from_config(config: &Config) -> Option<McpRegistry> {
 }
 
 /// Attach the dispatcher and (when an MCP server is configured) the orchestrator to `daemon`, using
-/// the loaded `config`. With no provider the daemon stays watch-only; with a provider but no MCP it
-/// is decide-only. This is the single owner of the daemon's decide/act wiring.
+/// the loaded `config` and the shared, live `catalog` (built once by the caller via
+/// [`capability_catalog_from_config`] and also handed to chat's own dispatch and the server's API —
+/// one object, not three independent snapshots). With no provider the daemon stays watch-only; with
+/// a provider but no MCP it is decide-only. This is the single owner of the daemon's decide/act
+/// wiring.
 ///
-/// The dispatcher is built from `config.tuning` and — crucially — holds `config.policy`'s base
-/// capabilities (the union of every grant) as its maximal authority, so the Decision 4 boundary is
-/// now *configured* rather than empty. Both the dispatcher catalog and the orchestrator's MCP
-/// connection come from `topology.mcps` (single source), so routing and execution line up by name.
+/// The dispatcher is built from `config.tuning`, and the `"dispatcher"` component's capabilities
+/// (`config.policy.capabilities_for("dispatcher")` — the union of grants naming that component) are
+/// its maximal authority, so the Decision 4 boundary is now *configured* rather than empty. The
+/// same set also bounds the orchestrator's `ExecuteDirect` runtime, so a decision the dispatcher
+/// approved can't reach an MCP outside what `"dispatcher"` was actually granted. The orchestrator's
+/// MCP connection comes from `topology.mcps` too (single source with the catalog), so routing and
+/// execution line up by name.
 pub fn configure_daemon(
     daemon: Daemon,
     provider: Option<&Arc<dyn Provider>>,
     config: &Config,
+    catalog: Arc<CapabilityCatalog>,
 ) -> Daemon {
     let Some(provider) = provider else {
         tracing::warn!("DEEPSEEK_API_KEY not set — running watch-only (no dispatch)");
@@ -100,21 +111,17 @@ pub fn configure_daemon(
         config.tuning.dispatch.clone(),
         config.tuning.concurrency.max_reaction_depth,
     );
-    let capabilities = config.policy.base_capabilities();
+    let capabilities = config.policy.capabilities_for("dispatcher");
     tracing::info!(
         grants = config.policy.grants.len(),
         capabilities = capabilities.capabilities.len(),
         "dispatcher capability boundary configured from policy"
     );
-    // Catalog AND connection both derive from `topology.mcps` now (single source): the dispatcher
-    // routes over the enabled MCPs and the orchestrator connects to those same names, so a routed
-    // name is always a name the runtime can reach.
-    let catalog = catalog_from_config(config);
-    let daemon = daemon.with_dispatcher(dispatcher, catalog, capabilities);
+    let daemon = daemon.with_dispatcher(dispatcher, catalog, capabilities.clone());
     match mcp_registry_from_config(config) {
         Some(factory) => {
             tracing::info!("orchestrator enabled (MCP execution)");
-            daemon.with_orchestrator(Orchestrator::new(provider.clone(), factory))
+            daemon.with_orchestrator(Orchestrator::new(provider.clone(), factory, capabilities))
         }
         None => {
             tracing::warn!("no enabled MCP in topology.mcps — decide-only (no MCP execution)");

@@ -13,6 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
+use liberado_common::CapabilityCatalog;
 use liberado_common::config::{CURRENT_SCHEMA_VERSION, Config, Tuning};
 use thiserror::Error;
 
@@ -221,19 +222,35 @@ where
 
 /// Build the dispatcher's catalog from the ENABLED MCPs in `config.topology.mcps`. This is what the
 /// dispatcher routes over (and the consequence guard gates on); an empty catalog means the dispatcher
-/// can route to nothing (the pre-slice-2 state).
-pub fn catalog_from_config(config: &Config) -> Vec<liberado_dispatcher::McpDescriptor> {
+/// can route to nothing (the pre-slice-2 state). Returns `liberado_common::McpDescriptor` — the same
+/// type backing the live `CapabilityCatalog`, so this is also the snapshot function
+/// `CapabilityCatalog` is seeded from at boot (see `crates/server/src/lib.rs::run`).
+pub fn catalog_from_config(config: &Config) -> Vec<liberado_common::McpDescriptor> {
     config
         .topology
         .mcps
         .iter()
         .filter(|m| m.enabled)
-        .map(|m| liberado_dispatcher::McpDescriptor {
+        .map(|m| liberado_common::McpDescriptor {
             name: m.name.clone(),
             description: m.description.clone(),
             consequence: m.consequence,
+            provenance: None,
         })
         .collect()
+}
+
+/// Build a live [`CapabilityCatalog`] from `config.topology.mcps` — the same descriptors
+/// [`catalog_from_config`] produces, pre-registered into the shared, queryable object every
+/// consumer (the server's `/api/catalog`, the daemon's reactive dispatch, chat's own dispatch)
+/// reads from. Callers wrap the result in `Arc` and share ONE instance (see
+/// `crates/server/src/lib.rs::run`) rather than each building their own snapshot.
+pub fn capability_catalog_from_config(config: &Config) -> CapabilityCatalog {
+    let catalog = CapabilityCatalog::new();
+    for descriptor in catalog_from_config(config) {
+        catalog.register(descriptor);
+    }
+    catalog
 }
 
 #[cfg(test)]
@@ -316,8 +333,9 @@ capabilities = [
             WriteClass::ProposalOnly
         );
 
-        // base_capabilities is the union of the single grant's caps.
-        let caps = config.policy.base_capabilities();
+        // capabilities_for("agent") is the union of the single grant's caps (the fixture's
+        // component is "agent" — see POLICY_TOML above).
+        let caps = config.policy.capabilities_for("agent");
         assert!(caps.contains(&Capability::Read(liberado_common::Zone::vault("tasks"))));
         assert!(caps.contains(&Capability::Write(liberado_common::Zone::vault("tasks"))));
         assert!(caps.contains(&Capability::Read(liberado_common::Zone::vault("decisions"))));

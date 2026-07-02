@@ -179,12 +179,18 @@ impl Policy {
             .unwrap_or_default()
     }
 
-    /// The daemon's base capability set: the union of all granted capabilities. The dispatcher
-    /// holds this maximal authority and only ever NARROWS it per dispatch (Decision 4 invariant).
-    /// v1 unions across components; per-component narrowing for subagents is a later refinement.
-    pub fn base_capabilities(&self) -> CapabilitySet {
+    /// The capability set granted to `component` — the union of every [`Grant`] whose `component`
+    /// matches, narrowed to just that slice of authority (this narrowing is itself the ceiling; a
+    /// dispatch further narrows within it, never outside it — Decision 4). Two components are
+    /// meaningful today: `"main-agent"` (the chat-facing tool surface, `ChatSessions`) and
+    /// `"dispatcher"` (the ceiling the guard pipeline and `ExecuteDirect`/`DispatchSubagent`
+    /// execution check against, `configure_daemon`). A grant can list either, both, or neither —
+    /// an MCP granted only to `"dispatcher"` is reachable via dispatch-routed execution but never
+    /// appears directly in chat.
+    pub fn capabilities_for(&self, component: &str) -> CapabilitySet {
         self.grants
             .iter()
+            .filter(|g| g.component == component)
             .flat_map(|g| g.capabilities.iter().cloned())
             .collect()
     }
@@ -260,6 +266,14 @@ pub struct DispatchTuning {
     /// Resource cap for in-flight code-dispatch (riggers) jobs. Not a safety gate — the capability
     /// grant is the authority gate; this limits build-job churn on homelab hardware.
     pub max_concurrent_coding_subagents: u32,
+    /// Whether `ExecuteDirect`'s `relevant_mcps` narrows the executor's runtime to what the
+    /// classifier judged relevant, instead of surfacing every granted MCP's full tool schemas on
+    /// every turn (the token-efficiency default). `Dispatcher::dispatch` clears `relevant_mcps`
+    /// to empty post-classification when this is `false`, so every downstream consumer
+    /// (`Orchestrator`, `ChatSessions`) has one simple rule regardless of this setting: respect
+    /// `relevant_mcps` when non-empty, else use the full grant. Flip this off to always send the
+    /// full catalog, no code change required.
+    pub narrow_direct_tools: bool,
 }
 
 impl Default for DispatchTuning {
@@ -273,6 +287,7 @@ impl Default for DispatchTuning {
             guidance_match_floor: 0.8,
             subagent_isolation: SubagentIsolation::InProcess,
             max_concurrent_coding_subagents: 2,
+            narrow_direct_tools: true,
         }
     }
 }
@@ -595,19 +610,19 @@ mod tests {
     use std::str::FromStr;
 
     #[test]
-    fn base_capabilities_unions_grants_and_dedups() {
+    fn capabilities_for_unions_matching_component_grants_and_dedups() {
         let policy = Policy {
             zones: Vec::new(),
             grants: vec![
                 Grant {
-                    component: "tasks-mcp".into(),
+                    component: "dispatcher".into(),
                     capabilities: vec![
                         Capability::Read(Zone::vault("tasks")),
                         Capability::Write(Zone::vault("tasks")),
                     ],
                 },
                 Grant {
-                    component: "memory-mcp".into(),
+                    component: "dispatcher".into(),
                     capabilities: vec![
                         // Overlaps with the first grant — the union must de-duplicate.
                         Capability::Read(Zone::vault("tasks")),
@@ -618,12 +633,41 @@ mod tests {
             secret_refs: Vec::new(),
         };
 
-        let caps = policy.base_capabilities();
+        let caps = policy.capabilities_for("dispatcher");
         assert!(caps.contains(&Capability::Read(Zone::vault("tasks"))));
         assert!(caps.contains(&Capability::Write(Zone::vault("tasks"))));
         assert!(caps.contains(&Capability::ExecuteMcp("memory-mcp".into())));
         // Read(tasks) appeared twice across grants but is held once.
         assert_eq!(caps.capabilities.len(), 3);
+    }
+
+    #[test]
+    fn capabilities_for_excludes_grants_of_other_components() {
+        let policy = Policy {
+            zones: Vec::new(),
+            grants: vec![
+                Grant {
+                    component: "main-agent".into(),
+                    capabilities: vec![Capability::ExecuteMcp("weather-mcp".into())],
+                },
+                Grant {
+                    component: "dispatcher".into(),
+                    capabilities: vec![Capability::ExecuteMcp("rentcast-mcp".into())],
+                },
+            ],
+            secret_refs: Vec::new(),
+        };
+
+        let main_agent = policy.capabilities_for("main-agent");
+        assert!(main_agent.contains(&Capability::ExecuteMcp("weather-mcp".into())));
+        assert!(
+            !main_agent.contains(&Capability::ExecuteMcp("rentcast-mcp".into())),
+            "a dispatcher-only grant must not leak into the main-agent's capability set"
+        );
+
+        let dispatcher = policy.capabilities_for("dispatcher");
+        assert!(dispatcher.contains(&Capability::ExecuteMcp("rentcast-mcp".into())));
+        assert!(!dispatcher.contains(&Capability::ExecuteMcp("weather-mcp".into())));
     }
 
     #[test]

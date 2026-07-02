@@ -49,6 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     name: name.to_string(),
                     description: desc.to_string(),
                     consequence: *consequence,
+                    provenance: None,
                 })
                 .collect(),
             capabilities: CapabilitySet::from_iter(

@@ -12,11 +12,14 @@ repository.workspace = true
 async-trait = { workspace = true }
 liberado-common = { workspace = true }
 liberado-conversation-store = { workspace = true }
+liberado-dispatcher = { workspace = true }
 liberado-executor = { workspace = true }
 liberado-mcp = { workspace = true }
+liberado-orchestrator = { workspace = true }
 liberado-provider = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

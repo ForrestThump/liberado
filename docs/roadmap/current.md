@@ -13,18 +13,30 @@ than being built as a months-long plumbing project up front (see Decision 18, th
 event-bus mesh). The substrate work itself (config/policy, catalog, proposal loop — Decisions
 11/14/17) is largely landed; this roadmap is what's next.
 
-### Phase 1 — The general MCP agent (next milestone)
+### Phase 1 — The general MCP agent ✅ (done, 2026-07-02)
 
 The vault-agnostic interactive agent; proves the core runs without TurboVault (none of it touches the
 vault).
 
-- **Route chat through the dispatcher.** Today chat drives the executor directly, bypassing the
-  tool-advisor, the guards, and sub-delegation; wiring chat -> dispatcher -> orchestrator gets all
-  three. (First bus-native seam: chat publishes a goal-event.)
-- **Live capability catalog + on-demand tool surfacing** — the validated lazy-loading pattern; the
-  token-efficiency core. (Mesh checkpoint #1: the catalog is a live, bus-queryable registry, not
-  static config — the same registry the TUI/WebUI query.)
-- **Multi-MCP + parallel, capability-narrowed sub-delegation** (closes Hermes gap #4).
+- ✅ **Route chat through the dispatcher.** Chat now runs every turn through `Dispatcher::dispatch`
+  before executing: `ExecuteDirect` falls through to the existing streaming path (zero UX
+  regression, verified live over SSE), `Clarify`/`Propose`/`DispatchSubagent` route through the
+  orchestrator. Full writeup:
+  [chat-dispatcher-and-component-scoping.md](chat-dispatcher-and-component-scoping.md).
+- ✅ **Live capability catalog + on-demand tool surfacing.** The three independently-static catalog
+  copies (daemon, chat, API) are now one shared `Arc<CapabilityCatalog>`, snapshotted fresh per
+  dispatch instead of frozen at boot. The dispatcher's `ExecuteDirect` decision now narrows which
+  MCPs' tool schemas the executor surfaces (`DispatchAction::ExecuteDirect.relevant_mcps`,
+  configurable via `DispatchTuning::narrow_direct_tools`, default on) — verified live: a PDF goal
+  and a memory-search goal each correctly narrowed to just the one relevant MCP out of a two-MCP
+  grant. Full writeup:
+  [live-catalog-and-dispatcher-narrowed-tools.md](live-catalog-and-dispatcher-narrowed-tools.md).
+- ✅ **Multi-MCP + parallel, capability-narrowed sub-delegation** (component-scoping half).
+  `Grant.component` is now consulted (`"main-agent"` vs `"dispatcher"`), and the `ExecuteDirect`
+  runtime-scoping gap that made this toothless is closed — see the dispatcher-and-component-scoping
+  writeup. Parallel sub-delegation itself (`Orchestrator::dispatch_parallel`) already existed;
+  wiring more of the fleet through it live is still open (closes Hermes gap #4 fully once the
+  deferred MCPs — caldav, calorie-counter, weather pending an upstream stdio fix — are usable too).
 
 ### Phase 2 — The self-improvement moat ✅ (done, June 2026)
 

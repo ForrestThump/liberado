@@ -90,6 +90,15 @@ impl Conversation {
         result
     }
 
+    /// Append a user message and a plain assistant reply directly, with no executor/tool
+    /// involvement — used when a turn is answered by the dispatch step itself (a clarifying
+    /// question, a proposal confirmation, or a subagent's report) rather than by the
+    /// conversational tool-calling loop.
+    pub fn answer(&mut self, user: &str, reply: &str) {
+        self.messages.push(Message::user(user));
+        self.messages.push(Message::assistant(reply));
+    }
+
     /// The full message history (system prompt first).
     pub fn history(&self) -> &[Message] {
         &self.messages

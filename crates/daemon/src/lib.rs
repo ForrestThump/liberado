@@ -12,11 +12,15 @@
 mod debounce;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use debounce::Debouncer;
-use liberado_common::{CapabilitySet, DispatchDecision, Event, EventPayload, event_source};
-use liberado_dispatcher::{DispatchRequest, Dispatcher, McpDescriptor};
+use liberado_common::{
+    CapabilitySet, CapabilityCatalog, DispatchDecision, Event, EventPayload, McpDescriptor,
+    event_source,
+};
+use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_orchestrator::{Disposition, Orchestrator, OrchestratorError};
 use liberado_vault::{Attribution, Vault, VaultError, VaultEvent};
 use thiserror::Error;
@@ -76,7 +80,9 @@ impl ReactionOutcome {
 /// The dispatcher plus the disjoint context the daemon hands it for each reaction.
 struct DispatcherContext {
     dispatcher: Dispatcher,
-    catalog: Vec<McpDescriptor>,
+    /// Shared with the server's `/api/catalog` and (when attached) chat's own dispatch — one
+    /// live source snapshotted fresh per request, not a copy frozen at construction time.
+    catalog: Arc<CapabilityCatalog>,
     capabilities: CapabilitySet,
     reaction_depth: u32,
 }
@@ -89,7 +95,7 @@ impl DispatcherContext {
             goal: format!(
                 "A note in the vault was created or edited at '{path}'. Decide how to react to it."
             ),
-            catalog: self.catalog.clone(),
+            catalog: self.catalog.descriptors(),
             capabilities: self.capabilities.clone(),
             reaction_depth: self.reaction_depth,
         }
@@ -138,11 +144,13 @@ impl Daemon {
 
     /// Attach a dispatcher so reactable changes are routed to a [`DispatchDecision`]. Without one,
     /// the daemon runs in watch-only mode ([`ReactionOutcome::Observed`]). The `catalog` +
-    /// `capabilities` form the disjoint context the dispatcher reasons over.
+    /// `capabilities` form the disjoint context the dispatcher reasons over. `catalog` is the same
+    /// shared, live `CapabilityCatalog` the server's API and (when attached) chat's own dispatch
+    /// read — the daemon snapshots it fresh per reaction, not once at construction.
     pub fn with_dispatcher(
         mut self,
         dispatcher: Dispatcher,
-        catalog: Vec<McpDescriptor>,
+        catalog: Arc<CapabilityCatalog>,
         capabilities: CapabilitySet,
     ) -> Self {
         self.dispatcher = Some(DispatcherContext {
@@ -557,7 +565,7 @@ mod tests {
 
         let daemon = daemon
             .with_debounce(Duration::from_millis(80))
-            .with_dispatcher(dispatcher, vec![], CapabilitySet::empty());
+            .with_dispatcher(dispatcher, Arc::new(CapabilityCatalog::new()), CapabilitySet::empty());
 
         let vault_dir = dir.path().to_path_buf();
         let (tx, mut rx) = unbounded_channel();
@@ -619,6 +627,7 @@ mod tests {
         let decision = DispatchDecision {
             action: DispatchAction::ExecuteDirect {
                 seed_calls: Vec::new(),
+                relevant_mcps: Vec::new(),
             },
             confidence: 0.95,
             rationale: "trivial".into(),
@@ -640,11 +649,11 @@ mod tests {
                 serde_json::json!({ "outcome": "succeeded", "summary": "done" }),
             )])],
         ));
-        let orchestrator = Orchestrator::new(exec_provider, NoopFactory);
+        let orchestrator = Orchestrator::new(exec_provider, NoopFactory, CapabilitySet::empty());
 
         let daemon = daemon
             .with_debounce(Duration::from_millis(80))
-            .with_dispatcher(dispatcher, vec![], CapabilitySet::empty())
+            .with_dispatcher(dispatcher, Arc::new(CapabilityCatalog::new()), CapabilitySet::empty())
             .with_orchestrator(orchestrator);
 
         let vault_dir = dir.path().to_path_buf();
@@ -712,6 +721,7 @@ mod tests {
                     tool: "email:send".into(),
                     args: serde_json::json!({ "to": "boss@example.com" }),
                 }],
+                relevant_mcps: Vec::new(),
             },
             confidence: 0.95,
             rationale: "send the requested email".into(),
@@ -725,20 +735,23 @@ mod tests {
         let dispatcher = Dispatcher::new(dispatch_provider, DispatchTuning::default(), 4);
 
         // Catalog declares the External MCP; capabilities grant it so the only block is consequence.
-        let catalog = vec![McpDescriptor {
+        let catalog = CapabilityCatalog::new();
+        catalog.register(McpDescriptor {
             name: "email".into(),
             description: "send email".into(),
             consequence: Consequence::External,
-        }];
+            provenance: None,
+        });
         let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("email".into())]);
         let orchestrator = Orchestrator::new(
             Arc::new(MockProvider::with_script("exec", Vec::new())),
             UnusedFactory,
+            CapabilitySet::empty(),
         );
 
         let daemon = daemon
             .with_debounce(Duration::from_millis(80))
-            .with_dispatcher(dispatcher, catalog, capabilities)
+            .with_dispatcher(dispatcher, Arc::new(catalog), capabilities)
             .with_orchestrator(orchestrator);
 
         let vault_dir = dir.path().to_path_buf();
@@ -827,6 +840,7 @@ mod tests {
                 Vec::<liberado_provider::CompletionResponse>::new(),
             )),
             RecordingFactory { runtime },
+            CapabilitySet::empty(),
         );
 
         let (daemon, dir) = temp_daemon().await;
@@ -926,6 +940,7 @@ mod tests {
                 Vec::<liberado_provider::CompletionResponse>::new(),
             )),
             SilentFactory { runtime },
+            CapabilitySet::empty(),
         );
 
         let (daemon, dir) = temp_daemon().await;

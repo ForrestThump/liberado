@@ -2930,13 +2930,16 @@ dependencies = [
  "futures",
  "liberado-common",
  "liberado-conversation-store",
+ "liberado-dispatcher",
  "liberado-executor",
  "liberado-mcp",
+ "liberado-orchestrator",
  "liberado-provider",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3031,6 +3034,7 @@ dependencies = [
  "liberado-common",
  "liberado-conversation-store",
  "liberado-daemon",
+ "liberado-dispatcher",
  "liberado-executor",
  "liberado-main-agent",
  "liberado-mcp",

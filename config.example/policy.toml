@@ -3,8 +3,14 @@
 #
 # This is the SECURITY SURFACE (Decision 4 / 5). Two things are declared here:
 #   1. Per-zone write classes — how much agents may mutate a given area.
-#   2. Capability grants — the explicit, named permissions the daemon holds. The dispatcher takes
-#      the UNION of all grants as its maximal authority and only ever NARROWS it per dispatch.
+#   2. Capability grants — the explicit, named permissions each COMPONENT holds. A grant's
+#      `component` is the join key: "main-agent" is chat's own tool surface (ChatSessions);
+#      "dispatcher" is the ceiling the guard pipeline and ExecuteDirect/DispatchSubagent execution
+#      check against. Each takes the union of every grant naming it, narrowed per dispatch, never
+#      widened. A capability granted to one but not the other means an MCP reachable only through
+#      dispatch-routed execution, never directly in chat (or vice versa) — see `code-dispatch`
+#      below: self-extension is powerful enough to want dispatch's guard pipeline in front of it,
+#      not a casual direct chat invocation.
 # An UNLISTED zone fails safe to `proposal_only` (agents can never silently write somewhere
 # undeclared). Every zone named in a grant MUST be declared below, and every `ExecuteMcp` MUST
 # name an MCP in topology.toml — `liberado config check` enforces both.
@@ -37,7 +43,7 @@ write_class = "human_only"       # a named, sensitive zone: agents may read but 
 # Zone form: { Vault = "<folder>" } for a vault folder, { Named = "<name>" } for an external zone.
 
 [[grants]]
-component = "agent"
+component = "main-agent"
 capabilities = [
     { Read = { Vault = "tasks" } },
     { Write = { Vault = "tasks" } },
@@ -45,7 +51,20 @@ capabilities = [
     { Write = { Vault = "decisions" } },
     { ReadSummary = { Named = "finance" } },   # finance is human_only: read a summary, never the detail
     { ExecuteMcp = "tasks-mcp" },              # must match a [[mcps]] name in topology.toml
-    { ExecuteMcp = "code-dispatch" },          # agent self-extension via riggers MCP
+    # code-dispatch (self-extension) is deliberately NOT granted here — see "dispatcher" below.
+]
+
+[[grants]]
+component = "dispatcher"
+capabilities = [
+    { Read = { Vault = "tasks" } },
+    { Write = { Vault = "tasks" } },
+    { Read = { Vault = "decisions" } },
+    { Write = { Vault = "decisions" } },
+    { ReadSummary = { Named = "finance" } },
+    { ExecuteMcp = "tasks-mcp" },
+    { ExecuteMcp = "code-dispatch" },          # dispatcher-only: self-extension goes through the
+                                                # guard pipeline, never a direct chat tool call.
 ]
 
 # Names of secrets the components need, resolved from the environment (never inlined). Each entry

@@ -45,6 +45,38 @@ consequence = "read_only"
 transport = { kind = "managed" }
 
 [[mcps]]
+name = "liberado-tool-helper-mcp"
+description = "search/save episodic memory and tool-selection guidance"
+consequence = "reversible"
+transport = { kind = "managed" }
+
+[[mcps]]
+name = "liberado-pdf-mcp"
+description = "PDF manipulation: merge, split, extract, convert"
+consequence = "reversible"
+transport = { kind = "managed" }
+
+[[mcps]]
+name = "liberado-rentcast-mcp"
+description = "real-estate property and rent data lookups"
+consequence = "read_only"
+transport = { kind = "managed" }
+# Leave `enabled = false` until RENTCAST_API_KEY is actually set. Without it this server doesn't
+# cleanly fail the MCP handshake — it corrupts the stdio JSON-RPC stream, and chat connects to
+# every registered MCP as ONE shared pool with a single connect-time budget. One broken server
+# here can starve the healthy ones, leaving chat with zero tools, not just this one missing.
+enabled = false
+
+[[mcps]]
+name = "liberado-anythingllm-mcp"
+description = "ingest and query content in AnythingLLM"
+consequence = "reversible"
+transport = { kind = "managed" }
+# Same reasoning as liberado-rentcast-mcp above — needs ANYTHINGLLM_API_KEY + a reachable
+# instance before enabling.
+enabled = false
+
+[[mcps]]
 name = "code-dispatch"
 description = "Plan, implement, and review code changes; scaffold and build new MCP tools"
 consequence = "reversible"

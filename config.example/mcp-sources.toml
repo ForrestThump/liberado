@@ -21,3 +21,11 @@ git = "https://github.com/ForrestThump/liberado-tool-helper-mcp"
 name = "liberado-pdf-mcp"
 git = "https://github.com/ForrestThump/liberado-pdf-mcp"
 package = "mcp-pdf-server"
+
+[[source]]
+name = "liberado-rentcast-mcp"
+git = "https://github.com/ForrestThump/liberado-rentcast-mcp"
+
+[[source]]
+name = "liberado-anythingllm-mcp"
+git = "https://github.com/ForrestThump/liberado-anythingllm-mcp"

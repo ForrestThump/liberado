@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use liberado_common::{
-    BlockReason, CapabilitySet, DispatchAction, DispatchDecision, Outcome, Proposal,
+    BlockReason, Capability, CapabilitySet, DispatchAction, DispatchDecision, Outcome, Proposal,
     ProposalStatus, ProposedAction, ToolCall, WriteProvenance,
 };
 use liberado_executor::{SUBMIT_REPORT_TOOL, ToolRuntime};
@@ -93,21 +93,26 @@ fn submit_report_response() -> CompletionResponse {
     )])
 }
 
-fn orchestrator(script: Vec<CompletionResponse>) -> (Calls, Orchestrator) {
+fn orchestrator(script: Vec<CompletionResponse>, capabilities: CapabilitySet) -> (Calls, Orchestrator) {
     let provider = Arc::new(MockProvider::with_script("mock", script));
     let factory = RecordingFactory::default();
     let calls = factory.calls.clone();
-    let orch = Orchestrator::new(provider, factory);
+    let orch = Orchestrator::new(provider, factory, capabilities);
     (calls, orch)
 }
 
 #[tokio::test]
-async fn execute_direct_runs_and_adopts_the_trigger_correlation() {
-    let (calls, orch) = orchestrator(vec![submit_report_response()]);
+async fn execute_direct_scopes_the_runtime_to_the_granted_mcps() {
+    // ExecuteDirect scopes to exactly what `capabilities` grants — an empty allow-list would mean
+    // "every registered MCP" to the factory, which is the bug this test guards against.
+    let capabilities =
+        CapabilitySet::from_iter([Capability::ExecuteMcp("tasks-mcp".into())]);
+    let (calls, orch) = orchestrator(vec![submit_report_response()], capabilities);
 
     let decision = DispatchDecision {
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
+            relevant_mcps: Vec::new(),
         },
         confidence: 0.9,
         rationale: "simple".into(),
@@ -126,7 +131,7 @@ async fn execute_direct_runs_and_adopts_the_trigger_correlation() {
     let calls = calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     let (allowed, prov) = &calls[0];
-    assert!(allowed.is_empty(), "ExecuteDirect sees no narrowed catalog");
+    assert_eq!(allowed, &vec!["tasks-mcp".to_string()]);
     assert_eq!(prov.source, "liberado-executor");
     // ExecuteDirect acts in the reaction's name → adopts the triggering correlation.
     assert_eq!(
@@ -136,8 +141,66 @@ async fn execute_direct_runs_and_adopts_the_trigger_correlation() {
 }
 
 #[tokio::test]
+async fn execute_direct_relevant_mcps_narrows_within_the_granted_ceiling() {
+    // Granted two MCPs, but the decision names only one as relevant — the runtime should be
+    // scoped to that one, not the full granted set (the token-efficiency narrowing).
+    let capabilities = CapabilitySet::from_iter([
+        Capability::ExecuteMcp("tasks-mcp".into()),
+        Capability::ExecuteMcp("email-mcp".into()),
+    ]);
+    let (calls, orch) = orchestrator(vec![submit_report_response()], capabilities);
+
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: vec!["tasks-mcp".into()],
+        },
+        confidence: 0.9,
+        rationale: "simple".into(),
+    };
+
+    orch.run(decision, "add milk to my list", "trigger-1")
+        .await
+        .expect("run");
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    let (allowed, _) = &calls[0];
+    assert_eq!(
+        allowed,
+        &vec!["tasks-mcp".to_string()],
+        "relevant_mcps must narrow within the granted ceiling, not replace it"
+    );
+}
+
+#[tokio::test]
+async fn execute_direct_with_zero_grants_never_calls_the_factory() {
+    // No ExecuteMcp grants at all: the factory must not be asked for "every registered MCP" (what
+    // an empty allow-list would otherwise mean) — it must not be called at all.
+    let (calls, orch) = orchestrator(vec![submit_report_response()], CapabilitySet::empty());
+
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: Vec::new(),
+        },
+        confidence: 0.9,
+        rationale: "simple".into(),
+    };
+    let disposition = orch
+        .run(decision, "tidy the inbox", "trigger-1")
+        .await
+        .expect("run");
+    assert!(matches!(disposition, Disposition::Reported(_)));
+    assert!(
+        calls.lock().unwrap().is_empty(),
+        "zero grants must not reach the factory (would mean 'every registered MCP')"
+    );
+}
+
+#[tokio::test]
 async fn dispatch_subagent_uses_its_own_correlation_and_allowed_mcps() {
-    let (calls, orch) = orchestrator(vec![submit_report_response()]);
+    let (calls, orch) = orchestrator(vec![submit_report_response()], CapabilitySet::empty());
 
     let decision = DispatchDecision {
         action: DispatchAction::DispatchSubagent {
@@ -178,7 +241,7 @@ async fn dispatch_subagent_uses_its_own_correlation_and_allowed_mcps() {
 async fn propose_builds_a_pending_proposal_without_executing() {
     // No scripted responses + no runtime: proves nothing ran (the orchestrator only builds the
     // artifact; the daemon writes it).
-    let (calls, orch) = orchestrator(vec![]);
+    let (calls, orch) = orchestrator(vec![], CapabilitySet::empty());
 
     let action = ProposedAction::ToolCalls(vec![ToolCall {
         tool: "email:send".into(),
@@ -216,7 +279,7 @@ async fn propose_builds_a_pending_proposal_without_executing() {
 #[tokio::test]
 async fn clarify_short_circuits_without_executing() {
     // No scripted responses + no runtime: proves nothing ran.
-    let (calls, orch) = orchestrator(vec![]);
+    let (calls, orch) = orchestrator(vec![], CapabilitySet::empty());
 
     let decision = DispatchDecision {
         action: DispatchAction::Clarify {
@@ -258,7 +321,7 @@ async fn execute_approved_runs_the_exact_calls_without_a_classifier_or_guard() {
         "mock",
         Vec::<CompletionResponse>::new(),
     ));
-    let orch = Orchestrator::new(provider, RecordingRuntimeFactory { runtime });
+    let orch = Orchestrator::new(provider, RecordingRuntimeFactory { runtime }, CapabilitySet::empty());
 
     let call = ToolCall {
         tool: "email:send".into(),

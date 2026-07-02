@@ -26,17 +26,36 @@
 //! granted tool regardless of how the message is phrased — robust, with no missed requests. (An
 //! earlier verb-keyword advisor was removed because it silently dropped legitimate requests phrased
 //! without a listed verb, e.g. "what's on my calendar?".)
+//!
+//! # Dispatch routing
+//!
+//! When [`with_dispatch`](Self::with_dispatch) is attached, every turn is classified by a
+//! [`Dispatcher`] *before* any execution happens — closing the gap where chat used to drive the
+//! executor directly, bypassing the guard pipeline and sub-delegation entirely. The four
+//! `DispatchAction` outcomes are handled asymmetrically, deliberately: `ExecuteDirect` (the common
+//! case) falls straight through into the existing streaming `Conversation::turn`/`turn_stream`
+//! path — zero change to today's token-by-token UX, now just gated on the dispatcher's approval.
+//! `Clarify`, `Propose`, and `DispatchSubagent` all route through [`Orchestrator::run`], which has
+//! no streaming variant (it calls the executor's report-mode `execute`, blocking until a full
+//! `Report`) — for `DispatchSubagent` specifically this is an accepted, deliberate UX trade-off
+//! (reserved for complex/open-ended goals, presumably rarer than direct execution) rather than an
+//! oversight; a "working on it" status plus the final report stands in for live tokens on that one
+//! path. `with_dispatch` requires an [`Orchestrator`] up front (not optional) because all three
+//! non-`ExecuteDirect` outcomes need it to produce a `Disposition` — a chat host with no MCP
+//! configured at all simply never calls `with_dispatch`, and turns run exactly as before.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use liberado_common::{CapabilitySet, Consequence};
+use liberado_common::{CapabilityCatalog, CapabilitySet, Consequence, DispatchAction};
 use liberado_conversation_store::{
     Author, ConversationHeader, ConversationStore, NewConversation, NewNode, StoreError, Ulid,
 };
+use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_executor::{AgentEvent, ExecError, Executor, ToolRuntime};
 use liberado_mcp::{RiskGatedToolRuntime, ScopedRuntime};
+use liberado_orchestrator::{Disposition, Orchestrator};
 use liberado_provider::Message;
 use thiserror::Error;
 use tokio::sync::mpsc::Sender;
@@ -77,6 +96,17 @@ pub struct ChatSessions {
     capabilities: CapabilitySet,
     /// Directory under which `proposals/` subdirectory holds proposal files.
     proposals_dir: PathBuf,
+
+    // ── Dispatch routing ─────────────────────────────────────────────────────
+    /// When present, every turn is classified before execution. See the module docs.
+    dispatcher: Option<Dispatcher>,
+    /// The MCP catalog the dispatcher's classifier chooses from — the same shared, live catalog
+    /// the daemon's reactive path and the server's API read, snapshotted fresh per dispatch call
+    /// rather than frozen at construction.
+    dispatch_catalog: Arc<CapabilityCatalog>,
+    /// Executes non-`ExecuteDirect` decisions. Required alongside `dispatcher` — see
+    /// [`with_dispatch`](Self::with_dispatch).
+    orchestrator: Option<Orchestrator>,
 }
 
 impl ChatSessions {
@@ -97,6 +127,9 @@ impl ChatSessions {
             consequences: Vec::new(),
             capabilities: CapabilitySet::empty(),
             proposals_dir: PathBuf::new(),
+            dispatcher: None,
+            dispatch_catalog: Arc::new(CapabilityCatalog::new()),
+            orchestrator: None,
         }
     }
 
@@ -126,6 +159,24 @@ impl ChatSessions {
         self.consequences = consequences;
         self.capabilities = capabilities;
         self.proposals_dir = proposals_dir;
+        self
+    }
+
+    /// Attach dispatch routing (see the module docs). `catalog` is the shared, live MCP catalog
+    /// the dispatcher's classifier chooses from — the same object the daemon's reactive path and
+    /// the server's API read, snapshotted fresh per turn rather than frozen at construction.
+    /// `orchestrator` executes the `Clarify`/`Propose`/`DispatchSubagent` outcomes (required —
+    /// those three all need it to produce a `Disposition`; `ExecuteDirect` never touches it,
+    /// staying on the streaming path).
+    pub fn with_dispatch(
+        mut self,
+        dispatcher: Dispatcher,
+        catalog: Arc<CapabilityCatalog>,
+        orchestrator: Orchestrator,
+    ) -> Self {
+        self.dispatcher = Some(dispatcher);
+        self.dispatch_catalog = catalog;
+        self.orchestrator = Some(orchestrator);
         self
     }
 
@@ -165,10 +216,18 @@ impl ChatSessions {
         let (mut convo, parent_leaf) = self.load(session).await?;
         let before = convo.len();
 
-        let turn_runtime = self.build_turn_runtime(user, session);
-        let reply = convo
-            .turn(&self.executor, turn_runtime.as_ref(), user)
-            .await?;
+        let reply = match self.dispatch_turn(user).await {
+            DispatchOutcome::Answered(reply) => {
+                convo.answer(user, &reply);
+                reply
+            }
+            DispatchOutcome::Proceed(relevant_mcps) => {
+                let turn_runtime = self.build_turn_runtime(user, session, &relevant_mcps);
+                convo
+                    .turn(&self.executor, turn_runtime.as_ref(), user)
+                    .await?
+            }
+        };
         self.persist_tail(session, &convo.history()[before..], parent_leaf)
             .await?;
         Ok(reply)
@@ -195,10 +254,20 @@ impl ChatSessions {
         let (mut convo, parent_leaf) = self.load(session).await?;
         let before = convo.len();
 
-        let turn_runtime = self.build_turn_runtime(user, session);
-        convo
-            .turn_stream(&self.executor, turn_runtime.as_ref(), user, events)
-            .await?;
+        match self.dispatch_turn(user).await {
+            DispatchOutcome::Answered(reply) => {
+                convo.answer(user, &reply);
+                // Deliver the already-resolved reply as a single token so it renders through the
+                // existing SSE contract unchanged — no new event type needed.
+                let _ = events.send(AgentEvent::Token(reply)).await;
+            }
+            DispatchOutcome::Proceed(relevant_mcps) => {
+                let turn_runtime = self.build_turn_runtime(user, session, &relevant_mcps);
+                convo
+                    .turn_stream(&self.executor, turn_runtime.as_ref(), user, events)
+                    .await?;
+            }
+        }
         self.persist_tail(session, &convo.history()[before..], parent_leaf)
             .await?;
         Ok(())
@@ -223,22 +292,94 @@ impl ChatSessions {
 
     // ── private helpers ──────────────────────────────────────────────────────
 
+    /// Classify `user` via the dispatcher (when attached) and resolve everything except
+    /// `ExecuteDirect` — which returns [`DispatchOutcome::Proceed`] (carrying the decision's
+    /// `relevant_mcps`, if any) so the caller falls through to the normal streaming execution
+    /// path, scoped by whatever narrowing the dispatcher found. See the module docs for why this
+    /// split exists.
+    async fn dispatch_turn(&self, user: &str) -> DispatchOutcome {
+        let (Some(dispatcher), Some(orchestrator)) = (&self.dispatcher, &self.orchestrator) else {
+            return DispatchOutcome::Proceed(Vec::new()); // no dispatcher — run exactly as before
+        };
+
+        let req = DispatchRequest {
+            goal: user.to_string(),
+            catalog: self.dispatch_catalog.descriptors(),
+            capabilities: self.capabilities.clone(),
+            reaction_depth: 0, // user-initiated, not a background reaction
+        };
+        let decision = match dispatcher.dispatch(&req).await {
+            Ok(decision) => decision,
+            Err(e) => {
+                tracing::warn!(error = %e, "chat dispatch failed — proceeding without routing");
+                return DispatchOutcome::Proceed(Vec::new());
+            }
+        };
+        if let DispatchAction::ExecuteDirect { relevant_mcps, .. } = &decision.action {
+            return DispatchOutcome::Proceed(relevant_mcps.clone());
+        }
+
+        let correlation_id = format!("chat-{}", Ulid::new());
+        match orchestrator.run(decision, user, &correlation_id).await {
+            Ok(Disposition::Clarify { questions, .. }) => {
+                DispatchOutcome::Answered(format_questions(&questions))
+            }
+            Ok(Disposition::Reported(report)) => DispatchOutcome::Answered(report.summary),
+            Ok(Disposition::Propose(proposal)) => match self.write_chat_proposal(&proposal).await
+            {
+                Ok(path) => DispatchOutcome::Answered(format!(
+                    "I've drafted a proposal for you to review — it needs your approval before it \
+                     runs: {}",
+                    path.display()
+                )),
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to write chat proposal");
+                    DispatchOutcome::Answered(
+                        "I wanted to propose an action but couldn't save it — please try again."
+                            .into(),
+                    )
+                }
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, "chat orchestration failed");
+                DispatchOutcome::Answered(format!("I ran into a problem handling that: {e}"))
+            }
+        }
+    }
+
+    /// Write a dispatcher-originated proposal the same way [`RiskGatedToolRuntime`]'s runtime-level
+    /// proposals are written: plain `tokio::fs::write` under `proposals_dir/proposals/`, not a
+    /// vault write. Chat proposals live in the data dir (not the vault) so a vault watcher never
+    /// reacts to them — a vault-resident proposal surface would need a provenance-tagged
+    /// `Vault::write` (Decision 11), deferred same as the runtime-level ones.
+    async fn write_chat_proposal(
+        &self,
+        proposal: &liberado_common::Proposal,
+    ) -> std::io::Result<PathBuf> {
+        let proposals_subdir = self.proposals_dir.join("proposals");
+        let proposal_path = proposals_subdir.join(format!("{}.md", proposal.id));
+        tokio::fs::create_dir_all(&proposals_subdir).await?;
+        tokio::fs::write(&proposal_path, proposal.to_note()).await?;
+        Ok(proposal_path)
+    }
+
     /// Build a per-turn [`ToolRuntime`] that scopes the visible tool surface to the granted
-    /// capabilities and wraps the result in [`RiskGatedToolRuntime`] for capability / consequence /
-    /// magnitude guards.
+    /// capabilities (further narrowed by `relevant_mcps` when the dispatcher supplied one — see
+    /// [`dispatch_turn`](Self::dispatch_turn) and `DispatchTuning::narrow_direct_tools`) and wraps
+    /// the result in [`RiskGatedToolRuntime`] for capability / consequence / magnitude guards.
     ///
     /// When no guard configuration is attached, returns the raw `self.runtime` unchanged.
-    fn build_turn_runtime(&self, user: &str, session: Ulid) -> Box<dyn ToolRuntime> {
+    fn build_turn_runtime(
+        &self,
+        user: &str,
+        session: Ulid,
+        relevant_mcps: &[String],
+    ) -> Box<dyn ToolRuntime> {
         if self.capabilities.capabilities.is_empty() && self.consequences.is_empty() {
             // No guards configured — use the raw runtime directly.
             // We wrap in a pass-through box so the caller's interface stays uniform.
             return Box::new(PassThroughRuntime(self.runtime.clone()));
         }
-
-        // TODO(tool-advisor): real on-demand surfacing — show a compact catalog (names+descriptions)
-        // and lazy-load full tool schemas only when routed (the OpenClaw/Hermes lazy-load pattern) —
-        // add this when the catalog is large enough that surfacing everything actually costs tokens.
-        // The verb-list heuristic was removed because it silently dropped legitimate requests.
 
         // Capability scoping: surface only MCPs the chat agent is granted, every turn, regardless of
         // how the message is phrased. The model sees the full granted tool set (robust — no missed
@@ -252,13 +393,26 @@ impl ChatSessions {
                 _ => None,
             })
             .collect();
+        // Dispatcher-narrowed tool surfacing (the token-efficiency piece — see module docs): when
+        // the dispatch step named specific relevant MCPs for this goal, further narrow within the
+        // granted ceiling instead of always surfacing every granted MCP's full tool schemas. Never
+        // widens — only names already in `granted_mcps` survive the intersection.
+        let scoped_mcps: Vec<String> = if relevant_mcps.is_empty() {
+            granted_mcps
+        } else {
+            granted_mcps
+                .into_iter()
+                .filter(|name| relevant_mcps.contains(name))
+                .collect()
+        };
         // `ScopedRuntime` treats an empty allow-list as pass-through (its general-purpose default).
         // For capability scoping that's the wrong sense — no grants must mean no tools — so route the
         // empty case to a no-tools runtime instead of letting everything through.
-        let inner: Arc<dyn ToolRuntime> = if granted_mcps.is_empty() {
+        let inner: Arc<dyn ToolRuntime> = if scoped_mcps.is_empty() {
             Arc::new(NoToolsRuntime)
         } else {
-            Arc::new(ScopedRuntime::new(self.runtime.clone(), granted_mcps))
+            tracing::debug!(count = scoped_mcps.len(), mcps = ?scoped_mcps, "chat turn tool scope");
+            Arc::new(ScopedRuntime::new(self.runtime.clone(), scoped_mcps))
         };
 
         // Wrap in RiskGatedToolRuntime for safety guards (capability / consequence / magnitude).
@@ -314,6 +468,35 @@ impl ChatSessions {
             parent = Some(node.id);
         }
         Ok(())
+    }
+}
+
+/// What [`ChatSessions::dispatch_turn`] resolved to.
+enum DispatchOutcome {
+    /// No dispatch routing to do (no dispatcher attached, dispatch failed, or the decision was
+    /// `ExecuteDirect`) — the caller runs the normal streaming execution path, scoped to these
+    /// MCPs when non-empty (the dispatcher's narrowing hint — see `DispatchTuning::narrow_direct_tools`
+    /// and `ChatSessions::build_turn_runtime`); empty means no narrowing, use the full grant.
+    Proceed(Vec<String>),
+    /// The turn is already answered (a clarifying question, a proposal confirmation, or a
+    /// subagent's report) — this text is the final reply, no execution needed.
+    Answered(String),
+}
+
+/// Render a dispatcher's clarifying questions as a plain reply.
+fn format_questions(questions: &[String]) -> String {
+    match questions {
+        [] => "I need a bit more information before I can help with that.".to_string(),
+        [only] => only.clone(),
+        many => {
+            let mut out = String::from("I have a few questions before I can help with that:\n");
+            for q in many {
+                out.push_str("- ");
+                out.push_str(q);
+                out.push('\n');
+            }
+            out
+        }
     }
 }
 
@@ -600,6 +783,269 @@ mod tests {
         assert!(
             offered.is_empty(),
             "ungranted MCP tools must be scoped out; got {offered:?}"
+        );
+    }
+
+    // ── Dispatch routing ─────────────────────────────────────────────────────
+
+    use liberado_common::config::DispatchTuning;
+    use liberado_common::{BlockReason, DispatchDecision};
+    use liberado_orchestrator::{RuntimeFactory, RuntimeSetupError};
+
+    struct NoopFactory;
+    #[async_trait]
+    impl RuntimeFactory for NoopFactory {
+        async fn runtime_for(
+            &self,
+            _allowed_mcps: &[String],
+            _provenance: liberado_common::WriteProvenance,
+        ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+            unreachable!("Clarify never builds a runtime")
+        }
+    }
+
+    /// A `ChatSessions` with dispatch routing attached: `dispatch_reply` scripts the dispatcher's
+    /// classifier (a `DispatchDecision` serialized as the "model" response), `chat_replies` scripts
+    /// the plain conversational executor for the `ExecuteDirect` fallthrough case.
+    fn sessions_with_dispatch(
+        root: &std::path::Path,
+        dispatch_decision: DispatchDecision,
+        chat_replies: Vec<CompletionResponse>,
+        orchestrator: Orchestrator,
+    ) -> ChatSessions {
+        let store = Arc::new(JsonlStore::new(root));
+        let dispatch_provider = Arc::new(MockProvider::with_script(
+            "dispatch",
+            [CompletionResponse::text(
+                serde_json::to_string(&dispatch_decision).unwrap(),
+            )],
+        ));
+        let dispatcher = Dispatcher::new(dispatch_provider, DispatchTuning::default(), 4);
+
+        let chat_provider = Arc::new(MockProvider::with_script("chat", chat_replies));
+        let executor = Executor::new(chat_provider, liberado_executor::Budget::default());
+
+        ChatSessions::new(store, executor, Arc::new(NoTools))
+            .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()), orchestrator)
+    }
+
+    #[tokio::test]
+    async fn clarify_decision_answers_without_executing() {
+        let dir = tempfile::tempdir().unwrap();
+        let decision = DispatchDecision {
+            action: DispatchAction::Clarify {
+                questions: vec!["which vault folder do you mean?".into()],
+                what_blocked: BlockReason::Ambiguous,
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        };
+        // The chat-path provider script is never touched — the turn is answered by the dispatcher
+        // before any conversational execution happens.
+        let orchestrator = Orchestrator::new(
+            Arc::new(MockProvider::with_script("exec", Vec::new())),
+            NoopFactory,
+            CapabilitySet::empty(),
+        );
+        let sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), orchestrator);
+
+        let id = sessions.create(None).await.unwrap();
+        let reply = sessions.turn(id, "clean up my notes").await.unwrap();
+        assert_eq!(reply, "which vault folder do you mean?");
+
+        // Persisted like any other turn: user message + assistant reply.
+        let history = sessions.history(id).await.unwrap();
+        assert!(history.iter().any(|m| m.content == "clean up my notes"));
+        assert!(
+            history
+                .iter()
+                .any(|m| m.content == "which vault folder do you mean?")
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_direct_decision_falls_through_to_normal_execution() {
+        let dir = tempfile::tempdir().unwrap();
+        let decision = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: Vec::new(),
+                relevant_mcps: Vec::new(),
+            },
+            confidence: 0.95,
+            rationale: "trivial".into(),
+        };
+        // ExecuteDirect never touches the orchestrator — NoopFactory would panic if it did.
+        let orchestrator = Orchestrator::new(
+            Arc::new(MockProvider::with_script("exec", Vec::new())),
+            NoopFactory,
+            CapabilitySet::empty(),
+        );
+        let sessions = sessions_with_dispatch(
+            dir.path(),
+            decision,
+            vec![CompletionResponse::text("Hello from the normal path!")],
+            orchestrator,
+        );
+
+        let id = sessions.create(None).await.unwrap();
+        let reply = sessions.turn(id, "hello").await.unwrap();
+        assert_eq!(reply, "Hello from the normal path!");
+    }
+
+    #[tokio::test]
+    async fn propose_decision_writes_a_proposal_file_and_confirms() {
+        use liberado_common::{Proposal, ProposalStatus, ProposedAction};
+
+        let dir = tempfile::tempdir().unwrap();
+        let decision = DispatchDecision {
+            action: DispatchAction::Propose {
+                proposed_action: ProposedAction::External {
+                    description: "send the weekly report email".into(),
+                },
+                rationale: "sending email is external".into(),
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        };
+        // Propose never touches the factory either — NoopFactory would panic if it did.
+        let orchestrator = Orchestrator::new(
+            Arc::new(MockProvider::with_script("exec", Vec::new())),
+            NoopFactory,
+            CapabilitySet::empty(),
+        );
+        let mut sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), orchestrator);
+        sessions = sessions.with_guards(Vec::new(), CapabilitySet::empty(), dir.path().join("data"));
+
+        let id = sessions.create(None).await.unwrap();
+        let reply = sessions
+            .turn(id, "email the team the weekly report")
+            .await
+            .unwrap();
+
+        assert!(
+            reply.contains("proposal"),
+            "expected a proposal confirmation, got: {reply}"
+        );
+        let proposals_dir = dir.path().join("data").join("proposals");
+        let entries: Vec<_> = std::fs::read_dir(&proposals_dir)
+            .expect("proposals dir should exist")
+            .filter_map(Result::ok)
+            .collect();
+        assert_eq!(entries.len(), 1, "exactly one proposal file written");
+        let contents = std::fs::read_to_string(entries[0].path()).unwrap();
+        let parsed = Proposal::from_note(&contents).expect("proposal note round-trips");
+        assert_eq!(parsed.status, ProposalStatus::Pending);
+    }
+
+    /// A runtime offering tools from two different MCP namespaces, so narrowing between them is
+    /// observable.
+    struct TwoMcpTools;
+    #[async_trait]
+    impl ToolRuntime for TwoMcpTools {
+        fn catalog(&self) -> Vec<ToolDef> {
+            vec![
+                ToolDef::new(
+                    "tasks-mcp:add",
+                    "add a task",
+                    serde_json::json!({ "type": "object" }),
+                ),
+                ToolDef::new(
+                    "email-mcp:send",
+                    "send an email",
+                    serde_json::json!({ "type": "object" }),
+                ),
+            ]
+        }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".into())
+        }
+    }
+
+    /// Build a `ChatSessions` granted both `tasks-mcp` and `email-mcp`, with dispatch attached and
+    /// scripted to return `relevant_mcps`, for testing dispatcher-narrowed tool surfacing.
+    fn sessions_for_narrowing_test(
+        dir: &std::path::Path,
+        relevant_mcps: Vec<String>,
+    ) -> (ChatSessions, Arc<MockProvider>) {
+        use liberado_common::Capability;
+
+        let decision = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: Vec::new(),
+                relevant_mcps,
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        };
+        let dispatch_provider = Arc::new(MockProvider::with_script(
+            "dispatch",
+            [CompletionResponse::text(
+                serde_json::to_string(&decision).unwrap(),
+            )],
+        ));
+        let dispatcher = Dispatcher::new(dispatch_provider, DispatchTuning::default(), 4);
+
+        let chat_provider = Arc::new(MockProvider::with_script(
+            "chat",
+            [CompletionResponse::text("done")],
+        ));
+        let executor = Executor::new(chat_provider.clone(), Budget::default());
+        let store = Arc::new(JsonlStore::new(dir));
+        let orchestrator = Orchestrator::new(
+            Arc::new(MockProvider::with_script("exec", Vec::new())),
+            NoopFactory,
+            CapabilitySet::empty(),
+        );
+        let capabilities = CapabilitySet::from_iter([
+            Capability::ExecuteMcp("tasks-mcp".into()),
+            Capability::ExecuteMcp("email-mcp".into()),
+        ]);
+        let sessions = ChatSessions::new(store, executor, Arc::new(TwoMcpTools))
+            .with_guards(Vec::new(), capabilities, dir.join("proposals"))
+            .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()), orchestrator);
+
+        (sessions, chat_provider)
+    }
+
+    #[tokio::test]
+    async fn execute_direct_relevant_mcps_narrows_the_surfaced_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sessions, chat_provider) =
+            sessions_for_narrowing_test(dir.path(), vec!["tasks-mcp".into()]);
+
+        let id = sessions.create(None).await.unwrap();
+        sessions.turn(id, "add milk to my list").await.unwrap();
+
+        let offered: Vec<String> = chat_provider.received_requests()[0]
+            .tools
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        assert_eq!(
+            offered,
+            vec!["tasks-mcp:add".to_string()],
+            "narrowed to only the relevant MCP, not the full grant"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_direct_empty_relevant_mcps_falls_back_to_full_grant() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sessions, chat_provider) = sessions_for_narrowing_test(dir.path(), Vec::new());
+
+        let id = sessions.create(None).await.unwrap();
+        sessions.turn(id, "do something").await.unwrap();
+
+        let mut offered: Vec<String> = chat_provider.received_requests()[0]
+            .tools
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        offered.sort();
+        assert_eq!(
+            offered,
+            vec!["email-mcp:send".to_string(), "tasks-mcp:add".to_string()],
+            "empty relevant_mcps must fall back to the full grant"
         );
     }
 }

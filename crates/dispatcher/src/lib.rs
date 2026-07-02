@@ -29,6 +29,14 @@ use liberado_provider::{CompletionRequest, Message, Provider, ProviderError, com
 use thiserror::Error;
 use tracing::Instrument;
 
+// Re-exported so existing `liberado_dispatcher::McpDescriptor` import paths (daemon, eval, this
+// crate's own `guards` module) keep working unchanged — it's the same type `liberado_common`'s
+// live `CapabilityCatalog` uses now, not a separate one. This crate used to define its own
+// `McpDescriptor` (name/description/consequence, no `provenance`), duplicating
+// `liberado_common::McpDescriptor` for a dependency-weight reason that no longer applied (this
+// crate already depends on `liberado_common` broadly).
+pub use liberado_common::McpDescriptor;
+
 /// What the dispatcher needs to route a single goal. The dispatcher deliberately runs with *less*
 /// context than the main agent (disjoint partitions); this is everything it sees.
 #[derive(Clone, Debug)]
@@ -41,16 +49,6 @@ pub struct DispatchRequest {
     pub capabilities: CapabilitySet,
     /// Correlation-chain depth: 0 for a user-initiated dispatch, >0 for a background reaction.
     pub reaction_depth: u32,
-}
-
-/// A catalog entry: an MCP the dispatcher may route to.
-#[derive(Clone, Debug)]
-pub struct McpDescriptor {
-    pub name: String,
-    pub description: String,
-    /// How risky this MCP's effects are (reversibility/externality) — the consequence guard gates
-    /// direct action that would touch a high-consequence MCP. Declared per server when registered.
-    pub consequence: Consequence,
 }
 
 /// Errors that abort a dispatch. Malformed model output does **not** appear here — it is handled
@@ -101,6 +99,7 @@ impl Dispatcher {
         async {
             let mut classified = self.classify(req).await?;
             ensure_correlation(&mut classified, goal_hash);
+            enforce_narrow_direct_tools(&mut classified, self.tuning.narrow_direct_tools);
 
             let decision =
                 match guards::evaluate(&classified, req, &self.tuning, self.max_reaction_depth) {
@@ -204,9 +203,14 @@ Bias to safety: when uncertain, or when consequences are high, prefer Clarify or
 over ExecuteDirect. Set `confidence` honestly in [0,1].
 
 Return ONLY JSON of the form (use exactly these fields — nothing else):
-{\"action\":{\"ExecuteDirect\":{\"seed_calls\":[{\"tool\":\"mcp:tool\",\"args\":{}}]}},\"confidence\":0.9,\"rationale\":\"...\"}
+{\"action\":{\"ExecuteDirect\":{\"seed_calls\":[{\"tool\":\"mcp:tool\",\"args\":{}}],\"relevant_mcps\":[\"...\"]}},\"confidence\":0.9,\"rationale\":\"...\"}
 {\"action\":{\"DispatchSubagent\":{\"goal\":\"...\",\"allowed_mcps\":[\"...\"],\"success_criteria\":[\"...\"]}},\"confidence\":0.8,\"rationale\":\"...\"}
 {\"action\":{\"Clarify\":{\"questions\":[\"...\"],\"what_blocked\":\"ambiguous\"}},\"confidence\":0.4,\"rationale\":\"...\"}
+
+For ExecuteDirect, also set `relevant_mcps` to the names (from the catalog) of the MCPs this goal \
+actually needs — same idea as DispatchSubagent's `allowed_mcps`, just for the direct-execution \
+case. Leave it empty if the goal doesn't clearly need any MCP, or if you're unsure (it only \
+narrows what the executor sees; it is never the sole source of truth for what's allowed).
 
 For DispatchSubagent, emit only goal, allowed_mcps (names from the catalog), and success_criteria. \
 `seed_calls` may be omitted (empty). Do not invent ids or capability objects.";
@@ -241,7 +245,7 @@ fn clarify_fallback() -> DispatchDecision {
 /// concrete-tool-call path — the primary "send an email" scenario.
 fn downgrade(classified: DispatchDecision, reason: BlockReason) -> DispatchDecision {
     if reason == BlockReason::HighConsequence
-        && let DispatchAction::ExecuteDirect { seed_calls } = &classified.action
+        && let DispatchAction::ExecuteDirect { seed_calls, .. } = &classified.action
         && !seed_calls.is_empty()
     {
         return downgrade_to_propose(classified);
@@ -252,7 +256,7 @@ fn downgrade(classified: DispatchDecision, reason: BlockReason) -> DispatchDecis
 /// Build the `Propose` a high-consequence concrete action downgrades to, preserving the original
 /// decision's seed calls (as the proposed action), confidence, and rationale.
 fn downgrade_to_propose(classified: DispatchDecision) -> DispatchDecision {
-    let DispatchAction::ExecuteDirect { seed_calls } = classified.action else {
+    let DispatchAction::ExecuteDirect { seed_calls, .. } = classified.action else {
         unreachable!("downgrade_to_propose is only called for a concrete ExecuteDirect");
     };
     DispatchDecision {
@@ -318,6 +322,19 @@ fn ensure_correlation(decision: &mut DispatchDecision, goal_hash: u64) {
     }
 }
 
+/// Deterministic post-classification enforcement of `DispatchTuning::narrow_direct_tools`: when
+/// off, clear whatever `relevant_mcps` the classifier produced so every downstream consumer
+/// (`Orchestrator`, `ChatSessions`) sees the same "no narrowing" signal it would if the model had
+/// never populated the field — one simple rule everywhere, no separate tunable-awareness needed
+/// per consumer. Same pattern as `ensure_correlation`: deterministic code, not model-trusted.
+fn enforce_narrow_direct_tools(decision: &mut DispatchDecision, narrow_direct_tools: bool) {
+    if !narrow_direct_tools
+        && let DispatchAction::ExecuteDirect { relevant_mcps, .. } = &mut decision.action
+    {
+        relevant_mcps.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,6 +357,7 @@ mod tests {
                 name: "tasks-mcp".into(),
                 description: "task ops".into(),
                 consequence: Consequence::Reversible,
+                provenance: None,
             }],
             capabilities,
             reaction_depth,
@@ -353,6 +371,7 @@ mod tests {
                     tool: tool.into(),
                     args: serde_json::json!({}),
                 }],
+                relevant_mcps: Vec::new(),
             },
             confidence,
             rationale: "test".into(),
@@ -378,6 +397,60 @@ mod tests {
         let sent = mock.last_request().unwrap();
         assert_eq!(sent.temperature, Some(0.0));
         assert!(matches!(sent.response_format, ResponseFormat::Json { .. }));
+    }
+
+    #[tokio::test]
+    async fn narrow_direct_tools_default_keeps_relevant_mcps() {
+        let decision = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: Vec::new(),
+                relevant_mcps: vec!["tasks-mcp".into()],
+            },
+            confidence: 0.95,
+            rationale: "test".into(),
+        };
+        let mock = scripted(&decision);
+        let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
+
+        let out = dispatcher
+            .dispatch(&request(caps("tasks-mcp"), 0))
+            .await
+            .unwrap();
+        match out.action {
+            DispatchAction::ExecuteDirect { relevant_mcps, .. } => {
+                assert_eq!(relevant_mcps, vec!["tasks-mcp".to_string()])
+            }
+            other => panic!("expected ExecuteDirect, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn narrow_direct_tools_off_clears_relevant_mcps() {
+        let decision = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: Vec::new(),
+                relevant_mcps: vec!["tasks-mcp".into()],
+            },
+            confidence: 0.95,
+            rationale: "test".into(),
+        };
+        let mock = scripted(&decision);
+        let tuning = DispatchTuning {
+            narrow_direct_tools: false,
+            ..DispatchTuning::default()
+        };
+        let dispatcher = Dispatcher::new(mock, tuning, 4);
+
+        let out = dispatcher
+            .dispatch(&request(caps("tasks-mcp"), 0))
+            .await
+            .unwrap();
+        match out.action {
+            DispatchAction::ExecuteDirect { relevant_mcps, .. } => {
+                assert!(relevant_mcps.is_empty(), "expected relevant_mcps cleared")
+            }
+            other => panic!("expected ExecuteDirect, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -424,6 +497,7 @@ mod tests {
                 name: "email".into(),
                 description: "send email".into(),
                 consequence: Consequence::External,
+                provenance: None,
             }],
             capabilities: caps("email"),
             reaction_depth: 0,
@@ -454,6 +528,7 @@ mod tests {
                 name: "vault".into(),
                 description: "git-tracked vault".into(),
                 consequence: Consequence::Reversible,
+                provenance: None,
             }],
             capabilities: caps("vault"),
             reaction_depth: 0,
@@ -461,6 +536,7 @@ mod tests {
         let decision = DispatchDecision {
             action: DispatchAction::ExecuteDirect {
                 seed_calls: Vec::new(),
+                relevant_mcps: Vec::new(),
             },
             confidence: 0.95,
             rationale: "test".into(),

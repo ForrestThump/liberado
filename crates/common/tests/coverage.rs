@@ -164,6 +164,7 @@ fn execute_direct_decision_round_trips() {
                 tool: "tasks-mcp:add".into(),
                 args: serde_json::json!({ "title": "milk" }),
             }],
+            relevant_mcps: Vec::new(),
         },
         confidence: 0.95,
         rationale: "trivial single-tool add".into(),

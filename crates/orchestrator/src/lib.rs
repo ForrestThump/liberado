@@ -21,11 +21,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use liberado_common::{
-    BlockReason, DispatchAction, DispatchDecision, Outcome, Proposal, ProposedAction, Report,
-    WriteProvenance, mcp_of,
+    BlockReason, Capability, CapabilitySet, DispatchAction, DispatchDecision, Outcome, Proposal,
+    ProposedAction, Report, WriteProvenance, mcp_of,
 };
 use liberado_executor::{Budget, ExecError, Executor, Task, ToolRuntime};
-use liberado_provider::{Provider, ToolInvocation};
+use liberado_provider::{Provider, ToolDef, ToolInvocation};
 use thiserror::Error;
 use tokio::sync::Semaphore;
 use tracing::Instrument;
@@ -107,16 +107,25 @@ pub trait RuntimeFactory: Send + Sync {
 pub struct Orchestrator {
     provider: Arc<dyn Provider>,
     factory: Box<dyn RuntimeFactory>,
+    /// The ceiling `ExecuteDirect` scopes its runtime to (see `run`'s `ExecuteDirect` arm). The
+    /// same `CapabilitySet` the caller's dispatch request was checked against — passing a wider
+    /// one here would let a direct execution reach MCPs the guard pre-flight never considered.
+    capabilities: CapabilitySet,
     source: String,
     direct_budget: Budget,
     subagent_budget: Budget,
 }
 
 impl Orchestrator {
-    pub fn new(provider: Arc<dyn Provider>, factory: impl RuntimeFactory + 'static) -> Self {
+    pub fn new(
+        provider: Arc<dyn Provider>,
+        factory: impl RuntimeFactory + 'static,
+        capabilities: CapabilitySet,
+    ) -> Self {
         Self {
             provider,
             factory: Box::new(factory),
+            capabilities,
             source: DEFAULT_SOURCE.to_string(),
             direct_budget: Budget::new(DIRECT_MAX_TURNS),
             subagent_budget: Budget::default(),
@@ -180,16 +189,51 @@ impl Orchestrator {
                     Ok(Disposition::Propose(proposal))
                 }
 
-                DispatchAction::ExecuteDirect { seed_calls } => {
-                    let provenanace =
-                        WriteProvenance::agent(self.source.clone(), trigger_correlation);
-                    let runtime = self.factory.runtime_for(&[], provenanace).await?;
+                DispatchAction::ExecuteDirect {
+                    seed_calls,
+                    relevant_mcps,
+                } => {
+                    // Scope to exactly the MCPs `self.capabilities` grants — an empty allow-list
+                    // means "every registered MCP" to `RuntimeFactory`/`ScopedRuntime` (the wrong
+                    // sense here, same reason `ChatSessions` special-cases it for its own scoping),
+                    // which would let an adaptive (non-seed) tool call reach any registered MCP
+                    // regardless of what the guard pre-flight actually checked the goal against.
+                    let granted: Vec<String> = self
+                        .capabilities
+                        .capabilities
+                        .iter()
+                        .filter_map(|c| match c {
+                            Capability::ExecuteMcp(name) => Some(name.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    // Further narrow within that ceiling when the classifier named which MCPs are
+                    // actually relevant (token-efficiency — see `DispatchTuning::narrow_direct_tools`).
+                    // Never widens: only MCPs already in `granted` survive the intersection, so a
+                    // hallucinated `relevant_mcps` entry (already guard-checked, but belt and
+                    // suspenders here too) can't grant more than the ceiling allows.
+                    let allowed_mcps: Vec<String> = if relevant_mcps.is_empty() {
+                        granted
+                    } else {
+                        granted
+                            .into_iter()
+                            .filter(|name| relevant_mcps.contains(name))
+                            .collect()
+                    };
                     tracing::debug!(
                         seed_count = seed_calls.len(),
+                        allowed_mcps = allowed_mcps.len(),
                         "building execute-direct task"
                     );
                     let task = Task::new(DIRECT_INSTRUCTIONS, goal).with_seed(seed_calls);
-                    let report = self.execute(&self.direct_budget, &*runtime, task).await?;
+                    let report = if allowed_mcps.is_empty() {
+                        self.execute(&self.direct_budget, &NoMcpRuntime, task).await?
+                    } else {
+                        let provenanace =
+                            WriteProvenance::agent(self.source.clone(), trigger_correlation);
+                        let runtime = self.factory.runtime_for(&allowed_mcps, provenanace).await?;
+                        self.execute(&self.direct_budget, &*runtime, task).await?
+                    };
                     tracing::Span::current().record("disposition", "reported");
                     tracing::info!(outcome = ?report.outcome, "execute-direct completed");
                     Ok(Disposition::Reported(report))
@@ -380,6 +424,22 @@ impl Orchestrator {
     }
 }
 
+/// A runtime that exposes no tools — used for `ExecuteDirect` when the acting component holds no
+/// `ExecuteMcp` grants at all, so an empty allow-list can't be mistaken for "everything visible"
+/// (see `Orchestrator::run`'s `ExecuteDirect` arm).
+struct NoMcpRuntime;
+
+#[async_trait]
+impl ToolRuntime for NoMcpRuntime {
+    fn catalog(&self) -> Vec<ToolDef> {
+        Vec::new()
+    }
+
+    async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+        Err("no MCP is granted to this component".into())
+    }
+}
+
 /// Build the subagent system prompt, appending its success criteria when present.
 fn subagent_instructions(success_criteria: &[String]) -> String {
     if success_criteria.is_empty() {
@@ -419,7 +479,7 @@ mod tests {
     #[test]
     fn with_source_overrides_default() {
         let provider = Arc::new(MockProvider::with_script("mock", vec![]));
-        let orch = Orchestrator::new(provider, NoopFactory).with_source("custom-source");
+        let orch = Orchestrator::new(provider, NoopFactory, CapabilitySet::empty()).with_source("custom-source");
         assert_eq!(orch.source, "custom-source");
     }
 
@@ -498,7 +558,7 @@ mod tests {
         ));
         let factory = RecordingFactory::default();
         let calls = factory.calls.clone();
-        let orch = Orchestrator::new(provider, factory);
+        let orch = Orchestrator::new(provider, factory, CapabilitySet::empty());
 
         let sub_dispatches = vec![
             SubDispatch {
@@ -570,7 +630,7 @@ mod tests {
 
         let provider = Arc::new(MockProvider::with_script("mock", [resp_a, resp_b]));
         let factory = RecordingFactory::default();
-        let orch = Orchestrator::new(provider, factory);
+        let orch = Orchestrator::new(provider, factory, CapabilitySet::empty());
 
         let sub_dispatches = vec![
             SubDispatch {
@@ -619,7 +679,7 @@ mod tests {
         ));
         let factory = RecordingFactory::default();
         let calls = factory.calls.clone();
-        let orch = Orchestrator::new(provider, factory);
+        let orch = Orchestrator::new(provider, factory, CapabilitySet::empty());
 
         let sub_dispatches = vec![
             SubDispatch {
@@ -659,7 +719,7 @@ mod tests {
             [submit_report_response("only task", "succeeded")],
         ));
         let factory = RecordingFactory::default();
-        let orch = Orchestrator::new(provider, factory);
+        let orch = Orchestrator::new(provider, factory, CapabilitySet::empty());
 
         let sub_dispatches = vec![SubDispatch {
             goal: "only".into(),

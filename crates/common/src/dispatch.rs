@@ -33,6 +33,14 @@ pub enum DispatchAction {
     ExecuteDirect {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         seed_calls: Vec<ToolCall>,
+        /// The MCPs the classifier judged relevant to this goal, narrowing what the executor's
+        /// runtime surfaces to the model — otherwise every granted MCP's full tool schemas get
+        /// sent every turn regardless of relevance (the token-efficiency gap this field closes).
+        /// Empty means no narrowing (the full grant applies) — also the effective value when
+        /// `DispatchTuning::narrow_direct_tools` is off, since `Dispatcher::dispatch` clears
+        /// whatever the model produced here in that case (deterministic, not model-trusted).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        relevant_mcps: Vec<String>,
     },
 
     /// Hand off to a narrowly-scoped subagent with a disjoint context slice.

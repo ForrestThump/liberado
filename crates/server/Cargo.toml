@@ -13,6 +13,7 @@ chat-client-contract = { workspace = true }
 liberado-bootstrap = { workspace = true }
 liberado-common = { workspace = true }
 liberado-daemon = { workspace = true }
+liberado-dispatcher = { workspace = true }
 liberado-orchestrator = { workspace = true }
 liberado-mcp = { workspace = true }
 liberado-executor = { workspace = true }

@@ -84,12 +84,20 @@ pub(crate) fn evaluate(
 /// treated as the MCP itself.
 fn referenced_mcps(action: &DispatchAction) -> Vec<&str> {
     match action {
-        // Pre-flight check over the classifier's opening move. The real boundary is runtime: the
-        // executor only offers tools the capability set permits, so an adaptive call it makes later
-        // is enforced there even though it isn't visible to this guard.
-        DispatchAction::ExecuteDirect { seed_calls } => {
-            seed_calls.iter().map(|c| mcp_of(&c.tool)).collect()
-        }
+        // Pre-flight check over the classifier's opening move (`seed_calls`) AND its narrowing hint
+        // (`relevant_mcps`, if the model populated one) — a hallucinated or out-of-scope name in
+        // either gets caught here, the same capability-gap protection `DispatchSubagent.allowed_mcps`
+        // already gets below. The real boundary is still runtime: the executor only offers tools the
+        // capability set permits, so an adaptive call it makes later is enforced there too, even
+        // though it isn't visible to this pre-flight guard.
+        DispatchAction::ExecuteDirect {
+            seed_calls,
+            relevant_mcps,
+        } => seed_calls
+            .iter()
+            .map(|c| mcp_of(&c.tool))
+            .chain(relevant_mcps.iter().map(String::as_str))
+            .collect(),
         DispatchAction::DispatchSubagent { allowed_mcps, .. } => {
             allowed_mcps.iter().map(String::as_str).collect()
         }
@@ -128,6 +136,7 @@ mod tests {
                 name: "tasks-mcp".into(),
                 description: "task ops".into(),
                 consequence: Consequence::Reversible,
+                provenance: None,
             }],
             capabilities,
             reaction_depth,
@@ -141,6 +150,7 @@ mod tests {
                     tool: tool.into(),
                     args: serde_json::json!({}),
                 }],
+                relevant_mcps: Vec::new(),
             },
             confidence,
             rationale: "test".into(),
@@ -206,6 +216,7 @@ mod tests {
                 name: "email".into(),
                 description: "send email".into(),
                 consequence: Consequence::External,
+                provenance: None,
             }],
             capabilities: granted("email"),
             reaction_depth: 0,
@@ -227,6 +238,7 @@ mod tests {
                 name: "vault".into(),
                 description: "git-tracked Obsidian vault".into(),
                 consequence: Consequence::Reversible,
+                provenance: None,
             }],
             capabilities: granted("vault"),
             reaction_depth: 0,
@@ -245,6 +257,7 @@ mod tests {
                 name: "vault".into(),
                 description: "git-tracked vault".into(),
                 consequence: Consequence::Reversible,
+                provenance: None,
             }],
             capabilities: granted("vault"),
             reaction_depth: 0,
@@ -297,6 +310,53 @@ mod tests {
                 4
             ),
             Some(BlockReason::CapabilityGap)
+        );
+    }
+
+    #[test]
+    fn execute_direct_requires_relevant_mcps_granted() {
+        // seed_calls references a granted MCP, but relevant_mcps names one that isn't — the
+        // narrowing hint gets the same capability-gap protection as seed_calls and allowed_mcps.
+        let d = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: vec![ToolCall {
+                    tool: "tasks-mcp:add".into(),
+                    args: serde_json::json!({}),
+                }],
+                relevant_mcps: vec!["tasks-mcp".into(), "email-mcp".into()],
+            },
+            confidence: 0.95,
+            rationale: "test".into(),
+        };
+        assert_eq!(
+            evaluate(
+                &d,
+                &req(granted("tasks-mcp"), 0),
+                &DispatchTuning::default(),
+                4
+            ),
+            Some(BlockReason::CapabilityGap)
+        );
+    }
+
+    #[test]
+    fn execute_direct_with_only_granted_relevant_mcps_passes() {
+        let d = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: Vec::new(),
+                relevant_mcps: vec!["tasks-mcp".into()],
+            },
+            confidence: 0.95,
+            rationale: "test".into(),
+        };
+        assert_eq!(
+            evaluate(
+                &d,
+                &req(granted("tasks-mcp"), 0),
+                &DispatchTuning::default(),
+                4
+            ),
+            None
         );
     }
 
