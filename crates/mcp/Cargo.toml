@@ -16,6 +16,7 @@ liberado-orchestrator = { workspace = true }
 turbomcp-client = { workspace = true, features = ["http"] }
 turbomcp-transport = { workspace = true }
 async-trait = { workspace = true }
+futures = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

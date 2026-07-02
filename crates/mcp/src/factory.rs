@@ -48,6 +48,41 @@ impl McpRegistry {
     pub fn len(&self) -> usize {
         self.connectors.len()
     }
+
+    /// Connect to every registered MCP independently and in parallel, tolerating individual
+    /// failures instead of aborting the whole batch — the "best effort" counterpart to
+    /// `RuntimeFactory::runtime_for`'s strict, all-required semantics (used by dispatch-routed
+    /// execution, where a missing *required* MCP should hard-fail, not silently narrow the
+    /// scope). Returns the names that failed alongside the runtime, so the caller can log/report
+    /// a summary; each individual failure is also logged at the point of failure.
+    pub async fn connect_all_best_effort(
+        &self,
+        provenance: WriteProvenance,
+    ) -> (Box<dyn ToolRuntime>, Vec<String>) {
+        let attempts = self.connectors.iter().map(|(name, connector)| {
+            let provenance = provenance.clone();
+            async move {
+                match connector.connect(provenance).await {
+                    Ok(runtime) => Ok((name.clone(), runtime)),
+                    Err(e) => Err((name.clone(), e)),
+                }
+            }
+        });
+        let results = futures::future::join_all(attempts).await;
+
+        let mut servers = Vec::new();
+        let mut failed = Vec::new();
+        for result in results {
+            match result {
+                Ok(entry) => servers.push(entry),
+                Err((name, e)) => {
+                    tracing::warn!(mcp = %name, error = %e, "MCP failed to connect — continuing without it");
+                    failed.push(name);
+                }
+            }
+        }
+        (Box::new(MultiMcpRuntime::new(servers)), failed)
+    }
 }
 
 #[async_trait]

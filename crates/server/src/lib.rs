@@ -22,7 +22,7 @@ use liberado_dispatcher::Dispatcher;
 use liberado_executor::{Budget, Executor, ToolRuntime};
 use liberado_main_agent::ChatSessions;
 use liberado_mcp::McpRegistry;
-use liberado_orchestrator::{Orchestrator, RuntimeFactory};
+use liberado_orchestrator::Orchestrator;
 use liberado_provider::Provider;
 use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
@@ -231,16 +231,13 @@ async fn build_chat(
     let (runtime, orchestrator): (Arc<dyn ToolRuntime>, Option<Orchestrator>) = match mcp {
         Some(registry) => {
             let provenance = WriteProvenance::agent("liberado-chat", "chat-session");
-            let rt: Arc<dyn ToolRuntime> = match registry.runtime_for(&[], provenance).await {
-                Ok(rt) => {
-                    info!("chat: connected MCP tools");
-                    Arc::from(rt)
-                }
-                Err(e) => {
-                    warn!(error = %e, "chat: MCP connect failed — continuing without tools");
-                    Arc::new(NoTools)
-                }
-            };
+            let (rt, failed) = registry.connect_all_best_effort(provenance).await;
+            let rt: Arc<dyn ToolRuntime> = Arc::from(rt);
+            if failed.is_empty() {
+                info!("chat: connected MCP tools");
+            } else {
+                warn!(failed = ?failed, "chat: some MCPs failed to connect — continuing with the rest");
+            }
             let orchestrator = Orchestrator::new(provider.clone(), registry, capabilities.clone());
             (rt, Some(orchestrator))
         }

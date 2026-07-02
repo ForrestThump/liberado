@@ -2951,6 +2951,7 @@ name = "liberado-mcp"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures",
  "liberado-common",
  "liberado-executor",
  "liberado-orchestrator",

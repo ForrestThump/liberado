@@ -94,6 +94,45 @@ impl McpConnector for ChannelConnector {
     }
 }
 
+/// A connector that always fails to connect — simulates a misconfigured or hung MCP server
+/// (e.g. `liberado-weather-mcp` defaulting to HTTP when stdio was expected).
+struct FailingConnector;
+
+#[async_trait::async_trait]
+impl McpConnector for FailingConnector {
+    async fn connect(
+        &self,
+        _provenance: WriteProvenance,
+    ) -> Result<Box<dyn liberado_executor::ToolRuntime>, RuntimeSetupError> {
+        Err(RuntimeSetupError("deliberate failure".into()))
+    }
+}
+
+/// A connector that succeeds after an injected delay — proves `connect_all_best_effort` runs
+/// connectors concurrently rather than one after another.
+struct SlowConnector {
+    server: EchoServer,
+    delay: std::time::Duration,
+}
+
+#[async_trait::async_trait]
+impl McpConnector for SlowConnector {
+    async fn connect(
+        &self,
+        provenance: WriteProvenance,
+    ) -> Result<Box<dyn liberado_executor::ToolRuntime>, RuntimeSetupError> {
+        tokio::time::sleep(self.delay).await;
+        let (transport, _server) =
+            turbomcp_server::transport::channel::run_in_process(&self.server)
+                .await
+                .map_err(|e| RuntimeSetupError(e.to_string()))?;
+        let runtime = TurbomcpRuntime::connect(Client::new(transport), provenance)
+            .await
+            .map_err(|e| RuntimeSetupError(e.to_string()))?;
+        Ok(Box::new(runtime))
+    }
+}
+
 fn registry() -> McpRegistry {
     McpRegistry::new()
         .register(
@@ -156,4 +195,86 @@ async fn allowed_mcps_selects_which_servers_are_in_scope() {
     assert!(err.contains("memory"), "{err}");
 
     assert_eq!(runtime.invoke(&call("tasks:add")).await.unwrap(), "added");
+}
+
+#[tokio::test]
+async fn best_effort_connects_the_healthy_ones_and_reports_the_failed() {
+    // One healthy server + one broken one — the healthy one's tools must still be usable, and the
+    // broken one must be named, not silently swallowed or allowed to abort the whole connect.
+    let registry = registry().register("weather", FailingConnector);
+
+    let (runtime, failed) = registry.connect_all_best_effort(prov()).await;
+
+    assert_eq!(failed, vec!["weather".to_string()]);
+    let names: Vec<String> = runtime.catalog().iter().map(|t| t.name.clone()).collect();
+    assert!(names.contains(&"tasks:add".to_string()), "{names:?}");
+    assert!(names.contains(&"memory:store".to_string()), "{names:?}");
+    assert!(!names.iter().any(|n| n.starts_with("weather:")), "{names:?}");
+    assert_eq!(runtime.invoke(&call("tasks:add")).await.unwrap(), "added");
+}
+
+#[tokio::test]
+async fn best_effort_with_every_connector_failing_yields_an_empty_but_valid_runtime() {
+    let registry = McpRegistry::new()
+        .register("weather", FailingConnector)
+        .register("caldav", FailingConnector);
+
+    let (runtime, mut failed) = registry.connect_all_best_effort(prov()).await;
+    failed.sort();
+
+    assert_eq!(failed, vec!["caldav".to_string(), "weather".to_string()]);
+    assert!(runtime.catalog().is_empty());
+    let err = runtime.invoke(&call("weather:forecast")).await.unwrap_err();
+    assert!(err.contains("weather"), "{err}");
+}
+
+#[tokio::test]
+async fn best_effort_with_every_connector_healthy_matches_runtime_for() {
+    let (runtime, failed) = registry().connect_all_best_effort(prov()).await;
+
+    assert!(failed.is_empty());
+    let mut names: Vec<String> = runtime.catalog().iter().map(|t| t.name.clone()).collect();
+    names.sort();
+    assert_eq!(names, vec!["memory:store".to_string(), "tasks:add".to_string()]);
+}
+
+#[tokio::test]
+async fn best_effort_connects_concurrently_not_sequentially() {
+    // Three servers each delayed ~200ms: if connections ran sequentially this would take ~600ms.
+    // Bound generously above one delay period to avoid CI flakiness while still catching a
+    // regression to sequential connection.
+    let delay = std::time::Duration::from_millis(200);
+    let registry = McpRegistry::new()
+        .register(
+            "a",
+            SlowConnector {
+                server: EchoServer { tool: "t", reply: "r" },
+                delay,
+            },
+        )
+        .register(
+            "b",
+            SlowConnector {
+                server: EchoServer { tool: "t", reply: "r" },
+                delay,
+            },
+        )
+        .register(
+            "c",
+            SlowConnector {
+                server: EchoServer { tool: "t", reply: "r" },
+                delay,
+            },
+        );
+
+    let start = std::time::Instant::now();
+    let (runtime, failed) = registry.connect_all_best_effort(prov()).await;
+    let elapsed = start.elapsed();
+
+    assert!(failed.is_empty());
+    assert_eq!(runtime.catalog().len(), 3);
+    assert!(
+        elapsed < delay * 2,
+        "expected ~{delay:?} (parallel), took {elapsed:?} — looks sequential"
+    );
 }
