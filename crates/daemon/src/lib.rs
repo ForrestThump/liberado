@@ -17,8 +17,7 @@ use std::time::{Duration, Instant};
 
 use debounce::Debouncer;
 use liberado_common::{
-    CapabilitySet, CapabilityCatalog, DispatchDecision, Event, EventPayload, McpDescriptor,
-    event_source,
+    CapabilitySet, CapabilityCatalog, DispatchDecision, Event, EventPayload, event_source,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_orchestrator::{Disposition, Orchestrator, OrchestratorError};
@@ -444,7 +443,7 @@ async fn sleep_until(deadline: Option<Instant>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liberado_common::WriteProvenance;
+    use liberado_common::{McpDescriptor, WriteProvenance};
     use std::time::Duration;
     use tempfile::TempDir;
     use tokio::sync::mpsc::unbounded_channel;
@@ -453,6 +452,41 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let daemon = Daemon::open("test", dir.path()).await.unwrap();
         (daemon, dir)
+    }
+
+    /// A runtime that records every `invoke` call, shared by the approved/pending proposal-execution
+    /// tests below (each previously hand-rolled its own field-for-field-identical copy of this).
+    #[derive(Clone, Default)]
+    struct RecordingRuntime {
+        invoked: std::sync::Arc<std::sync::Mutex<Vec<liberado_provider::ToolInvocation>>>,
+    }
+    #[async_trait::async_trait]
+    impl liberado_executor::ToolRuntime for RecordingRuntime {
+        fn catalog(&self) -> Vec<liberado_provider::ToolDef> {
+            Vec::new()
+        }
+        async fn invoke(
+            &self,
+            call: &liberado_provider::ToolInvocation,
+        ) -> Result<String, String> {
+            self.invoked.lock().unwrap().push(call.clone());
+            Ok("ok".into())
+        }
+    }
+    #[derive(Clone)]
+    struct RecordingFactory {
+        runtime: RecordingRuntime,
+    }
+    #[async_trait::async_trait]
+    impl liberado_orchestrator::RuntimeFactory for RecordingFactory {
+        async fn runtime_for(
+            &self,
+            _allowed_mcps: &[String],
+            _provenance: WriteProvenance,
+        ) -> Result<Box<dyn liberado_executor::ToolRuntime>, liberado_orchestrator::RuntimeSetupError>
+        {
+            Ok(Box::new(self.runtime.clone()))
+        }
     }
 
     #[tokio::test]
@@ -805,40 +839,8 @@ mod tests {
     #[tokio::test]
     async fn daemon_executes_an_approved_proposal() {
         use liberado_common::{Proposal, ProposalStatus, ProposedAction, ToolCall};
-        use liberado_executor::ToolRuntime;
-        use liberado_orchestrator::{Orchestrator, RuntimeFactory, RuntimeSetupError};
-        use liberado_provider::{MockProvider, ToolDef, ToolInvocation};
-        use std::sync::{Arc, Mutex};
-
-        // A runtime that records every invoke call.
-        #[derive(Clone, Default)]
-        struct RecordingRuntime {
-            invoked: Arc<Mutex<Vec<ToolInvocation>>>,
-        }
-        #[async_trait::async_trait]
-        impl ToolRuntime for RecordingRuntime {
-            fn catalog(&self) -> Vec<ToolDef> {
-                Vec::new()
-            }
-            async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
-                self.invoked.lock().unwrap().push(call.clone());
-                Ok("ok".into())
-            }
-        }
-        #[derive(Clone)]
-        struct RecordingFactory {
-            runtime: RecordingRuntime,
-        }
-        #[async_trait::async_trait]
-        impl RuntimeFactory for RecordingFactory {
-            async fn runtime_for(
-                &self,
-                _allowed_mcps: &[String],
-                _provenance: WriteProvenance,
-            ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
-                Ok(Box::new(self.runtime.clone()))
-            }
-        }
+        use liberado_orchestrator::Orchestrator;
+        use liberado_provider::MockProvider;
 
         let runtime = RecordingRuntime::default();
         let invoked = runtime.invoked.clone();
@@ -908,48 +910,17 @@ mod tests {
     #[tokio::test]
     async fn daemon_does_not_execute_a_pending_proposal() {
         use liberado_common::{Proposal, ProposalStatus, ProposedAction, ToolCall};
-        use liberado_executor::ToolRuntime;
-        use liberado_orchestrator::{Orchestrator, RuntimeFactory, RuntimeSetupError};
-        use liberado_provider::{MockProvider, ToolDef, ToolInvocation};
-        use std::sync::{Arc, Mutex};
+        use liberado_orchestrator::Orchestrator;
+        use liberado_provider::MockProvider;
 
-        #[derive(Clone, Default)]
-        struct SilentRuntime {
-            invoked: Arc<Mutex<Vec<ToolInvocation>>>,
-        }
-        #[async_trait::async_trait]
-        impl ToolRuntime for SilentRuntime {
-            fn catalog(&self) -> Vec<ToolDef> {
-                Vec::new()
-            }
-            async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
-                self.invoked.lock().unwrap().push(call.clone());
-                Ok("ok".into())
-            }
-        }
-        #[derive(Clone)]
-        struct SilentFactory {
-            runtime: SilentRuntime,
-        }
-        #[async_trait::async_trait]
-        impl RuntimeFactory for SilentFactory {
-            async fn runtime_for(
-                &self,
-                _allowed_mcps: &[String],
-                _provenance: WriteProvenance,
-            ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
-                Ok(Box::new(self.runtime.clone()))
-            }
-        }
-
-        let runtime = SilentRuntime::default();
+        let runtime = RecordingRuntime::default();
         let invoked = runtime.invoked.clone();
         let orch = Orchestrator::new(
-            Arc::new(MockProvider::with_script(
+            std::sync::Arc::new(MockProvider::with_script(
                 "mock",
                 Vec::<liberado_provider::CompletionResponse>::new(),
             )),
-            SilentFactory { runtime },
+            RecordingFactory { runtime },
             CapabilitySet::empty(),
             Vec::new(),
             std::env::temp_dir(),

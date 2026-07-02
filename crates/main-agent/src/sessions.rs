@@ -384,15 +384,7 @@ impl ChatSessions {
         // Capability scoping: surface only MCPs the chat agent is granted, every turn, regardless of
         // how the message is phrased. The model sees the full granted tool set (robust — no missed
         // requests). An empty grant set scopes to nothing (no tools visible).
-        let granted_mcps: Vec<String> = self
-            .capabilities
-            .capabilities
-            .iter()
-            .filter_map(|c| match c {
-                liberado_common::Capability::ExecuteMcp(name) => Some(name.clone()),
-                _ => None,
-            })
-            .collect();
+        let granted_mcps: Vec<String> = self.capabilities.granted_mcps();
         // Dispatcher-narrowed tool surfacing (the token-efficiency piece — see module docs): when
         // the dispatch step named specific relevant MCPs for this goal, further narrow within the
         // granted ceiling instead of always surfacing every granted MCP's full tool schemas. Never

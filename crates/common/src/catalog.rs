@@ -106,6 +106,15 @@ impl CapabilityCatalog {
     pub fn len(&self) -> usize {
         self.inner.read().unwrap().mcps.len()
     }
+
+    /// `(mcp_name, consequence)` pairs for every registered descriptor — the shape
+    /// `RiskGatedToolRuntime`'s consequence check and `Orchestrator`'s runtime-level gate consume.
+    pub fn consequence_catalog(&self) -> Vec<(String, Consequence)> {
+        self.descriptors()
+            .iter()
+            .map(|d| (d.name.clone(), d.consequence))
+            .collect()
+    }
 }
 
 impl Default for CapabilityCatalog {

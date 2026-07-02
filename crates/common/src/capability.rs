@@ -190,6 +190,19 @@ impl CapabilitySet {
             .any(|c| matches!(c, Capability::ExecuteMcp(name) if name == mcp))
     }
 
+    /// The MCP names this set grants `ExecuteMcp` on, in grant order. The runtime-scoping ceiling
+    /// derived from a component's capabilities (an empty allow-list elsewhere in the codebase means
+    /// "every registered MCP" — this is how callers derive the actual granted set instead).
+    pub fn granted_mcps(&self) -> Vec<String> {
+        self.capabilities
+            .iter()
+            .filter_map(|c| match c {
+                Capability::ExecuteMcp(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Narrow this set to the intersection with `other`. This is the **only** way to derive a
     /// delegated set — the result can never contain a capability absent from `self`, so
     /// authority can only shrink down a delegation chain (Decision 4 invariant).

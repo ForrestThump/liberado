@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use liberado_common::{
-    BlockReason, Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision,
-    Outcome, Proposal, ProposedAction, Report, WriteProvenance, mcp_of,
+    BlockReason, CapabilitySet, Consequence, DispatchAction, DispatchDecision, Outcome, Proposal,
+    ProposedAction, Report, WriteProvenance, mcp_of,
 };
 use liberado_executor::{Budget, ExecError, Executor, RiskGatedToolRuntime, Task, ToolRuntime};
 use liberado_provider::{Provider, ToolDef, ToolInvocation};
@@ -207,15 +207,7 @@ impl Orchestrator {
                     // sense here, same reason `ChatSessions` special-cases it for its own scoping),
                     // which would let an adaptive (non-seed) tool call reach any registered MCP
                     // regardless of what the guard pre-flight actually checked the goal against.
-                    let granted: Vec<String> = self
-                        .capabilities
-                        .capabilities
-                        .iter()
-                        .filter_map(|c| match c {
-                            Capability::ExecuteMcp(name) => Some(name.clone()),
-                            _ => None,
-                        })
-                        .collect();
+                    let granted: Vec<String> = self.capabilities.granted_mcps();
                     // Further narrow within that ceiling when the classifier named which MCPs are
                     // actually relevant (token-efficiency — see `DispatchTuning::narrow_direct_tools`).
                     // Never widens: only MCPs already in `granted` survive the intersection, so a

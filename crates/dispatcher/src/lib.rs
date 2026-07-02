@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use liberado_common::config::DispatchTuning;
 use liberado_common::{
-    BlockReason, CapabilitySet, Consequence, DispatchAction, DispatchDecision, ProposedAction,
+    BlockReason, CapabilitySet, DispatchAction, DispatchDecision, ProposedAction,
 };
 use liberado_provider::{CompletionRequest, Message, Provider, ProviderError, complete_json};
 use thiserror::Error;
@@ -338,7 +338,7 @@ fn enforce_narrow_direct_tools(decision: &mut DispatchDecision, narrow_direct_to
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liberado_common::{Capability, ToolCall};
+    use liberado_common::{Capability, Consequence, ToolCall};
     use liberado_provider::{CompletionResponse, MockProvider, ResponseFormat};
 
     fn scripted(decision: &DispatchDecision) -> Arc<MockProvider> {

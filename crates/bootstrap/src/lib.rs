@@ -46,6 +46,14 @@ pub fn mcp_install_dir() -> PathBuf {
         .join("mcp-bin")
 }
 
+/// Where operational data (conversation logs, proposal files) lives — outside the vault (Decision 12),
+/// so a vault watcher never reacts to it. `LIBERADO_DATA_DIR` env var wins; otherwise `.liberado`
+/// relative to the working directory. Shared by both the chat-boot path (`liberado-server`) and the
+/// daemon-boot path (this crate), which each used to resolve this independently.
+pub fn data_dir() -> PathBuf {
+    PathBuf::from(std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into()))
+}
+
 /// Build the shared inference provider from the environment (`DEEPSEEK_API_KEY`). `None` means no key
 /// is set, so the daemon runs watch-only and chat is disabled.
 pub fn provider_from_env() -> Option<Arc<dyn Provider>> {
@@ -120,13 +128,8 @@ pub fn configure_daemon(
     // Runtime-level gating ingredients for the orchestrator's adaptive (non-seed) tool calls — the
     // same consequence catalog and non-vault proposals convention chat's own RiskGatedToolRuntime
     // uses (see `RiskGatedToolRuntime`'s doc comment on why proposals stay out of the vault).
-    let consequences: Vec<(String, liberado_common::Consequence)> = catalog
-        .descriptors()
-        .iter()
-        .map(|d| (d.name.clone(), d.consequence))
-        .collect();
-    let data_dir = std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into());
-    let proposals_dir = PathBuf::from(data_dir).join("proposals");
+    let consequences = catalog.consequence_catalog();
+    let proposals_dir = data_dir().join("proposals");
     let daemon = daemon.with_dispatcher(dispatcher, catalog, capabilities.clone());
     match mcp_registry_from_config(config) {
         Some(factory) => {
