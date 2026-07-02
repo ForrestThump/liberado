@@ -1,7 +1,7 @@
 //! # liberado-server
 //!
 //! The Liberado daemon process, as a library: it assembles the provider/chat/daemon (via
-//! `liberado_bootstrap`), spawns the vault watch loop, and serves the HTTP/SSE API (`docs/interface.md`)
+//! `liberado_bootstrap`), spawns the vault watch loop, and serves the HTTP/SSE API (`docs/reference/api.md`)
 //! plus the built web frontend. The `liberado serve` subcommand calls [`run`]; this crate ships no
 //! binary and does not init the global tracing subscriber (the CLI owns that, so a library embedding
 //! us doesn't fight over it).
@@ -67,6 +67,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // Build the provider once and share it between the daemon (dispatch/execute) and chat.
     let provider = liberado_bootstrap::provider_from_env();
     let dispatcher_attached = provider.is_some();
+    let model_name = provider.as_ref().map(|p| p.model().to_string());
     let mcp = liberado_bootstrap::mcp_registry_from_config(&config);
     let orchestrator_attached = dispatcher_attached && mcp.is_some();
 
@@ -96,6 +97,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         chat_tools,
         chat_tool_names,
         catalog: capability_catalog,
+        model_name,
     });
 
     let daemon = Daemon::open("webui", &vault_path).await?;
@@ -122,7 +124,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         )
         .route(
             "/api/conversations/{id}",
-            axum::routing::get(api::get_conversation),
+            axum::routing::get(api::get_conversation).patch(api::patch_conversation_title),
         )
         .layer(CorsLayer::permissive())
         .with_state(state)

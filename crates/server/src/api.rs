@@ -32,7 +32,7 @@ pub struct ChatRequest {
     pub session: Option<Ulid>,
 }
 
-/// Streaming chat — the shared client contract (see `docs/interface.md`). Returns
+/// Streaming chat — the shared client contract (see `docs/reference/api.md`). Returns
 /// `text/event-stream`; events: `token` (answer delta), `tool` (a call starting, `{name,args}`),
 /// `tool_result` (its outcome, `{name,ok,preview}`), `done`, `failed`. Available as both `POST`
 /// (JSON body — native clients) and `GET` (`?message=…` — browser
@@ -222,6 +222,44 @@ pub async fn list_conversations(State(state): State<Arc<AppState>>) -> impl Into
     }
 }
 
+/// `PATCH /api/conversations/{id}` — update the title of an existing conversation.
+#[derive(Deserialize)]
+pub struct TitleRequest {
+    pub title: String,
+}
+
+pub async fn patch_conversation_title(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Ulid>,
+    Json(req): Json<TitleRequest>,
+) -> impl IntoResponse {
+    let Some(sessions) = &state.chat else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: "chat is disabled — set DEEPSEEK_API_KEY".into(),
+            }),
+        )
+            .into_response();
+    };
+    match sessions.set_title(id, req.title).await {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(liberado_main_agent::SessionError::Store(
+            liberado_conversation_store::StoreError::NotFound(_),
+        )) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "conversation not found".into(),
+            }),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "PATCH title failed for conversation {id}");
+            chat_error(e)
+        }
+    }
+}
+
 /// `GET /api/conversations/{id}` — the full message history of one conversation, for reopening it.
 /// 404 when the conversation does not exist, 500 on any other store error.
 pub async fn get_conversation(
@@ -268,7 +306,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         dispatcher_attached: state.dispatcher_attached,
         orchestrator_attached: state.orchestrator_attached,
         reactions_seen: reactions_len as u64,
-        model_name: None,
+        model_name: state.model_name.clone(),
         token_usage_total: None,
         context_window: None,
         chat_tools: state.chat_tools,
@@ -278,6 +316,17 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 pub async fn catalog(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let descriptors = state.catalog.descriptors();
+
+    // `chat_tool_names` is the connected runtime's real, flat `<mcp>:<tool>`-prefixed catalog
+    // (built once at boot in `build_chat`) — group it by server name so each row below gets its
+    // actual tool breakdown instead of the tool_count:0/tool_names:[] stub this used to return.
+    let mut tools_by_mcp: std::collections::HashMap<&str, Vec<String>> = std::collections::HashMap::new();
+    for tool_name in &state.chat_tool_names {
+        let mcp = liberado_common::mcp_of(tool_name);
+        let bare = tool_name.strip_prefix(&format!("{mcp}:")).unwrap_or(tool_name);
+        tools_by_mcp.entry(mcp).or_default().push(bare.to_string());
+    }
+
     let mcps = descriptors
         .iter()
         .map(|d| {
@@ -288,15 +337,14 @@ pub async fn catalog(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 .ok()
                 .and_then(|v| v.as_str().map(String::from))
                 .unwrap_or_default();
+            let tool_names = tools_by_mcp.get(d.name.as_str()).cloned().unwrap_or_default();
 
             McpInfo {
                 name: d.name.clone(),
                 description: d.description.clone(),
                 consequence,
-                // TODO: no per-MCP tool count source yet — McpDescriptor only has
-                // name/description/consequence/provenance; no per-MCP tool lists available.
-                tool_count: 0,
-                tool_names: Vec::new(),
+                tool_count: tool_names.len(),
+                tool_names,
                 provenance: d.provenance.clone(),
             }
         })

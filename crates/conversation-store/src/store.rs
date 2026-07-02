@@ -39,4 +39,7 @@ pub trait ConversationStore: Send + Sync {
 
     /// All conversation headers, newest first (by id).
     async fn list(&self) -> StoreResult<Vec<ConversationHeader>>;
+
+    /// Overwrite the title of an existing conversation. Idempotent across calls.
+    async fn set_title(&self, conversation: Ulid, title: String) -> StoreResult<()>;
 }

@@ -90,6 +90,7 @@ fn StatusBanner(status: DaemonStatus) -> Element {
                 Stat { label: "Vault", value: &status.vault_path }
                 Stat { label: "Watcher", value: bool_label(status.watcher_active) }
                 Stat { label: "Dispatcher", value: bool_label(status.dispatcher_attached) }
+                Stat { label: "Model", value: status.model_name.as_deref().unwrap_or("—") }
                 Stat { label: "Reactions", value: &status.reactions_seen.to_string() }
             }
         }

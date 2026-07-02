@@ -183,7 +183,8 @@ pub enum ReactionOutcome {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ConvHeader {
     pub id: String,
-    pub title: String,
+    #[serde(default)]
+    pub title: Option<String>,
     pub created_at: String,
     /// Parent conversation id — set when this conversation was forked/spawned from another.
     #[serde(default)]
@@ -554,7 +555,7 @@ mod tests {
     fn conv_header_roundtrip_with_parent() {
         let h = ConvHeader {
             id: "c1".into(),
-            title: "test conversation".into(),
+            title: Some("test conversation".into()),
             created_at: "2025-06-25T12:00:00Z".into(),
             parent_conversation: Some("c0".into()),
             spawned_by: Some("msg-5".into()),
@@ -577,7 +578,7 @@ mod tests {
     fn conv_header_default_is_all_empty() {
         let h = ConvHeader::default();
         assert!(h.id.is_empty());
-        assert!(h.title.is_empty());
+        assert!(h.title.is_none());
         assert!(h.parent_conversation.is_none());
     }
 

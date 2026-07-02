@@ -216,6 +216,11 @@ impl ChatSessions {
         Ok(nodes.into_iter().map(|n| n.message).collect())
     }
 
+    /// Set the title of a conversation. Idempotent — subsequent calls overwrite the same field.
+    pub async fn set_title(&self, session: Ulid, title: String) -> SessionResult<()> {
+        Ok(self.store.set_title(session, title).await?)
+    }
+
     // ── private helpers ──────────────────────────────────────────────────────
 
     /// Build a per-turn [`ToolRuntime`] that scopes the visible tool surface to the granted

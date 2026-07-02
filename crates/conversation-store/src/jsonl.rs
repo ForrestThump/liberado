@@ -298,4 +298,30 @@ impl ConversationStore for JsonlStore {
         headers.sort_by(|a, b| b.id.cmp(&a.id));
         Ok(headers)
     }
+
+    async fn set_title(&self, conversation: Ulid, title: String) -> StoreResult<()> {
+        // Hold the same per-conversation lock `append` does: this rewrites the whole file from a
+        // snapshot, so without the lock a concurrent append could land between the read and the
+        // write and be silently dropped by the overwrite.
+        let lock = self.lock_for(conversation);
+        let _guard = lock.lock().await;
+
+        let (existing, nodes) = self.load(conversation).await?;
+        let updated = ConversationHeader {
+            id: existing.id,
+            title: Some(title),
+            parent_conversation: existing.parent_conversation,
+            spawned_by: existing.spawned_by,
+            created_at: existing.created_at,
+        };
+        let mut contents = serde_json::to_string(&Record::Header(updated))?;
+        contents.push('\n');
+        for node in nodes {
+            contents.push_str(&serde_json::to_string(&Record::Node(node))?);
+            contents.push('\n');
+        }
+        let path = self.path_for(conversation);
+        tokio::fs::write(&path, contents).await?;
+        Ok(())
+    }
 }

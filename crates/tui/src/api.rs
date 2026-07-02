@@ -205,7 +205,7 @@ mod tests {
     fn conv_header_serde_roundtrip_with_parent() {
         let header = ConvHeader {
             id: "c1".into(),
-            title: "test conversation".into(),
+            title: Some("test conversation".into()),
             created_at: "2025-06-25T12:00:00Z".into(),
             parent_conversation: Some("c0".into()),
             spawned_by: Some("msg-5".into()),
@@ -234,7 +234,7 @@ mod tests {
     fn conv_header_default_is_all_empty() {
         let header = ConvHeader::default();
         assert!(header.id.is_empty());
-        assert!(header.title.is_empty());
+        assert!(header.title.is_none());
         assert!(header.parent_conversation.is_none());
     }
 

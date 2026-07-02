@@ -36,12 +36,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
         .iter()
         .enumerate()
         .map(|(i, node)| {
-            let title_str = &node.header.title;
-            let display = if title_str.is_empty() {
-                "(untitled)"
-            } else {
-                title_str
-            };
+            let display = node.header.title.as_deref().unwrap_or("(untitled)");
             let id_short = short_id(&node.header.id);
             let rel = relative_time(&node.header.created_at);
             let active = app.session.as_deref() == Some(node.header.id.as_str());

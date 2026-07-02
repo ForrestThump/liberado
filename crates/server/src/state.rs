@@ -28,6 +28,10 @@ pub struct AppState {
     /// and consequence. Populated at boot from `config.topology.mcps` and updated at runtime
     /// as MCPs come and go. Exposed via `GET /api/catalog`.
     pub catalog: Arc<CapabilityCatalog>,
+    /// The active model id, from `Provider::model()` (`None` when no provider is configured).
+    /// Display-only for now — there is no runtime model switch; the model is fixed at daemon
+    /// startup by config/env (`DEEPSEEK_MODEL`).
+    pub model_name: Option<String>,
 }
 
 /// A tool runtime with no tools — chat still works (just conversation) when no MCP is configured.
