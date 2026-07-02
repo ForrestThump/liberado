@@ -7,7 +7,7 @@
 //!    consumer side of the upstream `metadata` passthrough.
 //! 2. **Consumer-side hash-join attribution** ([`attribution`]). Given an observed change, decide
 //!    *react or suppress* by matching the file's content hash against the `after_hash` of a recent
-//!    agent write (concurrency spec §6). This is what stops reactive ACPs from reacting to their
+//!    agent write (concurrency spec §6). This is what stops reactive hooks from reacting to their
 //!    own writes.
 //!
 //! It is also the single place the §8.1 upstream-dependency fallbacks are isolated (see
@@ -35,7 +35,7 @@ pub use turbovault_vault::VaultEvent;
 
 /// A handle to a Turbovault-backed vault with the audit log enabled.
 ///
-/// Cheap to clone (everything is `Arc`-shared), so the daemon, MCPs, and ACPs can hold their own
+/// Cheap to clone (everything is `Arc`-shared), so the daemon, MCPs, and hooks can hold their own
 /// handles to the same vault.
 #[derive(Clone)]
 pub struct Vault {

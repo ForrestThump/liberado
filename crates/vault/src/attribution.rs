@@ -10,7 +10,7 @@
 //! this robust to event coalescing and the human-edits-after-agent case: whichever agent write
 //! produced the *current* bytes is the one that explains them.
 //!
-//! Recency, cross-ACP correlation de-looping, and reaction-depth limits are layered by the daemon
+//! Recency, cross-hook correlation de-looping, and reaction-depth limits are layered by the daemon
 //! on top of this primitive (it owns the event timestamp and the cascade state); this module is
 //! the pure content-identity join.
 

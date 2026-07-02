@@ -1,7 +1,7 @@
 //! # liberado-common
 //!
 //! The shared vocabulary of the Liberado system. Every other crate (daemon, dispatcher,
-//! MCPs, ACPs, TUI) compiles against these types, so this crate is deliberately
+//! MCPs, hooks, TUI) compiles against these types, so this crate is deliberately
 //! dependency-light and free of any I/O or runtime concerns — it is *types and pure
 //! functions* only.
 //!
@@ -12,7 +12,7 @@
 //! - [`provenance`] — [`provenance::WriteProvenance`], attached to Turbovault audit entries
 //!   so reactive consumers can attribute writes and break loops (Decision 5).
 //! - [`event`] — the standardized [`event::Event`] payload that flows from every trigger
-//!   source (vault subscription, timers, homelab hooks) into ACPs (`life-os-architecture.md`
+//!   source (vault subscription, timers, homelab hooks) into hooks (`life-os-architecture.md`
 //!   §5).
 //! - [`dispatch`] — [`dispatch::DispatchDecision`] / [`dispatch::Report`] and the execution
 //!   model the dispatcher emits (Decision 1, `liberado-dispatch-logic-spec.md`).

@@ -1,4 +1,4 @@
-# Liberado Config Spec — One Resolved Model, Many Small Files, Fail-Fast
+﻿# Liberado Config Spec — One Resolved Model, Many Small Files, Fail-Fast
 
 **Status**: Resolves Tier-3 Decision 14 (single source of truth for config / topology). Actionable.
 **Owner**: Shiloh Mangus
@@ -23,7 +23,7 @@
 4. **Out of the vault, homelab-local.** Config lives on the machine running the system; you `ssh` in
    to change it. It is never synced into the vault (boot-order chicken-and-egg; and a sync conflict
    or phone edit must never be able to alter the containment boundary).
-5. **Agents do not write config.** No MCP, ACP, dispatcher, or subagent has a capability to modify
+5. **Agents do not write config.** No MCP, hook, dispatcher, or subagent has a capability to modify
    config files. (User-approval-gated config changes *through* the system are a v2+ roadmap item,
    explicitly out of scope for initial work.)
 6. **Secrets are not config.** They live in env / systemd credentials and are referenced by name
@@ -36,7 +36,7 @@ and risk profiles:
 
 | Kind | Examples | Why it lives where it does |
 |---|---|---|
-| **Topology / wiring** | enabled MCPs/ACPs, ports, socket paths, webhook URLs, model/provider selection | The daemon needs the whole picture to wire and boot. Homelab-local. |
+| **Topology / wiring** | enabled MCPs/hooks, ports, socket paths, webhook URLs, model/provider selection | The daemon needs the whole picture to wire and boot. Homelab-local. |
 | **Security policy** | zones, write-classes, capability grants, secret *references* | The containment surface (Decision 4). **Must be central + auditable in one place** — never scattered per-module, or a module could under-declare its own limits. |
 | **Behavior tunables** | thresholds, settle windows, `MAX_*`, schedules | Benign (a wrong value degrades behavior, never breaches containment). Mostly defaults-in-code with optional overrides. |
 
@@ -67,9 +67,9 @@ A single loader merges all sources into the typed model, then runs **cross-cutti
 before anything starts. Examples of what it rejects:
 
 - A capability or write-class that references a **zone not defined** in `policy`.
-- An ACP/MCP named in `policy` (grants) that **does not exist / is not enabled** in `topology`.
+- A hook/MCP named in `policy` (grants) that **does not exist / is not enabled** in `topology`.
 - **Port / socket-path collisions** across components.
-- An enabled ACP with **no trigger** (neither subscription routing nor a webhook/timer).
+- An enabled hook with **no trigger** (neither subscription routing nor a webhook/timer).
 - A **secret reference** with no corresponding env/systemd credential present.
 - **Duplicate ownership** of a setting across files.
 - Out-of-range tunables (e.g. `MAX_CONCURRENT_SUBAGENTS = 0`).

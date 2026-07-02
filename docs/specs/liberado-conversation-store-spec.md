@@ -247,5 +247,5 @@ exists:
 - **Decision 12** (`liberado-architecture-decisions.md`) — append-only JSONL outside the vault; this
   spec is the conversation-shaped instance of the same rule.
 - **Decision 17** (`liberado-architecture-decisions.md`) — the log entry this spec resolves.
-- `docs/interface.md` — the chat API/SSE contract; "Sessions / Persistence" on its roadmap is this
+- `docs/reference/api.md` — the chat API/SSE contract; "Sessions / Persistence" on its roadmap is this
   store surfacing through the API.

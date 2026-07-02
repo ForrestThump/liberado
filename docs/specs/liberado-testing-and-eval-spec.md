@@ -1,4 +1,4 @@
-# Liberado Testing & Eval Spec — Integration Tests at the Two Ingress Points
+﻿# Liberado Testing & Eval Spec — Integration Tests at the Two Ingress Points
 
 **Status**: Resolves Tier-3 Decision 16 (testing seams for nondeterministic dispatch). Actionable.
 **Owner**: Shiloh Mangus
@@ -18,7 +18,7 @@ what happens.
 
 1. **Simulated user prompt** → main agent → ContextPolicy → dispatcher → (execute | subagent |
    clarify) → outcome.
-2. **Simulated vault event** → daemon subscription → attribution/de-loop → ACP → dispatcher →
+2. **Simulated vault event** → daemon subscription → attribution/de-loop → hook → dispatcher →
    outcome. (Covers inbox capture, ambient sweep, decisions/reviews reactions, etc.)
 
 **Mocked externals** (so a scenario is hermetic and side-effect-free):

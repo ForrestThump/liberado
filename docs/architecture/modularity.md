@@ -1,6 +1,6 @@
-# Modularity — The Seam Plan
+﻿# Modularity — The Seam Plan
 
-This page records the concrete moves that turn the three pillars' "modular MCP/ACP substrate" into
+This page records the concrete moves that turn the three pillars' "modular MCP/hook substrate" into
 reality. It is the engineering companion to the [mesh vision](../ideas/meshify.md) and the
 [roadmap's mesh checkpoints](../roadmap/current.md).
 
@@ -16,7 +16,7 @@ the whole, the boundary is not real yet. `conversation-store` already passes: it
   **TUI depends only on that**, making it a standalone TUI-for-any-agent library rather than a
   Liberado-coupled binary. This is the near-term modularity proof: a client that needs nothing from
   the agent internals but the contract.
-- **Define an event-source / ACP trait** — the seam that makes the vault a plugin. Vault-watch and
+- **Define an event-source / hook trait** — the seam that makes the vault a plugin. Vault-watch and
   cron both implement it, so the daemon consumes events without knowing where they came from. This is
   what demotes TurboVault from hard dependency to default-privileged plugin (see Decision 19).
 - **Dispatcher-as-library** — the tool-advisor is independently useful on its own (route a goal over

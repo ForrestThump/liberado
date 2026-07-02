@@ -13,7 +13,7 @@
 //!
 //! Durations are stored as plain seconds (`*_secs`) for unambiguous TOML/serde. The actual
 //! file loader + cross-cutting validation (port collisions, dangling zone refs, triggerless
-//! ACPs) is the daemon's job; [`Config::validate`] here covers the model-level invariants that
+//! hooks) is the daemon's job; [`Config::validate`] here covers the model-level invariants that
 //! can be checked from these types alone.
 
 use std::collections::HashMap;
@@ -54,8 +54,8 @@ pub struct Topology {
     pub model_roles: HashMap<ModelRole, String>,
     /// Enabled MCP servers (each carries the routing + risk metadata the dispatcher needs).
     pub mcps: Vec<McpConfig>,
-    /// Enabled ACP webhook receivers.
-    pub acps: Vec<ComponentConfig>,
+    /// Enabled hook (webhook) receivers.
+    pub hooks: Vec<ComponentConfig>,
 }
 
 impl Default for Topology {
@@ -67,12 +67,12 @@ impl Default for Topology {
             models: Vec::new(),
             model_roles: HashMap::new(),
             mcps: Vec::new(),
-            acps: Vec::new(),
+            hooks: Vec::new(),
         }
     }
 }
 
-/// A wired component (ACP): how it's reached and whether it's on. MCPs use [`McpConfig`], which
+/// A wired component (hook): how it's reached and whether it's on. MCPs use [`McpConfig`], which
 /// additionally carries the routing description + risk rating the dispatcher needs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentConfig {
@@ -168,7 +168,7 @@ pub struct ZonePolicy {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Grant {
-    /// Component the grant applies to (MCP/ACP/subagent role name).
+    /// Component the grant applies to (MCP/hook/subagent role name).
     pub component: String,
     pub capabilities: Vec<Capability>,
 }
@@ -392,7 +392,7 @@ impl Config {
 
     /// Validate invariants checkable from the resolved model alone. The daemon's loader layers
     /// additional cross-cutting checks on top (port/socket collisions, dangling zone/secret
-    /// refs, triggerless ACPs). Returns the first violation found.
+    /// refs, triggerless hooks). Returns the first violation found.
     pub fn validate(&self) -> Result<()> {
         if self.topology.vault_path.as_os_str().is_empty() {
             return Err(Error::Config("topology.vault_path is required".into()));
@@ -503,9 +503,9 @@ impl ConfigBuilder {
         self
     }
 
-    /// Add an ACP component config.
-    pub fn acp(mut self, acp: ComponentConfig) -> Self {
-        self.config.topology.acps.push(acp);
+    /// Add a hook component config.
+    pub fn hook(mut self, hook: ComponentConfig) -> Self {
+        self.config.topology.hooks.push(hook);
         self
     }
 
@@ -807,7 +807,7 @@ clarify_threshold_read = 0.8
     }
 
     #[test]
-    fn builder_adds_mcp_and_acp() {
+    fn builder_adds_mcp_and_hook() {
         let cfg = Config::builder()
             .vault_path("/vault")
             .mcp(McpConfig {
@@ -820,17 +820,17 @@ clarify_threshold_read = 0.8
                     args: vec!["-y".into(), "@scope/mcp".into()],
                 },
             })
-            .acp(ComponentConfig {
-                name: "acp1".into(),
+            .hook(ComponentConfig {
+                name: "hook1".into(),
                 enabled: true,
                 endpoint: Some("http://localhost:9000".into()),
             })
             .build()
             .expect("valid config");
         assert_eq!(cfg.topology.mcps.len(), 1);
-        assert_eq!(cfg.topology.acps.len(), 1);
+        assert_eq!(cfg.topology.hooks.len(), 1);
         assert_eq!(cfg.topology.mcps[0].name, "mcp1");
-        assert_eq!(cfg.topology.acps[0].name, "acp1");
+        assert_eq!(cfg.topology.hooks[0].name, "hook1");
     }
 
     #[test]

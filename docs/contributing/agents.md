@@ -1,4 +1,4 @@
-# Liberado — Agent & Build Guide
+﻿# Liberado — Agent & Build Guide
 
 This file is the single source of truth for agents and contributors on how to build, run, and
 extend Liberado. Read `ARCHITECTURE.md` for the system overview and current status.
@@ -76,7 +76,7 @@ Reactions are logged to stderr. The daemon runs until killed.
 ## CLI chat client
 
 `liberado chat [session-id]` is a terminal REPL for the conversational agent. It is a **client** of
-the shared chat API — a thin `reqwest`/SSE consumer of `POST /api/chat/stream` (`docs/interface.md`),
+the shared chat API — a thin `reqwest`/SSE consumer of `POST /api/chat/stream` (`docs/reference/api.md`),
 the first native (non-browser) client of that contract. It embeds no agent logic; the daemon server
 owns the conversation, provider, and store.
 
@@ -114,7 +114,7 @@ files are read, **each optional** — an absent file leaves that section at its 
 
 | File            | Section  | What it holds                                                       |
 |-----------------|----------|--------------------------------------------------------------------|
-| `topology.toml` | wiring   | `vault_path`, provider/models, enabled MCP/ACP components          |
+| `topology.toml` | wiring   | `vault_path`, provider/models, enabled MCP/hook components         |
 | `policy.toml`   | security | zones + write-classes and the capability grants                    |
 | `tuning.toml`   | behavior | dispatch/context/concurrency/capture/maintenance knobs (all defaulted) |
 
@@ -188,7 +188,7 @@ The server listens on `0.0.0.0:4201` (LAN-accessible). Set `LIBERADO_PORT` to ch
 | `GET /api/reactions?limit=N`| Recent reaction events (default 20)              |
 | `GET /api/vault`            | Vault root path and watcher info                 |
 | `POST /api/chat`            | Conversational agent — `{"message":"…","session"?:"…"}` → `{"reply":"…","session":"…"}`. Multi-turn, session-keyed and persisted (rehydrated per turn from the `ConversationStore`); omit `session` to start a new conversation. Tool-using. Needs `DEEPSEEK_API_KEY`; uses the MCPs declared in `topology.toml` (`[[mcps]]`) for tools. |
-| `GET`/`POST /api/chat/stream` | Streaming chat (`text/event-stream`) — the shared client/SSE contract (`docs/interface.md`). Events: `session` (first), `token`, `tool`, `tool_result`, `done`, `failed`. `POST` (JSON body, native) and `GET ?message=…&session=…` (browser `EventSource`). Closing the stream cancels the turn (persists nothing). |
+| `GET`/`POST /api/chat/stream` | Streaming chat (`text/event-stream`) — the shared client/SSE contract (`docs/reference/api.md`). Events: `session` (first), `token`, `tool`, `tool_result`, `done`, `failed`. `POST` (JSON body, native) and `GET ?message=…&session=…` (browser `EventSource`). Closing the stream cancels the turn (persists nothing). |
 | `GET /api/conversations`    | List conversation headers (`[{id,title,created_at}]`, newest first). Needs chat enabled. |
 | `GET /api/conversations/{id}` | One conversation's full message history (`{"messages":[…]}`); `404` if absent. |
 | `GET /`                     | Dioxus WASM frontend (served from dist/)         |

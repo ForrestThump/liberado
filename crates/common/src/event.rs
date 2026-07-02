@@ -3,7 +3,7 @@
 //! One shape used by **both** trigger paths: (a) vault changes surfaced by the daemon's
 //! Turbovault subscription (the daemon fills in `provenance` after central hash-join
 //! attribution), and (b) non-vault triggers (systemd timers, git/docker/homelab hooks) that
-//! POST this JSON directly to an ACP webhook. Keeping `event_type` and `source` as strings is
+//! POST this JSON directly to a hook webhook. Keeping `event_type` and `source` as strings is
 //! deliberate: any hook-capable system must be able to mint a valid event without linking our
 //! crates.
 
@@ -21,7 +21,7 @@ pub mod event_source {
     pub const DOCKER_EVENT: &str = "docker-event";
 }
 
-/// A trigger event delivered to an ACP (or routed internally by the daemon).
+/// A trigger event delivered to a hook (or routed internally by the daemon).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Event {
     /// Domain event name, e.g. `"DecisionLogged"`, `"InboxNoteSettled"`.

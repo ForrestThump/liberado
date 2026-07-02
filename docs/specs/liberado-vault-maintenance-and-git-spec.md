@@ -58,7 +58,7 @@ conservatism for vault edits without touching the human-in-the-loop gate for rea
 
 ## 3. Maintenance Tasks
 
-A category of vault-hygiene work run by a scheduled `maintenance-acp` (timer-triggered) and/or
+A category of vault-hygiene work run by a scheduled `maintenance-hook` (timer-triggered) and/or
 dispatched on demand by the user ("clean up the vault"). Each maintenance run commits its work
 (git = undo) and respects write classes.
 
@@ -104,7 +104,7 @@ Turbovault tooling.
 | `git_commit_schedule` | per-batch + hourly | When the homelab commits. |
 | `git_authority_node` | homelab | The only node running git ops / holding `.git/`. |
 | `stignore_machine_dirs` | `.git/`, `.turbovault/`, `.liberado/` | Dirs Syncthing must not replicate. |
-| `maintenance_schedule` | weekly | When `maintenance-acp` runs the hygiene sweep. |
+| `maintenance_schedule` | weekly | When `maintenance-hook` runs the hygiene sweep. |
 | `prune_requires_proposal` | true (human-authored) | Pruning human content always proposes first. |
 | `conflict_merge_autonomy` | direct-if-confident | Confident union merges act directly (git backstop); else propose. |
 
@@ -112,7 +112,7 @@ Turbovault tooling.
 
 - Git-backed vault on the homelab with `.stignore` excluding machine dirs; batched commits with
   provenance in messages.
-- `maintenance-acp`: scheduled conflict resolution + broken-link repair + health check.
+- `maintenance-hook`: scheduled conflict resolution + broken-link repair + health check.
 - On-demand maintenance dispatch.
 
 **Deferred**: automatic stale-content pruning beyond proposals, richer git-based time-travel UI,

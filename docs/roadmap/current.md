@@ -1,4 +1,4 @@
-# Liberado — Roadmap
+﻿# Liberado — Roadmap
 
 Forward-looking work, beyond what `ARCHITECTURE.md` marks as built. Ordered loosely by priority
 within each section. This is a living doc — promote items up as they're picked, and record *why*
@@ -63,7 +63,7 @@ and the GIT_ASKPASS credential hygiene.
 ### Phase 3 — Autonomy breadth
 
 Cron as a bus listener (Hermes gap #2, near-free) + the vault becomes the reactive event-source
-plugin (vault-decoupling lands here, behind an event-source/ACP trait). (Mesh checkpoint #3: cron and
+plugin (vault-decoupling lands here, behind an event-source/hook trait). (Mesh checkpoint #3: cron and
 vault-watch are interchangeable event-sources; a second dispatcher/executor is config-enableable.)
 
 ### Phase 4 — Scaling
@@ -140,3 +140,10 @@ path; don't add it on intuition.
 - **Multi-server MCP registry UX** — declare several servers (stdio `npx` + remote HTTP like
   deepwiki) from config; the machinery (`McpRegistry`, mixed `McpConnector`s) exists, the
   config/registration surface does not.
+- **A2A (Agent2Agent) interop** — captured as an idea, not scheduled:
+  [`a2a-protocol-idea.md`](../ideas/a2a-protocol-idea.md). The conversation-store seams
+  (`author`, conversation lineage — Decision 17) and the mesh direction (Decision 18) already
+  carry most of what this needs; the real gap is a new inbound protocol surface (AgentCard +
+  Task lifecycle) and an outbound peer-delegation capability. Not before Phase 3 — same category
+  of work as vault-decoupling and cron (another event-source in, another external capability
+  out).

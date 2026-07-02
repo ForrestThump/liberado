@@ -1,4 +1,4 @@
-# Liberado Architecture Decisions Log
+﻿# Liberado Architecture Decisions Log
 
 **Purpose**: Consolidated, prioritized list of key architectural and design decisions. Grouped by importance so we can resolve them in sequence before writing code that would be expensive to change.  
 **Status**: Living document. Each decision includes current state, open questions, and a recommended path based on our principles (loose coupling, security-first containment, token efficiency via context partitioning, low overhead, maintainability alongside real life, provider-agnostic scaffolding).  
@@ -40,16 +40,16 @@ The main agent context remains protected from tool definitions, internal dispatc
 **Routing detail resolved in `liberado-dispatch-logic-spec.md`**: the dispatcher chooses among four terminal actions — `ExecuteDirect`, `DispatchSubagent`, `Clarify` (to the main agent), and `Report` (the return type of the first two). Choice is made by a 5-step pipeline (retrieve procedural guidance → classify via small inference → downgrade-only deterministic guards → act → record outcome). Correctness is engineered, not assumed: routing is **safe-by-default** (uncertainty degrades toward Clarify/proposal, never toward an irreversible action), guards can only *downgrade* risk (capability/zone-write-class/consequence/reaction-depth/confidence), and the decision is a typed, traced, eval-tested artifact (Decisions 12, 16). The component split (new `liberado-dispatcher` consuming the renamed `liberado-memory-mcp` for general + procedural memory) is recorded in `life-os-architecture.md` §2.
 
 ### 2. Daemon-First vs. TUI-First Process Model
-**Why it matters**: Background autonomy requires long-running processes. If the main agent loop lives inside the TUI process, adding real background work (ACPs firing while TUI is closed) will require a significant rewrite.
+**Why it matters**: Background autonomy requires long-running processes. If the main agent loop lives inside the TUI process, adding real background work (hooks firing while TUI is closed) will require a significant rewrite.
 
 **Current state in design**: ratatui TUI listed as "primary"; axum API as "optional." Not explicit about daemon ownership.
 
 **Open questions**:
 - Does the main agent loop run inside the TUI process, or is there a separate long-running daemon process that the TUI attaches to as a client?
-- How do ACPs and background work interact with a closed TUI?
+- How do hooks and background work interact with a closed TUI?
 
 **Recommended path**:
-- **Daemon-first**. The core agent loop + liberado dispatcher + MCP/ACP client lives in a long-running daemon (or the main-agent crate can run as a service).
+- **Daemon-first**. The core agent loop + liberado dispatcher + MCP/hook client lives in a long-running daemon (or the main-agent crate can run as a service).
 - The ratatui TUI is a **thin client** that connects to the daemon (via local socket, Tailscale, or stdio).
 - This cleanly supports background autonomy without forcing the TUI to stay open.
 - Start simple: single binary that can run in "daemon mode" or "TUI-attached mode" for v1.
@@ -58,10 +58,10 @@ The main agent context remains protected from tool definitions, internal dispatc
 
 Decision 2: Daemon-first vs. TUI-first Process Model (Finalized)
 Decision: Daemon-first architecture.
-The core agent loop, liberado dispatcher, MCP/ACP clients, and background work ownership live in a long-running daemon process. The ratatui TUI and optional webserver (axum) are clients that attach to the daemon.
+The core agent loop, liberado dispatcher, MCP/hook clients, and background work ownership live in a long-running daemon process. The ratatui TUI and optional webserver (axum) are clients that attach to the daemon.
 Rationale
 
-True background autonomy (ACPs firing on schedules or vault changes, scheduled reviews, reactive behaviors) requires a process that continues running even when the TUI is closed.
+True background autonomy (hooks firing on schedules or vault changes, scheduled reviews, reactive behaviors) requires a process that continues running even when the TUI is closed.
 Putting the main agent loop inside the TUI process would force a significant refactor later when adding headless/background capabilities.
 A daemon model cleanly separates core logic from user interfaces, improving maintainability and testability.
 This aligns with the goal of low mental load: the user can close the TUI without losing ongoing work or scheduled behaviors.
@@ -74,7 +74,7 @@ text┌────────────────────────�
 │  • Main Agent Loop + ContextPolicy                           │
 │  • liberado-tool-helper-mcp (dispatcher)                     │
 │  • MCP client connections                                    │
-│  • ACP client / message handling                             │
+│  • Hook client / message handling                             │
 │  • Background trigger integration (vault emitter, timers)    │
 │  • Optional: lightweight webserver (axum) inside daemon      │
 └──────────────────────────────┬───────────────────────────────┘
@@ -90,8 +90,8 @@ Key Design Points
 1. Daemon Ownership
 
 The daemon owns the main reasoning loop, ContextPolicy, and calls to liberado.
-It manages connections to MCPs and receives messages from ACPs.
-Background autonomy (ACPs, scheduled triggers, vault-change reactions) runs inside or is coordinated by the daemon.
+It manages connections to MCPs and receives messages from hooks.
+Background autonomy (hooks, scheduled triggers, vault-change reactions) runs inside or is coordinated by the daemon.
 
 2. TUI as a Client
 
@@ -132,12 +132,12 @@ Capability / context requests (if needed)
 
 6. Background Work & Detach
 
-ACPs and scheduled behaviors continue running in the daemon even after the TUI disconnects.
+Hooks and scheduled behaviors continue running in the daemon even after the TUI disconnects.
 The daemon should handle graceful shutdown and persistence of in-flight work where necessary (mostly via the vault).
 
 Implications for Code Structure
 
-main-agent crate → becomes the core daemon logic (loop, ContextPolicy, liberado integration, MCP/ACP handling).
+main-agent crate → becomes the core daemon logic (loop, ContextPolicy, liberado integration, MCP/hook handling).
 tui crate/binary → thin client that connects and renders the interface.
 Clear separation between orchestration logic and presentation.
 Easier to test the core agent behavior independently of the UI.
@@ -159,20 +159,20 @@ Slightly higher resource usage (daemon always running).
 Mitigation: For early development we can make the daemon start automatically and transparently when running liberado tui, so the experience still feels simple.
 
 ### 3. MCP Transport and Process Model (Multiple Consumers)
-**Why it matters**: The main agent (via liberado), subagents, and ACPs may all need to invoke the same MCPs (e.g., tasks-mcp). Stdio is simple but couples lifecycle and makes sharing difficult.
+**Why it matters**: The main agent (via liberado), subagents, and hooks may all need to invoke the same MCPs (e.g., tasks-mcp). Stdio is simple but couples lifecycle and makes sharing difficult.
 
 **Current state in design**: "stdio or SSE" left open. Multiple consumers not yet addressed.
 
 **Open questions**:
 - Do MCPs run as long-lived services (HTTP/SSE) or are they spawned per-caller (stdio)?
 - Are MCPs shared singletons or per-caller instances?
-- How does this interact with capability filtering per caller (main agent vs subagent vs ACP)?
+- How does this interact with capability filtering per caller (main agent vs subagent vs hook)?
 
 **Recommended path**:
 - Prefer **long-running HTTP/SSE MCP services** for v1 and beyond (easier sharing, connection model, and capability enforcement at the boundary).
 - Use stdio only for very simple/one-off MCPs if needed.
 - Design MCPs to be **stateless or narrowly stateful** so multiple callers can use them safely.
-- Capability filtering happens at dispatch time (liberado or ACP) before calling the MCP.
+- Capability filtering happens at dispatch time (liberado or hook) before calling the MCP.
 
 **Status**: Complete
 
@@ -180,7 +180,7 @@ Decision 3: MCP Transport and Process Model (Finalized)
 Decision:
 Support both HTTP/SSE and stdio transports, with a strong preference for long-running HTTP/SSE MCP services. Stateless MCPs are preferred. Stateful MCPs are allowed when necessary, but must use narrow resource-level locking rather than broad MCP-level locks.
 Rationale
-Multiple consumers (main agent via liberado, subagents, and ACPs) will eventually need to interact with MCPs concurrently. A pure stdio model creates lifecycle and sharing problems in this scenario. Long-running HTTP/SSE services make concurrent access more natural while still allowing capability narrowing.
+Multiple consumers (main agent via liberado, subagents, and hooks) will eventually need to interact with MCPs concurrently. A pure stdio model creates lifecycle and sharing problems in this scenario. Long-running HTTP/SSE services make concurrent access more natural while still allowing capability narrowing.
 Stateless (or narrowly stateful) MCPs are dramatically easier to reason about, test, and scale. However, some capabilities genuinely require state (e.g., sessionful connections or complex in-memory coordination), so we should not ban stateful MCPs outright.
 When state is required, broad locks on the entire MCP would severely limit concurrency. Narrow locking at the resource or zone level is a better fit with the capability-based model developed in Decision 4.
 Key Points
@@ -223,31 +223,31 @@ Adopt HTTP/SSE as the primary transport with support for stdio. Prefer stateless
 - What exactly is a "Zone"? (Path glob set? Named region of the vault? Hierarchical?)
 - What is the capability grammar? (e.g., `Read(tasks/*)`, `Write(decisions/)`, `Invoke(tasks-mcp:complete)`)
 - Who is the authority that grants capabilities? (Static per-component config? Dynamic from liberado at dispatch time? Vault-based policy?)
-- How are capabilities passed and checked at every boundary (MCP, ACP, subagent spawn)?
+- How are capabilities passed and checked at every boundary (MCP, hook, subagent spawn)?
 
 **Recommended path**:
-- Define concrete types in a shared `common` crate **before writing any MCP or ACP code**:
+- Define concrete types in a shared `common` crate **before writing any MCP or hook code**:
   - `Zone` (simple path prefix + optional glob for v1)
   - `Capability` (enum or structured type)
   - `CapabilitySet` / `Policy`
   - `check_capability(subject, action, target)` function
 - Start with **static per-component + dispatch-time grants** from liberado.
-- Make every MCP and ACP call the guard on entry.
+- Make every MCP and hook call the guard on entry.
 - This single artifact unblocks a huge amount of the security model.
 
 **Status**: Complete
 
-Defined as `life-os-permissions-idea.md` . The enforcement boundary is at each MCP / ACP. Permission can be narrowed at dispatch, but never expanded. Simple yaml defition of permissions. Zones for areas of permission.
+Defined as `liberado-permissions-idea.md`. The enforcement boundary is at each MCP / hook. Permission can be narrowed at dispatch, but never expanded. Simple yaml defition of permissions. Zones for areas of permission.
 
 ### 5. Vault Concurrency, Write Provenance, and Loop-Breaking
-**Why it matters**: The vault is the shared database with many writers (human in Obsidian, main agent, subagents, ACPs). Without clear rules, we risk write races, data loss, and infinite reaction loops.
+**Why it matters**: The vault is the shared database with many writers (human in Obsidian, main agent, subagents, hooks). Without clear rules, we risk write races, data loss, and infinite reaction loops.
 
 **Current state in design**: "Hash-protected writes" mentioned. Vault-emitter is responsible for change detection but its full responsibilities are underspecified.
 
 **Open questions**:
 - Which paths are human-only vs. agent-writable?
 - How do we handle concurrent edits (Obsidian + agent)?
-- How do we prevent reaction loops (agent writes → emitter fires ACP → ACP writes → emitter fires again)?
+- How do we prevent reaction loops (agent writes → emitter fires hook → hook writes → emitter fires again)?
 - What provenance tagging is required on agent-originated changes?
 
 **Recommended path**:
@@ -262,10 +262,10 @@ Defined as `life-os-permissions-idea.md` . The enforcement boundary is at each M
 
 Decision 5: Resolved in `liberado-vault-concurrency-spec.md`. Summary:
 - **Provenance lives on the Turbovault audit log, not frontmatter** (frontmatter is last-writer-only state and goes stale on direct Obsidian edits). Rides on `AuditEntry.metadata._liberado_provenance` today; migrates to a typed field if the upstream proposal lands. `source` + `correlation_id` are mandatory on every agent write.
-- **Loop-breaking via Approach A (consumer-side hash join)**: attribute an observed change by matching `sha256(nfc(content))` against the `after_hash` of the latest audit entry for that path. Match + non-human + recent → suppress; no match → external/human edit → react. Robust to races, coalescing, and human-edits-after-agent. A bounded seen-correlation set + child correlation IDs break cross-ACP A→B→A chains; `MAX_REACTION_DEPTH` halts cascades.
-- **Consume Turbovault's native subscription (PR #24), not a custom emitter.** The daemon holds one subscription and does the hash-join + de-loop **centrally**, then routes already-attributed events to thin ACPs. This supersedes the hand-built `vault-change-emitter` in `life-os-architecture.md` §5 (non-vault triggers still POST webhooks directly).
+- **Loop-breaking via Approach A (consumer-side hash join)**: attribute an observed change by matching `sha256(nfc(content))` against the `after_hash` of the latest audit entry for that path. Match + non-human + recent → suppress; no match → external/human edit → react. Robust to races, coalescing, and human-edits-after-agent. A bounded seen-correlation set + child correlation IDs break cross-hook A→B→A chains; `MAX_REACTION_DEPTH` halts cascades.
+- **Consume Turbovault's native subscription (PR #24), not a custom emitter.** The daemon holds one subscription and does the hash-join + de-loop **centrally**, then routes already-attributed events to thin hooks. This supersedes the hand-built `vault-change-emitter` in `life-os-architecture.md` §5 (non-vault triggers still POST webhooks directly).
 - **Concurrency stays optimistic** with the structured `ConcurrentModification { path, expected, actual }` error; agents re-read and retry (bounded) rather than overwrite.
-- **Per-zone write classes** (`human_only` / `agent_writable` / `proposal_only` / `shared`) enforced at the MCP/ACP boundary; unlisted zones default to `proposal_only` (fail safe).
+- **Per-zone write classes** (`human_only` / `agent_writable` / `proposal_only` / `shared`) enforced at the MCP/hook boundary; unlisted zones default to `proposal_only` (fail safe).
 - **Idempotency**: correlation ID is the idempotency key; vault-as-journal (pending→working→done markers) makes redelivery safe.
 - **Attribution is best-effort, never a security boundary** (`None` = treat as external). Security stays with the Decision 4 capability/zone model.
 - No upstream merge blocks the architecture — every upstream dependency has a working fallback behind a thin adapter (see spec §8.1).
@@ -278,16 +278,16 @@ Decision 5: Resolved in `liberado-vault-concurrency-spec.md`. Summary:
 **Why it matters**: Bare HTTP POST is at-most-once. Background autonomy that silently drops work on restart is not acceptable.
 
 **Recommended path**:
-- Design ACP reaction handlers to be **idempotent** from the start (use correlation IDs + check-if-already-processed).
+- Design hook reaction handlers to be **idempotent** from the start (use correlation IDs + check-if-already-processed).
 - Use the **vault itself as the durable journal** where possible (write intended work as a pending item, then process).
 - For higher reliability later, consider a small durable queue, but keep v1 vault-centric.
 
 **Status**: Complete (specified in `liberado-vault-concurrency-spec.md` §7).
 
-Decision 6: Both delivery paths (Turbovault subscription with drop-and-resync; webhook POST) are **at-most-once**, so reaction handlers are **idempotent by construction**. The `correlation_id` carried on every standardized event is the **idempotency key**. Before acting, an ACP checks a durable journal marker (`.liberado/reactions/<correlation_id>.json`: pending → working → done) — redelivery re-enters at the existing marker instead of double-acting. **Vault-as-journal** is the v1 durability story; no separate durable queue. On subscription **drop/overflow**, the contract is *resync from authoritative state* (bounded re-scan of the ACP's zone), never "assume we saw every event." **Event ordering is not guaranteed** — handlers must converge regardless of order (idempotent, not order-dependent). A durable queue is deferred until vault-centric journaling proves insufficient.
+Decision 6: Both delivery paths (Turbovault subscription with drop-and-resync; webhook POST) are **at-most-once**, so reaction handlers are **idempotent by construction**. The `correlation_id` carried on every standardized event is the **idempotency key**. Before acting, a hook checks a durable journal marker (`.liberado/reactions/<correlation_id>.json`: pending → working → done) — redelivery re-enters at the existing marker instead of double-acting. **Vault-as-journal** is the v1 durability story; no separate durable queue. On subscription **drop/overflow**, the contract is *resync from authoritative state* (bounded re-scan of the hook's zone), never "assume we saw every event." **Event ordering is not guaranteed** — handlers must converge regardless of order (idempotent, not order-dependent). A durable queue is deferred until vault-centric journaling proves insufficient.
 
 ### 7. Monorepo vs. Separate Repos Strategy
-**Why it matters**: "Loose coupling via separate repos" conflicts with heavy use of shared crates (`acp-common`, guards, types).
+**Why it matters**: "Loose coupling via separate repos" conflicts with heavy use of shared crates (`hook-common`, guards, types).
 
 **Recommended path**:
 - Commit to a **Cargo workspace (monorepo)** for v1–v2.
@@ -296,7 +296,7 @@ Decision 6: Both delivery paths (Turbovault subscription with drop-and-resync; w
 
 **Status**: Complete
 
-Decision 7: **One Cargo workspace (monorepo)** for the Liberado system — `common`, `acp-common`, `main-agent` (daemon), `liberado-dispatcher`, `liberado-memory-mcp`, the MCP crates, the ACP crates, and `tui`. Crate boundaries are kept clean so any crate can be extracted to its own repo later with low friction. **External dependencies** (`turbovault`, `turbomcp` and its crates) are *not* vendored into the workspace — they are consumed as **path dependencies during co-development** (the repos are checked out as siblings and Shiloh actively contributes to both) and **pinned to crates.io versions for release builds**. The existing `liberado-tool-helper-mcp` repo is folded in as the `liberado-memory-mcp` crate at implementation time. This resolves the original "loose coupling via separate repos vs. shared crates" tension in favor of shared crates now, extraction later if ever needed.
+Decision 7: **One Cargo workspace (monorepo)** for the Liberado system — `common`, `hook-common`, `main-agent` (daemon), `liberado-dispatcher`, `liberado-memory-mcp`, the MCP crates, the hook crates, and `tui`. Crate boundaries are kept clean so any crate can be extracted to its own repo later with low friction. **External dependencies** (`turbovault`, `turbomcp` and its crates) are *not* vendored into the workspace — they are consumed as **path dependencies during co-development** (the repos are checked out as siblings and Shiloh actively contributes to both) and **pinned to crates.io versions for release builds**. The existing `liberado-tool-helper-mcp` repo is folded in as the `liberado-memory-mcp` crate at implementation time. This resolves the original "loose coupling via separate repos vs. shared crates" tension in favor of shared crates now, extraction later if ever needed.
 
 ### 8. Subagent Execution Model (Isolation Level)
 **Why it matters**: Affects security isolation, complexity, resource usage, and KV-cache pressure on local inference.
@@ -310,19 +310,19 @@ Decision 7: **One Cargo workspace (monorepo)** for the Liberado system — `comm
 
 Decision 8: **In-process subagents** (tokio tasks in the daemon) for v1, capped at `MAX_CONCURRENT_SUBAGENTS` (default 2) for KV-cache/homelab bounds. They are spawned through a `Subagent` boundary that takes `(goal, CapabilitySet, allowed_mcps, success_criteria, model, correlation_id)` and returns a `Report` — **the dispatcher never knows whether a subagent ran in-process or out-of-process**, so moving heavy/experimental subagents to separate processes later requires no dispatch-logic change. **Isolation model, stated honestly**: in-process subagents share the daemon's memory space, so their *only* containment is **capability narrowing enforced at the MCP boundary** (no ambient authority — a subagent holds only a narrowed MCP client) plus secret isolation (raw secrets never reach any subagent; inference via the daemon). This is "trust-the-hand-audited-code" isolation, adequate for v1 because all subagent code and prompts are ours; it is **not** adversarial isolation. Out-of-process subagents (OS sandbox) are the upgrade path if/when subagents ever run less-trusted prompts. Context slices are kept disjoint (goal + narrowed schemas + work context only) for KV-cache control and the quadratic-prefill savings. **Isolation level is configurable** (`subagent.isolation = in_process | out_of_process`, default `in_process`) in the single-source config (Decision 14), so scaling to process isolation is a config change, not a source edit.
 
-### 9. How ACP Messages Reach the Main Agent
-**Why it matters**: Affects coupling between ACPs and the core loop.
+### 9. How Hook Messages Reach the Main Agent
+**Why it matters**: Affects coupling between hooks and the core loop.
 
 **Recommended path**:
-- Primary path: **vault-mediated** (ACPs write structured artifacts/summaries; ContextPolicy surfaces relevant items). Maximum loose coupling.
+- Primary path: **vault-mediated** (hooks write structured artifacts/summaries; ContextPolicy surfaces relevant items). Maximum loose coupling.
 - Allow optional direct channel for high-priority cases later.
 
 **Status**: Complete (surfacing mechanism in `liberado-context-policy-spec.md` §2 Job B).
 
-Decision 9: **Vault-mediated only** for v1. ACPs and detached subagents **write structured artifacts** (with provenance + `correlation_id`) to agent-writable surfacing zones (`reviews/`, `proposals/`, ACP output locations); they do **not** push into the daemon or know anything about the main loop. ContextPolicy's **per-turn Job B** surfaces unseen items (queried by a since-last-seen cursor / `surfaced: false` frontmatter, marked surfaced after showing). This keeps ACPs maximally decoupled — an ACP's only outbound contract is "write a vault artifact." A direct high-priority push channel is **deferred** until a real need (e.g. an urgent interrupt that can't wait for the next turn) is proven.
+Decision 9: **Vault-mediated only** for v1. Hooks and detached subagents **write structured artifacts** (with provenance + `correlation_id`) to agent-writable surfacing zones (`reviews/`, `proposals/`, hook output locations); they do **not** push into the daemon or know anything about the main loop. ContextPolicy's **per-turn Job B** surfaces unseen items (queried by a since-last-seen cursor / `surfaced: false` frontmatter, marked surfaced after showing). This keeps hooks maximally decoupled — a hook's only outbound contract is "write a vault artifact." A direct high-priority push channel is **deferred** until a real need (e.g. an urgent interrupt that can't wait for the next turn) is proven.
 
 ### 10. Secrets Backend and Inter-Component Auth
-**Why it matters**: Critical for any MCP or ACP that touches credentials (email, finance, notifications).
+**Why it matters**: Critical for any MCP or hook that touches credentials (email, finance, notifications).
 
 **Recommended path**:
 - Use environment variables + systemd credentials for secrets in v1.
@@ -332,10 +332,10 @@ Decision 9: **Vault-mediated only** for v1. ACPs and detached subagents **write 
 **Status**: Complete
 
 Decision 10: Layered, leveraging what turbomcp already provides (API-key/JWT auth, secret zeroization, SSRF/path-traversal guards in `turbomcp-server`/`turbomcp-proxy`):
-- **Secrets at rest**: environment variables + **systemd credentials** (`LoadCredential=`) for v1. Each MCP/ACP process receives only the secrets it needs, injected at the process boundary.
+- **Secrets at rest**: environment variables + **systemd credentials** (`LoadCredential=`) for v1. Each MCP/hook process receives only the secrets it needs, injected at the process boundary.
 - **Secret isolation (IronClaw pattern, per `liberado-permissions-idea.md`)**: raw secrets **never enter LLM context** — they are injected at the MCP boundary for the specific authorized operation only. The model sees results, not credentials.
-- **Provider/inference keys live only in the daemon.** The main agent, dispatcher, and subagents run inference through the daemon's provider abstraction. MCPs/ACPs that need reasoning use **MCP sampling** (`turbomcp-client`) so they never hold provider keys.
-- **Inter-component auth**: local MCPs are reached over **Unix domain sockets** (filesystem permissions are the boundary; no network, no token needed). **ACP webhooks** (which accept input from external triggers) require a **shared-secret bearer header** and bind **Tailscale/localhost only**. Start with API-key/shared-secret; **JWT or mTLS** is the documented upgrade for any component that ever becomes network-exposed.
+- **Provider/inference keys live only in the daemon.** The main agent, dispatcher, and subagents run inference through the daemon's provider abstraction. MCPs/hooks that need reasoning use **MCP sampling** (`turbomcp-client`) so they never hold provider keys.
+- **Inter-component auth**: local MCPs are reached over **Unix domain sockets** (filesystem permissions are the boundary; no network, no token needed). **Hook webhooks** (which accept input from external triggers) require a **shared-secret bearer header** and bind **Tailscale/localhost only**. Start with API-key/shared-secret; **JWT or mTLS** is the documented upgrade for any component that ever becomes network-exposed.
 
 ### 11. Human-in-the-Loop / Proposal & Approval Boundary
 **Why it matters**: Some background actions (especially involving family, schedule, or external communication) should not be fully autonomous.
@@ -343,21 +343,21 @@ Decision 10: Layered, leveraging what turbomcp already provides (API-key/JWT aut
 **Recommended path**:
 - Define a clear **"proposal" output type** early.
 - High-consequence actions emit proposals into a review location in the vault (or a dedicated inbox) rather than acting directly.
-- Start conservative: most ACP reactions write proposals or structured notes; only low-risk actions execute directly.
+- Start conservative: most hook reactions write proposals or structured notes; only low-risk actions execute directly.
 
 **Status**: Complete
 
 Decision 11: A **Proposal** is a structured vault artifact — the typed output already referenced by the dispatch guards (`liberado-dispatch-logic-spec.md` §6) and concurrency write-classes (`liberado-vault-concurrency-spec.md` §3).
 
-- **Shape**: a note in `proposals/` with frontmatter `{ id, correlation_id, source (agent/ACP name), proposed_action (structured), rationale, status: pending|approved|rejected|expired, created, expires }` and a human-readable body.
+- **Shape**: a note in `proposals/` with frontmatter `{ id, correlation_id, source (agent/hook name), proposed_action (structured), rationale, status: pending|approved|rejected|expired, created, expires }` and a human-readable body.
 - **What requires one** (computed, not classifier-judged): any write to a `proposal_only` zone, any high-consequence action (external comms, irreversible deletes, anything touching `Sensitive`/`FamilyShared`), and any guard-forced downgrade. Unlisted zones default to `proposal_only` (fail safe), so the **conservative default is "propose, don't act."**
 - **Approval lifecycle (closes through the same machinery)**: agent writes proposal → ContextPolicy Job B surfaces it → user approves via the **TUI command *or* by editing `status: approved`** (so approval also works directly from Obsidian) → the approval is a human-sourced vault write that the daemon's subscription picks up → the daemon executes the `proposed_action` (now authorized) with the **proposal's `correlation_id`**, marks the proposal `done`, and links the resulting artifact. The execution write is agent-sourced and de-looped normally (concurrency spec §6). Expired/rejected proposals are never executed.
-- **v1 conservative posture**: most ACP reactions emit proposals or plain structured notes; only explicitly low-risk, `shared`/`agent_writable` actions execute directly.
+- **v1 conservative posture**: most hook reactions emit proposals or plain structured notes; only explicitly low-risk, `shared`/`agent_writable` actions execute directly.
 
 **Status update (emit AND approve→execute landed, June 24, 2026)**: the full propose→approve→execute loop is closed. The EMIT path is wired — high-consequence *concrete* actions (an `ExecuteDirect` with a non-empty seed call list whose MCP is `External`/`Irreversible`) downgrade through `DispatchAction::Propose` → `Disposition::Propose(Proposal)` → a `proposals/<id>.md` artifact. The daemon writes it with **agent provenance**, so attribution suppresses the write (no self-reaction). On the APPROVE→EXECUTE side, a human's `status: approved` edit is picked up by the daemon's watch loop: `react()` checks for the `proposals/` path prefix before dispatching, routes to `handle_proposal_change`, which parses the frontmatter, validates it is Approved + non-expired + non-terminal, then calls `orchestrator.execute_approved()` with the proposal's `correlation_id` as provenance. Execution runs the approved `ToolCalls` directly against a runtime scoped to their MCPs (no classifier, no guards — the human edit is the authorization). On success the daemon flips `status` to `done` with agent provenance (loop-broken). Idempotency: terminal proposals (Done/Rejected/Expired) and non-actionable proposals (Pending) are left alone; infra errors from execution propagate (not marked done, retriable on the next watch cycle). Fuzzier high-consequence cases (empty-seed `ExecuteDirect`, `DispatchSubagent`, the magnitude-gate goal signal) still downgrade to `Clarify` for now.
 
 ### 12. Runtime Audit / Tracing Substrate
-**Why it matters**: "Fully auditable" currently only covers code + git state. Runtime behavior (dispatch decisions, tool calls, ACP reactions) is invisible.
+**Why it matters**: "Fully auditable" currently only covers code + git state. Runtime behavior (dispatch decisions, tool calls, hook reactions) is invisible.
 
 **Recommended path**:
 - Use `tracing` with structured spans from the beginning.
@@ -366,11 +366,11 @@ Decision 11: A **Proposal** is a structured vault artifact — the typed output 
 
 **Status**: Complete
 
-Decision 12: **`tracing` with structured spans** across the daemon, dispatcher, MCPs, and ACPs from day one. **Dispatch decisions are instrumented specifically** (goal hash, retrieved guidance ids, action, confidence, rationale, guard downgrades, await/detach, outcome — `liberado-dispatch-logic-spec.md` §9) — this is the data that validates the routing and quadratic-savings theses.
+Decision 12: **`tracing` with structured spans** across the daemon, dispatcher, MCPs, and hooks from day one. **Dispatch decisions are instrumented specifically** (goal hash, retrieved guidance ids, action, confidence, rationale, guard downgrades, await/detach, outcome — `liberado-dispatch-logic-spec.md` §9) — this is the data that validates the routing and quadratic-savings theses.
 
 **Two distinct trails, deliberately not conflated**:
 1. **Turbovault audit log** (`turbovault-audit`, already exists): vault **write provenance** — before/after hashes + provenance metadata. Powers loop-breaking (Decision 5). A property of *vault writes*.
-2. **Liberado runtime trace** (new): dispatch decisions, tool calls, ACP reactions, errors. A property of *system behavior*.
+2. **Liberado runtime trace** (new): dispatch decisions, tool calls, hook reactions, errors. A property of *system behavior*.
 
 **Sink**: the runtime trace is **append-only JSONL outside the vault markdown** (a daemon trace dir / gitignored `.liberado/trace/`), **never** into vault notes — high-volume trace writes would pollute the very change stream the system reacts to (the same lesson that put provenance on the audit log, not frontmatter). A richer sink (e.g. structured DB) is a later, non-blocking upgrade.
 
@@ -399,7 +399,7 @@ Decision 14: **Single source of truth = one resolved, validated *model*, not one
 - **Three concerns, owned distinctly**: `topology.toml` (wiring — components/ports/sockets/models), `policy.toml` (the central, auditable **security surface** — zones, write-classes, capability grants, secret references), and an optional `tuning.toml` (benign behavior overrides). Each setting is owned by exactly one place (validator rejects duplicate ownership).
 - **Defaults live in code; config holds only deltas** — every tunable has a `Default` matching its home spec, so the config file can be **small or absent** and the system still works.
 - **Out of the vault, homelab-local** (ssh in to edit); **agents never write config** (user-approval-gated config-through-the-system is a v2+ item). **Secrets are not config** (env/systemd by reference — Decision 10).
-- **Fail-fast**: merge precedence is defaults → files → env (`LIBERADO_*`) → CLI; the merged whole is **cross-validated before the daemon serves anything** (unknown zones, missing MCPs, port collisions, dangling secret refs, triggerless ACPs, etc.), surfaced on startup and via a `liberado config check` command. Conflicts are a load-time error, never a runtime surprise.
+- **Fail-fast**: merge precedence is defaults → files → env (`LIBERADO_*`) → CLI; the merged whole is **cross-validated before the daemon serves anything** (unknown zones, missing MCPs, port collisions, dangling secret refs, triggerless hooks, etc.), surfaced on startup and via a `liberado config check` command. Conflicts are a load-time error, never a runtime surprise.
 
 ### 15. Frontmatter Schema Validation + Migration
 Decide validation approach and migration strategy for frontmatter fields before the vault grows large.
@@ -540,12 +540,12 @@ the TUI client never change during the migration.
 ### 19. TurboVault as Privileged Plugin, not Hard Dependency
 **Why it matters**: The original Pillar 1 ("the vault is the source of truth") read as a system-wide
 invariant. The matured pillars demote it: the core must be usable without TurboVault, or the
-"modular MCP/ACP substrate" pillar and the general-MCP-agent milestone are not real.
+"modular MCP/hook substrate" pillar and the general-MCP-agent milestone are not real.
 
 **Decision**: **The vault (TurboVault) is the default, privileged perception+storage plugin, not a
 hard dependency.** The core — dispatch / execute / MCP runtime / chat / conversation-store — is
 **vault-agnostic**. The vault's coupling is isolated to the **reactive subsystem** (watch +
-provenance loop-breaking), which becomes *the vault plugin* behind an **event-source / ACP trait**
+provenance loop-breaking), which becomes *the vault plugin* behind an **event-source / hook trait**
 (the same trait cron implements — Decision 18). Privileged-default in the meantime: TurboVault stays
 the out-of-the-box perception+storage layer, but nothing in the core path requires it. This is the
 destination the mesh (Decision 18) reaches; vault-decoupling lands in roadmap Phase 3.
@@ -563,6 +563,12 @@ Phase 3.
 
 ## Tier 4: Lower-Regret / Polish Decisions
 
+- **A2A (Agent2Agent) protocol interop** — not yet a decision, captured as
+  [`a2a-protocol-idea.md`](../ideas/a2a-protocol-idea.md) (2026-07-01). Preliminary read: the
+  Decision 17 conversation-store seams (`author`, lineage) and the Decision 18 mesh direction
+  already carry most of the data-model need; the open gap is a new inbound protocol surface and
+  an outbound peer-delegation capability, gated like any other MCP/subagent trust boundary. Not
+  before Phase 3.
 - Exact initial model/provider and SDK choice (DeepSeek route, config approach).
 - ~~Precise naming for the enhanced liberado component~~ **Resolved**: split into `liberado-dispatcher` (new out-of-band routing agent) + `liberado-memory-mcp` (renamed `liberado-tool-helper-mcp`, the mem0-backed general + procedural memory store the dispatcher consumes). Actual directory rename happens at implementation time (planning phase keeps the existing folder name).
 - v1 scope boundaries (what is explicitly deferred).

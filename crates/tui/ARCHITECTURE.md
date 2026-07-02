@@ -2,7 +2,7 @@
 
 A native terminal UI for Liberado that attaches to a running daemon server over the
 **same shared HTTP/SSE contract** as the web UI and the `liberado chat` REPL
-(`docs/interface.md`). It is the primary interactive surface for daily use.
+(`docs/reference/api.md`). It is the primary interactive surface for daily use.
 
 ## Principle: the TUI proves the API is client-agnostic
 

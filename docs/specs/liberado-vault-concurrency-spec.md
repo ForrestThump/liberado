@@ -1,4 +1,4 @@
-# Liberado Decision 5 — Vault Concurrency, Write Provenance & Loop-Breaking Spec
+﻿# Liberado Decision 5 — Vault Concurrency, Write Provenance & Loop-Breaking Spec
 
 **Status**: Resolves Tier-1 Decision 5. Actionable spec; implementation can begin from here.
 **Owner**: Shiloh Mangus
@@ -16,16 +16,16 @@
 ## 1. Purpose & Scope
 
 The vault is a shared database with many concurrent writers: the human (in Obsidian), the
-main agent, dispatched subagents, and ACPs reacting to events. This spec defines the rules
+main agent, dispatched subagents, and hooks reacting to events. This spec defines the rules
 that make those writers coexist safely:
 
 1. **Write zones** — who is allowed to write where.
 2. **Provenance** — how every agent-originated write is attributed.
 3. **Concurrency** — how simultaneous edits are detected and resolved.
-4. **Loop-breaking** — how reactive ACPs avoid reacting to their own (and each other's) writes.
+4. **Loop-breaking** — how reactive hooks avoid reacting to their own (and each other's) writes.
 5. **Idempotency** — how at-most-once webhook delivery is made safe to retry.
 
-This is load-bearing: no ACP or agent that **writes** to the vault should be implemented
+This is load-bearing: no hook or agent that **writes** to the vault should be implemented
 before these rules are in place.
 
 ---
@@ -55,7 +55,7 @@ before these rules are in place.
 ## 3. Write Zones & Human-vs-Agent Boundaries
 
 Write authority is expressed in the Decision 4 zone/capability model. Decision 5 adds a
-per-zone **write-class** policy that the daemon and ACPs honor:
+per-zone **write-class** policy that the daemon and hooks honor:
 
 | Write class | Meaning | Examples |
 |---|---|---|
@@ -68,7 +68,7 @@ Rules:
 - Write class is declared **per zone** in the same config that holds capability grants
   (Decision 14, single source of truth). Default for an unlisted zone is `proposal_only`
   (fail safe — agents can't silently write somewhere undeclared).
-- The class is enforced at the **MCP/ACP boundary** (same place capabilities are checked),
+- The class is enforced at the **MCP/hook boundary** (same place capabilities are checked),
   never only in the orchestrator.
 - A subagent's write class is the **intersection** of its granted zone class and any
   narrowing applied at dispatch — narrow only, never widen (Decision 4 invariant).
@@ -144,7 +144,7 @@ escalate to main agent` (never force-overwrite a `human_only`/`shared` zone).
 
 ## 6. Loop-Breaking (Approach A — consumer-side hash join)
 
-The problem: an ACP receives `FileModified("reviews/2026-06-21.md")` and must decide **react or
+The problem: a hook receives `FileModified("reviews/2026-06-21.md")` and must decide **react or
 ignore**. The fs-watcher event is provenance-blind (identical whether Turbovault, Obsidian, or
 git wrote it). We attribute by **content identity**, not timing.
 
@@ -187,9 +187,9 @@ Hash-join is the primary mechanism; we add a cheap second guard for the degenera
 write whose content collides with what a human would type" case and for chains:
 
 - Every reactive write carries the **originating `correlation_id`** (not a fresh one) when the
-  reaction is a *direct consequence* of the triggering event. An ACP maintains a small bounded
+  reaction is a *direct consequence* of the triggering event. A hook maintains a small bounded
   **seen-correlation set**; if an incoming event's joined provenance carries a `correlation_id`
-  this ACP already acted on, it suppresses. This breaks A→B→A chains across *different* ACPs,
+  this hook already acted on, it suppresses. This breaks A→B→A chains across *different* hooks,
   which pure per-path hash-join does not catch.
 - A reaction that legitimately starts new work mints a **new** correlation ID (child), and
   records `parent_correlation_id` in its provenance `note`, so chains stay traceable and a
@@ -208,9 +208,9 @@ write whose content collides with what a human would type" case and for chains:
 ## 7. Event Delivery & Idempotency (bridges Decision 6)
 
 Both the fs subscription (drop-and-resync, best-effort) and bare webhook POSTs are at-most-once.
-ACP reaction handlers are therefore **idempotent by construction**:
+Hook reaction handlers are therefore **idempotent by construction**:
 
-- The **correlation ID is the idempotency key.** Before acting, an ACP checks whether work for
+- The **correlation ID is the idempotency key.** Before acting, a hook checks whether work for
   this `correlation_id` already exists (a pending/working/done marker in the vault under a
   conventional location, e.g. `.liberado/reactions/<correlation_id>.json`, or an in-memory
   bounded set keyed by correlation ID for same-process speed with the vault marker as the
@@ -219,23 +219,23 @@ ACP reaction handlers are therefore **idempotent by construction**:
   provenance + correlation ID), then performs work, then marks done. A crash/redelivery
   re-enters at the pending marker instead of double-acting.
 - On subscription **drop/overflow**, the documented contract is *resync from authoritative
-  state* — the ACP re-scans its zone (bounded) rather than trusting it saw every event.
+  state* — the hook re-scans its zone (bounded) rather than trusting it saw every event.
 
 ---
 
 ## 8. Reconciliation with `life-os-architecture.md` §5 (the emitter)
 
 `life-os-architecture.md` describes a hand-built `vault-change-emitter` that watches paths and
-routes to ACP webhooks. **This is superseded** by Turbovault's native subscription:
+routes to hook webhooks. **This is superseded** by Turbovault's native subscription:
 
 - Turbovault already owns the `notify`-based `VaultWatcher` and (via PR #24) fans it out to
   filtered subscribers with a monotonic `seq` / `since_seq` resume cursor.
 - The daemon (Decision 2) holds **one** subscription to Turbovault and does the §6 hash-join +
   §6.3 correlation guard **once, centrally**, then routes high-signal, already-de-looped events
-  to the relevant ACP. ACPs stay thin: they receive *attributed* events and just run domain
+  to the relevant hook. Hooks stay thin: they receive *attributed* events and just run domain
   reaction logic. This removes the per-consumer join cost that Approach A would otherwise incur.
 - **Non-vault triggers** (systemd timers, git/docker hooks, homelab sources) still POST the
-  standardized event payload to ACP webhooks directly — that part of §5 stands. Only the
+  standardized event payload to hook webhooks directly — that part of §5 stands. Only the
   vault-watching emitter is replaced.
 
 `life-os-architecture.md` §5 and §6 should be rewritten to reflect this (separate task — see the
@@ -258,7 +258,7 @@ daemon can ship with and swap out later behind a thin adapter.
 ## 9. What This Unblocks
 
 With this spec in place, the following become safe to build:
-- Any `agent_writable` ACP (`reviews-acp`, `decisions-acp`) — they have provenance, idempotency,
+- Any `agent_writable` hook (`reviews-hook`, `decisions-hook`) — they have provenance, idempotency,
   and loop-breaking rules.
 - The daemon's central subscription + attribution layer.
 - The proposal/approval path (Decision 11) for `proposal_only` zones.

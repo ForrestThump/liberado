@@ -3,7 +3,7 @@
 //! The long-running core of Liberado (Decision 2: daemon-first). This is the v1 **vertical
 //! slice**: it watches the vault, attributes every observed change (loop-breaking, Decision 5),
 //! and forwards the changes that came from *outside* our own write path as standardized
-//! [`Event`]s. Downstream (the dispatcher, ACPs) consume those events; here we just produce them.
+//! [`Event`]s. Downstream (the dispatcher, hooks) consume those events; here we just produce them.
 //!
 //! The reactive decision is split into a pure, deterministic [`Daemon::process_change`] (testable
 //! without the filesystem) and the watcher plumbing in [`Daemon::run`] — mirroring how the vault

@@ -1,4 +1,4 @@
-**Excellent.** Let's make progress on **Decision 4** by defining the core abstractions while drawing inspiration from real systems.
+﻿**Excellent.** Let's make progress on **Decision 4** by defining the core abstractions while drawing inspiration from real systems.
 
 ### Analysis of Existing Systems (IronClaw + Others)
 
@@ -24,7 +24,7 @@ This is excellent because it treats permissions as **first-class, attenuatable t
 **Useful patterns to steal**:
 - Explicit, named capabilities instead of implicit access.
 - Ability to **narrow** (attenuate) capabilities when delegating.
-- Enforcement at the **boundary** (inside the MCP/ACP or sandbox), not just in the orchestrator.
+- Enforcement at the **boundary** (inside the MCP/hook or sandbox), not just in the orchestrator.
 - Host-mediated access to sensitive resources (especially secrets).
 
 ### Recommended Design for Liberado
@@ -36,7 +36,7 @@ Core ideas:
 - **Capabilities** = explicit permissions within zones.
 - **No ambient authority** — components only have what is explicitly granted.
 - **Narrowing on delegation** — liberado (and subagents) can pass *subsets* of capabilities.
-- Enforcement lives primarily **inside each MCP/ACP**.
+- Enforcement lives primarily **inside each MCP/hook**.
 
 This keeps config relatively simple while giving strong containment.
 
@@ -156,7 +156,7 @@ This matches the "dispatcher can narrow, but not expand" model we discussed.
 
 | Aspect | Recommendation | Rationale |
 |-------|----------------|---------|
-| **Enforcement location** | Inside each MCP/ACP | Follows IronClaw's "enforce at the boundary" principle. More robust than central hooks. |
+| **Enforcement location** | Inside each MCP/hook | Follows IronClaw's "enforce at the boundary" principle. More robust than central hooks. |
 | **Narrowing** | Allowed at dispatch time | Gives flexibility while keeping user config simple. |
 | **Expansion** | Never allowed | Security invariant. |
 | **User config complexity** | Keep relatively simple (base capabilities only) | Avoids the config explosion you were worried about. |

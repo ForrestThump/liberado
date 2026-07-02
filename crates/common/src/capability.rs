@@ -3,7 +3,7 @@
 //! The security foundation. Inspired by IronClaw's capability-based, zero-ambient-authority
 //! design: components start with *nothing* and are granted explicit, named capabilities that
 //! can only ever be **narrowed** (attenuated) on delegation, never widened. Enforcement lives
-//! at each MCP/ACP boundary — this crate provides the vocabulary and the check; the boundary
+//! at each MCP/hook boundary — this crate provides the vocabulary and the check; the boundary
 //! calls it.
 
 use serde::{Deserialize, Serialize};
@@ -38,7 +38,7 @@ impl Zone {
 
 /// Per-zone write authority (Decision 5, concurrency spec §3).
 ///
-/// Enforced at the MCP/ACP boundary alongside capability checks. The default for an
+/// Enforced at the MCP/hook boundary alongside capability checks. The default for an
 /// *unlisted* zone is [`WriteClass::ProposalOnly`] (fail safe — agents can never silently
 /// write somewhere undeclared).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -205,7 +205,7 @@ impl CapabilitySet {
     }
 
     /// Guard: return `Ok(())` if `cap` is granted, otherwise [`Error::CapabilityDenied`].
-    /// This is the function every MCP/ACP boundary calls on entry.
+    /// This is the function every MCP/hook boundary calls on entry.
     pub fn check(&self, cap: &Capability) -> Result<()> {
         if self.contains(cap) {
             Ok(())

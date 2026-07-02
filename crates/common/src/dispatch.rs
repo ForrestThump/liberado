@@ -165,7 +165,7 @@ pub enum ExecMode {
     #[default]
     Await,
     /// Returns a [`JobHandle`] immediately; the Report is delivered later via vault-mediated
-    /// surfacing (the same path ACP outputs use).
+    /// surfacing (the same path hook outputs use).
     Detach,
 }
 

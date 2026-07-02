@@ -224,7 +224,7 @@ fn proposal_expiry() {
     let mut p = Proposal::pending(
         "p1",
         "c1",
-        "decisions-acp",
+        "decisions-hook",
         ProposedAction::External {
             description: "send".into(),
         },

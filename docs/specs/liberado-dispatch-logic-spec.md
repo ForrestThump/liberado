@@ -1,4 +1,4 @@
-# Liberado Dispatch Logic Spec — When the Dispatcher Routes, Executes, Reports, or Asks
+﻿# Liberado Dispatch Logic Spec — When the Dispatcher Routes, Executes, Reports, or Asks
 
 **Status**: Completes the remaining detail of Tier-1 Decision 1 (Liberado invocation model).
 Actionable; implementation can begin from here.
@@ -248,11 +248,11 @@ tension between "in-process" and "the main agent should make progress while a su
 **in-process inside the daemon**, calling the provider abstraction directly. It is core
 orchestration — it needs tight access to the provider, the MCP client pool, the active
 `CapabilitySet`, and tracing — so routing it back through the MCP protocol would be pure ceremony.
-**MCP sampling (`turbomcp-client`) is reserved for genuinely external servers** (MCPs/ACPs that need
+**MCP sampling (`turbomcp-client`) is reserved for genuinely external servers** (MCPs/hooks that need
 to borrow the daemon's inference without holding provider keys). The dispatcher is not external.
 
 **Axis 2 — concurrency (async, not blocking).** In-process does **not** mean synchronous. The daemon
-is tokio-async; the dispatcher runs as spawned tasks. The daemon itself never blocks — ACPs keep
+is tokio-async; the dispatcher runs as spawned tasks. The daemon itself never blocks — hooks keep
 firing and other input is still handled while any dispatch is in flight. Work splits by timescale:
 
 - **Classification** (retrieve guidance → classify → guards) is fast (small model, sub-second) and
@@ -264,7 +264,7 @@ firing and other input is still handled while any dispatch is in flight. Work sp
   - **Detach** (background-originated work, or foreground work the main agent flags non-blocking):
     the dispatcher returns a job handle immediately (`correlation_id` + status), the main agent
     completes its turn, and the subagent's Report is delivered later as a high-signal event via the
-    **same vault-mediated surfacing path ACP messages use** (Decision 9). Daemon-first (Decision 2)
+    **same vault-mediated surfacing path hook messages use** (Decision 9). Daemon-first (Decision 2)
     is exactly what makes this clean.
 
 **Promote-on-timeout.** A foreground dispatch starts in Await; if still running after
@@ -323,7 +323,7 @@ pub struct JobHandle {                // returned immediately for Detach (and on
 
 1. **Resolved** — dispatcher classification inference runs **in-process** in the daemon via the
    provider abstraction directly (§10, Axis 1). MCP sampling through `turbomcp-client` is reserved
-   for external MCPs/ACPs that need reasoning without provider keys. Concurrency is provided by the
+   for external MCPs/hooks that need reasoning without provider keys. Concurrency is provided by the
    async runtime + Await/Detach (§10, Axis 2), not by relocating inference.
 2. Should `confidence` be model-self-reported (cheap, noisy) or derived from guidance-match score +
    heuristics (more stable)? Start self-reported; revisit with eval data.

@@ -1,4 +1,4 @@
-# Liberado ContextPolicy Spec — A Deliberately Dumb Life Header
+﻿# Liberado ContextPolicy Spec — A Deliberately Dumb Life Header
 
 **Status**: Specifies the main-agent ContextPolicy (Decision 2 daemon / §1 Main Agent). Actionable.
 **Owner**: Shiloh Mangus
@@ -6,7 +6,7 @@
 **Related**:
 - `life-os-architecture.md` (§1 Main Agent & ContextPolicy)
 - `liberado-dispatch-logic-spec.md` (on-demand retrieval via the dispatcher; Detach report delivery)
-- `liberado-architecture-decisions.md` (Decision 9 ACP→main messaging; Decision 11 proposals)
+- `liberado-architecture-decisions.md` (Decision 9 hook→main messaging; Decision 11 proposals)
 - Turbovault read tools (`search`, `read_note`, `search_by_frontmatter`, `query_frontmatter_sql`)
 
 ---
@@ -40,7 +40,7 @@ begins (including right after `/new`).
 
 **Job B — per-turn background surfacing** (cheap). Each turn, surface newly-arrived high-signal
 items so background autonomy re-enters the main loop: completed **Detached** subagent Reports,
-**ACP** outputs, and **pending proposals awaiting approval** (Decisions 9, 11; dispatch spec §10).
+**hook** outputs, and **pending proposals awaiting approval** (Decisions 9, 11; dispatch spec §10).
 This is the inbound channel for everything the system did while you weren't looking.
 
 ---
@@ -62,7 +62,7 @@ Concrete shape (illustrative — real output is this small):
 Today: 2026-06-21 (Sat). 3 tasks due · 1 event · 2 proposals awaiting review.
 Goals: [Ship Liberado v1 — in progress] · [Q3 fitness — on track] · [Family trip — blocked].
 Recent decisions: daemon-first arch (06-20) · risk-tiered clarify threshold (06-21).
-Inbox: detached "decision-review" done → reviews/2026-06-21.md · tasks-acp flagged 1 overdue.
+Inbox: detached "decision-review" done → reviews/2026-06-21.md · tasks-hook flagged 1 overdue.
 Vault: tasks/ calendar/ decisions/ goals/ reviews/ knowledge/ — ask to load more.
 ```
 
@@ -115,7 +115,7 @@ thread) is optional and distinct from subagent dispatch.
 ## 7. v1 Scope
 
 - Deterministic header assembly (Job A) from Turbovault queries + template.
-- Per-turn background surfacing (Job B): detached Reports + ACP outputs + pending proposals.
+- Per-turn background surfacing (Job B): detached Reports + hook outputs + pending proposals.
 - The tiny curated read-only toolset for direct expansion (§4.1).
 - Everything else on-demand via the dispatcher.
 

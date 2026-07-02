@@ -64,7 +64,7 @@ pub struct Proposal {
     pub id: String,
     /// The originating goal/event — reused as the idempotency key when executed.
     pub correlation_id: String,
-    /// Which agent/ACP produced this proposal.
+    /// Which agent/hook produced this proposal.
     pub source: String,
     pub proposed_action: ProposedAction,
     pub rationale: String,
@@ -202,7 +202,7 @@ mod tests {
         let p = Proposal::pending(
             "prop-2",
             "review-2026-06-21",
-            "decisions-acp",
+            "decisions-hook",
             ProposedAction::External {
                 description: "Add family calendar event".into(),
             },
@@ -242,7 +242,7 @@ mod tests {
         let p = Proposal::pending(
             "prop-1",
             "review-2026-06-21",
-            "decisions-acp",
+            "decisions-hook",
             ProposedAction::External {
                 description: "Add family calendar event".into(),
             },

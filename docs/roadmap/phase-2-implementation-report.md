@@ -1,4 +1,4 @@
-# Phase 2 — Implementation Report
+﻿# Phase 2 — Implementation Report
 
 ## Slice 1: riggers as `code-dispatch` MCP + `Provider` trait
 
@@ -348,4 +348,4 @@ Total eval scenarios: 12 → 18. No changes needed to `main.rs` — `scenarios()
 
 ### Next: Phase 3 — Autonomy Breadth
 
-Per `docs/roadmap/current.md`, Phase 3 adds cron as a bus listener (Hermes gap #2), vault decoupling behind an event-source/ACP trait, and mesh checkpoint #3.
+Per `docs/roadmap/current.md`, Phase 3 adds cron as a bus listener (Hermes gap #2), vault decoupling behind an event-source/hook trait, and mesh checkpoint #3.

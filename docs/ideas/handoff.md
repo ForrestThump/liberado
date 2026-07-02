@@ -1,7 +1,7 @@
-# Liberado — Handoff
+﻿# Liberado — Handoff
 
 Current-state handoff for the next session. For the full system map read `ARCHITECTURE.md`; for
-build/run read `AGENTS.md`; for the chat API read `docs/interface.md`; for the rationale behind any
+build/run read `AGENTS.md`; for the chat API read `docs/reference/api.md`; for the rationale behind any
 "Decision N" read `liberado-architecture-decisions.md`.
 
 > Note: this is the single handoff file. There is **no** uppercase `HANDOFF.md` — on Windows
@@ -46,11 +46,11 @@ is green (all crates pass). The system is daemon-first and consolidated into **o
 - The binary entry / arg dispatch: `crates/cli/src/main.rs`; chat client: `crates/cli/src/chat_client.rs`.
 - Server (library): `crates/server/src/{lib,api,state}.rs` — `lib.rs::run` is the daemon entry point.
 - Shared env wiring: `crates/bootstrap/src/lib.rs`.
-- Chat/SSE contract: `docs/interface.md`. Endpoint table + env vars: `AGENTS.md`.
+- Chat/SSE contract: `docs/reference/api.md`. Endpoint table + env vars: `AGENTS.md`.
 
 ## Matured vision (2026-06-26 planning session)
 
-Liberado is a **modular MCP/ACP-first Rust agent substrate**, **vault-optional**, whose
+Liberado is a **modular MCP/hook-first Rust agent substrate**, **vault-optional**, whose
 differentiation is **"self-improving autonomy with guarantees"**: the LLM proposes, deterministic
 code disposes, and self-extension can build new tools but can never widen its own authority. Full
 thesis + competitive grounding in [`docs/architecture/positioning.md`](../architecture/positioning.md);
@@ -72,7 +72,7 @@ to `done` (loop-broken, idempotent).
    checkpoints tied to features guard against drift. Not a big-bang refactor.
 3. **Vault = hard-plugin destination, reached via the mesh** (Decision 19) — TurboVault is the
    privileged *default* perception+storage plugin in the meantime, but the core is vault-agnostic;
-   the vault becomes a plugin behind an event-source/ACP trait in Phase 3.
+   the vault becomes a plugin behind an event-source/hook trait in Phase 3.
 4. **Personal-first with framework-grade seams** — build what is objectively more useful for the
    author than the free alternatives, but keep crate boundaries clean enough to reuse.
 

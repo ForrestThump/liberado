@@ -3,7 +3,7 @@
 # file leaves that section at its built-in defaults.
 #
 # Topology is the deployment wiring: where the vault is, which provider/models are in play, and
-# which MCP/ACP components are enabled. Defaults live in code — set only what differs here.
+# which MCP/hook components are enabled. Defaults live in code — set only what differs here.
 
 # The Obsidian vault, the source of truth. REQUIRED (validation fails without it). The CLI's
 # `serve <vault-path>` argument overrides this when given.

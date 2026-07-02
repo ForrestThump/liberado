@@ -1,11 +1,11 @@
-# Liberado Capture & Ambient Analysis Spec — Inbox + Whole-Vault Awareness
+﻿# Liberado Capture & Ambient Analysis Spec — Inbox + Whole-Vault Awareness
 
 **Status**: Specifies the async-capture interaction mode and the lighter ambient analysis of all
 human notes. A peer to the TUI. Actionable.
 **Owner**: Shiloh Mangus
 **Last Updated**: June 21, 2026
 **Related**:
-- `life-os-architecture.md` (interaction modes; ACPs; triggering)
+- `life-os-architecture.md` (interaction modes; hooks; triggering)
 - `liberado-dispatch-logic-spec.md` (everything routes through normal dispatch)
 - `liberado-vault-concurrency-spec.md` (loop-breaking, write classes, journal markers)
 - `liberado-context-policy-spec.md` (counts in header; results via Job B)
@@ -27,7 +27,7 @@ clearly stopped. Capture has no urgency by default.
 
 ## 2. Why It's Almost Free
 
-It rides existing machinery; the **inbox-acp is thin** because all judgment (what is this note,
+It rides existing machinery; the **inbox-hook is thin** because all judgment (what is this note,
 where does it go, is it high-consequence) is the dispatcher's existing job (dispatch spec §5–§6):
 
 ```
@@ -85,7 +85,7 @@ here it is "has the human stopped editing." They compose. `#hold-off` short-circ
 2. **Sync conflicts are not fatal** — they are handled out-of-band by the maintenance task
    (`liberado-vault-maintenance-and-git-spec.md`): a subagent does a **lossless union merge** of the
    conflicting versions, deletes the `.sync-conflict` file, and commits (git is the undo). The
-   inbox-acp itself just skips conflict files.
+   inbox-hook itself just skips conflict files.
 3. **Minimize concurrent edits**: read → produce output elsewhere → for inbox items, move the
    original to `processed/` once (the move is the smallest conflict surface and the "done" marker).
 
@@ -129,7 +129,7 @@ here it is "has the human stopped editing." They compose. `#hold-off` short-circ
 
 ## 12. v1 Scope
 
-- `inbox-acp`: watch `inbox/` via the daemon subscription, resolve tier (flags + location), settle,
+- `inbox-hook`: watch `inbox/` via the daemon subscription, resolve tier (flags + location), settle,
   dispatch at the tier's intensity, move inbox items to `processed/` with a breadcrumb.
 - Ambient nightly sweep over changed notes at capped intensity.
 - Flags `#ready-now` / `#hold-off`.

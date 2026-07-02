@@ -1,4 +1,4 @@
-# Positioning
+﻿# Positioning
 
 Liberado is **not** trying to win the agent-framework market. The goal is narrower and more honest:
 **build something objectively more useful *for its author* than the existing free alternatives**
@@ -28,7 +28,7 @@ None of them can claim that *agent self-extension cannot widen authority* — be
 capability boundary the LLM can only narrow. Liberado can: a **Rust-native, memory-safe core where
 the LLM proposes and deterministic code disposes**, where self-improvement happens via **`ProposeMcp`
 -> a Rust/WASM-sandboxed MCP -> capability-gated hot-reload** rather than arbitrary code execution,
-where the **dispatcher-as-tool-advisor** keeps context lean, and where the **MCP/ACP-first
+where the **dispatcher-as-tool-advisor** keeps context lean, and where the **MCP/hook-first
 event-mesh** makes the whole thing modular and partially deployable.
 
 ## What we deliberately do NOT chase

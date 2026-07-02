@@ -15,7 +15,7 @@ liberado chat [session]  ──►  chat_client::run(session)     (streaming HTT
 ```
 
 `serve` runs in the foreground, hosting the daemon and API until killed. `chat` is a thin native
-(`reqwest`/SSE) client of a separately-running server (`docs/interface.md`) — no agent logic, no
+(`reqwest`/SSE) client of a separately-running server (`docs/reference/api.md`) — no agent logic, no
 provider, no store; it just streams `/api/chat/stream` and prints it.
 
 ## Arguments & environment
