@@ -22,6 +22,10 @@
 //! threading write-provenance through it are deliberately *out* of this crate — the engine only
 //! depends on the trait, so it is testable with a mock runtime and a [`MockProvider`].
 
+mod risk_gated;
+
+pub use risk_gated::RiskGatedToolRuntime;
+
 use std::sync::Arc;
 
 use async_trait::async_trait;

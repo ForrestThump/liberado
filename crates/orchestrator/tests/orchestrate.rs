@@ -5,11 +5,11 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use liberado_common::{
-    BlockReason, Capability, CapabilitySet, DispatchAction, DispatchDecision, Outcome, Proposal,
-    ProposalStatus, ProposedAction, ToolCall, WriteProvenance,
+    BlockReason, Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision,
+    Outcome, Proposal, ProposalStatus, ProposedAction, ToolCall, WriteProvenance,
 };
 use liberado_executor::{SUBMIT_REPORT_TOOL, ToolRuntime};
-use liberado_orchestrator::{Disposition, Orchestrator, RuntimeFactory, RuntimeSetupError};
+use liberado_orchestrator::{Disposition, Orchestrator, RuntimeFactory, RuntimeSetupError, SubDispatch};
 use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
 
 /// A runtime that offers no tools (so the scripted model goes straight to `submit_report`).
@@ -97,7 +97,7 @@ fn orchestrator(script: Vec<CompletionResponse>, capabilities: CapabilitySet) ->
     let provider = Arc::new(MockProvider::with_script("mock", script));
     let factory = RecordingFactory::default();
     let calls = factory.calls.clone();
-    let orch = Orchestrator::new(provider, factory, capabilities);
+    let orch = Orchestrator::new(provider, factory, capabilities, Vec::new(), std::env::temp_dir());
     (calls, orch)
 }
 
@@ -321,7 +321,13 @@ async fn execute_approved_runs_the_exact_calls_without_a_classifier_or_guard() {
         "mock",
         Vec::<CompletionResponse>::new(),
     ));
-    let orch = Orchestrator::new(provider, RecordingRuntimeFactory { runtime }, CapabilitySet::empty());
+    let orch = Orchestrator::new(
+        provider,
+        RecordingRuntimeFactory { runtime },
+        CapabilitySet::empty(),
+        Vec::new(),
+        std::env::temp_dir(),
+    );
 
     let call = ToolCall {
         tool: "email:send".into(),
@@ -344,4 +350,249 @@ async fn execute_approved_runs_the_exact_calls_without_a_classifier_or_guard() {
     assert_eq!(invoked.len(), 1);
     assert_eq!(invoked[0].name, "email:send");
     assert_eq!(invoked[0].arguments, call.args);
+}
+
+// ------------------------------------------------------------------
+// Runtime-level gating: the executor's *adaptive* (non-seed) tool calls must get the same
+// capability/consequence checking the dispatcher's pre-flight guard only ever applied to the
+// decision's seed call.
+// ------------------------------------------------------------------
+
+#[tokio::test]
+async fn execute_direct_downgrades_a_high_consequence_adaptive_call() {
+    // No seed_calls: the model's first real turn calling this tool *is* the adaptive call — the
+    // same code path a genuine mid-loop call takes, never pre-vetted by the dispatcher's guard.
+    let script = vec![
+        CompletionResponse::tool_calls(vec![ToolInvocation::new(
+            "c1",
+            "dangerous-mcp:delete_everything",
+            serde_json::json!({"path": "important.md"}),
+        )]),
+        submit_report_response(),
+    ];
+    let provider = Arc::new(MockProvider::with_script("mock", script));
+    let runtime = RecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let proposals_dir = tempfile::TempDir::new().unwrap();
+    let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("dangerous-mcp".into())]);
+    let orch = Orchestrator::new(
+        provider,
+        RecordingRuntimeFactory { runtime },
+        capabilities,
+        vec![("dangerous-mcp".into(), Consequence::External)],
+        proposals_dir.path().to_path_buf(),
+    );
+
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: Vec::new(),
+        },
+        confidence: 0.9,
+        rationale: "looked simple".into(),
+    };
+
+    let disposition = orch
+        .run(decision, "clean up the vault", "trigger-1")
+        .await
+        .expect("run");
+
+    // The downgrade is a tool *result*, not an abort — the run still completes normally.
+    assert!(matches!(disposition, Disposition::Reported(_)));
+
+    // The real tool never ran.
+    assert!(
+        invoked.lock().unwrap().is_empty(),
+        "a high-consequence adaptive call must not reach the real tool"
+    );
+
+    // A proposal file was written instead.
+    let written = std::fs::read_dir(proposals_dir.path().join("proposals"))
+        .expect("proposals dir should exist")
+        .count();
+    assert_eq!(written, 1, "exactly one proposal file should be written");
+}
+
+#[tokio::test]
+async fn execute_direct_rejects_an_out_of_capability_adaptive_call() {
+    // Granted only "safe-mcp" — so `allowed_mcps` derivation lets *some* execution proceed — but the
+    // model's first real turn (adaptive, not seeded) calls an entirely different, ungranted MCP.
+    let script = vec![
+        CompletionResponse::tool_calls(vec![ToolInvocation::new(
+            "c1",
+            "other-mcp:do_something",
+            serde_json::json!({}),
+        )]),
+        submit_report_response(),
+    ];
+    let provider = Arc::new(MockProvider::with_script("mock", script));
+    let runtime = RecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("safe-mcp".into())]);
+    let orch = Orchestrator::new(
+        provider,
+        RecordingRuntimeFactory { runtime },
+        capabilities,
+        Vec::new(),
+        std::env::temp_dir(),
+    );
+
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: Vec::new(),
+        },
+        confidence: 0.9,
+        rationale: "looked simple".into(),
+    };
+
+    let disposition = orch
+        .run(decision, "do a safe thing", "trigger-1")
+        .await
+        .expect("run");
+
+    assert!(matches!(disposition, Disposition::Reported(_)));
+    assert!(
+        invoked.lock().unwrap().is_empty(),
+        "an ungranted adaptive call must not reach the real tool"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_subagent_gates_with_the_narrowed_capability_set() {
+    // The orchestrator's own ceiling grants both MCPs; the decision's own (narrower) capabilities
+    // only grant "tasks-mcp". The gate must use the narrowed intersection, not the raw ceiling.
+    let script = vec![
+        CompletionResponse::tool_calls(vec![ToolInvocation::new(
+            "c1",
+            "other-mcp:do_something",
+            serde_json::json!({}),
+        )]),
+        submit_report_response(),
+    ];
+    let provider = Arc::new(MockProvider::with_script("mock", script));
+    let runtime = RecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let ceiling = CapabilitySet::from_iter([
+        Capability::ExecuteMcp("tasks-mcp".into()),
+        Capability::ExecuteMcp("other-mcp".into()),
+    ]);
+    let orch = Orchestrator::new(
+        provider,
+        RecordingRuntimeFactory { runtime },
+        ceiling,
+        Vec::new(),
+        std::env::temp_dir(),
+    );
+
+    let decision = DispatchDecision {
+        action: DispatchAction::DispatchSubagent {
+            goal: "narrow task".into(),
+            capabilities: CapabilitySet::from_iter([Capability::ExecuteMcp("tasks-mcp".into())]),
+            allowed_mcps: vec!["other-mcp".into()],
+            success_criteria: vec![],
+            artifact_target: None,
+            model: None,
+            correlation_id: "sub-1".into(),
+        },
+        confidence: 0.8,
+        rationale: "multi-step".into(),
+    };
+
+    let disposition = orch
+        .run(decision, "outer goal ignored", "trigger-1")
+        .await
+        .expect("run");
+
+    assert!(matches!(disposition, Disposition::Reported(_)));
+    assert!(
+        invoked.lock().unwrap().is_empty(),
+        "the subagent's own (narrower) capabilities must gate it, not the orchestrator's raw ceiling"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_parallel_gates_each_sub_dispatch() {
+    let script = vec![
+        CompletionResponse::tool_calls(vec![ToolInvocation::new(
+            "c1",
+            "dangerous-mcp:wipe",
+            serde_json::json!({}),
+        )]),
+        submit_report_response(),
+    ];
+    let provider = Arc::new(MockProvider::with_script("mock", script));
+    let runtime = RecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("dangerous-mcp".into())]);
+    let orch = Orchestrator::new(
+        provider,
+        RecordingRuntimeFactory { runtime },
+        capabilities,
+        vec![("dangerous-mcp".into(), Consequence::External)],
+        std::env::temp_dir(),
+    );
+
+    let sub_dispatches = vec![SubDispatch {
+        goal: "do the dangerous thing".into(),
+        allowed_mcps: vec!["dangerous-mcp".into()],
+        success_criteria: vec![],
+        correlation_id: "sub-a".into(),
+        label: "A".into(),
+    }];
+
+    let report = orch
+        .dispatch_parallel(sub_dispatches, 1)
+        .await
+        .expect("dispatch_parallel");
+
+    assert_eq!(report.outcome, Outcome::Succeeded);
+    assert!(
+        invoked.lock().unwrap().is_empty(),
+        "a high-consequence sub-dispatch call must not reach the real tool"
+    );
+}
+
+#[tokio::test]
+async fn execute_approved_bypasses_gating_by_design() {
+    // Even with a consequence catalog that WOULD downgrade this call through the gate, an approved
+    // proposal must execute directly — approval is already the authorization (see
+    // `execute_approved`'s doc comment). Re-gating it would create an approve -> re-propose loop.
+    let runtime = RecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        Vec::<CompletionResponse>::new(),
+    ));
+    let orch = Orchestrator::new(
+        provider,
+        RecordingRuntimeFactory { runtime },
+        CapabilitySet::empty(),
+        vec![("email-mcp".into(), Consequence::External)],
+        std::env::temp_dir(),
+    );
+
+    let call = ToolCall {
+        tool: "email-mcp:send".into(),
+        args: serde_json::json!({ "to": "boss@example.com" }),
+    };
+    let mut proposal = Proposal::pending(
+        "id-1",
+        "id-1",
+        "liberado",
+        ProposedAction::ToolCalls(vec![call.clone()]),
+        "approved email",
+    );
+    proposal.status = ProposalStatus::Approved;
+
+    let report = orch.execute_approved(&proposal).await.expect("execute");
+    assert_eq!(report.outcome, Outcome::Succeeded);
+
+    let invoked = invoked.lock().unwrap();
+    assert_eq!(
+        invoked.len(),
+        1,
+        "an approved high-consequence call must actually execute, not be re-gated"
+    );
+    assert_eq!(invoked[0].name, "email-mcp:send");
 }

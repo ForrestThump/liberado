@@ -25,9 +25,10 @@ use liberado_common::{
     CapabilitySet, Consequence, Proposal, ProposedAction,
     is_sweeping_destructive, mcp_of,
 };
-use liberado_executor::ToolRuntime;
 use liberado_provider::{ToolDef, ToolInvocation};
 use tracing::Instrument;
+
+use crate::ToolRuntime;
 
 /// A runtime guard that wraps an inner [`ToolRuntime`] and applies capability, consequence,
 /// and magnitude checks before delegating to the inner runtime.

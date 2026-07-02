@@ -223,6 +223,26 @@ async fn build_chat(
     // up front since both the Orchestrator construction and ChatSessions' guards need it.
     let capabilities = config.policy.capabilities_for("main-agent");
 
+    // Conversation logs live outside the vault (Decision 12 operational data), under
+    // `<LIBERADO_DATA_DIR>/conversations`. `JsonlStore::new` creates the directory.
+    let data_dir = std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into());
+    let store = Arc::new(JsonlStore::new(Path::new(&data_dir).join("conversations")));
+
+    // Consequence catalog: (name, Consequence) pairs for risk gating (both chat's own
+    // RiskGatedToolRuntime, below, and the Orchestrator's runtime-level gate for adaptive tool
+    // calls). A one-time snapshot at boot is fine here — MCP declarations aren't runtime-dynamic
+    // yet — but the dispatch-routing catalog below stays the live `Arc` so it and the daemon/API
+    // never drift apart from each other.
+    let descriptors = catalog.descriptors();
+    let consequences: Vec<(String, liberado_common::Consequence)> = descriptors
+        .iter()
+        .map(|d| (d.name.clone(), d.consequence))
+        .collect();
+    let catalog_is_empty = descriptors.is_empty();
+
+    // Proposal files directory (shared by chat's own guard and the Orchestrator's).
+    let proposals_dir = Path::new(&data_dir).join("proposals");
+
     // Connect a tool runtime once, reused for the chat's lifetime, and — when an MCP registry is
     // configured — keep the registry itself alive too, so it can also back an Orchestrator for
     // dispatch-routed executions (Clarify/Propose/DispatchSubagent; see `with_dispatch` below).
@@ -238,7 +258,13 @@ async fn build_chat(
             } else {
                 warn!(failed = ?failed, "chat: some MCPs failed to connect — continuing with the rest");
             }
-            let orchestrator = Orchestrator::new(provider.clone(), registry, capabilities.clone());
+            let orchestrator = Orchestrator::new(
+                provider.clone(),
+                registry,
+                capabilities.clone(),
+                consequences.clone(),
+                proposals_dir.clone(),
+            );
             (rt, Some(orchestrator))
         }
         None => {
@@ -256,26 +282,7 @@ async fn build_chat(
         info!("chat: no tools available — the model can only converse, not act");
     }
 
-    // Conversation logs live outside the vault (Decision 12 operational data), under
-    // `<LIBERADO_DATA_DIR>/conversations`. `JsonlStore::new` creates the directory.
-    let data_dir = std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into());
-    let store = Arc::new(JsonlStore::new(Path::new(&data_dir).join("conversations")));
-
     // ── Build the guarded ChatSessions ───────────────────────────────────────
-    //
-    // Consequence catalog: (name, Consequence) pairs for risk gating. A one-time snapshot at boot
-    // is fine here — MCP declarations aren't runtime-dynamic yet — but the dispatch-routing catalog
-    // below stays the live `Arc` so it and the daemon/API never drift apart from each other.
-    let descriptors = catalog.descriptors();
-    let consequences: Vec<(String, liberado_common::Consequence)> = descriptors
-        .iter()
-        .map(|d| (d.name.clone(), d.consequence))
-        .collect();
-    let catalog_is_empty = descriptors.is_empty();
-
-    // Proposal files directory.
-    let proposals_dir = Path::new(&data_dir).join("proposals");
-
     let mut sessions = ChatSessions::new(
         store,
         Executor::new(provider.clone(), Budget::default()),

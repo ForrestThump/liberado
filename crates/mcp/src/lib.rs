@@ -19,13 +19,11 @@
 mod connector;
 mod factory;
 mod multi;
-mod risk_gated;
 mod scoped;
 
 pub use connector::{HttpConnector, McpConnector, StdioConnector};
 pub use factory::McpRegistry;
 pub use multi::MultiMcpRuntime;
-pub use risk_gated::RiskGatedToolRuntime;
 pub use scoped::ScopedRuntime;
 
 use async_trait::async_trait;

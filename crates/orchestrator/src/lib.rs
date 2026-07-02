@@ -17,14 +17,15 @@
 //! [`RuntimeFactory`], so this crate stays testable with a mock and the real turbomcp-backed
 //! factory is a separate concern.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use liberado_common::{
-    BlockReason, Capability, CapabilitySet, DispatchAction, DispatchDecision, Outcome, Proposal,
-    ProposedAction, Report, WriteProvenance, mcp_of,
+    BlockReason, Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision,
+    Outcome, Proposal, ProposedAction, Report, WriteProvenance, mcp_of,
 };
-use liberado_executor::{Budget, ExecError, Executor, Task, ToolRuntime};
+use liberado_executor::{Budget, ExecError, Executor, RiskGatedToolRuntime, Task, ToolRuntime};
 use liberado_provider::{Provider, ToolDef, ToolInvocation};
 use thiserror::Error;
 use tokio::sync::Semaphore;
@@ -111,6 +112,10 @@ pub struct Orchestrator {
     /// same `CapabilitySet` the caller's dispatch request was checked against — passing a wider
     /// one here would let a direct execution reach MCPs the guard pre-flight never considered.
     capabilities: CapabilitySet,
+    /// `(mcp_name, consequence)` pairs for the runtime-level gate's consequence check (see `gate`).
+    consequence_catalog: Vec<(String, Consequence)>,
+    /// Base directory for proposal files a runtime-level downgrade writes (see `gate`).
+    proposals_dir: PathBuf,
     source: String,
     direct_budget: Budget,
     subagent_budget: Budget,
@@ -121,11 +126,15 @@ impl Orchestrator {
         provider: Arc<dyn Provider>,
         factory: impl RuntimeFactory + 'static,
         capabilities: CapabilitySet,
+        consequence_catalog: Vec<(String, Consequence)>,
+        proposals_dir: PathBuf,
     ) -> Self {
         Self {
             provider,
             factory: Box::new(factory),
             capabilities,
+            consequence_catalog,
+            proposals_dir,
             source: DEFAULT_SOURCE.to_string(),
             direct_budget: Budget::new(DIRECT_MAX_TURNS),
             subagent_budget: Budget::default(),
@@ -232,6 +241,8 @@ impl Orchestrator {
                         let provenanace =
                             WriteProvenance::agent(self.source.clone(), trigger_correlation);
                         let runtime = self.factory.runtime_for(&allowed_mcps, provenanace).await?;
+                        let runtime =
+                            self.gate(runtime, self.capabilities.clone(), goal, trigger_correlation);
                         self.execute(&self.direct_budget, &*runtime, task).await?
                     };
                     tracing::Span::current().record("disposition", "reported");
@@ -241,6 +252,7 @@ impl Orchestrator {
 
                 DispatchAction::DispatchSubagent {
                     goal: subgoal,
+                    capabilities,
                     allowed_mcps,
                     success_criteria,
                     correlation_id,
@@ -248,6 +260,16 @@ impl Orchestrator {
                 } => {
                     let provenance = WriteProvenance::agent(self.source.clone(), &correlation_id);
                     let runtime = self.factory.runtime_for(&allowed_mcps, provenance).await?;
+                    // Gate with the ceiling narrowed by the decision's own capabilities (Decision 4:
+                    // authority can only shrink down a delegation chain) — belt and suspenders, same
+                    // as `ExecuteDirect` re-intersecting `relevant_mcps` against its granted ceiling.
+                    let gate_capabilities = self.capabilities.narrow(&capabilities);
+                    let runtime = self.gate(
+                        runtime,
+                        gate_capabilities,
+                        subgoal.as_str(),
+                        correlation_id.as_str(),
+                    );
                     tracing::debug!(
                         subagents = allowed_mcps.len(),
                         criteria = success_criteria.len(),
@@ -361,6 +383,14 @@ impl Orchestrator {
             let provenance =
                 WriteProvenance::agent(self.source.clone(), &sub.correlation_id);
             let runtime = self.factory.runtime_for(&sub.allowed_mcps, provenance).await?;
+            // No per-sub-dispatch CapabilitySet exists on `SubDispatch` today (only `allowed_mcps`),
+            // so gate with the orchestrator-level ceiling — the same one `ExecuteDirect` uses.
+            let runtime = self.gate(
+                runtime,
+                self.capabilities.clone(),
+                sub.goal.as_str(),
+                sub.correlation_id.as_str(),
+            );
             let task = Task::new(subagent_instructions(&sub.success_criteria), sub.goal);
             let budget = self.subagent_budget;
             let provider = self.provider.clone();
@@ -422,6 +452,29 @@ impl Orchestrator {
             .execute(runtime, task)
             .await
     }
+
+    /// Wrap a connected runtime in the same runtime-level safety net chat's own tool loop already
+    /// uses (`RiskGatedToolRuntime`), so the executor's *adaptive* (non-seed) tool calls get the
+    /// same capability/consequence/magnitude checking the dispatcher's pre-flight guard only ever
+    /// applied to the decision's seed call. Deliberately not used by `execute_approved` — approval
+    /// is already the authorization there; re-gating it would re-downgrade an approved call into a
+    /// new proposal.
+    fn gate(
+        &self,
+        runtime: Box<dyn ToolRuntime>,
+        capabilities: CapabilitySet,
+        goal_context: impl Into<String>,
+        correlation_base: impl Into<String>,
+    ) -> Arc<dyn ToolRuntime> {
+        Arc::new(RiskGatedToolRuntime::new(
+            Arc::from(runtime),
+            capabilities,
+            self.consequence_catalog.clone(),
+            self.proposals_dir.clone(),
+            goal_context.into(),
+            correlation_base.into(),
+        ))
+    }
 }
 
 /// A runtime that exposes no tools — used for `ExecuteDirect` when the acting component holds no
@@ -479,7 +532,14 @@ mod tests {
     #[test]
     fn with_source_overrides_default() {
         let provider = Arc::new(MockProvider::with_script("mock", vec![]));
-        let orch = Orchestrator::new(provider, NoopFactory, CapabilitySet::empty()).with_source("custom-source");
+        let orch = Orchestrator::new(
+            provider,
+            NoopFactory,
+            CapabilitySet::empty(),
+            Vec::new(),
+            std::env::temp_dir(),
+        )
+        .with_source("custom-source");
         assert_eq!(orch.source, "custom-source");
     }
 
@@ -558,7 +618,13 @@ mod tests {
         ));
         let factory = RecordingFactory::default();
         let calls = factory.calls.clone();
-        let orch = Orchestrator::new(provider, factory, CapabilitySet::empty());
+        let orch = Orchestrator::new(
+            provider,
+            factory,
+            CapabilitySet::empty(),
+            Vec::new(),
+            std::env::temp_dir(),
+        );
 
         let sub_dispatches = vec![
             SubDispatch {
@@ -630,7 +696,13 @@ mod tests {
 
         let provider = Arc::new(MockProvider::with_script("mock", [resp_a, resp_b]));
         let factory = RecordingFactory::default();
-        let orch = Orchestrator::new(provider, factory, CapabilitySet::empty());
+        let orch = Orchestrator::new(
+            provider,
+            factory,
+            CapabilitySet::empty(),
+            Vec::new(),
+            std::env::temp_dir(),
+        );
 
         let sub_dispatches = vec![
             SubDispatch {
@@ -679,7 +751,13 @@ mod tests {
         ));
         let factory = RecordingFactory::default();
         let calls = factory.calls.clone();
-        let orch = Orchestrator::new(provider, factory, CapabilitySet::empty());
+        let orch = Orchestrator::new(
+            provider,
+            factory,
+            CapabilitySet::empty(),
+            Vec::new(),
+            std::env::temp_dir(),
+        );
 
         let sub_dispatches = vec![
             SubDispatch {
@@ -719,7 +797,13 @@ mod tests {
             [submit_report_response("only task", "succeeded")],
         ));
         let factory = RecordingFactory::default();
-        let orch = Orchestrator::new(provider, factory, CapabilitySet::empty());
+        let orch = Orchestrator::new(
+            provider,
+            factory,
+            CapabilitySet::empty(),
+            Vec::new(),
+            std::env::temp_dir(),
+        );
 
         let sub_dispatches = vec![SubDispatch {
             goal: "only".into(),

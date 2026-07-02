@@ -53,8 +53,8 @@ use liberado_conversation_store::{
     Author, ConversationHeader, ConversationStore, NewConversation, NewNode, StoreError, Ulid,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
-use liberado_executor::{AgentEvent, ExecError, Executor, ToolRuntime};
-use liberado_mcp::{RiskGatedToolRuntime, ScopedRuntime};
+use liberado_executor::{AgentEvent, ExecError, Executor, RiskGatedToolRuntime, ToolRuntime};
+use liberado_mcp::ScopedRuntime;
 use liberado_orchestrator::{Disposition, Orchestrator};
 use liberado_provider::Message;
 use thiserror::Error;
@@ -846,6 +846,8 @@ mod tests {
             Arc::new(MockProvider::with_script("exec", Vec::new())),
             NoopFactory,
             CapabilitySet::empty(),
+            Vec::new(),
+            std::env::temp_dir(),
         );
         let sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), orchestrator);
 
@@ -879,6 +881,8 @@ mod tests {
             Arc::new(MockProvider::with_script("exec", Vec::new())),
             NoopFactory,
             CapabilitySet::empty(),
+            Vec::new(),
+            std::env::temp_dir(),
         );
         let sessions = sessions_with_dispatch(
             dir.path(),
@@ -912,6 +916,8 @@ mod tests {
             Arc::new(MockProvider::with_script("exec", Vec::new())),
             NoopFactory,
             CapabilitySet::empty(),
+            Vec::new(),
+            std::env::temp_dir(),
         );
         let mut sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), orchestrator);
         sessions = sessions.with_guards(Vec::new(), CapabilitySet::empty(), dir.path().join("data"));
@@ -995,6 +1001,8 @@ mod tests {
             Arc::new(MockProvider::with_script("exec", Vec::new())),
             NoopFactory,
             CapabilitySet::empty(),
+            Vec::new(),
+            std::env::temp_dir(),
         );
         let capabilities = CapabilitySet::from_iter([
             Capability::ExecuteMcp("tasks-mcp".into()),

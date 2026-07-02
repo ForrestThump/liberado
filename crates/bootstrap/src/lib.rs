@@ -117,11 +117,27 @@ pub fn configure_daemon(
         capabilities = capabilities.capabilities.len(),
         "dispatcher capability boundary configured from policy"
     );
+    // Runtime-level gating ingredients for the orchestrator's adaptive (non-seed) tool calls — the
+    // same consequence catalog and non-vault proposals convention chat's own RiskGatedToolRuntime
+    // uses (see `RiskGatedToolRuntime`'s doc comment on why proposals stay out of the vault).
+    let consequences: Vec<(String, liberado_common::Consequence)> = catalog
+        .descriptors()
+        .iter()
+        .map(|d| (d.name.clone(), d.consequence))
+        .collect();
+    let data_dir = std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into());
+    let proposals_dir = PathBuf::from(data_dir).join("proposals");
     let daemon = daemon.with_dispatcher(dispatcher, catalog, capabilities.clone());
     match mcp_registry_from_config(config) {
         Some(factory) => {
             tracing::info!("orchestrator enabled (MCP execution)");
-            daemon.with_orchestrator(Orchestrator::new(provider.clone(), factory, capabilities))
+            daemon.with_orchestrator(Orchestrator::new(
+                provider.clone(),
+                factory,
+                capabilities,
+                consequences,
+                proposals_dir,
+            ))
         }
         None => {
             tracing::warn!("no enabled MCP in topology.mcps — decide-only (no MCP execution)");

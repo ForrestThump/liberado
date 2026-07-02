@@ -649,7 +649,13 @@ mod tests {
                 serde_json::json!({ "outcome": "succeeded", "summary": "done" }),
             )])],
         ));
-        let orchestrator = Orchestrator::new(exec_provider, NoopFactory, CapabilitySet::empty());
+        let orchestrator = Orchestrator::new(
+            exec_provider,
+            NoopFactory,
+            CapabilitySet::empty(),
+            Vec::new(),
+            std::env::temp_dir(),
+        );
 
         let daemon = daemon
             .with_debounce(Duration::from_millis(80))
@@ -747,6 +753,8 @@ mod tests {
             Arc::new(MockProvider::with_script("exec", Vec::new())),
             UnusedFactory,
             CapabilitySet::empty(),
+            Vec::new(),
+            std::env::temp_dir(),
         );
 
         let daemon = daemon
@@ -841,6 +849,8 @@ mod tests {
             )),
             RecordingFactory { runtime },
             CapabilitySet::empty(),
+            Vec::new(),
+            std::env::temp_dir(),
         );
 
         let (daemon, dir) = temp_daemon().await;
@@ -941,6 +951,8 @@ mod tests {
             )),
             SilentFactory { runtime },
             CapabilitySet::empty(),
+            Vec::new(),
+            std::env::temp_dir(),
         );
 
         let (daemon, dir) = temp_daemon().await;
