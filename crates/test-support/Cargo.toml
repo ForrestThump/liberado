@@ -1,0 +1,15 @@
+[package]
+name = "liberado-test-support"
+version = "0.1.0"
+description = "Shared ToolRuntime/RuntimeFactory test doubles, consolidating what used to be duplicated across liberado-orchestrator's and liberado-daemon's own test modules. Test-only: consumed exclusively as a dev-dependency."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+liberado-common = { workspace = true }
+liberado-executor = { workspace = true }
+liberado-provider = { workspace = true }

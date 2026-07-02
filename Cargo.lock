@@ -2877,6 +2877,7 @@ dependencies = [
  "liberado-executor",
  "liberado-orchestrator",
  "liberado-provider",
+ "liberado-test-support",
  "liberado-vault",
  "serde_json",
  "tempfile",
@@ -2955,7 +2956,6 @@ dependencies = [
  "futures",
  "liberado-common",
  "liberado-executor",
- "liberado-orchestrator",
  "liberado-provider",
  "serde_json",
  "tempfile",
@@ -2991,6 +2991,7 @@ dependencies = [
  "liberado-common",
  "liberado-executor",
  "liberado-provider",
+ "liberado-test-support",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
@@ -3051,6 +3052,16 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+]
+
+[[package]]
+name = "liberado-test-support"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "liberado-common",
+ "liberado-executor",
+ "liberado-provider",
 ]
 
 [[package]]

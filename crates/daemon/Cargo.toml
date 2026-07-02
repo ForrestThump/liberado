@@ -22,5 +22,6 @@ thiserror = { workspace = true }
 tempfile = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-executor = { workspace = true }
+liberado-test-support = { workspace = true }
 async-trait = { workspace = true }
 serde_json = { workspace = true }

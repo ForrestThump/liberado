@@ -15,7 +15,7 @@ use std::time::Instant;
 use std::path::Path;
 
 use axum::Router;
-use liberado_common::{CapabilityCatalog, WriteProvenance};
+use liberado_common::{CapabilityCatalog, CapabilitySet, WriteProvenance};
 use liberado_conversation_store::JsonlStore;
 use liberado_daemon::Daemon;
 use liberado_dispatcher::Dispatcher;
@@ -225,49 +225,19 @@ async fn build_chat(
 
     // Conversation logs live outside the vault (Decision 12 operational data), under
     // `<LIBERADO_DATA_DIR>/conversations`. `JsonlStore::new` creates the directory.
-    let data_dir = liberado_bootstrap::data_dir();
-    let store = Arc::new(JsonlStore::new(data_dir.join("conversations")));
+    let store = Arc::new(JsonlStore::new(
+        liberado_bootstrap::data_dir().join("conversations"),
+    ));
 
-    // Consequence catalog: (name, Consequence) pairs for risk gating (both chat's own
-    // RiskGatedToolRuntime, below, and the Orchestrator's runtime-level gate for adaptive tool
-    // calls). A one-time snapshot at boot is fine here — MCP declarations aren't runtime-dynamic
-    // yet — but the dispatch-routing catalog below stays the live `Arc` so it and the daemon/API
-    // never drift apart from each other.
-    let consequences = catalog.consequence_catalog();
-    let catalog_is_empty = consequences.is_empty();
+    // Consequence catalog + proposals dir: shared with `configure_daemon`'s own Orchestrator wiring
+    // (`liberado_bootstrap::guard_context`) so the two boot paths can't independently drift on how
+    // either is derived. A one-time snapshot at boot is fine here — MCP declarations aren't
+    // runtime-dynamic yet — but the dispatch-routing catalog below stays the live `Arc` so it and the
+    // daemon/API never drift apart from each other.
+    let guard = liberado_bootstrap::guard_context(&catalog);
+    let catalog_is_empty = guard.consequences.is_empty();
 
-    // Proposal files directory (shared by chat's own guard and the Orchestrator's).
-    let proposals_dir = data_dir.join("proposals");
-
-    // Connect a tool runtime once, reused for the chat's lifetime, and — when an MCP registry is
-    // configured — keep the registry itself alive too, so it can also back an Orchestrator for
-    // dispatch-routed executions (Clarify/Propose/DispatchSubagent; see `with_dispatch` below).
-    // Without an MCP, chat still works as plain conversation and dispatch routing is skipped
-    // entirely (there would be nothing for the orchestrator to execute against).
-    let (runtime, orchestrator): (Arc<dyn ToolRuntime>, Option<Orchestrator>) = match mcp {
-        Some(registry) => {
-            let provenance = WriteProvenance::agent("liberado-chat", "chat-session");
-            let (rt, failed) = registry.connect_all_best_effort(provenance).await;
-            let rt: Arc<dyn ToolRuntime> = Arc::from(rt);
-            if failed.is_empty() {
-                info!("chat: connected MCP tools");
-            } else {
-                warn!(failed = ?failed, "chat: some MCPs failed to connect — continuing with the rest");
-            }
-            let orchestrator = Orchestrator::new(
-                provider.clone(),
-                registry,
-                capabilities.clone(),
-                consequences.clone(),
-                proposals_dir.clone(),
-            );
-            (rt, Some(orchestrator))
-        }
-        None => {
-            info!("chat: no MCP configured — chat will be conversation-only");
-            (Arc::new(NoTools), None)
-        }
-    };
+    let (runtime, orchestrator) = connect_chat_runtime(&provider, mcp, &capabilities, &guard).await;
 
     let tool_catalog = runtime.catalog();
     let tool_names: Vec<String> = tool_catalog.iter().map(|t| t.name.clone()).collect();
@@ -279,13 +249,13 @@ async fn build_chat(
     }
 
     // ── Build the guarded ChatSessions ───────────────────────────────────────
-    let consequence_count = consequences.len();
+    let consequence_count = guard.consequences.len();
     let mut sessions = ChatSessions::new(
         store,
         Executor::new(provider.clone(), Budget::default()),
         runtime,
     )
-    .with_guards(consequences, capabilities, proposals_dir);
+    .with_guards(guard.consequences, capabilities, guard.proposals_dir);
 
     if !catalog_is_empty {
         info!(
@@ -307,4 +277,41 @@ async fn build_chat(
     }
 
     (Some(Arc::new(sessions)), tool_count, tool_names)
+}
+
+/// Connect chat's tool runtime once, reused for its lifetime, and — when an MCP registry is
+/// configured — build the Orchestrator that backs its dispatch-routed executions
+/// (Clarify/Propose/DispatchSubagent; see `build_chat`'s `with_dispatch` wiring). Without an MCP,
+/// chat still works as plain conversation and dispatch routing is skipped entirely (there would be
+/// nothing for the orchestrator to execute against).
+async fn connect_chat_runtime(
+    provider: &Arc<dyn Provider>,
+    mcp: Option<McpRegistry>,
+    capabilities: &CapabilitySet,
+    guard: &liberado_bootstrap::GuardContext,
+) -> (Arc<dyn ToolRuntime>, Option<Orchestrator>) {
+    match mcp {
+        Some(registry) => {
+            let provenance = WriteProvenance::agent("liberado-chat", "chat-session");
+            let (rt, failed) = registry.connect_all_best_effort(provenance).await;
+            let rt: Arc<dyn ToolRuntime> = Arc::from(rt);
+            if failed.is_empty() {
+                info!("chat: connected MCP tools");
+            } else {
+                warn!(failed = ?failed, "chat: some MCPs failed to connect — continuing with the rest");
+            }
+            let orchestrator = Orchestrator::new(
+                provider.clone(),
+                registry,
+                capabilities.clone(),
+                guard.consequences.clone(),
+                guard.proposals_dir.clone(),
+            );
+            (rt, Some(orchestrator))
+        }
+        None => {
+            info!("chat: no MCP configured — chat will be conversation-only");
+            (Arc::new(NoTools), None)
+        }
+    }
 }

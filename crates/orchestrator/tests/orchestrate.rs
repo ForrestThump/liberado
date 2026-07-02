@@ -3,87 +3,18 @@
 
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use liberado_common::{
     BlockReason, Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision,
     Outcome, Proposal, ProposalStatus, ProposedAction, ToolCall, WriteProvenance,
 };
-use liberado_executor::{SUBMIT_REPORT_TOOL, ToolRuntime};
-use liberado_orchestrator::{Disposition, Orchestrator, RuntimeFactory, RuntimeSetupError, SubDispatch};
-use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
-
-/// A runtime that offers no tools (so the scripted model goes straight to `submit_report`).
-struct MockRuntime;
-
-#[async_trait]
-impl ToolRuntime for MockRuntime {
-    fn catalog(&self) -> Vec<ToolDef> {
-        Vec::new()
-    }
-    async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
-        Ok("ok".to_string())
-    }
-}
+use liberado_executor::SUBMIT_REPORT_TOOL;
+use liberado_orchestrator::{Disposition, Orchestrator, SubDispatch};
+use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
+use liberado_test_support::{
+    CallRecordingFactory, InvocationRecordingFactory, InvocationRecordingRuntime,
+};
 
 type Calls = Arc<Mutex<Vec<(Vec<String>, WriteProvenance)>>>;
-
-/// Records every `runtime_for` call so tests can assert what scope/provenance the orchestrator
-/// derived from the decision. Cloneable (shared `calls`) so a handle can outlive the move into the
-/// orchestrator.
-#[derive(Clone, Default)]
-struct RecordingFactory {
-    calls: Calls,
-}
-
-#[async_trait]
-impl RuntimeFactory for RecordingFactory {
-    async fn runtime_for(
-        &self,
-        allowed_mcps: &[String],
-        provenance: WriteProvenance,
-    ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push((allowed_mcps.to_vec(), provenance));
-        Ok(Box::new(MockRuntime))
-    }
-}
-
-/// A runtime that records every `invoke` so `execute_approved` tests can assert the exact approved
-/// calls ran. Shares its log so a handle survives the move into the factory.
-#[derive(Clone, Default)]
-struct RecordingRuntime {
-    invoked: Arc<Mutex<Vec<ToolInvocation>>>,
-}
-
-#[async_trait]
-impl ToolRuntime for RecordingRuntime {
-    fn catalog(&self) -> Vec<ToolDef> {
-        Vec::new()
-    }
-    async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
-        self.invoked.lock().unwrap().push(call.clone());
-        Ok("ok".to_string())
-    }
-}
-
-/// A factory that hands out clones of one [`RecordingRuntime`], so the test can read back what the
-/// orchestrator invoked.
-struct RecordingRuntimeFactory {
-    runtime: RecordingRuntime,
-}
-
-#[async_trait]
-impl RuntimeFactory for RecordingRuntimeFactory {
-    async fn runtime_for(
-        &self,
-        _allowed_mcps: &[String],
-        _provenance: WriteProvenance,
-    ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
-        Ok(Box::new(self.runtime.clone()))
-    }
-}
 
 fn submit_report_response() -> CompletionResponse {
     CompletionResponse::tool_calls(vec![ToolInvocation::new(
@@ -95,7 +26,7 @@ fn submit_report_response() -> CompletionResponse {
 
 fn orchestrator(script: Vec<CompletionResponse>, capabilities: CapabilitySet) -> (Calls, Orchestrator) {
     let provider = Arc::new(MockProvider::with_script("mock", script));
-    let factory = RecordingFactory::default();
+    let factory = CallRecordingFactory::default();
     let calls = factory.calls.clone();
     let orch = Orchestrator::new(provider, factory, capabilities, Vec::new(), std::env::temp_dir());
     (calls, orch)
@@ -315,7 +246,7 @@ async fn clarify_short_circuits_without_executing() {
 async fn execute_approved_runs_the_exact_calls_without_a_classifier_or_guard() {
     // No scripted provider responses: execute_approved must NOT go through any classifier/guard — it
     // runs the approved calls straight against the runtime. A scripted call would panic if consumed.
-    let runtime = RecordingRuntime::default();
+    let runtime = InvocationRecordingRuntime::default();
     let invoked = runtime.invoked.clone();
     let provider = Arc::new(MockProvider::with_script(
         "mock",
@@ -323,7 +254,7 @@ async fn execute_approved_runs_the_exact_calls_without_a_classifier_or_guard() {
     ));
     let orch = Orchestrator::new(
         provider,
-        RecordingRuntimeFactory { runtime },
+        InvocationRecordingFactory { runtime },
         CapabilitySet::empty(),
         Vec::new(),
         std::env::temp_dir(),
@@ -371,13 +302,13 @@ async fn execute_direct_downgrades_a_high_consequence_adaptive_call() {
         submit_report_response(),
     ];
     let provider = Arc::new(MockProvider::with_script("mock", script));
-    let runtime = RecordingRuntime::default();
+    let runtime = InvocationRecordingRuntime::default();
     let invoked = runtime.invoked.clone();
     let proposals_dir = tempfile::TempDir::new().unwrap();
     let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("dangerous-mcp".into())]);
     let orch = Orchestrator::new(
         provider,
-        RecordingRuntimeFactory { runtime },
+        InvocationRecordingFactory { runtime },
         capabilities,
         vec![("dangerous-mcp".into(), Consequence::External)],
         proposals_dir.path().to_path_buf(),
@@ -426,12 +357,12 @@ async fn execute_direct_rejects_an_out_of_capability_adaptive_call() {
         submit_report_response(),
     ];
     let provider = Arc::new(MockProvider::with_script("mock", script));
-    let runtime = RecordingRuntime::default();
+    let runtime = InvocationRecordingRuntime::default();
     let invoked = runtime.invoked.clone();
     let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("safe-mcp".into())]);
     let orch = Orchestrator::new(
         provider,
-        RecordingRuntimeFactory { runtime },
+        InvocationRecordingFactory { runtime },
         capabilities,
         Vec::new(),
         std::env::temp_dir(),
@@ -471,7 +402,7 @@ async fn dispatch_subagent_gates_with_the_narrowed_capability_set() {
         submit_report_response(),
     ];
     let provider = Arc::new(MockProvider::with_script("mock", script));
-    let runtime = RecordingRuntime::default();
+    let runtime = InvocationRecordingRuntime::default();
     let invoked = runtime.invoked.clone();
     let ceiling = CapabilitySet::from_iter([
         Capability::ExecuteMcp("tasks-mcp".into()),
@@ -479,7 +410,7 @@ async fn dispatch_subagent_gates_with_the_narrowed_capability_set() {
     ]);
     let orch = Orchestrator::new(
         provider,
-        RecordingRuntimeFactory { runtime },
+        InvocationRecordingFactory { runtime },
         ceiling,
         Vec::new(),
         std::env::temp_dir(),
@@ -522,12 +453,12 @@ async fn dispatch_parallel_gates_each_sub_dispatch() {
         submit_report_response(),
     ];
     let provider = Arc::new(MockProvider::with_script("mock", script));
-    let runtime = RecordingRuntime::default();
+    let runtime = InvocationRecordingRuntime::default();
     let invoked = runtime.invoked.clone();
     let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("dangerous-mcp".into())]);
     let orch = Orchestrator::new(
         provider,
-        RecordingRuntimeFactory { runtime },
+        InvocationRecordingFactory { runtime },
         capabilities,
         vec![("dangerous-mcp".into(), Consequence::External)],
         std::env::temp_dir(),
@@ -558,7 +489,7 @@ async fn execute_approved_bypasses_gating_by_design() {
     // Even with a consequence catalog that WOULD downgrade this call through the gate, an approved
     // proposal must execute directly — approval is already the authorization (see
     // `execute_approved`'s doc comment). Re-gating it would create an approve -> re-propose loop.
-    let runtime = RecordingRuntime::default();
+    let runtime = InvocationRecordingRuntime::default();
     let invoked = runtime.invoked.clone();
     let provider = Arc::new(MockProvider::with_script(
         "mock",
@@ -566,7 +497,7 @@ async fn execute_approved_bypasses_gating_by_design() {
     ));
     let orch = Orchestrator::new(
         provider,
-        RecordingRuntimeFactory { runtime },
+        InvocationRecordingFactory { runtime },
         CapabilitySet::empty(),
         vec![("email-mcp".into(), Consequence::External)],
         std::env::temp_dir(),

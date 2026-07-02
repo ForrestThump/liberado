@@ -50,11 +50,13 @@ connection reuse and a multi-server registry are later refinements.
 
 ## Dependencies
 
-- Depends on: `liberado-executor` (`ToolRuntime`), `liberado-provider` (`ToolDef`/`ToolInvocation`),
-  `liberado-common` (`WriteProvenance`, `mcp_of`), `liberado-orchestrator` (`RuntimeFactory` trait),
-  `turbomcp-client`, `turbomcp-transport`.
+- Depends on: `liberado-executor` (`ToolRuntime`, and `RuntimeFactory`/`RuntimeSetupError` — moved here
+  from `liberado-orchestrator` specifically so this crate wouldn't need to depend sideways on the
+  dispatch-bridging crate), `liberado-provider` (`ToolDef`/`ToolInvocation`), `liberado-common`
+  (`WriteProvenance`, `mcp_of`), `turbomcp-client`, `turbomcp-transport`.
 - Depended on by: the daemon/cli wiring (assembles a factory + orchestrator). No cycle —
-  `orchestrator` does not depend on `mcp`.
+  `orchestrator` does not depend on `mcp`, and (as of the `RuntimeFactory` move) `mcp` no longer
+  depends on `orchestrator` either.
 
 ## Tests
 

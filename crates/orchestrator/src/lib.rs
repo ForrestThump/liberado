@@ -25,7 +25,10 @@ use liberado_common::{
     BlockReason, CapabilitySet, Consequence, DispatchAction, DispatchDecision, Outcome, Proposal,
     ProposedAction, Report, WriteProvenance, mcp_of,
 };
-use liberado_executor::{Budget, ExecError, Executor, RiskGatedToolRuntime, Task, ToolRuntime};
+use liberado_executor::{
+    Budget, ExecError, Executor, RiskGatedToolRuntime, RuntimeFactory, RuntimeSetupError, Task,
+    ToolRuntime,
+};
 use liberado_provider::{Provider, ToolDef, ToolInvocation};
 use thiserror::Error;
 use tokio::sync::Semaphore;
@@ -61,11 +64,6 @@ pub enum Disposition {
     Propose(Proposal),
 }
 
-/// Failure building a [`ToolRuntime`] for an execution (connection/handshake/etc.).
-#[derive(Debug, Error)]
-#[error("{0}")]
-pub struct RuntimeSetupError(pub String);
-
 /// A single sub-goal to dispatch in parallel. Each is capability-narrowed to the MCPs its
 /// sub-goal actually needs.
 pub struct SubDispatch {
@@ -89,18 +87,6 @@ pub enum OrchestratorError {
     Runtime(#[from] RuntimeSetupError),
     #[error(transparent)]
     Execution(#[from] ExecError),
-}
-
-/// How the orchestrator obtains a [`ToolRuntime`] for an execution: given the MCPs the execution is
-/// allowed to see and the provenance every call should carry, return a connected runtime. The real
-/// implementation (turbomcp-backed) lives in the MCP layer; tests inject a mock.
-#[async_trait]
-pub trait RuntimeFactory: Send + Sync {
-    async fn runtime_for(
-        &self,
-        allowed_mcps: &[String],
-        provenance: WriteProvenance,
-    ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError>;
 }
 
 /// Maps dispatcher decisions to executions. Holds the factory behind a boxed trait object so the
@@ -500,10 +486,9 @@ fn subagent_instructions(success_criteria: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
     use liberado_executor::SUBMIT_REPORT_TOOL;
-    use liberado_provider::{CompletionResponse, MockProvider, ToolDef};
+    use liberado_provider::{CompletionResponse, MockProvider};
+    use liberado_test_support::CallRecordingFactory;
     use super::*;
 
     #[test]
@@ -552,40 +537,6 @@ mod tests {
     // dispatch_parallel tests
     // ------------------------------------------------------------------
 
-    type Calls = Arc<Mutex<Vec<(Vec<String>, WriteProvenance)>>>;
-
-    #[derive(Clone, Default)]
-    struct RecordingFactory {
-        calls: Calls,
-    }
-
-    #[async_trait]
-    impl RuntimeFactory for RecordingFactory {
-        async fn runtime_for(
-            &self,
-            allowed_mcps: &[String],
-            provenance: WriteProvenance,
-        ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push((allowed_mcps.to_vec(), provenance));
-            Ok(Box::new(MockRuntime))
-        }
-    }
-
-    struct MockRuntime;
-
-    #[async_trait]
-    impl ToolRuntime for MockRuntime {
-        fn catalog(&self) -> Vec<ToolDef> {
-            Vec::new()
-        }
-        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
-            Ok("ok".to_string())
-        }
-    }
-
     fn submit_report_response(summary: &str, outcome: &str) -> CompletionResponse {
         CompletionResponse::tool_calls(vec![ToolInvocation::new(
             "c",
@@ -608,7 +559,7 @@ mod tests {
                 submit_report_response("task B done", "succeeded"),
             ],
         ));
-        let factory = RecordingFactory::default();
+        let factory = CallRecordingFactory::default();
         let calls = factory.calls.clone();
         let orch = Orchestrator::new(
             provider,
@@ -687,7 +638,7 @@ mod tests {
         )]);
 
         let provider = Arc::new(MockProvider::with_script("mock", [resp_a, resp_b]));
-        let factory = RecordingFactory::default();
+        let factory = CallRecordingFactory::default();
         let orch = Orchestrator::new(
             provider,
             factory,
@@ -741,7 +692,7 @@ mod tests {
                 submit_report_response("task 2", "succeeded"),
             ],
         ));
-        let factory = RecordingFactory::default();
+        let factory = CallRecordingFactory::default();
         let calls = factory.calls.clone();
         let orch = Orchestrator::new(
             provider,
@@ -788,7 +739,7 @@ mod tests {
             "mock",
             [submit_report_response("only task", "succeeded")],
         ));
-        let factory = RecordingFactory::default();
+        let factory = CallRecordingFactory::default();
         let orch = Orchestrator::new(
             provider,
             factory,

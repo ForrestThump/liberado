@@ -19,7 +19,7 @@ pub use config::{
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use liberado_common::CapabilityCatalog;
+use liberado_common::{CapabilityCatalog, Consequence};
 use liberado_common::config::{Config, McpTransport, managed_binary_path};
 use liberado_daemon::Daemon;
 use liberado_dispatcher::Dispatcher;
@@ -52,6 +52,23 @@ pub fn mcp_install_dir() -> PathBuf {
 /// daemon-boot path (this crate), which each used to resolve this independently.
 pub fn data_dir() -> PathBuf {
     PathBuf::from(std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into()))
+}
+
+/// The ingredients for `RiskGatedToolRuntime`-style guarding — chat's own runtime gate and the
+/// `Orchestrator`'s runtime-level gate for adaptive tool calls both need the same consequence
+/// catalog and the same non-vault proposals directory. Shared by both boot paths (`liberado-server`'s
+/// `build_chat`, this crate's `configure_daemon`), which each used to derive these independently.
+pub struct GuardContext {
+    pub consequences: Vec<(String, Consequence)>,
+    pub proposals_dir: PathBuf,
+}
+
+/// Build a [`GuardContext`] from the live capability catalog.
+pub fn guard_context(catalog: &CapabilityCatalog) -> GuardContext {
+    GuardContext {
+        consequences: catalog.consequence_catalog(),
+        proposals_dir: data_dir().join("proposals"),
+    }
 }
 
 /// Build the shared inference provider from the environment (`DEEPSEEK_API_KEY`). `None` means no key
@@ -128,8 +145,7 @@ pub fn configure_daemon(
     // Runtime-level gating ingredients for the orchestrator's adaptive (non-seed) tool calls — the
     // same consequence catalog and non-vault proposals convention chat's own RiskGatedToolRuntime
     // uses (see `RiskGatedToolRuntime`'s doc comment on why proposals stay out of the vault).
-    let consequences = catalog.consequence_catalog();
-    let proposals_dir = data_dir().join("proposals");
+    let guard = guard_context(&catalog);
     let daemon = daemon.with_dispatcher(dispatcher, catalog, capabilities.clone());
     match mcp_registry_from_config(config) {
         Some(factory) => {
@@ -138,8 +154,8 @@ pub fn configure_daemon(
                 provider.clone(),
                 factory,
                 capabilities,
-                consequences,
-                proposals_dir,
+                guard.consequences,
+                guard.proposals_dir,
             ))
         }
         None => {

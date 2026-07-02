@@ -782,7 +782,7 @@ mod tests {
 
     use liberado_common::config::DispatchTuning;
     use liberado_common::{BlockReason, DispatchDecision};
-    use liberado_orchestrator::{RuntimeFactory, RuntimeSetupError};
+    use liberado_executor::{RuntimeFactory, RuntimeSetupError};
 
     struct NoopFactory;
     #[async_trait]

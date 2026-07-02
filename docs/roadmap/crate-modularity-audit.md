@@ -151,10 +151,12 @@ higher-level dispatch-bridging crate.
 `mcp → orchestrator` edge entirely — `mcp` would then depend only on `provider` + the narrow
 provenance piece from finding 3.
 
-**Status**: Deferred — not started. Independently re-found by
+**Status**: Done (2026-07-02). Independently re-found by
 [`hygiene-audit-2026-07-02.md`](hygiene-audit-2026-07-02.md)'s coupling pass (its item 6) after this
 same edge nearly forced a circular dependency during that session's runtime-gating work — good
-cross-confirmation this is real, still the next pick once that doc's Tier 1 is done.
+cross-confirmation this was real. `RuntimeFactory`/`RuntimeSetupError` moved to `liberado-executor`;
+`liberado-mcp`'s dependency on `liberado-orchestrator` removed entirely (verified via
+`cargo tree -p liberado-mcp` — zero occurrences).
 
 ---
 
@@ -188,9 +190,9 @@ session's work prompted.
 
 1. **Findings 1–2** (this doc's action items) — safe, mechanical, no architectural decisions
    required, net deletion of duplicate code. Execute now.
-2. **Findings 4–5** — highest leverage for the stated "reusable coding-agent substrate" bar once
-   picked up: together they make `provider + executor + mcp + conversation-store` a genuinely
-   standalone, vault-agnostic four-crate set, not just an aspirational one.
+2. **Findings 4–5** — highest leverage for the stated "reusable coding-agent substrate" bar; together
+   they make `provider + executor + mcp + conversation-store` a genuinely standalone, vault-agnostic
+   four-crate set, not just an aspirational one. Both done as of 2026-07-02.
 3. **Finding 3** (`common` split) — highest effort, touches the most call sites; do this once the
    shape of 4–5's extraction has proven out the pattern, so the module boundaries chosen for the
    split are informed by real reuse rather than guessed up front.

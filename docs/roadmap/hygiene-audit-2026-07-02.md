@@ -61,29 +61,37 @@ load-bearing for tests. Verified with a full `cargo build --workspace` + `cargo 
 
 ---
 
-## Tier 2 — structural, moderate scope (not yet started)
+## Tier 2 — structural, moderate scope
 
-6. **Move the `RuntimeFactory` trait from `liberado-orchestrator` to `liberado-executor`.** Root cause
+**Status**: Done (2026-07-02). All three items shipped together (item 6 had to land first — item 8's
+shared crate is written against the trait's new home): `RuntimeFactory`/`RuntimeSetupError` moved to
+`liberado-executor`, `liberado-mcp`'s dependency on `liberado-orchestrator` removed entirely (confirmed
+via `cargo tree -p liberado-mcp` — zero occurrences), a new `liberado-test-support` crate replaced the
+duplicated `RecordingFactory`/`RecordingRuntime`-shaped mocks across `orchestrator/tests/orchestrate.rs`,
+`orchestrator/src/lib.rs`'s own tests, and `daemon/src/lib.rs`, and `build_chat` was split with a new
+shared `liberado_bootstrap::guard_context()` also adopted by `configure_daemon`. Full workspace build +
+`cargo test --workspace --no-run` + `cargo test --workspace` all clean throughout (51 suites, 0 failures).
+
+6. ✅ **Move the `RuntimeFactory` trait from `liberado-orchestrator` to `liberado-executor`.** Root cause
    of the near-cycle patched around this session (relocating `RiskGatedToolRuntime` instead of the
-   trait). `liberado-mcp` depends on `liberado-orchestrator` *solely* for this trait; moving it to
+   trait). `liberado-mcp` depended on `liberado-orchestrator` *solely* for this trait; moved to
    `liberado-executor` (which both crates already depend on, and which already owns the `ToolRuntime`
-   trait these factories build) removes the layering violation at the source instead of leaving the
+   trait these factories build), removing the layering violation at the source instead of leaving the
    next collision to be discovered by accident again. Same fix `crate-modularity-audit.md`'s Finding 4
-   already recommends — this doc doesn't repeat its reasoning, just confirms it's still open.
-7. **Split `build_chat`** (`crates/server/src/lib.rs:210-313`, ~100 lines, 5 distinct concerns:
+   recommended — that finding's status updated to reflect this is done, not open.
+7. ✅ **Split `build_chat`** (`crates/server/src/lib.rs`, was ~100 lines, 5 distinct concerns:
    guard-context assembly, MCP connection + orchestrator construction, session-store setup, dispatch
-   wiring) into named helpers — a `build_guard_context(...)` (which becomes the natural home for items
-   3-4's new shared calls) and a `connect_chat_runtime(...)`. `configure_daemon` itself is fine as-is
-   (~50 lines, single-responsibility) once it calls the same shared helper instead of duplicating the
-   guard-context computation inline.
-8. **Consolidate `RecordingRuntime`/`RecordingFactory`** — duplicated field-for-field in
-   `crates/orchestrator/tests/orchestrate.rs:34-86`, `crates/orchestrator/src/lib.rs`'s own inline
-   `#[cfg(test)]` module (`:563-595`), and twice more in `crates/daemon/src/lib.rs` (`:815-840`, and
-   the `SilentRuntime`/`SilentFactory` pair item 1 already flags as a pure duplicate of this same
-   shape). One shared fixture (a small `#[cfg(test)]` module re-exported from `liberado-orchestrator`,
-   or a dedicated `liberado-test-support` crate) instead of 4+ copies. The trivial `Noop*`/`Unused*`
-   stub runtimes (2-4 lines each, several locations) are *not* worth this treatment — too small for the
-   abstraction to pay for itself.
+   wiring). Extracted a `connect_chat_runtime(...)` helper; the guard-context piece became
+   `liberado_bootstrap::guard_context()` (a real cross-crate shared helper, not just an in-file
+   one) — `configure_daemon` now calls the same function instead of duplicating the computation inline.
+8. ✅ **Consolidate `RecordingRuntime`/`RecordingFactory`** — was duplicated field-for-field in
+   `crates/orchestrator/tests/orchestrate.rs`, `crates/orchestrator/src/lib.rs`'s own inline
+   `#[cfg(test)]` module, and `crates/daemon/src/lib.rs`. New `liberado-test-support` crate (a real
+   dev-dependency, not a `#[cfg(test)]` module — those can't be re-exported across crates) exports
+   `CallRecordingFactory` and `InvocationRecordingFactory`/`InvocationRecordingRuntime` (two distinct
+   names since the two duplicated patterns actually did different things), consumed by all three sites.
+   The trivial `Noop*`/`Unused*` stub runtimes (2-4 lines each, several locations) were left inline as
+   planned — too small for the abstraction to pay for itself.
 
 ---
 

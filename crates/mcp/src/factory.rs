@@ -6,13 +6,12 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use liberado_common::WriteProvenance;
-use liberado_executor::ToolRuntime;
-use liberado_orchestrator::{RuntimeFactory, RuntimeSetupError};
+use liberado_executor::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
 
 use crate::connector::McpConnector;
 use crate::MultiMcpRuntime;
 
-/// A named set of MCP servers. Implements the orchestrator's `RuntimeFactory`: each `runtime_for`
+/// A named set of MCP servers. Implements `RuntimeFactory`: each `runtime_for`
 /// connects (v1: a fresh connection per execution — no pooling) to the selected servers and unions
 /// their tools.
 #[derive(Default)]

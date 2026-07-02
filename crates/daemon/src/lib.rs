@@ -454,41 +454,6 @@ mod tests {
         (daemon, dir)
     }
 
-    /// A runtime that records every `invoke` call, shared by the approved/pending proposal-execution
-    /// tests below (each previously hand-rolled its own field-for-field-identical copy of this).
-    #[derive(Clone, Default)]
-    struct RecordingRuntime {
-        invoked: std::sync::Arc<std::sync::Mutex<Vec<liberado_provider::ToolInvocation>>>,
-    }
-    #[async_trait::async_trait]
-    impl liberado_executor::ToolRuntime for RecordingRuntime {
-        fn catalog(&self) -> Vec<liberado_provider::ToolDef> {
-            Vec::new()
-        }
-        async fn invoke(
-            &self,
-            call: &liberado_provider::ToolInvocation,
-        ) -> Result<String, String> {
-            self.invoked.lock().unwrap().push(call.clone());
-            Ok("ok".into())
-        }
-    }
-    #[derive(Clone)]
-    struct RecordingFactory {
-        runtime: RecordingRuntime,
-    }
-    #[async_trait::async_trait]
-    impl liberado_orchestrator::RuntimeFactory for RecordingFactory {
-        async fn runtime_for(
-            &self,
-            _allowed_mcps: &[String],
-            _provenance: WriteProvenance,
-        ) -> Result<Box<dyn liberado_executor::ToolRuntime>, liberado_orchestrator::RuntimeSetupError>
-        {
-            Ok(Box::new(self.runtime.clone()))
-        }
-    }
-
     #[tokio::test]
     async fn external_change_produces_reaction() {
         let (daemon, dir) = temp_daemon().await;
@@ -627,8 +592,8 @@ mod tests {
     async fn daemon_acts_on_a_decision_via_the_orchestrator() {
         use liberado_common::config::DispatchTuning;
         use liberado_common::{DispatchAction, DispatchDecision, Outcome};
-        use liberado_executor::{SUBMIT_REPORT_TOOL, ToolRuntime};
-        use liberado_orchestrator::{Orchestrator, RuntimeFactory, RuntimeSetupError};
+        use liberado_executor::{RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime};
+        use liberado_orchestrator::Orchestrator;
         use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
         use std::sync::Arc;
 
@@ -723,8 +688,8 @@ mod tests {
             Capability, Consequence, DispatchAction, DispatchDecision, Proposal, ProposalStatus,
             ProposedAction, ToolCall,
         };
-        use liberado_executor::ToolRuntime;
-        use liberado_orchestrator::{Orchestrator, RuntimeFactory, RuntimeSetupError};
+        use liberado_executor::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
+        use liberado_orchestrator::Orchestrator;
         use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
         use std::sync::Arc;
 
@@ -841,15 +806,16 @@ mod tests {
         use liberado_common::{Proposal, ProposalStatus, ProposedAction, ToolCall};
         use liberado_orchestrator::Orchestrator;
         use liberado_provider::MockProvider;
+        use liberado_test_support::{InvocationRecordingFactory, InvocationRecordingRuntime};
 
-        let runtime = RecordingRuntime::default();
+        let runtime = InvocationRecordingRuntime::default();
         let invoked = runtime.invoked.clone();
         let orch = Orchestrator::new(
             Arc::new(MockProvider::with_script(
                 "mock",
                 Vec::<liberado_provider::CompletionResponse>::new(),
             )),
-            RecordingFactory { runtime },
+            InvocationRecordingFactory { runtime },
             CapabilitySet::empty(),
             Vec::new(),
             std::env::temp_dir(),
@@ -912,15 +878,16 @@ mod tests {
         use liberado_common::{Proposal, ProposalStatus, ProposedAction, ToolCall};
         use liberado_orchestrator::Orchestrator;
         use liberado_provider::MockProvider;
+        use liberado_test_support::{InvocationRecordingFactory, InvocationRecordingRuntime};
 
-        let runtime = RecordingRuntime::default();
+        let runtime = InvocationRecordingRuntime::default();
         let invoked = runtime.invoked.clone();
         let orch = Orchestrator::new(
             std::sync::Arc::new(MockProvider::with_script(
                 "mock",
                 Vec::<liberado_provider::CompletionResponse>::new(),
             )),
-            RecordingFactory { runtime },
+            InvocationRecordingFactory { runtime },
             CapabilitySet::empty(),
             Vec::new(),
             std::env::temp_dir(),

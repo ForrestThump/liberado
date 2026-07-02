@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use liberado_common::{Outcome, Report, ToolCall};
+use liberado_common::{Outcome, Report, ToolCall, WriteProvenance};
 use liberado_provider::{
     CompletionRequest, CompletionResponse, Message, Provider, ProviderError, Role, StreamItem,
     ToolDef, ToolInvocation,
@@ -104,6 +104,25 @@ pub trait ToolRuntime: Send + Sync {
     /// errors (which abort the whole loop) for infrastructure faults, by surfacing them through the
     /// runtime's own state rather than here.
     async fn invoke(&self, call: &ToolInvocation) -> Result<String, String>;
+}
+
+/// Failure building a [`ToolRuntime`] for an execution (connection/handshake/etc.).
+#[derive(Debug, Error)]
+#[error("{0}")]
+pub struct RuntimeSetupError(pub String);
+
+/// How an orchestrator obtains a [`ToolRuntime`] for an execution: given the MCPs the execution is
+/// allowed to see and the provenance every call should carry, return a connected runtime. The real
+/// implementation (turbomcp-backed) lives in the MCP layer; tests inject a mock. Lives here (rather
+/// than in `liberado-orchestrator`, which consumes it) so `liberado-mcp` — which implements it — only
+/// needs to depend on this crate, not sideways into the dispatch-bridging one.
+#[async_trait]
+pub trait RuntimeFactory: Send + Sync {
+    async fn runtime_for(
+        &self,
+        allowed_mcps: &[String],
+        provenance: WriteProvenance,
+    ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError>;
 }
 
 /// Loop bounds. Currently just a turn cap; room to grow (token/time budgets) without touching call
