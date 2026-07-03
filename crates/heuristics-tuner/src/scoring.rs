@@ -144,18 +144,32 @@ pub fn aggregate(scenarios: Vec<ScoredScenario>) -> CandidateFitness {
     }
 }
 
-/// Score `prompt` against every scenario in `liberado_eval::scenarios()`, `samples_per_scenario`
-/// times per configured `scoring_providers` model, all concurrently. Each individual dispatch call
-/// is charged against `budget`; a call is skipped once the budget is exhausted, so a mid-run cutoff
-/// still yields a (partial, honestly-reported) fitness rather than panicking.
+/// The scenarios a session actually scores against — every scenario in `liberado_eval::scenarios()`
+/// by default, or just the first `max_scenarios` of them when set. Deterministic (declaration
+/// order), not random: this exists for quick smoke-testing the pipeline cheaply before a
+/// comprehensive run, where reproducibility matters more than a representative sample.
+fn scenario_subset(max_scenarios: Option<usize>) -> Vec<Scenario> {
+    let all = scenarios();
+    match max_scenarios {
+        Some(n) => all.into_iter().take(n).collect(),
+        None => all,
+    }
+}
+
+/// Score `prompt` against `liberado_eval::scenarios()` (or just the first `max_scenarios` of them,
+/// for a cheap smoke test), `samples_per_scenario` times per configured `scoring_providers` model,
+/// all concurrently. Each individual dispatch call is charged against `budget`; a call is skipped
+/// once the budget is exhausted, so a mid-run cutoff still yields a (partial, honestly-reported)
+/// fitness rather than panicking.
 pub async fn score_candidate(
     prompt: &str,
     scoring_providers: &[Arc<dyn Provider>],
     samples_per_scenario: usize,
+    max_scenarios: Option<usize>,
     budget: &Budget,
 ) -> CandidateFitness {
     let mut set = tokio::task::JoinSet::new();
-    for scenario in scenarios() {
+    for scenario in scenario_subset(max_scenarios) {
         for provider in scoring_providers {
             let dispatcher = Arc::new(
                 Dispatcher::new(
@@ -384,5 +398,26 @@ mod tests {
         assert_eq!(s.pass_rate(), 0.0);
         assert!(!s.any_unsafe());
         assert_eq!(s.safe_default_rate(), None);
+    }
+
+    #[test]
+    fn scenario_subset_none_returns_everything() {
+        assert_eq!(scenario_subset(None).len(), scenarios().len());
+    }
+
+    #[test]
+    fn scenario_subset_limits_deterministically() {
+        let limited = scenario_subset(Some(3));
+        assert_eq!(limited.len(), 3);
+        // Same first 3, in declaration order, as the unlimited set -- reproducible for a smoke test.
+        let all = scenarios();
+        assert_eq!(limited[0].name, all[0].name);
+        assert_eq!(limited[1].name, all[1].name);
+        assert_eq!(limited[2].name, all[2].name);
+    }
+
+    #[test]
+    fn scenario_subset_larger_than_available_returns_everything() {
+        assert_eq!(scenario_subset(Some(9999)).len(), scenarios().len());
     }
 }

@@ -17,10 +17,14 @@
 #     "deepseek/deepseek-v4-flash",         # DeepSeek
 #     "google/gemini-3-flash-preview",      # Google
 #     "x-ai/grok-4.3",                      # xAI
-#     "anthropic/claude-haiku-4.5",         # Anthropic (concrete version, not a `~latest` alias)
 #     "meta-llama/llama-3.1-8b-instruct",   # Meta
 #     "openai/gpt-5-nano",                  # OpenAI (cheapest GPT-5 variant)
+#     "z-ai/glm-4.7-flash",                 # Zhipu
+#     "xiaomi/mimo-v2.5",                   # Xiaomi
 #   ]
+# (Claude Haiku deliberately excluded from this set — it and Grok dominated cost in a napkin-math
+# estimate for a 10-samples-per-scenario run despite being "cheap" tier, without adding much
+# distinct signal over the other models already in the set.)
 # (slugs spot-checked July 2026 — OpenRouter can rename them; openrouter.ai/models is the source
 # of truth.)
 
@@ -35,9 +39,15 @@
 # meaningfully averaged signal instead of a single noisy sample. Cost multiplies directly:
 # samples_per_scenario x number of scoring_models x ~19 scenarios per candidate scored, so raise
 # call_budget (and consider lowering max_generations/mutations_per_candidate) to match. Example:
-# 10 samples x 6 models x 19 scenarios = ~1140 calls just to score ONE candidate — the real
+# 10 samples x 7 models x 19 scenarios = ~1330 calls just to score ONE candidate — the real
 # config/tuner.toml scales max_generations down to 2 and mutations_per_candidate down to 1 to keep
-# the whole run around ~8,000 calls instead of ~18,000 at the code defaults.
+# the whole run around ~9,500 calls instead of ~18,000+ at the code defaults.
+
+# max_scenarios = 3
+# Score against only the first N scenarios (declaration order in crates/eval/src/scenarios.rs),
+# instead of all of them (~19). Unset by default (every scenario scores). Not a representative
+# subset — just a cheap, deterministic slice for smoke-testing that a session's config (models,
+# sample count, budget) actually works before committing to a full, expensive run.
 
 # beam_width = 2                       # candidates kept per generation
 # cold_starts_per_generation = 1       # fresh, independent restarts per generation (the local-maxima mitigation)

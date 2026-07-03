@@ -264,6 +264,20 @@ architecture idea the way there is for a scored prompt candidate.
    not possible this session (`OPENROUTER_API_KEY` visibility to this shell is intermittent, as it
    has been throughout this crate's build) — deferred to whenever the key is next visible, same
    posture as the original v1 build.
+9. ✅ **Done (2026-07-06).** `max_scenarios: Option<usize>` config knob (`tuner.toml`'s
+   `max_scenarios` / `TUNER_MAX_SCENARIOS`) limits scoring to the first N of
+   `liberado_eval::scenarios()` in declaration order — unset (`None`, every scenario) by default.
+   Not a representative sample, deliberately: a deterministic prefix is reproducible run-to-run,
+   which matters more than representativeness for its actual purpose — cheaply smoke-testing that a
+   session's config (model list, sample count, budget) works end-to-end before committing to an
+   expensive comprehensive run. Prompted by a napkin-math cost estimate for a 6-model,
+   10-samples/scenario comprehensive run (~$2-6, dominated by Claude Haiku and Grok despite
+   "cheap" tier pricing) — the user wanted to validate the pipeline on a cheap slice first. Same
+   turn, the scoring model list was corrected: Claude Haiku dropped (cost driver, not clearly worth
+   it), `z-ai/glm-4.7-flash` and `xiaomi/mimo-v2.5` added (both spot-checked on OpenRouter,
+   July 2026). 3 new unit tests cover `scenario_subset` (none/some/over-large N); config resolution
+   gained a `resolve_optional_usize` helper (no numeric fallback — `None` is the valid default,
+   unlike every other tunable in this file).
 
 ## First real run — findings (2026-07-03)
 

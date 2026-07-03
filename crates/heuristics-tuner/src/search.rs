@@ -116,6 +116,7 @@ pub async fn run_tuner(config: TunerConfig) -> TunerResult {
         DEFAULT_SYSTEM_PROMPT,
         &config.scoring_providers,
         config.samples_per_scenario,
+        config.max_scenarios,
         &budget,
     )
     .await;
@@ -175,6 +176,7 @@ pub async fn run_tuner(config: TunerConfig) -> TunerResult {
                 &candidate.prompt,
                 &config.scoring_providers,
                 config.samples_per_scenario,
+                config.max_scenarios,
                 &budget,
             )
             .await;

@@ -18,7 +18,10 @@
 //! signal. `scoring_models` can list several OpenRouter model slugs and `samples_per_scenario` can
 //! sample each of them more than once; both default to today's cheap single-model, single-sample
 //! behavior unless explicitly turned up — this is a deliberate, visible cost decision the user
-//! makes, not a silent multiplier on the existing defaults.
+//! makes, not a silent multiplier on the existing defaults. `max_scenarios` limits scoring to the
+//! first N of `liberado_eval::scenarios()` (declaration order) — unset (`None`) by default, meaning
+//! every scenario — for cheaply smoke-testing a session's plumbing before committing to a full,
+//! comprehensive run.
 
 use std::sync::Arc;
 
@@ -50,6 +53,10 @@ pub struct TunerConfig {
     pub meta_provider: Arc<dyn Provider>,
     /// How many times each scenario is sampled per scoring model.
     pub samples_per_scenario: usize,
+    /// Score only the first `max_scenarios` of `liberado_eval::scenarios()` (declaration order),
+    /// or all of them when `None`. For cheaply smoke-testing the pipeline before a comprehensive
+    /// run — not meant to be a representative subset, just a quick, reproducible slice.
+    pub max_scenarios: Option<usize>,
     pub beam_width: usize,
     pub cold_starts_per_generation: usize,
     pub mutations_per_candidate: usize,
@@ -70,6 +77,7 @@ struct TunerFileConfig {
     scoring_models: Option<Vec<String>>,
     meta_model: Option<String>,
     samples_per_scenario: Option<usize>,
+    max_scenarios: Option<usize>,
     beam_width: Option<usize>,
     cold_starts_per_generation: Option<usize>,
     mutations_per_candidate: Option<usize>,
@@ -107,6 +115,7 @@ impl TunerConfig {
                 file.samples_per_scenario,
                 DEFAULT_SAMPLES_PER_SCENARIO,
             ),
+            max_scenarios: resolve_optional_usize("TUNER_MAX_SCENARIOS", file.max_scenarios),
             beam_width: resolve_usize("TUNER_BEAM_WIDTH", file.beam_width, DEFAULT_BEAM_WIDTH),
             cold_starts_per_generation: resolve_usize(
                 "TUNER_COLD_STARTS_PER_GENERATION",
@@ -162,6 +171,15 @@ fn resolve_usize(var: &str, file_value: Option<usize>, default: usize) -> usize 
         .unwrap_or(default)
 }
 
+/// Resolve an optional `usize` tunable that has no numeric default (`None` — "no limit" — is itself
+/// the valid default): env var wins if it parses, else the file's value, else `None`.
+fn resolve_optional_usize(var: &str, file_value: Option<usize>) -> Option<usize> {
+    std::env::var(var)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .or(file_value)
+}
+
 /// Resolve a list-valued tunable (scoring models): the env var (comma-separated) wins if it parses
 /// to a non-empty list, else the file's list if non-empty, else a single-element list of `default`.
 fn resolve_model_list(var: &str, file_value: Option<Vec<String>>, default: &str) -> Vec<String> {
@@ -199,6 +217,16 @@ mod tests {
     }
 
     #[test]
+    fn resolve_optional_usize_falls_back_to_none_when_nothing_set() {
+        assert_eq!(resolve_optional_usize("TUNER_TEST_VAR_DOES_NOT_EXIST", None), None);
+    }
+
+    #[test]
+    fn resolve_optional_usize_prefers_file_value_when_set() {
+        assert_eq!(resolve_optional_usize("TUNER_TEST_VAR_DOES_NOT_EXIST", Some(3)), Some(3));
+    }
+
+    #[test]
     fn resolve_model_list_falls_back_to_single_default() {
         assert_eq!(
             resolve_model_list("TUNER_TEST_MODELS_DOES_NOT_EXIST", None, "deepseek/default"),
@@ -220,6 +248,7 @@ mod tests {
         let cfg: TunerFileConfig = toml::from_str("").unwrap();
         assert!(cfg.scoring_models.is_none());
         assert!(cfg.samples_per_scenario.is_none());
+        assert!(cfg.max_scenarios.is_none());
         assert!(cfg.call_budget.is_none());
     }
 
