@@ -1,7 +1,10 @@
 ﻿# Liberado — Agent & Build Guide
 
 This file is the single source of truth for agents and contributors on how to build, run, and
-extend Liberado. Read `ARCHITECTURE.md` for the system overview and current status.
+extend Liberado. Read `ARCHITECTURE.md` for the system overview and current status, and
+[`development-workflow.md`](development-workflow.md) for *how work here actually gets done* —
+research/plan/implement/test/document/commit discipline, subagent delegation patterns, and the
+project's governing principles. Read that one before starting non-trivial work on a new branch.
 
 ---
 

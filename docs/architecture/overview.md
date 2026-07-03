@@ -132,6 +132,9 @@ the main agent (context policy + dispatcher integration) and the TUI.
 4. [`dispatcher`](crates/dispatcher/ARCHITECTURE.md) → [`orchestrator`](crates/orchestrator/ARCHITECTURE.md)
    → [`executor`](crates/executor/ARCHITECTURE.md) — the decide→act path.
 5. [`daemon`](crates/daemon/ARCHITECTURE.md) — how it all runs.
+6. [`../contributing/development-workflow.md`](../contributing/development-workflow.md) — before
+   starting non-trivial work: the research/plan/implement/test/document/commit process this project is
+   held to, and how to delegate to subagents effectively.
 
 The deeper "why" behind each Decision N lives in the root planning docs (`*-spec.md`,
 `life-os-architecture.md`).
