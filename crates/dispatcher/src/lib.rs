@@ -216,10 +216,13 @@ Bias to safety: when uncertain, or when consequences are high, prefer Clarify or
 over ExecuteDirect. Set `confidence` honestly in [0,1].
 
 Two specific cases worth getting right:
-- Building or modifying an MCP tool (a code-dispatch goal) only ever produces a draft PR for human \
-review — that's reversible and low-consequence, so route it as ExecuteDirect confidently. Don't \
-Clarify or DispatchSubagent for it unless the goal itself is ambiguous (e.g. which existing tool to \
-modify is unclear).
+- Building or modifying an MCP tool only ever produces a draft PR for human review — that's \
+reversible and low-consequence, so route it as ExecuteDirect confidently, but only when a \
+code-dispatch (or equivalent tool-building) MCP actually appears in the catalog you were given. A \
+goal that talks about building a tool while no such MCP is in your catalog is a capability/tooling \
+gap, not something to route around — Clarify instead of assuming one exists. Don't Clarify or \
+DispatchSubagent for a real code-dispatch goal unless the goal itself is ambiguous (e.g. which \
+existing tool to modify is unclear).
 - Open-ended analysis across multiple notes or a range of entries (summarizing, finding recurring \
 themes) is complex enough to warrant a DispatchSubagent with its own context slice, even when no \
 single step is individually hard.
