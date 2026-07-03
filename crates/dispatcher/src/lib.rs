@@ -65,6 +65,7 @@ pub struct Dispatcher {
     provider: Arc<dyn Provider>,
     tuning: DispatchTuning,
     max_reaction_depth: u32,
+    system_prompt: String,
 }
 
 impl Dispatcher {
@@ -79,7 +80,17 @@ impl Dispatcher {
             provider,
             tuning,
             max_reaction_depth,
+            system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
         }
+    }
+
+    /// Override the system prompt used during classification. Defaults to
+    /// [`DEFAULT_SYSTEM_PROMPT`]. The heuristics tuner (`docs/roadmap/heuristics-tuning-engine-plan.md`)
+    /// uses this to test candidate prompts against the real dispatch code path without
+    /// reimplementing it.
+    pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.system_prompt = prompt.into();
+        self
     }
 
     /// Route a goal to a guarded [`DispatchDecision`].
@@ -178,7 +189,7 @@ impl Dispatcher {
             .collect::<Vec<_>>()
             .join("\n");
         CompletionRequest::new(vec![
-            Message::system(SYSTEM_PROMPT),
+            Message::system(&self.system_prompt),
             Message::user(format!(
                 "Goal:\n{}\n\nAvailable MCPs:\n{}",
                 req.goal, catalog
@@ -188,7 +199,9 @@ impl Dispatcher {
     }
 }
 
-const SYSTEM_PROMPT: &str = "\
+/// The default classification system prompt. `pub` so external crates (the heuristics tuner) can
+/// diff a candidate prompt against the real baseline.
+pub const DEFAULT_SYSTEM_PROMPT: &str = "\
 You are Liberado's dispatcher: a fast, careful router. Given a goal and a catalog of available \
 MCPs (tools), choose exactly ONE action and return it as a single JSON object.
 
