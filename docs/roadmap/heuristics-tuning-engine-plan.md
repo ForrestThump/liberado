@@ -153,8 +153,13 @@ architecture idea the way there is for a scored prompt candidate.
 
 ## Rough build order
 
-1. Give `liberado-eval` a `[lib]` target (or lift `Scenario`/`ExpectKind` out) so a new crate can
-   depend on its scoring shape without duplicating it.
+1. ✅ **Done (2026-07-03).** Gave `liberado-eval` a `[lib]` target (`src/lib.rs`, auto-detected
+   alongside `src/main.rs` — no `Cargo.toml` change needed, same shape `liberado-tui` already uses).
+   `scenarios.rs` moved under the lib unchanged; the per-scenario classification logic that used to
+   be inlined in `main.rs`'s run loop is now `liberado_eval::score()` (`src/scoring.rs`), returning
+   a `ScenarioOutcome` — the actual "scoring shape" a future tuner needs, not just the scenario data
+   types. `main.rs` calls it instead of re-deriving the classification; behavior is unchanged (same
+   printed output), now backed by 5 unit tests on `score()` itself.
 2. `liberado-provider-openrouter` — implement `Provider`, mirroring `provider-deepseek`.
 3. `liberado-heuristics-tuner` v1: dispatcher-only, cold-start + mutation candidate generation, the
    inner local-search loop with a small beam, budget-capped, scored via `liberado-eval`'s existing

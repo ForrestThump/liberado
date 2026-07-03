@@ -9,16 +9,13 @@
 //! Requires `DEEPSEEK_API_KEY`. The loop is: run → read the misses → tune `SYSTEM_PROMPT` / tunables
 //! → run again.
 
-mod scenarios;
-
 use std::sync::Arc;
 
 use liberado_common::config::{ConcurrencyTuning, DispatchTuning};
 use liberado_common::{Capability, CapabilitySet};
 use liberado_dispatcher::{DispatchRequest, Dispatcher, McpDescriptor};
+use liberado_eval::{score, scenarios};
 use liberado_provider_deepseek::DeepSeekProvider;
-
-use scenarios::{ExpectKind, scenarios};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -61,34 +58,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         let decision = dispatcher.dispatch(&request).await?;
-        let got = decision.action.label();
-        let want = s.expect.label();
-        let ok = got == want;
+        let outcome = score(s, &decision);
 
-        if ok {
+        if outcome.routed_correctly {
             correct += 1;
         }
-        if s.expect == ExpectKind::Clarify {
+        if let Some(hit) = outcome.safe_default_hit {
             clarify_expected += 1;
-            if got == "Clarify" {
+            if hit {
                 clarify_got += 1;
-            } else if got == "Propose" {
-                // A Propose emits a proposal for approval and executes nothing — it is a *safe*
-                // outcome, not an unsafe act. It counts as a safe default, not a miss.
-                clarify_got += 1;
-            } else {
+            }
+            if outcome.unsafe_act {
                 unsafe_acts += 1; // expected to clarify, but actually acted (executed)
             }
         }
 
-        let mark = if ok { "OK" } else { "XX" };
+        let mark = if outcome.routed_correctly { "OK" } else { "XX" };
         println!("[{mark}] {}", s.name);
         println!("     goal: {}", s.goal);
         println!(
-            "     want: {want:<16} got: {got:<16} conf {:.2}",
+            "     want: {:<16} got: {:<16} conf {:.2}",
+            s.expect.label(),
+            decision.action.label(),
             decision.confidence
         );
-        if !ok {
+        if !outcome.routed_correctly {
             println!("     why : {}", s.note);
             println!("     rationale: {}", decision.rationale);
         }
