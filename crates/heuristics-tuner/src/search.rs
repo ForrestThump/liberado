@@ -6,12 +6,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use liberado_dispatcher::DEFAULT_SYSTEM_PROMPT;
+use liberado_orchestrator::{DIRECT_INSTRUCTIONS, DIRECT_MAX_TURNS};
 
 use crate::candidate::{Candidate, CandidateOrigin};
 use crate::config::TunerConfig;
-use crate::generation::{cold_start, mutate, request_justification};
-use crate::rubric::format_rubric;
+use crate::generation::{
+    cold_start, cold_start_executor, mutate, mutate_executor, request_justification,
+};
+use crate::rubric::{format_executor_rubric, format_rubric};
 use crate::scoring::{CandidateFitness, score_candidate};
+use crate::tool_loop_scoring::{ToolLoopFitness, score_executor_candidate};
 
 /// A plain countdown shared across every concurrent LLM call in a session (scoring and meta
 /// calls alike) — not a rate limiter or a fairness mechanism, just a cost ceiling. `Relaxed`
@@ -268,6 +272,197 @@ async fn request_justification_if_budget_allows(
     request_justification(meta_provider, prompt, budget).await.ok()
 }
 
+// ── Executor-layer tuning ──────────────────────────────────────────────────────────────────────
+//
+// Deliberately parallel to the dispatcher-tuning code above rather than a generalization of it —
+// see docs/roadmap/heuristics-tuning-engine-plan.md's executor/subagent tuning extension for why
+// duplicating `select_beam`/`advance_beam`'s ~40 lines is the accepted tradeoff for now: it keeps
+// this addition fully additive, with zero risk of the new work destabilizing the dispatcher path's
+// already-fixed elitism logic while this one is still new and unproven.
+
+/// The executor-layer analog of [`select_beam`] — same disqualify-then-rank logic, but reading
+/// [`ToolLoopFitness`]'s fields instead of the dispatcher's.
+pub fn select_beam_executor(scored: &[(Candidate, ToolLoopFitness)], beam_width: usize) -> Vec<usize> {
+    let mut qualified: Vec<usize> = scored
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, fitness))| fitness.unsafe_acts == 0)
+        .map(|(i, _)| i)
+        .collect();
+
+    qualified.sort_by(|&a, &b| {
+        let fa = &scored[a].1;
+        let fb = &scored[b].1;
+        fb.accuracy
+            .partial_cmp(&fa.accuracy)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                fb.outcome_match_rate
+                    .partial_cmp(&fa.outcome_match_rate)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+
+    qualified.truncate(beam_width);
+    qualified
+}
+
+/// The executor-layer analog of [`advance_beam`] — same elitism (the incumbent beam is included in
+/// the same selection as the new pool, so a generation can never regress it).
+fn advance_beam_executor(
+    beam: &[(Candidate, ToolLoopFitness)],
+    pool: Vec<(Candidate, ToolLoopFitness)>,
+    beam_width: usize,
+) -> Vec<(Candidate, ToolLoopFitness)> {
+    let mut scored: Vec<(Candidate, ToolLoopFitness)> = beam.to_vec();
+    scored.extend(pool);
+
+    let survivors = select_beam_executor(&scored, beam_width);
+    if survivors.is_empty() {
+        beam.to_vec()
+    } else {
+        survivors.into_iter().map(|idx| scored[idx].clone()).collect()
+    }
+}
+
+/// The executor-layer analog of [`GenerationRecord`].
+pub struct ExecutorGenerationRecord {
+    pub generation: usize,
+    pub candidate: Candidate,
+    pub fitness: ToolLoopFitness,
+    pub rubric: String,
+}
+
+/// The executor-layer analog of [`TunerResult`].
+pub struct ExecutorTunerResult {
+    pub winner: Candidate,
+    pub winner_fitness: ToolLoopFitness,
+    pub baseline_fitness: ToolLoopFitness,
+    pub rubric: String,
+    pub generations: Vec<ExecutorGenerationRecord>,
+}
+
+/// The executor-layer analog of [`run_tuner`]: same beam-search-with-restarts loop shape, seeded
+/// from `DIRECT_INSTRUCTIONS` instead of `DEFAULT_SYSTEM_PROMPT`, scored by
+/// `score_executor_candidate` (a real, mocked `Executor::execute` tool loop per trial) instead of a
+/// single dispatcher classification call.
+pub async fn run_executor_tuner(config: TunerConfig) -> ExecutorTunerResult {
+    let budget = Budget::new(config.call_budget);
+
+    let baseline_fitness = score_executor_candidate(
+        DIRECT_INSTRUCTIONS,
+        &config.scoring_providers,
+        config.samples_per_scenario,
+        config.max_scenarios,
+        DIRECT_MAX_TURNS,
+        &budget,
+    )
+    .await;
+    let baseline = Candidate {
+        prompt: DIRECT_INSTRUCTIONS.to_string(),
+        origin: CandidateOrigin::ColdStart,
+    };
+
+    let mut beam: Vec<(Candidate, ToolLoopFitness)> = vec![(baseline, baseline_fitness.clone())];
+    let mut generations: Vec<ExecutorGenerationRecord> = Vec::new();
+
+    for generation_index in 0..config.max_generations {
+        if budget.exhausted() {
+            break;
+        }
+
+        let mut pool: Vec<Candidate> = Vec::new();
+
+        for (parent_index, (parent, parent_fitness)) in beam.iter().enumerate() {
+            for _ in 0..config.mutations_per_candidate {
+                if budget.exhausted() {
+                    break;
+                }
+                let failing = parent_fitness.failing();
+                match mutate_executor(config.meta_provider.as_ref(), &parent.prompt, &failing, &budget).await {
+                    Ok(prompt) => pool.push(Candidate {
+                        prompt,
+                        origin: CandidateOrigin::MutatedFrom {
+                            parent_index,
+                            parent_accuracy: parent_fitness.accuracy,
+                        },
+                    }),
+                    Err(_) => continue, // logged inside mutate_executor(); skip this slot, not the run
+                }
+            }
+        }
+
+        for _ in 0..config.cold_starts_per_generation {
+            if budget.exhausted() {
+                break;
+            }
+            if let Ok(prompt) = cold_start_executor(config.meta_provider.as_ref(), &budget).await {
+                pool.push(Candidate {
+                    prompt,
+                    origin: CandidateOrigin::ColdStart,
+                });
+            }
+        }
+
+        if pool.is_empty() {
+            break; // budget ran out before a single candidate could be produced this generation
+        }
+
+        let mut scored = Vec::with_capacity(pool.len());
+        for candidate in pool {
+            let fitness = score_executor_candidate(
+                &candidate.prompt,
+                &config.scoring_providers,
+                config.samples_per_scenario,
+                config.max_scenarios,
+                DIRECT_MAX_TURNS,
+                &budget,
+            )
+            .await;
+            scored.push((candidate, fitness));
+        }
+
+        beam = advance_beam_executor(&beam, scored, config.beam_width);
+
+        let (best_candidate, best_fitness) = &beam[0];
+        let justification = request_justification_if_budget_allows(
+            config.meta_provider.as_ref(),
+            &best_candidate.prompt,
+            &budget,
+        )
+        .await;
+        let rubric = format_executor_rubric(
+            best_candidate,
+            best_fitness,
+            &baseline_fitness,
+            DIRECT_INSTRUCTIONS,
+            justification.as_deref(),
+        );
+        generations.push(ExecutorGenerationRecord {
+            generation: generation_index + 1,
+            candidate: best_candidate.clone(),
+            fitness: best_fitness.clone(),
+            rubric,
+        });
+    }
+
+    let (winner, winner_fitness) = beam.into_iter().next().expect("beam is never empty");
+    let rubric = generations
+        .last()
+        .map(|g| g.rubric.clone())
+        .unwrap_or_else(|| {
+            format_executor_rubric(&winner, &winner_fitness, &baseline_fitness, DIRECT_INSTRUCTIONS, None)
+        });
+
+    ExecutorTunerResult {
+        winner,
+        winner_fitness,
+        baseline_fitness,
+        rubric,
+        generations,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,6 +586,84 @@ mod tests {
         let next = advance_beam(&beam, pool, 1);
         assert_eq!(next.len(), 1);
         assert_eq!(next[0].0.prompt, "unsafe-incumbent");
+    }
+
+    fn tool_loop_fitness(accuracy: f32, outcome_match_rate: f32, unsafe_acts: usize) -> ToolLoopFitness {
+        ToolLoopFitness {
+            accuracy,
+            outcome_match_rate,
+            unsafe_acts,
+            scenarios: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn select_beam_executor_excludes_unsafe_candidates_even_at_top_accuracy() {
+        let scored = vec![
+            (candidate("unsafe-but-accurate"), tool_loop_fitness(0.95, 1.0, 1)),
+            (candidate("safe-but-less-accurate"), tool_loop_fitness(0.80, 1.0, 0)),
+        ];
+        assert_eq!(select_beam_executor(&scored, 2), vec![1]);
+    }
+
+    #[test]
+    fn select_beam_executor_orders_by_accuracy_then_outcome_match_rate() {
+        let scored = vec![
+            (candidate("a"), tool_loop_fitness(0.80, 0.5, 0)),
+            (candidate("b"), tool_loop_fitness(0.90, 1.0, 0)),
+            (candidate("c"), tool_loop_fitness(0.90, 0.5, 0)),
+        ];
+        assert_eq!(select_beam_executor(&scored, 3), vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn advance_beam_executor_never_regresses_below_a_safe_incumbent() {
+        let beam = vec![(candidate("incumbent"), tool_loop_fitness(0.77, 1.0, 0))];
+        let pool = vec![(candidate("regressive-cold-start"), tool_loop_fitness(0.33, 1.0, 0))];
+        let next = advance_beam_executor(&beam, pool, 1);
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].0.prompt, "incumbent");
+    }
+
+    #[test]
+    fn advance_beam_executor_adopts_a_genuinely_better_new_candidate() {
+        let beam = vec![(candidate("incumbent"), tool_loop_fitness(0.77, 1.0, 0))];
+        let pool = vec![(candidate("improved-mutation"), tool_loop_fitness(0.90, 1.0, 0))];
+        let next = advance_beam_executor(&beam, pool, 1);
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].0.prompt, "improved-mutation");
+    }
+
+    #[test]
+    fn advance_beam_executor_falls_back_to_incumbent_when_everything_is_disqualified() {
+        let beam = vec![(candidate("unsafe-incumbent"), tool_loop_fitness(0.9, 1.0, 1))];
+        let pool = vec![(candidate("also-unsafe"), tool_loop_fitness(0.5, 1.0, 2))];
+        let next = advance_beam_executor(&beam, pool, 1);
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].0.prompt, "unsafe-incumbent");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires OPENROUTER_API_KEY + network access"]
+    async fn live_end_to_end_executor() {
+        // Mirrors `live_end_to_end` below, but for the executor layer via TUNER_LAYER=executor.
+        // SAFETY: same single-threaded test process assumption as `live_end_to_end`.
+        unsafe {
+            std::env::set_var("TUNER_LAYER", "executor");
+            std::env::set_var("TUNER_MAX_GENERATIONS", "1");
+            std::env::set_var("TUNER_MUTATIONS_PER_CANDIDATE", "1");
+            std::env::set_var("TUNER_COLD_STARTS_PER_GENERATION", "1");
+            std::env::set_var("TUNER_BEAM_WIDTH", "1");
+            std::env::set_var("TUNER_CALL_BUDGET", "60");
+        }
+        let config = TunerConfig::load().expect("OPENROUTER_API_KEY not set");
+        assert_eq!(config.layer, crate::config::Layer::Executor);
+        let result = run_executor_tuner(config).await;
+        assert!(!result.rubric.is_empty());
+        assert_eq!(
+            result.winner_fitness.unsafe_acts, 0,
+            "a winner must never carry an unsafe act"
+        );
     }
 
     #[tokio::test]

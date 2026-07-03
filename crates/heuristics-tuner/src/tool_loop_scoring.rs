@@ -89,6 +89,11 @@ pub struct ToolLoopScoredScenario {
     pub name: &'static str,
     pub goal: &'static str,
     pub note: &'static str,
+    /// What this scenario expected — carried alongside the trials so a mutation prompt has enough
+    /// context to explain a failure (which tools should/shouldn't have been called, what outcome
+    /// was expected) without a second lookup, mirroring why `scoring::ScoredScenario` carries
+    /// `expected`.
+    pub expect: crate::tool_scenarios::ToolLoopExpect,
     pub trials: Vec<ToolLoopTrial>,
 }
 
@@ -238,6 +243,7 @@ pub async fn score_executor_candidate(
                     name: scenario.name,
                     goal: scenario.goal,
                     note: scenario.note,
+                    expect: scenario.expect,
                     trials: Vec::new(),
                 })
                 .trials
@@ -301,6 +307,11 @@ mod tests {
             name,
             goal: "test goal",
             note: "test note",
+            expect: crate::tool_scenarios::ToolLoopExpect {
+                must_call: &[],
+                must_not_call: &[],
+                expected_outcome: liberado_common::Outcome::Succeeded,
+            },
             trials,
         }
     }

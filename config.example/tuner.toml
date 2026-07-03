@@ -8,6 +8,15 @@
 # TUNER_SCORING_MODELS is comma-separated when set as an env var (e.g.
 # "deepseek/deepseek-v4-flash,anthropic/claude-haiku-latest").
 
+# layer = "dispatcher"
+# Which role's system prompt this session tunes: "dispatcher" (default — tunes
+# liberado_dispatcher::DEFAULT_SYSTEM_PROMPT, no execution, scoring is a single classification
+# call) or "executor" (tunes liberado_orchestrator::DIRECT_INSTRUCTIONS by actually running a
+# scripted, mocked Executor::execute tool loop per scenario/sample — a materially more expensive
+# and slower call than dispatcher scoring). An unrecognized value falls back to "dispatcher" with a
+# warning rather than failing the session. Subagent-layer tuning (SUBAGENT_PREAMBLE) is planned but
+# not yet built (docs/roadmap/heuristics-tuning-engine-plan.md's executor/subagent extension).
+
 # scoring_models = ["deepseek/deepseek-v4-flash"]
 # Plays "the real dispatcher" during scoring. List more than one to check whether a candidate
 # prompt is robust across models or overfit to one. A diverse, cheap-per-provider set that's been

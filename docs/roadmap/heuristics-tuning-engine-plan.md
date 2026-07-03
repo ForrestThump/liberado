@@ -286,6 +286,44 @@ architecture idea the way there is for a scored prompt candidate.
     run hit (see "Comprehensive run — a real regression, and why" below). 4 new unit tests cover it
     directly: never-regress-below-a-safe-incumbent, adopt-a-genuinely-better-candidate,
     replace-an-unsafe-incumbent-even-at-lower-accuracy, and fall-back-when-everything's-disqualified.
+11. ✅ **Done (2026-07-06), executor layer only.** Extended tuning past the dispatcher to
+    `liberado_orchestrator::DIRECT_INSTRUCTIONS` (the `ExecuteDirect` executor's system prompt) —
+    the "Executor and main-agent tuning are follow-up cycles" item from this doc's original Search
+    Strategy section. Built and live-tested in independent, separately-committed pieces per
+    explicit user direction, deliberately *parallel to* (not a generalization of) the dispatcher
+    tuning code, so none of it could destabilize the just-fixed elitism logic:
+    - `DIRECT_INSTRUCTIONS`/`SUBAGENT_PREAMBLE` made `pub const` in `orchestrator/src/lib.rs`
+      (mirrors `Dispatcher::DEFAULT_SYSTEM_PROMPT`'s existing visibility) — no other `Orchestrator`
+      API change needed, since the tuner calls `Executor::execute` directly with
+      `Task::new(candidate, scenario.goal)`, the same way `Orchestrator` itself does.
+    - New `tool_scenarios.rs`: `ToolLoopScenario`/`ToolLoopExpect` describe tool-loop correctness
+      (which tools get called, what `Report::outcome` results) instead of a fixed classification
+      label — `liberado_eval::Scenario`'s shape doesn't fit an open-ended trajectory. 5 hand-written
+      scenarios (single lookup, multi-step research, avoiding an irrelevant destructive tool — this
+      layer's hard safety gate, avoiding a needlessly heavy tool, honestly reporting failure when
+      the only available tool genuinely can't help).
+    - New `tool_loop_scoring.rs`: a `ScriptedToolRuntime` (each tool in a scenario returns its own
+      canned result and records every invocation, unlike the existing test doubles which return one
+      fixed value for every tool) drives a real `Executor::execute` per trial;
+      `score_executor_candidate` mirrors `scoring::score_candidate`'s concurrency shape exactly.
+      `ToolLoopFitness`'s `outcome_match_rate` is the `safe_default_rate` analog — a secondary
+      signal (did the final self-reported outcome match what was expected) distinct from
+      call-correctness.
+    - `generation.rs` gained `cold_start_executor`/`mutate_executor` (own `TASK_DESCRIPTION`
+      describing an executor's job); `search.rs` gained `select_beam_executor`/
+      `advance_beam_executor` (deliberately duplicated, not shared, from the dispatcher's — same
+      elitism logic) and `run_executor_tuner`; `rubric.rs` gained `format_executor_rubric`
+      (parameterized by `baseline_prompt` so it can serve subagent tuning too, later);
+      `config.rs` gained `Layer::{Dispatcher, Executor}` (`tuner.toml`'s `layer` /
+      `TUNER_LAYER`, default `Dispatcher` — today's behavior unchanged unless a session opts in).
+    - 39 new unit tests (dispatcher-path tests untouched); zero workspace regressions verified
+      after every phase (`cargo test --workspace`).
+    - **Explicitly deferred**: subagent-layer tuning (`SUBAGENT_PREAMBLE`) — planned as a
+      near-mechanical repeat of this same machinery, not yet built; automatic round-robin cycling
+      across all three layers in one session; main-agent persona tuning (no discrete
+      tool-call/outcome signal — needs an LLM-judge approach, a different design problem);
+      topology-driven tool-loop scenario generation; upstreaming `ScriptedToolRuntime` into
+      `liberado-test-support`.
 
 ## Comprehensive run — a real regression, and why (2026-07-06)
 

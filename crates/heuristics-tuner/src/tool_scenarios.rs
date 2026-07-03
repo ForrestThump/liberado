@@ -10,7 +10,7 @@ use liberado_common::Outcome;
 
 /// One scenario: a goal, the tool catalog a mock `ToolRuntime` exposes for it (name, description,
 /// canned result returned on invocation), and what a well-behaved run should do.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct ToolLoopScenario {
     pub name: &'static str,
     pub goal: &'static str,
@@ -24,7 +24,7 @@ pub struct ToolLoopScenario {
 }
 
 /// What a well-behaved trial looks like for one scenario.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct ToolLoopExpect {
     /// Tool names that must be called at least once. Empty means no requirement.
     pub must_call: &'static [&'static str],

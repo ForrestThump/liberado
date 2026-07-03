@@ -45,8 +45,20 @@ const DEFAULT_CALL_BUDGET: usize = 350;
 
 const TUNER_CONFIG_FILE: &str = "tuner.toml";
 
+/// Which role's system prompt this session tunes
+/// (`docs/roadmap/heuristics-tuning-engine-plan.md`'s executor/subagent tuning extension).
+/// `Dispatcher` is the default — preserves this crate's original, only behavior — `Executor` is
+/// opt-in via `tuner.toml`'s `layer = "executor"` or `TUNER_LAYER=executor`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Layer {
+    #[default]
+    Dispatcher,
+    Executor,
+}
+
 /// Everything a tuning session needs, resolved once at startup.
 pub struct TunerConfig {
+    pub layer: Layer,
     /// One `OpenRouterProvider` per configured scoring model slug — a candidate is scored against
     /// every one of these (see `samples_per_scenario` for how many times against each).
     pub scoring_providers: Vec<Arc<dyn Provider>>,
@@ -74,6 +86,7 @@ pub enum ConfigError {
 /// rest at their code defaults, same convention as `topology.toml`/`policy.toml`/`tuning.toml`.
 #[derive(Debug, Default, Deserialize)]
 struct TunerFileConfig {
+    layer: Option<String>,
     scoring_models: Option<Vec<String>>,
     meta_model: Option<String>,
     samples_per_scenario: Option<usize>,
@@ -108,6 +121,7 @@ impl TunerConfig {
         let meta_provider: Arc<dyn Provider> = Arc::new(OpenRouterProvider::new(api_key, meta_model));
 
         Ok(Self {
+            layer: resolve_layer(file.layer.clone()),
             scoring_providers,
             meta_provider,
             samples_per_scenario: resolve_usize(
@@ -180,6 +194,21 @@ fn resolve_optional_usize(var: &str, file_value: Option<usize>) -> Option<usize>
         .or(file_value)
 }
 
+/// Resolve which layer this session tunes: env var wins if set, else the file's value, else
+/// `Layer::default()` (`Dispatcher`). An unrecognized value falls back to the default with a
+/// warning rather than failing the session — same posture as a `tuner.toml` parse error.
+fn resolve_layer(file_value: Option<String>) -> Layer {
+    let raw = env_string("TUNER_LAYER").or(file_value);
+    match raw.as_deref().map(str::to_lowercase).as_deref() {
+        Some("dispatcher") | None => Layer::Dispatcher,
+        Some("executor") => Layer::Executor,
+        Some(other) => {
+            tracing::warn!(value = %other, "unknown tuner layer — defaulting to dispatcher");
+            Layer::Dispatcher
+        }
+    }
+}
+
 /// Resolve a list-valued tunable (scoring models): the env var (comma-separated) wins if it parses
 /// to a non-empty list, else the file's list if non-empty, else a single-element list of `default`.
 fn resolve_model_list(var: &str, file_value: Option<Vec<String>>, default: &str) -> Vec<String> {
@@ -227,6 +256,26 @@ mod tests {
     }
 
     #[test]
+    fn resolve_layer_defaults_to_dispatcher_when_nothing_set() {
+        assert_eq!(resolve_layer(None), Layer::Dispatcher);
+    }
+
+    #[test]
+    fn resolve_layer_prefers_file_value() {
+        assert_eq!(resolve_layer(Some("executor".to_string())), Layer::Executor);
+    }
+
+    #[test]
+    fn resolve_layer_is_case_insensitive() {
+        assert_eq!(resolve_layer(Some("Executor".to_string())), Layer::Executor);
+    }
+
+    #[test]
+    fn resolve_layer_falls_back_to_dispatcher_on_unrecognized_value() {
+        assert_eq!(resolve_layer(Some("subagent-typo".to_string())), Layer::Dispatcher);
+    }
+
+    #[test]
     fn resolve_model_list_falls_back_to_single_default() {
         assert_eq!(
             resolve_model_list("TUNER_TEST_MODELS_DOES_NOT_EXIST", None, "deepseek/default"),
@@ -246,6 +295,7 @@ mod tests {
     #[test]
     fn file_config_with_no_fields_set_parses_as_all_none() {
         let cfg: TunerFileConfig = toml::from_str("").unwrap();
+        assert!(cfg.layer.is_none());
         assert!(cfg.scoring_models.is_none());
         assert!(cfg.samples_per_scenario.is_none());
         assert!(cfg.max_scenarios.is_none());
