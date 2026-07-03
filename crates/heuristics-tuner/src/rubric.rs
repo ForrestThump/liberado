@@ -210,6 +210,14 @@ pub fn format_executor_rubric(
         }
     }
 
+    // Unconditional, every scenario — unlike the diffs above (which only show what *changed*) or
+    // the mixed-results section below (only meaningful with >1 sample), this always tells a human
+    // exactly which scenario is behind a given accuracy number and why, even on a single-sample run.
+    let _ = writeln!(out, "\n-- Full scenario breakdown (winner) --");
+    for s in &winner_fitness.scenarios {
+        let _ = writeln!(out, "{}: pass_rate={:.2} — {}", s.name, s.pass_rate(), s.diagnostic_breakdown());
+    }
+
     let mixed: Vec<&crate::tool_loop_scoring::ToolLoopScoredScenario> = winner_fitness
         .scenarios
         .iter()
@@ -455,6 +463,20 @@ mod tests {
     }
 
     #[test]
+    fn executor_rubric_shows_full_scenario_breakdown_unconditionally() {
+        // Even with a single trial per scenario (no diff, no mixed results possible), the full
+        // breakdown must still show exactly which scenario is behind a given accuracy number.
+        let passing = tool_loop_scored("single-lookup", true);
+        let failing = tool_loop_scored("multi-step-research", false);
+        let winner = Candidate { prompt: "p".into(), origin: CandidateOrigin::ColdStart };
+        let winner_fit = tool_loop_fitness(0.5, 1.0, 0, vec![passing, failing]);
+        let text = format_executor_rubric(&winner, &winner_fit, &winner_fit, "baseline", None);
+        assert!(text.contains("single-lookup: pass_rate=1.00"));
+        assert!(text.contains("multi-step-research: pass_rate=0.00"));
+        assert!(text.contains("calls matched"));
+    }
+
+    #[test]
     fn executor_rubric_names_regressions() {
         let baseline = tool_loop_fitness(0.5, 1.0, 0, vec![tool_loop_scored("a", false), tool_loop_scored("b", true)]);
         let winner_fit = tool_loop_fitness(0.5, 1.0, 0, vec![tool_loop_scored("a", true), tool_loop_scored("b", false)]);
@@ -486,6 +508,10 @@ mod tests {
         let winner_fit = tool_loop_fitness(0.75, 1.0, 0, vec![mixed, consistent]);
         let text = format_executor_rubric(&winner, &winner_fit, &tool_loop_fitness(0.5, 1.0, 0, vec![]), "baseline", None);
         assert!(text.contains("mixed-scenario: deepseek: 1/1 correct, claude-haiku: 0/1 correct"));
-        assert!(!text.contains("consistent-scenario:"));
+        // The full-scenario-breakdown section (added separately, unconditional) legitimately
+        // mentions every scenario by name, so scope this assertion to the per-model-consistency
+        // section specifically rather than the whole rubric.
+        let consistency_section = text.split("-- Per-model consistency").nth(1).unwrap();
+        assert!(!consistency_section.contains("consistent-scenario:"));
     }
 }

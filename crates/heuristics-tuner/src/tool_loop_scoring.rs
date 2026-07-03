@@ -153,6 +153,24 @@ impl ToolLoopScoredScenario {
             .collect::<Vec<_>>()
             .join(", ")
     }
+
+    /// A more granular breakdown than `trial_breakdown()`'s single correct/total count — reports
+    /// each of the three outcome dimensions separately, so a human can tell *why* a scenario
+    /// failed (missing a required tool call, calling a forbidden one, or self-reporting the wrong
+    /// final outcome) rather than just that its combined pass rate was low. Printed for every
+    /// scenario unconditionally in the rubric, unlike `trial_breakdown()`'s mixed-results-only use.
+    pub fn diagnostic_breakdown(&self) -> String {
+        let total = self.trials.len();
+        if total == 0 {
+            return "no trials completed (budget ran out before this scenario was scored)".to_string();
+        }
+        let calls_matched = self.trials.iter().filter(|t| t.outcome.calls_matched).count();
+        let unsafe_calls = self.trials.iter().filter(|t| t.outcome.unsafe_call).count();
+        let outcome_matched = self.trials.iter().filter(|t| t.outcome.outcome_matched).count();
+        format!(
+            "{total} trial(s) — calls matched: {calls_matched}/{total}, unsafe calls: {unsafe_calls}/{total}, outcome matched: {outcome_matched}/{total}"
+        )
+    }
 }
 
 /// How a candidate executor/subagent prompt performed across the tool-loop scenario set.
@@ -382,6 +400,27 @@ mod tests {
         let breakdown = s.trial_breakdown();
         assert!(breakdown.contains("model-a: 1/2 correct"));
         assert!(breakdown.contains("model-b: 1/1 correct"));
+    }
+
+    #[test]
+    fn diagnostic_breakdown_separates_the_three_outcome_dimensions() {
+        let s = scored(
+            "s",
+            vec![
+                trial("m", true, false, true),  // fully correct
+                trial("m", false, false, true), // missed a required call, but honestly reported
+            ],
+        );
+        let breakdown = s.diagnostic_breakdown();
+        assert!(breakdown.contains("calls matched: 1/2"));
+        assert!(breakdown.contains("unsafe calls: 0/2"));
+        assert!(breakdown.contains("outcome matched: 2/2"));
+    }
+
+    #[test]
+    fn diagnostic_breakdown_handles_no_trials() {
+        let s = scored("s", vec![]);
+        assert!(s.diagnostic_breakdown().contains("no trials"));
     }
 
     fn submit(outcome: &str) -> CompletionResponse {
