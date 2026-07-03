@@ -117,9 +117,11 @@ the roadmap. See [`docs/roadmap/current.md`](../roadmap/current.md) for the full
   environment on spawned processes). A co-resident MCP process can write directly to the vault. This is
   why writer-identity verification (hardening audit item 1) cannot be closed with a code patch — it
   needs OS-level process isolation or an out-of-band approval channel.
-- **Two Rust installs on this machine**: the standalone install at `C:\Program Files\Rust stable MSVC
-  1.94\` is first in PATH but lacks the wasm32 stdlib. Prepend the rustup-managed toolchain's bin dir
-  before calling `dx` for WASM builds. See `agents.md` Web UI section for the exact command.
+- **WASM builds need the rustup toolchain, not the standalone Rust install on PATH** — full
+  explanation and the exact `dx build` command:
+  [`docs/contributing/agents.md`](../contributing/agents.md#building-the-wasm-frontend) ("Building
+  the WASM frontend"). Documented there, not duplicated here, since that's the living build guide
+  and this file gets rewritten wholesale each Dream pass.
 
 ---
 
