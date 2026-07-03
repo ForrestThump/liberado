@@ -170,18 +170,29 @@ architecture idea the way there is for a scored prompt candidate.
    on Windows without a restart).
 3. ✅ **Done (2026-07-03).** `liberado-heuristics-tuner` v1 — dispatcher-only, cold-start +
    mutation candidate generation, a beam-search-with-restarts loop over `liberado-eval`'s existing
-   19 scenarios, budget-capped (`Budget`, `Arc<AtomicUsize>` + `Ordering::Relaxed`, session-configured
-   via env vars — see `config.rs`). Required first fixing a real blocker: `Dispatcher`'s system
-   prompt was a private hardcoded `const`, with no way to test a candidate against the real
-   `Dispatcher` type — `crates/dispatcher/src/lib.rs` gained a `pub const DEFAULT_SYSTEM_PROMPT`
-   and a `with_system_prompt()` builder (backward-compatible, no existing test changed). The rubric
-   (`rubric.rs`) is the "propose a diff, never auto-merge" artifact — metric deltas, named
-   scenario regressions/fixes, a model-authored generalization justification, both prompts
-   side-by-side — printed to stdout and saved under `liberado_config::data_dir()/tuner/`. 27 unit
-   tests (pure logic: beam selection, budget accounting, aggregation, request-building, rubric
-   formatting) plus 2 `#[ignore]`d live tests (`generation::live_cold_start`,
-   `search::live_end_to_end`) for whenever `OPENROUTER_API_KEY` is actually visible to the shell
-   running them. Live-run the tuner itself: `cargo run -p liberado-heuristics-tuner`.
+   19 scenarios, budget-capped (`Budget`, `Arc<AtomicUsize>` + `Ordering::Relaxed`). Required first
+   fixing a real blocker: `Dispatcher`'s system prompt was a private hardcoded `const`, with no way
+   to test a candidate against the real `Dispatcher` type — `crates/dispatcher/src/lib.rs` gained a
+   `pub const DEFAULT_SYSTEM_PROMPT` and a `with_system_prompt()` builder (backward-compatible, no
+   existing test changed). The rubric (`rubric.rs`) is the "propose a diff, never auto-merge"
+   artifact — metric deltas, named scenario regressions/fixes, a model-authored generalization
+   justification, both prompts side-by-side — printed to stdout and saved under
+   `liberado_config::data_dir()/tuner/`.
+
+   **Config, revised same day**: every tunable except `OPENROUTER_API_KEY` (a secret — never in a
+   file, Decision 10) now resolves through three layers, lowest to highest —
+   code default → `tuner.toml` (`config.example/tuner.toml` is the template, resolved via the same
+   `liberado_config::config_dir()` the daemon's own topology/policy/tuning files use) →
+   environment variable — matching Decision 14's layering exactly, so per-session tweaking (model
+   choice, beam width, budget, generation count) never needs a recompile. Default scoring/meta
+   model changed from `deepseek/deepseek-chat` to `deepseek/deepseek-v4-flash` (smaller, cheaper,
+   still DeepSeek so a winning prompt is likely to transfer).
+
+   30 unit tests (pure logic: beam selection, budget accounting, aggregation, request-building,
+   rubric formatting, file/env config layering) plus 2 `#[ignore]`d live tests
+   (`generation::live_cold_start`, `search::live_end_to_end`) for whenever `OPENROUTER_API_KEY` is
+   actually visible to the shell running them. Live-run the tuner itself:
+   `cargo run -p liberado-heuristics-tuner`.
 4. Proposal-rubric output format + human review flow — folded into step 3 above (the rubric
    *is* the output format; there's no separate "diff" artifact beyond the full candidate/baseline
    prompt text already in the rubric, which is what a human diffs by eye before hand-copying a

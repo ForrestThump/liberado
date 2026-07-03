@@ -1,0 +1,15 @@
+# tuner.toml — TEMPLATE for liberado-heuristics-tuner. Copy to your config dir and edit.
+# OPTIONAL (absent => every knob at its code default). Tweak per tuning session without
+# recompiling — this file is read fresh on every `cargo run -p liberado-heuristics-tuner`.
+#
+# OPENROUTER_API_KEY is never read from here — it's a secret, stays in the environment
+# (Decision 10). Every value below can also be set as an env var of the same name, uppercased and
+# prefixed TUNER_ (e.g. TUNER_CALL_BUDGET) — an env var wins over this file for a one-off override.
+
+# scoring_model = "deepseek/deepseek-v4-flash"  # plays "the real dispatcher" during scoring
+# meta_model = "deepseek/deepseek-v4-flash"      # proposes/mutates prompt text; defaults to scoring_model if unset
+# beam_width = 2                                 # candidates kept per generation
+# cold_starts_per_generation = 1                 # fresh, independent restarts per generation (the local-maxima mitigation)
+# mutations_per_candidate = 2                    # mutations per beam member
+# max_generations = 3                            # outer-loop cap
+# call_budget = 350                              # total LLM calls (scoring + meta) for the whole session

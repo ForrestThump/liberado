@@ -278,7 +278,7 @@ mod tests {
         // full pipeline (scoring, generation, beam selection, rubric) cheaply. Override
         // TUNER_MAX_GENERATIONS / TUNER_CALL_BUDGET via env if a longer run is wanted.
         // SAFETY: single-threaded test process assumption -- these vars aren't read by any other
-        // concurrently-running test, only by TunerConfig::from_env() called immediately after.
+        // concurrently-running test, only by TunerConfig::load() called immediately after.
         unsafe {
             std::env::set_var("TUNER_MAX_GENERATIONS", "1");
             std::env::set_var("TUNER_MUTATIONS_PER_CANDIDATE", "1");
@@ -286,7 +286,7 @@ mod tests {
             std::env::set_var("TUNER_BEAM_WIDTH", "1");
             std::env::set_var("TUNER_CALL_BUDGET", "60");
         }
-        let config = TunerConfig::from_env().expect("OPENROUTER_API_KEY not set");
+        let config = TunerConfig::load().expect("OPENROUTER_API_KEY not set");
         let result = run_tuner(config).await;
         assert!(!result.rubric.is_empty());
         assert_eq!(

@@ -1,7 +1,8 @@
-//! Entry point: read the session config from the environment, run one tuning session, print the
-//! rubric, and save it under `<LIBERADO_DATA_DIR>/tuner/` (via `liberado_config::data_dir()`, the
-//! same machine-local state sink the conversation store and proposal signing key already use).
-//! Nothing here (or anywhere in this crate) ever writes to the real dispatcher's system prompt.
+//! Entry point: resolve the session config from `tuner.toml` + environment overrides
+//! (`config::TunerConfig::load`), run one tuning session, print the rubric, and save it under
+//! `<LIBERADO_DATA_DIR>/tuner/` (via `liberado_config::data_dir()`, the same machine-local state
+//! sink the conversation store and proposal signing key already use). Nothing here (or anywhere in
+//! this crate) ever writes to the real dispatcher's system prompt.
 
 use liberado_heuristics_tuner::{TunerConfig, run_tuner};
 
@@ -9,7 +10,7 @@ use liberado_heuristics_tuner::{TunerConfig, run_tuner};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    let config = TunerConfig::from_env()?;
+    let config = TunerConfig::load()?;
     let result = run_tuner(config).await;
 
     println!("{}", result.rubric);
