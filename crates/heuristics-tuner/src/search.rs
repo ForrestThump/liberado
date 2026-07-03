@@ -105,6 +105,36 @@ pub fn select_beam(scored: &[(Candidate, CandidateFitness)], beam_width: usize) 
     qualified
 }
 
+/// Decide the next generation's beam from the current one plus a freshly-scored candidate pool —
+/// **with elitism**: the incumbent beam is included in the same selection as the new pool, so a
+/// generation that only produces candidates worse than the current beam can never regress it. A
+/// real run surfaced why this matters: without it, `select_beam` only ever compared a generation's
+/// new candidates against *each other*, so an independent cold start that happened to be merely
+/// "safe" (0 unsafe acts) could permanently evict a much more accurate incumbent it was never
+/// actually compared against, with no way back (`docs/roadmap/heuristics-tuning-engine-plan.md`'s
+/// "comprehensive run" findings, 2026-07-06 — accuracy regressed 0.77 to 0.33 this way).
+///
+/// Falls back to the unchanged incumbent `beam` only if every candidate in the combined pool
+/// (incumbents included) is disqualified — this can only happen if the incumbent beam itself still
+/// carries an unsafe act (e.g. the seeded baseline, before it's ever been through this selection)
+/// and nothing safe was found this generation either; a wasted generation, not a regression to
+/// carry forward.
+fn advance_beam(
+    beam: &[(Candidate, CandidateFitness)],
+    pool: Vec<(Candidate, CandidateFitness)>,
+    beam_width: usize,
+) -> Vec<(Candidate, CandidateFitness)> {
+    let mut scored: Vec<(Candidate, CandidateFitness)> = beam.to_vec();
+    scored.extend(pool);
+
+    let survivors = select_beam(&scored, beam_width);
+    if survivors.is_empty() {
+        beam.to_vec()
+    } else {
+        survivors.into_iter().map(|idx| scored[idx].clone()).collect()
+    }
+}
+
 /// Run a full tuning session: score the baseline, then cycle generations of mutations + cold
 /// starts, keeping a beam of the best-so-far, until either `max_generations` or the call budget is
 /// exhausted. Never touches a real tool or vault — every call in this module is either a
@@ -183,13 +213,7 @@ pub async fn run_tuner(config: TunerConfig) -> TunerResult {
             scored.push((candidate, fitness));
         }
 
-        let survivors = select_beam(&scored, config.beam_width);
-        if !survivors.is_empty() {
-            // An all-disqualified generation (every candidate committed an unsafe act) leaves
-            // `beam` untouched — a wasted generation, not a regression the search should carry
-            // forward.
-            beam = survivors.into_iter().map(|idx| scored[idx].clone()).collect();
-        }
+        beam = advance_beam(&beam, scored, config.beam_width);
 
         // Record this generation's best-so-far, with its own justification call — a human
         // reviewing later gets the search's progression, not just where it ended up.
@@ -327,6 +351,46 @@ mod tests {
     fn select_beam_handles_fewer_candidates_than_width() {
         let scored = vec![(candidate("a"), fitness(0.9, 1.0, 0))];
         assert_eq!(select_beam(&scored, 5), vec![0]);
+    }
+
+    #[test]
+    fn advance_beam_never_regresses_below_a_safe_incumbent() {
+        // The exact real-world case that motivated this function: an incumbent that's both safe
+        // and accurate must survive a generation whose only new candidate is safe but much worse.
+        let beam = vec![(candidate("incumbent"), fitness(0.77, 1.0, 0))];
+        let pool = vec![(candidate("regressive-cold-start"), fitness(0.33, 1.0, 0))];
+        let next = advance_beam(&beam, pool, 1);
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].0.prompt, "incumbent");
+        assert_eq!(next[0].1.accuracy, 0.77);
+    }
+
+    #[test]
+    fn advance_beam_adopts_a_genuinely_better_new_candidate() {
+        let beam = vec![(candidate("incumbent"), fitness(0.77, 1.0, 0))];
+        let pool = vec![(candidate("improved-mutation"), fitness(0.90, 1.0, 0))];
+        let next = advance_beam(&beam, pool, 1);
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].0.prompt, "improved-mutation");
+        assert_eq!(next[0].1.accuracy, 0.90);
+    }
+
+    #[test]
+    fn advance_beam_replaces_an_unsafe_incumbent_with_a_safe_candidate_even_at_lower_accuracy() {
+        let beam = vec![(candidate("unsafe-baseline"), fitness(0.95, 1.0, 1))];
+        let pool = vec![(candidate("safe-candidate"), fitness(0.50, 1.0, 0))];
+        let next = advance_beam(&beam, pool, 1);
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].0.prompt, "safe-candidate");
+    }
+
+    #[test]
+    fn advance_beam_falls_back_to_incumbent_when_everything_is_disqualified() {
+        let beam = vec![(candidate("unsafe-incumbent"), fitness(0.9, 1.0, 1))];
+        let pool = vec![(candidate("also-unsafe"), fitness(0.5, 1.0, 2))];
+        let next = advance_beam(&beam, pool, 1);
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].0.prompt, "unsafe-incumbent");
     }
 
     #[tokio::test]

@@ -278,6 +278,56 @@ architecture idea the way there is for a scored prompt candidate.
    July 2026). 3 new unit tests cover `scenario_subset` (none/some/over-large N); config resolution
    gained a `resolve_optional_usize` helper (no numeric fallback — `None` is the valid default,
    unlike every other tunable in this file).
+10. ✅ **Done (2026-07-06).** Elitism in beam selection — `search.rs` gained `advance_beam(beam,
+    pool, beam_width)`, a pure function that includes the current beam in the same `select_beam`
+    call as the newly-scored pool, so a generation that only produces worse candidates can never
+    regress the beam (falls back to the unchanged incumbent only if literally everything, including
+    the incumbents, is disqualified for an unsafe act). Fixes the exact bug the first comprehensive
+    run hit (see "Comprehensive run — a real regression, and why" below). 4 new unit tests cover it
+    directly: never-regress-below-a-safe-incumbent, adopt-a-genuinely-better-candidate,
+    replace-an-unsafe-incumbent-even-at-lower-accuracy, and fall-back-when-everything's-disqualified.
+
+## Comprehensive run — a real regression, and why (2026-07-06)
+
+First full comprehensive run (5 models — Claude Haiku dropped per item 9's decision, GLM/MiMo
+dropped per the smoke-test findings above — `samples_per_scenario = 10`, no `max_scenarios` limit,
+2 generations) surfaced a serious bug, not a prompt problem: the reported "winner" **regressed
+routing accuracy from the baseline's 0.77 to 0.33**, flipping 11 of ~19 scenarios from passing to
+failing, while `unsafe_acts` dropped from 1 (baseline) to 0 (winner) and safe-default rate held at
+1.00 — the safety numbers looked fine, masking a severe accuracy collapse.
+
+Root cause, traced through `generation-1.txt`/`generation-2.txt`: the regressive prompt entered the
+beam in generation 1 as an **independent cold start**, already carrying the regression. It then
+permanently displaced the baseline, because `select_beam` (`search.rs`) only ever ranked a
+generation's freshly-produced candidates *against each other* — the incumbent beam was never
+included in that comparison. A cold start that happened to be merely safe (0 unsafe acts) could
+therefore evict a far more accurate incumbent it was never actually compared against, and generation
+2's mutations only ever built on the now-corrupted beam with no way back. Fixed by item 10 above
+(`advance_beam`).
+
+Bonus finding, and a genuine repeat: the regressive candidate reinvented `Propose` as a directly
+selectable classifier action (see this doc's "First real run — findings" section) — the same
+already-documented invalid pattern (`Propose` is only ever emitted by the deterministic consequence
+guard downgrading `ExecuteDirect`, never chosen directly by the classifier). The meta-generation
+prompts (`mutate`/`cold_start` in `generation.rs`) still don't warn against this specific failure
+mode, so it's free to recur. **Not fixed this session** — worth adding an explicit guardrail against
+it in a future pass, now that it's shown up twice.
+
+**Decision (2026-07-06)**: the user was, independently, already skeptical that `DEFAULT_SYSTEM_PROMPT`
+needed further tuning — the baseline's `unsafe_acts: 0`-in-the-safe-cases behavior (excluding this
+run's own baseline oddity, noted below) held up fine across a real, diverse 5-model/10-sample run,
+and the softer `0.77` accuracy figure likely reflects genuinely ambiguous scenarios more than actual
+dispatcher brokenness. Rather than re-running the comprehensive session to chase a better prompt, the
+call was: fix the search engine's elitism bug (done, item 10) so the *tool* is trustworthy whenever a
+real trigger (a new MCP, a changed tool surface) warrants running it again, and shelve prompt-tuning-
+for-its-own-sake until then — matching the tuner's original framing as a maintenance tool, not a
+benchmark to chase.
+
+One more thing worth a look whenever this is revisited: this run's own **baseline** carried
+`unsafe_acts: 1` (unlike the very first single-model run, which held `unsafe_acts: 0` throughout) —
+worth a quick check of which scenario/model combination produced it before trusting
+`DEFAULT_SYSTEM_PROMPT`'s safety property as a settled fact across the full 5-model panel, distinct
+from the elitism bug above.
 
 ## Smoke-test findings — two models look broken, not just weak (2026-07-06)
 
