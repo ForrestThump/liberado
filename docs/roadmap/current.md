@@ -72,7 +72,7 @@ shipped:
 the token-efficiency pillar and a future ContextPolicy), the `refiner` (~= Clarify), `forge-client`,
 and the GIT_ASKPASS credential hygiene.
 
-### Before Phase 3 — heuristics tuning engine (planned, not started)
+### Before Phase 3 — heuristics tuning engine (v1 built, dispatcher layer only — 2026-07-03)
 
 Automate the manual "run eval → read the misses → tune the prompt → run again" loop
 `liberado-eval` already documents doing by hand, so weak points in routing/tool-use surface

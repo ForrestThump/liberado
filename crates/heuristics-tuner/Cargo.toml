@@ -1,0 +1,28 @@
+[package]
+name = "liberado-heuristics-tuner"
+version = "0.1.0"
+description = "Automates the dispatcher prompt-tuning loop (docs/roadmap/heuristics-tuning-engine-plan.md): generates and scores candidate system prompts against the existing eval scenario set via a beam-search-with-restarts loop, and proposes the best as a diff + rubric for human review. Never auto-applies a prompt change."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "liberado-heuristics-tuner"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { workspace = true }
+liberado-common = { workspace = true }
+liberado-config = { workspace = true }
+liberado-dispatcher = { workspace = true }
+liberado-eval = { workspace = true }
+liberado-provider = { workspace = true }
+liberado-provider-openrouter = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

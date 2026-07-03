@@ -2948,6 +2948,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "liberado-heuristics-tuner"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "liberado-common",
+ "liberado-config",
+ "liberado-dispatcher",
+ "liberado-eval",
+ "liberado-provider",
+ "liberado-provider-openrouter",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "liberado-main-agent"
 version = "0.1.0"
 dependencies = [

@@ -71,6 +71,8 @@ chat-client-contract = { path = "crates/chat-client-contract" }
 liberado-markdown = { path = "crates/markdown" }
 liberado-commands = { path = "crates/liberado-commands" }
 liberado-test-support = { path = "crates/test-support" }
+liberado-eval = { path = "crates/eval" }
+liberado-heuristics-tuner = { path = "crates/heuristics-tuner" }
 
 # --- co-developed path dependencies (Decision 7) ---
 # Pinned to whatever is checked out in the sibling directories (currently the

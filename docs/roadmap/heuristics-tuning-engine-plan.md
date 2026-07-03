@@ -168,9 +168,23 @@ architecture idea the way there is for a scored prompt candidate.
    revisit. Live smoke test is `#[ignore]`d pending a session where the key is actually visible to
    the shell running the tests (env vars set after a long-lived shell starts don't propagate to it
    on Windows without a restart).
-3. `liberado-heuristics-tuner` v1: dispatcher-only, cold-start + mutation candidate generation, the
-   inner local-search loop with a small beam, budget-capped, scored via `liberado-eval`'s existing
-   dimensions.
-4. Proposal-rubric output format + human review flow.
+3. ✅ **Done (2026-07-03).** `liberado-heuristics-tuner` v1 — dispatcher-only, cold-start +
+   mutation candidate generation, a beam-search-with-restarts loop over `liberado-eval`'s existing
+   19 scenarios, budget-capped (`Budget`, `Arc<AtomicUsize>` + `Ordering::Relaxed`, session-configured
+   via env vars — see `config.rs`). Required first fixing a real blocker: `Dispatcher`'s system
+   prompt was a private hardcoded `const`, with no way to test a candidate against the real
+   `Dispatcher` type — `crates/dispatcher/src/lib.rs` gained a `pub const DEFAULT_SYSTEM_PROMPT`
+   and a `with_system_prompt()` builder (backward-compatible, no existing test changed). The rubric
+   (`rubric.rs`) is the "propose a diff, never auto-merge" artifact — metric deltas, named
+   scenario regressions/fixes, a model-authored generalization justification, both prompts
+   side-by-side — printed to stdout and saved under `liberado_config::data_dir()/tuner/`. 27 unit
+   tests (pure logic: beam selection, budget accounting, aggregation, request-building, rubric
+   formatting) plus 2 `#[ignore]`d live tests (`generation::live_cold_start`,
+   `search::live_end_to_end`) for whenever `OPENROUTER_API_KEY` is actually visible to the shell
+   running them. Live-run the tuner itself: `cargo run -p liberado-heuristics-tuner`.
+4. Proposal-rubric output format + human review flow — folded into step 3 above (the rubric
+   *is* the output format; there's no separate "diff" artifact beyond the full candidate/baseline
+   prompt text already in the rubric, which is what a human diffs by eye before hand-copying a
+   change into `DEFAULT_SYSTEM_PROMPT`).
 5. Extend the outer loop to the executor layer (mocked `ToolRuntime`), then main-agent.
 6. Architecture-critique mode, as a separate, lower-frequency entry point into the same crate.
