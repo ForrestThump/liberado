@@ -23,7 +23,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use liberado_common::{
     BlockReason, CapabilitySet, Consequence, DispatchAction, DispatchDecision, Outcome, Proposal,
-    ProposalSigner, ProposedAction, Report, WriteProvenance, mcp_of,
+    ProposalSigner, ProposedAction, Report, ToolCall, WriteProvenance, mcp_of,
 };
 use liberado_executor::{
     Budget, ExecError, Executor, RiskGatedToolRuntime, RuntimeFactory, RuntimeSetupError, Task,
@@ -272,10 +272,14 @@ impl Orchestrator {
         .await
     }
 
-    /// Execute an APPROVED proposal's action directly — approval is the authorization, so this
-    /// bypasses the dispatcher/guards entirely (re-dispatching would just re-trigger the consequence
-    /// guard and re-propose). It runs exactly the approved calls, in order, via a runtime scoped to
-    /// the MCPs they touch, with the proposal's correlation id as provenance.
+    /// Execute an APPROVED proposal's action — approval is the authorization, so this bypasses the
+    /// dispatcher/guards entirely (re-dispatching would just re-trigger the consequence guard and
+    /// re-propose). What "bypasses the guards" means differs by variant: `ToolCalls` runs exactly
+    /// the approved calls with no further gating (the calls themselves were what a human reviewed
+    /// and approved); `Subagent` runs the approved goal/scoping through the same runtime-gated
+    /// execution a live `DispatchSubagent` gets, because what was approved is the *goal and MCP
+    /// scope*, not specific calls — the subagent still decides its own adaptive calls, so those
+    /// still need the same per-call safety net (see `gate`'s doc comment).
     ///
     /// Checks the proposal's integrity signature before doing anything else — not a re-classification
     /// (approval still bypasses the risk guards, unchanged), but an authenticity check that this is
@@ -305,72 +309,128 @@ impl Orchestrator {
                 });
             }
 
-            let ProposedAction::ToolCalls(calls) = &proposal.proposed_action else {
-                // External/VaultWrite/Other aren't produced by v1 emit; refuse defensively rather
-                // than error so the daemon can mark the proposal done and not retry forever.
-                tracing::warn!(
-                    action = ?proposal.proposed_action,
-                    "approved proposal action is not executable in v1"
-                );
-                return Ok(Report {
-                    outcome: Outcome::Failed,
-                    summary: "proposed action type is not executable in v1".into(),
-                    artifacts: Vec::new(),
-                    new_high_signal_facts: Vec::new(),
-                    follow_up: None,
-                });
-            };
-
-            // Scope the runtime to exactly the MCPs the approved calls touch (deduplicated, order
-            // preserved). A runtime_for failure is an infra error and propagates.
-            let mut allowed_mcps: Vec<String> = Vec::new();
-            for call in calls {
-                let mcp = mcp_of(&call.tool).to_string();
-                if !allowed_mcps.contains(&mcp) {
-                    allowed_mcps.push(mcp);
+            match &proposal.proposed_action {
+                ProposedAction::ToolCalls(calls) => {
+                    self.execute_approved_tool_calls(proposal, calls).await
+                }
+                ProposedAction::Subagent {
+                    goal,
+                    capabilities,
+                    allowed_mcps,
+                    success_criteria,
+                } => {
+                    self.execute_approved_subagent(
+                        proposal,
+                        goal,
+                        capabilities,
+                        allowed_mcps,
+                        success_criteria,
+                    )
+                    .await
+                }
+                other => {
+                    // VaultWrite/External/Other aren't produced by v1 emit; refuse defensively
+                    // rather than error so the daemon can mark the proposal done and not retry
+                    // forever.
+                    tracing::warn!(
+                        action = ?other,
+                        "approved proposal action is not executable in v1"
+                    );
+                    Ok(Report {
+                        outcome: Outcome::Failed,
+                        summary: "proposed action type is not executable in v1".into(),
+                        artifacts: Vec::new(),
+                        new_high_signal_facts: Vec::new(),
+                        follow_up: None,
+                    })
                 }
             }
-            let provenance = WriteProvenance::agent(self.source.clone(), &proposal.correlation_id);
-            let runtime = self.factory.runtime_for(&allowed_mcps, provenance).await?;
-
-            // Run every approved call in order. Tool-level errors do NOT abort — they're folded into
-            // the outcome (mirrors how the executor surfaces tool failures in-band).
-            let mut ok = 0usize;
-            let mut failed = 0usize;
-            for (i, call) in calls.iter().enumerate() {
-                let inv =
-                    ToolInvocation::new(format!("approved-{i}"), &call.tool, call.args.clone());
-                match runtime.invoke(&inv).await {
-                    Ok(_) => ok += 1,
-                    Err(e) => {
-                        tracing::warn!(tool = %call.tool, error = %e, "approved call failed");
-                        failed += 1;
-                    }
-                }
-            }
-
-            let outcome = if failed == 0 {
-                Outcome::Succeeded
-            } else if ok == 0 {
-                Outcome::Failed
-            } else {
-                Outcome::PartiallySucceeded
-            };
-            tracing::info!(?outcome, ok, failed, "executed approved proposal");
-            Ok(Report {
-                outcome,
-                summary: format!(
-                    "Executed approved proposal {} ({} call(s))",
-                    proposal.id,
-                    calls.len()
-                ),
-                artifacts: Vec::new(),
-                new_high_signal_facts: Vec::new(),
-                follow_up: None,
-            })
         }
         .instrument(span)
         .await
+    }
+
+    /// `execute_approved`'s `ToolCalls` arm: run exactly the approved calls, in order, via a
+    /// runtime scoped to the MCPs they touch, with the proposal's correlation id as provenance.
+    async fn execute_approved_tool_calls(
+        &self,
+        proposal: &Proposal,
+        calls: &[ToolCall],
+    ) -> Result<Report, OrchestratorError> {
+        // Scope the runtime to exactly the MCPs the approved calls touch (deduplicated, order
+        // preserved). A runtime_for failure is an infra error and propagates.
+        let mut allowed_mcps: Vec<String> = Vec::new();
+        for call in calls {
+            let mcp = mcp_of(&call.tool).to_string();
+            if !allowed_mcps.contains(&mcp) {
+                allowed_mcps.push(mcp);
+            }
+        }
+        let provenance = WriteProvenance::agent(self.source.clone(), &proposal.correlation_id);
+        let runtime = self.factory.runtime_for(&allowed_mcps, provenance).await?;
+
+        // Run every approved call in order. Tool-level errors do NOT abort — they're folded into
+        // the outcome (mirrors how the executor surfaces tool failures in-band).
+        let mut ok = 0usize;
+        let mut failed = 0usize;
+        for (i, call) in calls.iter().enumerate() {
+            let inv = ToolInvocation::new(format!("approved-{i}"), &call.tool, call.args.clone());
+            match runtime.invoke(&inv).await {
+                Ok(_) => ok += 1,
+                Err(e) => {
+                    tracing::warn!(tool = %call.tool, error = %e, "approved call failed");
+                    failed += 1;
+                }
+            }
+        }
+
+        let outcome = if failed == 0 {
+            Outcome::Succeeded
+        } else if ok == 0 {
+            Outcome::Failed
+        } else {
+            Outcome::PartiallySucceeded
+        };
+        tracing::info!(?outcome, ok, failed, "executed approved proposal");
+        Ok(Report {
+            outcome,
+            summary: format!(
+                "Executed approved proposal {} ({} call(s))",
+                proposal.id,
+                calls.len()
+            ),
+            artifacts: Vec::new(),
+            new_high_signal_facts: Vec::new(),
+            follow_up: None,
+        })
+    }
+
+    /// `execute_approved`'s `Subagent` arm: dispatch the approved goal to a subagent scoped to
+    /// `allowed_mcps`/`capabilities` (narrowed by the orchestrator's own ceiling, same
+    /// belt-and-suspenders narrowing `run`'s `DispatchSubagent` arm does), with the proposal's
+    /// correlation id as provenance. Runtime-gated (see `execute_approved`'s doc comment for why
+    /// this variant, unlike `ToolCalls`, still needs it).
+    async fn execute_approved_subagent(
+        &self,
+        proposal: &Proposal,
+        goal: &str,
+        capabilities: &CapabilitySet,
+        allowed_mcps: &[String],
+        success_criteria: &[String],
+    ) -> Result<Report, OrchestratorError> {
+        let provenance = WriteProvenance::agent(self.source.clone(), &proposal.correlation_id);
+        let runtime = self.factory.runtime_for(allowed_mcps, provenance).await?;
+        let gate_capabilities = self.capabilities.narrow(capabilities);
+        let runtime = self.gate(
+            runtime,
+            gate_capabilities,
+            goal,
+            proposal.correlation_id.as_str(),
+        );
+        let task = Task::new(subagent_instructions(success_criteria), goal);
+        let report = self.execute(&self.subagent_budget, &*runtime, task).await?;
+        tracing::info!(outcome = ?report.outcome, "executed approved subagent proposal");
+        Ok(report)
     }
 
     /// Run multiple subagent dispatches in parallel, each capability-narrowed to the MCPs
@@ -462,9 +522,11 @@ impl Orchestrator {
     /// Wrap a connected runtime in the same runtime-level safety net chat's own tool loop already
     /// uses (`RiskGatedToolRuntime`), so the executor's *adaptive* (non-seed) tool calls get the
     /// same capability/consequence/magnitude checking the dispatcher's pre-flight guard only ever
-    /// applied to the decision's seed call. Deliberately not used by `execute_approved` — approval
-    /// is already the authorization there; re-gating it would re-downgrade an approved call into a
-    /// new proposal.
+    /// applied to the decision's seed call. Not used by `execute_approved`'s `ToolCalls` arm —
+    /// approval is already the authorization for those *specific calls*; re-gating them would
+    /// re-downgrade an approved call into a new proposal. `execute_approved`'s `Subagent` arm DOES
+    /// use it, though: what a human approved there is a goal + MCP scope, not fixed calls, so the
+    /// subagent's own adaptive calls during execution still need this same per-call safety net.
     fn gate(
         &self,
         runtime: Box<dyn ToolRuntime>,

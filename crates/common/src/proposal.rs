@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use thiserror::Error;
 
+use crate::capability::CapabilitySet;
 use crate::dispatch::ToolCall;
 
 /// The fence that separates YAML frontmatter from the note body. A proposal note is exactly one
@@ -51,6 +52,22 @@ impl ProposalStatus {
 pub enum ProposedAction {
     /// Run one or more tool calls.
     ToolCalls(Vec<ToolCall>),
+    /// Hand a goal off to a narrowly-scoped subagent — mirrors `DispatchAction::DispatchSubagent`
+    /// minus `correlation_id` (the proposal's own `correlation_id` already ties writes back to
+    /// this proposal) and `artifact_target`/`model` (not yet consulted by the live execution path
+    /// either, so there is nothing yet to preserve for the approved path to honor). Unlike
+    /// `ToolCalls`, what was "approved" here is the goal + scoping, not specific tool calls — the
+    /// subagent still decides its own calls adaptively on execution, so the approved run stays
+    /// runtime-gated the same way a live `DispatchSubagent` is.
+    Subagent {
+        goal: String,
+        #[serde(default)]
+        capabilities: CapabilitySet,
+        #[serde(default)]
+        allowed_mcps: Vec<String>,
+        #[serde(default)]
+        success_criteria: Vec<String>,
+    },
     /// Write/replace a vault note.
     VaultWrite {
         path: String,
@@ -228,6 +245,10 @@ impl ProposedAction {
                     .join(", ");
                 format!("run {} tool call(s): {tools}", calls.len())
             }
+            ProposedAction::Subagent { goal, allowed_mcps, .. } => {
+                let mcps = allowed_mcps.join(", ");
+                format!("dispatch a subagent for: {goal} (mcps: {mcps})")
+            }
             ProposedAction::VaultWrite { path, .. } => format!("write vault note `{path}`"),
             ProposedAction::External { description } => format!("external action: {description}"),
             ProposedAction::Other(value) => format!("other action: {value}"),
@@ -280,6 +301,27 @@ mod tests {
                 args: serde_json::json!({ "to": "boss@example.com" }),
             }]),
             "The note asks to email the boss",
+        );
+        let back = Proposal::from_note(&p.to_note()).unwrap();
+        assert_eq!(back, p);
+        assert_eq!(back.status, ProposalStatus::Pending);
+    }
+
+    #[test]
+    fn note_round_trips_subagent() {
+        let p = Proposal::pending(
+            "prop-sub-1",
+            "prop-sub-1",
+            "liberado",
+            ProposedAction::Subagent {
+                goal: "review recent decisions".into(),
+                capabilities: CapabilitySet::from_iter([crate::capability::Capability::ExecuteMcp(
+                    "decisions-mcp".into(),
+                )]),
+                allowed_mcps: vec!["decisions-mcp".into()],
+                success_criteria: vec!["a review note exists".into()],
+            },
+            "Open-ended and touches an external-consequence MCP",
         );
         let back = Proposal::from_note(&p.to_note()).unwrap();
         assert_eq!(back, p);

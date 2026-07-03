@@ -101,9 +101,10 @@ Ordered by feel-impact. Each is a client + (sometimes) server change behind the 
 - **Tool-call visibility (contract)** — the stream emits `tool` (call starting, with args) and
   `tool_result` (outcome: ok + result preview) around every tool call. The backend half is done and
   tested; the web UI renders them as inline chips (visual polish still wants a human eye).
-- **Stop / cancel (backend)** — closing the stream aborts the in-flight turn and rolls history back
-  (see *Stop / cancel* above). Connection-lifecycle, no endpoint. The web UI still wants a literal
-  **Stop button** wired to `EventSource.close()` — small frontend follow-up.
+- **Stop / cancel** — closing the stream aborts the in-flight turn and rolls history back (see
+  *Stop / cancel* above). Connection-lifecycle, no endpoint. The web UI's Stop button
+  (`crates/webui/src/components/chat.rs`'s `stop-btn`, wired to `close_current_stream()`) calls
+  `EventSource.close()` on click — both halves are landed, not just the backend primitive.
 - **Sessions / persistence** — conversations are keyed by session id and persisted via the
   `ConversationStore` (Decision 17, `liberado-conversation-store`): an append-only log of message
   *nodes* (a DAG, so branching is additive), JSONL outside the vault under
@@ -119,10 +120,6 @@ Ordered by feel-impact. Each is a client + (sometimes) server change behind the 
   (`crates/webui/src/components/markdown.rs`, wired into `chat.rs`), not raw text.
 - **MCP panel + sidebar** — `/api/catalog` and `/api/conversations` back a live capability panel and
   conversation sidebar in the web UI.
-
-### Next (web UI polish, same contract)
-- **Stop button (web UI)** — a button that calls `EventSource.close()` mid-stream; the backend cancel
-  primitive above does the rest. Not yet wired up.
 
 ### Then (capability)
 - **Reaction feed in chat** — surface the daemon's autonomous `Reaction`s (already on `/api/reactions`)

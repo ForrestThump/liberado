@@ -236,32 +236,74 @@ fn clarify_fallback() -> DispatchDecision {
 }
 
 /// Resolve a guard violation to a downgraded decision. A high-consequence block on a *concrete*
-/// `ExecuteDirect` (a non-empty seed call list — a known action like "send this email") becomes a
-/// `Propose`, carrying the action for human approval (Decision 11). Every other case stays a
-/// `Clarify` — the most conservative output when there is nothing concrete to propose.
+/// `ExecuteDirect` (a non-empty seed call list — a known action like "send this email") or on a
+/// `DispatchSubagent` (which always carries a restated goal — the classifier's one required field,
+/// so there is always something concrete enough to propose) becomes a `Propose`, carrying the
+/// action for human approval (Decision 11). Every other case stays a `Clarify` — the most
+/// conservative output when there is nothing concrete to propose.
 ///
-/// TODO: broaden proposal production to the fuzzier high-consequence cases (an empty-seed
-/// `ExecuteDirect`, a `DispatchSubagent`, the magnitude-gate goal signal). v1 covers only the
-/// concrete-tool-call path — the primary "send an email" scenario.
+/// TODO: the one still-deferred fuzzy case is an empty-seed `ExecuteDirect` (including a bare
+/// magnitude-gate hit with no seed calls) — there is no fixed action to propose, since
+/// `ExecuteDirect` carries no goal of its own (unlike `DispatchSubagent`); the caller's `goal`
+/// isn't threaded into this function today. Approving it would mean "run the adaptive loop on this
+/// goal," which needs the same runtime-gated-execution shape `Orchestrator::execute_approved`'s
+/// `Subagent` arm now has — likely a `ProposedAction::AdaptiveGoal { goal, relevant_mcps }` run via
+/// `Task::new(DIRECT_INSTRUCTIONS, goal)` under a gated runtime, mirroring `Orchestrator::run`'s
+/// `ExecuteDirect` arm. Left for a follow-up rather than folded in here.
 fn downgrade(classified: DispatchDecision, reason: BlockReason) -> DispatchDecision {
-    if reason == BlockReason::HighConsequence
-        && let DispatchAction::ExecuteDirect { seed_calls, .. } = &classified.action
-        && !seed_calls.is_empty()
-    {
-        return downgrade_to_propose(classified);
+    if reason == BlockReason::HighConsequence {
+        match &classified.action {
+            DispatchAction::ExecuteDirect { seed_calls, .. } if !seed_calls.is_empty() => {
+                return downgrade_to_propose_tool_calls(classified);
+            }
+            DispatchAction::DispatchSubagent { .. } => {
+                return downgrade_to_propose_subagent(classified);
+            }
+            _ => {}
+        }
     }
     downgrade_to_clarify(classified.confidence, reason)
 }
 
-/// Build the `Propose` a high-consequence concrete action downgrades to, preserving the original
-/// decision's seed calls (as the proposed action), confidence, and rationale.
-fn downgrade_to_propose(classified: DispatchDecision) -> DispatchDecision {
+/// Build the `Propose` a high-consequence concrete `ExecuteDirect` downgrades to, preserving the
+/// original decision's seed calls (as the proposed action), confidence, and rationale.
+fn downgrade_to_propose_tool_calls(classified: DispatchDecision) -> DispatchDecision {
     let DispatchAction::ExecuteDirect { seed_calls, .. } = classified.action else {
-        unreachable!("downgrade_to_propose is only called for a concrete ExecuteDirect");
+        unreachable!("downgrade_to_propose_tool_calls is only called for a concrete ExecuteDirect");
     };
     DispatchDecision {
         action: DispatchAction::Propose {
             proposed_action: ProposedAction::ToolCalls(seed_calls),
+            rationale: classified.rationale.clone(),
+        },
+        confidence: classified.confidence,
+        rationale: classified.rationale,
+    }
+}
+
+/// Build the `Propose` a high-consequence `DispatchSubagent` downgrades to, preserving the goal,
+/// narrowed capabilities, MCP scoping, and success criteria the classifier chose —
+/// `Orchestrator::execute_approved` dispatches the subagent exactly as scoped here once a human
+/// approves it.
+fn downgrade_to_propose_subagent(classified: DispatchDecision) -> DispatchDecision {
+    let DispatchAction::DispatchSubagent {
+        goal,
+        capabilities,
+        allowed_mcps,
+        success_criteria,
+        ..
+    } = classified.action
+    else {
+        unreachable!("downgrade_to_propose_subagent is only called for a DispatchSubagent");
+    };
+    DispatchDecision {
+        action: DispatchAction::Propose {
+            proposed_action: ProposedAction::Subagent {
+                goal,
+                capabilities,
+                allowed_mcps,
+                success_criteria,
+            },
             rationale: classified.rationale.clone(),
         },
         confidence: classified.confidence,
@@ -515,6 +557,58 @@ mod tests {
                 assert_eq!(calls[0].tool, "email:send");
             }
             other => panic!("expected Propose(ToolCalls), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn high_consequence_subagent_is_downgraded_to_propose() {
+        // A DispatchSubagent whose allowed_mcps touches an External MCP: the consequence gate must
+        // turn it into a Propose(Subagent) — NOT a Clarify — since a restated goal is always
+        // concrete enough to propose (unlike an empty-seed ExecuteDirect).
+        let request = DispatchRequest {
+            goal: "summarize this week's reviews and email the boss".into(),
+            catalog: vec![McpDescriptor {
+                name: "email".into(),
+                description: "send email".into(),
+                consequence: Consequence::External,
+                provenance: None,
+            }],
+            capabilities: caps("email"),
+            reaction_depth: 0,
+        };
+        let decision = DispatchDecision {
+            action: DispatchAction::DispatchSubagent {
+                goal: "summarize this week's reviews and email the boss".into(),
+                capabilities: CapabilitySet::empty(),
+                allowed_mcps: vec!["email".into()],
+                success_criteria: vec!["the boss received the summary".into()],
+                artifact_target: None,
+                model: None,
+                correlation_id: "c1".into(),
+            },
+            confidence: 0.9,
+            rationale: "open-ended, touches an external MCP".into(),
+        };
+        let mock = scripted(&decision);
+        let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
+
+        let out = dispatcher.dispatch(&request).await.unwrap();
+        match out.action {
+            DispatchAction::Propose {
+                proposed_action:
+                    liberado_common::ProposedAction::Subagent {
+                        goal,
+                        allowed_mcps,
+                        success_criteria,
+                        ..
+                    },
+                ..
+            } => {
+                assert_eq!(goal, "summarize this week's reviews and email the boss");
+                assert_eq!(allowed_mcps, vec!["email".to_string()]);
+                assert_eq!(success_criteria, vec!["the boss received the summary".to_string()]);
+            }
+            other => panic!("expected Propose(Subagent), got {other:?}"),
         }
     }
 

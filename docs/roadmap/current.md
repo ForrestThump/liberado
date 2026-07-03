@@ -115,12 +115,19 @@ always-on.
     OS-level MCP process isolation or an out-of-band approval channel, not a code patch — see that
     audit doc's item 1 for why.
 - **Proposal workflow (Decision 11)** — ✅ *done (emit AND approve→execute landed, June 24, 2026;
-  integrity signing + vault-routed runtime proposals added 2026-07-02).*
+  integrity signing + vault-routed runtime proposals added 2026-07-02; `DispatchSubagent` emit
+  broadened 2026-07-02).*
   The full propose→approve→execute loop is closed: a human `status: approved` edit on a
   `proposals/<id>.md` note is picked up by the daemon, verified for integrity, executed via the
-  orchestrator with the proposal's `correlation_id`, and flipped to `status: done`. **Remaining:**
-  broaden emit beyond the concrete-tool-call case (empty-seed `ExecuteDirect`, `DispatchSubagent`,
-  the magnitude gate), which still downgrade to `Clarify`.
+  orchestrator with the proposal's `correlation_id`, and flipped to `status: done`. A high-consequence
+  `DispatchSubagent` now downgrades to `Propose(ProposedAction::Subagent)` instead of `Clarify` —
+  it always carries a restated goal, so there's always something concrete to propose. On approval,
+  `Orchestrator::execute_approved`'s new `Subagent` arm dispatches it through the same runtime-gated
+  execution a live `DispatchSubagent` gets (unlike the `ToolCalls` arm, which is ungated — what was
+  approved there was the exact calls, not just a goal + scope). **Remaining:** the one still-deferred
+  fuzzy case is an empty-seed `ExecuteDirect` (including a bare magnitude-gate hit with no seed
+  calls) — no fixed action to propose there since `ExecuteDirect` carries no goal of its own; see
+  `downgrade`'s doc comment in `crates/dispatcher/src/lib.rs` for the shape a follow-up would take.
 - **Crate hygiene + hardening passes (2026-07-01 to 2026-07-02)** — three hygiene tiers (test-mock
   dedup, `RuntimeFactory` relocation to `liberado-executor`, new `liberado-config` crate extracted
   from `liberado-bootstrap`) plus a hardening audit (proposal-integrity items above). Full writeups:

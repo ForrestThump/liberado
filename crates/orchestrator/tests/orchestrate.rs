@@ -596,3 +596,108 @@ async fn execute_approved_bypasses_gating_by_design() {
     );
     assert_eq!(invoked[0].name, "email-mcp:send");
 }
+
+#[tokio::test]
+async fn execute_approved_subagent_dispatches_the_approved_goal() {
+    // What was approved is the goal + MCP scope (Decision 11's review surface for a Subagent
+    // proposal), not fixed calls — the approved run still drives a real adaptive tool loop, ending
+    // in submit_report like any other subagent dispatch.
+    let script = vec![
+        CompletionResponse::tool_calls(vec![ToolInvocation::new(
+            "c1",
+            "decisions-mcp:list_recent",
+            serde_json::json!({}),
+        )]),
+        submit_report_response(),
+    ];
+    let provider = Arc::new(MockProvider::with_script("mock", script));
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let signer = ProposalSigner::random();
+    let orch = Orchestrator::new(
+        provider,
+        InvocationRecordingFactory { runtime },
+        CapabilitySet::from_iter([Capability::ExecuteMcp("decisions-mcp".into())]),
+        Vec::new(),
+        std::env::temp_dir(),
+        signer.clone(),
+    );
+
+    let mut proposal = Proposal::pending(
+        "review-2026-07-02",
+        "review-2026-07-02",
+        "liberado",
+        ProposedAction::Subagent {
+            goal: "review recent decisions".into(),
+            capabilities: CapabilitySet::from_iter([Capability::ExecuteMcp(
+                "decisions-mcp".into(),
+            )]),
+            allowed_mcps: vec!["decisions-mcp".into()],
+            success_criteria: vec!["a review note exists".into()],
+        },
+        "open-ended, touches an external-consequence MCP",
+    );
+    signer.sign(&mut proposal);
+    proposal.status = ProposalStatus::Approved;
+
+    let report = orch.execute_approved(&proposal).await.expect("execute");
+    assert_eq!(report.outcome, Outcome::Succeeded);
+
+    let invoked = invoked.lock().unwrap();
+    assert_eq!(invoked.len(), 1);
+    assert_eq!(invoked[0].name, "decisions-mcp:list_recent");
+}
+
+#[tokio::test]
+async fn execute_approved_subagent_still_gates_adaptive_calls_outside_its_capabilities() {
+    // Unlike ToolCalls (specific calls were the thing reviewed), a Subagent proposal only approved
+    // a goal + scope — the subagent's own adaptive calls during execution must still be gated, the
+    // same as a live (never-proposed) DispatchSubagent would be.
+    let script = vec![
+        CompletionResponse::tool_calls(vec![ToolInvocation::new(
+            "c1",
+            "other-mcp:do_something",
+            serde_json::json!({}),
+        )]),
+        submit_report_response(),
+    ];
+    let provider = Arc::new(MockProvider::with_script("mock", script));
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let signer = ProposalSigner::random();
+    // The orchestrator's own ceiling grants both MCPs; the proposal's own (narrower) capabilities
+    // only grant "tasks-mcp" — the gate must use the narrowed intersection.
+    let ceiling = CapabilitySet::from_iter([
+        Capability::ExecuteMcp("tasks-mcp".into()),
+        Capability::ExecuteMcp("other-mcp".into()),
+    ]);
+    let orch = Orchestrator::new(
+        provider,
+        InvocationRecordingFactory { runtime },
+        ceiling,
+        Vec::new(),
+        std::env::temp_dir(),
+        signer.clone(),
+    );
+
+    let mut proposal = Proposal::pending(
+        "c1",
+        "c1",
+        "liberado",
+        ProposedAction::Subagent {
+            goal: "narrow task".into(),
+            capabilities: CapabilitySet::from_iter([Capability::ExecuteMcp("tasks-mcp".into())]),
+            allowed_mcps: vec!["other-mcp".into()],
+            success_criteria: vec![],
+        },
+        "narrowly scoped",
+    );
+    signer.sign(&mut proposal);
+    proposal.status = ProposalStatus::Approved;
+
+    orch.execute_approved(&proposal).await.expect("execute");
+    assert!(
+        invoked.lock().unwrap().is_empty(),
+        "the proposal's own (narrower) capabilities must gate it, not the orchestrator's raw ceiling"
+    );
+}
