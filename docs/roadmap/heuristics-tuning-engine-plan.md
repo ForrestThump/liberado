@@ -1,8 +1,18 @@
 # Heuristics Tuning Engine — Plan
 
-**Status**: Brainstormed and scoped 2026-07-03. Not started. Captured here so the design survives
-before Phase 3 work begins — the intent is to harden the tool-use/dispatch architecture by
-automatically finding its weak points, rather than finding them slowly through dogfooding.
+**Status**: v1 built and used for a real tuning run 2026-07-03 (dispatcher layer; see the build
+order below for what shipped). Captured here so the design survives before Phase 3 work begins —
+the intent is to harden the tool-use/dispatch architecture by automatically finding its weak
+points, rather than finding them slowly through dogfooding.
+
+**Framing, confirmed after the first real run (2026-07-03)**: this is not a benchmark-chasing
+exercise — a candidate that "wins" against the fixed scenario set isn't the point, and the first
+real run proved exactly why (see "Scenario generation" below): it's a **maintenance tool that
+keeps the dispatcher's prompt honest as the tool surface and data change**. When a new MCP is
+added, or an existing one's shape changes, the dispatcher's prompt should be able to re-adjust
+toward using it correctly in the situations that call for it — automatically, not by a human
+noticing a misroute weeks later — while the existing hand-curated scenarios keep acting as a
+regression net so the re-tune doesn't quietly break what already worked.
 
 ## Motivation
 
@@ -20,6 +30,11 @@ the traced-run → fixture pipeline this plan builds on rather than replaces.
 - Automatically discover prompts/scenarios where the dispatcher, executor, or main agent
   misbehaves — wrong routing, unsafe acts, wasted tool calls, budget exhaustion — without a human
   hand-writing every scenario.
+- **Re-adapt to a changing tool surface, not just fix wording.** When a tool is added, removed, or
+  reshaped, the dispatcher's prompt should catch up to it — using the new tool correctly where it
+  applies — without a human noticing the gap through dogfooding first. This is the actual point;
+  scoring higher against a fixed scenario set is a proxy for it, not the goal itself (see
+  "Scenario generation" below for the concrete mechanism this implies).
 - Propose specific, evidenced prompt tweaks a human can review and merge — never auto-apply.
 - Periodically step back from prompt-level tuning and have a model critique the *architecture*
   itself, not just wording — a second, broader mode alongside the tight local-search loop.
@@ -55,14 +70,29 @@ specifically, since every LLM call in the system already goes through `Provider`
 
 ### Scenario generation
 
-- **v1**: cold-prompt an LLM to generate diverse goals for the target layer's use case (see "Search
-  strategy" below) — a generative analog to what `liberado-eval`'s scenarios do by hand today.
-- **Later** (once there's real usage to learn from): mine `liberado-conversation-store`'s history
-  (Liberado's own chat logs — "user post history" means our own dogfooded history, not anything
-  external) for realistic goal shapes. Today there's ~none of this; the plan doesn't depend on it
-  existing, but the generation step should be built so a history-informed source can be swapped in
-  later without changing the rest of the pipeline. This is the same traced-run → fixture idea
-  `testing-and-eval-spec.md` §5 already describes for the manual eval, just automated.
+- **v1 (shipped 2026-07-03)**: cold-prompt an LLM to generate candidate *prompts*, but scoring
+  itself reuses `liberado-eval`'s fixed, hand-written 19 scenarios as-is — no dynamic scenario
+  generation yet. This is a real, known gap, not an oversight: the first real tuning run (see
+  `Dreams`-adjacent review, 2026-07-03) confirmed the fixed scenario set only ever exercises the
+  MCPs someone thought to hand-write a case for at the time. Add a new MCP tomorrow and the tuner
+  has no way to know it exists — it will keep scoring the same 19 goals forever, none of which
+  touch the new tool. That's fine for "does prompt-tuning work at all" (v1's actual goal), but it
+  doesn't yet deliver the real goal above (re-adapting to a changing tool surface).
+- **Next, not yet built — topology-driven generation**: read the *live* `CapabilityCatalog` (the
+  same one `liberado-dispatcher`/the daemon already build from `topology.toml` — no new source of
+  truth, just a new consumer of an existing one) and synthesize plausible goals that would need
+  each tool, weighted toward newly-added or reshaped ones. Fold these into the scoring pool
+  *alongside* the fixed `liberado-eval` scenarios on every run — new tools get exercised, and the
+  hand-curated 19 keep acting as the regression net so a re-tune triggered by a new tool can't
+  quietly break already-working routing. This is the mechanism that actually delivers "add a tool,
+  the engine adjusts automatically" rather than "the engine gets slightly better at 19 fixed
+  goals forever."
+- **Later still** (once there's real usage to learn from): mine `liberado-conversation-store`'s
+  history (Liberado's own chat logs — "user post history" means our own dogfooded history, not
+  anything external) for realistic goal shapes, as a third scenario source alongside the fixed set
+  and the topology-driven one. Today there's ~none of this; the plan doesn't depend on it existing.
+  This is the same traced-run → fixture idea `testing-and-eval-spec.md` §5 already describes for
+  the manual eval, just automated.
 
 ### Search strategy
 
@@ -212,3 +242,39 @@ architecture idea the way there is for a scored prompt candidate.
    change into `DEFAULT_SYSTEM_PROMPT`).
 5. Extend the outer loop to the executor layer (mocked `ToolRuntime`), then main-agent.
 6. Architecture-critique mode, as a separate, lower-frequency entry point into the same crate.
+7. **Topology-driven scenario generation** (see "Scenario generation" above) — read the live
+   `CapabilityCatalog` and synthesize goals per tool, weighted toward newly-added/reshaped ones,
+   folded in alongside the fixed `liberado-eval` scenarios. This is the mechanism that actually
+   delivers the "re-adapts when you add a tool" goal, not just "gets slightly better at 19 fixed
+   goals" — identified as the real next step after reviewing the first live run's results.
+
+## First real run — findings (2026-07-03)
+
+A live session (defaults: `deepseek/deepseek-v4-flash`, 3 generations, beam width 2) took routing
+accuracy from 0.72 to 0.94 and held it there, with `unsafe_acts` staying at 0 in every generation —
+the hard safety gate never broke even while the search was actively wrong about other things.
+Recorded here because the specific failure mode is a real, generalizable lesson, not a one-off:
+
+- **What generalized cleanly**: generation 1 added two rules — "code-dispatch actions are
+  reversible (draft PR only), route confidently" and "open-ended multi-document analysis needs a
+  subagent" — fixing 5 of 6 originally-failing scenarios in one shot with no observed downside.
+  Hand-adopted into `DEFAULT_SYSTEM_PROMPT` the same day (see dispatcher commit).
+- **What didn't**: generation 1 fixed those five scenarios by *replacing* the baseline's general
+  "bias toward safety" framing with a specific rule list — and the rule list didn't cover external
+  actions, so it silently lost the safety net for anything not explicitly named, regressing
+  `external-email` (expects `Clarify`). Lesson: a rule-list-style mutation is only as safe as its
+  coverage; don't let a specific-case fix quietly delete a general safety principle. This is why
+  the hand-adopted version *adds* the two rules to the existing prompt rather than replacing it.
+- **A mutation that should never be adopted, and reveals a real scoring blind spot**: generation 3,
+  trying to fix a second regression (`external-broadcast`, expects `Propose`), taught the model to
+  emit `Propose` as a directly-choosable classifier action — but invented a JSON shape
+  (`{"proposal":..., "reason":...}`) that doesn't match the real `ProposedAction` enum at all. In
+  this codebase `Propose` is never something the classifier emits directly; it's produced only by
+  the deterministic consequence guard downgrading a concrete `ExecuteDirect`. The tuner's scoring
+  compares top-level action *labels* only, not full structural JSON validity against the real Rust
+  types, so this defect wasn't caught by the score (a real gap worth closing eventually — but for
+  now, a human reviewing before adopting anything is the actual defense, exactly as designed). The
+  likely correct fix for `external-broadcast` isn't a classifier rule at all: classify concrete,
+  nameable external actions as `ExecuteDirect` and trust the existing consequence guard to downgrade
+  them to `Propose` automatically, rather than teaching the classifier to self-censor via `Clarify`
+  or to fabricate an action type it was never meant to produce.
