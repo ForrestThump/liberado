@@ -358,8 +358,30 @@ if the goal isn't finished, or file the report if it genuinely is (or can't proc
 unconditionally pushing to wrap up. This is an engine-level fix (`liberado-executor`), independent
 of whatever `DIRECT_INSTRUCTIONS` text the tuner eventually settles on, and benefits every consumer
 of `Executor::execute`, not just the tuner. Verified: `liberado-executor`'s own 14 tests unaffected,
-zero regressions workspace-wide. **Not yet re-verified live** — the next executor-layer smoke test
-after this fix should show whether `multi-step-research` improves.
+zero regressions workspace-wide.
+
+**Re-verified live, same session**: a follow-up run (same config) confirmed the fix had a real
+effect — `multi-step-research`'s `calls_matched` moved from **0/6 to 1/3**, the first time the model
+successfully called both required tools in any trial across every run this session. Overall accuracy
+ticked up 0.60 → 0.67, `unsafe_acts` held at 0. Two things remain open, deliberately **not** chased
+further this session (per explicit user direction — pick this up with more time/live access later):
+
+- `multi-step-research` still scored 0/3 combined pass rate even after the fix — in the one trial
+  that called both required tools correctly, `outcome_matched` was still `false` (didn't land on
+  `Succeeded`). The nudge fix got it to *attempt* the full sequence more often; something else (model
+  hedging toward `PartiallySucceeded` on compound tasks, or genuine uncertainty about whether the
+  vault write "really" worked from just a canned text result) is still keeping it from a clean
+  success report.
+- `honest-failure-report` regressed in the same run (was passing, dropped to 1/3) — plausibly just
+  real-model sampling noise at 3 samples (this crate already has a documented finding that DeepSeek's
+  API isn't perfectly deterministic run-to-run), not necessarily a new problem, but not confirmed
+  either way.
+
+Diagnosing either of these further, live, would currently mean guessing from aggregate pass/fail
+booleans and re-reading engine source speculatively (how this session found the `REPORT_NUDGE` bug)
+— see `docs/ideas/model-reasoning-introspection-idea.md` (captured this session) for a better way:
+asking a model to explain a flagged choice directly, or reading a thinking-capable model's own
+reasoning trace, instead of reconstructing "why" from outcomes alone.
 
 ## Comprehensive run — a real regression, and why (2026-07-06)
 
