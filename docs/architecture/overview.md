@@ -64,7 +64,8 @@ Bottom-up (each depends roughly on those above it):
 |---|---|---|
 | Types | [`common`](../../crates/common/ARCHITECTURE.md) | Shared vocabulary: provenance, capability, dispatch, event, model, config, proposal. No logic. |
 | Inference | [`provider`](../../crates/provider/ARCHITECTURE.md) | The `Provider` narrow waist + `MockProvider`. No HTTP. |
-| Inference | [`provider-deepseek`](../../crates/provider-deepseek/ARCHITECTURE.md) | Concrete DeepSeek backend (the only crate that talks to a model). |
+| Inference | [`provider-deepseek`](../../crates/provider-deepseek/ARCHITECTURE.md) | Concrete DeepSeek backend — the wired production backend (`cli`'s dependency). |
+| Inference | [`provider-openrouter`](../../crates/provider-openrouter/ARCHITECTURE.md) | Concrete OpenRouter backend — many models behind one API/key, for running concurrent evaluations without one provider's rate limit as the bottleneck. Scaffolded ahead of the heuristics tuning engine; not wired into any binary yet. |
 | Vault | [`vault`](../../crates/vault/ARCHITECTURE.md) | Turbovault adapter: provenance writes + hash-join attribution (loop-breaking). |
 | Decide | [`dispatcher`](../../crates/dispatcher/ARCHITECTURE.md) | classify (LLM) → guards (deterministic, downgrade-only) → `DispatchDecision`. |
 | Act | [`executor`](../../crates/executor/ARCHITECTURE.md) | The agent loop: drive a `Provider` over a `ToolRuntime` to a `Report`. MCP-agnostic. |

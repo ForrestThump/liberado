@@ -1,7 +1,10 @@
 # liberado-provider-deepseek — the concrete inference backend
 
 A thin [`Provider`](../provider/ARCHITECTURE.md) implementation for DeepSeek's OpenAI-compatible
-chat API, over `reqwest`. The only crate that talks HTTP to a model.
+chat API, over `reqwest` — the wired production backend (`liberado-cli`'s dependency). As of
+[`liberado-provider-openrouter`](../provider-openrouter/ARCHITECTURE.md), no longer the only crate
+that talks HTTP to a model — that one exists to run many models concurrently through one API
+(scaffolded ahead of the heuristics tuning engine), not to replace this one.
 
 ## Surface
 

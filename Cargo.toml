@@ -54,6 +54,7 @@ liberado-config-loader = { path = "crates/config-loader" }
 liberado-conversation-store = { path = "crates/conversation-store" }
 liberado-provider = { path = "crates/provider" }
 liberado-provider-deepseek = { path = "crates/provider-deepseek" }
+liberado-provider-openrouter = { path = "crates/provider-openrouter" }
 liberado-vault = { path = "crates/vault" }
 liberado-dispatcher = { path = "crates/dispatcher" }
 liberado-executor = { path = "crates/executor" }

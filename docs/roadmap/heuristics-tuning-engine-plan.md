@@ -160,7 +160,14 @@ architecture idea the way there is for a scored prompt candidate.
    a `ScenarioOutcome` — the actual "scoring shape" a future tuner needs, not just the scenario data
    types. `main.rs` calls it instead of re-deriving the classification; behavior is unchanged (same
    printed output), now backed by 5 unit tests on `score()` itself.
-2. `liberado-provider-openrouter` — implement `Provider`, mirroring `provider-deepseek`.
+2. ✅ **Done (2026-07-03).** `liberado-provider-openrouter` — implements `Provider`, mirroring
+   `provider-deepseek`'s shape almost exactly (same OpenAI-compatible wire format). `from_env()`
+   reads `OPENROUTER_API_KEY`/`OPENROUTER_MODEL`. Not yet wired into any binary — scaffolded only.
+   **Deliberately not de-duplicated against `provider-deepseek`** (near-identical translation
+   logic in both crates) — see the new crate's `lib.rs` module doc comment for why and when to
+   revisit. Live smoke test is `#[ignore]`d pending a session where the key is actually visible to
+   the shell running the tests (env vars set after a long-lived shell starts don't propagate to it
+   on Windows without a restart).
 3. `liberado-heuristics-tuner` v1: dispatcher-only, cold-start + mutation candidate generation, the
    inner local-search loop with a small beam, budget-capped, scored via `liberado-eval`'s existing
    dimensions.
