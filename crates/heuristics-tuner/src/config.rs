@@ -11,6 +11,14 @@
 //! two. The call budget and generation count are deliberately a human's per-session decision, not
 //! a fixed global default (`docs/roadmap/heuristics-tuning-engine-plan.md`) — the values here are
 //! cheap-to-run starting points, not a target to converge on.
+//!
+//! **Scoring model(s) and sample count** (`docs/roadmap/heuristics-tuning-engine-plan.md`'s
+//! "Real-model verification" findings): real model APIs aren't perfectly deterministic run-to-run
+//! even at temperature 0, so a single sample against a single model isn't a fully trustworthy
+//! signal. `scoring_models` can list several OpenRouter model slugs and `samples_per_scenario` can
+//! sample each of them more than once; both default to today's cheap single-model, single-sample
+//! behavior unless explicitly turned up — this is a deliberate, visible cost decision the user
+//! makes, not a silent multiplier on the existing defaults.
 
 use std::sync::Arc;
 
@@ -21,10 +29,11 @@ use serde::Deserialize;
 /// Plays "the real dispatcher" during scoring — defaults to OpenRouter's slug for a small, cheap
 /// DeepSeek model, so a winning prompt is likely to transfer without every run being expensive.
 /// Spot-checked against OpenRouter's own site as of this writing; OpenRouter can rename slugs,
-/// which is exactly why this is overridable (via `tuner.toml` or `TUNER_SCORING_MODEL`) rather
+/// which is exactly why this is overridable (via `tuner.toml` or `TUNER_SCORING_MODELS`) rather
 /// than hardcoded deeper in the logic.
 pub const DEFAULT_SCORING_MODEL: &str = "deepseek/deepseek-v4-flash";
 
+const DEFAULT_SAMPLES_PER_SCENARIO: usize = 1;
 const DEFAULT_BEAM_WIDTH: usize = 2;
 const DEFAULT_COLD_STARTS_PER_GENERATION: usize = 1;
 const DEFAULT_MUTATIONS_PER_CANDIDATE: usize = 2;
@@ -35,8 +44,12 @@ const TUNER_CONFIG_FILE: &str = "tuner.toml";
 
 /// Everything a tuning session needs, resolved once at startup.
 pub struct TunerConfig {
-    pub scoring_provider: Arc<dyn Provider>,
+    /// One `OpenRouterProvider` per configured scoring model slug — a candidate is scored against
+    /// every one of these (see `samples_per_scenario` for how many times against each).
+    pub scoring_providers: Vec<Arc<dyn Provider>>,
     pub meta_provider: Arc<dyn Provider>,
+    /// How many times each scenario is sampled per scoring model.
+    pub samples_per_scenario: usize,
     pub beam_width: usize,
     pub cold_starts_per_generation: usize,
     pub mutations_per_candidate: usize,
@@ -54,8 +67,9 @@ pub enum ConfigError {
 /// rest at their code defaults, same convention as `topology.toml`/`policy.toml`/`tuning.toml`.
 #[derive(Debug, Default, Deserialize)]
 struct TunerFileConfig {
-    scoring_model: Option<String>,
+    scoring_models: Option<Vec<String>>,
     meta_model: Option<String>,
+    samples_per_scenario: Option<usize>,
     beam_width: Option<usize>,
     cold_starts_per_generation: Option<usize>,
     mutations_per_candidate: Option<usize>,
@@ -65,25 +79,34 @@ struct TunerFileConfig {
 
 impl TunerConfig {
     /// Resolve config from `tuner.toml` (if present) layered under environment variables, then
-    /// build the two `OpenRouterProvider`s. `OPENROUTER_API_KEY` is the only required value.
+    /// build the `OpenRouterProvider`s. `OPENROUTER_API_KEY` is the only required value.
     pub fn load() -> Result<Self, ConfigError> {
         let api_key = std::env::var("OPENROUTER_API_KEY").map_err(|_| ConfigError::MissingApiKey)?;
         let file = load_file_config();
 
-        let scoring_model = env_string("TUNER_SCORING_MODEL")
-            .or(file.scoring_model.clone())
-            .unwrap_or_else(|| DEFAULT_SCORING_MODEL.to_string());
+        let scoring_models = resolve_model_list(
+            "TUNER_SCORING_MODELS",
+            file.scoring_models.clone(),
+            DEFAULT_SCORING_MODEL,
+        );
         let meta_model = env_string("TUNER_META_MODEL")
             .or(file.meta_model.clone())
-            .unwrap_or_else(|| scoring_model.clone());
+            .unwrap_or_else(|| scoring_models[0].clone());
 
-        let scoring_provider: Arc<dyn Provider> =
-            Arc::new(OpenRouterProvider::new(api_key.clone(), scoring_model));
+        let scoring_providers: Vec<Arc<dyn Provider>> = scoring_models
+            .into_iter()
+            .map(|model| Arc::new(OpenRouterProvider::new(api_key.clone(), model)) as Arc<dyn Provider>)
+            .collect();
         let meta_provider: Arc<dyn Provider> = Arc::new(OpenRouterProvider::new(api_key, meta_model));
 
         Ok(Self {
-            scoring_provider,
+            scoring_providers,
             meta_provider,
+            samples_per_scenario: resolve_usize(
+                "TUNER_SAMPLES_PER_SCENARIO",
+                file.samples_per_scenario,
+                DEFAULT_SAMPLES_PER_SCENARIO,
+            ),
             beam_width: resolve_usize("TUNER_BEAM_WIDTH", file.beam_width, DEFAULT_BEAM_WIDTH),
             cold_starts_per_generation: resolve_usize(
                 "TUNER_COLD_STARTS_PER_GENERATION",
@@ -139,6 +162,28 @@ fn resolve_usize(var: &str, file_value: Option<usize>, default: usize) -> usize 
         .unwrap_or(default)
 }
 
+/// Resolve a list-valued tunable (scoring models): the env var (comma-separated) wins if it parses
+/// to a non-empty list, else the file's list if non-empty, else a single-element list of `default`.
+fn resolve_model_list(var: &str, file_value: Option<Vec<String>>, default: &str) -> Vec<String> {
+    if let Ok(raw) = std::env::var(var) {
+        let list: Vec<String> = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect();
+        if !list.is_empty() {
+            return list;
+        }
+    }
+    if let Some(list) = file_value {
+        if !list.is_empty() {
+            return list;
+        }
+    }
+    vec![default.to_string()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,22 +199,48 @@ mod tests {
     }
 
     #[test]
+    fn resolve_model_list_falls_back_to_single_default() {
+        assert_eq!(
+            resolve_model_list("TUNER_TEST_MODELS_DOES_NOT_EXIST", None, "deepseek/default"),
+            vec!["deepseek/default".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_model_list_prefers_file_value_over_default() {
+        let file_value = Some(vec!["a/b".to_string(), "c/d".to_string()]);
+        assert_eq!(
+            resolve_model_list("TUNER_TEST_MODELS_DOES_NOT_EXIST", file_value, "deepseek/default"),
+            vec!["a/b".to_string(), "c/d".to_string()]
+        );
+    }
+
+    #[test]
     fn file_config_with_no_fields_set_parses_as_all_none() {
         let cfg: TunerFileConfig = toml::from_str("").unwrap();
-        assert!(cfg.scoring_model.is_none());
+        assert!(cfg.scoring_models.is_none());
+        assert!(cfg.samples_per_scenario.is_none());
         assert!(cfg.call_budget.is_none());
     }
 
     #[test]
-    fn file_config_parses_partial_overrides() {
+    fn file_config_parses_partial_overrides_including_model_array() {
         let cfg: TunerFileConfig = toml::from_str(
             r#"
-            scoring_model = "some/model"
+            scoring_models = ["deepseek/deepseek-v4-flash", "anthropic/claude-haiku-latest"]
+            samples_per_scenario = 3
             call_budget = 999
             "#,
         )
         .unwrap();
-        assert_eq!(cfg.scoring_model.as_deref(), Some("some/model"));
+        assert_eq!(
+            cfg.scoring_models,
+            Some(vec![
+                "deepseek/deepseek-v4-flash".to_string(),
+                "anthropic/claude-haiku-latest".to_string()
+            ])
+        );
+        assert_eq!(cfg.samples_per_scenario, Some(3));
         assert_eq!(cfg.call_budget, Some(999));
         assert!(cfg.beam_width.is_none());
     }

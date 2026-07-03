@@ -247,11 +247,23 @@ architecture idea the way there is for a scored prompt candidate.
    folded in alongside the fixed `liberado-eval` scenarios. This is the mechanism that actually
    delivers the "re-adapts when you add a tool" goal, not just "gets slightly better at 19 fixed
    goals" — identified as the real next step after reviewing the first live run's results.
-8. **Multi-sample scoring** (see "Real-model verification — findings (2026-07-04)" below) — score
-   each scenario across N samples per candidate instead of one, to average out real-model run-to-run
-   noise observed during verification. A config knob (sample count), not a redesign. Worth doing
-   before or alongside item 7 — noisy scoring undermines confidence in any tuning run regardless of
-   scenario source.
+8. ✅ **Done (2026-07-04).** Multi-sample, multi-model scoring — each scenario is now sampled
+   `samples_per_scenario` times against every configured model in `scoring_models` (both default to
+   today's single-sample, single-model behavior unless explicitly turned up in `tuner.toml` or via
+   `TUNER_SAMPLES_PER_SCENARIO`/`TUNER_SCORING_MODELS`). `ScoredScenario` now carries a
+   `trials: Vec<ScenarioTrial>` (one per model×sample) instead of a single outcome. The aggregation
+   is deliberately asymmetric: `unsafe_acts` counts **scenarios where any trial was unsafe** (never
+   averaged away — the safety-critical property this item exists to preserve), while
+   `accuracy`/`safe_default_rate` are legitimate mean pass rates across trials. The rubric gained a
+   "per-model consistency" section, shown only for scenarios with mixed results, so a human can see
+   whether a candidate is robust across models or overfit to one. 38 unit tests (up from 30) cover
+   the new aggregation, list-config resolution, and per-model formatting; the live end-to-end test
+   still passes with the new signature. `#[derive(Clone, Copy)]` added to `liberado_eval::Scenario`
+   as the small prerequisite that let one scenario be reused across multiple (model, sample) trials
+   without an explicit clone at each use site. Live verification with a real multi-model config was
+   not possible this session (`OPENROUTER_API_KEY` visibility to this shell is intermittent, as it
+   has been throughout this crate's build) — deferred to whenever the key is next visible, same
+   posture as the original v1 build.
 
 ## First real run — findings (2026-07-03)
 

@@ -112,8 +112,13 @@ pub fn select_beam(scored: &[(Candidate, CandidateFitness)], beam_width: usize) 
 pub async fn run_tuner(config: TunerConfig) -> TunerResult {
     let budget = Budget::new(config.call_budget);
 
-    let baseline_fitness =
-        score_candidate(DEFAULT_SYSTEM_PROMPT, config.scoring_provider.clone(), &budget).await;
+    let baseline_fitness = score_candidate(
+        DEFAULT_SYSTEM_PROMPT,
+        &config.scoring_providers,
+        config.samples_per_scenario,
+        &budget,
+    )
+    .await;
     let baseline = Candidate {
         prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
         origin: CandidateOrigin::ColdStart,
@@ -166,8 +171,13 @@ pub async fn run_tuner(config: TunerConfig) -> TunerResult {
 
         let mut scored = Vec::with_capacity(pool.len());
         for candidate in pool {
-            let fitness =
-                score_candidate(&candidate.prompt, config.scoring_provider.clone(), &budget).await;
+            let fitness = score_candidate(
+                &candidate.prompt,
+                &config.scoring_providers,
+                config.samples_per_scenario,
+                &budget,
+            )
+            .await;
             scored.push((candidate, fitness));
         }
 

@@ -5,11 +5,29 @@
 # OPENROUTER_API_KEY is never read from here — it's a secret, stays in the environment
 # (Decision 10). Every value below can also be set as an env var of the same name, uppercased and
 # prefixed TUNER_ (e.g. TUNER_CALL_BUDGET) — an env var wins over this file for a one-off override.
+# TUNER_SCORING_MODELS is comma-separated when set as an env var (e.g.
+# "deepseek/deepseek-v4-flash,anthropic/claude-haiku-latest").
 
-# scoring_model = "deepseek/deepseek-v4-flash"  # plays "the real dispatcher" during scoring
-# meta_model = "deepseek/deepseek-v4-flash"      # proposes/mutates prompt text; defaults to scoring_model if unset
-# beam_width = 2                                 # candidates kept per generation
-# cold_starts_per_generation = 1                 # fresh, independent restarts per generation (the local-maxima mitigation)
-# mutations_per_candidate = 2                    # mutations per beam member
-# max_generations = 3                            # outer-loop cap
-# call_budget = 350                              # total LLM calls (scoring + meta) for the whole session
+# scoring_models = ["deepseek/deepseek-v4-flash"]
+# Plays "the real dispatcher" during scoring. List more than one to check whether a candidate
+# prompt is robust across models or overfit to one, e.g.:
+#   scoring_models = ["deepseek/deepseek-v4-flash", "anthropic/claude-haiku-latest", "x-ai/grok-4.3", "meta-llama/llama-3.3-70b-instruct"]
+# (slugs spot-checked July 2026 — OpenRouter can rename them; openrouter.ai/models is the source
+# of truth.)
+
+# meta_model = "deepseek/deepseek-v4-flash"
+# Proposes/mutates prompt text; defaults to the first scoring model if unset.
+
+# samples_per_scenario = 1
+# How many times each scenario is sampled per model. Real model APIs aren't perfectly
+# deterministic run-to-run even at temperature 0 (see
+# docs/roadmap/heuristics-tuning-engine-plan.md's "Real-model verification" findings) — raising
+# this (e.g. to 3-5) makes the accuracy/safety numbers a meaningfully averaged signal instead of a
+# single noisy sample. Cost multiplies directly: samples_per_scenario x number of scoring_models x
+# ~19 scenarios per candidate scored, so raise call_budget accordingly.
+
+# beam_width = 2                       # candidates kept per generation
+# cold_starts_per_generation = 1       # fresh, independent restarts per generation (the local-maxima mitigation)
+# mutations_per_candidate = 2          # mutations per beam member
+# max_generations = 3                  # outer-loop cap
+# call_budget = 350                    # total LLM calls (scoring + meta) for the whole session

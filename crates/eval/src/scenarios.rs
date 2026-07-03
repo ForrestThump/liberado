@@ -27,6 +27,11 @@ impl ExpectKind {
     }
 }
 
+/// Every field is `&'static`/`Copy`-able, so this is `Copy` — a scenario can cheaply be reused
+/// across multiple dispatch calls (e.g. the heuristics tuner sampling one scenario several times
+/// across models, `crates/heuristics-tuner/src/scoring.rs`) without an explicit `.clone()` at each
+/// use site.
+#[derive(Clone, Copy)]
 pub struct Scenario {
     pub name: &'static str,
     pub goal: &'static str,
