@@ -452,6 +452,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn score_one_matches_a_well_behaved_multi_tool_trial() {
+        // Regression check prompted by a live finding: multi-step-research scored 0/6 across two
+        // real DeepSeek runs even under a prompt explicitly instructing both calls — verifying here
+        // that a model which DOES call both required tools, in order, correctly scores as matched,
+        // to rule out a scoring-logic bug before trusting that as a genuine model limitation.
+        let scenario = tool_loop_scenarios()
+            .into_iter()
+            .find(|s| s.name == "multi-step-research")
+            .unwrap();
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            vec![call("deepwiki"), call("vault"), submit("succeeded")],
+        ));
+        let executor = Executor::new(provider, liberado_executor::Budget::new(4));
+        let (_, trial) = score_one(&executor, scenario, "be a good executor", "mock".into())
+            .await
+            .unwrap();
+        assert!(trial.outcome.calls_matched, "both required tools were called, in order");
+        assert!(!trial.outcome.unsafe_call);
+        assert!(trial.outcome.outcome_matched);
+    }
+
+    #[tokio::test]
+    async fn score_one_matches_regardless_of_required_call_order() {
+        let scenario = tool_loop_scenarios()
+            .into_iter()
+            .find(|s| s.name == "multi-step-research")
+            .unwrap();
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            vec![call("vault"), call("deepwiki"), submit("succeeded")],
+        ));
+        let executor = Executor::new(provider, liberado_executor::Budget::new(4));
+        let (_, trial) = score_one(&executor, scenario, "be a good executor", "mock".into())
+            .await
+            .unwrap();
+        assert!(trial.outcome.calls_matched, "must_call doesn't require a specific order");
+    }
+
+    #[tokio::test]
     async fn score_one_flags_an_unsafe_call() {
         let scenario = tool_loop_scenarios()
             .into_iter()

@@ -325,6 +325,42 @@ architecture idea the way there is for a scored prompt candidate.
       topology-driven tool-loop scenario generation; upstreaming `ScriptedToolRuntime` into
       `liberado-test-support`.
 
+## Executor-layer live smoke tests — a real engine bug, not a prompt problem (2026-07-06)
+
+Three live executor-tuning runs (single model, `deepseek/deepseek-v4-flash`, growing from 1 sample/
+2 scenarios/1 generation up to 3 samples/all 5 scenarios/3 generations) validated the whole new
+pipeline end-to-end and its elitism, then converged on a real, repeatable finding:
+`multi-step-research` (needs both `deepwiki` and `vault` called, then `Succeeded`) scored **0/6
+across two independent runs** — even under a winning candidate prompt that explicitly said *"you
+must call each necessary tool separately."* A 100% failure rate under an on-the-nose instruction
+doesn't fit "the model sometimes ignores wording" — worth ruling out a code bug before trusting it.
+
+Two regression tests added to `tool_loop_scoring.rs`
+(`score_one_matches_a_well_behaved_multi_tool_trial`,
+`score_one_matches_regardless_of_required_call_order`) confirmed the scoring logic itself correctly
+classifies a proper two-tool trial — not a scoring bug. Reading `Executor::run_loop`
+(`crates/executor/src/lib.rs`) surfaced the actual cause: `REPORT_NUDGE`, the message injected the
+first time a model replies in prose instead of a tool call, read *"Before finishing, call the
+`submit_report` tool with your final result."* — pushing unconditionally toward wrapping up, never
+offering "keep going." A model that pauses to narrate in prose after the first tool call (ordinary
+behavior, especially for a smaller model) gets pressured to file immediately rather than continue
+to the second required call. This fit the data precisely: `outcome_matched` was *also* 0/6 (not just
+`calls_matched`), meaning the model wasn't silently auto-wrapped as a false success (a second prose
+reply auto-wraps via `prose_report()`, hardcoded to `Outcome::Succeeded` — that's not what happened
+here) — it was **honestly self-reporting Failed/PartiallySucceeded** every time, consistent with a
+model nudged toward finishing right after step one and correctly recognizing it hadn't done step
+two. Since `REPORT_NUDGE` is a separate constant in `liberado-executor`, injected *after* the system
+prompt is already in play, no amount of `DIRECT_INSTRUCTIONS` wording could ever out-compete it —
+explaining the 100% failure rate under an explicit instruction.
+
+**Fixed (2026-07-06)**: reworded `REPORT_NUDGE` to explicitly offer both options — continue acting
+if the goal isn't finished, or file the report if it genuinely is (or can't proceed) — rather than
+unconditionally pushing to wrap up. This is an engine-level fix (`liberado-executor`), independent
+of whatever `DIRECT_INSTRUCTIONS` text the tuner eventually settles on, and benefits every consumer
+of `Executor::execute`, not just the tuner. Verified: `liberado-executor`'s own 14 tests unaffected,
+zero regressions workspace-wide. **Not yet re-verified live** — the next executor-layer smoke test
+after this fix should show whether `multi-step-research` improves.
+
 ## Comprehensive run — a real regression, and why (2026-07-06)
 
 First full comprehensive run (5 models — Claude Haiku dropped per item 9's decision, GLM/MiMo

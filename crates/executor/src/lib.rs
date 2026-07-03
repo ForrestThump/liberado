@@ -84,9 +84,17 @@ pub const SUBMIT_REPORT_TOOL: &str = "submit_report";
 /// `small_fanout`.
 pub const DEFAULT_MAX_TURNS: u32 = 8;
 
-/// Appended once if the model answers in prose without filing a `Report`, asking it to do so.
-const REPORT_NUDGE: &str = "Before finishing, call the `submit_report` tool with your final \
-result. Do not reply in plain text.";
+/// Appended once if the model answers in prose without filing a `Report`. Deliberately offers
+/// *both* options (keep going, or finish) rather than unconditionally pushing to wrap up — an
+/// earlier wording ("Before finishing, call `submit_report`...") biased a model that paused to
+/// narrate mid-plan toward prematurely filing instead of continuing a genuinely multi-step goal, a
+/// real live finding from `liberado-heuristics-tuner`'s executor-layer tuning (a scenario needing
+/// two distinct tool calls scored 0/6 across two independent runs, even under system prompts that
+/// explicitly instructed both calls — the nudge's own wording was working against the prompt at
+/// exactly the moment it mattered, docs/roadmap/heuristics-tuning-engine-plan.md).
+const REPORT_NUDGE: &str = "If the goal isn't finished yet, continue by calling whatever tool you \
+still need — don't stop partway through a multi-step plan. Once it's actually done (or you \
+genuinely cannot proceed), call `submit_report` with your final result. Do not reply in plain text.";
 
 /// The tools available for a run plus how to execute them. Implemented by the (future)
 /// turbomcp-backed runtime in production and by a mock in tests; the engine depends only on this.
