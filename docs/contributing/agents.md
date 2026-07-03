@@ -1,7 +1,8 @@
 ﻿# Liberado — Agent & Build Guide
 
 This file is the single source of truth for agents and contributors on how to build, run, and
-extend Liberado. Read `ARCHITECTURE.md` for the system overview and current status, and
+extend Liberado. Read [`docs/architecture/overview.md`](../architecture/overview.md) for the system
+overview and current status, and
 [`development-workflow.md`](development-workflow.md) for *how work here actually gets done* —
 research/plan/implement/test/document/commit discipline, subagent delegation patterns, and the
 project's governing principles. Read that one before starting non-trivial work on a new branch.
@@ -154,8 +155,8 @@ zones/grants/MCPs), or the first actionable error (e.g. a grant referencing an u
 `ExecuteMcp` naming an MCP absent from `topology.mcps`, or a `secret_refs` entry with no env var).
 With no config present it correctly reports the missing `vault_path`.
 
-Commented starter files live in [`config.example/`](config.example/) — copy them to your config dir
-and edit.
+Commented starter files live in [`config.example/`](../../config.example/) — copy them to your
+config dir and edit.
 
 ---
 
@@ -188,12 +189,14 @@ The server listens on `0.0.0.0:4201` (LAN-accessible). Set `LIBERADO_PORT` to ch
 | Endpoint                    | Description                                      |
 |-----------------------------|--------------------------------------------------|
 | `GET /api/status`           | Daemon state, uptime, dispatcher/orchestrator    |
+| `GET /api/catalog`          | Live MCP capability catalog (`{"mcps":[{name,description,consequence,tool_count,tool_names}]}`) — the same shared `Arc<CapabilityCatalog>` the dispatcher routes against. |
 | `GET /api/reactions?limit=N`| Recent reaction events (default 20)              |
 | `GET /api/vault`            | Vault root path and watcher info                 |
 | `POST /api/chat`            | Conversational agent — `{"message":"…","session"?:"…"}` → `{"reply":"…","session":"…"}`. Multi-turn, session-keyed and persisted (rehydrated per turn from the `ConversationStore`); omit `session` to start a new conversation. Tool-using. Needs `DEEPSEEK_API_KEY`; uses the MCPs declared in `topology.toml` (`[[mcps]]`) for tools. |
 | `GET`/`POST /api/chat/stream` | Streaming chat (`text/event-stream`) — the shared client/SSE contract (`docs/reference/api.md`). Events: `session` (first), `token`, `tool`, `tool_result`, `done`, `failed`. `POST` (JSON body, native) and `GET ?message=…&session=…` (browser `EventSource`). Closing the stream cancels the turn (persists nothing). |
 | `GET /api/conversations`    | List conversation headers (`[{id,title,created_at}]`, newest first). Needs chat enabled. |
 | `GET /api/conversations/{id}` | One conversation's full message history (`{"messages":[…]}`); `404` if absent. |
+| `PATCH /api/conversations/{id}` | Rename a conversation — `{"title":"…"}` → `200`; `404` if absent, `503` if chat is disabled. |
 | `GET /`                     | Dioxus WASM frontend (served from dist/)         |
 
 ### Building the WASM frontend
@@ -277,4 +280,5 @@ Config is a **mesh**: each file (`topology.toml`, `policy.toml`, `tuning.toml`) 
 
 Later layers win at the TOML table/key level. Per-value provenance is reported by `liberado config check`.
 
-See `config-plan.md` for the full rationale and next-step notes.
+See [`docs/specs/liberado-config-spec.md`](../specs/liberado-config-spec.md) for the full rationale,
+file layout, and validation contract.

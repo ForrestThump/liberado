@@ -1,8 +1,17 @@
 ﻿# Liberado — Handoff
 
-Current-state handoff for the next session. For the full system map read `ARCHITECTURE.md`; for
-build/run read `AGENTS.md`; for the chat API read `docs/reference/api.md`; for the rationale behind any
-"Decision N" read `liberado-architecture-decisions.md`.
+**Point-in-time snapshot from the 2026-06-26 planning session — not a living doc.** Everything below
+("What's done", "Known issues", "What's next") describes state as of that date; Phase 1 and Phase 2
+have since shipped in full (see [`docs/roadmap/current.md`](../roadmap/current.md)) and the MCP
+tool-name `:` bug noted below is long fixed. Kept for the planning rationale in "Matured vision" and
+"Working patterns"/"Pitfalls learned", which are still accurate. For current state, use
+[`docs/roadmap/current.md`](../roadmap/current.md); for the durable process doc, use
+[`docs/contributing/development-workflow.md`](../contributing/development-workflow.md).
+
+For the full system map read [`docs/architecture/overview.md`](../architecture/overview.md); for
+build/run read [`docs/contributing/agents.md`](../contributing/agents.md); for the chat API read
+`docs/reference/api.md`; for the rationale behind any "Decision N" read
+`liberado-architecture-decisions.md`.
 
 > Note: this is the single handoff file. There is **no** uppercase `HANDOFF.md` — on Windows
 > (case-insensitive filesystem) the two names collide, so keep it lowercase. (An earlier stub here

@@ -1,7 +1,7 @@
 [package]
 name = "liberado-config-loader"
 version = "0.1.0"
-description = "ConfigSource trait + ChainLoader for layered Liberado configuration loading (step 2 of config-plan.md)."
+description = "ConfigSource trait + ChainLoader for layered Liberado configuration loading."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

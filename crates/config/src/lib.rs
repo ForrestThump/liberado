@@ -28,7 +28,7 @@ use thiserror::Error;
 /// or `None` if that section fell back to its built-in [`Default`].
 ///
 /// Returned alongside [`Config`] by [`load_config`] so callers can report
-/// per-value provenance in diagnostics (Decision 14 / config-plan.md step 5).
+/// per-value provenance in diagnostics (Decision 14; see `docs/specs/liberado-config-spec.md`).
 #[derive(Debug, Clone)]
 pub struct ConfigProvenance {
     /// The source file for `[topology]` values, or `None` if the file was absent.

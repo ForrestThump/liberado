@@ -13,11 +13,13 @@ actual `use` sites in the crates flagged as "should be generic" (`executor`, `mc
 `conversation-store`, `provider`) to see exactly which types cross each edge — not just that an
 edge exists.
 
-**Status**: Findings recorded 2026-07-01. Items 1–2 (below) are the safe, mechanical half and are
-**done** — verified with a full clean `cargo build --workspace` + `cargo test --workspace` (zero
-failures). Items 3–5 are a real architectural change (splitting `common`, moving traits between
-crates) that ripples through most crates' `Cargo.toml`s and are **deferred pending a deliberate
-pass** — not yet started.
+**Status**: Findings recorded 2026-07-01. Items 1, 2, and 4 are **done** (verified with a full clean
+`cargo build --workspace` + `cargo test --workspace`, zero failures); item 5 is **partially
+resolved** (the effect the finding wanted is achieved, just not via its originally-proposed
+mechanism — see item 5's own status note). **Item 3 — splitting `liberado-common` — is the sole
+fully open item**, deferred pending a deliberate pass since it's the highest-effort,
+most call-site-touching change of the five and benefits from the boundaries found while doing 4–5
+(see "Recommended sequencing" at the bottom).
 
 ---
 

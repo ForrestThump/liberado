@@ -238,8 +238,11 @@ routes to hook webhooks. **This is superseded** by Turbovault's native subscript
   standardized event payload to hook webhooks directly — that part of §5 stands. Only the
   vault-watching emitter is replaced.
 
-`life-os-architecture.md` §5 and §6 should be rewritten to reflect this (separate task — see the
-"Reconcile emitter section" thread).
+`life-os-architecture.md` §5 has since been rewritten to reflect this (the "hand-built
+`vault-change-emitter`" is marked superseded there, matching the single-subscription,
+central-attribution design above). Note that `life-os-architecture.md` as a whole now carries a
+superseded-by header pointing at `docs/architecture/overview.md` — treat this concurrency spec, not
+that older vision doc, as the source of truth for the emitter design.
 
 ### 8.1 Upstream dependency ladder (and fallbacks if it slips)
 

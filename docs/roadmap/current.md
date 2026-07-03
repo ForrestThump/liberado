@@ -1,8 +1,8 @@
 ﻿# Liberado — Roadmap
 
-Forward-looking work, beyond what `ARCHITECTURE.md` marks as built. Ordered loosely by priority
-within each section. This is a living doc — promote items up as they're picked, and record *why*
-something is deferred so the reasoning isn't lost.
+Forward-looking work, beyond what [`docs/architecture/overview.md`](../architecture/overview.md)
+marks as built. Ordered loosely by priority within each section. This is a living doc — promote
+items up as they're picked, and record *why* something is deferred so the reasoning isn't lost.
 
 ## The phased roadmap
 
@@ -100,12 +100,34 @@ always-on.
     checking the dispatcher's pre-flight guard only ever applied to the seed call.
     `execute_approved` is deliberately left ungated (approval is already the authorization). 5 new
     integration tests in `crates/orchestrator/tests/orchestrate.rs` prove the gap is closed.
-- **Proposal workflow (Decision 11)** — ✅ *done (emit AND approve→execute landed, June 24, 2026).*
+  - ✅ **Runtime-gated proposals now land in the vault — done (2026-07-02).** That runtime gate's
+    downgraded proposals used to write to a data-dir path nothing ever read (a dead end — see
+    [hardening-audit-2026-07-02.md](hardening-audit-2026-07-02.md) item 3). `RiskGatedToolRuntime`'s
+    `proposals_dir` now means the vault's own `proposals/` directory, so a runtime-gated downgrade
+    flows through the exact same approve→execute pipeline pre-flight proposals already use — proven
+    end-to-end by `daemon`'s
+    `runtime_gated_downgrade_lands_in_the_vault_and_executes_once_approved` test.
+  - ✅ **Proposal integrity signing — done (2026-07-02).** Every `Proposal` now carries an
+    HMAC-SHA256 `integrity` signature (`ProposalSigner`, per-installation key) over its immutable
+    fields, verified before execution in `handle_proposal_change` and again (defense-in-depth) in
+    `execute_approved`. Closes hardening-audit item 2 (action substitution/tampering detection).
+    Item 1 (writer-identity verification — *who* flipped `status: approved`) stays open; it needs
+    OS-level MCP process isolation or an out-of-band approval channel, not a code patch — see that
+    audit doc's item 1 for why.
+- **Proposal workflow (Decision 11)** — ✅ *done (emit AND approve→execute landed, June 24, 2026;
+  integrity signing + vault-routed runtime proposals added 2026-07-02).*
   The full propose→approve→execute loop is closed: a human `status: approved` edit on a
-  `proposals/<id>.md` note is picked up by the daemon, executed via the orchestrator with the
-  proposal's `correlation_id`, and flipped to `status: done`. **Remaining:** broaden emit beyond the
-  concrete-tool-call case (empty-seed `ExecuteDirect`, `DispatchSubagent`, the magnitude gate),
-  which still downgrade to `Clarify`.
+  `proposals/<id>.md` note is picked up by the daemon, verified for integrity, executed via the
+  orchestrator with the proposal's `correlation_id`, and flipped to `status: done`. **Remaining:**
+  broaden emit beyond the concrete-tool-call case (empty-seed `ExecuteDirect`, `DispatchSubagent`,
+  the magnitude gate), which still downgrade to `Clarify`.
+- **Crate hygiene + hardening passes (2026-07-01 to 2026-07-02)** — three hygiene tiers (test-mock
+  dedup, `RuntimeFactory` relocation to `liberado-executor`, new `liberado-config` crate extracted
+  from `liberado-bootstrap`) plus a hardening audit (proposal-integrity items above). Full writeups:
+  [hygiene-audit-2026-07-02.md](hygiene-audit-2026-07-02.md),
+  [hardening-audit-2026-07-02.md](hardening-audit-2026-07-02.md),
+  [crate-modularity-audit.md](crate-modularity-audit.md) (a broader coupling/duplication sweep;
+  items 1, 2, 4, 5 done, item 3 — splitting `liberado-common` — still deferred).
 - **Zone write-class guard (§6 #2)** — downgrade agent writes to `proposal_only` / `human_only`
   zones to a Proposal (Decision 11), using the existing `WriteClass`.
 - **Catalog population** — the live daemon dispatches against an *empty* MCP catalog today; build the
@@ -114,6 +136,14 @@ always-on.
   registry.)
 - ✅ **Runtime tool gating** — done, see "Per-call runtime enforcement" above (same item, noted twice
   in this doc).
+- **Shared wire-type + slash-command extraction across clients** — TUI, WebUI, and CLI now share
+  `chat-client-contract`'s `ChatEvent`/SSE decoder and `liberado-commands`' slash-command dispatcher
+  instead of three hand-rolled copies. Full plan:
+  [tui-shared-code-extraction-plan.md](tui-shared-code-extraction-plan.md) (decoder unification
+  done; the plan's `ChatClient` trait adoption is a separate, still-deferred follow-up — see
+  `crate-modularity-audit.md` finding 2).
+- **WebUI flesh-out** — sidebar, MCP panel, markdown rendering, slash commands, and chat UX landed.
+  Design reference, not a live TODO list: [webui-flesh-out-plan.md](webui-flesh-out-plan.md).
 
 ## Nice to haves
 

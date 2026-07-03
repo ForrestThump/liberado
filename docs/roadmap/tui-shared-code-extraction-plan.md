@@ -1,5 +1,15 @@
 # Shared Wire-Type Extraction Plan
 
+**Status (2026-07-02)**: Steps 0–3 (repointing server/TUI/WebUI at `chat-client-contract`'s shared
+DTOs and `ChatEvent::from_sse_data()`) and the `SseDecoder`/`SseEvent` half of Step 4 are **done** —
+confirmed by [`crate-modularity-audit.md`](crate-modularity-audit.md) finding 2, which independently
+re-verified this while auditing crate coupling. The section 8 checkboxes below were the original
+targets and are left unedited as the plan's record of intent; treat the modularity audit as the
+up-to-date source on what's actually landed. **Still outstanding**: the `ChatClient` trait defined
+in `chat_client_contract::native` is implemented nowhere — TUI and CLI still use separate ad-hoc
+transport functions instead of one shared trait. That adoption is a distinct, deferred follow-up,
+not blocking anything else.
+
 Promote `chat-client-contract` from an orphan crate to the single source of truth for all
 wire DTOs shared between server, TUI, WebUI, and CLI. Fix type drift before it widens.
 

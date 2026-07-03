@@ -106,10 +106,26 @@ mirrors them as typed fields with matching `Default`s. Concretely, the model agg
 - **User-approval-gated config changes through the system** (agents proposing config edits for
   human approval). Out of scope for initial work — config changes are manual via `ssh`.
 
-## 7. Open Questions (non-blocking)
+## 7. Open Questions — resolved
 
-1. Config dir location: `/etc/liberado/` (system service) vs `~/.config/liberado/` (XDG user). Likely
-   support both with XDG precedence; pin when the daemon's service unit is written.
-2. Should `topology` and `policy` be separate files or two sections of one file? Separate keeps the
-   security surface isolated and easy to audit/permission (e.g. stricter file perms on `policy.toml`).
-   Leaning separate.
+Both questions below were open as of June 2026; the implementation (`crates/config`) has since
+settled them.
+
+1. ~~Config dir location: `/etc/liberado/` vs `~/.config/liberado/`~~ — **resolved**: `config_dir()`
+   uses the platform config dir (`dirs::config_dir()/liberado` — XDG on Linux, `%APPDATA%\liberado`
+   on Windows), with `LIBERADO_CONFIG_DIR` as an explicit override and a development-convenience
+   fallback that walks up from the running binary looking for a `config/` directory. No separate
+   `/etc/liberado/` path.
+2. ~~Separate files vs sections of one file~~ — **resolved as separate**: `topology.toml`,
+   `policy.toml`, and `tuning.toml` ship as three independent files, matching §3's layout.
+
+## 8. Gitignore policy
+
+Local deployment overrides are never committed; only the starter examples are:
+
+| Path | Git status | Purpose |
+|---|---|---|
+| `config.example/` | committed | Starter files |
+| `config/*.toml` | `.gitignore`d | Local deployment overrides |
+| `crates/*/config.example/` | committed | Per-crate examples |
+| `crates/*/config/*.toml` | `.gitignore`d | Per-crate deployment overrides |

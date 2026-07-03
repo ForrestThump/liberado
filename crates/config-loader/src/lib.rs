@@ -1,7 +1,7 @@
 //! # liberado-config-loader
 //!
 //! A thin config-loading foundation: [`ConfigSource`] trait and [`ChainLoader`] that
-//! merges multiple sources in precedence order (step 2 of config-plan.md).
+//! merges multiple sources in precedence order (see `docs/specs/liberado-config-spec.md`).
 //!
 //! The trait is generic — any source of TOML content (file, env var, compiled-in default)
 //! implements it. [`ChainLoader`] loads each source in sequence and merges the results at

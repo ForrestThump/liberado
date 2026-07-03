@@ -7,16 +7,16 @@ share everything.
 
 ```
               ┌──────────── liberado-server (HTTP + SSE) ──────────────────┐
-              │  /api/status   /api/reactions   /api/vault                  │
+              │  /api/status   /api/catalog   /api/reactions   /api/vault   │
               │  /api/chat (POST, non-streaming)                            │
               │  /api/chat/stream (POST/GET → text/event-stream)            │
-              │  /api/conversations   /api/conversations/{id}               │
+              │  /api/conversations   /api/conversations/{id} (GET/PATCH)   │
               └───────────────┬───────────────────────────┬────────────────┘
                               │                            │
                     fetch / EventSource            reqwest (native)
                               │                            │
                    ┌──────────┴─────────┐        ┌─────────┴──────────┐
-                   │  webui (Dioxus/WASM)│        │  tui (ratatui)     │  ← future
+                   │  webui (Dioxus/WASM)│        │  tui (ratatui)     │
                    └────────────────────┘        └────────────────────┘
 ```
 
@@ -49,6 +49,13 @@ can continue it. Conversation history is rehydrated from the store each turn and
 Two read endpoints back the conversation sidebar: **`GET /api/conversations`** lists every
 conversation header (`[{id,title,created_at}]`, newest first), and **`GET /api/conversations/{id}`**
 returns one conversation's full message history (`{"messages":[…]}`; `404` if it doesn't exist).
+**`PATCH /api/conversations/{id}`** with `{"title": "..."}` renames a conversation (`200` on success,
+`404` if it doesn't exist, `503` if chat is disabled).
+
+**`GET /api/catalog`** returns the live MCP capability catalog (`{"mcps":[{name,description,
+consequence,tool_count,tool_names}]}`) — the same `Arc<CapabilityCatalog>` the dispatcher routes
+against, not an independent snapshot. `tool_count`/`tool_names` are populated from the connected
+chat runtime's tools, grouped by MCP name.
 
 Tool events are **JSON-encoded** (not bare strings) so a multi-line preview can't split across SSE
 `data:` lines, and so the fields stay typed. `args`/`preview` are truncated server-side (~200 chars)
@@ -107,27 +114,33 @@ Ordered by feel-impact. Each is a client + (sometimes) server change behind the 
   *trait* so the engine stays swappable. The server holds no in-memory conversation cache — it
   rehydrates per turn and persists a turn's messages only on success.
 
+### Landed (continued — web UI polish)
+- **Markdown rendering** — the agent's Markdown answers render as code blocks, lists, and links
+  (`crates/webui/src/components/markdown.rs`, wired into `chat.rs`), not raw text.
+- **MCP panel + sidebar** — `/api/catalog` and `/api/conversations` back a live capability panel and
+  conversation sidebar in the web UI.
+
 ### Next (web UI polish, same contract)
-- **Markdown rendering** — the agent answers in Markdown; render code blocks, lists, links instead of
-  raw text.
 - **Stop button (web UI)** — a button that calls `EventSource.close()` mid-stream; the backend cancel
-  primitive above does the rest.
+  primitive above does the rest. Not yet wired up.
 
 ### Then (capability)
 - **Reaction feed in chat** — surface the daemon's autonomous `Reaction`s (already on `/api/reactions`)
   as system messages in the conversation, so proactive work shows up where the user is looking.
 
-### The TUI (proves the shared API)
-- **`liberado chat`** (landed) — the first native `reqwest`/SSE client of the contract: a terminal
-  REPL (`crates/cli`, `chat_client.rs`) that streams the *same* `POST /api/chat/stream` and prints
-  the conversation. It embeds no agent logic — it learns the session id from the `session` event and
-  reuses it — so it both seeds the TUI (same bytes, same incremental SSE parser) and proves the API
-  is genuinely client-agnostic. Run it against a running server (`LIBERADO_SERVER` overrides the
-  default `http://127.0.0.1:4201`).
+### The TUI (proved the shared API)
+Both native clients are landed and share code (`chat-client-contract`'s `ChatEvent`/SSE decoder,
+`liberado-commands`' slash-command dispatcher — see
+[`tui-shared-code-extraction-plan.md`](../roadmap/tui-shared-code-extraction-plan.md)):
+- **`liberado chat`** — the first native `reqwest`/SSE client of the contract: a terminal REPL
+  (`crates/cli`, `chat_client.rs`) that streams the *same* `POST /api/chat/stream` and prints the
+  conversation. It embeds no agent logic — it learns the session id from the `session` event and
+  reuses it. Run it against a running server (`LIBERADO_SERVER` overrides the default
+  `http://127.0.0.1:4201`).
 - **`crates/tui`** (ratatui) — a native client hitting the *same* endpoints with `reqwest`: a chat
   pane consuming `/api/chat/stream`, a status line from `/api/status`, a reactions tail from
-  `/api/reactions`. Building it is the test that the API is genuinely client-agnostic; anything the
-  TUI needs that isn't expressible over HTTP/SSE is a gap in the contract, not the TUI.
+  `/api/reactions`. Confirms the API is genuinely client-agnostic — everything the TUI needed was
+  expressible over HTTP/SSE, no client-specific endpoint was added.
 
 ## Design rules for keeping the API shared
 

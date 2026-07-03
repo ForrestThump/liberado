@@ -62,21 +62,21 @@ Bottom-up (each depends roughly on those above it):
 
 | Layer | Crate | Role |
 |---|---|---|
-| Types | [`common`](crates/common/ARCHITECTURE.md) | Shared vocabulary: provenance, capability, dispatch, event, model, config, proposal. No logic. |
-| Inference | [`provider`](crates/provider/ARCHITECTURE.md) | The `Provider` narrow waist + `MockProvider`. No HTTP. |
-| Inference | [`provider-deepseek`](crates/provider-deepseek/ARCHITECTURE.md) | Concrete DeepSeek backend (the only crate that talks to a model). |
-| Vault | [`vault`](crates/vault/ARCHITECTURE.md) | Turbovault adapter: provenance writes + hash-join attribution (loop-breaking). |
-| Decide | [`dispatcher`](crates/dispatcher/ARCHITECTURE.md) | classify (LLM) → guards (deterministic, downgrade-only) → `DispatchDecision`. |
-| Act | [`executor`](crates/executor/ARCHITECTURE.md) | The agent loop: drive a `Provider` over a `ToolRuntime` to a `Report`. MCP-agnostic. |
-| Act | [`mcp`](crates/mcp/ARCHITECTURE.md) | `TurbomcpRuntime`: the `ToolRuntime` over real MCP tools; injects provenance into `_meta`. |
-| Act | [`orchestrator`](crates/orchestrator/ARCHITECTURE.md) | Bridges a `DispatchDecision` to an execution; chooses the provenance correlation. |
-| Converse | [`main-agent`](crates/main-agent/Cargo.toml) | Multi-turn `Conversation`: drives the executor's conversational loop, carries context across turns, streams `AgentEvent`s (tokens, tool start/result), atomic-under-cancel turns. The thing a chat client talks to. |
-| Core | [`daemon`](crates/daemon/ARCHITECTURE.md) | The long-running watch→debounce→attribute→dispatch loop. |
-| Compose | [`bootstrap`](crates/bootstrap/Cargo.toml) | Builds provider/dispatcher/orchestrator from the environment — the shared composition logic for the `cli` and server binaries. |
-| Root | [`cli`](crates/cli/ARCHITECTURE.md) | The single `liberado` binary — client + launcher (`serve` runs the daemon, `chat` streams). |
-| Server | [`server`](crates/server/Cargo.toml) | The daemon process — watch loop + chat + HTTP/SSE API (`docs/reference/api.md`); run via `liberado serve`. |
-| Web UI | [`webui`](crates/webui/Cargo.toml) | Dioxus WASM frontend — dashboard, reactions feed, vault panel, streaming chat. Excluded from workspace native builds; built with `dx build`. |
-| Eval | [`eval`](crates/eval/Cargo.toml) | Real-model routing/safety eval suite (routing accuracy, safe-default rate, UNSAFE-acts that must never increase). Not a build dependency of the system. |
+| Types | [`common`](../../crates/common/ARCHITECTURE.md) | Shared vocabulary: provenance, capability, dispatch, event, model, config, proposal. No logic. |
+| Inference | [`provider`](../../crates/provider/ARCHITECTURE.md) | The `Provider` narrow waist + `MockProvider`. No HTTP. |
+| Inference | [`provider-deepseek`](../../crates/provider-deepseek/ARCHITECTURE.md) | Concrete DeepSeek backend (the only crate that talks to a model). |
+| Vault | [`vault`](../../crates/vault/ARCHITECTURE.md) | Turbovault adapter: provenance writes + hash-join attribution (loop-breaking). |
+| Decide | [`dispatcher`](../../crates/dispatcher/ARCHITECTURE.md) | classify (LLM) → guards (deterministic, downgrade-only) → `DispatchDecision`. |
+| Act | [`executor`](../../crates/executor/ARCHITECTURE.md) | The agent loop: drive a `Provider` over a `ToolRuntime` to a `Report`. MCP-agnostic. |
+| Act | [`mcp`](../../crates/mcp/ARCHITECTURE.md) | `TurbomcpRuntime`: the `ToolRuntime` over real MCP tools; injects provenance into `_meta`. |
+| Act | [`orchestrator`](../../crates/orchestrator/ARCHITECTURE.md) | Bridges a `DispatchDecision` to an execution; chooses the provenance correlation. |
+| Converse | [`main-agent`](../../crates/main-agent/Cargo.toml) | Multi-turn `Conversation`: drives the executor's conversational loop, carries context across turns, streams `AgentEvent`s (tokens, tool start/result), atomic-under-cancel turns. The thing a chat client talks to. |
+| Core | [`daemon`](../../crates/daemon/ARCHITECTURE.md) | The long-running watch→debounce→attribute→dispatch loop. |
+| Compose | [`bootstrap`](../../crates/bootstrap/Cargo.toml) | Builds provider/dispatcher/orchestrator from the environment — the shared composition logic for the `cli` and server binaries. |
+| Root | [`cli`](../../crates/cli/ARCHITECTURE.md) | The single `liberado` binary — client + launcher (`serve` runs the daemon, `chat` streams). |
+| Server | [`server`](../../crates/server/Cargo.toml) | The daemon process — watch loop + chat + HTTP/SSE API (`docs/reference/api.md`); run via `liberado serve`. |
+| Web UI | [`webui`](../../crates/webui/Cargo.toml) | Dioxus WASM frontend — dashboard, reactions feed, vault panel, streaming chat. Excluded from workspace native builds; built with `dx build`. |
+| Eval | [`eval`](../../crates/eval/Cargo.toml) | Real-model routing/safety eval suite (routing accuracy, safe-default rate, UNSAFE-acts that must never increase). Not a build dependency of the system. |
 
 ## Cross-cutting concepts
 
@@ -111,27 +111,33 @@ the main agent (context policy + dispatcher integration) and the TUI.
 2. ✅ **Concrete `RuntimeFactory`** — `liberado-mcp`'s `TurbomcpRuntimeFactory` connects via stdio, builds a provenance-bound `TurbomcpRuntime`, scopes it to allowed MCPs.
 3. ✅ **Daemon → orchestrator** — `react()` runs dispatch → orchestrate; `Reaction` carries `ReactionOutcome` (`Observed` / `Decided` / `Acted(Disposition)`). The server assembles the orchestrator from the enabled `[[mcps]]` in `topology.toml`, each connected by `transport` (`crates/bootstrap`'s `mcp_registry_from_config`).
 4. ✅ **Single-binary consolidation** — one `liberado` binary with subcommands: `liberado serve [vault]` (daemon + chat + HTTP/SSE API), `liberado chat [session]` (client), bare `liberado <vault>` aliases `serve`. `crates/server` (`liberado-server`) is a **library** exposing `pub async fn run(vault)`, not a binary. This concretely realizes daemon-first (Decision 2): one process hosts everything; every interface is a client.
-5. ✅ **Web UI** — `liberado-server` (Axum, `:4201`, run via `liberado serve`) hosts the daemon and serves a JSON API; `liberado-webui` (Dioxus WASM) is the browser dashboard showing daemon status, reactions, and vault info. LAN-accessible. Build with `dx build --release --package liberado-webui --web` (see `AGENTS.md`).
+5. ✅ **Web UI** — `liberado-server` (Axum, `:4201`, run via `liberado serve`) hosts the daemon and serves a JSON API; `liberado-webui` (Dioxus WASM) is the browser dashboard showing daemon status, reactions, and vault info. LAN-accessible. Build with `dx build --release --package liberado-webui --web` (see [`../contributing/agents.md`](../contributing/agents.md)).
 6. ✅ **Conversational chat loop** — `crates/main-agent`'s `Conversation` drives the executor's conversational tool-calling loop with context carried across turns. Served over the shared chat/SSE contract (`docs/reference/api.md`): `POST /api/chat` and the streaming `GET`/`POST /api/chat/stream` with token streaming, tool-call visibility (`tool`/`tool_result`), and stop/cancel (close the stream → turn aborts + history rolls back, persisting nothing).
 7. ✅ **Conversation persistence** — Decision 17 landed: `crates/conversation-store` (`liberado-conversation-store`) is the append-only JSONL log of DAG message-nodes (ULIDs minted at append time inside a per-conversation lock, so file-order == id-order), outside the vault under `<LIBERADO_DATA_DIR>/conversations`. `main-agent`'s `ChatSessions` rehydrates per turn from the store and **persists only on success**, so the server holds no in-memory conversation cache and a cancelled turn is a clean on-disk no-op. Sessions are keyed by a `session` SSE event; `GET /api/conversations` + `GET /api/conversations/{id}` list and reopen them.
-8. ✅ **`liberado chat` CLI client** — a `reqwest`/SSE terminal REPL (`crates/cli/chat_client.rs`), the first native (non-browser) client of the shared chat API and the seed of the future TUI.
+8. ✅ **`liberado chat` CLI client** — a `reqwest`/SSE terminal REPL (`crates/cli/chat_client.rs`), the first native (non-browser) client of the shared chat API.
 9. ✅ **Config-driven substrate** — the daemon boots on one validated `Config` (Decision 14, `crates/bootstrap`): the dispatcher holds `policy.toml`'s grants as its base authority, and `topology.mcps` is now the **single source** for both the dispatcher's catalog AND the runtime's MCP connection. Each `[[mcps]]` entry declares a required `description` (routing), `consequence` (the risk gate), and `transport` (`stdio` command/args or `http` url — how the runtime reaches it); the dispatcher routes over the enabled MCPs and the orchestrator connects to those same names by transport, so a routed name is always a name the runtime can reach (slice 2b done — no env path remains).
 
-10. ✅ **Proposal workflow (Decision 11, emit AND approve→execute)** — the full propose→approve→execute loop is closed. The EMIT path writes a `proposals/<id>.md` artifact for high-consequence concrete actions (YAML frontmatter with `status: pending`); the APPROVE→EXECUTE half picks up a human `status: approved` edit via the watch loop, calls `orchestrator.execute_approved()` with the proposal's `correlation_id` as provenance (no re-dispatch, no guards — the edit is the authorization), and flips `status` to `done` (loop-broken, idempotent).
+10. ✅ **Proposal workflow (Decision 11, emit AND approve→execute)** — the full propose→approve→execute loop is closed. The EMIT path writes a `proposals/<id>.md` artifact for high-consequence concrete actions (YAML frontmatter with `status: pending`); the APPROVE→EXECUTE half picks up a human `status: approved` edit via the watch loop, calls `orchestrator.execute_approved()` with the proposal's `correlation_id` as provenance (no re-dispatch, no guards — the edit is the authorization), and flips `status` to `done` (loop-broken, idempotent). As of 2026-07-02 every proposal also carries an HMAC-SHA256 integrity signature (tamper detection) and runtime-gated proposals (adaptive, non-seed tool calls) land in the vault too, not a data-dir dead end — see [`hardening-audit-2026-07-02.md`](../roadmap/hardening-audit-2026-07-02.md).
+11. ✅ **Phase 1 — the general MCP agent** — chat now routes every turn through `Dispatcher::dispatch` before executing (the "main-agent depth" item below is done); the three independently-static capability catalogs (daemon/chat/API) are one live, shared `Arc<CapabilityCatalog>`; `Grant.component` narrows both dispatch routing and runtime tool surfacing. Full writeups: [`chat-dispatcher-and-component-scoping.md`](../roadmap/chat-dispatcher-and-component-scoping.md), [`live-catalog-and-dispatcher-narrowed-tools.md`](../roadmap/live-catalog-and-dispatcher-narrowed-tools.md).
+12. ✅ **Phase 2 — the self-improvement moat** — `riggers/` (`liberado-pr-dispatch-mcp`) registered as `code-dispatch` (reversible, human-approved draft PRs only), with a greenfield mode to scaffold brand-new MCPs from scratch. Full report: [`phase-2-implementation-report.md`](../roadmap/phase-2-implementation-report.md).
+13. ✅ **`crates/tui`** — a ratatui TUI client hitting the same chat/SSE contract as the browser web UI and `liberado chat`; shares its SSE decoder and slash-command dispatcher with the other clients (`chat-client-contract`, `liberado-commands`) rather than hand-rolling its own.
+14. ✅ **Web UI flesh-out** — sidebar, MCP capability panel, Markdown rendering, and slash commands landed in `liberado-webui`. Design reference: [`webui-flesh-out-plan.md`](../roadmap/webui-flesh-out-plan.md).
 
 **Not yet built (next slice):**
-- **Main-agent depth** — the conversational loop exists, but the fuller design (ContextPolicy header, dispatcher integration so chat routes through the same guards as reactions, per-turn background surfacing) is not wired yet; chat currently drives the executor directly.
-- `crates/tui/` — ratatui TUI client that attaches to the daemon over the same chat/SSE contract (`liberado chat` already proves the contract is client-agnostic).
-- Inbox hook, hooks generally, multi-MCP registry, connection pooling.
+- Inbox hook, hooks generally, multi-MCP registry UX, connection pooling.
+- The `ChatClient` trait in `chat_client_contract::native` exists but is implemented nowhere — TUI and CLI still use separate ad-hoc transport functions instead of adopting it (see [`crate-modularity-audit.md`](../roadmap/crate-modularity-audit.md) finding 2).
+- Splitting `liberado-common`'s nine-module grab-bag along its natural boundaries — the last open item in [`crate-modularity-audit.md`](../roadmap/crate-modularity-audit.md).
+- Writer-identity verification on proposal approval (item 1 of [`hardening-audit-2026-07-02.md`](../roadmap/hardening-audit-2026-07-02.md)) — needs OS-level MCP process isolation or an out-of-band approval channel, not a code patch.
+- Phase 3 (cron as a bus listener, vault-decoupling) and Phase 4 (execution environment scaling) — see [`current.md`](../roadmap/current.md).
 
 ## Where to start reading
 
 1. This file.
-2. [`common`](crates/common/ARCHITECTURE.md) — the vocabulary everything speaks.
-3. [`vault`](crates/vault/ARCHITECTURE.md) — attribution / loop-breaking (the conceptual heart).
-4. [`dispatcher`](crates/dispatcher/ARCHITECTURE.md) → [`orchestrator`](crates/orchestrator/ARCHITECTURE.md)
-   → [`executor`](crates/executor/ARCHITECTURE.md) — the decide→act path.
-5. [`daemon`](crates/daemon/ARCHITECTURE.md) — how it all runs.
+2. [`common`](../../crates/common/ARCHITECTURE.md) — the vocabulary everything speaks.
+3. [`vault`](../../crates/vault/ARCHITECTURE.md) — attribution / loop-breaking (the conceptual heart).
+4. [`dispatcher`](../../crates/dispatcher/ARCHITECTURE.md) → [`orchestrator`](../../crates/orchestrator/ARCHITECTURE.md)
+   → [`executor`](../../crates/executor/ARCHITECTURE.md) — the decide→act path.
+5. [`daemon`](../../crates/daemon/ARCHITECTURE.md) — how it all runs.
 6. [`../contributing/development-workflow.md`](../contributing/development-workflow.md) — before
    starting non-trivial work: the research/plan/implement/test/document/commit process this project is
    held to, and how to delegate to subagents effectively.
