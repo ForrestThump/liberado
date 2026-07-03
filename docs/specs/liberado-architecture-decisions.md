@@ -2,7 +2,7 @@
 
 **Purpose**: Consolidated, prioritized list of key architectural and design decisions. Grouped by importance so we can resolve them in sequence before writing code that would be expensive to change.  
 **Status**: Living document. Each decision includes current state, open questions, and a recommended path based on our principles (loose coupling, security-first containment, token efficiency via context partitioning, low overhead, maintainability alongside real life, provider-agnostic scaffolding).  
-**Last Updated**: 2026-06-26
+**Last Updated**: 2026-07-02
 
 ---
 

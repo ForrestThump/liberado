@@ -1,133 +1,97 @@
-﻿# Liberado — Handoff
+# Liberado — Handoff (2026-07-02)
 
-**Point-in-time snapshot from the 2026-06-26 planning session — not a living doc.** Everything below
-("What's done", "Known issues", "What's next") describes state as of that date; Phase 1 and Phase 2
-have since shipped in full (see [`docs/roadmap/current.md`](../roadmap/current.md)) and the MCP
-tool-name `:` bug noted below is long fixed. Kept for the planning rationale in "Matured vision" and
-"Working patterns"/"Pitfalls learned", which are still accurate. For current state, use
-[`docs/roadmap/current.md`](../roadmap/current.md); for the durable process doc, use
-[`docs/contributing/development-workflow.md`](../contributing/development-workflow.md).
+Current-state handoff. Kept in sync by the Dream skill after each session arc. For the authoritative
+system map read [`docs/architecture/overview.md`](../architecture/overview.md); for build/run/configure
+read [`docs/contributing/agents.md`](../contributing/agents.md); for the development process (how to
+research, plan, delegate, test, commit) read
+[`docs/contributing/development-workflow.md`](../contributing/development-workflow.md); for the chat
+API contract read [`docs/reference/api.md`](../reference/api.md); for the rationale behind any
+"Decision N" read [`docs/specs/liberado-architecture-decisions.md`](../specs/liberado-architecture-decisions.md).
 
-For the full system map read [`docs/architecture/overview.md`](../architecture/overview.md); for
-build/run read [`docs/contributing/agents.md`](../contributing/agents.md); for the chat API read
-`docs/reference/api.md`; for the rationale behind any "Decision N" read
-`liberado-architecture-decisions.md`.
+> Note: keep this file lowercase (`handoff.md`, not `HANDOFF.md`). On Windows (case-insensitive
+> filesystem) the two names collide — see Pitfalls below.
 
-> Note: this is the single handoff file. There is **no** uppercase `HANDOFF.md` — on Windows
-> (case-insensitive filesystem) the two names collide, so keep it lowercase. (An earlier stub here
-> pointed at a nonexistent uppercase file; that was the bug, now fixed.)
+---
 
-## State of the tree
+## What's built (as of 2026-07-02)
 
-All current work is **uncommitted** (one commit in history: `first commit`). `cargo test --workspace`
-is green (all crates pass). The system is daemon-first and consolidated into **one binary**.
+All fourteen "Done" milestones in [`docs/architecture/overview.md`](../architecture/overview.md) are
+shipped and `cargo test --workspace` is green. The system is:
 
-## What's done (this arc)
+- **One `liberado` binary** (daemon-first, Decision 2): `liberado serve [vault]` runs the daemon + chat
+  + HTTP/SSE API; `liberado chat [session]` is a native client; bare `liberado <vault>` aliases `serve`.
+- **Phases 1 and 2 complete**: chat routes through the dispatcher; capability catalog is live and shared;
+  `crates/tui` is a ratatui client; web UI has sidebar/MCP panel/Markdown/slash commands; Riggers
+  (`code-dispatch`) enables self-improvement via draft PRs.
+- **Proposal loop hardened (2026-07-02)**: HMAC-SHA256 integrity signing on every proposal (item 2 of
+  hardening audit); runtime-gated proposals now land in the vault's own `proposals/` dir so approve→execute
+  works for adaptive-call downgrades too (item 3). Item 1 (writer-identity verification) remains open —
+  needs OS-level MCP sandboxing or an out-of-band approval channel.
+- **Crate hygiene passes (2026-07-01 to 2026-07-02)**: three tiers — test-mock dedup, `RuntimeFactory`
+  relocation to `liberado-executor`, new `liberado-config` crate extracted from `liberado-bootstrap`. Full
+  record: [`docs/roadmap/hygiene-audit-2026-07-02.md`](../roadmap/hygiene-audit-2026-07-02.md).
 
-- **Decision 17 — conversation persistence, end to end.** New crate `crates/conversation-store`
-  (`liberado-conversation-store`): an append-only JSONL log of DAG message-nodes, one file per
-  conversation under `<LIBERADO_DATA_DIR>/conversations` (outside the vault — Decision 12 operational
-  data). `ConversationStore` trait + `JsonlStore` impl; spec in `liberado-conversation-store-spec.md`.
-  The load-bearing property: **ULIDs are minted at append time inside a per-conversation lock**, so
-  file-order == id-order — the one choice that can't be retrofitted (enables O(log n) id lookup
-  later). Reads are lock-free.
-- **`ChatSessions`** (`crates/main-agent/src/sessions.rs`) wires the store into chat:
-  **rehydrate-per-turn** from the store, **persist-only-on-success**. The server holds no in-memory
-  conversation cache; a cancelled/errored turn writes nothing (composes with the in-memory rollback in
-  `Conversation::turn_stream`). The system prompt is persisted as the conversation's root node.
-- **Server is session-keyed.** A `session` SSE event leads each stream (client echoes it back as
-  `?session=` / the `session` body field); added `GET /api/conversations` and
-  `GET /api/conversations/{id}`.
-- **Single-binary consolidation.** `crates/webui-server` was renamed to `crates/server`
-  (`liberado-server`) and is now a **library** (`pub async fn run(vault)`), not a binary. There is one
-  binary, `liberado`, with subcommands: `liberado serve [vault]` (daemon + chat + API),
-  `liberado chat [session]` (client), bare `liberado <vault>` aliases `serve`.
-- **`liberado chat` CLI client** (`crates/cli/src/chat_client.rs`) — a `reqwest`/SSE terminal REPL,
-  the first native client of the shared chat API and the seed of the future TUI.
-- **`crates/bootstrap`** (`liberado-bootstrap`) — deduped the env→daemon assembly
-  (`provider_from_env`, `mcp_registry_from_env`, `configure_daemon`) so the binary and any other host
-  wire the daemon identically.
+**Not yet built (next slice)**: inbox hook, hooks generally, multi-MCP registry UX, connection pooling.
+`ChatClient` trait adoption (crate-modularity-audit finding 2) and splitting `liberado-common`'s
+nine-module grab-bag (finding 3) are the primary crate-structure deferred items. Phases 3 and 4 are on
+the roadmap. See [`docs/roadmap/current.md`](../roadmap/current.md) for the full list.
+
+---
 
 ## Where key things live
 
-- Conversation store: `crates/conversation-store/src/{jsonl,store,types,error}.rs`.
-- Chat persistence orchestration: `crates/main-agent/src/sessions.rs` (`ChatSessions`).
-- The binary entry / arg dispatch: `crates/cli/src/main.rs`; chat client: `crates/cli/src/chat_client.rs`.
-- Server (library): `crates/server/src/{lib,api,state}.rs` — `lib.rs::run` is the daemon entry point.
-- Shared env wiring: `crates/bootstrap/src/lib.rs`.
-- Chat/SSE contract: `docs/reference/api.md`. Endpoint table + env vars: `AGENTS.md`.
+| What | Where |
+|---|---|
+| Shared type vocabulary | `crates/common/src/` |
+| Proposal type + signer | `crates/common/src/proposal.rs` |
+| Per-installation proposal signing key | `crates/config/src/lib.rs` (`load_or_create_proposal_key`), stored at `<data_dir>/.proposal-key` |
+| Dispatcher (classify + guards) | `crates/dispatcher/src/` |
+| Executor (agent loop) | `crates/executor/src/` — `RiskGatedToolRuntime` lives here |
+| Orchestrator (bridges decision → execution) | `crates/orchestrator/src/lib.rs` |
+| Multi-turn conversation (chat loop) | `crates/main-agent/src/sessions.rs` (`ChatSessions`) |
+| Daemon watch loop | `crates/daemon/src/lib.rs` — `handle_proposal_change` routes approved proposals |
+| Shared env wiring | `crates/bootstrap/src/lib.rs` |
+| Config loading + `GuardContext` | `crates/config/src/lib.rs` |
+| Binary entry + arg dispatch | `crates/cli/src/main.rs` |
+| Chat client (CLI) | `crates/cli/src/chat_client.rs` |
+| Server library | `crates/server/src/lib.rs` — `run()` is the daemon entry point |
+| TUI client | `crates/tui/src/` |
+| Web UI (Dioxus WASM) | `crates/webui/src/` — `dx build` only, excluded from native workspace build |
+| Conversation store | `crates/conversation-store/src/{jsonl,store,types,error}.rs` |
+| Shared SSE decoder + slash-command dispatcher | `crates/chat-client-contract/` and `crates/liberado-commands/` |
 
-## Matured vision (2026-06-26 planning session)
-
-Liberado is a **modular MCP/hook-first Rust agent substrate**, **vault-optional**, whose
-differentiation is **"self-improving autonomy with guarantees"**: the LLM proposes, deterministic
-code disposes, and self-extension can build new tools but can never widen its own authority. Full
-thesis + competitive grounding in [`docs/architecture/positioning.md`](../architecture/positioning.md);
-the three pillars in [`docs/architecture/overview.md`](../architecture/overview.md); the seam plan in
-[`docs/architecture/modularity.md`](../architecture/modularity.md).
-
-**The proposal loop (Decision 11) is fully landed** — both EMIT and APPROVE→EXECUTE. A
-high-consequence concrete action emits a `proposals/<id>.md` artifact; a human `status: approved`
-edit is picked up by the watch loop and executed via `orchestrator.execute_approved()` with the
-proposal's `correlation_id` (no re-dispatch, no guards — the edit is the authorization), then flipped
-to `done` (loop-broken, idempotent).
-
-**Four planning decisions agreed this session:**
-
-1. **General-agent-first** — the next milestone is the vault-agnostic general MCP agent, built
-   mesh-native and crate-independent (none of it touches the vault).
-2. **Incremental mesh with checkpoints** (Decision 18) — wrap seams behind an `EventBus` trait as
-   they are touched; new components are bus-native from day one; concrete "mesh is real now"
-   checkpoints tied to features guard against drift. Not a big-bang refactor.
-3. **Vault = hard-plugin destination, reached via the mesh** (Decision 19) — TurboVault is the
-   privileged *default* perception+storage plugin in the meantime, but the core is vault-agnostic;
-   the vault becomes a plugin behind an event-source/hook trait in Phase 3.
-4. **Personal-first with framework-grade seams** — build what is objectively more useful for the
-   author than the free alternatives, but keep crate boundaries clean enough to reuse.
-
-## Known issues
-
-- **Known bug (Phase 1 blocker) — MCP tool names with `:` rejected by the provider API.** Symptom:
-  chat/TUI with an MCP configured returns HTTP 400 `Invalid 'tools[0].function.name': ... pattern
-  '^[a-zA-Z0-9_-]+$'`; the agent appears to see no tools. Root cause: Liberado namespaces MCP tools
-  as `<mcp>:<tool>` (the `mcp_of` convention), but the OpenAI/DeepSeek chat API requires
-  `tools[].function.name` to match `^[a-zA-Z0-9_-]+$` (no colon), so any tool-bearing request is
-  rejected before the model sees the tools. Fix: in the `provider-deepseek` adapter (the
-  OpenAI-compatible boundary), sanitize each tool name to the valid pattern on the way out while
-  keeping a per-request `sanitized -> original` map, and translate the model's returned tool-call name
-  back on the way in. Preserves the internal `:` convention; handles any invalid char
-  (colon/dot/slash). This is the next debugging task.
-
-## What's next — Phase 1: the general MCP agent
-
-(See [`docs/roadmap/current.md`](../roadmap/current.md) for the full four-phase plan.)
-
-The immediate Phase-1 work is (a) fix the MCP tool-name bug above, then (b) route chat through the
-dispatcher. Riggers integration is now roadmapped (use-as-MCP + Provider-trait adoption) as the
-Phase-2 self-improvement engine — see the roadmap.
-
-1. **Fix the MCP tool-name `:` bug** (see Known issues) — sanitize tool names at the
-   `provider-deepseek` boundary with a per-request reverse map. Unblocks every tool-bearing request.
-2. **Route chat through the dispatcher** — chat currently drives the executor directly, bypassing the
-   tool-advisor, guards, and sub-delegation; wiring chat -> dispatcher -> orchestrator gets all three
-   (and is the first bus-native seam: chat publishes a goal-event).
-3. **Live capability catalog + on-demand tool surfacing** — a live, bus-queryable registry (mesh
-   checkpoint #1), the token-efficiency core.
-4. **Multi-MCP + parallel, capability-narrowed sub-delegation** (closes Hermes gap #4).
-5. **`crates/tui`** — ratatui client over the same chat/SSE contract; the near-term modularity proof
-   is extracting a `chat-client-contract` crate the TUI depends on alone.
-6. Roadmap items still open: runtime tool gating, MCP connection pooling, multi-server registry UX.
+---
 
 ## Working patterns that succeed (keep doing)
 
-- **Dispatch a subagent for code, then verify independently**: read the produced code, run
-  `cargo test`, and run a **live end-to-end smoke** — don't trust the subagent's report alone.
+- **Research before design — verify claims against code.** Read the struct/function/route before trusting
+  a doc that describes it. Checking the actual `Cargo.toml` and `wc -l` caught at least one hygiene
+  finding this session that turned out to be **false on both counts** — a plausible-sounding claim the
+  premise check ruled out immediately.
+- **Dispatch 3 parallel research subagents for audit-shaped work**, one per independent angle (coupling /
+  duplication / dead code; or guard coverage / integrity / injection surfaces). Each agent gets the full
+  architecture context already known, a narrow angle, a demand for file:line verdicts, and a word budget
+  (~600-700 words). Three complementary deep reports, not three overlapping shallow ones.
+- **Verify code staleness claims against code, not narrative** — the docs review pass that found
+  `api.md` missing two routes (`GET /api/catalog`, `PATCH /api/conversations/{id}`) was only reliable
+  because the claim was checked against the actual `crates/server/src/api.rs` route table, not accepted
+  from a summary.
+- **Cheap link-checking catches bugs human review misses.** Walking `docs/`, regex-extracting markdown
+  links, and verifying each target path caught 22 broken links in a single pass — several of which
+  predated this session's own edits.
+- **Dispatch a subagent for code, then verify independently**: read the produced code, run `cargo build`
+  then `cargo test --workspace --no-run` (they're different — the second compiles `#[cfg(test)]`), then
+  `cargo test --workspace`. Don't trust the subagent's own report.
 - **Live smoke recipe** (proven repeatedly): hydrate the key from the Windows User env via
   `[Environment]::GetEnvironmentVariable("DEEPSEEK_API_KEY","User")` (NEVER print it; only confirm
-  length 35 / prefix `sk-`), start `liberado serve <scratch-vault>` on a scratch `LIBERADO_PORT` +
-  `LIBERADO_DATA_DIR`, drive a two-turn message through `liberado chat`, then assert continuity (turn 2
+  length 35 / prefix `sk-`); start `liberado serve <scratch-vault>` on a scratch `LIBERADO_PORT` +
+  `LIBERADO_DATA_DIR`; drive a two-turn message through `liberado chat`; assert continuity (turn 2
   recalls a word from turn 1) and a persisted ULID `.jsonl` under `<LIBERADO_DATA_DIR>/conversations`.
 - A force-killed server (`Stop-Process -Force`) exits **255** — expected, not a failure.
+- **Split audit into two commits**: first the findings doc (`docs/roadmap/`), then the fix. Each is
+  individually reviewable and the findings survive even if the fix is later revisited.
+
+---
 
 ## Pitfalls learned (don't relearn)
 
@@ -135,13 +99,29 @@ Phase-2 self-improvement engine — see the roadmap.
 - **SSE event naming**: the error event is named **`failed`**, not `error` — browser `EventSource`
   reserves `error` for its own connection errors. Structured events (`tool`, `tool_result`) are
   JSON-encoded so multi-line previews don't split across `data:` lines.
+- **`cargo build` is not enough.** It does not compile `#[cfg(test)]` code. A trimmed "unused" import
+  that only a test module uses will silently break the test suite. Always run `cargo test --workspace
+  --no-run` as a separate step, then `cargo test --workspace`.
+- **`cargo tree` for structural dependency claims.** If a change's point is "crate X no longer depends on
+  crate Y," compile success alone does not prove the edge is gone (transitive paths still compile).
+  Run `cargo tree -p X` and grep for `Y`.
 - **`tokio::select!` borrow tangles**: don't reuse the same `&mut` in one branch's body that another
   branch's future borrowed; clone the channel sender, and keep rollback **inside** the awaited future
   (a Drop guard) rather than in the select arm.
-- **Keep the `liberado-orchestrator` dep wherever `RuntimeFactory::runtime_for` is called** — the
-  trait must be in scope. A removal that looked safe broke the build.
+- **Keep the `liberado-orchestrator` dep wherever `RuntimeFactory::runtime_for` is called** — the trait
+  must be in scope. A removal that looked safe broke the build.
 - The executor's **"termination follows the consumer"** design is the seam that makes
   chat-vs-autonomous a configuration, not a fork.
+- **MCP server child processes have zero filesystem sandboxing** (confirmed:
+  `turbomcp/crates/turbomcp-transport/src/child_process.rs` does not set `current_dir` or restrict
+  environment on spawned processes). A co-resident MCP process can write directly to the vault. This is
+  why writer-identity verification (hardening audit item 1) cannot be closed with a code patch — it
+  needs OS-level process isolation or an out-of-band approval channel.
+- **Two Rust installs on this machine**: the standalone install at `C:\Program Files\Rust stable MSVC
+  1.94\` is first in PATH but lacks the wasm32 stdlib. Prepend the rustup-managed toolchain's bin dir
+  before calling `dx` for WASM builds. See `agents.md` Web UI section for the exact command.
+
+---
 
 ## Live constraints (must not violate)
 
@@ -150,3 +130,7 @@ Phase-2 self-improvement engine — see the roadmap.
   without explicit permission.
 - **Outward-facing actions need confirmation.**
 - Don't commit, push, or run servers/daemons without being asked.
+- **Never amend a prior commit** unless explicitly asked — create new commits.
+- **Stage explicit file lists**, not `git add -A`/`-u` — unrelated WIP on the same branch (the
+  `ui-polish` branch has uncommitted webui component work alongside hardening fixes) must not get swept
+  into an unrelated commit by accident.
