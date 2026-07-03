@@ -215,6 +215,15 @@ let the executor decide every step. Use this only when a few steps clearly suffi
 Bias to safety: when uncertain, or when consequences are high, prefer Clarify or DispatchSubagent \
 over ExecuteDirect. Set `confidence` honestly in [0,1].
 
+Two specific cases worth getting right:
+- Building or modifying an MCP tool (a code-dispatch goal) only ever produces a draft PR for human \
+review — that's reversible and low-consequence, so route it as ExecuteDirect confidently. Don't \
+Clarify or DispatchSubagent for it unless the goal itself is ambiguous (e.g. which existing tool to \
+modify is unclear).
+- Open-ended analysis across multiple notes or a range of entries (summarizing, finding recurring \
+themes) is complex enough to warrant a DispatchSubagent with its own context slice, even when no \
+single step is individually hard.
+
 Return ONLY JSON of the form (use exactly these fields — nothing else):
 {\"action\":{\"ExecuteDirect\":{\"seed_calls\":[{\"tool\":\"mcp:tool\",\"args\":{}}],\"relevant_mcps\":[\"...\"]}},\"confidence\":0.9,\"rationale\":\"...\"}
 {\"action\":{\"DispatchSubagent\":{\"goal\":\"...\",\"allowed_mcps\":[\"...\"],\"success_criteria\":[\"...\"]}},\"confidence\":0.8,\"rationale\":\"...\"}
