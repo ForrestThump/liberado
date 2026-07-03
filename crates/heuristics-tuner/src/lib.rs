@@ -21,4 +21,4 @@ pub use candidate::{Candidate, CandidateOrigin};
 pub use config::{ConfigError, TunerConfig};
 pub use generation::GenerationError;
 pub use scoring::{CandidateFitness, ScoredScenario};
-pub use search::{Budget, TunerResult, run_tuner};
+pub use search::{Budget, GenerationRecord, TunerResult, run_tuner};

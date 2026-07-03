@@ -193,6 +193,19 @@ architecture idea the way there is for a scored prompt candidate.
    (`generation::live_cold_start`, `search::live_end_to_end`) for whenever `OPENROUTER_API_KEY` is
    actually visible to the shell running them. Live-run the tuner itself:
    `cargo run -p liberado-heuristics-tuner`.
+
+   **Per-generation output + a one-command runner, added same day** — driven by a real
+   constraint: the user is running this remotely over SSH (Termux on a phone) and can't babysit a
+   live session or easily hand a key back and forth. `run_tuner`'s `TunerResult` now carries a
+   `generations: Vec<GenerationRecord>` (each generation's own best candidate + fitness + a rubric
+   against the baseline, with its own justification call — not just the final winner), so a human
+   reviewing later sees the search's progression, not just where it ended up. `main.rs` saves one
+   file per generation (`generation-N.txt`) plus `final.txt` (same content as the last generation's
+   file, so there's an obvious filename to check first) under
+   `<LIBERADO_DATA_DIR>/tuner/<run-timestamp>/` — one folder per invocation. `scripts/run-tuner.ps1`
+   wraps the whole thing into one command: it reads `OPENROUTER_API_KEY` from an already-exported
+   env var (never accepted as a script argument, so it never lands in shell history or a process
+   listing), builds/runs the tuner, and points at the output folder when done.
 4. Proposal-rubric output format + human review flow — folded into step 3 above (the rubric
    *is* the output format; there's no separate "diff" artifact beyond the full candidate/baseline
    prompt text already in the rubric, which is what a human diffs by eye before hand-copying a

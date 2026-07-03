@@ -51,13 +51,26 @@ impl Budget {
     }
 }
 
+/// The best candidate found by the end of one generation, with its own rubric against the
+/// baseline — not just the overall session's final winner. Saved as its own file so a human
+/// reviewing the run later can see how the search actually got there, not just where it ended up.
+pub struct GenerationRecord {
+    /// 1-based, for human-facing filenames/output (`generation-1.txt`, ...).
+    pub generation: usize,
+    pub candidate: Candidate,
+    pub fitness: CandidateFitness,
+    pub rubric: String,
+}
+
 /// The result of a full tuning session: the winning candidate, its fitness, the baseline it beat
-/// (or didn't), and the formatted rubric ready to print/save.
+/// (or didn't), the formatted rubric ready to print/save, and every generation's own best
+/// candidate + rubric along the way (`generations.last()` is the same candidate as `winner`).
 pub struct TunerResult {
     pub winner: Candidate,
     pub winner_fitness: CandidateFitness,
     pub baseline_fitness: CandidateFitness,
     pub rubric: String,
+    pub generations: Vec<GenerationRecord>,
 }
 
 /// Select the top `beam_width` candidates by fitness: `unsafe_acts > 0` disqualifies a candidate
@@ -107,8 +120,9 @@ pub async fn run_tuner(config: TunerConfig) -> TunerResult {
     };
 
     let mut beam: Vec<(Candidate, CandidateFitness)> = vec![(baseline, baseline_fitness.clone())];
+    let mut generations: Vec<GenerationRecord> = Vec::new();
 
-    for _ in 0..config.max_generations {
+    for generation_index in 0..config.max_generations {
         if budget.exhausted() {
             break;
         }
@@ -164,26 +178,58 @@ pub async fn run_tuner(config: TunerConfig) -> TunerResult {
             // forward.
             beam = survivors.into_iter().map(|idx| scored[idx].clone()).collect();
         }
+
+        // Record this generation's best-so-far, with its own justification call — a human
+        // reviewing later gets the search's progression, not just where it ended up.
+        let (best_candidate, best_fitness) = &beam[0];
+        let justification = request_justification_if_budget_allows(
+            config.meta_provider.as_ref(),
+            &best_candidate.prompt,
+            &budget,
+        )
+        .await;
+        let rubric = format_rubric(
+            best_candidate,
+            best_fitness,
+            &baseline_fitness,
+            justification.as_deref(),
+        );
+        generations.push(GenerationRecord {
+            generation: generation_index + 1,
+            candidate: best_candidate.clone(),
+            fitness: best_fitness.clone(),
+            rubric,
+        });
     }
 
     let (winner, winner_fitness) = beam.into_iter().next().expect("beam is never empty");
-
-    let justification = if !budget.exhausted() {
-        request_justification(config.meta_provider.as_ref(), &winner.prompt, &budget)
-            .await
-            .ok()
-    } else {
-        None
-    };
-
-    let rubric = format_rubric(&winner, &winner_fitness, &baseline_fitness, justification.as_deref());
+    // The final generation's record already carries the same candidate + a rubric against the
+    // baseline — reuse it rather than spending another justification call on an identical prompt.
+    let rubric = generations
+        .last()
+        .map(|g| g.rubric.clone())
+        .unwrap_or_else(|| format_rubric(&winner, &winner_fitness, &baseline_fitness, None));
 
     TunerResult {
         winner,
         winner_fitness,
         baseline_fitness,
         rubric,
+        generations,
     }
+}
+
+/// Request a justification unless the budget is already exhausted — a best-effort call, not one
+/// that should ever abort a run. Shared by every generation's record and the final result.
+async fn request_justification_if_budget_allows(
+    meta_provider: &dyn liberado_provider::Provider,
+    prompt: &str,
+    budget: &Budget,
+) -> Option<String> {
+    if budget.exhausted() {
+        return None;
+    }
+    request_justification(meta_provider, prompt, budget).await.ok()
 }
 
 #[cfg(test)]
@@ -293,5 +339,10 @@ mod tests {
             result.winner_fitness.unsafe_acts, 0,
             "a winner must never carry an unsafe act"
         );
+        assert!(
+            !result.generations.is_empty(),
+            "at least one generation record should exist for review"
+        );
+        assert_eq!(result.generations.last().unwrap().rubric, result.rubric);
     }
 }
