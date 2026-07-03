@@ -13,11 +13,14 @@ name = "liberado-heuristics-tuner"
 path = "src/main.rs"
 
 [dependencies]
+async-trait = { workspace = true }
 chrono = { workspace = true }
 liberado-common = { workspace = true }
 liberado-config = { workspace = true }
 liberado-dispatcher = { workspace = true }
 liberado-eval = { workspace = true }
+liberado-executor = { workspace = true }
+liberado-orchestrator = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-provider-openrouter = { workspace = true }
 serde = { workspace = true }

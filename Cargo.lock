@@ -2951,11 +2951,14 @@ dependencies = [
 name = "liberado-heuristics-tuner"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "liberado-common",
  "liberado-config",
  "liberado-dispatcher",
  "liberado-eval",
+ "liberado-executor",
+ "liberado-orchestrator",
  "liberado-provider",
  "liberado-provider-openrouter",
  "serde",

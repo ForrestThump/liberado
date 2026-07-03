@@ -40,12 +40,19 @@ pub const DEFAULT_SOURCE: &str = "liberado-executor";
 /// Turn budget for an `ExecuteDirect` (kept tight — it is the "few steps clearly suffice" path).
 pub const DIRECT_MAX_TURNS: u32 = 4;
 
-const DIRECT_INSTRUCTIONS: &str = "\
+/// The executor's system prompt for an `ExecuteDirect` tool loop. `pub` (like
+/// `Dispatcher::DEFAULT_SYSTEM_PROMPT`) so `liberado-heuristics-tuner` can read it as the seed
+/// baseline for executor-layer prompt tuning — adopting a winning candidate is still a manual
+/// hand-edit of this const, never auto-merged (Decision 14).
+pub const DIRECT_INSTRUCTIONS: &str = "\
 You are Liberado's executor. Accomplish the goal using the available tools, taking as few steps as \
 possible. When the goal is done, call `submit_report` with a concise, high-signal result. Do not \
 ask the user anything; if you cannot proceed, submit a report explaining why.";
 
-const SUBAGENT_PREAMBLE: &str = "\
+/// The subagent's system prompt preamble for a `DispatchSubagent` task (success criteria are
+/// appended per-task by `subagent_instructions`). `pub` for the same reason as
+/// `DIRECT_INSTRUCTIONS` above — a seed baseline for subagent-layer prompt tuning.
+pub const SUBAGENT_PREAMBLE: &str = "\
 You are a narrowly-scoped Liberado subagent. Use only the tools you have been given to accomplish \
 the goal, then call `submit_report` with the result. Do not exceed your goal.";
 
