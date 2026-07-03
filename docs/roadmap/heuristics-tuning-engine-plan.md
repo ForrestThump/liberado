@@ -279,6 +279,49 @@ architecture idea the way there is for a scored prompt candidate.
    gained a `resolve_optional_usize` helper (no numeric fallback — `None` is the valid default,
    unlike every other tunable in this file).
 
+## Smoke-test findings — two models look broken, not just weak (2026-07-06)
+
+Live smoke test (`max_scenarios = 3`, `samples_per_scenario = 3`, all 7 models from item 9, 2
+generations) ran successfully end-to-end — confirms the whole pipeline works: all 7 providers
+dispatched concurrently, budget accounting held, per-model consistency section rendered correctly
+in the rubric. But the per-model breakdown surfaced a real anomaly, not just noise:
+
+- **`xiaomi/mimo-v2.5`: 0/18 correct** across every scenario tested and both generations (3
+  scenarios × 3 samples × 2 generations).
+- **`z-ai/glm-4.7-flash`: 1/18 correct**, same shape.
+- Every other model (`deepseek/deepseek-v4-flash`, `google/gemini-3-flash-preview`, `x-ai/grok-4.3`,
+  `meta-llama/llama-3.1-8b-instruct`, `openai/gpt-5-nano`) scored 2/3 or 3/3 on nearly every
+  scenario/sample.
+
+This isn't "these are just weaker models" — 0/18 and 1/18 against a smaller model
+(`llama-3.1-8b-instruct`) scoring near-perfectly doesn't pass a smell test. Two live hypotheses,
+neither confirmed yet:
+1. **Schema/format non-compliance**: these two models may not reliably emit the exact JSON shape
+   `Dispatcher::dispatch` expects, and something downstream is coercing a parse partial-failure into
+   "wrong action" rather than surfacing a decode error. Against this: `score_one`
+   (`crates/heuristics-tuner/src/scoring.rs`) calls `dispatcher.dispatch(&request).await.ok()?` —
+   a real decode failure would make the whole trial silently disappear (`None`), not count as an
+   incorrect-but-present trial. The rubric's breakdown shows `3/3 correct` as the *denominator* for
+   both models on every scenario (e.g. `xiaomi/mimo-v2.5: 0/3 correct`) — meaning all 3 samples DID
+   produce a trial (dispatch succeeded, decoded fine), they were just consistently scored wrong. That
+   points away from a parse failure and toward a genuine reasoning/instruction-following gap — but
+   worth confirming directly (log the raw decision each model actually returned per scenario) rather
+   than inferring it from aggregate counts alone.
+2. **Model-slug mismatch**: these are two very recently spot-checked OpenRouter slugs
+   (`z-ai/glm-4.7-flash`, `xiaomi/mimo-v2.5`) — worth double-checking neither slug is quietly routing
+   to a different/mis-tuned backend than intended, or that OpenRouter isn't silently degrading to a
+   smaller variant under the hood for either.
+
+**Decision (2026-07-06)**: both models are dropped from the comprehensive 10-samples-per-scenario
+run (kept only in `config.example/tuner.toml` as a documented "known bad, needs debugging" note, not
+silently deleted) — burning 10 samples × ~19 scenarios × 2 models = ~380 calls per candidate on two
+models that may be fundamentally miswired isn't worth the cost until this is diagnosed. **Not
+investigated further this session** — deferred to the next session with hands-on access to log raw
+per-model decisions directly. When picked back up: add a debug path that dumps the raw
+`DispatchDecision` (or the raw provider response, if decode itself is suspect) for a failing
+(model, scenario) pair, run it against `xiaomi/mimo-v2.5` and `z-ai/glm-4.7-flash` specifically for
+1-2 of the 3 smoke-test scenarios, and read what they actually said.
+
 ## First real run — findings (2026-07-03)
 
 A live session (defaults: `deepseek/deepseek-v4-flash`, 3 generations, beam width 2) took routing
