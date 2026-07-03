@@ -165,6 +165,12 @@ impl Daemon {
     /// [`ReactionOutcome::Acted`]). Only meaningful alongside [`with_dispatcher`](Self::with_dispatcher):
     /// without a dispatcher there is no decision to execute; with a dispatcher but no orchestrator,
     /// reactions stop at [`ReactionOutcome::Decided`].
+    ///
+    /// This crate has no `liberado-mcp` dependency (by design — see `ARCHITECTURE.md`), so the
+    /// requirement that `orchestrator` carry a real `RuntimeFactory` implementation for production
+    /// use is invisible from this crate's own `Cargo.toml` alone. That wiring is supplied by the
+    /// caller — see `liberado_bootstrap::configure_daemon`, which connects an `McpRegistry` and
+    /// passes it in.
     pub fn with_orchestrator(mut self, orchestrator: Orchestrator) -> Self {
         self.orchestrator = Some(orchestrator);
         self

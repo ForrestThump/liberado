@@ -95,23 +95,47 @@ shared `liberado_bootstrap::guard_context()` also adopted by `configure_daemon`.
 
 ---
 
-## Tier 3 — worth a conversation, not urgent
+## Tier 3
 
-9. **Merge `liberado-theme` + `liberado-markdown` + `liberado-commands`** — three tiny,
-   zero-Liberado-logic UI-support crates, always consumed together by `tui`/`webui`/`cli`. Merging
-   would cut three Cargo workspace members and the `commands -> theme` inter-crate edge without losing
-   a real boundary.
-10. **Split `liberado-bootstrap`** so `liberado-mcp-forge` (a build tool) doesn't transitively pull in
-    `liberado-daemon`'s vault-watching machinery just to load config and wire MCPs. Low urgency —
-    `mcp-forge` still builds and works today, this is a compile-time/conceptual-surface concern, not a
-    correctness one.
-11. **Whether `liberado-server`'s assembly logic in `lib.rs` duplicates or legitimately augments
-    `liberado-bootstrap`'s stated assembly role** — flagged as ambiguous by the coupling pass, needs a
-    closer read of both files side by side before judging either way.
-12. `liberado-daemon` depending on `liberado-orchestrator` without any corresponding `liberado-mcp`
-    dependency (production wiring happens from outside, via `bootstrap`/`server`) — this coupling is
-    invisible from `daemon`'s own `Cargo.toml` alone. Low urgency; a doc-comment note on `Daemon`'s
-    orchestrator field would make the implicit requirement explicit.
+**Status**: Closed out (2026-07-02). Before implementing, re-verified each item's premise directly
+against the code rather than trusting the one-line summaries below — two didn't hold up.
+
+9. ❌ **Merge `liberado-theme` + `liberado-markdown` + `liberado-commands`** — **dropped, premise was
+   wrong on both counts.** Not tiny: 750+447+1171 lines, real module structure (`liberado-commands` has
+   its own `handlers/` subdirectory and a 639-line test file). Not "always used together": checked each
+   consumer's `Cargo.toml` directly — `liberado-cli` depends on *none* of the three; `liberado-webui`
+   depends on `commands`+`theme` but not `markdown`. Merging would have forced `webui`'s WASM bundle to
+   carry `markdown` code it doesn't use — a regression against the "could someone use just this crate?"
+   test that motivated the original modularity audit.
+   - **New finding surfaced while checking this**: `liberado-webui` hand-rolls its own `render_markdown`
+     (`crates/webui/src/components/markdown.rs`, using `pulldown-cmark` directly) instead of using
+     `liberado-markdown`, which is explicitly designed for this — its own doc comment says it returns
+     UI-agnostic spans so "any renderer (ratatui, HTML/Dioxus, terminal escapes) can map to its own
+     primitives." Dioxus/HTML is literally one of the three renderers it was built for. **Deliberately
+     not fixed now**: `liberado-markdown` looks like a narrower subset than full CommonMark (no
+     tables/blockquotes/nested lists visible in its supported-syntax table), and webui's markdown
+     rendering is active WIP on `ui-polish` that can't be verified live right now. A real, scoped
+     candidate for a later, deliberate pass — not busywork.
+10. ✅ **Split `liberado-bootstrap`** so `liberado-mcp-forge` doesn't transitively pull in
+    `liberado-daemon`'s vault-watching machinery just to load config and wire MCPs. Confirmed real:
+    `mcp-forge` calls exactly `config_dir()` and `mcp_install_dir()`, nothing else. New
+    `liberado-config` crate holds the config loader + light path-resolution helpers
+    (`config_dir`/`mcp_install_dir`/`data_dir`/`GuardContext`); `liberado-bootstrap` re-exports its full
+    surface (`liberado-server`/`liberado-cli` needed zero changes), and `mcp-forge` now depends on
+    `liberado-config` only. Verified via `cargo tree -p liberado-mcp-forge` — `liberado-daemon`,
+    `turbovault`, `turbomcp`, `liberado-orchestrator`, `liberado-dispatcher` no longer appear anywhere
+    in its dependency tree.
+11. ✅ **Whether `liberado-server`'s assembly logic duplicates or legitimately augments
+    `liberado-bootstrap`'s role** — **closed, no action needed.** Read both fully: `build_chat`
+    (server) and `configure_daemon` (bootstrap) both construct an `Orchestrator`, which looks like
+    duplication at a glance, but the actual inputs differ meaningfully per-actor — the daemon's
+    autonomous reactive loop and chat's interactive session genuinely need separate `Orchestrator`
+    instances (different capability component, different live MCP connection). The one real shared
+    piece (consequence catalog + proposals dir) was already extracted as `guard_context()` in Tier 2.
+    Nothing left to consolidate.
+12. ✅ `liberado-daemon` depending on `liberado-orchestrator` without any corresponding `liberado-mcp`
+    dependency — doc-comment added to `Daemon::with_orchestrator` making the implicit
+    `RuntimeFactory`-supplied-by-the-caller requirement explicit.
 
 ---
 

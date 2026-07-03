@@ -2790,19 +2790,14 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 name = "liberado-bootstrap"
 version = "0.1.0"
 dependencies = [
- "dirs 5.0.1",
  "liberado-common",
- "liberado-config-loader",
+ "liberado-config",
  "liberado-daemon",
  "liberado-dispatcher",
  "liberado-mcp",
  "liberado-orchestrator",
  "liberado-provider",
  "liberado-provider-deepseek",
- "serde",
- "tempfile",
- "thiserror 2.0.18",
- "toml 0.8.23",
  "tracing",
 ]
 
@@ -2837,6 +2832,20 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "liberado-config"
+version = "0.1.0"
+dependencies = [
+ "dirs 5.0.1",
+ "liberado-common",
+ "liberado-config-loader",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 0.8.23",
+ "tracing",
 ]
 
 [[package]]
@@ -2973,8 +2982,8 @@ dependencies = [
 name = "liberado-mcp-forge"
 version = "0.1.0"
 dependencies = [
- "liberado-bootstrap",
  "liberado-common",
+ "liberado-config",
  "serde",
  "tempfile",
  "thiserror 2.0.18",

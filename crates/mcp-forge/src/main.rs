@@ -7,7 +7,7 @@
 //!
 //! Reads `mcp-sources.toml` from the same config directory the daemon resolves
 //! (`LIBERADO_CONFIG_DIR` or the platform default). Installs into `LIBERADO_MCP_INSTALL_DIR`
-//! (or its platform-default equivalent) — see `liberado_bootstrap::mcp_install_dir`.
+//! (or its platform-default equivalent) — see `liberado_config::mcp_install_dir`.
 
 mod build;
 mod lock;
@@ -61,7 +61,7 @@ fn main() -> ExitCode {
 }
 
 fn run_sync(force: bool, only: Option<String>) -> ExitCode {
-    let Some(config_dir) = liberado_bootstrap::config_dir() else {
+    let Some(config_dir) = liberado_config::config_dir() else {
         eprintln!("no config directory found (set LIBERADO_CONFIG_DIR)");
         return ExitCode::FAILURE;
     };
@@ -88,7 +88,7 @@ fn run_sync(force: bool, only: Option<String>) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let install_dir = liberado_bootstrap::mcp_install_dir();
+    let install_dir = liberado_config::mcp_install_dir();
     let mut lock = LockFile::load(&install_dir);
 
     let mut failed = false;

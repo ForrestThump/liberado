@@ -28,7 +28,7 @@ exist there"; `crates/bootstrap/src/lib.rs`'s `McpTransport::Managed` match arm 
 
 ## Pieces
 
-- `sources.rs` — loads `mcp-sources.toml` (found via the same `liberado_bootstrap::config_dir()`
+- `sources.rs` — loads `mcp-sources.toml` (found via the same `liberado_config::config_dir()`
   the daemon uses, so it sits next to `topology.toml`). Each `[[source]]` has `name` (must match
   the `topology.toml` `[[mcps]]` entry it feeds), `git`, and two escape hatches for repos that
   don't follow the "binary name == repo name" convention: `package` (passed as `cargo install`'s

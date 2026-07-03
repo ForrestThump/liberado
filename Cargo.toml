@@ -46,6 +46,7 @@ crossterm = "0.28"
 # --- internal crates ---
 liberado-bootstrap = { path = "crates/bootstrap" }
 liberado-common = { path = "crates/common" }
+liberado-config = { path = "crates/config" }
 liberado-config-loader = { path = "crates/config-loader" }
 liberado-conversation-store = { path = "crates/conversation-store" }
 liberado-provider = { path = "crates/provider" }

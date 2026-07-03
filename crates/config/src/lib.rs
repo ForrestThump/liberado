@@ -1,15 +1,22 @@
-//! The config-file loader (Decision 14, `liberado-config-spec.md`).
+//! # liberado-config
 //!
-//! The typed *model* and its model-level [`Config::validate`] live in `liberado-common`; this is the
-//! daemon-side half: resolve a config directory, read the three optional per-section TOML files
-//! (`topology.toml` / `policy.toml` / `tuning.toml`), assemble them into one [`Config`], and run the
-//! **cross-cutting** checks (dangling zone/MCP refs, missing secrets) via the config-loader crate.
-//! Every error names the offending file or setting, because the realistic edit path for this config
-//! is an `ssh` session — the message has to be enough to fix it without a debugger.
+//! The config-file loader (Decision 14, `liberado-config-spec.md`), plus the path-resolution helpers
+//! built directly on it. The typed *model* and its model-level [`Config::validate`] live in
+//! `liberado-common`; this is the daemon-side half: resolve a config directory, read the three
+//! optional per-section TOML files (`topology.toml` / `policy.toml` / `tuning.toml`), assemble them
+//! into one [`Config`], and run the **cross-cutting** checks (dangling zone/MCP refs, missing secrets)
+//! via the config-loader crate. Every error names the offending file or setting, because the realistic
+//! edit path for this config is an `ssh` session — the message has to be enough to fix it without a
+//! debugger.
 //!
 //! Each file is optional: an absent file leaves its section at the specced `Default` (so an empty
 //! config still assembles a `Config`, which then fails validation citing e.g. the missing vault path
 //! — a precise, actionable failure, not a silent one).
+//!
+//! Deliberately dependency-light: only `liberado-common` + `liberado-config-loader`, no
+//! daemon/mcp/dispatcher/orchestrator/provider — so a tool that only needs config/path resolution
+//! (`liberado-mcp-forge`) doesn't have to build the whole assembly stack. `liberado-bootstrap` depends
+//! on this crate and re-exports its public surface, so `liberado-server`/`liberado-cli` see no change.
 
 use std::path::{Path, PathBuf};
 
@@ -251,6 +258,50 @@ pub fn capability_catalog_from_config(config: &Config) -> CapabilityCatalog {
         catalog.register(descriptor);
     }
     catalog
+}
+
+/// Where `liberado-mcp-forge` installs managed MCP binaries, and where
+/// [`McpTransport::Managed`](liberado_common::config::McpTransport::Managed) resolution looks for
+/// them (Decision: convention over mutation — `topology.toml` never gets a file path written into
+/// it; a `name` resolves to a path by this one rule, on both the forge tool's and the daemon's side).
+///
+/// 1. `LIBERADO_MCP_INSTALL_DIR` env var — explicit intent, always wins.
+/// 2. Platform data dir (`dirs::data_dir()/liberado/mcp-bin`), mirroring how [`config_dir`]
+///    resolves `LIBERADO_CONFIG_DIR`.
+pub fn mcp_install_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("LIBERADO_MCP_INSTALL_DIR") {
+        return PathBuf::from(dir);
+    }
+    dirs::data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("liberado")
+        .join("mcp-bin")
+}
+
+/// Where operational data (conversation logs, proposal files) lives — outside the vault (Decision 12),
+/// so a vault watcher never reacts to it. `LIBERADO_DATA_DIR` env var wins; otherwise `.liberado`
+/// relative to the working directory. Shared by both the chat-boot path (`liberado-server`) and the
+/// daemon-boot path (`liberado-bootstrap`), which each used to resolve this independently.
+pub fn data_dir() -> PathBuf {
+    PathBuf::from(std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into()))
+}
+
+/// The ingredients for `RiskGatedToolRuntime`-style guarding — chat's own runtime gate and the
+/// `Orchestrator`'s runtime-level gate for adaptive tool calls both need the same consequence
+/// catalog and the same non-vault proposals directory. Shared by both boot paths (`liberado-server`'s
+/// `build_chat`, `liberado-bootstrap`'s `configure_daemon`), which each used to derive these
+/// independently.
+pub struct GuardContext {
+    pub consequences: Vec<(String, liberado_common::Consequence)>,
+    pub proposals_dir: PathBuf,
+}
+
+/// Build a [`GuardContext`] from the live capability catalog.
+pub fn guard_context(catalog: &CapabilityCatalog) -> GuardContext {
+    GuardContext {
+        consequences: catalog.consequence_catalog(),
+        proposals_dir: data_dir().join("proposals"),
+    }
 }
 
 #[cfg(test)]

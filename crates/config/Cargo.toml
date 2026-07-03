@@ -1,0 +1,21 @@
+[package]
+name = "liberado-config"
+version = "0.1.0"
+description = "Config loading (Decision 14): resolve a config directory, read the per-section TOML files, assemble and validate a Config, plus the path-resolution helpers (mcp install dir, operational data dir, runtime-gating context) built on it. Deliberately dependency-light — no daemon/mcp/dispatcher/orchestrator — so tools that only need config/path resolution (e.g. liberado-mcp-forge) don't have to pull in the whole assembly stack."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+liberado-common = { workspace = true }
+liberado-config-loader = { workspace = true }
+dirs = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

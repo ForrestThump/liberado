@@ -1,25 +1,28 @@
 //! # liberado-bootstrap
 //!
-//! Composition helpers that build Liberado's components, shared by every binary that assembles a
-//! daemon. Two things live here: the config **loader** (Decision 14 — resolve + merge the small
-//! per-section TOML files into one validated [`Config`]) and the **assembly** that turns that config
-//! (plus the env-sourced provider) into a wired daemon — the dispatcher's capabilities + catalog and
-//! the MCP runtime registry all come from `policy`/`topology`, while the inference provider still
-//! comes from the environment (`DEEPSEEK_API_KEY`). Keeping daemon assembly in one place means the
-//! `cli` and server binaries build the same daemon the same way, so the modes (watch-only /
-//! decide-only / act) can't drift apart between them.
+//! The **assembly** half of daemon composition: turns a loaded config (plus the env-sourced
+//! provider) into a wired daemon — the dispatcher's capabilities + catalog and the MCP runtime
+//! registry all come from `policy`/`topology`, while the inference provider still comes from the
+//! environment (`DEEPSEEK_API_KEY`). Keeping daemon assembly in one place means the `cli` and server
+//! binaries build the same daemon the same way, so the modes (watch-only / decide-only / act) can't
+//! drift apart between them.
+//!
+//! The config **loader** itself (Decision 14 — resolve + merge the small per-section TOML files into
+//! one validated `Config`) and the light path-resolution helpers built on it (`config_dir`,
+//! `mcp_install_dir`, `data_dir`, `GuardContext`) live in `liberado-config` instead — this crate's
+//! heavy assembly functions need `liberado-daemon`/`liberado-mcp`/`liberado-dispatcher`/
+//! `liberado-orchestrator`/`liberado-provider-deepseek`, which a config-only consumer
+//! (`liberado-mcp-forge`) has no use for. Re-exported here so `liberado-server`/`liberado-cli` see no
+//! change from before this split.
 
-mod config;
-
-pub use config::{
-    ConfigError, ConfigProvenance, capability_catalog_from_config, catalog_from_config, config_dir,
-    load_config,
+pub use liberado_config::{
+    ConfigError, ConfigProvenance, GuardContext, capability_catalog_from_config,
+    catalog_from_config, config_dir, data_dir, guard_context, load_config, mcp_install_dir,
 };
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use liberado_common::{CapabilityCatalog, Consequence};
+use liberado_common::CapabilityCatalog;
 use liberado_common::config::{Config, McpTransport, managed_binary_path};
 use liberado_daemon::Daemon;
 use liberado_dispatcher::Dispatcher;
@@ -27,49 +30,6 @@ use liberado_mcp::{HttpConnector, McpRegistry, StdioConnector};
 use liberado_orchestrator::Orchestrator;
 use liberado_provider::Provider;
 use liberado_provider_deepseek::DeepSeekProvider;
-
-/// Where `liberado-mcp-forge` installs managed MCP binaries, and where
-/// [`McpTransport::Managed`] resolution looks for them (Decision: convention over mutation —
-/// `topology.toml` never gets a file path written into it; a `name` resolves to a path by this
-/// one rule, on both the forge tool's and the daemon's side).
-///
-/// 1. `LIBERADO_MCP_INSTALL_DIR` env var — explicit intent, always wins.
-/// 2. Platform data dir (`dirs::data_dir()/liberado/mcp-bin`), mirroring how [`config_dir`]
-///    resolves `LIBERADO_CONFIG_DIR`.
-pub fn mcp_install_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("LIBERADO_MCP_INSTALL_DIR") {
-        return PathBuf::from(dir);
-    }
-    dirs::data_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("liberado")
-        .join("mcp-bin")
-}
-
-/// Where operational data (conversation logs, proposal files) lives — outside the vault (Decision 12),
-/// so a vault watcher never reacts to it. `LIBERADO_DATA_DIR` env var wins; otherwise `.liberado`
-/// relative to the working directory. Shared by both the chat-boot path (`liberado-server`) and the
-/// daemon-boot path (this crate), which each used to resolve this independently.
-pub fn data_dir() -> PathBuf {
-    PathBuf::from(std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into()))
-}
-
-/// The ingredients for `RiskGatedToolRuntime`-style guarding — chat's own runtime gate and the
-/// `Orchestrator`'s runtime-level gate for adaptive tool calls both need the same consequence
-/// catalog and the same non-vault proposals directory. Shared by both boot paths (`liberado-server`'s
-/// `build_chat`, this crate's `configure_daemon`), which each used to derive these independently.
-pub struct GuardContext {
-    pub consequences: Vec<(String, Consequence)>,
-    pub proposals_dir: PathBuf,
-}
-
-/// Build a [`GuardContext`] from the live capability catalog.
-pub fn guard_context(catalog: &CapabilityCatalog) -> GuardContext {
-    GuardContext {
-        consequences: catalog.consequence_catalog(),
-        proposals_dir: data_dir().join("proposals"),
-    }
-}
 
 /// Build the shared inference provider from the environment (`DEEPSEEK_API_KEY`). `None` means no key
 /// is set, so the daemon runs watch-only and chat is disabled.
