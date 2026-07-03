@@ -48,7 +48,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use liberado_common::{CapabilityCatalog, CapabilitySet, Consequence, DispatchAction};
+use liberado_common::{
+    CapabilityCatalog, CapabilitySet, Consequence, DispatchAction, ProposalSigner,
+};
 use liberado_conversation_store::{
     Author, ConversationHeader, ConversationStore, NewConversation, NewNode, StoreError, Ulid,
 };
@@ -94,8 +96,13 @@ pub struct ChatSessions {
     consequences: Vec<(String, Consequence)>,
     /// Capability grants for RiskGatedToolRuntime capability checking.
     capabilities: CapabilitySet,
-    /// Directory under which `proposals/` subdirectory holds proposal files.
+    /// The vault's `proposals/` directory — a `proposals/` subdirectory under this holds proposal
+    /// files (matches the daemon's own `PROPOSALS_DIR` convention, see `RiskGatedToolRuntime`'s
+    /// doc comment for why this is vault-rooted, not a data-dir path).
     proposals_dir: PathBuf,
+    /// Signs every proposal this session writes (dispatcher-originated and runtime-gated alike) so
+    /// the daemon can detect tampering before approving one.
+    signer: ProposalSigner,
 
     // ── Dispatch routing ─────────────────────────────────────────────────────
     /// When present, every turn is classified before execution. See the module docs.
@@ -127,6 +134,7 @@ impl ChatSessions {
             consequences: Vec::new(),
             capabilities: CapabilitySet::empty(),
             proposals_dir: PathBuf::new(),
+            signer: ProposalSigner::random(),
             dispatcher: None,
             dispatch_catalog: Arc::new(CapabilityCatalog::new()),
             orchestrator: None,
@@ -149,16 +157,20 @@ impl ChatSessions {
     ///
     /// * `consequences` - `(mcp_name, consequence)` pairs for consequence gating.
     /// * `capabilities` - The base capability set for capability checks and tool scoping.
-    /// * `proposals_dir` - Base directory for proposal files (`proposals/proposals/<id>.md`).
+    /// * `proposals_dir` - The vault's `proposals/` directory (`proposals/proposals/<id>.md` under
+    ///   it holds proposal files — matches the daemon's own `PROPOSALS_DIR` convention).
+    /// * `signer` - Signs every proposal this session writes.
     pub fn with_guards(
         mut self,
         consequences: Vec<(String, Consequence)>,
         capabilities: CapabilitySet,
         proposals_dir: PathBuf,
+        signer: ProposalSigner,
     ) -> Self {
         self.consequences = consequences;
         self.capabilities = capabilities;
         self.proposals_dir = proposals_dir;
+        self.signer = signer;
         self
     }
 
@@ -347,11 +359,11 @@ impl ChatSessions {
         }
     }
 
-    /// Write a dispatcher-originated proposal the same way [`RiskGatedToolRuntime`]'s runtime-level
-    /// proposals are written: plain `tokio::fs::write` under `proposals_dir/proposals/`, not a
-    /// vault write. Chat proposals live in the data dir (not the vault) so a vault watcher never
-    /// reacts to them — a vault-resident proposal surface would need a provenance-tagged
-    /// `Vault::write` (Decision 11), deferred same as the runtime-level ones.
+    /// Write a dispatcher-originated proposal (already signed by `Orchestrator`'s `Propose` arm) the
+    /// same way [`RiskGatedToolRuntime`]'s runtime-level proposals are written: plain
+    /// `tokio::fs::write` under `proposals_dir/proposals/`. `proposals_dir` is the vault's own
+    /// `proposals/` directory, so this lands exactly where the daemon's `react()` already watches —
+    /// approving it flows through the same pipeline pre-flight proposals use.
     async fn write_chat_proposal(
         &self,
         proposal: &liberado_common::Proposal,
@@ -415,6 +427,7 @@ impl ChatSessions {
             self.proposals_dir.clone(),
             user.to_string(),
             session.to_string(),
+            self.signer.clone(),
         ))
     }
 
@@ -685,6 +698,7 @@ mod tests {
                 vec![("tasks-mcp".into(), Consequence::Reversible)],
                 liberado_common::CapabilitySet::empty(),
                 dir.path().join("proposals"),
+                ProposalSigner::random(),
             );
 
         let id = sessions.create(None).await.unwrap();
@@ -727,6 +741,7 @@ mod tests {
                 vec![("calendar-mcp".into(), Consequence::Reversible)],
                 CapabilitySet::from_iter([Capability::ExecuteMcp("calendar-mcp".into())]),
                 dir.path().join("proposals"),
+                ProposalSigner::random(),
             );
 
         let id = sessions.create(None).await.unwrap();
@@ -762,6 +777,7 @@ mod tests {
                 vec![("email-mcp".into(), Consequence::External)],
                 CapabilitySet::empty(), // nothing granted
                 dir.path().join("proposals"),
+                ProposalSigner::random(),
             );
 
         let id = sessions.create(None).await.unwrap();
@@ -840,6 +856,7 @@ mod tests {
             CapabilitySet::empty(),
             Vec::new(),
             std::env::temp_dir(),
+            ProposalSigner::random(),
         );
         let sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), orchestrator);
 
@@ -875,6 +892,7 @@ mod tests {
             CapabilitySet::empty(),
             Vec::new(),
             std::env::temp_dir(),
+            ProposalSigner::random(),
         );
         let sessions = sessions_with_dispatch(
             dir.path(),
@@ -910,9 +928,15 @@ mod tests {
             CapabilitySet::empty(),
             Vec::new(),
             std::env::temp_dir(),
+            ProposalSigner::random(),
         );
         let mut sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), orchestrator);
-        sessions = sessions.with_guards(Vec::new(), CapabilitySet::empty(), dir.path().join("data"));
+        sessions = sessions.with_guards(
+            Vec::new(),
+            CapabilitySet::empty(),
+            dir.path().join("data"),
+            ProposalSigner::random(),
+        );
 
         let id = sessions.create(None).await.unwrap();
         let reply = sessions
@@ -995,13 +1019,19 @@ mod tests {
             CapabilitySet::empty(),
             Vec::new(),
             std::env::temp_dir(),
+            ProposalSigner::random(),
         );
         let capabilities = CapabilitySet::from_iter([
             Capability::ExecuteMcp("tasks-mcp".into()),
             Capability::ExecuteMcp("email-mcp".into()),
         ]);
         let sessions = ChatSessions::new(store, executor, Arc::new(TwoMcpTools))
-            .with_guards(Vec::new(), capabilities, dir.join("proposals"))
+            .with_guards(
+                Vec::new(),
+                capabilities,
+                dir.join("proposals"),
+                ProposalSigner::random(),
+            )
             .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()), orchestrator);
 
         (sessions, chat_provider)

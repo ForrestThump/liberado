@@ -20,6 +20,7 @@ pub use liberado_config::{
     catalog_from_config, config_dir, data_dir, guard_context, load_config, mcp_install_dir,
 };
 
+use std::path::Path;
 use std::sync::Arc;
 
 use liberado_common::CapabilityCatalog;
@@ -68,11 +69,12 @@ pub fn mcp_registry_from_config(config: &Config) -> Option<McpRegistry> {
 }
 
 /// Attach the dispatcher and (when an MCP server is configured) the orchestrator to `daemon`, using
-/// the loaded `config` and the shared, live `catalog` (built once by the caller via
+/// the loaded `config`, the shared, live `catalog` (built once by the caller via
 /// [`capability_catalog_from_config`] and also handed to chat's own dispatch and the server's API —
-/// one object, not three independent snapshots). With no provider the daemon stays watch-only; with
-/// a provider but no MCP it is decide-only. This is the single owner of the daemon's decide/act
-/// wiring.
+/// one object, not three independent snapshots), and `vault_path` (the same resolved path `daemon`
+/// itself was opened over — not re-derived from `config.topology.vault_path`, since a CLI override
+/// can make those differ). With no provider the daemon stays watch-only; with a provider but no MCP
+/// it is decide-only. This is the single owner of the daemon's decide/act wiring.
 ///
 /// The dispatcher is built from `config.tuning`, and the `"dispatcher"` component's capabilities
 /// (`config.policy.capabilities_for("dispatcher")` — the union of grants naming that component) are
@@ -86,6 +88,7 @@ pub fn configure_daemon(
     provider: Option<&Arc<dyn Provider>>,
     config: &Config,
     catalog: Arc<CapabilityCatalog>,
+    vault_path: &Path,
 ) -> Daemon {
     let Some(provider) = provider else {
         tracing::warn!("DEEPSEEK_API_KEY not set — running watch-only (no dispatch)");
@@ -103,10 +106,12 @@ pub fn configure_daemon(
         "dispatcher capability boundary configured from policy"
     );
     // Runtime-level gating ingredients for the orchestrator's adaptive (non-seed) tool calls — the
-    // same consequence catalog and non-vault proposals convention chat's own RiskGatedToolRuntime
-    // uses (see `RiskGatedToolRuntime`'s doc comment on why proposals stay out of the vault).
-    let guard = guard_context(&catalog);
-    let daemon = daemon.with_dispatcher(dispatcher, catalog, capabilities.clone());
+    // same consequence catalog, vault-rooted proposals directory, and integrity signer chat's own
+    // RiskGatedToolRuntime uses (see `RiskGatedToolRuntime`'s doc comment).
+    let guard = guard_context(&catalog, vault_path);
+    let daemon = daemon
+        .with_dispatcher(dispatcher, catalog, capabilities.clone())
+        .with_proposal_signer(guard.signer.clone());
     match mcp_registry_from_config(config) {
         Some(factory) => {
             tracing::info!("orchestrator enabled (MCP execution)");
@@ -116,6 +121,7 @@ pub fn configure_daemon(
                 capabilities,
                 guard.consequences,
                 guard.proposals_dir,
+                guard.signer,
             ))
         }
         None => {

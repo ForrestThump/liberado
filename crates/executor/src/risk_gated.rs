@@ -8,6 +8,16 @@
 //! This is the runtime safety net that sits between the agent loop and the actual MCP tools —
 //! even if the dispatcher misclassifies a request, this guard catches it before the tool runs.
 //!
+//! ## `proposals_dir` is the vault's `proposals/` directory
+//!
+//! Earlier, downgraded proposals were written outside the vault (a data directory) specifically so
+//! the vault watcher would never react to them — but nothing ever read them back either, so an
+//! approval had nowhere to go: a genuine dead end. `proposals_dir` is now the **vault's**
+//! `proposals/` directory, the same one the dispatcher's pre-flight `Propose` disposition already
+//! uses. The daemon's `react()` routes any change under `proposals/` straight to its
+//! approve/execute handling based on path alone, so a downgrade written here now flows through the
+//! same, already-working propose→approve→execute pipeline — approving one actually executes it.
+//!
 //! ## Downgrade is a tool *result*, not an error
 //!
 //! A consequence/magnitude downgrade returns `Ok(<clear message>)` — a tool *result* the model
@@ -22,7 +32,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use liberado_common::{
-    CapabilitySet, Consequence, Proposal, ProposedAction,
+    CapabilitySet, Consequence, Proposal, ProposalSigner, ProposedAction,
     is_sweeping_destructive, mcp_of,
 };
 use liberado_provider::{ToolDef, ToolInvocation};
@@ -44,6 +54,8 @@ pub struct RiskGatedToolRuntime {
     goal_context: String,
     /// Correlation base for proposal naming (e.g. session id or dispatch id).
     correlation_base: String,
+    /// Signs every downgraded proposal so the daemon can detect tampering before approving it.
+    signer: ProposalSigner,
 }
 
 impl RiskGatedToolRuntime {
@@ -57,6 +69,8 @@ impl RiskGatedToolRuntime {
     /// * `proposals_dir` - Directory under which `proposals/` subdirectory holds proposal files.
     /// * `goal_context` - The user message / goal context for magnitude assessment.
     /// * `correlation_base` - A unique base string for naming generated proposals.
+    /// * `signer` - Signs every downgraded proposal (see [`Proposal::integrity`]'s doc comment).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         inner: Arc<dyn ToolRuntime>,
         capabilities: CapabilitySet,
@@ -64,6 +78,7 @@ impl RiskGatedToolRuntime {
         proposals_dir: PathBuf,
         goal_context: String,
         correlation_base: String,
+        signer: ProposalSigner,
     ) -> Self {
         Self {
             inner,
@@ -72,6 +87,7 @@ impl RiskGatedToolRuntime {
             proposals_dir,
             goal_context,
             correlation_base,
+            signer,
         }
     }
 }
@@ -164,13 +180,13 @@ impl RiskGatedToolRuntime {
                 .as_nanos(),
         );
 
-        // NOTE: chat proposals live in the data dir (not the vault) so a vault watcher never reacts
-        // to them. A vault-resident proposal surface would require a provenance-tagged Vault::write
-        // (Decision 11) — deferred.
+        // `proposals_dir` is the vault's proposals/ directory (see this module's doc comment) — the
+        // daemon's react() routes changes here into the same approve/execute pipeline the
+        // dispatcher's own pre-flight proposals use.
         let proposals_subdir = self.proposals_dir.join("proposals");
         let proposal_path = proposals_subdir.join(format!("{proposal_id}.md"));
 
-        let proposal = Proposal::pending(
+        let mut proposal = Proposal::pending(
             &proposal_id,
             &self.correlation_base,
             "liberado-chat",
@@ -180,6 +196,7 @@ impl RiskGatedToolRuntime {
             }]),
             rationale,
         );
+        self.signer.sign(&mut proposal);
 
         let note = proposal.to_note();
 
@@ -279,6 +296,7 @@ mod tests {
             std::env::temp_dir(),
             "test goal".into(),
             "test-correlation".into(),
+            ProposalSigner::random(),
         )
     }
 
@@ -298,6 +316,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let inner = Arc::new(MockInner::new(&["email-mcp:send"], Ok("sent".into())));
         let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("email-mcp".into())]);
+        let signer = ProposalSigner::random();
         let rt = RiskGatedToolRuntime::new(
             inner.clone(),
             caps,
@@ -305,6 +324,7 @@ mod tests {
             dir.path().to_path_buf(),
             "send an email".into(),
             "test-email".into(),
+            signer.clone(),
         );
 
         let call = ToolInvocation::new("c1", "email-mcp:send", serde_json::json!({"to": "boss"}));
@@ -322,11 +342,16 @@ mod tests {
             "high-consequence call must not invoke the inner tool"
         );
 
-        // Verify the proposal file was written
+        // Verify the proposal file was written, and it's signed with the runtime's own signer.
         let proposals_dir = dir.path().join("proposals");
         let mut entries = tokio::fs::read_dir(&proposals_dir).await.unwrap();
-        let entry = entries.next_entry().await.unwrap();
-        assert!(entry.is_some(), "proposal file should exist");
+        let entry = entries.next_entry().await.unwrap().expect("proposal file should exist");
+        let content = tokio::fs::read_to_string(entry.path()).await.unwrap();
+        let written = liberado_common::Proposal::from_note(&content).unwrap();
+        assert!(
+            signer.verify(&written),
+            "the written proposal must verify against the runtime's own signer"
+        );
     }
 
     #[tokio::test]
@@ -369,6 +394,7 @@ mod tests {
             dir.path().to_path_buf(),
             "delete all notes".into(), // Sweeping+destructive goal
             "test-sweep".into(),
+            ProposalSigner::random(),
         );
 
         let call = ToolInvocation::new("c1", "vault-mcp:delete", serde_json::json!({"path": "all"}));

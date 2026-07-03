@@ -21,7 +21,15 @@ Items 1-3 below are scoped for a follow-on implementation plan; items 4-9 are lo
 
 ## Items 1-3 — scoped for the next implementation plan
 
-### 1. Approval spoofing — no writer-identity verification (High)
+**Status (2026-07-02)**: items 2 and 3 are implemented (HMAC-SHA256 proposal integrity signing in
+`crates/common/src/proposal.rs`'s `ProposalSigner`, verified in `handle_proposal_change` and
+`execute_approved`; `RiskGatedToolRuntime`'s proposals now write to the vault's own `proposals/`
+directory instead of a data-dir dead end, so runtime-gated downgrades flow through the same
+approve→execute pipeline as pre-flight proposals). Item 1 remains open; see its entry below for why it
+needs a separate, larger initiative (OS-level MCP process isolation or an out-of-band approval channel)
+rather than a code fix in this pass.
+
+### 1. Approval spoofing — no writer-identity verification (High) — ⏳ open, not attempted this pass
 
 **Where**: `crates/daemon/src/lib.rs`'s `handle_proposal_change` (`~lines 220-362`, exact ranges may
 have shifted). The daemon detects "a proposal was approved" purely by watching for a vault change under
@@ -44,7 +52,18 @@ vault filesystem *is* that gate.
 `proposed_action` (the actual tool/args that will run), `rationale`, or `expires` between propose and
 approve is silently accepted — there's no snapshot comparison against what was originally proposed.
 
-### 2. Action substitution — executed action isn't provably what was approved (High)
+**Why this stays open**: a content-based integrity signature (item 2, now implemented) detects tampering
+with an *existing* proposal's immutable fields, but it cannot verify *who* flipped `status: approved` —
+that field has to stay editable for the normal human-approval workflow, so it can't be part of the
+creation-time signature. Any daemon-held signing key also lives in a plain file on the same filesystem
+MCP server child processes already have full read/write access to (confirmed via
+`turbomcp/crates/turbomcp-transport/src/child_process.rs` — no `current_dir`/`environment` sandboxing on
+spawned processes). Closing this gap for real needs either OS-level process isolation for MCP servers
+(deny filesystem access to the vault except through the audited `Vault::write` API) or an out-of-band
+approval channel (push notification, CLI confirmation, authenticated web session) that a co-resident
+process can't reach — both larger initiatives than a hardening patch.
+
+### 2. Action substitution — executed action isn't provably what was approved (High) — done (2026-07-02)
 
 **Where**: `Orchestrator::execute_approved` (`crates/orchestrator/src/lib.rs:~272-346`) reads
 `proposal.proposed_action` from the in-memory struct that was *just* parsed live from the note at
@@ -53,7 +72,17 @@ created. Same root cause as item 1's field-tampering note, called out separately
 (cryptographic/hash commitment, or at minimum a write-once field) is a distinct piece of work from
 locking down *who* can write `status: approved`.
 
-### 3. Runtime-level gate's own proposals are a dead end (Functional gap, not security — but directly undermines this session's own runtime-gating work)
+**Implemented**: `crates/common/src/proposal.rs`'s `ProposalSigner` computes an HMAC-SHA256 over the
+proposal's immutable fields (`id`/`correlation_id`/`source`/`proposed_action`/`created`) at creation
+time, stored in a new `integrity` field — deliberately excluding `status`/`expires` so the normal
+approval workflow still works. The signing key is per-installation (`load_or_create_proposal_key`,
+`crates/config/src/lib.rs`, `<data_dir>/.proposal-key`, 0600 on Unix). Verified in
+`crates/daemon/src/lib.rs`'s `handle_proposal_change` (rejects before the terminal-status check — a bad
+signature leaves the proposal's on-disk status untouched rather than marking it done) and again in
+`Orchestrator::execute_approved` (defense-in-depth). As documented above, this closes tampering
+detection but does not solve item 1 (writer identity) — see that item's "why this stays open" note.
+
+### 3. Runtime-level gate's own proposals are a dead end (Functional gap, not security — but directly undermines this session's own runtime-gating work) — done (2026-07-02)
 
 **Where**: `RiskGatedToolRuntime::write_proposal` (`crates/executor/src/risk_gated.rs:~153-213`) writes
 proposal files to `<LIBERADO_DATA_DIR>/proposals/proposals/<id>.md` — deliberately *outside* the vault
@@ -70,6 +99,16 @@ calls bypass the safety guard" gap. That fix correctly *blocks* a high-consequen
 running immediately (`Ok("PROPOSAL CREATED...")` instead of executing) — but the promised recovery path
 ("a human can review and approve it later") doesn't exist. The block is real; the appeal path is not.
 Both chat's own `RiskGatedToolRuntime` usage and the orchestrator's now share this same dead end.
+
+**Implemented**: `RiskGatedToolRuntime`'s `proposals_dir` now means the vault's own `proposals/`
+directory (not a data-dir dead end) — `crates/config/src/lib.rs`'s `guard_context()` builds it from the
+vault path directly. The daemon's `react()` already routes any change under `proposals/` to
+`handle_proposal_change` based on path alone, so a runtime-gated downgrade now flows through the exact
+same approve→execute pipeline pre-flight proposals use, with no new daemon-side code. Proven end-to-end
+by `crates/daemon/src/lib.rs`'s `runtime_gated_downgrade_lands_in_the_vault_and_executes_once_approved`
+test: construct a `RiskGatedToolRuntime`, trigger a high-consequence call, confirm the proposal lands
+under `<vault>/proposals/` with a valid signature, simulate human approval by editing status in place,
+start the daemon, confirm it actually executes.
 
 ---
 

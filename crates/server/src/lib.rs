@@ -75,8 +75,14 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     let mcp = liberado_bootstrap::mcp_registry_from_config(&config);
     let orchestrator_attached = dispatcher_attached && mcp.is_some();
 
-    let (chat, chat_tools, chat_tool_names) =
-        build_chat(provider.clone(), mcp, &config, capability_catalog.clone()).await;
+    let (chat, chat_tools, chat_tool_names) = build_chat(
+        provider.clone(),
+        mcp,
+        &config,
+        capability_catalog.clone(),
+        Path::new(&vault_path),
+    )
+    .await;
 
     let state = Arc::new(AppState {
         start_time: Instant::now(),
@@ -92,8 +98,13 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let daemon = Daemon::open("webui", &vault_path).await?;
-    let daemon =
-        liberado_bootstrap::configure_daemon(daemon, provider.as_ref(), &config, capability_catalog);
+    let daemon = liberado_bootstrap::configure_daemon(
+        daemon,
+        provider.as_ref(),
+        &config,
+        capability_catalog,
+        Path::new(&vault_path),
+    );
 
     let reaction_tx = state.reaction_tx();
     let daemon_handle = tokio::spawn(async move {
@@ -212,6 +223,7 @@ async fn build_chat(
     mcp: Option<McpRegistry>,
     config: &liberado_common::config::Config,
     catalog: Arc<CapabilityCatalog>,
+    vault_path: &Path,
 ) -> (Option<Arc<ChatSessions>>, usize, Vec<String>) {
     let provider = match provider {
         Some(p) => p,
@@ -234,7 +246,7 @@ async fn build_chat(
     // either is derived. A one-time snapshot at boot is fine here — MCP declarations aren't
     // runtime-dynamic yet — but the dispatch-routing catalog below stays the live `Arc` so it and the
     // daemon/API never drift apart from each other.
-    let guard = liberado_bootstrap::guard_context(&catalog);
+    let guard = liberado_bootstrap::guard_context(&catalog, vault_path);
     let catalog_is_empty = guard.consequences.is_empty();
 
     let (runtime, orchestrator) = connect_chat_runtime(&provider, mcp, &capabilities, &guard).await;
@@ -255,7 +267,12 @@ async fn build_chat(
         Executor::new(provider.clone(), Budget::default()),
         runtime,
     )
-    .with_guards(guard.consequences, capabilities, guard.proposals_dir);
+    .with_guards(
+        guard.consequences,
+        capabilities,
+        guard.proposals_dir,
+        guard.signer.clone(),
+    );
 
     if !catalog_is_empty {
         info!(
@@ -306,6 +323,7 @@ async fn connect_chat_runtime(
                 capabilities.clone(),
                 guard.consequences.clone(),
                 guard.proposals_dir.clone(),
+                guard.signer.clone(),
             );
             (rt, Some(orchestrator))
         }

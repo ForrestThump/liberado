@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use liberado_common::{
     BlockReason, Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision,
-    Outcome, Proposal, ProposalStatus, ProposedAction, ToolCall, WriteProvenance,
+    Outcome, Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall, WriteProvenance,
 };
 use liberado_executor::SUBMIT_REPORT_TOOL;
 use liberado_orchestrator::{Disposition, Orchestrator, SubDispatch};
@@ -28,7 +28,14 @@ fn orchestrator(script: Vec<CompletionResponse>, capabilities: CapabilitySet) ->
     let provider = Arc::new(MockProvider::with_script("mock", script));
     let factory = CallRecordingFactory::default();
     let calls = factory.calls.clone();
-    let orch = Orchestrator::new(provider, factory, capabilities, Vec::new(), std::env::temp_dir());
+    let orch = Orchestrator::new(
+        provider,
+        factory,
+        capabilities,
+        Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+    );
     (calls, orch)
 }
 
@@ -252,12 +259,14 @@ async fn execute_approved_runs_the_exact_calls_without_a_classifier_or_guard() {
         "mock",
         Vec::<CompletionResponse>::new(),
     ));
+    let signer = ProposalSigner::random();
     let orch = Orchestrator::new(
         provider,
         InvocationRecordingFactory { runtime },
         CapabilitySet::empty(),
         Vec::new(),
         std::env::temp_dir(),
+        signer.clone(),
     );
 
     let call = ToolCall {
@@ -271,6 +280,7 @@ async fn execute_approved_runs_the_exact_calls_without_a_classifier_or_guard() {
         ProposedAction::ToolCalls(vec![call.clone()]),
         "the note asks to email the boss",
     );
+    signer.sign(&mut proposal);
     proposal.status = ProposalStatus::Approved;
 
     let report = orch.execute_approved(&proposal).await.expect("execute");
@@ -281,6 +291,51 @@ async fn execute_approved_runs_the_exact_calls_without_a_classifier_or_guard() {
     assert_eq!(invoked.len(), 1);
     assert_eq!(invoked[0].name, "email:send");
     assert_eq!(invoked[0].arguments, call.args);
+}
+
+#[tokio::test]
+async fn execute_approved_rejects_a_proposal_with_no_valid_signature() {
+    // A proposal that was never signed (or was tampered with after signing) must not execute, even
+    // though it's status: approved — the integrity check runs before anything else in
+    // execute_approved.
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        Vec::<CompletionResponse>::new(),
+    ));
+    let orch = Orchestrator::new(
+        provider,
+        InvocationRecordingFactory { runtime },
+        CapabilitySet::empty(),
+        Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+    );
+
+    let mut proposal = Proposal::pending(
+        "forged-1",
+        "forged-1",
+        "liberado",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "email:send".into(),
+            args: serde_json::json!({ "to": "boss@example.com" }),
+        }]),
+        "never signed",
+    );
+    proposal.status = ProposalStatus::Approved;
+    // proposal.integrity is left empty — never signed by this orchestrator's signer.
+
+    let report = orch.execute_approved(&proposal).await.expect("execute_approved");
+    assert_eq!(
+        report.outcome,
+        Outcome::Failed,
+        "an unsigned/forged proposal must not report success"
+    );
+    assert!(
+        invoked.lock().unwrap().is_empty(),
+        "the real tool must never be invoked for a proposal that fails integrity verification"
+    );
 }
 
 // ------------------------------------------------------------------
@@ -306,12 +361,14 @@ async fn execute_direct_downgrades_a_high_consequence_adaptive_call() {
     let invoked = runtime.invoked.clone();
     let proposals_dir = tempfile::TempDir::new().unwrap();
     let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("dangerous-mcp".into())]);
+    let signer = ProposalSigner::random();
     let orch = Orchestrator::new(
         provider,
         InvocationRecordingFactory { runtime },
         capabilities,
         vec![("dangerous-mcp".into(), Consequence::External)],
         proposals_dir.path().to_path_buf(),
+        signer.clone(),
     );
 
     let decision = DispatchDecision {
@@ -337,11 +394,17 @@ async fn execute_direct_downgrades_a_high_consequence_adaptive_call() {
         "a high-consequence adaptive call must not reach the real tool"
     );
 
-    // A proposal file was written instead.
-    let written = std::fs::read_dir(proposals_dir.path().join("proposals"))
-        .expect("proposals dir should exist")
-        .count();
-    assert_eq!(written, 1, "exactly one proposal file should be written");
+    // A proposal file was written instead, and it's signed with the orchestrator's own signer.
+    let mut entries = std::fs::read_dir(proposals_dir.path().join("proposals"))
+        .expect("proposals dir should exist");
+    let entry = entries.next().expect("exactly one proposal file should be written").unwrap();
+    assert!(entries.next().is_none(), "exactly one proposal file should be written");
+    let content = std::fs::read_to_string(entry.path()).unwrap();
+    let written_proposal = Proposal::from_note(&content).unwrap();
+    assert!(
+        signer.verify(&written_proposal),
+        "the written proposal must verify against the orchestrator's own signer"
+    );
 }
 
 #[tokio::test]
@@ -366,6 +429,7 @@ async fn execute_direct_rejects_an_out_of_capability_adaptive_call() {
         capabilities,
         Vec::new(),
         std::env::temp_dir(),
+        ProposalSigner::random(),
     );
 
     let decision = DispatchDecision {
@@ -414,6 +478,7 @@ async fn dispatch_subagent_gates_with_the_narrowed_capability_set() {
         ceiling,
         Vec::new(),
         std::env::temp_dir(),
+        ProposalSigner::random(),
     );
 
     let decision = DispatchDecision {
@@ -462,6 +527,7 @@ async fn dispatch_parallel_gates_each_sub_dispatch() {
         capabilities,
         vec![("dangerous-mcp".into(), Consequence::External)],
         std::env::temp_dir(),
+        ProposalSigner::random(),
     );
 
     let sub_dispatches = vec![SubDispatch {
@@ -495,12 +561,14 @@ async fn execute_approved_bypasses_gating_by_design() {
         "mock",
         Vec::<CompletionResponse>::new(),
     ));
+    let signer = ProposalSigner::random();
     let orch = Orchestrator::new(
         provider,
         InvocationRecordingFactory { runtime },
         CapabilitySet::empty(),
         vec![("email-mcp".into(), Consequence::External)],
         std::env::temp_dir(),
+        signer.clone(),
     );
 
     let call = ToolCall {
@@ -514,6 +582,7 @@ async fn execute_approved_bypasses_gating_by_design() {
         ProposedAction::ToolCalls(vec![call.clone()]),
         "approved email",
     );
+    signer.sign(&mut proposal);
     proposal.status = ProposalStatus::Approved;
 
     let report = orch.execute_approved(&proposal).await.expect("execute");

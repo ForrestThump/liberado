@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 
 use debounce::Debouncer;
 use liberado_common::{
-    CapabilitySet, CapabilityCatalog, DispatchDecision, Event, EventPayload, event_source,
+    CapabilitySet, CapabilityCatalog, DispatchDecision, Event, EventPayload, ProposalSigner,
+    event_source,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_orchestrator::{Disposition, Orchestrator, OrchestratorError};
@@ -119,6 +120,11 @@ pub struct Daemon {
     debounce: Duration,
     dispatcher: Option<DispatcherContext>,
     orchestrator: Option<Orchestrator>,
+    /// Verifies a proposal's integrity signature before treating an approval edit as actionable
+    /// (see `handle_proposal_change`). Defaults to a fresh random key at `open()` — production
+    /// wiring overrides it via [`with_proposal_signer`](Self::with_proposal_signer) with the same
+    /// installation-wide signer every proposal-creation site uses, so signatures actually match.
+    signer: ProposalSigner,
 }
 
 impl Daemon {
@@ -132,12 +138,22 @@ impl Daemon {
             debounce: DEFAULT_DEBOUNCE,
             dispatcher: None,
             orchestrator: None,
+            signer: ProposalSigner::random(),
         })
     }
 
     /// Override the debounce window (e.g. a short window in tests).
     pub fn with_debounce(mut self, debounce: Duration) -> Self {
         self.debounce = debounce;
+        self
+    }
+
+    /// Use `signer` to verify proposal integrity signatures, instead of the random ephemeral one
+    /// `open()` generates by default. Production callers pass the same installation-wide signer
+    /// every proposal-creation site (`Orchestrator`, `RiskGatedToolRuntime`) uses — see
+    /// `liberado_bootstrap::configure_daemon`.
+    pub fn with_proposal_signer(mut self, signer: ProposalSigner) -> Self {
+        self.signer = signer;
         self
     }
 
@@ -316,6 +332,21 @@ impl Daemon {
                 return Ok(ReactionOutcome::Observed);
             }
         };
+
+        // 2.5. Integrity check: detects tampering with the proposal's immutable fields (or a
+        //    wholesale-forged proposal with no valid signature at all) between creation and this
+        //    edit. This must run before anything else that could execute — a failure is observed
+        //    and left alone, never marked done, so it's never silently treated as if it had
+        //    legitimately run. See `Proposal::integrity`'s doc comment for what this does and
+        //    doesn't defend against.
+        if !self.signer.verify(&proposal) {
+            tracing::warn!(
+                proposal_id = %proposal.id,
+                "proposal failed integrity verification — refusing to treat as actionable \
+                 (possible tampering)"
+            );
+            return Ok(ReactionOutcome::Observed);
+        }
 
         // 3. Terminal states are never re-executed (at-most-once journal marker, Decision 6).
         if proposal.status.is_terminal() {
@@ -660,6 +691,7 @@ mod tests {
             CapabilitySet::empty(),
             Vec::new(),
             std::env::temp_dir(),
+            liberado_common::ProposalSigner::random(),
         );
 
         let daemon = daemon
@@ -760,6 +792,7 @@ mod tests {
             CapabilitySet::empty(),
             Vec::new(),
             std::env::temp_dir(),
+            liberado_common::ProposalSigner::random(),
         );
 
         let daemon = daemon
@@ -809,13 +842,14 @@ mod tests {
 
     #[tokio::test]
     async fn daemon_executes_an_approved_proposal() {
-        use liberado_common::{Proposal, ProposalStatus, ProposedAction, ToolCall};
+        use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall};
         use liberado_orchestrator::Orchestrator;
         use liberado_provider::MockProvider;
         use liberado_test_support::{InvocationRecordingFactory, InvocationRecordingRuntime};
 
         let runtime = InvocationRecordingRuntime::default();
         let invoked = runtime.invoked.clone();
+        let signer = ProposalSigner::random();
         let orch = Orchestrator::new(
             Arc::new(MockProvider::with_script(
                 "mock",
@@ -825,12 +859,14 @@ mod tests {
             CapabilitySet::empty(),
             Vec::new(),
             std::env::temp_dir(),
+            signer.clone(),
         );
 
         let (daemon, dir) = temp_daemon().await;
         let daemon = daemon
             .with_debounce(Duration::from_millis(80))
-            .with_orchestrator(orch);
+            .with_orchestrator(orch)
+            .with_proposal_signer(signer.clone());
 
         // Pre-create proposals/ so the watcher doesn't react to directory creation.
         let proposals_dir = dir.path().join("proposals");
@@ -842,7 +878,8 @@ mod tests {
         // Let the watcher establish before writing the proposal file.
         tokio::time::sleep(Duration::from_millis(300)).await;
 
-        // Write an approved proposal (simulates a human editing status to approved).
+        // Write an approved proposal (simulates a human editing status to approved), signed with
+        // the same key the daemon verifies against.
         let mut proposal = Proposal::pending(
             "vault-change:test-proposal:abc",
             "vault-change:test-proposal:abc",
@@ -853,6 +890,7 @@ mod tests {
             }]),
             "a test proposal",
         );
+        signer.sign(&mut proposal);
         proposal.status = ProposalStatus::Approved;
         std::fs::write(proposals_dir.join("approved.md"), &proposal.to_note()).unwrap();
 
@@ -897,6 +935,7 @@ mod tests {
             CapabilitySet::empty(),
             Vec::new(),
             std::env::temp_dir(),
+            liberado_common::ProposalSigner::random(),
         );
 
         let (daemon, dir) = temp_daemon().await;
@@ -942,6 +981,182 @@ mod tests {
         let contents = std::fs::read_to_string(proposals_dir.join("pending-test.md")).unwrap();
         let parsed = Proposal::from_note(&contents).unwrap();
         assert_eq!(parsed.status, ProposalStatus::Pending);
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn daemon_rejects_an_approved_proposal_with_a_bad_integrity_signature() {
+        // Same shape as `daemon_executes_an_approved_proposal`, but the note is signed with a
+        // DIFFERENT key than the daemon verifies against — simulating a wholesale-forged proposal
+        // (or a legitimate one whose proposed_action was tampered with after signing). Must not
+        // execute, and must not be marked done — left alone so a human can investigate.
+        use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall};
+        use liberado_orchestrator::Orchestrator;
+        use liberado_provider::MockProvider;
+        use liberado_test_support::{InvocationRecordingFactory, InvocationRecordingRuntime};
+
+        let runtime = InvocationRecordingRuntime::default();
+        let invoked = runtime.invoked.clone();
+        let daemon_signer = ProposalSigner::random();
+        let orch = Orchestrator::new(
+            Arc::new(MockProvider::with_script(
+                "mock",
+                Vec::<liberado_provider::CompletionResponse>::new(),
+            )),
+            InvocationRecordingFactory { runtime },
+            CapabilitySet::empty(),
+            Vec::new(),
+            std::env::temp_dir(),
+            daemon_signer.clone(),
+        );
+
+        let (daemon, dir) = temp_daemon().await;
+        let daemon = daemon
+            .with_debounce(Duration::from_millis(80))
+            .with_orchestrator(orch)
+            .with_proposal_signer(daemon_signer);
+
+        let proposals_dir = dir.path().join("proposals");
+        std::fs::create_dir_all(&proposals_dir).unwrap();
+
+        let (tx, mut rx) = unbounded_channel();
+        let handle = tokio::spawn(daemon.run(tx));
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // Signed with an unrelated key, not the daemon's — a forged or tampered signature either
+        // way, from the daemon's point of view.
+        let forging_signer = ProposalSigner::random();
+        let mut proposal = Proposal::pending(
+            "forged-test",
+            "forged-correlation",
+            "test",
+            ProposedAction::ToolCalls(vec![ToolCall {
+                tool: "tasks:create".into(),
+                args: serde_json::json!({ "summary": "should-not-run" }),
+            }]),
+            "a forged approval",
+        );
+        forging_signer.sign(&mut proposal);
+        proposal.status = ProposalStatus::Approved;
+        std::fs::write(proposals_dir.join("forged.md"), &proposal.to_note()).unwrap();
+
+        let _reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out waiting for reaction")
+            .expect("reaction channel closed");
+
+        assert!(
+            invoked.lock().unwrap().is_empty(),
+            "a proposal with a bad integrity signature must NOT invoke any tool, even though \
+             status is approved"
+        );
+
+        // Left as Approved (not silently flipped to Done) — a real failure state a human should
+        // notice, not one indistinguishable from a successful run.
+        let contents = std::fs::read_to_string(proposals_dir.join("forged.md")).unwrap();
+        let parsed = Proposal::from_note(&contents).unwrap();
+        assert_eq!(
+            parsed.status,
+            ProposalStatus::Approved,
+            "a rejected-for-integrity proposal must not be marked Done"
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn runtime_gated_downgrade_lands_in_the_vault_and_executes_once_approved() {
+        // End-to-end proof of item 3's fix: a RiskGatedToolRuntime downgrade writes into the
+        // *vault's* proposals/ directory (not a dead-end data dir), and approving it there actually
+        // executes it via the same daemon pipeline pre-flight proposals already use.
+        use liberado_common::{Capability, Consequence, Proposal, ProposalSigner, ProposalStatus};
+        use liberado_executor::{RiskGatedToolRuntime, ToolRuntime};
+        use liberado_orchestrator::Orchestrator;
+        use liberado_provider::{MockProvider, ToolInvocation};
+        use liberado_test_support::{InvocationRecordingFactory, InvocationRecordingRuntime};
+
+        let (daemon, dir) = temp_daemon().await;
+        let vault_path = dir.path().to_path_buf();
+        let signer = ProposalSigner::random();
+
+        // 1. A RiskGatedToolRuntime downgrades a high-consequence call, writing a proposal straight
+        //    into this vault's proposals/ directory (proposals_dir = the vault root — write_proposal
+        //    joins "proposals" itself, matching the daemon's own PROPOSALS_DIR convention).
+        let inner: Arc<dyn ToolRuntime> = Arc::new(InvocationRecordingRuntime::default());
+        let gated = RiskGatedToolRuntime::new(
+            inner,
+            CapabilitySet::from_iter([Capability::ExecuteMcp("dangerous-mcp".into())]),
+            vec![("dangerous-mcp".into(), Consequence::External)],
+            vault_path.clone(),
+            "clean up the vault".into(),
+            "runtime-gate-test".into(),
+            signer.clone(),
+        );
+        let call = ToolInvocation::new(
+            "c1",
+            "dangerous-mcp:wipe",
+            serde_json::json!({ "path": "everything" }),
+        );
+        let downgrade_msg = gated.invoke(&call).await.expect("downgrade is Ok, not Err");
+        assert!(downgrade_msg.contains("PROPOSAL CREATED"));
+
+        let proposals_dir = vault_path.join("proposals");
+        let mut entries: Vec<_> = std::fs::read_dir(&proposals_dir)
+            .expect("the runtime-level downgrade must have created the vault's proposals/ dir")
+            .filter_map(Result::ok)
+            .collect();
+        assert_eq!(entries.len(), 1, "exactly one proposal file should exist");
+        let proposal_path = entries.remove(0).path();
+        let written = Proposal::from_note(&std::fs::read_to_string(&proposal_path).unwrap())
+            .expect("proposal note round-trips");
+        assert_eq!(written.status, ProposalStatus::Pending);
+        assert!(signer.verify(&written), "the downgrade must be signed");
+
+        // 2. Now wire up the daemon (matching signer + an orchestrator that records invocations) and
+        //    let it observe a human's approval edit — the exact same pipeline pre-flight proposals
+        //    already use, proving this is no longer a dead end.
+        let runtime = InvocationRecordingRuntime::default();
+        let invoked = runtime.invoked.clone();
+        let orch = Orchestrator::new(
+            Arc::new(MockProvider::with_script(
+                "mock",
+                Vec::<liberado_provider::CompletionResponse>::new(),
+            )),
+            InvocationRecordingFactory { runtime },
+            CapabilitySet::empty(),
+            Vec::new(),
+            std::env::temp_dir(),
+            signer.clone(),
+        );
+        let daemon = daemon
+            .with_debounce(Duration::from_millis(80))
+            .with_orchestrator(orch)
+            .with_proposal_signer(signer);
+
+        let (tx, mut rx) = unbounded_channel();
+        let handle = tokio::spawn(daemon.run(tx));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // The human approves — status flips, signature (over the unchanged action/id/etc.) stays
+        // valid.
+        let mut approved = written;
+        approved.status = ProposalStatus::Approved;
+        std::fs::write(&proposal_path, approved.to_note()).unwrap();
+
+        let _reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out waiting for reaction")
+            .expect("reaction channel closed");
+
+        let recorded = invoked.lock().unwrap();
+        assert_eq!(
+            recorded.len(),
+            1,
+            "approving the runtime-gated proposal must actually execute it"
+        );
+        assert_eq!(recorded[0].name, "dangerous-mcp:wipe");
 
         handle.abort();
     }

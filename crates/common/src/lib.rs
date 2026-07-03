@@ -43,5 +43,5 @@ pub use dispatch::{
 pub use error::{Error, Result};
 pub use event::{Event, EventPayload, event_source};
 pub use model::{ModelChoice, ModelProfile, ModelRole, ModelTier, RequiredCaps};
-pub use proposal::{Proposal, ProposalNoteError, ProposalStatus, ProposedAction};
+pub use proposal::{Proposal, ProposalNoteError, ProposalSigner, ProposalStatus, ProposedAction};
 pub use provenance::{HUMAN_SOURCE, PROVENANCE_KEY, WriteProvenance};

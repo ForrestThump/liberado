@@ -288,20 +288,72 @@ pub fn data_dir() -> PathBuf {
 
 /// The ingredients for `RiskGatedToolRuntime`-style guarding — chat's own runtime gate and the
 /// `Orchestrator`'s runtime-level gate for adaptive tool calls both need the same consequence
-/// catalog and the same non-vault proposals directory. Shared by both boot paths (`liberado-server`'s
-/// `build_chat`, `liberado-bootstrap`'s `configure_daemon`), which each used to derive these
-/// independently.
+/// catalog, the same proposals directory, and the same proposal-integrity signer. Shared by both
+/// boot paths (`liberado-server`'s `build_chat`, `liberado-bootstrap`'s `configure_daemon`), which
+/// each used to derive these independently.
+///
+/// `proposals_dir` is the **vault's** `proposals/` directory (not a data-dir path) — a runtime-level
+/// downgrade needs to land where the daemon's `react()` actually watches, so approving one has
+/// somewhere to go. See `RiskGatedToolRuntime`'s doc comment for why this used to be data-dir-only
+/// and why that was a dead end.
 pub struct GuardContext {
     pub consequences: Vec<(String, liberado_common::Consequence)>,
     pub proposals_dir: PathBuf,
+    pub signer: liberado_common::ProposalSigner,
 }
 
-/// Build a [`GuardContext`] from the live capability catalog.
-pub fn guard_context(catalog: &CapabilityCatalog) -> GuardContext {
+/// Build a [`GuardContext`] from the live capability catalog and the vault path a runtime-level
+/// proposal downgrade should be written under.
+pub fn guard_context(catalog: &CapabilityCatalog, vault_path: &Path) -> GuardContext {
     GuardContext {
         consequences: catalog.consequence_catalog(),
-        proposals_dir: data_dir().join("proposals"),
+        proposals_dir: vault_path.to_path_buf(),
+        signer: liberado_common::ProposalSigner::new(load_or_create_proposal_key()),
     }
+}
+
+const PROPOSAL_KEY_FILE: &str = ".proposal-key";
+const PROPOSAL_KEY_LEN: usize = 32;
+
+/// Load the per-installation proposal-signing key from `<data_dir>/.proposal-key`, generating and
+/// persisting a fresh random one on first use. If persisting fails (e.g. a permissions error), logs
+/// a warning and falls back to an ephemeral in-memory key for this run — proposals signed this run
+/// then simply won't verify after a restart, which is a safe failure mode (rejected, not silently
+/// accepted), not a dangerous one. See [`liberado_common::Proposal::integrity`] for what this key
+/// does and doesn't defend against.
+pub fn load_or_create_proposal_key() -> Vec<u8> {
+    let path = data_dir().join(PROPOSAL_KEY_FILE);
+    if let Ok(bytes) = std::fs::read(&path) {
+        if bytes.len() == PROPOSAL_KEY_LEN {
+            return bytes;
+        }
+    }
+    let mut key = vec![0u8; PROPOSAL_KEY_LEN];
+    {
+        use rand::RngCore;
+        rand::thread_rng().fill_bytes(&mut key);
+    }
+    if let Err(e) = persist_proposal_key(&path, &key) {
+        tracing::warn!(
+            error = %e,
+            "failed to persist the proposal signing key — using an ephemeral one for this run; \
+             proposals created now won't verify after a restart"
+        );
+    }
+    key
+}
+
+fn persist_proposal_key(path: &Path, key: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, key)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

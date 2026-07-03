@@ -23,7 +23,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use liberado_common::{
     BlockReason, CapabilitySet, Consequence, DispatchAction, DispatchDecision, Outcome, Proposal,
-    ProposedAction, Report, WriteProvenance, mcp_of,
+    ProposalSigner, ProposedAction, Report, WriteProvenance, mcp_of,
 };
 use liberado_executor::{
     Budget, ExecError, Executor, RiskGatedToolRuntime, RuntimeFactory, RuntimeSetupError, Task,
@@ -102,18 +102,23 @@ pub struct Orchestrator {
     consequence_catalog: Vec<(String, Consequence)>,
     /// Base directory for proposal files a runtime-level downgrade writes (see `gate`).
     proposals_dir: PathBuf,
+    /// Signs proposals built by the `Propose` arm and this orchestrator's own runtime-level `gate`
+    /// downgrades; also checked defensively in `execute_approved` (see that method's doc comment).
+    signer: ProposalSigner,
     source: String,
     direct_budget: Budget,
     subagent_budget: Budget,
 }
 
 impl Orchestrator {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider: Arc<dyn Provider>,
         factory: impl RuntimeFactory + 'static,
         capabilities: CapabilitySet,
         consequence_catalog: Vec<(String, Consequence)>,
         proposals_dir: PathBuf,
+        signer: ProposalSigner,
     ) -> Self {
         Self {
             provider,
@@ -121,6 +126,7 @@ impl Orchestrator {
             capabilities,
             consequence_catalog,
             proposals_dir,
+            signer,
             source: DEFAULT_SOURCE.to_string(),
             direct_budget: Budget::new(DIRECT_MAX_TURNS),
             subagent_budget: Budget::default(),
@@ -172,13 +178,14 @@ impl Orchestrator {
                     // One proposal per trigger (v1): id == correlation == the triggering event, so
                     // the artifact is idempotent in the trigger and reuses the trigger's
                     // correlation when later executed. No vault write here — the daemon persists it.
-                    let proposal = Proposal::pending(
+                    let mut proposal = Proposal::pending(
                         trigger_correlation,
                         trigger_correlation,
                         self.source.clone(),
                         proposed_action,
                         rationale,
                     );
+                    self.signer.sign(&mut proposal);
                     tracing::Span::current().record("disposition", "proposed");
                     tracing::info!(proposal_id = %proposal.id, "dispatch resulted in a proposal");
                     Ok(Disposition::Propose(proposal))
@@ -269,6 +276,13 @@ impl Orchestrator {
     /// bypasses the dispatcher/guards entirely (re-dispatching would just re-trigger the consequence
     /// guard and re-propose). It runs exactly the approved calls, in order, via a runtime scoped to
     /// the MCPs they touch, with the proposal's correlation id as provenance.
+    ///
+    /// Checks the proposal's integrity signature before doing anything else — not a re-classification
+    /// (approval still bypasses the risk guards, unchanged), but an authenticity check that this is
+    /// actually the same proposal that was proposed, not a tampered or wholesale-forged one. The
+    /// primary check lives in the daemon's `handle_proposal_change` (which must reject *before*
+    /// calling this, so a failure is never marked done); this is defense in depth for any other
+    /// caller reaching this method.
     pub async fn execute_approved(&self, proposal: &Proposal) -> Result<Report, OrchestratorError> {
         let span = tracing::info_span!(
             "execute_approved",
@@ -277,6 +291,20 @@ impl Orchestrator {
             source = %self.source,
         );
         async {
+            if !self.signer.verify(proposal) {
+                tracing::warn!(
+                    proposal_id = %proposal.id,
+                    "approved proposal failed integrity verification — refusing to execute"
+                );
+                return Ok(Report {
+                    outcome: Outcome::Failed,
+                    summary: "proposal failed integrity verification — not executed".into(),
+                    artifacts: Vec::new(),
+                    new_high_signal_facts: Vec::new(),
+                    follow_up: None,
+                });
+            }
+
             let ProposedAction::ToolCalls(calls) = &proposal.proposed_action else {
                 // External/VaultWrite/Other aren't produced by v1 emit; refuse defensively rather
                 // than error so the daemon can mark the proposal done and not retry forever.
@@ -451,6 +479,7 @@ impl Orchestrator {
             self.proposals_dir.clone(),
             goal_context.into(),
             correlation_base.into(),
+            self.signer.clone(),
         ))
     }
 }
@@ -515,6 +544,7 @@ mod tests {
             CapabilitySet::empty(),
             Vec::new(),
             std::env::temp_dir(),
+            ProposalSigner::random(),
         )
         .with_source("custom-source");
         assert_eq!(orch.source, "custom-source");
@@ -567,6 +597,7 @@ mod tests {
             CapabilitySet::empty(),
             Vec::new(),
             std::env::temp_dir(),
+            ProposalSigner::random(),
         );
 
         let sub_dispatches = vec![
@@ -645,6 +676,7 @@ mod tests {
             CapabilitySet::empty(),
             Vec::new(),
             std::env::temp_dir(),
+            ProposalSigner::random(),
         );
 
         let sub_dispatches = vec![
@@ -700,6 +732,7 @@ mod tests {
             CapabilitySet::empty(),
             Vec::new(),
             std::env::temp_dir(),
+            ProposalSigner::random(),
         );
 
         let sub_dispatches = vec![
@@ -746,6 +779,7 @@ mod tests {
             CapabilitySet::empty(),
             Vec::new(),
             std::env::temp_dir(),
+            ProposalSigner::random(),
         );
 
         let sub_dispatches = vec![SubDispatch {
