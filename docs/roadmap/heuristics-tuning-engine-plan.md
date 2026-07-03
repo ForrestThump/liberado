@@ -247,6 +247,11 @@ architecture idea the way there is for a scored prompt candidate.
    folded in alongside the fixed `liberado-eval` scenarios. This is the mechanism that actually
    delivers the "re-adapts when you add a tool" goal, not just "gets slightly better at 19 fixed
    goals" — identified as the real next step after reviewing the first live run's results.
+8. **Multi-sample scoring** (see "Real-model verification — findings (2026-07-04)" below) — score
+   each scenario across N samples per candidate instead of one, to average out real-model run-to-run
+   noise observed during verification. A config knob (sample count), not a redesign. Worth doing
+   before or alongside item 7 — noisy scoring undermines confidence in any tuning run regardless of
+   scenario source.
 
 ## First real run — findings (2026-07-03)
 
@@ -278,3 +283,43 @@ Recorded here because the specific failure mode is a real, generalizable lesson,
   nameable external actions as `ExecuteDirect` and trust the existing consequence guard to downgrade
   them to `Propose` automatically, rather than teaching the classifier to self-censor via `Clarify`
   or to fabricate an action type it was never meant to produce.
+
+## Real-model verification — findings (2026-07-04)
+
+Ran `liberado-eval` against the real `deepseek-chat` model to confirm the hand-adopted generation-1
+rules (above) actually held. Two things came out of this, one good, one that changes how much
+confidence to put in any single eval/tuning-run number going forward.
+
+- **The architectural hypothesis about `external-broadcast` was right.** With the original
+  baseline's "bias to safety" framing kept intact (not replaced, per the lesson above) plus the two
+  hand-adopted rules, `external-broadcast` now resolves correctly via `Propose` on its own — without
+  ever teaching the classifier that `Propose` exists. It classifies the goal as a concrete
+  `ExecuteDirect` and the deterministic consequence guard downgrades it automatically. This is the
+  fix generation 3 was reaching for (badly); the real one required no prompt change at all once the
+  general safety framing wasn't sacrificed.
+- **The first real verification run reproduced a genuine regression, and it was worth fixing**:
+  the hand-adopted code-dispatch rule ("route confidently") didn't condition on the tool actually
+  being in the catalog shown to the model, so `code_dispatch_not_configured` (grant exists, but the
+  MCP isn't registered) flipped from `Clarify` to `ExecuteDirect` — a real `unsafe_acts: 1`. Fixed by
+  qualifying the rule ("...only when a code-dispatch MCP actually appears in the catalog you were
+  given"). Confirmed fixed across 5 consecutive live runs (`unsafe_acts: 0` every time).
+- **Real-model runs are noisier than a single sample suggests, even at temperature 0.** Across those
+  5 consecutive runs with an *unchanged* prompt, overall routing accuracy swung between 11/18 and
+  16/18, and which scenarios failed changed run to run — including basic, unambiguous scenarios
+  (`simple-task-add`, a single granted tool and one obvious step) that have nothing to do with the
+  code-dispatch rule at all. DeepSeek's real API isn't perfectly deterministic run-to-run even at
+  `temperature: 0.0` (likely server-side batching/routing, not a client-side issue). This matters
+  beyond just this one fix: **any single eval or tuning-run accuracy number — including the
+  0.72 → 0.94 jump in the first tuning session above — carries real sampling noise**, and a
+  single-sample comparison between two candidates isn't fully trustworthy on its own. The
+  `unsafe_acts` gate held solid across all 5 runs, though — that signal is far more stable than the
+  raw accuracy number, likely because it's a rarer, more discrete event (most of the noise seems to
+  land on borderline-confidence scenarios flipping between adjacent action labels, not on clearly
+  right-or-wrong safety calls).
+- **Candidate future improvement, not yet built**: score each scenario across N samples (e.g. 3-5)
+  per candidate and use a majority vote or averaged fitness, rather than trusting one sample per
+  scenario. Costs proportionally more calls per candidate, but given the budget is already
+  session-configured (Decision: human sets it per run), this is a config knob, not a redesign. Worth
+  doing before or alongside topology-driven scenario generation (item 7 above) — noisy scoring
+  undermines confidence in any tuning run, current or future, regardless of which layer or scenario
+  source is being tuned.
