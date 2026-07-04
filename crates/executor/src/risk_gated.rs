@@ -137,7 +137,7 @@ impl ToolRuntime for RiskGatedToolRuntime {
                 );
                 let proposal_path = self
                     .write_proposal(call, "High-consequence MCP — requires human approval")
-                    .await;
+                    .await?;
                 return Ok(proposal_message(&proposal_path));
             }
 
@@ -151,7 +151,7 @@ impl ToolRuntime for RiskGatedToolRuntime {
                 );
                 let proposal_path = self
                     .write_proposal(call, "Sweeping destructive action — requires human approval")
-                    .await;
+                    .await?;
                 return Ok(proposal_message(&proposal_path));
             }
 
@@ -165,12 +165,17 @@ impl ToolRuntime for RiskGatedToolRuntime {
 }
 
 impl RiskGatedToolRuntime {
-    /// Write a proposal file and return its path.
+    /// Write a proposal file and return its path — or `Err` if it genuinely couldn't be written.
+    /// A downgrade's whole safety property is that a human gets to review a real file before the
+    /// action runs; silently reporting success on a failed write would tell the model (and
+    /// therefore the user) that something is queued for approval when nothing was actually saved,
+    /// with no way for either to notice. So a write failure here is a real tool-level error, fed
+    /// back in-band like any other (`ToolRuntime::invoke`'s own contract), not swallowed.
     async fn write_proposal(
         &self,
         call: &ToolInvocation,
         rationale: &str,
-    ) -> PathBuf {
+    ) -> Result<PathBuf, String> {
         let proposal_id = format!(
             "{}-{}",
             self.correlation_base,
@@ -207,26 +212,34 @@ impl RiskGatedToolRuntime {
                 error = %e,
                 "failed to create proposals directory"
             );
+            return Err(format!(
+                "could not create the proposals directory at {}: {e} — the action was NOT executed \
+                 and NO proposal was saved for approval; this needs a human to look at the vault/\
+                 filesystem before retrying",
+                proposals_subdir.display()
+            ));
         }
 
-        match tokio::fs::write(&proposal_path, &note).await {
-            Ok(_) => {
-                tracing::info!(
-                    path = %proposal_path.display(),
-                    tool = %call.name,
-                    "proposal written"
-                );
-            }
-            Err(e) => {
-                tracing::error!(
-                    path = %proposal_path.display(),
-                    error = %e,
-                    "failed to write proposal file"
-                );
-            }
+        if let Err(e) = tokio::fs::write(&proposal_path, &note).await {
+            tracing::error!(
+                path = %proposal_path.display(),
+                error = %e,
+                "failed to write proposal file"
+            );
+            return Err(format!(
+                "could not save the proposal file at {}: {e} — the action was NOT executed and NO \
+                 proposal was saved for approval; this needs a human to look at the vault/filesystem \
+                 before retrying",
+                proposal_path.display()
+            ));
         }
 
-        proposal_path
+        tracing::info!(
+            path = %proposal_path.display(),
+            tool = %call.name,
+            "proposal written"
+        );
+        Ok(proposal_path)
     }
 }
 
@@ -380,6 +393,43 @@ mod tests {
         let names: Vec<&str> = catalog.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"my-mcp:read"));
         assert!(names.contains(&"my-mcp:write"));
+    }
+
+    #[tokio::test]
+    async fn a_proposal_write_failure_is_a_real_error_not_a_silent_ok() {
+        // proposals_dir points at a path whose parent component is an existing *file*, so
+        // create_dir_all(proposals_dir/"proposals") cannot succeed — this must surface as a real
+        // Err, not a fabricated "PROPOSAL CREATED" success with nothing actually written.
+        let dir = tempfile::TempDir::new().unwrap();
+        let occupied_by_a_file = dir.path().join("occupied");
+        tokio::fs::write(&occupied_by_a_file, b"not a directory").await.unwrap();
+
+        let inner = Arc::new(MockInner::new(&["email-mcp:send"], Ok("sent".into())));
+        let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("email-mcp".into())]);
+        let rt = RiskGatedToolRuntime::new(
+            inner.clone(),
+            caps,
+            vec![("email-mcp".into(), Consequence::External)],
+            occupied_by_a_file,
+            "send an email".into(),
+            "test-write-failure".into(),
+            ProposalSigner::random(),
+        );
+
+        let call = ToolInvocation::new("c1", "email-mcp:send", serde_json::json!({"to": "boss"}));
+        let result = rt.invoke(&call).await;
+        assert!(
+            result.is_err(),
+            "a genuine write failure must surface as Err, not a fabricated success message"
+        );
+        assert!(
+            !result.unwrap_err().contains("PROPOSAL CREATED"),
+            "must not claim a proposal was created when nothing was written"
+        );
+        assert!(
+            inner.invoked.lock().unwrap().is_empty(),
+            "the inner tool must still never run, regardless of whether the proposal was saved"
+        );
     }
 
     #[tokio::test]
