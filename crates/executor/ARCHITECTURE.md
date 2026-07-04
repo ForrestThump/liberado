@@ -22,14 +22,22 @@ and **hands back** the structured artifact in one event — no second "structuri
   `async invoke(&ToolInvocation) -> Result<String, String>`. Tool-level failures are returned `Err`
   and surfaced to the model **in-band** so it adapts; only infra faults abort.
 - `Executor` (holds `Arc<dyn Provider>` + `Budget`), `Task` (`instructions`/`goal`/optional
-  `seed_calls`), `Budget`, `ExecError`, `SUBMIT_REPORT_TOOL`.
+  `seed_calls`), `Budget`, `ResourceLimit`/`ResourceUsage` (the pluggable resource-bound trait +
+  its per-turn usage snapshot), `ExecError`, `SUBMIT_REPORT_TOOL`.
 
 ## Backstops
 
-- **Turn `Budget`** — a hard cap; exhaustion becomes a `Report` — `PartiallySucceeded` (with a
-  compact "tool → result preview" summary) if any call actually succeeded before time ran out,
-  `Failed` only if none did (`budget_failed_report_with_progress`) — never a transport error, since
-  the delegator is owed a report either way.
+- **`Budget`** — `max_turns` is the loop's own mechanical bound (always present, drives the
+  iteration itself); an open-ended list of additional `ResourceLimit` impls (`.with_wall_clock()`,
+  `.with_token_limit()` — a token-count proxy for cost, since real `$`/token pricing needs a
+  per-model rate table that isn't worth the upkeep while usage is cheap) is checked alongside it
+  every turn, added ahead of Phase 3's autonomy widening (cron introduces unattended activation
+  where a stuck run could go unnoticed far longer than one a human is watching in chat). Every
+  existing `Budget::new`/`Budget::default` call site is unchanged — this is purely additive.
+  Exhaustion (whichever resource tripped) becomes a `Report` — `PartiallySucceeded` (with a compact
+  "tool → result preview" summary, naming which resource ran out) if any call actually succeeded
+  first, `Failed` only if none did (`budget_failed_report_with_progress`) — never a transport error,
+  since the delegator is owed a report either way.
 - **Single nudge** — in report mode, if the model answers in prose without filing, it's nudged once,
   then the prose is wrapped as a `Report` rather than lost (`REPORT_NUDGE`).
 - **Doom-loop guard** — detects a model stuck repeating the same tool with near-duplicate arguments
@@ -54,11 +62,13 @@ and **hands back** the structured artifact in one event — no second "structuri
 ## Tests
 
 Inline: multi-turn→file, conversational multi-tool→prose, budget→failed/partially-succeeded report
-(with and without real progress), malformed `submit_report` args→decode error, seed-before-first-turn,
-nudge-then-wrap, in-band tool failure, doom-loop detection (near-duplicate args, single-turn batched
-duplicates, false-positive avoidance for genuinely distinct same-tool calls), short-cycle detection,
-each escalation step (nudge/removal/give-up) for both guards, and the tight-budget recovery-bonus
-regression.
+(with and without real progress, naming whichever resource ran out), malformed `submit_report`
+args→decode error, seed-before-first-turn, nudge-then-wrap, in-band tool failure, doom-loop
+detection (near-duplicate args, single-turn batched duplicates, false-positive avoidance for
+genuinely distinct same-tool calls), short-cycle detection, each escalation step
+(nudge/removal/give-up) for both guards, the tight-budget recovery-bonus regression, and the
+wall-clock/token `ResourceLimit` checks (including a regression proving the token limit actually
+exhausts once accumulated usage crosses it, not just on construction).
 
 ## Multi-step tool chaining: substantially fixed, one known gap remains
 

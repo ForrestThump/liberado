@@ -22,8 +22,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use liberado_common::{
-    BlockReason, CapabilitySet, Consequence, DispatchAction, DispatchDecision, Outcome, Proposal,
-    ProposalSigner, ProposedAction, Report, ToolCall, WriteProvenance, mcp_of,
+    BlockReason, CapabilitySet, Consequence, DispatchAction, DispatchDecision, McpDescriptor,
+    Outcome, Proposal, ProposalSigner, ProposedAction, Report, ToolCall, WriteClass,
+    WriteProvenance, mcp_of,
 };
 use liberado_executor::{
     Budget, ExecError, Executor, RiskGatedToolRuntime, RuntimeFactory, RuntimeSetupError, Task,
@@ -107,6 +108,10 @@ pub struct Orchestrator {
     capabilities: CapabilitySet,
     /// `(mcp_name, consequence)` pairs for the runtime-level gate's consequence check (see `gate`).
     consequence_catalog: Vec<(String, Consequence)>,
+    /// MCP descriptors (zone declarations) for the runtime-level gate's zone-write-class check.
+    zone_catalog: Vec<McpDescriptor>,
+    /// `(zone, write_class)` pairs from `Policy.zones` for the same check.
+    zone_write_classes: Vec<(String, WriteClass)>,
     /// Base directory for proposal files a runtime-level downgrade writes (see `gate`).
     proposals_dir: PathBuf,
     /// Signs proposals built by the `Propose` arm and this orchestrator's own runtime-level `gate`
@@ -124,6 +129,8 @@ impl Orchestrator {
         factory: impl RuntimeFactory + 'static,
         capabilities: CapabilitySet,
         consequence_catalog: Vec<(String, Consequence)>,
+        zone_catalog: Vec<McpDescriptor>,
+        zone_write_classes: Vec<(String, WriteClass)>,
         proposals_dir: PathBuf,
         signer: ProposalSigner,
     ) -> Self {
@@ -132,6 +139,8 @@ impl Orchestrator {
             factory: Box::new(factory),
             capabilities,
             consequence_catalog,
+            zone_catalog,
+            zone_write_classes,
             proposals_dir,
             signer,
             source: DEFAULT_SOURCE.to_string(),
@@ -553,6 +562,8 @@ impl Orchestrator {
             Arc::from(runtime),
             capabilities,
             self.consequence_catalog.clone(),
+            self.zone_catalog.clone(),
+            self.zone_write_classes.clone(),
             self.proposals_dir.clone(),
             goal_context.into(),
             correlation_base.into(),
@@ -620,6 +631,8 @@ mod tests {
             NoopFactory,
             CapabilitySet::empty(),
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),
         )
@@ -672,6 +685,8 @@ mod tests {
             provider,
             factory,
             CapabilitySet::empty(),
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),
@@ -752,6 +767,8 @@ mod tests {
             factory,
             CapabilitySet::empty(),
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),
         );
@@ -808,6 +825,8 @@ mod tests {
             factory,
             CapabilitySet::empty(),
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),
         );
@@ -854,6 +873,8 @@ mod tests {
             provider,
             factory,
             CapabilitySet::empty(),
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),

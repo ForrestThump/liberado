@@ -1,25 +1,40 @@
 # liberado-dispatcher — the safe router (decide, don't do)
 
 Takes a goal + minimal context and produces a typed `DispatchDecision` — `ExecuteDirect`,
-`DispatchSubagent`, or `Clarify` (Decision 1). It **decides**; it does not execute (that's the
-[orchestrator](../orchestrator/ARCHITECTURE.md) + [executor](../executor/ARCHITECTURE.md)).
+`DispatchSubagent`, `Clarify`, or `Propose` (Decision 1/11). It **decides**; it does not execute
+(that's the [orchestrator](../orchestrator/ARCHITECTURE.md) +
+[executor](../executor/ARCHITECTURE.md)).
 
 ## Pipeline
 
 ```
-DispatchRequest ──► classify ──► guards.evaluate ──► DispatchDecision
-   goal,            (1 structured   (deterministic,
-   catalog,          inference,      downgrade-only)
-   capabilities,     temp 0)
-   reaction_depth
+DispatchRequest ──► classify ──► guards.evaluate ──► downgrade() ──► DispatchDecision
+   goal,            (1 structured   (deterministic,      (Clarify, or
+   catalog,          inference,      downgrade-only)      Propose for a
+   capabilities,     temp 0)                              concrete action)
+   reaction_depth,
+   zone_write_classes
 ```
 
 1. **classify** (`lib.rs`) — one structured-output inference at temperature 0 turns the goal + MCP
    catalog into a candidate decision via `complete_json`. A decode/empty failure falls back to a
    safe `Clarify`, never an action.
 2. **guards** (`guards.rs`) — deterministic checks that run **after** the model and can only
-   *downgrade* autonomy (to `Clarify`). Priority: capability gap → reaction-depth limit → confidence
-   floor. They never upgrade or invent an action.
+   *downgrade* autonomy. Priority: capability gap → consequence gate → zone-write-class gate →
+   magnitude gate → reaction-depth limit → confidence floor. A capability gap, depth limit, or
+   low-confidence hit downgrades to `Clarify`; a consequence or zone-write-class hit on a
+   *concrete* action (a non-empty `ExecuteDirect` or any `DispatchSubagent`) downgrades to
+   `Propose` instead (Decision 11) — both are "needs human approval before running," just gated on
+   different axes (general riskiness vs. the specific target zone). Guards never upgrade or invent
+   an action.
+
+   The zone-write-class gate is pre-flight only, checking `ExecuteDirect`'s seed calls against
+   per-tool zone declarations (`McpDescriptor.default_zone`/`tool_zones`, human-authored in
+   `topology.toml`'s `McpConfig`, unlabeled tools inheriting the MCP's `default_zone`) resolved via
+   `resolve_zone` and checked against `DispatchRequest.zone_write_classes` (from `Policy.zones`).
+   The real, always-enforced boundary for every call (including a subagent's later adaptive ones)
+   is `RiskGatedToolRuntime` (`liberado-executor`), which shares the same resolution helper — this
+   pre-flight check only ever sees the classifier's opening move.
 
 ## The core safety property
 
@@ -31,17 +46,21 @@ ever toward *less* autonomy. A model that "wants to just do it" cannot escape a 
 ## Surface
 
 - `Dispatcher` (holds `Arc<dyn Provider>`, `DispatchTuning`, max reaction depth), `dispatch()`.
-- `DispatchRequest`, `McpDescriptor` (the catalog entry the model sees).
+- `DispatchRequest` (goal, `catalog: Vec<McpDescriptor>`, capabilities, reaction depth,
+  `zone_write_classes`), `McpDescriptor` (re-exported from `liberado-common` — the catalog entry
+  the model sees, now zone-aware for the zone-write-class gate).
 - `SYSTEM_PROMPT` — the classifier prompt. Biasing it toward delegation (vs. "just working") is a
   known, deliberate tuning surface; the structural backstop is that policy/guards can *force* a
   route regardless of the model's lean.
 
 ## Dependencies
 
-- Depends on: `liberado-common` (decision/capability types), `liberado-provider` (inference).
+- Depends on: `liberado-common` (decision/capability/zone-resolution types), `liberado-config-loader`
+  (`DispatchTuning`), `liberado-provider` (inference).
 - Depended on by: `daemon`, `cli`, and (consumes its output) `orchestrator`.
 
 ## Tests
 
-`lib.rs` + `guards.rs` inline tests: temp-0 JSON classification, safe fallback, and each guard
-downgrade (capability, depth, confidence) with their precedence.
+`lib.rs` + `guards.rs` inline tests: temp-0 JSON classification, safe fallback, each guard downgrade
+(capability, consequence, zone-write-class, magnitude, depth, confidence) with their precedence,
+and the Clarify-vs-Propose split for consequence/zone-write-class hits on a concrete action.

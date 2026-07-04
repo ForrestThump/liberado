@@ -108,10 +108,11 @@ pub fn configure_daemon(
     // Runtime-level gating ingredients for the orchestrator's adaptive (non-seed) tool calls — the
     // same consequence catalog, vault-rooted proposals directory, and integrity signer chat's own
     // RiskGatedToolRuntime uses (see `RiskGatedToolRuntime`'s doc comment).
-    let guard = guard_context(&catalog, vault_path);
+    let guard = guard_context(&catalog, &config.policy, vault_path);
     let daemon = daemon
         .with_dispatcher(dispatcher, catalog, capabilities.clone())
-        .with_proposal_signer(guard.signer.clone());
+        .with_proposal_signer(guard.signer.clone())
+        .with_zone_write_classes(guard.zone_write_classes.clone());
     match mcp_registry_from_config(config) {
         Some(factory) => {
             tracing::info!("orchestrator enabled (MCP execution)");
@@ -120,6 +121,8 @@ pub fn configure_daemon(
                 factory,
                 capabilities,
                 guard.consequences,
+                guard.zone_catalog,
+                guard.zone_write_classes,
                 guard.proposals_dir,
                 guard.signer,
             ))
@@ -144,6 +147,8 @@ mod tests {
             description: "test".into(),
             consequence: Consequence::Reversible,
             transport,
+            default_zone: None,
+            tools: Vec::new(),
         }
     }
 

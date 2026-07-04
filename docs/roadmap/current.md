@@ -87,11 +87,25 @@ classification call), selectable via `tuner.toml`'s `layer`. A real elitism bug 
 and a real engine bug (`REPORT_NUDGE`) were both found and fixed via this tool, live. Full design +
 findings: [heuristics-tuning-engine-plan.md](heuristics-tuning-engine-plan.md).
 
-- **⚠️ Open, project-level priority: multi-step tool chaining is not fully reliable.** Found via the
-  tuner, but not a tuner-specific problem — both `ExecuteDirect` and `DispatchSubagent` share the
-  same execution engine, and it unreliably completes even a simple, unambiguous two-tool-call goal.
-  One contributing bug fixed (see above); the gap narrowed but persists. Full evidence and open
-  threads: [multi-step-execution-reliability-finding.md](multi-step-execution-reliability-finding.md).
+- **✅ Multi-step tool chaining reliability — substantially resolved (2026-07-04).** Found via the
+  tuner, not a tuner-specific problem — both `ExecuteDirect` and `DispatchSubagent` share the same
+  execution engine. Root cause: a model can get stuck repeating one tool call with reworded-but-
+  same-intent arguments, defeating byte-equality detection. Fixed with a doom-loop guard
+  (`is_doom_loop`/`detect_short_cycle` in `liberado-executor`, TF-IDF argument similarity, not exact
+  match) that escalates nudge → tool removal (with a one-time bounded turn-budget top-up) → honest
+  failure, plus a progress-aware budget-exhaustion report. Live-verified 0/6 → 5/6 on the original
+  failing scenario. One remaining gap (a fast-finish timing case, not a loop) and full evidence:
+  [multi-step-execution-reliability-finding.md](multi-step-execution-reliability-finding.md).
+- **✅ Resource-budget hardening (2026-07-04).** Ahead of Phase 3 widening the autonomy surface —
+  cron introduces unattended, unprompted activation where a stuck run could go unnoticed far longer
+  than one a human is watching in chat. The turn `Budget` used to be the only bound (no wall-clock
+  or cost cap); generalized into a pluggable `ResourceLimit` trait (`liberado-executor`) so adding a
+  new bounded resource later doesn't touch the loop's own logic. Wall-clock and a token-count proxy
+  for cost (real `$`/token pricing deferred — not worth the upkeep while usage is this cheap) are
+  wired in now; every existing `Budget::new`/`Budget::default` call site is unchanged.
+- **✅ Zone-write-class guard (§6 #2) — done (2026-07-04).** See the "Landed" section below for the
+  design (per-tool zone declarations with MCP-level inheritance, shared resolution helper between
+  the dispatcher's pre-flight check and `RiskGatedToolRuntime`'s runtime enforcement).
 
 ### Phase 3 — Autonomy breadth
 
@@ -110,12 +124,21 @@ always-on.
   direct action by `Consequence` (read-only < reversible < irreversible < external). Validated in
   `liberado-eval`: external actions (email/Slack) are deterministically downgraded to `Clarify` even
   at high confidence, while git-tracked vault writes flow.
-- **Zone write-class guard (§6 #2)** — ❌ **still deferred, not implemented** (this entry used to sit
-  in this section with no marker either way, reading ambiguously as if it might already be built —
-  it isn't). Would downgrade agent writes to `proposal_only`/`human_only` zones to a Proposal
-  (Decision 11), using the existing `WriteClass`, on top of the consequence guard above. See
-  `crates/dispatcher/src/guards.rs`'s own doc comment, which names this as the one guard from §6
-  still not built (deferred to the slice that adds tool→zone resolution).
+- **Zone write-class guard (§6 #2)** — ✅ *done (2026-07-04, part of the Phase-3 hardening pass —
+  see "Before Phase 3" below).* Downgrades an agent write targeting a `proposal_only`/`human_only`
+  zone to a Proposal (Decision 11), on top of the consequence guard above. The missing piece this
+  was deferred on ("tool→zone resolution") turned out to need new config surface, not just guard
+  logic: `McpConfig` gained `default_zone`/`tools: Vec<ToolImpact>` (per-tool zone declarations,
+  with unlabeled tools inheriting the MCP's `default_zone` — human-authored, like `consequence`,
+  not self-declared by the MCP), and `liberado_common::McpDescriptor` carries the same
+  `default_zone`/`tool_zones` so the dispatcher's pre-flight `guards.rs` and the runtime's
+  `RiskGatedToolRuntime` share one resolution helper (`resolve_zone`/`resolve_declared_zone`) rather
+  than duplicating it. Deliberately static per-tool declaration, not per-call argument
+  introspection — a single generic multi-zone tool (e.g. `vault:write(path)`) needs distinct
+  per-zone tool names to be discriminated by this guard; accepted as the simpler tradeoff over
+  parsing arbitrary tool-specific argument shapes. Both the pre-flight and runtime layers fail safe
+  to `WriteClass::ProposalOnly` for a resolved-but-unlisted zone, matching `Policy::write_class`'s
+  own fail-safe default.
 - **Magnitude / destructiveness axis** — ✅ *dispatcher-level done.* A liberado-owned, deterministic
   classifier (`Magnitude`, `is_sweeping_destructive` in `common` — reads the goal/tool text, needs no
   MCP metadata) gates **sweeping-destructive** goals even when reversible. Closed the eval's UNSAFE=1:

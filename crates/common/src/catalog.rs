@@ -26,7 +26,7 @@ use crate::Consequence;
 /// This is the common crate's own descriptor type (mirroring
 /// `liberado_dispatcher::McpDescriptor` fields) so that the catalog lives in
 /// dependency-light `liberado-common` without pulling in the dispatcher crate.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct McpDescriptor {
     /// Unique name of this MCP server, matching the `name` in `topology.mcps`.
     pub name: String,
@@ -37,6 +37,34 @@ pub struct McpDescriptor {
     /// The correlation_id of the session that created this MCP via self-extension (riggers).
     /// `None` for human-configured static MCPs declared in `topology.toml`.
     pub provenance: Option<String>,
+    /// Default target zone for this MCP's write tools — a tool not named in `tool_zones` below
+    /// inherits this. `None` if this MCP hasn't opted into zone tracking (most MCPs aren't vault
+    /// writers at all). Mirrors `liberado_config_loader::McpConfig::default_zone`, kept as a plain
+    /// field here rather than depending on that crate's `ToolImpact` type, since this crate is
+    /// deliberately dependency-light.
+    pub default_zone: Option<String>,
+    /// Per-tool zone overrides: `(bare tool name, target zone)`. A tool named here with `None`
+    /// explicitly overrides to "not a zone write" even when `default_zone` is set. Mirrors
+    /// `liberado_config_loader::McpConfig::tools`.
+    pub tool_zones: Vec<(String, Option<String>)>,
+}
+
+/// Resolve the target zone for `bare_tool_name` given `descriptor`'s zone declarations. `None`
+/// means "not a zone-write concern" — a declared read, or an MCP that hasn't opted into zone
+/// tracking at all — distinct from "a write whose zone is unknown," which callers (the zone-
+/// write-class guard) should treat conservatively rather than silently skip. Mirrors
+/// `liberado_config_loader::resolve_declared_zone` exactly; kept separate because it operates on
+/// this crate's lighter `McpDescriptor` (what the dispatcher/runtime actually see), not the config
+/// crate's richer `McpConfig`.
+pub fn resolve_zone(descriptor: &McpDescriptor, bare_tool_name: &str) -> Option<String> {
+    match descriptor
+        .tool_zones
+        .iter()
+        .find(|(name, _)| name == bare_tool_name)
+    {
+        Some((_, zone)) => zone.clone(),
+        None => descriptor.default_zone.clone(),
+    }
 }
 
 /// A live, queryable capability catalog. Multiple consumers can independently query
@@ -133,6 +161,7 @@ mod tests {
             description: format!("{name} description"),
             consequence: Consequence::Reversible,
             provenance: None,
+            ..Default::default()
         }
     }
 
@@ -206,6 +235,7 @@ mod tests {
             description: "v1".into(),
             consequence: Consequence::ReadOnly,
             provenance: None,
+            ..Default::default()
         });
 
         // Re-register with updated fields.
@@ -214,6 +244,7 @@ mod tests {
             description: "v2".into(),
             consequence: Consequence::External,
             provenance: None,
+            ..Default::default()
         });
 
         let desc = catalog.get("mcp").unwrap();

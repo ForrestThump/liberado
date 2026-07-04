@@ -225,6 +225,8 @@ async fn score_one(
                 description: desc.to_string(),
                 consequence: *consequence,
                 provenance: None,
+                default_zone: None,
+                tool_zones: Vec::new(),
             })
             .collect(),
         capabilities: CapabilitySet::from_iter(
@@ -234,6 +236,7 @@ async fn score_one(
                 .map(|n| Capability::ExecuteMcp(n.to_string())),
         ),
         reaction_depth: 0,
+        zone_write_classes: Vec::new(),
     };
 
     let decision = dispatcher.dispatch(&request).await.ok()?;

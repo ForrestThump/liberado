@@ -32,7 +32,8 @@ use thiserror::Error;
 pub use liberado_config_loader::{
     CURRENT_SCHEMA_VERSION, CaptureTuning, ComponentConfig, ConcurrencyTuning, Config, ConfigBuilder,
     ContextTuning, DispatchTuning, Grant, MaintenanceTuning, McpConfig, McpTransport, Policy,
-    SubagentIsolation, Topology, Tuning, ZonePolicy, managed_binary_path,
+    SubagentIsolation, ToolImpact, Topology, Tuning, ZonePolicy, managed_binary_path,
+    resolve_declared_zone,
 };
 
 /// Records which source file contributed each section of a loaded [`Config`],
@@ -254,6 +255,12 @@ pub fn catalog_from_config(config: &Config) -> Vec<liberado_common::McpDescripto
             description: m.description.clone(),
             consequence: m.consequence,
             provenance: None,
+            default_zone: m.default_zone.clone(),
+            tool_zones: m
+                .tools
+                .iter()
+                .map(|t| (t.name.clone(), t.zone.clone()))
+                .collect(),
         })
         .collect()
 }
@@ -309,15 +316,32 @@ pub fn data_dir() -> PathBuf {
 /// and why that was a dead end.
 pub struct GuardContext {
     pub consequences: Vec<(String, liberado_common::Consequence)>,
+    /// MCP descriptors (zone declarations) for the zone-write-class guard (§6 #2) — the same
+    /// `catalog.descriptors()` `consequences` above is derived from, passed through directly
+    /// rather than reduced to a tuple list, since the zone-resolution helpers already operate on
+    /// `McpDescriptor`.
+    pub zone_catalog: Vec<liberado_common::McpDescriptor>,
+    /// `(zone, write_class)` pairs from `Policy.zones` — what a resolved zone is checked against.
+    pub zone_write_classes: Vec<(String, liberado_common::WriteClass)>,
     pub proposals_dir: PathBuf,
     pub signer: liberado_common::ProposalSigner,
 }
 
-/// Build a [`GuardContext`] from the live capability catalog and the vault path a runtime-level
-/// proposal downgrade should be written under.
-pub fn guard_context(catalog: &CapabilityCatalog, vault_path: &Path) -> GuardContext {
+/// Build a [`GuardContext`] from the live capability catalog, the policy (for zone write-classes),
+/// and the vault path a runtime-level proposal downgrade should be written under.
+pub fn guard_context(
+    catalog: &CapabilityCatalog,
+    policy: &liberado_config_loader::Policy,
+    vault_path: &Path,
+) -> GuardContext {
     GuardContext {
         consequences: catalog.consequence_catalog(),
+        zone_catalog: catalog.descriptors(),
+        zone_write_classes: policy
+            .zones
+            .iter()
+            .map(|z| (z.zone.clone(), z.write_class))
+            .collect(),
         proposals_dir: vault_path.to_path_buf(),
         signer: liberado_common::ProposalSigner::new(load_or_create_proposal_key()),
     }
@@ -550,6 +574,8 @@ capabilities = [ { ExecuteMcp = "ghost-mcp" } ]
                     command: "npx".into(),
                     args: vec!["-y".into(), "@scope/tasks".into()],
                 },
+                default_zone: None,
+                tools: Vec::new(),
             },
             McpConfig {
                 name: "email-mcp".into(),
@@ -560,6 +586,8 @@ capabilities = [ { ExecuteMcp = "ghost-mcp" } ]
                     command: "email-mcp".into(),
                     args: vec![],
                 },
+                default_zone: None,
+                tools: Vec::new(),
             },
         ];
 

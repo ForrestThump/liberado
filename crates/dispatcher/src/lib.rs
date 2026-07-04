@@ -49,6 +49,11 @@ pub struct DispatchRequest {
     pub capabilities: CapabilitySet,
     /// Correlation-chain depth: 0 for a user-initiated dispatch, >0 for a background reaction.
     pub reaction_depth: u32,
+    /// `(zone, write_class)` pairs from `Policy.zones` (Decision 11) — what the zone-write-class
+    /// guard (§6 #2) checks a seed call's resolved target zone against. A zone not present here
+    /// falls back to the same conservative default `Policy::write_class` itself uses
+    /// (`WriteClass::ProposalOnly`) — see `guards::zone_write_class`.
+    pub zone_write_classes: Vec<(String, liberado_common::WriteClass)>,
 }
 
 /// Errors that abort a dispatch. Malformed model output does **not** appear here — it is handled
@@ -260,12 +265,15 @@ fn clarify_fallback() -> DispatchDecision {
     }
 }
 
-/// Resolve a guard violation to a downgraded decision. A high-consequence block on a *concrete*
-/// `ExecuteDirect` (a non-empty seed call list — a known action like "send this email") or on a
-/// `DispatchSubagent` (which always carries a restated goal — the classifier's one required field,
-/// so there is always something concrete enough to propose) becomes a `Propose`, carrying the
-/// action for human approval (Decision 11). Every other case stays a `Clarify` — the most
-/// conservative output when there is nothing concrete to propose.
+/// Resolve a guard violation to a downgraded decision. A high-consequence or zone-restricted block
+/// on a *concrete* `ExecuteDirect` (a non-empty seed call list — a known action like "send this
+/// email") or on a `DispatchSubagent` (which always carries a restated goal — the classifier's one
+/// required field, so there is always something concrete enough to propose) becomes a `Propose`,
+/// carrying the action for human approval (Decision 11). Every other case stays a `Clarify` — the
+/// most conservative output when there is nothing concrete to propose. `ZoneRestricted` (§6 #2)
+/// gets the exact same treatment as `HighConsequence` here — both are "a human needs to approve
+/// this specific action before it runs," just gated on a different axis (target zone vs. general
+/// riskiness) — there's no reason for one to produce a `Propose` and the other only a `Clarify`.
 ///
 /// TODO: the one still-deferred fuzzy case is an empty-seed `ExecuteDirect` (including a bare
 /// magnitude-gate hit with no seed calls) — there is no fixed action to propose, since
@@ -278,7 +286,7 @@ fn clarify_fallback() -> DispatchDecision {
 fn downgrade(classified: DispatchDecision, reason: BlockReason) -> DispatchDecision {
     let confidence = classified.confidence;
     let rationale = classified.rationale;
-    if reason == BlockReason::HighConsequence {
+    if matches!(reason, BlockReason::HighConsequence | BlockReason::ZoneRestricted) {
         match classified.action {
             DispatchAction::ExecuteDirect { seed_calls, .. } if !seed_calls.is_empty() => {
                 return downgrade_to_propose_tool_calls(seed_calls, confidence, rationale);
@@ -373,6 +381,9 @@ fn clarify_question(reason: BlockReason) -> String {
         BlockReason::HighConsequence => {
             "This is far-reaching or hard to undo (a sweeping change, or something that leaves the system like an email) — should I go ahead?".into()
         }
+        BlockReason::ZoneRestricted => {
+            "This would write somewhere that needs your review before it happens — should I go ahead?".into()
+        }
         BlockReason::DepthLimit => {
             "This reaction chain has gone deep enough that I'm pausing it — should it continue?".into()
         }
@@ -441,9 +452,12 @@ mod tests {
                 description: "task ops".into(),
                 consequence: Consequence::Reversible,
                 provenance: None,
+                default_zone: None,
+                tool_zones: Vec::new(),
             }],
             capabilities,
             reaction_depth,
+            zone_write_classes: Vec::new(),
         }
     }
 
@@ -581,9 +595,12 @@ mod tests {
                 description: "send email".into(),
                 consequence: Consequence::External,
                 provenance: None,
+                default_zone: None,
+                tool_zones: Vec::new(),
             }],
             capabilities: caps("email"),
             reaction_depth: 0,
+            zone_write_classes: Vec::new(),
         };
         let mock = scripted(&execute_direct("email:send", 0.95));
         let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
@@ -602,6 +619,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn zone_restricted_concrete_action_is_downgraded_to_propose() {
+        // A granted, confident, Reversible-consequence ExecuteDirect whose seed call targets a
+        // ProposalOnly zone: the zone-write-class guard (§6 #2) must turn it into a Propose
+        // carrying the call, the exact same treatment as HighConsequence gets — not a bare
+        // Clarify. See guards.rs's own unit tests for the guard-level isolation of this case.
+        let request = DispatchRequest {
+            goal: "write a review note".into(),
+            catalog: vec![McpDescriptor {
+                name: "vault".into(),
+                description: "git-tracked vault".into(),
+                consequence: Consequence::Reversible,
+                provenance: None,
+                default_zone: None,
+                tool_zones: vec![("write_review".into(), Some("reviews".into()))],
+            }],
+            capabilities: caps("vault"),
+            reaction_depth: 0,
+            zone_write_classes: vec![("reviews".into(), liberado_common::WriteClass::ProposalOnly)],
+        };
+        let mock = scripted(&execute_direct("vault:write_review", 0.95));
+        let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
+
+        let out = dispatcher.dispatch(&request).await.unwrap();
+        match out.action {
+            DispatchAction::Propose {
+                proposed_action: liberado_common::ProposedAction::ToolCalls(calls),
+                ..
+            } => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].tool, "vault:write_review");
+            }
+            other => panic!("expected Propose(ToolCalls), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn high_consequence_subagent_is_downgraded_to_propose() {
         // A DispatchSubagent whose allowed_mcps touches an External MCP: the consequence gate must
         // turn it into a Propose(Subagent) — NOT a Clarify — since a restated goal is always
@@ -613,9 +666,12 @@ mod tests {
                 description: "send email".into(),
                 consequence: Consequence::External,
                 provenance: None,
+                default_zone: None,
+                tool_zones: Vec::new(),
             }],
             capabilities: caps("email"),
             reaction_depth: 0,
+            zone_write_classes: Vec::new(),
         };
         let decision = DispatchDecision {
             action: DispatchAction::DispatchSubagent {
@@ -664,9 +720,12 @@ mod tests {
                 description: "git-tracked vault".into(),
                 consequence: Consequence::Reversible,
                 provenance: None,
+                default_zone: None,
+                tool_zones: Vec::new(),
             }],
             capabilities: caps("vault"),
             reaction_depth: 0,
+            zone_write_classes: Vec::new(),
         };
         let decision = DispatchDecision {
             action: DispatchAction::ExecuteDirect {

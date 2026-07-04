@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use debounce::Debouncer;
 use liberado_common::{
     CapabilitySet, CapabilityCatalog, DispatchDecision, Event, EventPayload, ProposalSigner,
-    event_source,
+    WriteClass, event_source,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_orchestrator::{Disposition, Orchestrator, OrchestratorError};
@@ -85,6 +85,9 @@ struct DispatcherContext {
     catalog: Arc<CapabilityCatalog>,
     capabilities: CapabilitySet,
     reaction_depth: u32,
+    /// `(zone, write_class)` pairs from `Policy.zones` — what the zone-write-class guard (§6 #2)
+    /// checks a seed call's resolved target zone against.
+    zone_write_classes: Vec<(String, WriteClass)>,
 }
 
 impl DispatcherContext {
@@ -98,6 +101,7 @@ impl DispatcherContext {
             catalog: self.catalog.descriptors(),
             capabilities: self.capabilities.clone(),
             reaction_depth: self.reaction_depth,
+            zone_write_classes: self.zone_write_classes.clone(),
         }
     }
 }
@@ -173,7 +177,19 @@ impl Daemon {
             catalog,
             capabilities,
             reaction_depth: DEFAULT_REACTION_DEPTH,
+            zone_write_classes: Vec::new(),
         });
+        self
+    }
+
+    /// Override the zone-write-classes the zone-write-class guard (§6 #2) checks against —
+    /// `(zone, write_class)` pairs from `Policy.zones`. Only meaningful alongside
+    /// [`with_dispatcher`](Self::with_dispatcher); a no-op if called before it (there's no
+    /// `DispatcherContext` yet to attach to).
+    pub fn with_zone_write_classes(mut self, zone_write_classes: Vec<(String, WriteClass)>) -> Self {
+        if let Some(ctx) = &mut self.dispatcher {
+            ctx.zone_write_classes = zone_write_classes;
+        }
         self
     }
 
@@ -690,6 +706,8 @@ mod tests {
             NoopFactory,
             CapabilitySet::empty(),
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
             std::env::temp_dir(),
             liberado_common::ProposalSigner::random(),
         );
@@ -784,12 +802,15 @@ mod tests {
             description: "send email".into(),
             consequence: Consequence::External,
             provenance: None,
+            ..Default::default()
         });
         let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("email".into())]);
         let orchestrator = Orchestrator::new(
             Arc::new(MockProvider::with_script("exec", Vec::new())),
             UnusedFactory,
             CapabilitySet::empty(),
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             std::env::temp_dir(),
             liberado_common::ProposalSigner::random(),
@@ -857,6 +878,8 @@ mod tests {
             )),
             InvocationRecordingFactory { runtime },
             CapabilitySet::empty(),
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             std::env::temp_dir(),
             signer.clone(),
@@ -934,6 +957,8 @@ mod tests {
             InvocationRecordingFactory { runtime },
             CapabilitySet::empty(),
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
             std::env::temp_dir(),
             liberado_common::ProposalSigner::random(),
         );
@@ -1006,6 +1031,8 @@ mod tests {
             )),
             InvocationRecordingFactory { runtime },
             CapabilitySet::empty(),
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             std::env::temp_dir(),
             daemon_signer.clone(),
@@ -1089,6 +1116,8 @@ mod tests {
             inner,
             CapabilitySet::from_iter([Capability::ExecuteMcp("dangerous-mcp".into())]),
             vec![("dangerous-mcp".into(), Consequence::External)],
+            Vec::new(),
+            Vec::new(),
             vault_path.clone(),
             "clean up the vault".into(),
             "runtime-gate-test".into(),
@@ -1126,6 +1155,8 @@ mod tests {
             )),
             InvocationRecordingFactory { runtime },
             CapabilitySet::empty(),
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             std::env::temp_dir(),
             signer.clone(),

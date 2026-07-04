@@ -246,7 +246,7 @@ async fn build_chat(
     // either is derived. A one-time snapshot at boot is fine here — MCP declarations aren't
     // runtime-dynamic yet — but the dispatch-routing catalog below stays the live `Arc` so it and the
     // daemon/API never drift apart from each other.
-    let guard = liberado_bootstrap::guard_context(&catalog, vault_path);
+    let guard = liberado_bootstrap::guard_context(&catalog, &config.policy, vault_path);
     let catalog_is_empty = guard.consequences.is_empty();
 
     let (runtime, orchestrator) = connect_chat_runtime(&provider, mcp, &capabilities, &guard).await;
@@ -272,7 +272,8 @@ async fn build_chat(
         capabilities,
         guard.proposals_dir,
         guard.signer.clone(),
-    );
+    )
+    .with_zone_guards(guard.zone_catalog, guard.zone_write_classes);
 
     if !catalog_is_empty {
         info!(
@@ -322,6 +323,8 @@ async fn connect_chat_runtime(
                 registry,
                 capabilities.clone(),
                 guard.consequences.clone(),
+                guard.zone_catalog.clone(),
+                guard.zone_write_classes.clone(),
                 guard.proposals_dir.clone(),
                 guard.signer.clone(),
             );

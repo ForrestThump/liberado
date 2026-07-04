@@ -6,14 +6,14 @@
 //! unsafe action. Because the guards are deterministic, the entire safety surface is exactly
 //! assertable (Decision 16) — only the classifier's *quality* is probabilistic, never its safety.
 //!
-//! v1 scope: capability, consequence-gate, magnitude, reaction-depth, and confidence-floor guards.
-//! The zone-write-class guard (§6 #2 — proposal forcing based on a write's target zone) is the one
-//! still deferred, to the slice that adds tool→zone resolution; it's noted below where it would
-//! slot in. (This comment previously also listed the consequence gate as deferred — stale as of
-//! whenever it actually shipped; the code below has implemented it for a while.)
+//! Scope: capability, consequence-gate, zone-write-class, magnitude, reaction-depth, and
+//! confidence-floor guards. (This comment previously listed the consequence gate, then the
+//! zone-write-class gate, as deferred — stale as of whenever each actually shipped; the code below
+//! has implemented both for a while by the time you're reading this.)
 
 use liberado_common::{
-    BlockReason, Consequence, DispatchAction, DispatchDecision, is_sweeping_destructive, mcp_of,
+    BlockReason, Consequence, DispatchAction, DispatchDecision, bare_tool_name,
+    is_sweeping_destructive, mcp_of, resolve_zone,
 };
 use liberado_config_loader::DispatchTuning;
 
@@ -52,9 +52,18 @@ pub(crate) fn evaluate(
     // (2) Consequence gate (§6 #3) — a permitted action that would touch something irreversible or
     // external (an email/message, an unversioned delete) needs human confirmation, even at high
     // confidence. A git-tracked vault write is `Reversible` and passes; `External`/`Irreversible`
-    // does not. (Zone write-class §6 #2 — proposal forcing — is still deferred.)
+    // does not.
     if max_consequence(&decision.action, req) >= CONSEQUENCE_GATE {
         return Some(BlockReason::HighConsequence);
+    }
+
+    // (2b) Zone-write-class gate (§6 #2) — a permitted, low-*general*-consequence action can still
+    // target a *specific* vault zone the human has restricted (`proposal_only`/`human_only`).
+    // Pre-flight scope only (this checks `ExecuteDirect`'s seed calls — see `zone_restricted`'s own
+    // doc comment); the real, always-enforced boundary for every call including adaptive ones is
+    // `RiskGatedToolRuntime`.
+    if zone_restricted(&decision.action, req) {
+        return Some(BlockReason::ZoneRestricted);
     }
 
     // (3) Magnitude gate — a *sweeping destructive* action is high-stakes by reach even when each
@@ -124,6 +133,41 @@ fn max_consequence(action: &DispatchAction, req: &DispatchRequest) -> Consequenc
         .unwrap_or_default()
 }
 
+/// Whether any of `action`'s seed calls target a zone whose declared `WriteClass` doesn't allow a
+/// direct agent write (`ProposalOnly`/`HumanOnly`) — the zone-write-class guard (§6 #2).
+///
+/// Only `ExecuteDirect`'s seed calls are checked — the same pre-flight scope `max_consequence`
+/// above already accepts: a `DispatchSubagent`'s adaptive calls aren't known yet at dispatch time,
+/// and this is a check, not the boundary (`RiskGatedToolRuntime` is, for every call including
+/// adaptive ones). A call whose MCP isn't in the catalog is skipped here (the capability guard
+/// already caught that, earlier and more specifically). A call whose tool hasn't opted into zone
+/// tracking (`resolve_zone` returns `None`) is not a zone-write concern and passes. A call whose
+/// resolved zone isn't in `req.zone_write_classes` fails safe to `WriteClass::default()`
+/// (`ProposalOnly`), the same conservative default `Policy::write_class` itself uses for an
+/// unlisted zone.
+fn zone_restricted(action: &DispatchAction, req: &DispatchRequest) -> bool {
+    let DispatchAction::ExecuteDirect { seed_calls, .. } = action else {
+        return false;
+    };
+    seed_calls.iter().any(|call| {
+        let Some(descriptor) = req.catalog.iter().find(|d| d.name == mcp_of(&call.tool)) else {
+            return false;
+        };
+        match resolve_zone(descriptor, bare_tool_name(&call.tool)) {
+            None => false,
+            Some(zone) => {
+                let write_class = req
+                    .zone_write_classes
+                    .iter()
+                    .find(|(z, _)| *z == zone)
+                    .map(|(_, wc)| *wc)
+                    .unwrap_or_default();
+                !write_class.allows_direct_agent_write()
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,9 +182,12 @@ mod tests {
                 description: "task ops".into(),
                 consequence: Consequence::Reversible,
                 provenance: None,
+                default_zone: None,
+                tool_zones: Vec::new(),
             }],
             capabilities,
             reaction_depth,
+            zone_write_classes: Vec::new(),
         }
     }
 
@@ -218,9 +265,12 @@ mod tests {
                 description: "send email".into(),
                 consequence: Consequence::External,
                 provenance: None,
+                default_zone: None,
+                tool_zones: Vec::new(),
             }],
             capabilities: granted("email"),
             reaction_depth: 0,
+            zone_write_classes: Vec::new(),
         };
         let d = execute_direct("email:send", 0.95);
         assert_eq!(
@@ -240,9 +290,12 @@ mod tests {
                 description: "git-tracked Obsidian vault".into(),
                 consequence: Consequence::Reversible,
                 provenance: None,
+                default_zone: None,
+                tool_zones: Vec::new(),
             }],
             capabilities: granted("vault"),
             reaction_depth: 0,
+            zone_write_classes: Vec::new(),
         };
         let d = execute_direct("vault:write", 0.95);
         assert_eq!(evaluate(&d, &request, &DispatchTuning::default(), 4), None);
@@ -259,9 +312,12 @@ mod tests {
                 description: "git-tracked vault".into(),
                 consequence: Consequence::Reversible,
                 provenance: None,
+                default_zone: None,
+                tool_zones: Vec::new(),
             }],
             capabilities: granted("vault"),
             reaction_depth: 0,
+            zone_write_classes: Vec::new(),
         };
         let d = execute_direct("vault:delete", 0.95);
         assert_eq!(
@@ -407,5 +463,75 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// A `vault` MCP request whose seed call targets `write_review` (declared to write to the
+    /// `reviews` zone), granted and `Reversible` (so the consequence gate alone would pass it) —
+    /// isolating the zone-write-class guard from the consequence gate it sits next to.
+    fn vault_request(zone_write_classes: Vec<(&str, liberado_common::WriteClass)>) -> DispatchRequest {
+        DispatchRequest {
+            goal: "write a review note".into(),
+            catalog: vec![McpDescriptor {
+                name: "vault".into(),
+                description: "git-tracked vault".into(),
+                consequence: Consequence::Reversible,
+                provenance: None,
+                default_zone: Some("tasks".into()),
+                tool_zones: vec![("write_review".into(), Some("reviews".into()))],
+            }],
+            capabilities: granted("vault"),
+            reaction_depth: 0,
+            zone_write_classes: zone_write_classes
+                .into_iter()
+                .map(|(z, wc)| (z.to_string(), wc))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn write_to_a_proposal_only_zone_is_zone_restricted() {
+        use liberado_common::WriteClass;
+        let d = execute_direct("vault:write_review", 0.95);
+        let request = vault_request(vec![("reviews", WriteClass::ProposalOnly)]);
+        assert_eq!(
+            evaluate(&d, &request, &DispatchTuning::default(), 4),
+            Some(BlockReason::ZoneRestricted)
+        );
+    }
+
+    #[test]
+    fn write_to_an_agent_writable_zone_passes() {
+        use liberado_common::WriteClass;
+        let d = execute_direct("vault:write_review", 0.95);
+        let request = vault_request(vec![("reviews", WriteClass::AgentWritable)]);
+        assert_eq!(evaluate(&d, &request, &DispatchTuning::default(), 4), None);
+    }
+
+    #[test]
+    fn unlisted_zone_fails_safe_to_zone_restricted() {
+        // "reviews" isn't in zone_write_classes at all -- must fail safe (ProposalOnly), not
+        // silently pass just because nothing was configured.
+        use liberado_common::WriteClass;
+        let d = execute_direct("vault:write_review", 0.95);
+        let request = vault_request(vec![("tasks", WriteClass::AgentWritable)]);
+        assert_eq!(
+            evaluate(&d, &request, &DispatchTuning::default(), 4),
+            Some(BlockReason::ZoneRestricted)
+        );
+    }
+
+    #[test]
+    fn a_tool_not_opted_into_zone_tracking_is_not_zone_restricted() {
+        // "add" isn't in vault's `tool_zones` and there's a `default_zone`, so it inherits
+        // "tasks" -- this specifically checks a tool from a *different*, zone-untracked MCP
+        // (tasks-mcp, no default_zone/tool_zones at all) isn't affected by the vault-only
+        // zone_write_classes above -- it should pass regardless of what zones are restricted.
+        use liberado_common::WriteClass;
+        let d = execute_direct("tasks-mcp:add", 0.95);
+        let request = DispatchRequest {
+            zone_write_classes: vec![("reviews".to_string(), WriteClass::ProposalOnly)],
+            ..req(granted("tasks-mcp"), 0)
+        };
+        assert_eq!(evaluate(&d, &request, &DispatchTuning::default(), 4), None);
     }
 }

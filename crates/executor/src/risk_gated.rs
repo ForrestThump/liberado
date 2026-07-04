@@ -32,8 +32,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use liberado_common::{
-    CapabilitySet, Consequence, Proposal, ProposalSigner, ProposedAction,
-    is_sweeping_destructive, mcp_of,
+    CapabilitySet, Consequence, McpDescriptor, Proposal, ProposalSigner, ProposedAction,
+    WriteClass, bare_tool_name, is_sweeping_destructive, mcp_of, resolve_zone,
 };
 use liberado_provider::{ToolDef, ToolInvocation};
 use tracing::Instrument;
@@ -41,13 +41,22 @@ use tracing::Instrument;
 use crate::ToolRuntime;
 
 /// A runtime guard that wraps an inner [`ToolRuntime`] and applies capability, consequence,
-/// and magnitude checks before delegating to the inner runtime.
+/// zone-write-class, and magnitude checks before delegating to the inner runtime.
 pub struct RiskGatedToolRuntime {
     inner: Arc<dyn ToolRuntime>,
     /// The capability set — the MCP must be granted to execute.
     capabilities: CapabilitySet,
     /// Consequence catalog: `(mcp_name, consequence)` pairs for each MCP.
     consequence_catalog: Vec<(String, Consequence)>,
+    /// Per-MCP zone declarations (§6 #2's zone-write-class guard) — the same `McpDescriptor` list
+    /// the live `CapabilityCatalog` already provides (`catalog.descriptors()`), reused directly
+    /// rather than deriving yet another shape the way `consequence_catalog` is its own tuple list.
+    zone_catalog: Vec<McpDescriptor>,
+    /// `(zone, write_class)` pairs from `Policy.zones` — what a call's resolved target zone (via
+    /// `zone_catalog`) is checked against. A zone absent here fails safe to
+    /// `WriteClass::default()` (`ProposalOnly`), the same conservative default
+    /// `Policy::write_class` itself uses for an unlisted zone.
+    zone_write_classes: Vec<(String, WriteClass)>,
     /// Base directory for proposal files. Proposals are written to `proposals_dir/proposals/`.
     proposals_dir: PathBuf,
     /// The current user message / goal context used for magnitude assessment.
@@ -66,6 +75,8 @@ impl RiskGatedToolRuntime {
     /// * `inner` - The inner tool runtime (shared) to delegate to when all guards pass.
     /// * `capabilities` - The set of granted capabilities for capability checking.
     /// * `consequence_catalog` - `(mcp_name, consequence)` pairs for consequence gating.
+    /// * `zone_catalog` - The MCP descriptors (zone declarations) for the zone-write-class guard.
+    /// * `zone_write_classes` - `(zone, write_class)` pairs from `Policy.zones`.
     /// * `proposals_dir` - Directory under which `proposals/` subdirectory holds proposal files.
     /// * `goal_context` - The user message / goal context for magnitude assessment.
     /// * `correlation_base` - A unique base string for naming generated proposals.
@@ -75,6 +86,8 @@ impl RiskGatedToolRuntime {
         inner: Arc<dyn ToolRuntime>,
         capabilities: CapabilitySet,
         consequence_catalog: Vec<(String, Consequence)>,
+        zone_catalog: Vec<McpDescriptor>,
+        zone_write_classes: Vec<(String, WriteClass)>,
         proposals_dir: PathBuf,
         goal_context: String,
         correlation_base: String,
@@ -84,6 +97,8 @@ impl RiskGatedToolRuntime {
             inner,
             capabilities,
             consequence_catalog,
+            zone_catalog,
+            zone_write_classes,
             proposals_dir,
             goal_context,
             correlation_base,
@@ -139,6 +154,41 @@ impl ToolRuntime for RiskGatedToolRuntime {
                     .write_proposal(call, "High-consequence MCP — requires human approval")
                     .await?;
                 return Ok(proposal_message(&proposal_path));
+            }
+
+            // 3b. Zone-write-class check (§6 #2): does this specific call's resolved target zone
+            // allow a direct agent write? Only applies to tools that have opted into zone
+            // tracking (`resolve_zone` returns `None` for anything else — most MCPs aren't vault
+            // writers at all). A resolved zone absent from `zone_write_classes` fails safe to
+            // `WriteClass::default()` (`ProposalOnly`) rather than silently passing.
+            if let Some(descriptor) = self.zone_catalog.iter().find(|d| d.name == mcp_name) {
+                let bare_tool = bare_tool_name(&call.name);
+                if let Some(zone) = resolve_zone(descriptor, bare_tool) {
+                    let write_class = self
+                        .zone_write_classes
+                        .iter()
+                        .find(|(z, _)| *z == zone)
+                        .map(|(_, wc)| *wc)
+                        .unwrap_or_default();
+                    if !write_class.allows_direct_agent_write() {
+                        tracing::warn!(
+                            mcp = %mcp_name,
+                            tool = %bare_tool,
+                            %zone,
+                            ?write_class,
+                            "tool call downgraded to proposal: zone write-class restricted"
+                        );
+                        let proposal_path = self
+                            .write_proposal(
+                                call,
+                                &format!(
+                                    "Write targets the '{zone}' zone, which requires human approval"
+                                ),
+                            )
+                            .await?;
+                        return Ok(proposal_message(&proposal_path));
+                    }
+                }
             }
 
             // 4. Magnitude check: sweeping destructive behavior in args or goal context.
@@ -306,6 +356,8 @@ mod tests {
             Arc::new(inner),
             capabilities,
             catalog,
+            Vec::new(),
+            Vec::new(),
             std::env::temp_dir(),
             "test goal".into(),
             "test-correlation".into(),
@@ -334,6 +386,8 @@ mod tests {
             inner.clone(),
             caps,
             vec![("email-mcp".into(), Consequence::External)],
+            Vec::new(),
+            Vec::new(),
             dir.path().to_path_buf(),
             "send an email".into(),
             "test-email".into(),
@@ -410,6 +464,8 @@ mod tests {
             inner.clone(),
             caps,
             vec![("email-mcp".into(), Consequence::External)],
+            Vec::new(),
+            Vec::new(),
             occupied_by_a_file,
             "send an email".into(),
             "test-write-failure".into(),
@@ -441,6 +497,8 @@ mod tests {
             inner.clone(),
             caps,
             vec![("vault-mcp".into(), Consequence::Reversible)], // Low consequence
+            Vec::new(),
+            Vec::new(),
             dir.path().to_path_buf(),
             "delete all notes".into(), // Sweeping+destructive goal
             "test-sweep".into(),
@@ -457,5 +515,102 @@ mod tests {
             inner.invoked.lock().unwrap().is_empty(),
             "sweeping-destructive call must not invoke the inner tool"
         );
+    }
+
+    fn vault_descriptor() -> McpDescriptor {
+        McpDescriptor {
+            name: "vault".into(),
+            description: "git-tracked vault".into(),
+            consequence: Consequence::Reversible, // low, so this isolates the zone check
+            provenance: None,
+            default_zone: Some("tasks".into()),
+            tool_zones: vec![("write_review".into(), Some("reviews".into()))],
+        }
+    }
+
+    #[tokio::test]
+    async fn zone_restricted_call_is_downgraded_to_proposal() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(&["vault:write_review"], Ok("wrote".into())));
+        let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("vault".into())]);
+        let rt = RiskGatedToolRuntime::new(
+            inner.clone(),
+            caps,
+            vec![("vault".into(), Consequence::Reversible)],
+            vec![vault_descriptor()],
+            vec![("reviews".to_string(), WriteClass::ProposalOnly)],
+            dir.path().to_path_buf(),
+            "write a review note".into(),
+            "test-zone".into(),
+            ProposalSigner::random(),
+        );
+
+        let call = ToolInvocation::new(
+            "c1",
+            "vault:write_review",
+            serde_json::json!({"content": "..."}),
+        );
+        let result = rt.invoke(&call).await;
+        let msg = result.expect("downgrade should be an Ok tool result, not an Err");
+        assert!(msg.contains("PROPOSAL CREATED") && msg.contains("NOT executed"));
+        assert!(
+            inner.invoked.lock().unwrap().is_empty(),
+            "a zone-restricted call must not invoke the inner tool"
+        );
+    }
+
+    #[tokio::test]
+    async fn zone_agent_writable_call_passes_through() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(&["vault:write_review"], Ok("wrote".into())));
+        let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("vault".into())]);
+        let rt = RiskGatedToolRuntime::new(
+            inner.clone(),
+            caps,
+            vec![("vault".into(), Consequence::Reversible)],
+            vec![vault_descriptor()],
+            vec![("reviews".to_string(), WriteClass::AgentWritable)],
+            dir.path().to_path_buf(),
+            "write a review note".into(),
+            "test-zone-ok".into(),
+            ProposalSigner::random(),
+        );
+
+        let call = ToolInvocation::new(
+            "c1",
+            "vault:write_review",
+            serde_json::json!({"content": "..."}),
+        );
+        let result = rt.invoke(&call).await;
+        assert_eq!(result, Ok("wrote".into()));
+        assert_eq!(inner.invoked.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn call_to_an_mcp_not_in_the_zone_catalog_is_unaffected() {
+        // Backward-compat case: an empty zone_catalog (as every pre-existing test in this file
+        // uses) must never trip the zone-write-class check, regardless of zone_write_classes.
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(&["vault:write_review"], Ok("wrote".into())));
+        let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("vault".into())]);
+        let rt = RiskGatedToolRuntime::new(
+            inner.clone(),
+            caps,
+            vec![("vault".into(), Consequence::Reversible)],
+            Vec::new(), // no zone declarations at all for "vault"
+            vec![("reviews".to_string(), WriteClass::ProposalOnly)],
+            dir.path().to_path_buf(),
+            "write a review note".into(),
+            "test-zone-untracked".into(),
+            ProposalSigner::random(),
+        );
+
+        let call = ToolInvocation::new(
+            "c1",
+            "vault:write_review",
+            serde_json::json!({"content": "..."}),
+        );
+        let result = rt.invoke(&call).await;
+        assert_eq!(result, Ok("wrote".into()));
     }
 }

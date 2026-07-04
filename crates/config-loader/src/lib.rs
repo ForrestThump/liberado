@@ -38,7 +38,8 @@ pub use file_source::FileSource;
 pub use model::{
     CURRENT_SCHEMA_VERSION, CaptureTuning, Config, ConfigBuilder, ComponentConfig, ConcurrencyTuning,
     ContextTuning, DispatchTuning, Grant, MaintenanceTuning, McpConfig, McpTransport, Policy,
-    SubagentIsolation, Topology, Tuning, ZonePolicy, managed_binary_path,
+    SubagentIsolation, ToolImpact, Topology, Tuning, ZonePolicy, managed_binary_path,
+    resolve_declared_zone,
 };
 pub use source::{ConfigLoadError, ConfigSource};
 pub use validation::validate_merged_config;

@@ -121,6 +121,14 @@ pub fn mcp_of(tool: &str) -> &str {
     tool.split_once(':').map(|(mcp, _)| mcp).unwrap_or(tool)
 }
 
+/// The bare tool name (without the `"<mcp>:"` prefix), the companion to [`mcp_of`] for the same
+/// `"<mcp>:<tool>"` convention — a bare name (no colon) is its own bare tool name too, mirroring
+/// `mcp_of`'s fallback. Used by the zone-write-class guard (§6 #2) to look up a tool's declared
+/// zone within its owning MCP's descriptor.
+pub fn bare_tool_name(tool: &str) -> &str {
+    tool.split_once(':').map(|(_, bare)| bare).unwrap_or(tool)
+}
+
 /// Why a [`DispatchAction::Clarify`] was raised. The first two are model-judged; the rest are
 /// produced by the deterministic guards (§6), not the classifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,6 +139,11 @@ pub enum BlockReason {
     CapabilityGap,
     /// The action would touch something irreversible or external (consequence guard, §6 #3).
     HighConsequence,
+    /// The action would write to a zone whose declared `WriteClass` doesn't allow a direct agent
+    /// write (`ProposalOnly`/`HumanOnly`) — the zone-write-class guard (§6 #2). Distinct from
+    /// `HighConsequence`: this gates on *where* a write lands, not how risky the MCP's effects are
+    /// in general.
+    ZoneRestricted,
     LowConfidence,
     DepthLimit,
 }

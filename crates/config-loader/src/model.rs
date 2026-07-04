@@ -106,6 +106,125 @@ pub struct McpConfig {
     /// How the runtime actually reaches this server. Same source (`topology.mcps`) drives both the
     /// dispatcher catalog and the connection, so a name routed to is a name we can connect to.
     pub transport: McpTransport,
+    /// Default target zone for this MCP's write tools — a tool not named in `tools` below
+    /// inherits this. `None` if this MCP has no uniform default (e.g. a general-purpose vault MCP
+    /// whose tools each write to a different zone — declare each one explicitly in `tools`
+    /// instead), or if none of this MCP's tools are zone-scoped writes at all. Optional, not
+    /// required: an MCP that never touches vault zones (weather, a calculator) simply omits this
+    /// and every one of its tools is treated as "not a zone-write concern" by
+    /// `resolve_declared_zone` — zone-write-class gating is opt-in per MCP, not a blanket
+    /// restrictive default the way `consequence` is (most MCPs aren't vault writers at all).
+    #[serde(default)]
+    pub default_zone: Option<String>,
+    /// Per-tool overrides. A tool named here uses its own `zone` instead of inheriting
+    /// `default_zone` — including explicitly overriding to "not a zone write" by leaving `zone`
+    /// unset, for the one read tool in an otherwise all-write MCP. A tool *not* named here always
+    /// inherits `default_zone` (which may itself be `None`).
+    #[serde(default)]
+    pub tools: Vec<ToolImpact>,
+}
+
+/// One tool's zone-write override within its owning [`McpConfig`] — see `McpConfig::default_zone`
+/// and `McpConfig::tools` for when this is needed vs. when a plain `default_zone` alone suffices.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolImpact {
+    /// Bare tool name (no `"<mcp>:"` prefix — implied by the owning `McpConfig`).
+    pub name: String,
+    /// Target zone this specific tool writes to, overriding the MCP's `default_zone`. Omit (or
+    /// set to `None`) to explicitly declare this one tool as NOT a zone write, even when the
+    /// MCP's other tools are.
+    #[serde(default)]
+    pub zone: Option<String>,
+}
+
+/// Resolve the target zone for a specific tool call, given its owning MCP's config and the tool's
+/// bare name (no `"<mcp>:"` prefix). `None` means "not a zone-write concern" — a declared read, or
+/// an MCP that hasn't opted into zone tracking at all — distinct from "a write whose zone is
+/// unknown," which callers should treat conservatively (the zone-write-class guard's fail-safe
+/// default for an unresolvable-but-real write) rather than silently skip.
+///
+/// Deliberately a static, per-tool *declaration* (like `consequence` already is), not per-call
+/// argument introspection: a tool call's `args` aren't parsed here at all. The tradeoff this
+/// accepts is real — a single generic `vault:write(path)` tool that can target any zone depending
+/// on its arguments can't be discriminated by this alone; an MCP author who needs that must expose
+/// distinct per-zone tool names (`vault:write_tasks`, `vault:write_reviews`, ...) instead of one
+/// generic multi-zone tool, if per-zone gating actually matters for it. Chosen for simplicity and
+/// consistency with the rest of the config surface over the added complexity (and MCP-argument-
+/// shape coupling) of dynamic resolution; revisit only if a real MCP's shape can't be expressed
+/// this way in practice.
+pub fn resolve_declared_zone(mcp: &McpConfig, bare_tool_name: &str) -> Option<String> {
+    match mcp.tools.iter().find(|t| t.name == bare_tool_name) {
+        Some(tool) => tool.zone.clone(),
+        None => mcp.default_zone.clone(),
+    }
+}
+
+#[cfg(test)]
+mod zone_resolution_tests {
+    use super::*;
+
+    fn mcp_with(default_zone: Option<&str>, tools: Vec<ToolImpact>) -> McpConfig {
+        McpConfig {
+            name: "test-mcp".into(),
+            enabled: true,
+            description: "test".into(),
+            consequence: Consequence::Reversible,
+            transport: McpTransport::Managed,
+            default_zone: default_zone.map(String::from),
+            tools,
+        }
+    }
+
+    #[test]
+    fn unlisted_tool_inherits_the_mcp_default_zone() {
+        let mcp = mcp_with(Some("tasks"), Vec::new());
+        assert_eq!(
+            resolve_declared_zone(&mcp, "write"),
+            Some("tasks".to_string())
+        );
+    }
+
+    #[test]
+    fn listed_tool_overrides_the_default_zone() {
+        let mcp = mcp_with(
+            Some("tasks"),
+            vec![ToolImpact {
+                name: "write_review".into(),
+                zone: Some("reviews".into()),
+            }],
+        );
+        assert_eq!(
+            resolve_declared_zone(&mcp, "write_review"),
+            Some("reviews".to_string())
+        );
+        // An unlisted tool on the same MCP still inherits the default.
+        assert_eq!(
+            resolve_declared_zone(&mcp, "write"),
+            Some("tasks".to_string())
+        );
+    }
+
+    #[test]
+    fn listed_tool_with_no_zone_explicitly_overrides_to_not_a_write() {
+        // Even though the MCP has a default_zone, explicitly listing a tool with no `zone`
+        // declares it as NOT a zone write (e.g. the one read tool in an otherwise all-write MCP).
+        let mcp = mcp_with(
+            Some("tasks"),
+            vec![ToolImpact {
+                name: "search".into(),
+                zone: None,
+            }],
+        );
+        assert_eq!(resolve_declared_zone(&mcp, "search"), None);
+    }
+
+    #[test]
+    fn no_default_zone_and_unlisted_tool_resolves_to_none() {
+        // An MCP that hasn't opted into zone tracking at all -- every one of its tools is "not a
+        // zone-write concern," not a fail-safe-restricted unknown.
+        let mcp = mcp_with(None, Vec::new());
+        assert_eq!(resolve_declared_zone(&mcp, "anything"), None);
+    }
 }
 
 /// How to reach an MCP server. Stdio spawns a child process; Http connects to a URL (Decision 3);
@@ -900,6 +1019,8 @@ clarify_threshold_read = 0.8
                     command: "npx".into(),
                     args: vec!["-y".into(), "@scope/mcp".into()],
                 },
+                default_zone: None,
+                tools: Vec::new(),
             })
             .hook(ComponentConfig {
                 name: "hook1".into(),

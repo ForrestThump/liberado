@@ -49,7 +49,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use liberado_common::{
-    CapabilityCatalog, CapabilitySet, Consequence, DispatchAction, ProposalSigner,
+    CapabilityCatalog, CapabilitySet, Consequence, DispatchAction, McpDescriptor, ProposalSigner,
+    WriteClass,
 };
 use liberado_conversation_store::{
     Author, ConversationHeader, ConversationStore, NewConversation, NewNode, StoreError, Ulid,
@@ -94,6 +95,10 @@ pub struct ChatSessions {
     // ── Slice 2: runtime safety guards ──────────────────────────────────────
     /// `(mcp_name, consequence)` pairs for RiskGatedToolRuntime consequence gating.
     consequences: Vec<(String, Consequence)>,
+    /// MCP descriptors (zone declarations) for RiskGatedToolRuntime's zone-write-class gating.
+    zone_catalog: Vec<McpDescriptor>,
+    /// `(zone, write_class)` pairs from `Policy.zones` for the same check.
+    zone_write_classes: Vec<(String, WriteClass)>,
     /// Capability grants for RiskGatedToolRuntime capability checking.
     capabilities: CapabilitySet,
     /// The vault's `proposals/` directory — a `proposals/` subdirectory under this holds proposal
@@ -132,6 +137,8 @@ impl ChatSessions {
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             locks: Mutex::new(HashMap::new()),
             consequences: Vec::new(),
+            zone_catalog: Vec::new(),
+            zone_write_classes: Vec::new(),
             capabilities: CapabilitySet::empty(),
             proposals_dir: PathBuf::new(),
             signer: ProposalSigner::random(),
@@ -160,6 +167,7 @@ impl ChatSessions {
     /// * `proposals_dir` - The vault's `proposals/` directory (`proposals/proposals/<id>.md` under
     ///   it holds proposal files — matches the daemon's own `PROPOSALS_DIR` convention).
     /// * `signer` - Signs every proposal this session writes.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_guards(
         mut self,
         consequences: Vec<(String, Consequence)>,
@@ -171,6 +179,24 @@ impl ChatSessions {
         self.capabilities = capabilities;
         self.proposals_dir = proposals_dir;
         self.signer = signer;
+        self
+    }
+
+    /// Attach zone-write-class guard configuration (§6 #2) — optional, and separate from
+    /// [`with_guards`](Self::with_guards) so existing callers don't need to change at all; a
+    /// session with no zone data attached just never trips the zone-write-class check (every
+    /// resolved zone would be looked up against an empty list, but `resolve_zone` itself returns
+    /// `None` for every tool anyway when `zone_catalog` is empty, so this is inert, not fail-open).
+    ///
+    /// * `zone_catalog` - MCP descriptors (zone declarations), e.g. `catalog.descriptors()`.
+    /// * `zone_write_classes` - `(zone, write_class)` pairs from `Policy.zones`.
+    pub fn with_zone_guards(
+        mut self,
+        zone_catalog: Vec<McpDescriptor>,
+        zone_write_classes: Vec<(String, WriteClass)>,
+    ) -> Self {
+        self.zone_catalog = zone_catalog;
+        self.zone_write_classes = zone_write_classes;
         self
     }
 
@@ -319,6 +345,7 @@ impl ChatSessions {
             catalog: self.dispatch_catalog.descriptors(),
             capabilities: self.capabilities.clone(),
             reaction_depth: 0, // user-initiated, not a background reaction
+            zone_write_classes: self.zone_write_classes.clone(),
         };
         let decision = match dispatcher.dispatch(&req).await {
             Ok(decision) => decision,
@@ -424,6 +451,8 @@ impl ChatSessions {
             inner,
             self.capabilities.clone(),
             self.consequences.clone(),
+            self.zone_catalog.clone(),
+            self.zone_write_classes.clone(),
             self.proposals_dir.clone(),
             user.to_string(),
             session.to_string(),
@@ -855,6 +884,8 @@ mod tests {
             NoopFactory,
             CapabilitySet::empty(),
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),
         );
@@ -891,6 +922,8 @@ mod tests {
             NoopFactory,
             CapabilitySet::empty(),
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),
         );
@@ -926,6 +959,8 @@ mod tests {
             Arc::new(MockProvider::with_script("exec", Vec::new())),
             NoopFactory,
             CapabilitySet::empty(),
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),
@@ -1017,6 +1052,8 @@ mod tests {
             Arc::new(MockProvider::with_script("exec", Vec::new())),
             NoopFactory,
             CapabilitySet::empty(),
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),

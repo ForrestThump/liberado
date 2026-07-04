@@ -87,6 +87,8 @@ mod tests {
                     command: "test".into(),
                     args: vec![],
                 },
+                default_zone: None,
+                tools: Vec::new(),
             }],
             ..Topology::default()
         }
