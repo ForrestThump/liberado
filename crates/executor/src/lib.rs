@@ -96,6 +96,94 @@ const REPORT_NUDGE: &str = "If the goal isn't finished yet, continue by calling 
 still need — don't stop partway through a multi-step plan. Once it's actually done (or you \
 genuinely cannot proceed), call `submit_report` with your final result. Do not reply in plain text.";
 
+/// How many consecutive, *near-duplicate* invocations of the same tool count as a "doom loop" — the
+/// model succeeding at a tool call every time yet making no progress, rather than hitting an error
+/// it could react to. Matches the threshold comparable harnesses use for the same failure mode
+/// (opencode/kilocode's `DOOM_LOOP_THRESHOLD`, VTCode's `LoopDetector`) — evidence this needs an
+/// engine-level guard, not just prompt wording, came from a live reproduction of
+/// `docs/roadmap/multi-step-execution-reliability-finding.md`: DeepSeek and Gemini both got stuck
+/// calling `deepwiki` 3-6 times in a row (every call succeeded; the result was just an unhelpful,
+/// repeatable answer) and never reached the second required tool, burning the whole turn budget. A
+/// tool call *succeeding* every time denies the model the one signal ("that failed") it reliably
+/// adapts to; whether it *also* notices "repeating this won't help" is a subtler, less reliable
+/// judgment call — and even a model that would eventually notice doesn't get the chance inside
+/// Liberado's tight turn budgets (4 for `ExecuteDirect`).
+///
+/// "Near-duplicate" matters, not just "identical": a first cut of this guard checked byte-for-byte
+/// argument equality and it did not fire against the real failure above, because the model was
+/// rephrasing the same question each call (`"turbomcp transport layer"` ->
+/// `"turbo-mcp transport Provider trait stdio HTTP JSON-RPC MCP protocol"` -> ...) rather than
+/// repeating it verbatim. See `args_similarity`.
+const DOOM_LOOP_THRESHOLD: usize = 3;
+
+/// Minimum cosine similarity (see `args_similarity`) between consecutive same-tool calls' arguments
+/// for them to count as "the same call" for [`DOOM_LOOP_THRESHOLD`] purposes. Hand-calibrated
+/// against the two cases that matter, not a large corpus (still just a starting point, revisit if
+/// live use shows false positives/negatives): the real DeepSeek transcript's 3 rephrasings of the
+/// same question scored ~0.26/~0.41/~0.24 pairwise, while 3 genuinely distinct queries to the same
+/// tool ("weather in Denver" / "capital of France" / "current bitcoin price") scored ~0.10. `0.2`
+/// sits between those clusters — closer to the distinct-queries side, since a missed detection just
+/// costs one more turn before the next check, while a false positive would nudge the model away from
+/// legitimately varied, on-track work.
+const ARG_SIMILARITY_THRESHOLD: f32 = 0.2;
+
+/// A small, one-time top-up to the turn budget, granted only when the tool-removal escalation step
+/// (strike 2, see the guard block in `run_loop`) actually fires — not a general "loops are free"
+/// refund. opencode/kilocode/VTCode were all checked directly and none of them refund or extend the
+/// budget just because a loop was detected; recovery counts against the original cap in all three.
+/// This is narrower and for a different reason: live evidence showed tool removal is structurally
+/// useless without it. `ExecuteDirect`'s 4-turn budget lets the nudge fire at turn 3 and removal at
+/// turn 4 — the *last* turn — leaving zero turns for the model to actually use what removal freed it
+/// to do, so the mechanism could never once pay off. Bounded and granted at most once per run (see
+/// `bonus_granted` in `run_loop`), so total worst-case turns stay capped at
+/// `max_turns + DOOM_LOOP_RECOVERY_BONUS_TURNS`, never unbounded.
+const DOOM_LOOP_RECOVERY_BONUS_TURNS: u32 = 2;
+
+/// The first, softest escalation step when the doom-loop guard fires — mirrors `REPORT_NUDGE`'s
+/// nudge shape: engine-level, independent of whatever `DIRECT_INSTRUCTIONS`/`SUBAGENT_PREAMBLE`
+/// text the tuner eventually settles on. If it fires again, the guard stops asking and starts
+/// removing the offending tool instead (see the guard block in `run_loop`) — live testing showed
+/// this alone doesn't change DeepSeek/Gemini's behavior (they repeated a 4th time anyway, with zero
+/// visible acknowledgment of the nudge in their response content), so it's a first try, not the
+/// whole mechanism.
+const DOOM_LOOP_NUDGE: &str = "You've called the same tool with the same or very similar arguments \
+several times in a row without new information. Use the result you already have to take the next \
+step in the plan, or call `submit_report` if you're genuinely stuck — repeating that call again \
+will not help.";
+
+/// The first escalation step for the second failure shape this guard catches: alternating between
+/// the same short cycle of tools (A, B, A, B, ...) instead of a repeated single call. VTCode's
+/// `LoopDetector` calls this pattern out explicitly (`detect_patterns`) as distinct from a single
+/// tool repeating — worth guarding even without live evidence of it happening yet, since the
+/// detection is essentially free (exact tool-name matching over the same call history this guard
+/// already tracks) and the underlying risk (burning the turn budget without progress) is identical.
+const CYCLE_NUDGE: &str = "You're alternating between the same short cycle of tools without making \
+new progress. Break the cycle: use what you already have to take a genuinely different next step, \
+or call `submit_report` if you're stuck.";
+
+/// The second escalation step for a persisting doom loop: the offending tool is actually removed
+/// from what the model can call for the rest of this task, not just asked to stop. Telling the
+/// model this explicitly (rather than silently shrinking its catalog) keeps the transcript
+/// coherent — a tool disappearing with no explanation would otherwise look like an error.
+fn tool_removed_nudge(tool_name: &str) -> String {
+    format!(
+        "The `{tool_name}` tool has been removed for the rest of this task — repeating it wasn't \
+         producing new information. Use the result(s) you already have to make progress with your \
+         remaining tools, or call `submit_report` if nothing else can move the goal forward."
+    )
+}
+
+/// The second escalation step for a persisting tool-cycle — see [`tool_removed_nudge`]'s doc
+/// comment for why the model is told, not just silently restricted.
+fn tools_removed_nudge(tool_names: &[String]) -> String {
+    let list = tool_names.join("`, `");
+    format!(
+        "The `{list}` tool(s) have been removed for the rest of this task — cycling between them \
+         wasn't making progress. Use what you already have with your remaining tools, or call \
+         `submit_report` if nothing else can move the goal forward."
+    )
+}
+
 /// The tools available for a run plus how to execute them. Implemented by the (future)
 /// turbomcp-backed runtime in production and by a mock in tests; the engine depends only on this.
 #[async_trait]
@@ -323,7 +411,7 @@ impl Executor {
         self.run_seed(runtime, &mut messages, &task.seed_calls)
             .await;
 
-        self.run_loop(runtime, &mut messages, &tools, mode).await
+        self.run_loop(runtime, &mut messages, &mut tools, mode).await
     }
 
     /// Run a conversational turn over an existing message history (multi-turn chat). The caller owns
@@ -338,9 +426,9 @@ impl Executor {
         runtime: &dyn ToolRuntime,
         messages: &mut Vec<Message>,
     ) -> Result<String, ExecError> {
-        let tools = runtime.catalog();
+        let mut tools = runtime.catalog();
         match self
-            .run_loop(runtime, messages, &tools, Mode::Conversational)
+            .run_loop(runtime, messages, &mut tools, Mode::Conversational)
             .await?
         {
             Terminal::Spoke(text) => Ok(text),
@@ -421,11 +509,33 @@ impl Executor {
         &self,
         runtime: &dyn ToolRuntime,
         messages: &mut Vec<Message>,
-        tools: &[ToolDef],
+        tools: &mut Vec<ToolDef>,
         mode: Mode,
     ) -> Result<Terminal, ExecError> {
         let mut nudged = false;
-        for turn in 1..=self.budget.max_turns {
+        // (tool name, arguments, result) of every real invocation, in call order, across the whole
+        // run — not just within one turn, since the doom loop this guards against spans turns (see
+        // `DOOM_LOOP_THRESHOLD`'s doc comment). The result rides along too so a budget-exhaustion
+        // failure report can show what actually happened instead of a bare "ran out of turns" —
+        // see `budget_failed_report_with_progress`.
+        let mut call_history: Vec<(String, serde_json::Value, String)> = Vec::new();
+        // Escalates each time a loop/cycle is (re-)detected, shared across both mechanisms: 1st ->
+        // nudge, 2nd -> remove the offending tool(s) and explain why, 3rd+ -> give up honestly.
+        // See this function's guard block below for why removal (not just another nudge) is the
+        // second step: a nudge alone did not change DeepSeek/Gemini's behavior in live testing —
+        // they repeated anyway — so the next escalation needs to change what's *possible*, not just
+        // what's *said*.
+        let mut loop_strikes: u8 = 0;
+        // Mutable so the tool-removal escalation step can grant its one-time top-up (see
+        // `DOOM_LOOP_RECOVERY_BONUS_TURNS`); `bonus_granted` caps that to once per run.
+        let mut max_turns = self.budget.max_turns;
+        let mut bonus_granted = false;
+        let mut turn: u32 = 0;
+        'turn_loop: loop {
+            turn += 1;
+            if turn > max_turns {
+                break;
+            }
             let turn_span = tracing::debug_span!(
                 "turn",
                 turn,
@@ -433,7 +543,7 @@ impl Executor {
                 finish_reason = tracing::field::Empty,
             );
             let response = async {
-                let request = CompletionRequest::new(messages.clone()).with_tools(tools.to_vec());
+                let request = CompletionRequest::new(messages.clone()).with_tools(tools.clone());
                 self.provider.complete(request).await
             }
             .instrument(tracing::debug_span!("provider_complete", turn))
@@ -476,6 +586,11 @@ impl Executor {
                     .map(|c| c.name.as_str())
                     .collect();
                 tracing::info!(turn, tool_count, ?names, "turn called tools");
+                if let Some(content) = &response.content {
+                    if !content.is_empty() {
+                        tracing::info!(turn, %content, "model's reasoning alongside the tool call(s)");
+                    }
+                }
             }
 
             for call in &response.tool_calls {
@@ -489,14 +604,93 @@ impl Executor {
                 let result = async { run_tool(runtime, call).await }
                     .instrument(tool_span)
                     .await;
+                call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
                 messages.push(Message::tool_result(&call.id, result));
+
+                if is_doom_loop(&call_history) {
+                    loop_strikes += 1;
+                    match loop_strikes {
+                        1 => {
+                            tracing::warn!(turn, tool = %call.name, "doom loop detected; nudging once");
+                            messages.push(Message::user(DOOM_LOOP_NUDGE));
+                            continue 'turn_loop;
+                        }
+                        2 => {
+                            let removed = call.name.clone();
+                            tools.retain(|t| t.name != removed);
+                            tracing::warn!(
+                                turn,
+                                tool = %removed,
+                                "doom loop persisted after nudge; removing the tool"
+                            );
+                            messages.push(Message::user(tool_removed_nudge(&removed)));
+                            if !bonus_granted {
+                                bonus_granted = true;
+                                max_turns += DOOM_LOOP_RECOVERY_BONUS_TURNS;
+                                tracing::info!(
+                                    max_turns,
+                                    "granted a one-time recovery top-up after tool removal"
+                                );
+                            }
+                            continue 'turn_loop;
+                        }
+                        _ => {
+                            tracing::warn!(
+                                turn,
+                                tool = %call.name,
+                                "doom loop persisted after tool removal; aborting"
+                            );
+                            return Ok(Terminal::Filed(doom_loop_failed_report(&call.name)));
+                        }
+                    }
+                }
+                if let Some(cycling) = detect_short_cycle(&call_history) {
+                    loop_strikes += 1;
+                    match loop_strikes {
+                        1 => {
+                            tracing::warn!(turn, ?cycling, "tool cycle detected; nudging once");
+                            messages.push(Message::user(CYCLE_NUDGE));
+                            continue 'turn_loop;
+                        }
+                        2 => {
+                            tools.retain(|t| !cycling.contains(&t.name));
+                            tracing::warn!(
+                                turn,
+                                ?cycling,
+                                "tool cycle persisted after nudge; removing the cycling tools"
+                            );
+                            messages.push(Message::user(tools_removed_nudge(&cycling)));
+                            if !bonus_granted {
+                                bonus_granted = true;
+                                max_turns += DOOM_LOOP_RECOVERY_BONUS_TURNS;
+                                tracing::info!(
+                                    max_turns,
+                                    "granted a one-time recovery top-up after tool removal"
+                                );
+                            }
+                            continue 'turn_loop;
+                        }
+                        _ => {
+                            tracing::warn!(turn, ?cycling, "tool cycle persisted after tool removal; aborting");
+                            return Ok(Terminal::Filed(cycle_failed_report()));
+                        }
+                    }
+                }
             }
         }
 
-        tracing::warn!(turns = self.budget.max_turns, "execution budget exhausted");
-        Err(ExecError::BudgetExceeded {
-            turns: self.budget.max_turns,
-        })
+        tracing::warn!(turns = max_turns, "execution budget exhausted");
+        match mode {
+            // The delegating agent is owed a Report, not a transport error — and it deserves to
+            // know what actually happened, not just that time ran out. See
+            // `budget_failed_report_with_progress`'s doc comment for why this stays a compact,
+            // mechanical summary rather than injecting the raw call history upward.
+            Mode::Report => Ok(Terminal::Filed(budget_failed_report_with_progress(
+                max_turns,
+                &call_history,
+            ))),
+            Mode::Conversational => Err(ExecError::BudgetExceeded { turns: max_turns }),
+        }
     }
 
     /// Execute the classifier's seed calls and append the synthetic assistant turn + results, so
@@ -604,7 +798,10 @@ fn prose_report(summary: String) -> Report {
     }
 }
 
-/// The `Report` returned when the turn budget is exhausted without completion.
+/// The `Report` returned when the turn budget is exhausted without completion and no calls were
+/// ever made to say anything about (the empty-history fallback `budget_failed_report_with_progress`
+/// defers to, and the one live path — `converse_stream`'s own budget exhaustion — that has no
+/// `Report` concept and can't call the enriched version at all).
 fn budget_failed_report(turns: u32) -> Report {
     Report {
         outcome: Outcome::Failed,
@@ -612,6 +809,205 @@ fn budget_failed_report(turns: u32) -> Report {
         artifacts: Vec::new(),
         new_high_signal_facts: Vec::new(),
         follow_up: Some("Consider dispatching a subagent with a larger budget.".into()),
+    }
+}
+
+/// The `Report` returned when the turn budget is exhausted, built from what the run actually did
+/// instead of a bare "ran out of turns" — a real live gap: a model that made genuine progress
+/// (e.g. wrote a vault note) before running out of turns to file `submit_report` previously
+/// reported back as a bare `Failed`, `artifacts: []`, indistinguishable from a run that made no
+/// progress at all. The deploying agent needs enough signal to decide "redeploy from here" vs.
+/// "start over," without the raw tool-call/result trace bubbling up a layer — that would defeat the
+/// token-efficiency point of delegating in the first place. So: a compact, mechanical listing
+/// (tool name + a short preview of its result, reusing the same `preview()` truncation the
+/// streaming path already uses for the same reason) rather than either extreme. `PartiallySucceeded`
+/// when at least one call actually succeeded (not `Failed`, which would incorrectly read the same
+/// as zero progress); `artifacts`/`new_high_signal_facts` are deliberately left for a human or a
+/// future cheap-model summarizer to derive — mechanically guessing which preview strings are
+/// "really" a written artifact path would mean parsing arbitrary tool-specific result text, which
+/// is a judgment call, not a mechanical one.
+fn budget_failed_report_with_progress(
+    turns: u32,
+    call_history: &[(String, serde_json::Value, String)],
+) -> Report {
+    if call_history.is_empty() {
+        return budget_failed_report(turns);
+    }
+    let any_succeeded = call_history
+        .iter()
+        .any(|(_, _, result)| !result.starts_with("tool error:"));
+    let call_list = call_history
+        .iter()
+        .map(|(name, _, result)| format!("{name} -> {}", preview(result)))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Report {
+        outcome: if any_succeeded {
+            Outcome::PartiallySucceeded
+        } else {
+            Outcome::Failed
+        },
+        summary: format!(
+            "Execution exceeded the {turns}-turn budget before filing a report. Calls made: {call_list}."
+        ),
+        artifacts: Vec::new(),
+        new_high_signal_facts: Vec::new(),
+        follow_up: Some(
+            "Some tool calls may have completed before the budget ran out (see summary) — \
+             redeploying with a larger budget, or a narrower remaining goal, may be able to finish \
+             from here rather than starting over."
+                .into(),
+        ),
+    }
+}
+
+/// Whether the last [`DOOM_LOOP_THRESHOLD`] invocations are consecutively the same tool, called
+/// with near-duplicate arguments (see `args_similarity`) — see [`DOOM_LOOP_THRESHOLD`]'s doc
+/// comment for why near-duplicate, not just byte-identical, is the right bar.
+fn is_doom_loop(history: &[(String, serde_json::Value, String)]) -> bool {
+    let Some((last_name, ..)) = history.last() else {
+        return false;
+    };
+    // Most-recent-first, stopping at the first call that isn't consecutively the same tool.
+    let streak: Vec<&serde_json::Value> = history
+        .iter()
+        .rev()
+        .take_while(|(name, ..)| name == last_name)
+        .map(|(_, args, _)| args)
+        .collect();
+    if streak.len() < DOOM_LOOP_THRESHOLD {
+        return false;
+    }
+    streak[..DOOM_LOOP_THRESHOLD]
+        .windows(2)
+        .all(|pair| args_similarity(pair[0], pair[1]) >= ARG_SIMILARITY_THRESHOLD)
+}
+
+/// Whether the tool-name sequence at the tail of `history` is a short repeating cycle (period 2 or
+/// 3 — e.g. A,B,A,B or A,B,C,A,B,C). Exact tool-name match only, no argument comparison: see
+/// [`CYCLE_NUDGE`]'s doc comment for why that's an acceptable, deliberately simpler bar than
+/// `is_doom_loop`'s. Returns the distinct tool names participating in the cycle (so the caller can
+/// remove exactly those, not the whole catalog) rather than a bare bool.
+fn detect_short_cycle(history: &[(String, serde_json::Value, String)]) -> Option<Vec<String>> {
+    let names: Vec<&str> = history.iter().map(|(name, ..)| name.as_str()).collect();
+    for period in 2..=3 {
+        let window = period * 2;
+        if names.len() < window {
+            continue;
+        }
+        let tail = &names[names.len() - window..];
+        let (first_half, second_half) = tail.split_at(period);
+        if first_half == second_half {
+            let mut distinct: Vec<String> = first_half.iter().map(|s| s.to_string()).collect();
+            distinct.sort_unstable();
+            distinct.dedup();
+            return Some(distinct);
+        }
+    }
+    None
+}
+
+/// Cosine similarity between two tool calls' arguments, weighted so a term shared by both calls
+/// (boilerplate, or the topic every rephrasing shares) counts for less than a term unique to one
+/// side — see [`DOOM_LOOP_THRESHOLD`]'s doc comment for why byte-equality alone missed the real
+/// failure this guards against. `1.0` when both sides tokenize to nothing (e.g. both `{}`): with no
+/// text to compare, equality of the raw value is the only signal left. Deterministic, local,
+/// no network/model call — a small bag-of-words IDF over just the two documents being compared,
+/// not a learned embedding.
+fn args_similarity(a: &serde_json::Value, b: &serde_json::Value) -> f32 {
+    let tokens_a = tokenize(a);
+    let tokens_b = tokenize(b);
+    if tokens_a.is_empty() && tokens_b.is_empty() {
+        return if a == b { 1.0 } else { 0.0 };
+    }
+    let vectors = tf_idf_vectors(&[tokens_a, tokens_b]);
+    cosine(&vectors[0], &vectors[1])
+}
+
+/// Lowercased alphanumeric runs from a JSON value's textual form — deliberately crude (no
+/// stemming/stopwords), adequate for comparing short tool-call argument strings.
+fn tokenize(value: &serde_json::Value) -> Vec<String> {
+    value
+        .to_string()
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// TF-IDF vectors for a small set of tokenized documents, IDF computed from just that set (there's
+/// no larger corpus available or wanted here — see `args_similarity`).
+fn tf_idf_vectors(docs: &[Vec<String>]) -> Vec<std::collections::HashMap<String, f32>> {
+    let n = docs.len() as f32;
+    let mut doc_freq: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for doc in docs {
+        let unique: std::collections::HashSet<&str> = doc.iter().map(String::as_str).collect();
+        for term in unique {
+            *doc_freq.entry(term).or_insert(0) += 1;
+        }
+    }
+    docs.iter()
+        .map(|doc| {
+            let mut tf: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+            for term in doc {
+                *tf.entry(term.clone()).or_insert(0.0) += 1.0;
+            }
+            for (term, count) in tf.iter_mut() {
+                let df = *doc_freq.get(term.as_str()).unwrap_or(&1) as f32;
+                // +1 smoothing: a term every doc shares still contributes a little (so two fully
+                // identical documents still cosine to 1.0), rather than vanishing entirely.
+                *count *= (n / df).ln() + 1.0;
+            }
+            tf
+        })
+        .collect()
+}
+
+fn cosine(a: &std::collections::HashMap<String, f32>, b: &std::collections::HashMap<String, f32>) -> f32 {
+    let dot: f32 = a
+        .iter()
+        .map(|(term, weight)| weight * b.get(term).copied().unwrap_or(0.0))
+        .sum();
+    let norm_a = a.values().map(|v| v * v).sum::<f32>().sqrt();
+    let norm_b = b.values().map(|v| v * v).sum::<f32>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+    dot / (norm_a * norm_b)
+}
+
+/// The `Report` returned when the doom-loop guard fires a second time: the model kept calling the
+/// same tool with near-duplicate arguments even after one corrective nudge.
+fn doom_loop_failed_report(tool_name: &str) -> Report {
+    Report {
+        outcome: Outcome::Failed,
+        summary: format!(
+            "Stopped: called `{tool_name}` with near-duplicate arguments {DOOM_LOOP_THRESHOLD}+ \
+             times in a row without making progress, even after a correction."
+        ),
+        artifacts: Vec::new(),
+        new_high_signal_facts: Vec::new(),
+        follow_up: Some(format!(
+            "The `{tool_name}` result may not carry enough information to act on, or the goal may \
+             need to be rephrased/split into smaller steps."
+        )),
+    }
+}
+
+/// The `Report` returned when a short tool-name cycle (see [`is_short_cycle`]) persists past one
+/// corrective nudge.
+fn cycle_failed_report() -> Report {
+    Report {
+        outcome: Outcome::Failed,
+        summary: "Stopped: cycling between the same short sequence of tools without making \
+                   progress, even after a correction."
+            .to_string(),
+        artifacts: Vec::new(),
+        new_high_signal_facts: Vec::new(),
+        follow_up: Some(
+            "The goal may need to be rephrased/split into smaller, more concrete steps.".into(),
+        ),
     }
 }
 
@@ -816,13 +1212,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn budget_exhaustion_becomes_a_failed_report() {
-        // Two tool turns, never files; budget of 2 forces termination.
+    async fn budget_exhaustion_with_no_progress_is_a_failed_report() {
+        // Every call errors — genuinely no progress — so exhaustion must stay `Failed`, not
+        // `PartiallySucceeded`.
         let (_provider, exec) = executor(
             vec![call_tool("search"), call_tool("search")],
             Budget::new(2),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let runtime = MockToolRuntime::new(&["search"], Err("upstream 500".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "loop forever"))
@@ -831,6 +1228,28 @@ mod tests {
 
         assert_eq!(report.outcome, Outcome::Failed);
         assert!(report.summary.contains("budget"));
+    }
+
+    #[tokio::test]
+    async fn budget_exhaustion_with_real_progress_is_partially_succeeded_and_names_the_calls() {
+        // Two tool turns, never files; budget of 2 forces termination — but both calls actually
+        // succeeded, so the deploying agent should see `PartiallySucceeded` and a summary naming
+        // what happened, not a bare "ran out of turns" indistinguishable from zero progress.
+        let (_provider, exec) = executor(
+            vec![call_tool("search"), call_tool("search")],
+            Budget::new(2),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "loop forever"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::PartiallySucceeded);
+        assert!(report.summary.contains("budget"), "{}", report.summary);
+        assert!(report.summary.contains("search"), "{}", report.summary);
+        assert!(report.summary.contains("3 hits"), "{}", report.summary);
     }
 
     #[tokio::test]
@@ -912,5 +1331,356 @@ mod tests {
         // The run completed (no abort) and the tool was still invoked.
         assert_eq!(report.outcome, Outcome::Succeeded);
         assert_eq!(runtime.invoked().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn doom_loop_is_nudged_once_then_recovers_on_a_different_call() {
+        // Three identical "search" calls trip the guard; a nudge is injected instead of a 4th
+        // identical call being allowed through, and the model diversifying afterward still
+        // completes normally.
+        let (provider, exec) = executor(
+            vec![
+                call_tool("search"),
+                call_tool("search"),
+                call_tool("search"),
+                call_tool("other_tool"),
+                submit(valid_report_args()),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search", "other_tool"], Ok("same result".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        // All 4 real tool calls ran (the guard nudges, it doesn't skip execution).
+        assert_eq!(runtime.invoked().len(), 4);
+        // The nudge was injected as its own message right after the 3rd identical call.
+        assert!(
+            provider
+                .received_requests()
+                .iter()
+                .any(|r| r.messages.iter().any(|m| m.content == DOOM_LOOP_NUDGE)),
+            "expected the doom-loop nudge to have been sent to the model"
+        );
+    }
+
+    #[tokio::test]
+    async fn doom_loop_persisting_past_the_nudge_removes_the_tool_then_aborts_if_it_still_repeats() {
+        // Escalation ladder: 1st detection (3rd identical call) nudges; 2nd (4th) removes the tool
+        // from what's offered and explains why; 3rd (5th — the tool somehow got called again
+        // anyway) gives up rather than burn the rest of the turn budget.
+        let (provider, exec) = executor(
+            vec![
+                call_tool("search"),
+                call_tool("search"),
+                call_tool("search"),
+                call_tool("search"),
+                call_tool("search"),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("same result".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Failed);
+        assert!(report.summary.contains("search"), "{}", report.summary);
+        assert_eq!(runtime.invoked().len(), 5);
+        // The tool was actually removed from the offered catalog, not just talked about — checked
+        // on the final request, sent after removal.
+        assert!(
+            provider
+                .received_requests()
+                .last()
+                .unwrap()
+                .tools
+                .iter()
+                .all(|t| t.name != "search"),
+            "expected `search` to be gone from the offered tools by the final turn"
+        );
+        assert!(
+            provider.received_requests().iter().any(|r| r
+                .messages
+                .iter()
+                .any(|m| m.content.contains("removed for the rest of this task"))),
+            "expected the tool-removal explanation to have been sent"
+        );
+    }
+
+    #[tokio::test]
+    async fn doom_loop_tool_removal_lets_the_task_actually_succeed() {
+        // The point of removing the tool instead of just failing: the model can still finish using
+        // what it already has, once the repeated tool is no longer an option.
+        let (_provider, exec) = executor(
+            vec![
+                call_tool("search"),
+                call_tool("search"),
+                call_tool("search"), // 1st detection: nudged
+                call_tool("search"), // 2nd detection: `search` removed
+                submit(valid_report_args()), // no longer able to repeat `search` -> finishes instead
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("same result".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        assert_eq!(runtime.invoked().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn recovery_bonus_rescues_a_tight_budget_where_removal_would_otherwise_arrive_too_late() {
+        // Regression for a real live finding: `ExecuteDirect`'s actual 4-turn budget means the
+        // nudge (turn 3) and tool removal (turn 4) land on the very last nominal turn — with no
+        // bonus, removal would be immediately followed by budget exhaustion, never able to pay off.
+        // A budget of 4 (mirroring `liberado_orchestrator::DIRECT_MAX_TURNS`), needing a 5th turn
+        // (only reachable via the one-time bonus) to actually finish.
+        let (_provider, exec) = executor(
+            vec![
+                call_tool("search"),
+                call_tool("search"),
+                call_tool("search"),         // turn 3: 1st detection, nudged
+                call_tool("search"),         // turn 4: 2nd detection, `search` removed + bonus granted
+                submit(valid_report_args()), // turn 5: only reachable because of the bonus
+            ],
+            Budget::new(4),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("same result".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            report.outcome,
+            Outcome::Succeeded,
+            "without the bonus this would be Failed (budget exhausted at turn 4): {report:?}"
+        );
+        assert_eq!(runtime.invoked().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn doom_loop_is_detected_within_a_single_turn_of_parallel_calls() {
+        // A model can request several tool calls in one turn (parallel calling) — 3 identical
+        // calls batched into a single response must trip the guard just like 3 across turns: the
+        // nudge fires after the 3rd of the batch (skipping any further calls in that same batch)
+        // and the loop moves straight to the next model turn, which here recovers cleanly.
+        let parallel_search = CompletionResponse::tool_calls(vec![
+            ToolInvocation::new("a", "search", serde_json::json!({})),
+            ToolInvocation::new("b", "search", serde_json::json!({})),
+            ToolInvocation::new("c", "search", serde_json::json!({})),
+        ]);
+        let (provider, exec) = executor(
+            vec![parallel_search, submit(valid_report_args())],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("same result".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        // Exactly the 3 batched calls ran — the guard didn't need a 4th to fire within one turn.
+        assert_eq!(runtime.invoked().len(), 3);
+        assert!(
+            provider
+                .received_requests()
+                .iter()
+                .any(|r| r.messages.iter().any(|m| m.content == DOOM_LOOP_NUDGE)),
+            "expected the doom-loop nudge to have been sent after the 3rd batched call"
+        );
+    }
+
+    fn call_tool_with_args(name: &str, args: serde_json::Value) -> CompletionResponse {
+        CompletionResponse::tool_calls(vec![ToolInvocation::new("c", name, args)])
+    }
+
+
+    #[tokio::test]
+    async fn doom_loop_catches_a_rephrased_repeat_not_just_a_byte_identical_one() {
+        // Regression for the real live finding: DeepSeek rewording the same question each call
+        // ("turbomcp transport layer" -> "turbo-mcp transport Provider trait stdio HTTP..." -> ...)
+        // defeated a byte-equality check entirely. These three are lifted from that transcript.
+        let (provider, exec) = executor(
+            vec![
+                call_tool_with_args(
+                    "deepwiki",
+                    serde_json::json!({ "query": "turbomcp transport layer" }),
+                ),
+                call_tool_with_args(
+                    "deepwiki",
+                    serde_json::json!({ "query": "turbo-mcp transport layer implementation Provider trait stdio HTTP" }),
+                ),
+                call_tool_with_args(
+                    "deepwiki",
+                    serde_json::json!({ "query": "turbomcp transport Provider trait stdio HTTP JSON-RPC MCP protocol" }),
+                ),
+                call_tool_with_args("vault", serde_json::json!({ "note": "summary" })),
+                submit(valid_report_args()),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(
+            &["deepwiki", "vault"],
+            Ok("turbomcp uses stdio and HTTP transports.".into()),
+        );
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "research and save"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        let invoked = runtime.invoked();
+        assert_eq!(invoked.len(), 4);
+        assert_eq!(invoked[3].name, "vault");
+        // The decisive check: the guard actually fired after the 3rd rephrased call. Without it,
+        // this test would pass for the wrong reason — the script reaches `vault` at turn 4 either
+        // way, since it's simply next in the scripted sequence.
+        assert!(
+            provider
+                .received_requests()
+                .iter()
+                .any(|r| r.messages.iter().any(|m| m.content == DOOM_LOOP_NUDGE)),
+            "expected the doom-loop nudge to have fired for the 3 rephrased deepwiki calls"
+        );
+    }
+
+    #[tokio::test]
+    async fn distinct_queries_to_the_same_tool_are_not_flagged_as_a_doom_loop() {
+        // The false-positive case: genuinely different queries to the same tool, back to back,
+        // must NOT trip the guard just because the tool name repeats.
+        let (provider, exec) = executor(
+            vec![
+                call_tool_with_args("search", serde_json::json!({ "query": "weather in Denver" })),
+                call_tool_with_args("search", serde_json::json!({ "query": "capital of France" })),
+                call_tool_with_args("search", serde_json::json!({ "query": "current bitcoin price" })),
+                submit(valid_report_args()),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("a result".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "look up three things"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        // All 3 distinct queries ran, uninterrupted by any nudge.
+        assert_eq!(runtime.invoked().len(), 3);
+        assert!(
+            !provider
+                .received_requests()
+                .iter()
+                .any(|r| r.messages.iter().any(|m| m.content == DOOM_LOOP_NUDGE)),
+            "distinct queries to the same tool must not trip the doom-loop guard"
+        );
+    }
+
+    #[tokio::test]
+    async fn short_cycle_between_two_tools_is_nudged_then_recovers() {
+        // A,B,A,B is a different failure shape than one tool repeating — same guard family
+        // (VTCode's `detect_patterns`), exact tool-name match, no argument comparison needed.
+        let (provider, exec) = executor(
+            vec![
+                call_tool("tool-a"),
+                call_tool("tool-b"),
+                call_tool("tool-a"),
+                call_tool("tool-b"),
+                submit(valid_report_args()),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["tool-a", "tool-b"], Ok("result".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        assert_eq!(runtime.invoked().len(), 4);
+        assert!(
+            provider
+                .received_requests()
+                .iter()
+                .any(|r| r.messages.iter().any(|m| m.content == CYCLE_NUDGE)),
+            "expected the cycle nudge to have been sent"
+        );
+    }
+
+    #[tokio::test]
+    async fn short_cycle_escalates_to_removing_both_cycling_tools_then_aborts_if_it_persists() {
+        // Same three-strike ladder as the doom-loop guard: nudge (turn 4), remove both cycling
+        // tools and explain why (turn 5), then give up if it somehow still repeats (turn 6).
+        let (provider, exec) = executor(
+            vec![
+                call_tool("tool-a"),
+                call_tool("tool-b"),
+                call_tool("tool-a"),
+                call_tool("tool-b"),
+                call_tool("tool-a"),
+                call_tool("tool-b"),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["tool-a", "tool-b"], Ok("result".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Failed);
+        assert!(report.summary.contains("cycling"), "{}", report.summary);
+        assert!(
+            provider
+                .received_requests()
+                .last()
+                .unwrap()
+                .tools
+                .iter()
+                .all(|t| t.name != "tool-a" && t.name != "tool-b"),
+            "expected both cycling tools to be gone from the offered tools by the final turn"
+        );
+    }
+
+    #[tokio::test]
+    async fn short_cycle_tool_removal_lets_the_task_actually_succeed() {
+        let (_provider, exec) = executor(
+            vec![
+                call_tool("tool-a"),
+                call_tool("tool-b"),
+                call_tool("tool-a"),
+                call_tool("tool-b"), // 1st detection: nudged
+                call_tool("tool-a"), // 2nd detection: tool-a and tool-b both removed
+                submit(valid_report_args()), // no longer able to cycle -> finishes instead
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["tool-a", "tool-b"], Ok("result".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        assert_eq!(runtime.invoked().len(), 5);
     }
 }

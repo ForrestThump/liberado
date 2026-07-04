@@ -26,10 +26,22 @@ and **hands back** the structured artifact in one event — no second "structuri
 
 ## Backstops
 
-- **Turn `Budget`** — a hard cap; exhaustion becomes a `Failed` `Report` (the delegator is owed a
-  report, not a transport error).
+- **Turn `Budget`** — a hard cap; exhaustion becomes a `Report` — `PartiallySucceeded` (with a
+  compact "tool → result preview" summary) if any call actually succeeded before time ran out,
+  `Failed` only if none did (`budget_failed_report_with_progress`) — never a transport error, since
+  the delegator is owed a report either way.
 - **Single nudge** — in report mode, if the model answers in prose without filing, it's nudged once,
-  then the prose is wrapped as a `Report` rather than lost.
+  then the prose is wrapped as a `Report` rather than lost (`REPORT_NUDGE`).
+- **Doom-loop guard** — detects a model stuck repeating the same tool with near-duplicate arguments
+  (`is_doom_loop`, TF-IDF cosine similarity over the arguments — not byte equality, which a model can
+  defeat just by rewording the same question) or cycling between a short, fixed sequence of tools
+  (`detect_short_cycle`, e.g. A,B,A,B). Escalates rather than immediately failing: nudge once, then
+  actually remove the offending tool(s) from what's callable for the rest of the task (with a
+  one-time, bounded turn-budget top-up — `DOOM_LOOP_RECOVERY_BONUS_TURNS` — since removal arriving on
+  the very last turn can never pay off otherwise), then give up honestly if it still persists. See
+  `docs/roadmap/multi-step-execution-reliability-finding.md`'s "Follow-up session" for the live
+  evidence (real models get stuck this way; a nudge alone doesn't reliably redirect them) and why
+  each step is shaped the way it is.
 - **Seed calls** — `ExecuteDirect`'s opening move is executed as a synthetic first turn, then the
   loop continues adaptively (the field is a *seed*, not a fixed plan).
 
@@ -41,18 +53,23 @@ and **hands back** the structured artifact in one event — no second "structuri
 
 ## Tests
 
-Inline: multi-turn→file, conversational multi-tool→prose, budget→failed report, malformed
-`submit_report` args→decode error, seed-before-first-turn, nudge-then-wrap, in-band tool failure.
+Inline: multi-turn→file, conversational multi-tool→prose, budget→failed/partially-succeeded report
+(with and without real progress), malformed `submit_report` args→decode error, seed-before-first-turn,
+nudge-then-wrap, in-band tool failure, doom-loop detection (near-duplicate args, single-turn batched
+duplicates, false-positive avoidance for genuinely distinct same-tool calls), short-cycle detection,
+each escalation step (nudge/removal/give-up) for both guards, and the tight-budget recovery-bonus
+regression.
 
-## Known limitation: multi-step tool chaining is not fully reliable
+## Multi-step tool chaining: substantially fixed, one known gap remains
 
-Live tuning of the executor/subagent prompts (`liberado-heuristics-tuner`) found that a genuinely
-simple two-tool-call goal ("research via one tool, write via another") fails to reach a clean
-`Succeeded` report a large fraction of the time against `deepseek/deepseek-v4-flash`, even under a
-system prompt that explicitly instructs the exact sequence needed. One real contributing bug was
-found and fixed here — `REPORT_NUDGE` used to unconditionally push toward `submit_report` the first
-time a model paused in prose, with no "keep going" option, competing against whatever the system
-prompt said at exactly the moment a model paused mid-plan. The fix (reworded to offer both options)
-measurably helped but did not fully resolve the gap. This is a project-level open finding, not just a
-tuner curiosity — see [`docs/roadmap/multi-step-execution-reliability-finding.md`](../../docs/roadmap/multi-step-execution-reliability-finding.md)
-for the full evidence, what's ruled out, and what's still open.
+Live tuning of the executor/subagent prompts (`liberado-heuristics-tuner`) originally found that a
+genuinely simple two-tool-call goal ("research via one tool, write via another") failed to reach a
+clean `Succeeded` report a large fraction of the time against `deepseek/deepseek-v4-flash`, even under
+a system prompt that explicitly instructed the exact sequence needed. A first contributing bug
+(`REPORT_NUDGE` unconditionally pushing toward `submit_report`) was found and fixed, but the core gap
+remained open. A follow-up investigation found the actual root cause — DeepSeek and Gemini both got
+stuck repeating the same tool call with reworded-but-same-intent arguments — and closed most of it
+with the doom-loop guard described above, live-verified going from 0/6 to 5/6 on the original failing
+scenario across two models. Full narrative, evidence, and the one remaining open gap (a fast-finish
+timing case, not a loop) in
+[`docs/roadmap/multi-step-execution-reliability-finding.md`](../../docs/roadmap/multi-step-execution-reliability-finding.md).
