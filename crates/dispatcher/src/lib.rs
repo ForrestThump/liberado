@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use liberado_common::config::DispatchTuning;
 use liberado_common::{
-    BlockReason, CapabilitySet, DispatchAction, DispatchDecision, ProposedAction,
+    BlockReason, CapabilitySet, DispatchAction, DispatchDecision, ProposedAction, ToolCall,
 };
 use liberado_provider::{CompletionRequest, Message, Provider, ProviderError, complete_json};
 use thiserror::Error;
@@ -276,51 +276,67 @@ fn clarify_fallback() -> DispatchDecision {
 /// `Task::new(DIRECT_INSTRUCTIONS, goal)` under a gated runtime, mirroring `Orchestrator::run`'s
 /// `ExecuteDirect` arm. Left for a follow-up rather than folded in here.
 fn downgrade(classified: DispatchDecision, reason: BlockReason) -> DispatchDecision {
+    let confidence = classified.confidence;
+    let rationale = classified.rationale;
     if reason == BlockReason::HighConsequence {
-        match &classified.action {
+        match classified.action {
             DispatchAction::ExecuteDirect { seed_calls, .. } if !seed_calls.is_empty() => {
-                return downgrade_to_propose_tool_calls(classified);
+                return downgrade_to_propose_tool_calls(seed_calls, confidence, rationale);
             }
-            DispatchAction::DispatchSubagent { .. } => {
-                return downgrade_to_propose_subagent(classified);
+            DispatchAction::DispatchSubagent {
+                goal,
+                capabilities,
+                allowed_mcps,
+                success_criteria,
+                ..
+            } => {
+                return downgrade_to_propose_subagent(
+                    goal,
+                    capabilities,
+                    allowed_mcps,
+                    success_criteria,
+                    confidence,
+                    rationale,
+                );
             }
             _ => {}
         }
     }
-    downgrade_to_clarify(classified.confidence, reason)
+    downgrade_to_clarify(confidence, reason)
 }
 
 /// Build the `Propose` a high-consequence concrete `ExecuteDirect` downgrades to, preserving the
-/// original decision's seed calls (as the proposed action), confidence, and rationale.
-fn downgrade_to_propose_tool_calls(classified: DispatchDecision) -> DispatchDecision {
-    let DispatchAction::ExecuteDirect { seed_calls, .. } = classified.action else {
-        unreachable!("downgrade_to_propose_tool_calls is only called for a concrete ExecuteDirect");
-    };
+/// original decision's seed calls (as the proposed action), confidence, and rationale. Takes the
+/// exact payload rather than the whole `DispatchDecision` — the caller's match arm is what proves
+/// this is a concrete `ExecuteDirect`, so there is nothing left to assert (or panic on) in here.
+fn downgrade_to_propose_tool_calls(
+    seed_calls: Vec<ToolCall>,
+    confidence: f32,
+    rationale: String,
+) -> DispatchDecision {
     DispatchDecision {
         action: DispatchAction::Propose {
             proposed_action: ProposedAction::ToolCalls(seed_calls),
-            rationale: classified.rationale.clone(),
+            rationale: rationale.clone(),
         },
-        confidence: classified.confidence,
-        rationale: classified.rationale,
+        confidence,
+        rationale,
     }
 }
 
 /// Build the `Propose` a high-consequence `DispatchSubagent` downgrades to, preserving the goal,
 /// narrowed capabilities, MCP scoping, and success criteria the classifier chose —
 /// `Orchestrator::execute_approved` dispatches the subagent exactly as scoped here once a human
-/// approves it.
-fn downgrade_to_propose_subagent(classified: DispatchDecision) -> DispatchDecision {
-    let DispatchAction::DispatchSubagent {
-        goal,
-        capabilities,
-        allowed_mcps,
-        success_criteria,
-        ..
-    } = classified.action
-    else {
-        unreachable!("downgrade_to_propose_subagent is only called for a DispatchSubagent");
-    };
+/// approves it. Takes the exact payload rather than the whole `DispatchDecision`, same reasoning as
+/// `downgrade_to_propose_tool_calls` above.
+fn downgrade_to_propose_subagent(
+    goal: String,
+    capabilities: CapabilitySet,
+    allowed_mcps: Vec<String>,
+    success_criteria: Vec<String>,
+    confidence: f32,
+    rationale: String,
+) -> DispatchDecision {
     DispatchDecision {
         action: DispatchAction::Propose {
             proposed_action: ProposedAction::Subagent {
@@ -329,10 +345,10 @@ fn downgrade_to_propose_subagent(classified: DispatchDecision) -> DispatchDecisi
                 allowed_mcps,
                 success_criteria,
             },
-            rationale: classified.rationale.clone(),
+            rationale: rationale.clone(),
         },
-        confidence: classified.confidence,
-        rationale: classified.rationale,
+        confidence,
+        rationale,
     }
 }
 

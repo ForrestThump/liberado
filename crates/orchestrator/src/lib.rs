@@ -452,7 +452,15 @@ impl Orchestrator {
         let mut handles = Vec::with_capacity(sub_dispatches.len());
 
         for sub in sub_dispatches {
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            // `acquire_owned` only errs if the semaphore was `.close()`d — this one is freshly
+            // created above, local to this call, and never closed, so this cannot actually fail;
+            // `.expect()` over `.unwrap()` so a future change that violates that assumption panics
+            // with an explanation instead of a bare unwrap trace.
+            let permit = semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("semaphore is local to this call and never closed");
             let provenance =
                 WriteProvenance::agent(self.source.clone(), &sub.correlation_id);
             let runtime = self.factory.runtime_for(&sub.allowed_mcps, provenance).await?;
