@@ -20,13 +20,21 @@ vocabulary and a mock. **It pulls in no HTTP stack and commits to no framework.*
 - **`MockProvider`** (`mock.rs`) — scriptable test double: hand it a queue of `CompletionResponse`s,
   it pops one per call and records every request, so a scenario can assert on both what the system
   did with a response and what it sent.
+- **`openai_compat`** (`openai_compat.rs`) — shared, pure (still no HTTP) translation logic for any
+  OpenAI-compatible chat-completions backend: tool-name sanitization, request/response JSON mapping,
+  SSE stream-delta accumulation. Added 2026-07-04 (`docs/roadmap/hygiene-audit-2026-07-04.md`) after
+  `cargo dupes` found `provider-deepseek` and `provider-openrouter` had byte-for-byte identical copies
+  of this logic — both now import from here instead, keeping only their own HTTP round-trip, defaults,
+  env-var names, and status-code mapping.
 
 ## Dependencies
 
 - Depends on: `liberado-common` is **not** required here — this crate is self-contained
-  (`serde`, `async-trait`). Concrete backends live in their own crates.
-- Depended on by: `provider-deepseek` (implements `Provider`), `dispatcher`, `executor`,
-  `orchestrator`, `mcp` (tool types), `cli`.
+  (`serde`, `serde_json`, `async-trait`, `futures`, `tracing`). Concrete backends live in their own
+  crates.
+- Depended on by: `provider-deepseek`/`provider-openrouter` (implement `Provider`, both use
+  `openai_compat`), `dispatcher`, `executor`, `orchestrator`, `mcp` (tool types), `cli`,
+  `heuristics-tuner`.
 
 ## Design notes
 

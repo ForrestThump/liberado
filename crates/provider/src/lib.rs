@@ -14,6 +14,7 @@
 
 mod error;
 mod mock;
+pub mod openai_compat;
 mod provider;
 mod types;
 

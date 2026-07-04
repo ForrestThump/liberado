@@ -12,10 +12,15 @@ that talks HTTP to a model — that one exists to run many models concurrently t
   `CompletionRequest` to the OpenAI request shape, POSTs it, and maps the response back.
 - `DeepSeekProvider::from_env()` — reads `DEEPSEEK_API_KEY` (required) and `DEEPSEEK_MODEL`
   (optional). `DEFAULT_BASE_URL = https://api.deepseek.com`.
-- Pure mappers `to_openai_request` / `from_openai_response` (unit-testable without the network):
-  `ResponseFormat::Json` → `{"type":"json_object"}` (DeepSeek's JSON mode **ignores the schema** —
-  the prompt carries the shape); top-level `error` on a 2xx is surfaced as `InvalidRequest`;
-  unparseable tool calls are `warn!`-logged rather than silently dropped.
+- The pure mappers (`to_openai_request`/`from_openai_response`/tool-name sanitization/SSE-delta
+  accumulation) now live in `liberado_provider::openai_compat`, shared with
+  `provider-openrouter` (moved 2026-07-04 — `cargo dupes` found the two crates carried
+  byte-for-byte identical copies, `docs/roadmap/hygiene-audit-2026-07-04.md`). This crate only
+  keeps `map_status` (DeepSeek doesn't have OpenRouter's extra `402` case) and the actual HTTP
+  round-trip. `ResponseFormat::Json` → `{"type":"json_object"}` (DeepSeek's JSON mode **ignores
+  the schema** — the prompt carries the shape); top-level `error` on a 2xx is surfaced as
+  `InvalidRequest`; unparseable tool calls are `warn!`-logged (in the shared module) rather than
+  silently dropped.
 
 ## Design notes
 
@@ -26,7 +31,7 @@ that talks HTTP to a model — that one exists to run many models concurrently t
 
 ## Dependencies
 
-- Depends on: `liberado-provider` (the trait + types), `reqwest`, `serde_json`, `tracing`.
+- Depends on: `liberado-provider` (the trait + types + `openai_compat`), `reqwest`, `serde_json`.
 - Depended on by: `cli` (the wired backend).
 
 ## Tests
