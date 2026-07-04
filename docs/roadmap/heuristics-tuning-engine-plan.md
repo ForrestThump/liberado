@@ -340,6 +340,14 @@ architecture idea the way there is for a scored prompt candidate.
     executor/subagent branches share a `save_tool_loop_result` helper (identical print/write shape).
     5 new tests (config resolution, a live end-to-end analog); zero regressions.
 
+    **Live smoke test, same day**: tiny first run (1 model, 1 sample, `single-lookup` +
+    `multi-step-research`, 1 generation) validated the pipeline end-to-end — winner matched baseline
+    exactly (elitism correctly held the incumbent again, nothing beat it), `single-lookup` 1/1,
+    `multi-step-research` 0/1. One sample isn't strong evidence on its own, but it's consistent with
+    the executor findings above: the subagent's looser 8-turn budget alone didn't fix
+    `multi-step-research` either — left as part of the same deferred investigation, not chased
+    further this session.
+
 ## Executor-layer live smoke tests — a real engine bug, not a prompt problem (2026-07-06)
 
 Three live executor-tuning runs (single model, `deepseek/deepseek-v4-flash`, growing from 1 sample/
