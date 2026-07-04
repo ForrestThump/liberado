@@ -221,25 +221,124 @@ pub trait RuntimeFactory: Send + Sync {
     ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError>;
 }
 
-/// Loop bounds. Currently just a turn cap; room to grow (token/time budgets) without touching call
-/// sites.
-#[derive(Debug, Clone, Copy)]
+/// A single bounded resource an execution must respect, checked once per turn against the
+/// accumulated [`ResourceUsage`] snapshot. New resource types (a rate limit, anything else
+/// bounded) just implement this — `Executor::run_loop`'s own logic never has to change to add
+/// one, only a new [`Budget::with_limit`] call site does. Deliberately abstract rather than a
+/// hardcoded enum of resource kinds: today's two concrete uses (wall-clock, a token-count proxy
+/// for cost — see [`TokenLimit`]'s doc comment for why not real dollars yet) shouldn't be the
+/// ceiling on what this can bound later.
+pub trait ResourceLimit: Send + Sync {
+    /// Human-readable name for diagnostics ("wall-clock", "tokens") — surfaced in a budget-
+    /// exceeded failure report so it names *which* resource ran out, not just "turns."
+    fn name(&self) -> &str;
+    /// Whether this resource has been exhausted given the current usage snapshot.
+    fn is_exhausted(&self, usage: &ResourceUsage) -> bool;
+}
+
+/// Accumulated resource usage for one execution, updated once per turn. Adding a new
+/// [`ResourceLimit`] later may need a new field here — a small, additive change; existing limits
+/// and `run_loop`'s own logic don't need to change alongside it.
+#[derive(Debug, Clone, Default)]
+pub struct ResourceUsage {
+    pub turns: u32,
+    pub elapsed: std::time::Duration,
+    /// Total tokens (prompt + completion) spent so far — see [`TokenLimit`]'s doc comment.
+    pub tokens: u64,
+}
+
+/// Bounds real elapsed time, independent of turn count — a single slow tool call or a model that
+/// just takes a long time per turn isn't caught by a turn cap alone.
+pub struct WallClockLimit(pub std::time::Duration);
+
+impl ResourceLimit for WallClockLimit {
+    fn name(&self) -> &str {
+        "wall-clock"
+    }
+    fn is_exhausted(&self, usage: &ResourceUsage) -> bool {
+        usage.elapsed >= self.0
+    }
+}
+
+/// A stand-in for a real dollar-cost cap: total token count, not actual `$`. Real pricing needs a
+/// per-model `$`/token table (rates differ by provider and by prompt vs. completion token, and
+/// need upkeep as providers change prices) that doesn't exist yet — deferred until it's clearly
+/// worth that upkeep, since current model usage is cheap enough not to need it now. Token count is
+/// a reasonable proxy in the meantime: it already correlates with real cost, and it's free (every
+/// `CompletionResponse` already reports it) — no new plumbing to add real dollars later either,
+/// just a new `ResourceLimit` impl reading a pricing table instead of a raw count.
+pub struct TokenLimit(pub u64);
+
+impl ResourceLimit for TokenLimit {
+    fn name(&self) -> &str {
+        "tokens"
+    }
+    fn is_exhausted(&self, usage: &ResourceUsage) -> bool {
+        usage.tokens >= self.0
+    }
+}
+
+/// Loop bounds: a turn cap (`max_turns`, unchanged from before — still the mechanical driver of
+/// `run_loop`'s own iteration, including the doom-loop guard's one-time recovery top-up, which is
+/// specifically a turn-count adjustment) plus an open-ended list of additional [`ResourceLimit`]s
+/// checked alongside it every turn. `Budget::new`/`Budget::default` build a turns-only budget —
+/// unchanged behavior for every existing call site — `.with_limit`/`.with_wall_clock`/
+/// `.with_token_limit` opt a call site into additional bounds.
+#[derive(Clone)]
 pub struct Budget {
     /// Maximum model turns before the loop is force-terminated.
     pub max_turns: u32,
+    extra_limits: Arc<Vec<Box<dyn ResourceLimit>>>,
 }
 
 impl Budget {
     pub fn new(max_turns: u32) -> Self {
-        Self { max_turns }
+        Self {
+            max_turns,
+            extra_limits: Arc::new(Vec::new()),
+        }
+    }
+
+    /// Add an arbitrary [`ResourceLimit`] to this budget, checked every turn alongside the turn
+    /// cap. Chainable: `Budget::new(4).with_limit(WallClockLimit(...)).with_limit(TokenLimit(...))`.
+    pub fn with_limit(mut self, limit: impl ResourceLimit + 'static) -> Self {
+        // `Arc::get_mut` (not `make_mut`, which needs `T: Clone` — trait objects don't support
+        // that generically) succeeds whenever this is the only reference, true for every real
+        // call site (builder chains are used immediately: `Budget::new(4).with_wall_clock(...)`).
+        // The `None` arm is only reachable if a `Budget` were cloned mid-chain before finishing —
+        // doesn't happen anywhere in this codebase, but falls back to starting a fresh list
+        // rather than panicking if it ever did.
+        match Arc::get_mut(&mut self.extra_limits) {
+            Some(limits) => limits.push(Box::new(limit)),
+            None => self.extra_limits = Arc::new(vec![Box::new(limit)]),
+        }
+        self
+    }
+
+    /// Shorthand for `with_limit(WallClockLimit(max))`.
+    pub fn with_wall_clock(self, max: std::time::Duration) -> Self {
+        self.with_limit(WallClockLimit(max))
+    }
+
+    /// Shorthand for `with_limit(TokenLimit(max_tokens))`.
+    pub fn with_token_limit(self, max_tokens: u64) -> Self {
+        self.with_limit(TokenLimit(max_tokens))
+    }
+
+    /// The name of the first exhausted extra limit (wall-clock, tokens, ...), if any — `None`
+    /// means none of the *extra* limits are exhausted (the turn cap is checked separately, since
+    /// it's the loop's own mechanical bound, not one of these).
+    fn exhausted_extra(&self, usage: &ResourceUsage) -> Option<&str> {
+        self.extra_limits
+            .iter()
+            .find(|limit| limit.is_exhausted(usage))
+            .map(|limit| limit.name())
     }
 }
 
 impl Default for Budget {
     fn default() -> Self {
-        Self {
-            max_turns: DEFAULT_MAX_TURNS,
-        }
+        Self::new(DEFAULT_MAX_TURNS)
     }
 }
 
@@ -527,13 +626,25 @@ impl Executor {
         // what's *said*.
         let mut loop_strikes: u8 = 0;
         // Mutable so the tool-removal escalation step can grant its one-time top-up (see
-        // `DOOM_LOOP_RECOVERY_BONUS_TURNS`); `bonus_granted` caps that to once per run.
+        // `DOOM_LOOP_RECOVERY_BONUS_TURNS`); `bonus_granted` caps that to once per run. Distinct
+        // from `usage`/`extra_limits` below: the turn cap is the loop's own mechanical bound (it
+        // drives the `for`-equivalent iteration itself), the extra limits are additional,
+        // independently-checked bounds layered on top.
         let mut max_turns = self.budget.max_turns;
         let mut bonus_granted = false;
         let mut turn: u32 = 0;
+        let mut usage = ResourceUsage::default();
+        let run_started = std::time::Instant::now();
+        let mut exhausted_resource: Option<&str> = None;
         'turn_loop: loop {
             turn += 1;
+            usage.turns = turn;
+            usage.elapsed = run_started.elapsed();
             if turn > max_turns {
+                break;
+            }
+            if let Some(name) = self.budget.exhausted_extra(&usage) {
+                exhausted_resource = Some(name);
                 break;
             }
             let turn_span = tracing::debug_span!(
@@ -548,6 +659,10 @@ impl Executor {
             }
             .instrument(tracing::debug_span!("provider_complete", turn))
             .await?;
+
+            if let Some(response_usage) = &response.usage {
+                usage.tokens += u64::from(response_usage.total_tokens);
+            }
 
             // Record the model's turn (content and/or tool calls) so it sees its own history.
             messages.push(assistant_turn(&response));
@@ -679,13 +794,19 @@ impl Executor {
             }
         }
 
-        tracing::warn!(turns = max_turns, "execution budget exhausted");
+        let exhausted_name = exhausted_resource.unwrap_or("turns");
+        tracing::warn!(
+            turns = max_turns,
+            resource = exhausted_name,
+            "execution budget exhausted"
+        );
         match mode {
             // The delegating agent is owed a Report, not a transport error — and it deserves to
             // know what actually happened, not just that time ran out. See
             // `budget_failed_report_with_progress`'s doc comment for why this stays a compact,
             // mechanical summary rather than injecting the raw call history upward.
             Mode::Report => Ok(Terminal::Filed(budget_failed_report_with_progress(
+                exhausted_name,
                 max_turns,
                 &call_history,
             ))),
@@ -812,6 +933,25 @@ fn budget_failed_report(turns: u32) -> Report {
     }
 }
 
+/// The same failure, naming which *other* resource (wall-clock, tokens, ...) ran out instead of
+/// the turn count, when that's what actually happened — `resource` is `"turns"` when it was the
+/// plain turn cap. See `budget_failed_report_with_progress`'s doc comment for the full-history
+/// version of this same naming.
+fn budget_failed_report_named(resource: &str, turns: u32) -> Report {
+    if resource == "turns" {
+        return budget_failed_report(turns);
+    }
+    Report {
+        outcome: Outcome::Failed,
+        summary: format!("Execution exceeded its {resource} budget without completing."),
+        artifacts: Vec::new(),
+        new_high_signal_facts: Vec::new(),
+        follow_up: Some(format!(
+            "Consider raising the {resource} budget, or narrowing the goal so less {resource} is needed."
+        )),
+    }
+}
+
 /// The `Report` returned when the turn budget is exhausted, built from what the run actually did
 /// instead of a bare "ran out of turns" — a real live gap: a model that made genuine progress
 /// (e.g. wrote a vault note) before running out of turns to file `submit_report` previously
@@ -827,11 +967,12 @@ fn budget_failed_report(turns: u32) -> Report {
 /// "really" a written artifact path would mean parsing arbitrary tool-specific result text, which
 /// is a judgment call, not a mechanical one.
 fn budget_failed_report_with_progress(
+    resource: &str,
     turns: u32,
     call_history: &[(String, serde_json::Value, String)],
 ) -> Report {
     if call_history.is_empty() {
-        return budget_failed_report(turns);
+        return budget_failed_report_named(resource, turns);
     }
     let any_succeeded = call_history
         .iter()
@@ -841,6 +982,11 @@ fn budget_failed_report_with_progress(
         .map(|(name, _, result)| format!("{name} -> {}", preview(result)))
         .collect::<Vec<_>>()
         .join("; ");
+    let budget_desc = if resource == "turns" {
+        format!("{turns}-turn budget")
+    } else {
+        format!("{resource} budget")
+    };
     Report {
         outcome: if any_succeeded {
             Outcome::PartiallySucceeded
@@ -848,7 +994,7 @@ fn budget_failed_report_with_progress(
             Outcome::Failed
         },
         summary: format!(
-            "Execution exceeded the {turns}-turn budget before filing a report. Calls made: {call_list}."
+            "Execution exceeded its {budget_desc} before filing a report. Calls made: {call_list}."
         ),
         artifacts: Vec::new(),
         new_high_signal_facts: Vec::new(),
@@ -1682,5 +1828,67 @@ mod tests {
 
         assert_eq!(report.outcome, Outcome::Succeeded);
         assert_eq!(runtime.invoked().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn wall_clock_limit_exhausts_before_the_first_turn_when_set_to_zero() {
+        // A zero-duration wall-clock limit is exhausted the instant any time at all has passed —
+        // deterministic without needing a real sleep, and proves the check runs before the
+        // provider is even called (no responses are consumed from the script).
+        let (provider, exec) = executor(
+            vec![submit(valid_report_args())],
+            Budget::new(4).with_wall_clock(std::time::Duration::ZERO),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Failed);
+        assert!(report.summary.contains("wall-clock"), "{}", report.summary);
+        assert_eq!(
+            provider.received_requests().len(),
+            0,
+            "the wall-clock check must fire before any provider call is made"
+        );
+    }
+
+    #[tokio::test]
+    async fn token_limit_exhausts_once_accumulated_usage_crosses_it() {
+        fn tool_call_with_usage(id: &str, tokens: u32) -> CompletionResponse {
+            CompletionResponse {
+                content: None,
+                tool_calls: vec![ToolInvocation::new(id, "search", serde_json::json!({}))],
+                finish_reason: liberado_provider::FinishReason::ToolCalls,
+                usage: Some(liberado_provider::Usage {
+                    prompt_tokens: tokens / 2,
+                    completion_tokens: tokens / 2,
+                    total_tokens: tokens,
+                }),
+            }
+        }
+        let script = vec![
+            tool_call_with_usage("c1", 100),
+            tool_call_with_usage("c2", 100),
+            submit(valid_report_args()),
+        ];
+        let (_provider, exec) = executor(
+            script,
+            Budget::new(10).with_token_limit(150), // exhausted after the 2nd response (total 200)
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("a result".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::PartiallySucceeded);
+        assert!(report.summary.contains("tokens"), "{}", report.summary);
+        // Both search calls ran (200 tokens spent) before the 3rd turn's token check stopped it —
+        // the 3rd scripted response (submit) was never reached.
+        assert_eq!(runtime.invoked().len(), 2);
     }
 }

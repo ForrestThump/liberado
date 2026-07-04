@@ -473,7 +473,7 @@ impl Orchestrator {
                 sub.correlation_id.as_str(),
             );
             let task = Task::new(subagent_instructions(&sub.success_criteria), sub.goal);
-            let budget = self.subagent_budget;
+            let budget = self.subagent_budget.clone();
             let provider = self.provider.clone();
             let label = sub.label.clone();
 
@@ -529,7 +529,7 @@ impl Orchestrator {
         runtime: &dyn ToolRuntime,
         task: Task,
     ) -> Result<Report, ExecError> {
-        Executor::new(self.provider.clone(), *budget)
+        Executor::new(self.provider.clone(), budget.clone())
             .execute(runtime, task)
             .await
     }
