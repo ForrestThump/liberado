@@ -796,8 +796,8 @@ mod tests {
 
     // ── Dispatch routing ─────────────────────────────────────────────────────
 
-    use liberado_common::config::DispatchTuning;
     use liberado_common::{BlockReason, DispatchDecision};
+    use liberado_config_loader::DispatchTuning;
     use liberado_executor::{RuntimeFactory, RuntimeSetupError};
 
     struct NoopFactory;

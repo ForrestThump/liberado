@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use liberado_common::config::managed_binary_path;
+use liberado_config::managed_binary_path;
 
 use crate::lock::LockFile;
 use crate::sources::McpSource;

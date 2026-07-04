@@ -12,10 +12,10 @@
 //! slot in. (This comment previously also listed the consequence gate as deferred — stale as of
 //! whenever it actually shipped; the code below has implemented it for a while.)
 
-use liberado_common::config::DispatchTuning;
 use liberado_common::{
     BlockReason, Consequence, DispatchAction, DispatchDecision, is_sweeping_destructive, mcp_of,
 };
+use liberado_config_loader::DispatchTuning;
 
 use crate::DispatchRequest;
 

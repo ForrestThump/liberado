@@ -2,8 +2,8 @@
 //! consumer crates do — serde round-trips of the typed artifacts, the security invariants, and
 //! the config fail-safe defaults.
 
-use liberado_common::config::{Config, Policy, ZonePolicy};
 use liberado_common::*;
+use liberado_config_loader::{Config, Policy, ZonePolicy};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 

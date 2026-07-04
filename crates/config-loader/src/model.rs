@@ -13,17 +13,23 @@
 //!
 //! Durations are stored as plain seconds (`*_secs`) for unambiguous TOML/serde. The actual
 //! file loader + cross-cutting validation (port collisions, dangling zone refs, triggerless
-//! hooks) is the daemon's job; [`Config::validate`] here covers the model-level invariants that
+//! hooks) is `liberado-config`'s job (file loading) and this crate's [`crate::validate_merged_config`]
+//! (cross-cutting checks); [`Config::validate`] here covers the model-level invariants that
 //! can be checked from these types alone.
+//!
+//! Lives in `liberado-config-loader`, not `liberado-config`, even though the latter is the more
+//! natural-sounding home: `liberado-config-loader`'s own cross-cutting validation
+//! (`validate_merged_config`) needs this type, and `liberado-config` already depends on
+//! `liberado-config-loader` — putting the model in `liberado-config` instead would create a cycle.
+//! `liberado-config` re-exports everything here, so external consumers still import it as
+//! `liberado_config::Config` et al. (moved from `liberado-common` 2026-07-04,
+//! `docs/roadmap/hygiene-audit-2026-07-04.md`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use liberado_common::{Capability, CapabilitySet, Consequence, Error, ModelProfile, ModelRole, Result, WriteClass};
 use serde::{Deserialize, Serialize};
-
-use crate::capability::{Capability, CapabilitySet, Consequence, WriteClass};
-use crate::error::{Error, Result};
-use crate::model::{ModelProfile, ModelRole};
 
 /// The fully-resolved configuration the daemon runs on.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -497,7 +503,7 @@ impl Config {
 /// # Example
 ///
 /// ```rust
-/// use liberado_common::config::Config;
+/// use liberado_config_loader::Config;
 ///
 /// let cfg = Config::builder()
 ///     .vault_path("/home/test/vault")
@@ -532,13 +538,13 @@ impl ConfigBuilder {
     }
 
     /// Add a model profile.
-    pub fn model(mut self, model: crate::model::ModelProfile) -> Self {
+    pub fn model(mut self, model: ModelProfile) -> Self {
         self.config.topology.models.push(model);
         self
     }
 
     /// Assign a model to a role (replaces any existing assignment for that role).
-    pub fn model_role(mut self, role: crate::model::ModelRole, name: impl Into<String>) -> Self {
+    pub fn model_role(mut self, role: ModelRole, name: impl Into<String>) -> Self {
         self.config.topology.model_roles.insert(role, name.into());
         self
     }
@@ -605,8 +611,8 @@ impl ConfigBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::Zone;
-    use crate::model::{ModelProfile, ModelRole, ModelTier};
+    use liberado_common::Zone;
+    use liberado_common::{ModelProfile, ModelRole, ModelTier};
     use std::str::FromStr;
 
     #[test]

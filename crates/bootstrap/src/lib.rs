@@ -16,7 +16,7 @@
 //! change from before this split.
 
 pub use liberado_config::{
-    ConfigError, ConfigProvenance, GuardContext, capability_catalog_from_config,
+    Config, ConfigError, ConfigProvenance, GuardContext, capability_catalog_from_config,
     catalog_from_config, config_dir, data_dir, guard_context, load_config, mcp_install_dir,
 };
 
@@ -24,7 +24,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use liberado_common::CapabilityCatalog;
-use liberado_common::config::{Config, McpTransport, managed_binary_path};
+use liberado_config::{McpTransport, managed_binary_path};
 use liberado_daemon::Daemon;
 use liberado_dispatcher::Dispatcher;
 use liberado_mcp::{HttpConnector, McpRegistry, StdioConnector};
@@ -135,7 +135,7 @@ pub fn configure_daemon(
 mod tests {
     use super::*;
     use liberado_common::capability::Consequence;
-    use liberado_common::config::McpConfig;
+    use liberado_config::McpConfig;
 
     fn mcp(name: &str, enabled: bool, transport: McpTransport) -> McpConfig {
         McpConfig {

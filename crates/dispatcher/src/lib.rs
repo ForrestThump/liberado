@@ -21,10 +21,10 @@ mod guards;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use liberado_common::config::DispatchTuning;
 use liberado_common::{
     BlockReason, CapabilitySet, DispatchAction, DispatchDecision, ProposedAction, ToolCall,
 };
+use liberado_config_loader::DispatchTuning;
 use liberado_provider::{CompletionRequest, Message, Provider, ProviderError, complete_json};
 use thiserror::Error;
 use tracing::Instrument;

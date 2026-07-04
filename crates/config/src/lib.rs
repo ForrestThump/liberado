@@ -1,8 +1,7 @@
 //! # liberado-config
 //!
 //! The config-file loader (Decision 14, `liberado-config-spec.md`), plus the path-resolution helpers
-//! built directly on it. The typed *model* and its model-level [`Config::validate`] live in
-//! `liberado-common`; this is the daemon-side half: resolve a config directory, read the three
+//! built directly on it. This is the daemon-side half: resolve a config directory, read the three
 //! optional per-section TOML files (`topology.toml` / `policy.toml` / `tuning.toml`), assemble them
 //! into one [`Config`], and run the **cross-cutting** checks (dangling zone/MCP refs, missing secrets)
 //! via the config-loader crate. Every error names the offending file or setting, because the realistic
@@ -13,6 +12,13 @@
 //! config still assembles a `Config`, which then fails validation citing e.g. the missing vault path
 //! — a precise, actionable failure, not a silent one).
 //!
+//! The typed *model* (`Config`/`Topology`/`Policy`/`Tuning`/…) and its model-level
+//! [`Config::validate`] live in `liberado-config-loader`, not here — that crate's own cross-cutting
+//! validation needs the model, and this crate already depends on it, so putting the model here
+//! instead would create a cycle (moved from `liberado-common` 2026-07-04,
+//! `docs/roadmap/hygiene-audit-2026-07-04.md`). Re-exported below so callers still reach it as
+//! `liberado_config::Config` et al. — "the config crate" stays the natural place to import it from.
+//!
 //! Deliberately dependency-light: only `liberado-common` + `liberado-config-loader`, no
 //! daemon/mcp/dispatcher/orchestrator/provider — so a tool that only needs config/path resolution
 //! (`liberado-mcp-forge`) doesn't have to build the whole assembly stack. `liberado-bootstrap` depends
@@ -21,8 +27,13 @@
 use std::path::{Path, PathBuf};
 
 use liberado_common::CapabilityCatalog;
-use liberado_common::config::{CURRENT_SCHEMA_VERSION, Config, Tuning};
 use thiserror::Error;
+
+pub use liberado_config_loader::{
+    CURRENT_SCHEMA_VERSION, CaptureTuning, ComponentConfig, ConcurrencyTuning, Config, ConfigBuilder,
+    ContextTuning, DispatchTuning, Grant, MaintenanceTuning, McpConfig, McpTransport, Policy,
+    SubagentIsolation, Topology, Tuning, ZonePolicy, managed_binary_path,
+};
 
 /// Records which source file contributed each section of a loaded [`Config`],
 /// or `None` if that section fell back to its built-in [`Default`].
@@ -261,7 +272,7 @@ pub fn capability_catalog_from_config(config: &Config) -> CapabilityCatalog {
 }
 
 /// Where `liberado-mcp-forge` installs managed MCP binaries, and where
-/// [`McpTransport::Managed`](liberado_common::config::McpTransport::Managed) resolution looks for
+/// [`McpTransport::Managed`] resolution looks for
 /// them (Decision: convention over mutation — `topology.toml` never gets a file path written into
 /// it; a `name` resolves to a path by this one rule, on both the forge tool's and the daemon's side).
 ///
@@ -362,7 +373,6 @@ mod tests {
     use liberado_common::Capability;
     use liberado_common::WriteClass;
     use liberado_common::capability::Consequence;
-    use liberado_common::config::{McpConfig, McpTransport};
     use std::io::Write;
     use tempfile::TempDir;
 

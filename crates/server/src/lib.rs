@@ -221,7 +221,7 @@ pub fn config_check(dir: Option<&Path>) -> Result<(), Box<dyn std::error::Error>
 async fn build_chat(
     provider: Option<Arc<dyn Provider>>,
     mcp: Option<McpRegistry>,
-    config: &liberado_common::config::Config,
+    config: &liberado_bootstrap::Config,
     catalog: Arc<CapabilityCatalog>,
     vault_path: &Path,
 ) -> (Option<Arc<ChatSessions>>, usize, Vec<String>) {

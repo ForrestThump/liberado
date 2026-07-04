@@ -11,8 +11,8 @@
 
 use std::sync::Arc;
 
-use liberado_common::config::{ConcurrencyTuning, DispatchTuning};
 use liberado_common::{Capability, CapabilitySet};
+use liberado_config_loader::{ConcurrencyTuning, DispatchTuning};
 use liberado_dispatcher::{DispatchRequest, Dispatcher, McpDescriptor};
 use liberado_eval::{score, scenarios};
 use liberado_provider_deepseek::DeepSeekProvider;

@@ -21,8 +21,8 @@ cheap when nothing changed upstream.
 
 This tool never writes into `topology.toml`. `McpConfig.name`/`description`/`consequence` stay
 human-authored (Liberado owns risk classification; MCPs don't self-declare it — see
-`crates/common/src/config.rs`'s `McpConfig` doc comment). The only contract between this crate and
-the daemon is [`liberado_common::config::managed_binary_path`]: given an install directory and a
+`crates/config-loader/src/model.rs`'s `McpConfig` doc comment). The only contract between this crate and
+the daemon is [`liberado_config::managed_binary_path`]: given an install directory and a
 name, both sides compute the same path independently. This crate's job ends at "make the binary
 exist there"; `crates/bootstrap/src/lib.rs`'s `McpTransport::Managed` match arm is the read side.
 

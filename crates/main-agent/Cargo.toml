@@ -27,3 +27,4 @@ async-trait = { workspace = true }
 serde_json = { workspace = true }
 futures = { workspace = true }
 tempfile = { workspace = true }
+liberado-config-loader = { workspace = true }

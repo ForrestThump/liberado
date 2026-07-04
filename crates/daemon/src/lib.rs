@@ -575,7 +575,7 @@ mod tests {
 
     #[tokio::test]
     async fn daemon_routes_reaction_through_dispatcher() {
-        use liberado_common::config::DispatchTuning;
+        use liberado_config_loader::DispatchTuning;
         use liberado_common::{BlockReason, DispatchAction, DispatchDecision};
         use liberado_provider::{CompletionResponse, MockProvider};
         use std::sync::Arc;
@@ -627,7 +627,7 @@ mod tests {
 
     #[tokio::test]
     async fn daemon_acts_on_a_decision_via_the_orchestrator() {
-        use liberado_common::config::DispatchTuning;
+        use liberado_config_loader::DispatchTuning;
         use liberado_common::{DispatchAction, DispatchDecision, Outcome};
         use liberado_executor::{RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime};
         use liberado_orchestrator::Orchestrator;
@@ -721,7 +721,7 @@ mod tests {
 
     #[tokio::test]
     async fn daemon_emits_a_proposal_for_a_high_consequence_action() {
-        use liberado_common::config::DispatchTuning;
+        use liberado_config_loader::DispatchTuning;
         use liberado_common::{
             Capability, Consequence, DispatchAction, DispatchDecision, Proposal, ProposalStatus,
             ProposedAction, ToolCall,

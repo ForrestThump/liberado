@@ -23,5 +23,6 @@ tempfile = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-executor = { workspace = true }
 liberado-test-support = { workspace = true }
+liberado-config-loader = { workspace = true }
 async-trait = { workspace = true }
 serde_json = { workspace = true }

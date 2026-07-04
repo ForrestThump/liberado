@@ -174,8 +174,8 @@ pub async fn score_candidate(
             let dispatcher = Arc::new(
                 Dispatcher::new(
                     provider.clone(),
-                    liberado_common::config::DispatchTuning::default(),
-                    liberado_common::config::ConcurrencyTuning::default().max_reaction_depth,
+                    liberado_config::DispatchTuning::default(),
+                    liberado_config::ConcurrencyTuning::default().max_reaction_depth,
                 )
                 .with_system_prompt(prompt),
             );

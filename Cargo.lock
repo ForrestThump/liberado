@@ -2837,6 +2837,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "hmac",
+ "liberado-config-loader",
  "rand 0.8.6",
  "serde",
  "serde_json",
@@ -2896,6 +2897,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "liberado-common",
+ "liberado-config-loader",
  "liberado-dispatcher",
  "liberado-executor",
  "liberado-orchestrator",
@@ -2914,6 +2916,7 @@ name = "liberado-dispatcher"
 version = "0.1.0"
 dependencies = [
  "liberado-common",
+ "liberado-config-loader",
  "liberado-provider",
  "serde_json",
  "thiserror 2.0.18",
@@ -2926,6 +2929,7 @@ name = "liberado-eval"
 version = "0.1.0"
 dependencies = [
  "liberado-common",
+ "liberado-config-loader",
  "liberado-dispatcher",
  "liberado-provider",
  "liberado-provider-deepseek",
@@ -2977,6 +2981,7 @@ dependencies = [
  "async-trait",
  "futures",
  "liberado-common",
+ "liberado-config-loader",
  "liberado-conversation-store",
  "liberado-dispatcher",
  "liberado-executor",

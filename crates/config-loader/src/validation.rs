@@ -14,8 +14,8 @@
 
 use liberado_common::Zone;
 use liberado_common::capability::Capability;
-use liberado_common::config::Config;
 
+use crate::model::Config;
 use crate::source::ConfigLoadError;
 
 /// Validate cross-cutting invariants that span [`Config`] sections.
@@ -71,9 +71,8 @@ fn zone_name(zone: &Zone) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{Grant, McpConfig, McpTransport, Policy, Topology, ZonePolicy};
     use liberado_common::capability::Consequence;
-    use liberado_common::config::{Grant, Policy, ZonePolicy};
-    use liberado_common::config::{McpConfig, McpTransport, Topology};
 
     /// Helper: a minimal valid topology with one MCP.
     fn topology_with_mcp(name: &str) -> Topology {

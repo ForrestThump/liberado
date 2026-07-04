@@ -1,6 +1,6 @@
 //! Loads `mcp-sources.toml` — the list of git-hosted MCP repos this crate builds and installs.
 //! Kept separate from `topology.toml` (which stays human-owned for `description`/`consequence`,
-//! see `liberado_common::config::McpConfig`'s doc comment); this file only ever answers "where
+//! see `liberado_config::McpConfig`'s doc comment); this file only ever answers "where
 //! does the source live, and how do I build it."
 
 use std::fs;
@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 /// One buildable MCP source. `name` is the join key with `topology.toml`'s `[[mcps]]` entry for
 /// this MCP — it's both the install-directory key and the binary name
-/// [`liberado_common::config::managed_binary_path`] resolves.
+/// [`liberado_config::managed_binary_path`] resolves.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct McpSource {
     pub name: String,

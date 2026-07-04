@@ -6,6 +6,11 @@ explicitly marked. Priorities reflect actual risk/payoff, not raw finding count.
 
 ## Priority 1 — worth fixing soon
 
+**Status: all four items below (the three Priority 1 fixes plus the `common::config` split pulled
+forward from Priority 2) have been fixed** — `fe2c1fe` (proposal-write bug), `c149240` (the two
+panics), `b6238e0` (provider dedup), and the `common::config` → `config-loader` split (this commit).
+Each was built and full-workspace-verified independently, in that order.
+
 ### A real bug: a failed proposal write is silently reported as success
 
 `crates/executor/src/risk_gated.rs`'s `write_proposal` (~lines 204-229): if `create_dir_all` or
@@ -52,23 +57,28 @@ Together) would otherwise be a third copy.
 
 ## Priority 2 — worth doing, lower urgency
 
-### `liberado-common` split: `config` module is the best next carve-out
+### `liberado-common` split: `config` module is the best next carve-out — **done**
 
 Module usage across the workspace: `config` (14 crates, 967 lines) and `catalog` (13 crates) dominate;
 `capability` (11 crates) and `catalog` are genuinely coupled (`catalog.rs` imports `Consequence` from
 `capability`) and should stay together. `proposal` (480 lines, 6 crates — daemon/executor/main-agent/
 dispatcher/config/eval) has no dependency on `capability`/`catalog` and is cleanly separable — a
-`liberado-proposal` crate is a reasonable second carve-out. `event` (145 lines, 1 crate — `daemon`
-only) should stay put until hooks/cron actually land and give it more consumers, per the doc's own
-stated plan. **`model` (`ModelProfile`/`ModelRole`) appears to have zero consumers outside `common`
-itself** — worth a quick check on whether it's dead weight or reached only through re-exports before
-deciding anything.
+`liberado-proposal` crate is a reasonable second carve-out (still open). `event` (145 lines, 1 crate —
+`daemon` only) should stay put until hooks/cron actually land and give it more consumers, per the
+doc's own stated plan. **`model` (`ModelProfile`/`ModelRole`) appears to have zero consumers outside
+`common` itself** — worth a quick check on whether it's dead weight or reached only through
+re-exports before deciding anything (still open).
 
-`config`'s case: `common::config`'s 967-line `Config`/`Topology`/`Policy`/`Tuning` type model overlaps
-semantically with what `crates/config` already validates and `crates/config-loader` already
-deserializes — the type model arguably belongs where the crate named for it lives. Moving it would
-also remove the current oddity of `mcp-forge` depending on all of `liberado-common` just to reach
-`Zone`/`managed_binary_path()`.
+`config`'s case: `common::config`'s 967-line `Config`/`Topology`/`Policy`/`Tuning` type model overlapped
+semantically with what `crates/config` already validated and `crates/config-loader` already
+deserialized — moved 2026-07-04. It landed in `liberado-config-loader`, not the initially-obvious
+`crates/config`, because `liberado-config-loader`'s own cross-cutting validation
+(`validate_merged_config`) needs the type, and `liberado-config` already depends on
+`liberado-config-loader` for that function — putting the model in `liberado-config` instead would
+have created a cycle. `liberado-config` re-exports everything, so the external-facing import path
+(`liberado_config::Config`) is unchanged. This also removed the prior oddity of `mcp-forge` depending
+on all of `liberado-common` just to reach `Zone`/`managed_binary_path()` (it now reaches
+`managed_binary_path` via `liberado-config`, which it already depended on).
 
 ### `heuristics-tuner`: don't split the crate, but split the module
 
@@ -162,6 +172,9 @@ standalone change today.
 
 ## What was NOT done this pass
 
-No code changes landed from this audit — it's a read-only survey, per the request. The Priority 1
-items (the proposal-write bug especially) are the ones I'd recommend actually fixing soon; everything
-else is safe to leave as a documented backlog, same posture as `crate-modularity-audit.md`.
+This audit itself was a read-only survey, per the request — no code changes landed in the same pass.
+The four items called out above (Priority 1's three fixes, plus the `common::config` split) were
+picked up and fixed in follow-up work shortly after. Everything else in this document (the
+`heuristics-tuner` module split, test extraction from oversized files, the minor dedups, the coverage
+gaps) remains an open, documented backlog — safe to leave as-is, same posture as
+`crate-modularity-audit.md`.

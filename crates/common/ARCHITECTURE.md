@@ -14,9 +14,15 @@ two or more crates, it lives here.
 | `dispatch` | `DispatchDecision`, `DispatchAction` (`ExecuteDirect`/`DispatchSubagent`/`Clarify`), `Report`, `Outcome`, `BlockReason`, `ToolCall`, `ExecMode`, `JobHandle`/`JobStatus` | 1 |
 | `event` | `Event`, `EventPayload`, `event_source` — one shape for **both** trigger paths (vault changes and hook webhooks) | 6 |
 | `model` | `ModelProfile`, `ModelRole`, `ModelTier`, `ModelChoice`, `RequiredCaps` — role-tiered capability floors | 13 |
-| `config` | `Config` (`Topology`/`Policy`/`Tuning`) + `validate()`; defaults live in code, config holds only deltas | 14 |
 | `proposal` | `Proposal`, `ProposalStatus`, `ProposedAction` — the human-in-the-loop artifact written to `proposals/` | 11 |
 | `error` | `Error`, `Result` | — |
+
+The typed config model (`Config`/`Topology`/`Policy`/`Tuning`) used to live here as a `config`
+module — moved to `liberado-config-loader` 2026-07-04 (`docs/roadmap/hygiene-audit-2026-07-04.md`,
+re-exported from `liberado-config`) to avoid a dependency cycle: `liberado-config-loader`'s own
+cross-cutting validation needs the type, and `liberado-config` already depends on
+`liberado-config-loader`. Nothing in this crate reaches for it, so it doesn't belong in the shared
+vocabulary every crate compiles against regardless of whether it touches config.
 
 ## Key invariants
 
@@ -27,7 +33,7 @@ two or more crates, it lives here.
 - **`DispatchAction` is a typed, inspectable, loggable artifact**, not free prose — that is what makes
   safety engineered (deterministic guards run over this structure) rather than hoped-for.
 - **Defaults in code, not config.** Every `Tuning` field's `Default` is its specced value, so an
-  empty config still boots; `config` only carries overrides.
+  empty config still boots; the config model (`liberado-config-loader`) only carries overrides.
 
 ## Dependencies
 

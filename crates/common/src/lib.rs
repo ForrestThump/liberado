@@ -18,12 +18,15 @@
 //!   model the dispatcher emits (Decision 1, `liberado-dispatch-logic-spec.md`).
 //! - [`proposal`] — the [`proposal::Proposal`] human-in-the-loop artifact (Decision 11).
 //! - [`model`] — [`model::ModelProfile`] + role capability floors (Decision 13).
-//! - [`config`] — the typed config model and its specced `Default`s (Decision 14).
 //! - [`error`] — the crate's error type.
+//!
+//! The typed config model (Decision 14) used to live here as a `config` module — moved to
+//! `liberado-config-loader` 2026-07-04 (`docs/roadmap/hygiene-audit-2026-07-04.md`), re-exported
+//! from `liberado-config`. Nothing here reaches for it, so it doesn't belong in the shared
+//! vocabulary every crate compiles against regardless of whether it touches config.
 
 pub mod capability;
 pub mod catalog;
-pub mod config;
 pub mod dispatch;
 pub mod error;
 pub mod event;
