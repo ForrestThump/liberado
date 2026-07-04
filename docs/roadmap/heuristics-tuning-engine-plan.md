@@ -318,12 +318,27 @@ architecture idea the way there is for a scored prompt candidate.
       `TUNER_LAYER`, default `Dispatcher` — today's behavior unchanged unless a session opts in).
     - 39 new unit tests (dispatcher-path tests untouched); zero workspace regressions verified
       after every phase (`cargo test --workspace`).
-    - **Explicitly deferred**: subagent-layer tuning (`SUBAGENT_PREAMBLE`) — planned as a
-      near-mechanical repeat of this same machinery, not yet built; automatic round-robin cycling
-      across all three layers in one session; main-agent persona tuning (no discrete
+    - **Explicitly deferred**: subagent-layer tuning (done next, item 12); automatic round-robin
+      cycling across all three layers in one session; main-agent persona tuning (no discrete
       tool-call/outcome signal — needs an LLM-judge approach, a different design problem);
       topology-driven tool-loop scenario generation; upstreaming `ScriptedToolRuntime` into
       `liberado-test-support`.
+12. ✅ **Done (2026-07-06).** Subagent-layer tuning (`SUBAGENT_PREAMBLE`) — turned out to be exactly
+    the near-mechanical repeat item 11 predicted, with one refinement: rather than duplicate
+    `run_executor_tuner`'s ~90-line loop body a third time (the elitism-duplication rationale was
+    specifically about isolating an *unproven* piece of logic from a new consumer — by this point
+    `run_executor_tuner` had 4 successful live runs behind it, so a third copy differing only in
+    seed prompt and turn budget would just be needless duplication, not risk isolation), it was
+    factored into a private `run_tool_loop_tuner(config, seed_prompt, max_turns)` with two thin
+    public wrappers: `run_executor_tuner` (`DIRECT_INSTRUCTIONS`,
+    `liberado_orchestrator::DIRECT_MAX_TURNS`) and the new `run_subagent_tuner`
+    (`SUBAGENT_PREAMBLE`, `liberado_executor::DEFAULT_MAX_TURNS` — mirrors `Orchestrator`'s own
+    `subagent_budget` default, looser than the executor's). `select_beam_executor`/
+    `advance_beam_executor`/`score_executor_candidate`/`format_executor_rubric` needed no changes at
+    all — they already operated on `ToolLoopFitness`/`Candidate` generically, with nothing
+    executor-specific baked in beyond the name. `Layer` gained `Subagent`; `main.rs`'s
+    executor/subagent branches share a `save_tool_loop_result` helper (identical print/write shape).
+    5 new tests (config resolution, a live end-to-end analog); zero regressions.
 
 ## Executor-layer live smoke tests — a real engine bug, not a prompt problem (2026-07-06)
 

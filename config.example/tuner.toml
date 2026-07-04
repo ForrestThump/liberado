@@ -9,13 +9,17 @@
 # "deepseek/deepseek-v4-flash,anthropic/claude-haiku-latest").
 
 # layer = "dispatcher"
-# Which role's system prompt this session tunes: "dispatcher" (default — tunes
-# liberado_dispatcher::DEFAULT_SYSTEM_PROMPT, no execution, scoring is a single classification
-# call) or "executor" (tunes liberado_orchestrator::DIRECT_INSTRUCTIONS by actually running a
-# scripted, mocked Executor::execute tool loop per scenario/sample — a materially more expensive
-# and slower call than dispatcher scoring). An unrecognized value falls back to "dispatcher" with a
-# warning rather than failing the session. Subagent-layer tuning (SUBAGENT_PREAMBLE) is planned but
-# not yet built (docs/roadmap/heuristics-tuning-engine-plan.md's executor/subagent extension).
+# Which role's system prompt this session tunes:
+#   "dispatcher" (default) — tunes liberado_dispatcher::DEFAULT_SYSTEM_PROMPT, no execution,
+#     scoring is a single classification call.
+#   "executor" — tunes liberado_orchestrator::DIRECT_INSTRUCTIONS by actually running a scripted,
+#     mocked Executor::execute tool loop per scenario/sample (liberado_orchestrator::DIRECT_MAX_TURNS
+#     turn budget) — a materially more expensive and slower call than dispatcher scoring.
+#   "subagent" — tunes liberado_orchestrator::SUBAGENT_PREAMBLE the same way as "executor" (same
+#     scenarios/scoring machinery — both roles run through the same Executor::execute), but with the
+#     subagent's own looser turn budget (liberado_executor::DEFAULT_MAX_TURNS, 8 vs. the executor's
+#     4 — mirrors Orchestrator's own subagent_budget default).
+# An unrecognized value falls back to "dispatcher" with a warning rather than failing the session.
 
 # scoring_models = ["deepseek/deepseek-v4-flash"]
 # Plays "the real dispatcher" during scoring. List more than one to check whether a candidate

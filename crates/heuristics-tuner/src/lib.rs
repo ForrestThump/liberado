@@ -5,14 +5,16 @@
 //! candidate system prompts against `liberado-eval`'s existing scenario set via a
 //! beam-search-with-restarts loop, then propose the best candidate as a diff + rubric for a human
 //! to review — nothing here ever writes to the real `DEFAULT_SYSTEM_PROMPT`. Extended to the
-//! executor layer (`DIRECT_INSTRUCTIONS`), scored by actually driving a mocked
-//! `Executor::execute` tool loop per trial (`tool_loop_scoring`/`tool_scenarios`) rather than a
-//! single classification call — `TunerConfig::layer` selects which role a session tunes. Never
-//! writes to the real prompt consts in either case; a human hand-adopts a winning candidate.
+//! executor and subagent layers (`DIRECT_INSTRUCTIONS`/`SUBAGENT_PREAMBLE` — both run through
+//! `liberado_executor::Executor::execute`, so they share the same scoring/search machinery), scored
+//! by actually driving a mocked `Executor::execute` tool loop per trial
+//! (`tool_loop_scoring`/`tool_scenarios`) rather than a single classification call —
+//! `TunerConfig::layer` selects which role a session tunes. Never writes to the real prompt consts
+//! in any case; a human hand-adopts a winning candidate.
 //!
 //! No real tool call or vault write happens anywhere in this crate: dispatcher-layer scoring only
-//! calls `Dispatcher::dispatch` (a pure classification decision), and executor-layer scoring only
-//! ever runs against a scripted mock `ToolRuntime`, never a real MCP.
+//! calls `Dispatcher::dispatch` (a pure classification decision), and executor/subagent-layer
+//! scoring only ever runs against a scripted mock `ToolRuntime`, never a real MCP.
 
 pub mod candidate;
 pub mod config;
@@ -29,7 +31,7 @@ pub use generation::GenerationError;
 pub use scoring::{CandidateFitness, ScenarioTrial, ScoredScenario};
 pub use search::{
     Budget, ExecutorGenerationRecord, ExecutorTunerResult, GenerationRecord, TunerResult,
-    run_executor_tuner, run_tuner,
+    run_executor_tuner, run_subagent_tuner, run_tuner,
 };
 pub use tool_loop_scoring::{ToolLoopFitness, ToolLoopScoredScenario, ToolLoopTrial, score_executor_candidate};
 pub use tool_scenarios::{ToolLoopExpect, ToolLoopScenario, tool_loop_scenarios};

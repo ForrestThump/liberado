@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use liberado_dispatcher::DEFAULT_SYSTEM_PROMPT;
-use liberado_orchestrator::{DIRECT_INSTRUCTIONS, DIRECT_MAX_TURNS};
+use liberado_orchestrator::{DIRECT_INSTRUCTIONS, DIRECT_MAX_TURNS, SUBAGENT_PREAMBLE};
 
 use crate::candidate::{Candidate, CandidateOrigin};
 use crate::config::TunerConfig;
@@ -342,24 +342,40 @@ pub struct ExecutorTunerResult {
     pub generations: Vec<ExecutorGenerationRecord>,
 }
 
-/// The executor-layer analog of [`run_tuner`]: same beam-search-with-restarts loop shape, seeded
-/// from `DIRECT_INSTRUCTIONS` instead of `DEFAULT_SYSTEM_PROMPT`, scored by
-/// `score_executor_candidate` (a real, mocked `Executor::execute` tool loop per trial) instead of a
-/// single dispatcher classification call.
+/// The executor-layer analog of [`run_tuner`]: same beam-search-with-restarts loop shape, scored
+/// by `score_executor_candidate` (a real, mocked `Executor::execute` tool loop per trial) instead
+/// of a single dispatcher classification call. Seeded from `DIRECT_INSTRUCTIONS`
+/// (`liberado_orchestrator::DIRECT_MAX_TURNS` turn budget).
 pub async fn run_executor_tuner(config: TunerConfig) -> ExecutorTunerResult {
+    run_tool_loop_tuner(config, DIRECT_INSTRUCTIONS, DIRECT_MAX_TURNS).await
+}
+
+/// The subagent-layer counterpart of [`run_executor_tuner`] — identical machinery (both roles run
+/// through `liberado_executor::Executor::execute`, which is what `select_beam_executor`/
+/// `advance_beam_executor`/`score_executor_candidate` actually operate on), seeded from
+/// `SUBAGENT_PREAMBLE` instead, with the subagent's own (looser) turn budget
+/// (`liberado_executor::DEFAULT_MAX_TURNS` — mirrors `Orchestrator`'s `subagent_budget` default,
+/// distinct from the executor's tighter `DIRECT_MAX_TURNS`).
+pub async fn run_subagent_tuner(config: TunerConfig) -> ExecutorTunerResult {
+    run_tool_loop_tuner(config, SUBAGENT_PREAMBLE, liberado_executor::DEFAULT_MAX_TURNS).await
+}
+
+/// Shared beam-search loop for any role that runs through `Executor::execute` (today: executor and
+/// subagent) — the two public entry points above differ only in seed prompt and turn budget.
+async fn run_tool_loop_tuner(config: TunerConfig, seed_prompt: &str, max_turns: u32) -> ExecutorTunerResult {
     let budget = Budget::new(config.call_budget);
 
     let baseline_fitness = score_executor_candidate(
-        DIRECT_INSTRUCTIONS,
+        seed_prompt,
         &config.scoring_providers,
         config.samples_per_scenario,
         config.max_scenarios,
-        DIRECT_MAX_TURNS,
+        max_turns,
         &budget,
     )
     .await;
     let baseline = Candidate {
-        prompt: DIRECT_INSTRUCTIONS.to_string(),
+        prompt: seed_prompt.to_string(),
         origin: CandidateOrigin::ColdStart,
     };
 
@@ -415,7 +431,7 @@ pub async fn run_executor_tuner(config: TunerConfig) -> ExecutorTunerResult {
                 &config.scoring_providers,
                 config.samples_per_scenario,
                 config.max_scenarios,
-                DIRECT_MAX_TURNS,
+                max_turns,
                 &budget,
             )
             .await;
@@ -435,7 +451,7 @@ pub async fn run_executor_tuner(config: TunerConfig) -> ExecutorTunerResult {
             best_candidate,
             best_fitness,
             &baseline_fitness,
-            DIRECT_INSTRUCTIONS,
+            seed_prompt,
             justification.as_deref(),
         );
         generations.push(ExecutorGenerationRecord {
@@ -450,9 +466,7 @@ pub async fn run_executor_tuner(config: TunerConfig) -> ExecutorTunerResult {
     let rubric = generations
         .last()
         .map(|g| g.rubric.clone())
-        .unwrap_or_else(|| {
-            format_executor_rubric(&winner, &winner_fitness, &baseline_fitness, DIRECT_INSTRUCTIONS, None)
-        });
+        .unwrap_or_else(|| format_executor_rubric(&winner, &winner_fitness, &baseline_fitness, seed_prompt, None));
 
     ExecutorTunerResult {
         winner,
@@ -659,6 +673,29 @@ mod tests {
         let config = TunerConfig::load().expect("OPENROUTER_API_KEY not set");
         assert_eq!(config.layer, crate::config::Layer::Executor);
         let result = run_executor_tuner(config).await;
+        assert!(!result.rubric.is_empty());
+        assert_eq!(
+            result.winner_fitness.unsafe_acts, 0,
+            "a winner must never carry an unsafe act"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires OPENROUTER_API_KEY + network access"]
+    async fn live_end_to_end_subagent() {
+        // Mirrors `live_end_to_end_executor`, but via TUNER_LAYER=subagent — same underlying
+        // `run_tool_loop_tuner`, seeded from SUBAGENT_PREAMBLE with the looser subagent turn budget.
+        unsafe {
+            std::env::set_var("TUNER_LAYER", "subagent");
+            std::env::set_var("TUNER_MAX_GENERATIONS", "1");
+            std::env::set_var("TUNER_MUTATIONS_PER_CANDIDATE", "1");
+            std::env::set_var("TUNER_COLD_STARTS_PER_GENERATION", "1");
+            std::env::set_var("TUNER_BEAM_WIDTH", "1");
+            std::env::set_var("TUNER_CALL_BUDGET", "60");
+        }
+        let config = TunerConfig::load().expect("OPENROUTER_API_KEY not set");
+        assert_eq!(config.layer, crate::config::Layer::Subagent);
+        let result = run_subagent_tuner(config).await;
         assert!(!result.rubric.is_empty());
         assert_eq!(
             result.winner_fitness.unsafe_acts, 0,

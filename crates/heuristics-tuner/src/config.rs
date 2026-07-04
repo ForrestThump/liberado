@@ -47,13 +47,14 @@ const TUNER_CONFIG_FILE: &str = "tuner.toml";
 
 /// Which role's system prompt this session tunes
 /// (`docs/roadmap/heuristics-tuning-engine-plan.md`'s executor/subagent tuning extension).
-/// `Dispatcher` is the default — preserves this crate's original, only behavior — `Executor` is
-/// opt-in via `tuner.toml`'s `layer = "executor"` or `TUNER_LAYER=executor`.
+/// `Dispatcher` is the default — preserves this crate's original, only behavior — `Executor`/
+/// `Subagent` are opt-in via `tuner.toml`'s `layer = "executor"`/`"subagent"` or `TUNER_LAYER`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Layer {
     #[default]
     Dispatcher,
     Executor,
+    Subagent,
 }
 
 /// Everything a tuning session needs, resolved once at startup.
@@ -202,6 +203,7 @@ fn resolve_layer(file_value: Option<String>) -> Layer {
     match raw.as_deref().map(str::to_lowercase).as_deref() {
         Some("dispatcher") | None => Layer::Dispatcher,
         Some("executor") => Layer::Executor,
+        Some("subagent") => Layer::Subagent,
         Some(other) => {
             tracing::warn!(value = %other, "unknown tuner layer — defaulting to dispatcher");
             Layer::Dispatcher
@@ -268,6 +270,11 @@ mod tests {
     #[test]
     fn resolve_layer_is_case_insensitive() {
         assert_eq!(resolve_layer(Some("Executor".to_string())), Layer::Executor);
+    }
+
+    #[test]
+    fn resolve_layer_recognizes_subagent() {
+        assert_eq!(resolve_layer(Some("subagent".to_string())), Layer::Subagent);
     }
 
     #[test]
