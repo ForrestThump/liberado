@@ -62,22 +62,33 @@ Bottom-up (each depends roughly on those above it):
 
 | Layer | Crate | Role |
 |---|---|---|
-| Types | [`common`](../../crates/common/ARCHITECTURE.md) | Shared vocabulary: provenance, capability, dispatch, event, model, config, proposal. No logic. |
+| Types | [`common`](../../crates/common/ARCHITECTURE.md) | Shared vocabulary: provenance, capability, catalog, dispatch, event, model, config, proposal. No logic. |
+| Config | [`config`](../../crates/config/Cargo.toml) | Config-file loader/validator (Decision 14): resolves the config dir, reads the three optional TOML files, assembles + validates a `Config`. Dependency-light on purpose, so tools that only need config/paths (`mcp-forge`) don't pull in the whole assembly stack. |
+| Config | [`config-loader`](../../crates/config-loader/Cargo.toml) | The layer beneath `config`: `ConfigSource` trait + `ChainLoader` merging TOML sources in precedence order. |
 | Inference | [`provider`](../../crates/provider/ARCHITECTURE.md) | The `Provider` narrow waist + `MockProvider`. No HTTP. |
 | Inference | [`provider-deepseek`](../../crates/provider-deepseek/ARCHITECTURE.md) | Concrete DeepSeek backend — the wired production backend (`cli`'s dependency). |
-| Inference | [`provider-openrouter`](../../crates/provider-openrouter/ARCHITECTURE.md) | Concrete OpenRouter backend — many models behind one API/key, for running concurrent evaluations without one provider's rate limit as the bottleneck. Scaffolded ahead of the heuristics tuning engine; not wired into any binary yet. |
+| Inference | [`provider-openrouter`](../../crates/provider-openrouter/ARCHITECTURE.md) | Concrete OpenRouter backend — many models behind one API/key, for running concurrent evaluations without one provider's rate limit as the bottleneck. Wired into `heuristics-tuner`, not the daemon/chat path. |
 | Vault | [`vault`](../../crates/vault/ARCHITECTURE.md) | Turbovault adapter: provenance writes + hash-join attribution (loop-breaking). |
 | Decide | [`dispatcher`](../../crates/dispatcher/ARCHITECTURE.md) | classify (LLM) → guards (deterministic, downgrade-only) → `DispatchDecision`. |
 | Act | [`executor`](../../crates/executor/ARCHITECTURE.md) | The agent loop: drive a `Provider` over a `ToolRuntime` to a `Report`. MCP-agnostic. |
 | Act | [`mcp`](../../crates/mcp/ARCHITECTURE.md) | `TurbomcpRuntime`: the `ToolRuntime` over real MCP tools; injects provenance into `_meta`. |
 | Act | [`orchestrator`](../../crates/orchestrator/ARCHITECTURE.md) | Bridges a `DispatchDecision` to an execution; chooses the provenance correlation. |
 | Converse | [`main-agent`](../../crates/main-agent/Cargo.toml) | Multi-turn `Conversation`: drives the executor's conversational loop, carries context across turns, streams `AgentEvent`s (tokens, tool start/result), atomic-under-cancel turns. The thing a chat client talks to. |
+| Store | [`conversation-store`](../../crates/conversation-store/Cargo.toml) | Decision-17 append-only JSONL store of DAG message-nodes — outside the vault, high-volume writes don't pollute the change-stream the daemon reacts to. |
 | Core | [`daemon`](../../crates/daemon/ARCHITECTURE.md) | The long-running watch→debounce→attribute→dispatch loop. |
 | Compose | [`bootstrap`](../../crates/bootstrap/Cargo.toml) | Builds provider/dispatcher/orchestrator from the environment — the shared composition logic for the `cli` and server binaries. |
+| Client | [`chat-client-contract`](../../crates/chat-client-contract/Cargo.toml) | Shared HTTP/SSE wire types + `ChatClient` trait + the `SseDecoder` incremental parser, so TUI/WebUI/CLI don't each hand-roll their own. |
+| Client | [`liberado-commands`](../../crates/liberado-commands/Cargo.toml) | Shared slash-command parser + handlers (`/help`, `/new`, `/model`, ...) for all chat clients via a `CommandContext` trait. |
+| Client | [`markdown`](../../crates/markdown/Cargo.toml) | Lightweight, UI-agnostic Markdown parser (no external dep) — one parser shared by ratatui, Dioxus, and terminal output. |
+| Client | [`theme`](../../crates/theme/Cargo.toml) | Shared color-token `Theme`/`ThemeRegistry` — no UI dependency, discovered from `<config>/themes/*.toml`. |
+| Client | [`tui`](../../crates/tui/ARCHITECTURE.md) | ratatui TUI client: chat pane, sidebar, slash commands, SSE streaming — same chat/SSE contract as the browser web UI. |
 | Root | [`cli`](../../crates/cli/ARCHITECTURE.md) | The single `liberado` binary — client + launcher (`serve` runs the daemon, `chat` streams). |
 | Server | [`server`](../../crates/server/Cargo.toml) | The daemon process — watch loop + chat + HTTP/SSE API (`docs/reference/api.md`); run via `liberado serve`. |
 | Web UI | [`webui`](../../crates/webui/Cargo.toml) | Dioxus WASM frontend — dashboard, reactions feed, vault panel, streaming chat. Excluded from workspace native builds; built with `dx build`. |
 | Eval | [`eval`](../../crates/eval/Cargo.toml) | Real-model routing/safety eval suite (routing accuracy, safe-default rate, UNSAFE-acts that must never increase). Not a build dependency of the system. |
+| Tooling | [`heuristics-tuner`](../../crates/heuristics-tuner/ARCHITECTURE.md) | Automates the eval-and-tweak loop for the dispatcher/executor/subagent prompts via beam search — proposes a diff + rubric, never auto-merges. Not a build dependency of the system. |
+| Tooling | [`mcp-forge`](../../crates/mcp-forge/ARCHITECTURE.md) | Builds/installs Liberado MCP servers from git URLs (`cargo install --git`), keyed by `mcp-sources.toml`. |
+| Testing | [`test-support`](../../crates/test-support/Cargo.toml) | Dev-dependency-only: shared `ToolRuntime`/`RuntimeFactory` test doubles, consolidating what used to be duplicated across `orchestrator`/`daemon` test modules. |
 
 ## Cross-cutting concepts
 
@@ -127,7 +138,10 @@ the main agent (context policy + dispatcher integration) and the TUI.
 **Not yet built (next slice):**
 - Inbox hook, hooks generally, multi-MCP registry UX, connection pooling.
 - The `ChatClient` trait in `chat_client_contract::native` exists but is implemented nowhere — TUI and CLI still use separate ad-hoc transport functions instead of adopting it (see [`crate-modularity-audit.md`](../roadmap/crate-modularity-audit.md) finding 2).
-- Splitting `liberado-common`'s nine-module grab-bag along its natural boundaries — the last open item in [`crate-modularity-audit.md`](../roadmap/crate-modularity-audit.md).
+- Splitting `liberado-common`'s grab-bag along its natural boundaries — partially underway (`config`
+  and `config-loader` have already been carved off into their own crates), but `common` still has
+  nine modules (`provenance`, `capability`, `catalog`, `dispatch`, `event`, `model`, `config`,
+  `proposal`, `error`) — the last open item in [`crate-modularity-audit.md`](../roadmap/crate-modularity-audit.md).
 - Writer-identity verification on proposal approval (item 1 of [`hardening-audit-2026-07-02.md`](../roadmap/hardening-audit-2026-07-02.md)) — needs OS-level MCP process isolation or an out-of-band approval channel, not a code patch.
 - Phase 3 (cron as a bus listener, vault-decoupling) and Phase 4 (execution environment scaling) — see [`current.md`](../roadmap/current.md).
 

@@ -75,10 +75,12 @@ liberado-tui ──HTTP──▶ liberado-server (:4201)
      │◀───────────────────────────────
 ```
 
-All endpoints share one `reqwest::Client`. The SSE parser (`src/sse.rs`) is an
-incremental byte-stream decoder — the same pattern as `liberado chat`
-(`crates/cli/chat_client.rs`), extracted into its own module so it can be tested
-independently.
+All endpoints share one `reqwest::Client`. The incremental SSE byte-stream decoder
+(`SseDecoder`/`SseEvent`) itself lives in `chat_client_contract::native`, shared with the
+`liberado chat` CLI client (which used to carry its own separate copy) — see
+`docs/roadmap/tui-shared-code-extraction-plan.md`. This crate's own `src/sse.rs` only converts a
+decoded `SseEvent` into this crate's `Action` enum (a `ToAction` trait, since Rust's orphan rules
+don't allow an inherent `impl` on a foreign type).
 
 ## State model
 
@@ -125,14 +127,24 @@ instruction for `main` to execute (spawn an HTTP request, start an SSE stream, q
 
 ## Modules
 
+Substantially more decomposed than a first pass — `render/` and `handlers/` each split into one file
+per pane/input-mode rather than one monolithic `ui.rs`/input-handling function.
+
 | File | Role |
 |------|------|
 | `main.rs` | Binary entry: init terminal, spawn HTTP + SSE + input tasks, run ratatui draw loop |
 | `lib.rs` | Crate docs + re-exports |
-| `sse.rs` | Incremental `SseDecoder`: feed it `reqwest` byte-stream chunks, get `SseEvent`s out. Extracted from `chat_client.rs` so it can be unit-tested independently |
+| `sse.rs` | Converts a `chat_client_contract::native::SseEvent` into this crate's `Action` (see above) |
 | `api.rs` | Typed `reqwest` client: `post_chat_stream()`, `fetch_status()`, `fetch_reactions()`, `fetch_conversations()`. Structs for every API response shape |
-| `app.rs` | `App` state machine: `Action` enum, `Effect` instruction set, `App::update(action)`. Pure state transitions — no I/O |
-| `ui.rs` | Ratatui `draw(frame, app)`: layout, render chat pane, sidebar, input line. Pure rendering — reads `App`, never mutates |
+| `app.rs` | `App` state machine: `Action` enum, `App::update(action)`. Pure state transitions — no I/O |
+| `command_context.rs` | Implements `liberado_commands::CommandContext` for this TUI's `App`, so the shared slash-command dispatcher (`/help`, `/theme`, ...) can run against it |
+| `conversations.rs` | Pure functions building/flattening a conversation tree from `ConvHeader` data for the sidebar list |
+| `effects.rs` | `EffectRunner`: owns the shared state needed to actually execute the `Effect` instructions `App::update` produces (HTTP calls, SSE streams, terminal actions) |
+| `format.rs` | Pure formatting utilities (timestamps, previews) shared by `app.rs`/`render/` |
+| `handlers/` | Keyboard/mouse input handlers, one file per concern (`chat.rs`, `dialog.rs`, `input.rs`, `mouse.rs`, `sidebar.rs`) — each a free `handle(app, key) -> Vec<Effect>`, dispatched by focus |
+| `render/` | Rendering, one file per pane (`chat.rs`, `dialog.rs`, `input.rs`, `sidebar_conversations.rs`, `sidebar_reactions.rs`, `sidebar_status.rs`, `status_bar.rs`) behind a `draw()` entry point that lays out the frame and dispatches to each. Pure rendering — reads `App`, never mutates |
+| `terminal.rs` | `TerminalGuard`: raw mode, alternate screen, mouse capture lifecycle |
+| `tuning.rs` | Tunable constants (scrollback limits, poll intervals, etc.) kept in one place |
 
 ## Dependencies
 
@@ -141,14 +153,24 @@ instruction for `main` to execute (spawn an HTTP request, start an SSE stream, q
 - `tokio` — async runtime, channels for event dispatch.
 - `serde_json` — parse API responses and SSE tool events.
 - `tracing` — structured logs (stderr, so the TUI never garbles them).
+- `chat_client_contract` — the shared wire types, `SseDecoder`/`SseEvent`.
+- `liberado_commands` — the shared slash-command dispatcher (`command_context.rs` implements its
+  `CommandContext` trait for this crate's `App`).
+- `liberado_markdown` — the shared Markdown-to-terminal-lines parser.
+- `liberado_theme` — the shared color-token `Theme`/`ThemeRegistry`.
 
-## What's deferred
+## Done since this doc's first pass (previously listed here as deferred)
 
-- Markdown-to-terminal rendering (code blocks, bold, links, lists). Start with plain
-  text and add a lightweight markdown parser later.
+- **Markdown-to-terminal rendering** — `render/chat.rs` calls `liberado_markdown::markdown_to_lines()`
+  on every assistant message; the parser itself lives in the shared `liberado-markdown` crate (used by
+  ratatui, Dioxus, and terminal output alike), not a TUI-local one.
+- **Color themes** — `liberado-theme`'s `ThemeRegistry` is a dependency; themes are discovered from
+  `<config>/themes/*.toml` and selectable via `command_context.rs`'s `/theme` command support.
+
+## What's still deferred
+
 - Conversation branching / DAG views — the session sidebar lists linear conversations
   only.
 - A "stop" keybinding that closes the SSE stream mid-turn (Esc already does this
   implicitly by dropping the reqwest response; the backend cancel-on-disconnect
   primitive is already built).
-- Color themes / configuration — hardcode a readable terminal color scheme for v1.

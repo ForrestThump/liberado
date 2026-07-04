@@ -56,8 +56,11 @@ exist there"; `crates/bootstrap/src/lib.rs`'s `McpTransport::Managed` match arm 
 ## Dependencies
 
 - `liberado-common` — `managed_binary_path()`, the shared path convention.
-- `liberado-bootstrap` — `config_dir()` (where `mcp-sources.toml` lives), `mcp_install_dir()`
-  (where binaries get installed).
+- `liberado-config` — `config_dir()` (where `mcp-sources.toml` lives), `mcp_install_dir()`
+  (where binaries get installed). Deliberately depends on `liberado-config` directly, not
+  `liberado-bootstrap` — the config/path resolution helpers were factored out specifically so a
+  build tool like this one isn't forced to pull in the whole provider/dispatcher/orchestrator
+  assembly stack just to find a directory.
 - No `tokio` — a handful of sequential `cargo install` invocations doesn't need an async runtime.
 - No `clap` — matches `liberado-cli`'s manual `std::env::args()` dispatch; the workspace has no
   arg-parsing library, and one flag pair (`--force`/`--only`) doesn't need one.

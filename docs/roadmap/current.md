@@ -110,6 +110,12 @@ always-on.
   direct action by `Consequence` (read-only < reversible < irreversible < external). Validated in
   `liberado-eval`: external actions (email/Slack) are deterministically downgraded to `Clarify` even
   at high confidence, while git-tracked vault writes flow.
+- **Zone write-class guard (§6 #2)** — ❌ **still deferred, not implemented** (this entry used to sit
+  in this section with no marker either way, reading ambiguously as if it might already be built —
+  it isn't). Would downgrade agent writes to `proposal_only`/`human_only` zones to a Proposal
+  (Decision 11), using the existing `WriteClass`, on top of the consequence guard above. See
+  `crates/dispatcher/src/guards.rs`'s own doc comment, which names this as the one guard from §6
+  still not built (deferred to the slice that adds tool→zone resolution).
 - **Magnitude / destructiveness axis** — ✅ *dispatcher-level done.* A liberado-owned, deterministic
   classifier (`Magnitude`, `is_sweeping_destructive` in `common` — reads the goal/tool text, needs no
   MCP metadata) gates **sweeping-destructive** goals even when reversible. Closed the eval's UNSAFE=1:
@@ -156,12 +162,10 @@ always-on.
   [hardening-audit-2026-07-02.md](hardening-audit-2026-07-02.md),
   [crate-modularity-audit.md](crate-modularity-audit.md) (a broader coupling/duplication sweep;
   items 1, 2, 4, 5 done, item 3 — splitting `liberado-common` — still deferred).
-- **Zone write-class guard (§6 #2)** — downgrade agent writes to `proposal_only` / `human_only`
-  zones to a Proposal (Decision 11), using the existing `WriteClass`.
-- **Catalog population** — the live daemon dispatches against an *empty* MCP catalog today; build the
-  catalog (names + descriptions + consequence) from the registered `McpRegistry` servers so the
-  dispatcher can actually route in production. (Phase 1 graduates this into a live bus-queryable
-  registry.)
+- ✅ **Catalog population** — done; this entry used to describe an open TODO ("the live daemon
+  dispatches against an *empty* MCP catalog today") that was stale — `topology.mcps` has been the
+  single source for both the dispatcher's catalog and the runtime's MCP connection since Phase 1.
+  See [`../architecture/overview.md`](../architecture/overview.md)'s "Current status" item 9.
 - ✅ **Runtime tool gating** — done, see "Per-call runtime enforcement" above (same item, noted twice
   in this doc).
 - **Shared wire-type + slash-command extraction across clients** — TUI, WebUI, and CLI now share

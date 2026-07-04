@@ -79,6 +79,8 @@ The dispatcher's classification step is the lone genuinely nondeterministic comp
     hard gate, separate from raw accuracy.
 - Used to **A/B system-prompt versions** and **compare models per role** (Decision 13 — e.g. an 8B
   subagent vs a larger one). Run occasionally / pre-change, not every commit (costs tokens, noisy).
+  `liberado-heuristics-tuner` automates this A/B loop (candidate generation + scoring + a
+  human-reviewed proposal) rather than a person hand-editing the prompt between runs — see §7 below.
 
 ## 5. Logging Is the Fixture Pipeline
 
@@ -109,8 +111,14 @@ the first thing read and usually becomes the fixture that pins the corrected beh
 - A starter **scenario/fixture suite** with mock-replay in CI; structured dispatch tracing + `record`
   mode to mint scenarios.
 
-**Deferred**: the full labeled real-model eval suite + dashboards; automated prompt-A/B tooling.
-(The safety-regression metric is defined now so it is never an afterthought, even if the suite starts small.)
+**Since landed**: the labeled real-model eval suite (`liberado-eval` — routing accuracy, safe-default
+rate, the UNSAFE-acts-must-never-increase gate) and automated prompt-A/B tooling
+(`liberado-heuristics-tuner`, 2026-07-03 — automates exactly the "run eval → tweak prompt → run
+again" loop this spec describes doing by hand, now extended past the dispatcher to the executor and
+subagent layers too). Full design and live-run findings: `docs/roadmap/heuristics-tuning-engine-plan.md`.
+
+**Still deferred**: dashboards. (The safety-regression metric was defined early specifically so it
+was never an afterthought, even while the suite was still small.)
 
 ## 8. Open Questions (non-blocking)
 

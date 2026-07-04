@@ -36,6 +36,9 @@ The daemon's operating mode (watch-only / decide-only / act) is selected by the 
 
 ## Tests
 
-The SSE decoder in `chat_client` is unit-tested; the rest of the binary's behavior is exercised
-through the library crates and verified by live smoke runs (`cargo build --bin liberado`, then
-`liberado serve` against a scratch vault with a `chat` client attached).
+The SSE decoder itself now lives in `chat-client-contract`'s `native::SseDecoder` (shared with the
+TUI, extracted from what used to be a `chat_client`-local parser — see
+`docs/roadmap/tui-shared-code-extraction-plan.md`), with its own test suite there; `chat_client.rs`
+imports it rather than re-implementing it. The rest of this binary's behavior is exercised through
+the library crates and verified by live smoke runs (`cargo build --bin liberado`, then `liberado
+serve` against a scratch vault with a `chat` client attached).

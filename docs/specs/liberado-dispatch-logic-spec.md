@@ -236,6 +236,14 @@ round-trip, not a human interruption. It also keeps the human-in-the-loop burden
   mocked provider. The classifier is nondeterministic, so we pin behavior with a fixture suite and
   catch regressions when prompts/models change. **This is the concrete answer to "how do I ensure
   it does the right thing": you make the decision a testable, versioned artifact, not a vibe.**
+- **Automated tuning** (`liberado-heuristics-tuner`, added 2026-07-03): automates the "run the eval
+  suite → read the misses → tweak the system prompt → run again" loop this section otherwise
+  describes doing by hand. Scores candidate prompts against `liberado-eval`'s scenario set (or, for
+  the executor/subagent layers, against a real mocked tool-loop run) via a beam-search-with-restarts
+  loop, and proposes the best candidate as a diff + rubric for human review — never auto-merges
+  (same Decision-14 trust boundary as everything else that touches config/prompts). Full design:
+  `docs/roadmap/heuristics-tuning-engine-plan.md`. Also surfaced a project-level open reliability
+  finding beyond prompt tuning itself: `docs/roadmap/multi-step-execution-reliability-finding.md`.
 
 ---
 

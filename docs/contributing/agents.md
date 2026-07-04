@@ -13,21 +13,33 @@ project's governing principles. Read that one before starting non-trivial work o
 
 ```
 crates/
-  common/            # Shared types — compile first
-  provider/          # Provider trait + MockProvider
-  provider-deepseek/ # DeepSeek HTTP backend
-  vault/             # Turbovault adapter (attribution, loop-breaking)
-  dispatcher/        # Goal → DispatchDecision (LLM classify + deterministic guards)
-  executor/          # Bounded tool-calling agent loop → Report
-  mcp/               # TurbomcpRuntime (ToolRuntime over real MCP stdio/SSE)
-  orchestrator/      # Bridges DispatchDecision → execution
-  main-agent/        # Multi-turn Conversation (chat loop): context + streaming + tool use
-  daemon/            # Watch → debounce → attribute → dispatch (the long-running core)
-  bootstrap/         # Shared env→provider/dispatcher/orchestrator wiring for the binaries
-  cli/               # liberado binary — client + launcher (serve runs the daemon, chat streams)
-  webui/             # Dioxus WASM frontend  (excluded from native workspace build)
-  server/            # the daemon's API server library — watch + chat + HTTP/SSE; run via `liberado serve`
-  eval/              # Real-model routing/safety eval suite (not a build dependency)
+  common/               # Shared types — compile first
+  config/               # Config-file loader/validator (Decision 14), dependency-light
+  config-loader/        # ConfigSource trait + ChainLoader beneath `config`
+  provider/             # Provider trait + MockProvider
+  provider-deepseek/    # DeepSeek HTTP backend
+  provider-openrouter/  # OpenRouter backend (many models, one key) — wired into heuristics-tuner
+  vault/                # Turbovault adapter (attribution, loop-breaking)
+  dispatcher/           # Goal → DispatchDecision (LLM classify + deterministic guards)
+  executor/             # Bounded tool-calling agent loop → Report
+  mcp/                  # TurbomcpRuntime (ToolRuntime over real MCP stdio/SSE)
+  orchestrator/         # Bridges DispatchDecision → execution
+  main-agent/           # Multi-turn Conversation (chat loop): context + streaming + tool use
+  conversation-store/   # Decision-17 append-only JSONL conversation store
+  daemon/               # Watch → debounce → attribute → dispatch (the long-running core)
+  bootstrap/            # Shared env→provider/dispatcher/orchestrator wiring for the binaries
+  chat-client-contract/ # Shared wire types + ChatClient trait + SseDecoder for all chat clients
+  liberado-commands/    # Shared slash-command parser/handlers for all chat clients
+  markdown/             # Shared, UI-agnostic Markdown parser
+  theme/                # Shared color-token Theme/ThemeRegistry
+  tui/                  # ratatui TUI client (same chat/SSE contract as web UI/CLI)
+  cli/                  # liberado binary — client + launcher (serve runs the daemon, chat streams)
+  webui/                # Dioxus WASM frontend  (excluded from native workspace build)
+  server/               # the daemon's API server library — watch + chat + HTTP/SSE; run via `liberado serve`
+  eval/                 # Real-model routing/safety eval suite (not a build dependency)
+  heuristics-tuner/     # Automated dispatcher/executor/subagent prompt-tuning tool (not a build dependency)
+  mcp-forge/            # Builds/installs Liberado MCP servers from git URLs
+  test-support/         # Dev-dependency-only shared ToolRuntime/RuntimeFactory test doubles
 
 turbovault/          # Co-developed path dep (sibling repo, not a workspace member)
 turbomcp/            # Co-developed path dep (sibling repo, not a workspace member)

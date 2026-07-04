@@ -37,7 +37,10 @@ traced to *that* goal. Both ride the loop-breaking + idempotency machinery.
 
 - Depends on: `liberado-common` (decision/report types), `liberado-provider` (`Arc<dyn Provider>`),
   `liberado-executor` (`Executor`/`Task`/`ToolRuntime`).
-- Depended on by: `daemon`, `cli`.
+- Depended on by: `bootstrap` (composition), `daemon`, `main-agent`, `server` — not `cli` directly,
+  which only depends on `liberado-server`. Also `heuristics-tuner` (reads `DIRECT_INSTRUCTIONS`/
+  `SUBAGENT_PREAMBLE`/`DIRECT_MAX_TURNS` as seed values for executor/subagent prompt tuning, without
+  going through `Orchestrator` itself) and `test-support` (shared test doubles).
 
 ## Tests
 

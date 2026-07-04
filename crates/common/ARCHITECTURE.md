@@ -10,6 +10,7 @@ two or more crates, it lives here.
 |---|---|---|
 | `provenance` | `WriteProvenance` (`source` + `correlation_id` + zone/note), `PROVENANCE_KEY` (`_liberado_provenance`), `HUMAN_SOURCE`, `to_audit_metadata`/`from_audit_metadata`, `is_human()` | 5 |
 | `capability` | `Zone`, `WriteClass`, `Capability`, `CapabilitySet` (narrow-only containment), `grants_mcp()` | 4 |
+| `catalog` | `CapabilityCatalog`, `McpDescriptor` — the live, thread-safe (`Arc<RwLock<_>>` + a `watch` channel for change notification) runtime registry of available MCPs, populated at boot from `topology.mcps` and updated as MCPs come and go. The one shared `Arc<CapabilityCatalog>` the dispatcher, daemon, chat, and API all route against. | — |
 | `dispatch` | `DispatchDecision`, `DispatchAction` (`ExecuteDirect`/`DispatchSubagent`/`Clarify`), `Report`, `Outcome`, `BlockReason`, `ToolCall`, `ExecMode`, `JobHandle`/`JobStatus` | 1 |
 | `event` | `Event`, `EventPayload`, `event_source` — one shape for **both** trigger paths (vault changes and hook webhooks) | 6 |
 | `model` | `ModelProfile`, `ModelRole`, `ModelTier`, `ModelChoice`, `RequiredCaps` — role-tiered capability floors | 13 |

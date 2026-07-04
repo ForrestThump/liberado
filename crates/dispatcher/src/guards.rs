@@ -6,10 +6,11 @@
 //! unsafe action. Because the guards are deterministic, the entire safety surface is exactly
 //! assertable (Decision 16) — only the classifier's *quality* is probabilistic, never its safety.
 //!
-//! v1 scope: capability, reaction-depth, and confidence-floor guards (all cleanly modelable and
-//! mapping to a `Clarify` downgrade). The consequence-gate and zone-write-class guards (§6 #2/#3)
-//! are deferred to the slice that adds proposal production + tool→zone resolution; they are noted
-//! where they would slot in.
+//! v1 scope: capability, consequence-gate, magnitude, reaction-depth, and confidence-floor guards.
+//! The zone-write-class guard (§6 #2 — proposal forcing based on a write's target zone) is the one
+//! still deferred, to the slice that adds tool→zone resolution; it's noted below where it would
+//! slot in. (This comment previously also listed the consequence gate as deferred — stale as of
+//! whenever it actually shipped; the code below has implemented it for a while.)
 
 use liberado_common::config::DispatchTuning;
 use liberado_common::{
