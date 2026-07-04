@@ -131,6 +131,18 @@ the main agent (context policy + dispatcher integration) and the TUI.
 - Writer-identity verification on proposal approval (item 1 of [`hardening-audit-2026-07-02.md`](../roadmap/hardening-audit-2026-07-02.md)) — needs OS-level MCP process isolation or an out-of-band approval channel, not a code patch.
 - Phase 3 (cron as a bus listener, vault-decoupling) and Phase 4 (execution environment scaling) — see [`current.md`](../roadmap/current.md).
 
+## Known limitations
+
+- **Multi-step tool chaining is not fully reliable.** Both `ExecuteDirect` and `DispatchSubagent`
+  terminate in the same engine (`liberado-executor`'s `Executor::execute`) — live tuning found that a
+  simple, unambiguous two-tool-call goal fails to reach a clean success report a large fraction of the
+  time against `deepseek/deepseek-v4-flash`, even under an explicit instruction to perform both steps.
+  One real engine bug was found and fixed (`REPORT_NUDGE` was biasing away from continuing a multi-step
+  plan); the gap narrowed but didn't close. Since `DispatchSubagent`'s whole reason to exist is handling
+  multi-step goals, this is a project-level reliability question, not a narrow tuning nit — full
+  writeup, evidence, and open threads:
+  [`multi-step-execution-reliability-finding.md`](../roadmap/multi-step-execution-reliability-finding.md).
+
 ## Where to start reading
 
 1. This file.

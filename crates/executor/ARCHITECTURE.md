@@ -43,3 +43,16 @@ and **hands back** the structured artifact in one event — no second "structuri
 
 Inline: multi-turn→file, conversational multi-tool→prose, budget→failed report, malformed
 `submit_report` args→decode error, seed-before-first-turn, nudge-then-wrap, in-band tool failure.
+
+## Known limitation: multi-step tool chaining is not fully reliable
+
+Live tuning of the executor/subagent prompts (`liberado-heuristics-tuner`) found that a genuinely
+simple two-tool-call goal ("research via one tool, write via another") fails to reach a clean
+`Succeeded` report a large fraction of the time against `deepseek/deepseek-v4-flash`, even under a
+system prompt that explicitly instructs the exact sequence needed. One real contributing bug was
+found and fixed here — `REPORT_NUDGE` used to unconditionally push toward `submit_report` the first
+time a model paused in prose, with no "keep going" option, competing against whatever the system
+prompt said at exactly the moment a model paused mid-plan. The fix (reworded to offer both options)
+measurably helped but did not fully resolve the gap. This is a project-level open finding, not just a
+tuner curiosity — see [`docs/roadmap/multi-step-execution-reliability-finding.md`](../../docs/roadmap/multi-step-execution-reliability-finding.md)
+for the full evidence, what's ruled out, and what's still open.

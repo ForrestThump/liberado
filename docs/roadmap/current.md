@@ -72,7 +72,7 @@ shipped:
 the token-efficiency pillar and a future ContextPolicy), the `refiner` (~= Clarify), `forge-client`,
 and the GIT_ASKPASS credential hygiene.
 
-### Before Phase 3 — heuristics tuning engine (v1 built, dispatcher layer only — 2026-07-03)
+### Before Phase 3 — heuristics tuning engine (dispatcher, executor, and subagent layers built — 2026-07-06)
 
 Automate the manual "run eval → read the misses → tune the prompt → run again" loop
 `liberado-eval` already documents doing by hand, so weak points in routing/tool-use surface
@@ -81,8 +81,17 @@ proactively instead of through slow dogfooding — the goal is a solid tool-use 
 (`liberado-heuristics-tuner`, `liberado-provider-openrouter`), local-search prompt tuning with
 Monte Carlo restarts against local maxima, proposed prompt diffs reviewed by a human (never
 auto-merged, same trust boundary as riggers' draft-PR pattern), plus a separate, lower-frequency
-architecture-critique mode. Full design:
-[heuristics-tuning-engine-plan.md](heuristics-tuning-engine-plan.md).
+architecture-critique mode (not yet built). Started dispatcher-only; extended to the executor and
+subagent layers (both score by actually driving a mocked `Executor::execute` tool loop, not just a
+classification call), selectable via `tuner.toml`'s `layer`. A real elitism bug in the search loop
+and a real engine bug (`REPORT_NUDGE`) were both found and fixed via this tool, live. Full design +
+findings: [heuristics-tuning-engine-plan.md](heuristics-tuning-engine-plan.md).
+
+- **⚠️ Open, project-level priority: multi-step tool chaining is not fully reliable.** Found via the
+  tuner, but not a tuner-specific problem — both `ExecuteDirect` and `DispatchSubagent` share the
+  same execution engine, and it unreliably completes even a simple, unambiguous two-tool-call goal.
+  One contributing bug fixed (see above); the gap narrowed but persists. Full evidence and open
+  threads: [multi-step-execution-reliability-finding.md](multi-step-execution-reliability-finding.md).
 
 ### Phase 3 — Autonomy breadth
 

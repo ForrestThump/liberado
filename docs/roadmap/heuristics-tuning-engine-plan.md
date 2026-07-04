@@ -350,6 +350,12 @@ architecture idea the way there is for a scored prompt candidate.
 
 ## Executor-layer live smoke tests — a real engine bug, not a prompt problem (2026-07-06)
 
+**This section's finding was elevated to a standalone, project-level doc** —
+[`multi-step-execution-reliability-finding.md`](multi-step-execution-reliability-finding.md) —
+since it's not a tuner-specific issue (both `ExecuteDirect` and `DispatchSubagent` share the engine
+this affects). The full run-by-run data stays here; that doc summarizes it for readers who aren't
+here for the tuner specifically.
+
 Three live executor-tuning runs (single model, `deepseek/deepseek-v4-flash`, growing from 1 sample/
 2 scenarios/1 generation up to 3 samples/all 5 scenarios/3 generations) validated the whole new
 pipeline end-to-end and its elitism, then converged on a real, repeatable finding:
