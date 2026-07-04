@@ -1,0 +1,19 @@
+[package]
+name = "liberado-notify"
+version = "0.1.0"
+description = "A minimal, pluggable notification sink for events a human should know about even when nothing else in the daemon's own surfaces is open in front of them right now — the motivating case is an unattended (cron-triggered, Phase 3) proposal nobody's watching for. Telegram is the first implementation (free, mature); the Notifier trait exists so it isn't the only one."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

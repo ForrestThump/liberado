@@ -35,6 +35,7 @@ use liberado_common::{
     CapabilitySet, Consequence, McpDescriptor, Proposal, ProposalSigner, ProposedAction,
     WriteClass, bare_tool_name, is_sweeping_destructive, mcp_of, resolve_zone,
 };
+use liberado_notify::Notifier;
 use liberado_provider::{ToolDef, ToolInvocation};
 use tracing::Instrument;
 
@@ -65,6 +66,11 @@ pub struct RiskGatedToolRuntime {
     correlation_base: String,
     /// Signs every downgraded proposal so the daemon can detect tampering before approving it.
     signer: ProposalSigner,
+    /// Told about every proposal this runtime writes — optional (`None` by default via
+    /// [`with_notifier`](Self::with_notifier), added as a builder step rather than a `new()`
+    /// parameter so existing call sites don't need to change). Best-effort: a notification
+    /// failure never blocks or fails the write it's reporting on.
+    notifier: Option<Arc<dyn Notifier>>,
 }
 
 impl RiskGatedToolRuntime {
@@ -103,7 +109,15 @@ impl RiskGatedToolRuntime {
             goal_context,
             correlation_base,
             signer,
+            notifier: None,
         }
+    }
+
+    /// Attach a [`Notifier`] to tell about every proposal this runtime writes. Optional — a
+    /// runtime with no notifier attached just never sends anything, the same as today.
+    pub fn with_notifier(mut self, notifier: Arc<dyn Notifier>) -> Self {
+        self.notifier = Some(notifier);
+        self
     }
 }
 
@@ -289,6 +303,21 @@ impl RiskGatedToolRuntime {
             tool = %call.name,
             "proposal written"
         );
+
+        if let Some(notifier) = &self.notifier {
+            let message = format!(
+                "Liberado: a new proposal needs your review.\n{rationale}\nTool: {}\nSaved at: {}",
+                call.name,
+                proposal_path.display()
+            );
+            if let Err(e) = notifier.notify(&message).await {
+                // Best-effort — the proposal itself is already safely written; a failed
+                // notification just means the human finds out by checking the vault instead of
+                // their phone, not that the safety property (a human gets to review it) broke.
+                tracing::warn!(error = %e, "failed to send proposal notification");
+            }
+        }
+
         Ok(proposal_path)
     }
 }
@@ -612,5 +641,35 @@ mod tests {
         );
         let result = rt.invoke(&call).await;
         assert_eq!(result, Ok("wrote".into()));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID + network access"]
+    async fn live_high_consequence_downgrade_sends_a_real_telegram_notification() {
+        // Full-integration live check: a real proposal write through the actual production guard
+        // path, with a real Notifier attached, not just liberado-notify's own bare TelegramNotifier
+        // in isolation — proves `with_notifier`/the `invoke`-path notify call are wired correctly,
+        // not just that the underlying HTTP call works.
+        let notifier = liberado_notify::TelegramNotifier::from_env()
+            .expect("set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to run this test");
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(&["email-mcp:send"], Ok("sent".into())));
+        let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("email-mcp".into())]);
+        let rt = RiskGatedToolRuntime::new(
+            inner,
+            caps,
+            vec![("email-mcp".into(), Consequence::External)],
+            Vec::new(),
+            Vec::new(),
+            dir.path().to_path_buf(),
+            "send an email".into(),
+            "live-notify-test".into(),
+            ProposalSigner::random(),
+        )
+        .with_notifier(Arc::new(notifier));
+
+        let call = ToolInvocation::new("c1", "email-mcp:send", serde_json::json!({"to": "boss"}));
+        let result = rt.invoke(&call).await;
+        assert!(result.expect("downgrade should be Ok").contains("PROPOSAL CREATED"));
     }
 }

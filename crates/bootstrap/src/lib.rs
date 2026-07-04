@@ -28,6 +28,7 @@ use liberado_config::{McpTransport, managed_binary_path};
 use liberado_daemon::Daemon;
 use liberado_dispatcher::Dispatcher;
 use liberado_mcp::{HttpConnector, McpRegistry, StdioConnector};
+use liberado_notify::Notifier;
 use liberado_orchestrator::Orchestrator;
 use liberado_provider::Provider;
 use liberado_provider_deepseek::DeepSeekProvider;
@@ -109,14 +110,26 @@ pub fn configure_daemon(
     // same consequence catalog, vault-rooted proposals directory, and integrity signer chat's own
     // RiskGatedToolRuntime uses (see `RiskGatedToolRuntime`'s doc comment).
     let guard = guard_context(&catalog, &config.policy, vault_path);
+
+    // Optional — a daemon/orchestrator with no TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID set just never
+    // sends anything, same as before this existed. The motivating case is exactly this daemon
+    // path: an unattended (cron-triggered, Phase 3) proposal nobody's watching the vault for.
+    let notifier: Option<Arc<dyn Notifier>> = liberado_notify::TelegramNotifier::from_env()
+        .map(|n| Arc::new(n) as Arc<dyn Notifier>);
+    tracing::info!(enabled = notifier.is_some(), "proposal notifications");
+
     let daemon = daemon
         .with_dispatcher(dispatcher, catalog, capabilities.clone())
         .with_proposal_signer(guard.signer.clone())
         .with_zone_write_classes(guard.zone_write_classes.clone());
+    let daemon = match &notifier {
+        Some(n) => daemon.with_notifier(n.clone()),
+        None => daemon,
+    };
     match mcp_registry_from_config(config) {
         Some(factory) => {
             tracing::info!("orchestrator enabled (MCP execution)");
-            daemon.with_orchestrator(Orchestrator::new(
+            let orchestrator = Orchestrator::new(
                 provider.clone(),
                 factory,
                 capabilities,
@@ -125,7 +138,12 @@ pub fn configure_daemon(
                 guard.zone_write_classes,
                 guard.proposals_dir,
                 guard.signer,
-            ))
+            );
+            let orchestrator = match &notifier {
+                Some(n) => orchestrator.with_notifier(n.clone()),
+                None => orchestrator,
+            };
+            daemon.with_orchestrator(orchestrator)
         }
         None => {
             tracing::warn!("no enabled MCP in topology.mcps — decide-only (no MCP execution)");

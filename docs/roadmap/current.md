@@ -106,6 +106,18 @@ findings: [heuristics-tuning-engine-plan.md](heuristics-tuning-engine-plan.md).
 - **✅ Zone-write-class guard (§6 #2) — done (2026-07-04).** See the "Landed" section below for the
   design (per-tool zone declarations with MCP-level inheritance, shared resolution helper between
   the dispatcher's pre-flight check and `RiskGatedToolRuntime`'s runtime enforcement).
+- **✅ Proposal notifications (Telegram) — done (2026-07-04).** Closes the last "who's watching an
+  unattended run" gap this hardening pass raised: a proposal written while nobody's looking at the
+  vault (the exact case cron introduces) now also reaches a phone. New `liberado-notify` crate: a
+  `Notifier` trait (Telegram is the first implementation — free, mature, works today; a future
+  push-notification channel is a new impl, not a rewrite) wired into both real proposal-write sites
+  (`Daemon::write_proposal`'s dispatcher pre-flight path, `RiskGatedToolRuntime::write_proposal`'s
+  runtime path, reached via `Orchestrator`), all via `.with_notifier()` builder steps so no existing
+  constructor call site needed to change. Always best-effort — a failed notification never blocks
+  or fails the proposal write it's reporting on. Opt-in via `TELEGRAM_BOT_TOKEN` +
+  `TELEGRAM_CHAT_ID` env vars (`TelegramNotifier::from_env()`); unset, nothing changes from before
+  this existed. Live-verified: a real proposal write through the full `RiskGatedToolRuntime`
+  production path actually delivered a Telegram message, not just the bare HTTP call in isolation.
 
 ### Phase 3 — Autonomy breadth
 

@@ -21,6 +21,7 @@ use liberado_common::{
     WriteClass, event_source,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
+use liberado_notify::Notifier;
 use liberado_orchestrator::{Disposition, Orchestrator, OrchestratorError};
 use liberado_vault::{Attribution, Vault, VaultError, VaultEvent};
 use thiserror::Error;
@@ -129,6 +130,9 @@ pub struct Daemon {
     /// wiring overrides it via [`with_proposal_signer`](Self::with_proposal_signer) with the same
     /// installation-wide signer every proposal-creation site uses, so signatures actually match.
     signer: ProposalSigner,
+    /// Told about every proposal this daemon writes (dispatcher pre-flight `Propose` path) —
+    /// optional, `None` by default. Best-effort: a notification failure never blocks the write.
+    notifier: Option<Arc<dyn Notifier>>,
 }
 
 impl Daemon {
@@ -143,12 +147,21 @@ impl Daemon {
             dispatcher: None,
             orchestrator: None,
             signer: ProposalSigner::random(),
+            notifier: None,
         })
     }
 
     /// Override the debounce window (e.g. a short window in tests).
     pub fn with_debounce(mut self, debounce: Duration) -> Self {
         self.debounce = debounce;
+        self
+    }
+
+    /// Attach a [`Notifier`] to tell about every proposal this daemon writes directly (the
+    /// dispatcher pre-flight `Propose` path — see `write_proposal`). Optional; a daemon with none
+    /// attached just never sends anything, the same as today.
+    pub fn with_notifier(mut self, notifier: Arc<dyn Notifier>) -> Self {
+        self.notifier = Some(notifier);
         self
     }
 
@@ -326,6 +339,18 @@ impl Daemon {
         self.vault
             .write(&path, &proposal.to_note(), None, &provenance)
             .await?;
+
+        if let Some(notifier) = &self.notifier {
+            let message = format!(
+                "Liberado: a new proposal needs your review.\n{}\nSaved at: {path}",
+                proposal.rationale
+            );
+            if let Err(e) = notifier.notify(&message).await {
+                // Best-effort — see RiskGatedToolRuntime::write_proposal's identical reasoning.
+                tracing::warn!(error = %e, "failed to send proposal notification");
+            }
+        }
+
         Ok(())
     }
 

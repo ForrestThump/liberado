@@ -58,6 +58,7 @@ liberado-provider-openrouter = { path = "crates/provider-openrouter" }
 liberado-vault = { path = "crates/vault" }
 liberado-dispatcher = { path = "crates/dispatcher" }
 liberado-executor = { path = "crates/executor" }
+liberado-notify = { path = "crates/notify" }
 liberado-mcp = { path = "crates/mcp" }
 liberado-mcp-forge = { path = "crates/mcp-forge" }
 liberado-orchestrator = { path = "crates/orchestrator" }

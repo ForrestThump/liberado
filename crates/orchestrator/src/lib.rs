@@ -30,6 +30,7 @@ use liberado_executor::{
     Budget, ExecError, Executor, RiskGatedToolRuntime, RuntimeFactory, RuntimeSetupError, Task,
     ToolRuntime,
 };
+use liberado_notify::Notifier;
 use liberado_provider::{Provider, ToolDef, ToolInvocation};
 use thiserror::Error;
 use tokio::sync::Semaphore;
@@ -120,6 +121,9 @@ pub struct Orchestrator {
     source: String,
     direct_budget: Budget,
     subagent_budget: Budget,
+    /// Told about every proposal a runtime-level `gate` downgrade writes — optional, `None` by
+    /// default. Best-effort: a notification failure never blocks the write it's reporting on.
+    notifier: Option<Arc<dyn Notifier>>,
 }
 
 impl Orchestrator {
@@ -146,12 +150,20 @@ impl Orchestrator {
             source: DEFAULT_SOURCE.to_string(),
             direct_budget: Budget::new(DIRECT_MAX_TURNS),
             subagent_budget: Budget::default(),
+            notifier: None,
         }
     }
 
     /// Override the provenance `source` recorded for executions (e.g. a per-deployment id).
     pub fn with_source(mut self, source: impl Into<String>) -> Self {
         self.source = source.into();
+        self
+    }
+
+    /// Attach a [`Notifier`] to tell about every proposal a runtime-level `gate` downgrade writes.
+    /// Optional; an orchestrator with none attached just never sends anything, the same as today.
+    pub fn with_notifier(mut self, notifier: Arc<dyn Notifier>) -> Self {
+        self.notifier = Some(notifier);
         self
     }
 
@@ -558,7 +570,7 @@ impl Orchestrator {
         goal_context: impl Into<String>,
         correlation_base: impl Into<String>,
     ) -> Arc<dyn ToolRuntime> {
-        Arc::new(RiskGatedToolRuntime::new(
+        let mut gated = RiskGatedToolRuntime::new(
             Arc::from(runtime),
             capabilities,
             self.consequence_catalog.clone(),
@@ -568,7 +580,11 @@ impl Orchestrator {
             goal_context.into(),
             correlation_base.into(),
             self.signer.clone(),
-        ))
+        );
+        if let Some(notifier) = &self.notifier {
+            gated = gated.with_notifier(notifier.clone());
+        }
+        Arc::new(gated)
     }
 }
 
