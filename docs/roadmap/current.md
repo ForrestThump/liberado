@@ -162,6 +162,13 @@ always-on.
   [hardening-audit-2026-07-02.md](hardening-audit-2026-07-02.md),
   [crate-modularity-audit.md](crate-modularity-audit.md) (a broader coupling/duplication sweep;
   items 1, 2, 4, 5 done, item 3 — splitting `liberado-common` — still deferred).
+- **⚠️ Dedup/coupling/decomposition/hygiene/coverage audit (2026-07-04)** — `cargo dupes` +
+  `cargo llvm-cov` + 3 subagents across the whole workspace. Found one real bug (a failed proposal
+  write in `RiskGatedToolRuntime` is silently reported to the user as success — the propose→approve
+  loop's whole safety property depends on this), two reachable-in-production panics, and confirmed
+  `provider-deepseek`/`provider-openrouter` are ~90% duplicated code with a concrete extraction plan.
+  Nothing fixed yet — this is a survey. Full writeup:
+  [hygiene-audit-2026-07-04.md](hygiene-audit-2026-07-04.md).
 - ✅ **Catalog population** — done; this entry used to describe an open TODO ("the live daemon
   dispatches against an *empty* MCP catalog today") that was stale — `topology.mcps` has been the
   single source for both the dispatcher's catalog and the runtime's MCP connection since Phase 1.
