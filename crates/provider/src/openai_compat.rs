@@ -338,6 +338,40 @@ fn parse_usage(u: &Value) -> Option<Usage> {
     })
 }
 
+/// Map an HTTP error status to a typed [`ProviderError`] (Decision 13: callers branch on these).
+/// `extra_client_error_status` folds in a backend's own client-error codes beyond the common set
+/// (e.g. OpenRouter's `402` for insufficient account credits) into the same `InvalidRequest`
+/// bucket — the last per-backend difference between what used to be two separate `map_status`
+/// copies in `liberado-provider-deepseek`/`liberado-provider-openrouter`
+/// (`docs/roadmap/hygiene-audit-2026-07-05.md`), now just a data parameter.
+pub fn map_status(status: u16, body: String, extra_client_error_status: &[u16]) -> ProviderError {
+    match status {
+        429 => ProviderError::RateLimited,
+        400 | 401 | 403 | 404 | 422 => {
+            ProviderError::InvalidRequest(format!("HTTP {status}: {body}"))
+        }
+        s if extra_client_error_status.contains(&s) => {
+            ProviderError::InvalidRequest(format!("HTTP {status}: {body}"))
+        }
+        _ => ProviderError::Transport(format!("HTTP {status}: {body}")),
+    }
+}
+
+/// Parse an OpenAI-compatible `GET /models` response body (`{"data": [{"id": "...", ...}, ...]}`)
+/// into a plain list of model ids. Entries missing a string `id` are skipped rather than failing
+/// the whole parse — a best-effort listing, not the authoritative model catalog.
+pub fn parse_models_response(v: &Value) -> Vec<String> {
+    v["data"]
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|e| e["id"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,5 +573,54 @@ mod tests {
             from_openai_response(&v, &empty_name_map()),
             Err(ProviderError::EmptyResponse)
         ));
+    }
+
+    #[test]
+    fn status_mapping_common_cases() {
+        assert!(matches!(
+            map_status(429, "x".into(), &[]),
+            ProviderError::RateLimited
+        ));
+        assert!(matches!(
+            map_status(401, "x".into(), &[]),
+            ProviderError::InvalidRequest(_)
+        ));
+        assert!(matches!(
+            map_status(500, "x".into(), &[]),
+            ProviderError::Transport(_)
+        ));
+    }
+
+    #[test]
+    fn status_mapping_extra_client_error_status_is_invalid_request() {
+        assert!(matches!(
+            map_status(402, "insufficient credits".into(), &[402]),
+            ProviderError::InvalidRequest(_)
+        ));
+        // Without it declared, the same code falls through to Transport.
+        assert!(matches!(
+            map_status(402, "x".into(), &[]),
+            ProviderError::Transport(_)
+        ));
+    }
+
+    #[test]
+    fn parse_models_response_extracts_ids() {
+        let v = json!({
+            "data": [
+                { "id": "deepseek-chat", "object": "model" },
+                { "id": "deepseek-reasoner" },
+                { "object": "model" } // missing id: skipped, not a hard error
+            ]
+        });
+        assert_eq!(
+            parse_models_response(&v),
+            vec!["deepseek-chat".to_string(), "deepseek-reasoner".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_models_response_missing_data_is_empty() {
+        assert_eq!(parse_models_response(&json!({})), Vec::<String>::new());
     }
 }

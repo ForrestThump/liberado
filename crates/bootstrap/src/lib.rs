@@ -3,15 +3,15 @@
 //! The **assembly** half of daemon composition: turns a loaded config (plus the env-sourced
 //! provider) into a wired daemon — the dispatcher's capabilities + catalog and the MCP runtime
 //! registry all come from `policy`/`topology`, while the inference provider still comes from the
-//! environment (`DEEPSEEK_API_KEY`). Keeping daemon assembly in one place means the `cli` and server
-//! binaries build the same daemon the same way, so the modes (watch-only / decide-only / act) can't
-//! drift apart between them.
+//! environment (whichever API key `config.topology.provider` selects — see [`provider_from_config`]).
+//! Keeping daemon assembly in one place means the `cli` and server binaries build the same daemon
+//! the same way, so the modes (watch-only / decide-only / act) can't drift apart between them.
 //!
 //! The config **loader** itself (Decision 14 — resolve + merge the small per-section TOML files into
 //! one validated `Config`) and the light path-resolution helpers built on it (`config_dir`,
 //! `mcp_install_dir`, `data_dir`, `GuardContext`) live in `liberado-config` instead — this crate's
 //! heavy assembly functions need `liberado-daemon`/`liberado-mcp`/`liberado-dispatcher`/
-//! `liberado-orchestrator`/`liberado-provider-deepseek`, which a config-only consumer
+//! `liberado-orchestrator`/`liberado-provider-openai-compat`, which a config-only consumer
 //! (`liberado-mcp-forge`) has no use for. Re-exported here so `liberado-server`/`liberado-cli` see no
 //! change from before this split.
 
@@ -31,39 +31,49 @@ use liberado_mcp::{HttpConnector, McpRegistry, StdioConnector};
 use liberado_notify::Notifier;
 use liberado_orchestrator::OrchestratorInfra;
 use liberado_provider::Provider;
-use liberado_provider_deepseek::DeepSeekProvider;
-use liberado_provider_openrouter::OpenRouterProvider;
+use liberado_provider_openai_compat::OpenAiCompatibleProvider;
 
 /// Build the shared inference provider from the environment, selecting the backend named by
-/// `config.topology.provider` (`"deepseek"` or `"openrouter"` — unknown values fall back to
-/// `"deepseek"` with a warning, same as the pre-existing default). `None` means the selected
-/// backend's API key isn't set, so the daemon runs watch-only and chat is disabled.
+/// `config.topology.provider` against the declared `config.topology.providers` table
+/// (`ProviderProfile`s — `crates/config-loader/src/model.rs`). Adding a new OpenAI-compatible
+/// backend (OpenAI direct, Groq, Together, ...) is a `[[topology.providers]]` config entry, not a
+/// new Rust type — `Config::validate` already guarantees `config.topology.provider` names a
+/// declared entry, so the lookup here can't silently miss (an "unknown provider" case would mean
+/// the config was hand-edited after validation, which this still degrades safely from). `None`
+/// means the selected backend's API key isn't set, so the daemon runs watch-only and chat is
+/// disabled.
 pub fn provider_from_config(config: &Config) -> Option<Arc<dyn Provider>> {
-    match config.topology.provider.as_str() {
-        "openrouter" => match OpenRouterProvider::from_env() {
-            Ok(provider) => {
-                let provider: Arc<dyn Provider> = Arc::new(provider);
-                tracing::info!(model = provider.model(), "provider configured (OpenRouter)");
-                Some(provider)
-            }
-            Err(_) => None,
-        },
-        other => {
-            if other != "deepseek" {
-                tracing::warn!(
-                    provider = other,
-                    "unknown topology.provider — falling back to deepseek"
-                );
-            }
-            match DeepSeekProvider::from_env() {
-                Ok(provider) => {
-                    let provider: Arc<dyn Provider> = Arc::new(provider);
-                    tracing::info!(model = provider.model(), "provider configured (DeepSeek)");
-                    Some(provider)
-                }
-                Err(_) => None,
-            }
+    let name = config.topology.provider.as_str();
+    let profile = config
+        .topology
+        .providers
+        .iter()
+        .find(|p| p.name == name)
+        .or_else(|| {
+            tracing::warn!(
+                provider = name,
+                "topology.provider names no declared topology.providers entry — falling back to deepseek"
+            );
+            config.topology.providers.iter().find(|p| p.name == "deepseek")
+        })?;
+
+    match OpenAiCompatibleProvider::from_env(
+        &profile.api_key_env,
+        profile.model_env.as_deref(),
+        &profile.default_model,
+        &profile.base_url,
+        profile.extra_client_error_status.clone(),
+    ) {
+        Ok(provider) => {
+            let provider: Arc<dyn Provider> = Arc::new(provider);
+            tracing::info!(
+                model = provider.model(),
+                provider = %profile.name,
+                "provider configured"
+            );
+            Some(provider)
         }
+        Err(_) => None,
     }
 }
 
@@ -280,18 +290,20 @@ mod tests {
     use liberado_common::capability::Consequence;
     use liberado_config::McpConfig;
 
-    // These mirror the existing `from_env_uses_environment_variables`-style tests in
-    // `liberado-provider-deepseek`/`liberado-provider-openrouter`: they don't mutate process env
-    // vars (races under parallel test execution), they just assert `provider_from_config` routes
-    // to the same underlying `from_env()` call the config selects, whatever this process's env
-    // happens to be.
+    // These mirror the existing `*_from_env_uses_environment_variables`-style tests in
+    // `liberado-provider-openai-compat`: they don't mutate process env vars (races under parallel
+    // test execution), they just assert `provider_from_config` routes to the same underlying
+    // `from_env()` call the config selects, whatever this process's env happens to be.
     #[test]
     fn unknown_provider_name_falls_back_to_deepseek_selection() {
+        // Exercises `provider_from_config`'s own defensive fallback directly (bypassing
+        // `Config::validate`, which would already reject this shape at load time) — the fallback
+        // is a real, independent safety net, not just relying on validation having run first.
         let mut config = Config::default();
         config.topology.provider = "not-a-real-provider".to_string();
         assert_eq!(
             provider_from_config(&config).is_some(),
-            DeepSeekProvider::from_env().is_ok()
+            OpenAiCompatibleProvider::deepseek_from_env().is_ok()
         );
     }
 
@@ -301,8 +313,32 @@ mod tests {
         config.topology.provider = "openrouter".to_string();
         assert_eq!(
             provider_from_config(&config).is_some(),
-            OpenRouterProvider::from_env().is_ok()
+            OpenAiCompatibleProvider::openrouter_from_env().is_ok()
         );
+    }
+
+    #[test]
+    fn a_provider_declared_purely_via_config_is_selectable_with_no_dedicated_rust_type() {
+        // The actual payoff of collapsing provider-deepseek/provider-openrouter into one generic
+        // crate: a backend with no Rust wrapper at all becomes usable purely by adding a
+        // `ProviderProfile` entry and pointing `topology.provider` at it.
+        use liberado_config::ProviderProfile;
+
+        let mut config = Config::default();
+        config.topology.providers.push(ProviderProfile {
+            name: "made-up-backend".to_string(),
+            base_url: "https://example.invalid".to_string(),
+            default_model: "some-model".to_string(),
+            api_key_env: "LIBERADO_TEST_MADE_UP_BACKEND_KEY_DOES_NOT_EXIST".to_string(),
+            model_env: None,
+            extra_client_error_status: Vec::new(),
+        });
+        config.topology.provider = "made-up-backend".to_string();
+
+        // No key set for this made-up backend, so construction fails cleanly (`None`) rather than
+        // falling back to deepseek — proves the lookup actually found and used the new entry
+        // instead of silently ignoring it.
+        assert!(provider_from_config(&config).is_none());
     }
 
     fn mcp(name: &str, enabled: bool, transport: McpTransport) -> McpConfig {

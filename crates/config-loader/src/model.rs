@@ -55,8 +55,16 @@ pub struct Topology {
     pub vault_path: PathBuf,
     /// Unix domain socket the daemon listens on for TUI/client attach (Decision 2).
     pub daemon_socket: PathBuf,
-    /// Inference provider name (provider-agnostic scaffolding, Decision 9/13).
+    /// Which declared `providers` entry (by `name`) supplies inference. Provider-agnostic
+    /// scaffolding (Decision 9/13) — validated against `providers` in [`Config::validate`].
     pub provider: String,
+    /// Declared inference backends — base URL, default model, and env var names for each. Adding
+    /// a new OpenAI-compatible backend (OpenAI direct, Groq, Together, ...) is a new entry here,
+    /// not a new crate: every backend is built by the single, generic
+    /// `liberado-provider-openai-compat` (`docs/roadmap/hygiene-audit-2026-07-05.md`'s follow-up).
+    /// Seeded with `deepseek`/`openrouter` by default so an empty/absent config still boots exactly
+    /// as before this field existed.
+    pub providers: Vec<ProviderProfile>,
     /// Declared model profiles available to the system.
     pub models: Vec<ModelProfile>,
     /// Which model (by name) fills each role. Validated against the capability floors.
@@ -85,6 +93,7 @@ impl Default for Topology {
             vault_path: PathBuf::new(),
             daemon_socket: PathBuf::from("/run/liberado/daemon.sock"),
             provider: "deepseek".to_string(),
+            providers: default_providers(),
             models: Vec::new(),
             model_roles: HashMap::new(),
             mcps: Vec::new(),
@@ -93,6 +102,55 @@ impl Default for Topology {
             pools: Vec::new(),
         }
     }
+}
+
+/// The two backends this system has always shipped with, as literal defaults — deliberately
+/// plain string literals here rather than `liberado_provider_openai_compat::OpenAiCompatibleProvider`'s
+/// constants: this crate must not depend on a concrete provider crate (that would invert the
+/// intended layering, config is foundational, providers are not).
+fn default_providers() -> Vec<ProviderProfile> {
+    vec![
+        ProviderProfile {
+            name: "deepseek".to_string(),
+            base_url: "https://api.deepseek.com".to_string(),
+            default_model: "deepseek-chat".to_string(),
+            api_key_env: "DEEPSEEK_API_KEY".to_string(),
+            model_env: Some("DEEPSEEK_MODEL".to_string()),
+            extra_client_error_status: Vec::new(),
+        },
+        ProviderProfile {
+            name: "openrouter".to_string(),
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+            default_model: "openai/gpt-4o-mini".to_string(),
+            api_key_env: "OPENROUTER_API_KEY".to_string(),
+            model_env: Some("OPENROUTER_MODEL".to_string()),
+            extra_client_error_status: vec![402],
+        },
+    ]
+}
+
+/// One declared inference backend — everything `liberado-provider-openai-compat`'s generic
+/// `OpenAiCompatibleProvider::from_env` needs to construct a provider for it. Adding a backend
+/// this system has never shipped with (OpenAI direct, Groq, Together, ...) is one more entry here,
+/// not a new Rust crate — see [`Topology::providers`]'s own doc comment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderProfile {
+    /// Matched against `topology.provider` to select this entry.
+    pub name: String,
+    pub base_url: String,
+    /// Used when `model_env` is absent, or set but not present in the environment.
+    pub default_model: String,
+    /// Env var holding the API key.
+    pub api_key_env: String,
+    /// Env var that overrides `default_model` when present — `None` if this backend has no such
+    /// override convention.
+    #[serde(default)]
+    pub model_env: Option<String>,
+    /// Status codes beyond the common OpenAI-compatible set this backend's API treats as a client
+    /// error rather than a generic transport failure (e.g. OpenRouter's `402` for insufficient
+    /// account credits).
+    #[serde(default)]
+    pub extra_client_error_status: Vec<u16>,
 }
 
 /// A named dispatcher/executor pool (Decision 18 checkpoint #3): authority segregation only, not
@@ -727,6 +785,30 @@ impl Config {
             ));
         }
 
+        // Provider names must be unique, and `topology.provider` must actually name a declared
+        // one — the same fail-fast shape as the model_roles check just below, so a typo'd or
+        // removed provider name is a load-time error, not a runtime "provider silently unset."
+        let mut seen_provider_names = std::collections::HashSet::new();
+        for provider in &self.topology.providers {
+            if !seen_provider_names.insert(&provider.name) {
+                return Err(Error::Config(format!(
+                    "topology.providers has a duplicate name '{}'",
+                    provider.name
+                )));
+            }
+        }
+        if !self
+            .topology
+            .providers
+            .iter()
+            .any(|p| p.name == self.topology.provider)
+        {
+            return Err(Error::Config(format!(
+                "topology.provider '{}' does not match any topology.providers entry",
+                self.topology.provider
+            )));
+        }
+
         // Every role assignment must name a declared model that meets the role's floor (D13).
         for (role, model_name) in &self.topology.model_roles {
             let profile = self
@@ -1090,6 +1172,64 @@ mod tests {
         assert!(cfg.validate().is_ok());
     }
 
+    fn provider_profile(name: &str) -> ProviderProfile {
+        ProviderProfile {
+            name: name.into(),
+            base_url: format!("https://{name}.example.com"),
+            default_model: "some-model".into(),
+            api_key_env: format!("{}_API_KEY", name.to_uppercase()),
+            model_env: None,
+            extra_client_error_status: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn duplicate_provider_names_fail_validation() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.topology.providers = vec![provider_profile("deepseek"), provider_profile("deepseek")];
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn topology_provider_must_match_a_declared_providers_entry() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.topology.provider = "not-declared-anywhere".into();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn a_brand_new_provider_declared_purely_via_config_validates_and_is_selectable() {
+        // The actual goal of this feature: a backend this system has never shipped with (no Rust
+        // wrapper, no dedicated crate) becomes usable by adding one `ProviderProfile` entry and
+        // pointing `topology.provider` at it — no code change.
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.topology.providers.push(provider_profile("groq"));
+        cfg.topology.provider = "groq".into();
+        assert!(cfg.validate().is_ok());
+        assert!(
+            cfg.topology
+                .providers
+                .iter()
+                .any(|p| p.name == "groq" && p.base_url == "https://groq.example.com")
+        );
+    }
+
+    #[test]
+    fn default_providers_seed_deepseek_and_openrouter() {
+        let cfg = Config::default();
+        let names: Vec<&str> = cfg
+            .topology
+            .providers
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["deepseek", "openrouter"]);
+        assert_eq!(cfg.topology.provider, "deepseek");
+    }
+
     fn cron_schedule(name: &str, cron_expr: &str) -> CronSchedule {
         CronSchedule {
             name: name.into(),
@@ -1279,7 +1419,7 @@ transport = { kind = "http", url = "https://mcp.deepwiki.com/mcp" }
         let toml = r#"
 [topology]
 vault_path = "/home/test/vault"
-provider = "test-provider"
+provider = "deepseek"
 
 [[topology.mcps]]
 name = "my-mcp"
@@ -1289,7 +1429,7 @@ transport = { kind = "stdio", command = "echo", args = ["hello"] }
 "#;
         let cfg = Config::from_str(toml).expect("valid TOML should parse");
         assert_eq!(cfg.topology.vault_path, PathBuf::from("/home/test/vault"));
-        assert_eq!(cfg.topology.provider, "test-provider");
+        assert_eq!(cfg.topology.provider, "deepseek");
         assert_eq!(cfg.topology.mcps.len(), 1);
         assert_eq!(cfg.topology.mcps[0].name, "my-mcp");
 
@@ -1368,11 +1508,11 @@ clarify_threshold_read = 0.8
         let cfg = Config::builder()
             .vault_path("/vault")
             .daemon_socket("/tmp/test.sock")
-            .provider("custom")
+            .provider("deepseek")
             .build()
             .expect("valid config");
         assert_eq!(cfg.topology.daemon_socket, PathBuf::from("/tmp/test.sock"));
-        assert_eq!(cfg.topology.provider, "custom");
+        assert_eq!(cfg.topology.provider, "deepseek");
     }
 
     #[test]

@@ -14,12 +14,12 @@ use std::sync::Arc;
 use liberado_common::{Capability, CapabilitySet};
 use liberado_config_loader::{ConcurrencyTuning, DispatchTuning};
 use liberado_dispatcher::{DispatchRequest, Dispatcher, McpDescriptor};
-use liberado_eval::{score, scenarios};
-use liberado_provider_deepseek::DeepSeekProvider;
+use liberado_eval::{scenarios, score};
+use liberado_provider_openai_compat::OpenAiCompatibleProvider;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let provider = DeepSeekProvider::from_env()
+    let provider = OpenAiCompatibleProvider::deepseek_from_env()
         .map_err(|_| "set DEEPSEEK_API_KEY to run the eval (it uses the real model)")?;
     let dispatcher = Dispatcher::new(
         Arc::new(provider),

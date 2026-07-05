@@ -26,7 +26,7 @@
 use std::sync::Arc;
 
 use liberado_provider::Provider;
-use liberado_provider_openrouter::OpenRouterProvider;
+use liberado_provider_openai_compat::OpenAiCompatibleProvider;
 use serde::Deserialize;
 
 /// Plays "the real dispatcher" during scoring — defaults to OpenRouter's slug for a small, cheap
@@ -60,8 +60,9 @@ pub enum Layer {
 /// Everything a tuning session needs, resolved once at startup.
 pub struct TunerConfig {
     pub layer: Layer,
-    /// One `OpenRouterProvider` per configured scoring model slug — a candidate is scored against
-    /// every one of these (see `samples_per_scenario` for how many times against each).
+    /// One OpenRouter-backed `OpenAiCompatibleProvider` per configured scoring model slug — a
+    /// candidate is scored against every one of these (see `samples_per_scenario` for how many
+    /// times against each).
     pub scoring_providers: Vec<Arc<dyn Provider>>,
     pub meta_provider: Arc<dyn Provider>,
     /// How many times each scenario is sampled per scoring model.
@@ -101,9 +102,11 @@ struct TunerFileConfig {
 
 impl TunerConfig {
     /// Resolve config from `tuner.toml` (if present) layered under environment variables, then
-    /// build the `OpenRouterProvider`s. `OPENROUTER_API_KEY` is the only required value.
+    /// build the OpenRouter-backed `OpenAiCompatibleProvider`s. `OPENROUTER_API_KEY` is the only
+    /// required value.
     pub fn load() -> Result<Self, ConfigError> {
-        let api_key = std::env::var("OPENROUTER_API_KEY").map_err(|_| ConfigError::MissingApiKey)?;
+        let api_key =
+            std::env::var("OPENROUTER_API_KEY").map_err(|_| ConfigError::MissingApiKey)?;
         let file = load_file_config();
 
         let scoring_models = resolve_model_list(
@@ -117,9 +120,19 @@ impl TunerConfig {
 
         let scoring_providers: Vec<Arc<dyn Provider>> = scoring_models
             .into_iter()
-            .map(|model| Arc::new(OpenRouterProvider::new(api_key.clone(), model)) as Arc<dyn Provider>)
+            .map(|model| {
+                Arc::new(OpenAiCompatibleProvider::new(
+                    api_key.clone(),
+                    model,
+                    OpenAiCompatibleProvider::OPENROUTER_BASE_URL,
+                )) as Arc<dyn Provider>
+            })
             .collect();
-        let meta_provider: Arc<dyn Provider> = Arc::new(OpenRouterProvider::new(api_key, meta_model));
+        let meta_provider: Arc<dyn Provider> = Arc::new(OpenAiCompatibleProvider::new(
+            api_key,
+            meta_model,
+            OpenAiCompatibleProvider::OPENROUTER_BASE_URL,
+        ));
 
         Ok(Self {
             layer: resolve_layer(file.layer.clone()),
@@ -244,17 +257,26 @@ mod tests {
 
     #[test]
     fn resolve_usize_prefers_file_value_over_default() {
-        assert_eq!(resolve_usize("TUNER_TEST_VAR_DOES_NOT_EXIST", Some(9), 7), 9);
+        assert_eq!(
+            resolve_usize("TUNER_TEST_VAR_DOES_NOT_EXIST", Some(9), 7),
+            9
+        );
     }
 
     #[test]
     fn resolve_optional_usize_falls_back_to_none_when_nothing_set() {
-        assert_eq!(resolve_optional_usize("TUNER_TEST_VAR_DOES_NOT_EXIST", None), None);
+        assert_eq!(
+            resolve_optional_usize("TUNER_TEST_VAR_DOES_NOT_EXIST", None),
+            None
+        );
     }
 
     #[test]
     fn resolve_optional_usize_prefers_file_value_when_set() {
-        assert_eq!(resolve_optional_usize("TUNER_TEST_VAR_DOES_NOT_EXIST", Some(3)), Some(3));
+        assert_eq!(
+            resolve_optional_usize("TUNER_TEST_VAR_DOES_NOT_EXIST", Some(3)),
+            Some(3)
+        );
     }
 
     #[test]
@@ -279,7 +301,10 @@ mod tests {
 
     #[test]
     fn resolve_layer_falls_back_to_dispatcher_on_unrecognized_value() {
-        assert_eq!(resolve_layer(Some("subagent-typo".to_string())), Layer::Dispatcher);
+        assert_eq!(
+            resolve_layer(Some("subagent-typo".to_string())),
+            Layer::Dispatcher
+        );
     }
 
     #[test]
@@ -294,7 +319,11 @@ mod tests {
     fn resolve_model_list_prefers_file_value_over_default() {
         let file_value = Some(vec!["a/b".to_string(), "c/d".to_string()]);
         assert_eq!(
-            resolve_model_list("TUNER_TEST_MODELS_DOES_NOT_EXIST", file_value, "deepseek/default"),
+            resolve_model_list(
+                "TUNER_TEST_MODELS_DOES_NOT_EXIST",
+                file_value,
+                "deepseek/default"
+            ),
             vec!["a/b".to_string(), "c/d".to_string()]
         );
     }
@@ -336,7 +365,10 @@ mod tests {
         // Mirrors provider-openrouter's own from_env test: reads real env state rather than
         // mutating it, so this only asserts in the (expected, in CI) case the key is unset.
         if std::env::var("OPENROUTER_API_KEY").is_err() {
-            assert!(matches!(TunerConfig::load(), Err(ConfigError::MissingApiKey)));
+            assert!(matches!(
+                TunerConfig::load(),
+                Err(ConfigError::MissingApiKey)
+            ));
         }
     }
 }

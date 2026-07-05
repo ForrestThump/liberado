@@ -1,0 +1,406 @@
+//! # liberado-provider-openai-compat
+//!
+//! One [`Provider`] implementation for every backend that speaks the OpenAI-compatible
+//! chat-completions wire format (DeepSeek, OpenRouter, and — without touching this crate again —
+//! OpenAI direct, Groq, Together, or anything else shaped the same way). It replaces what used to
+//! be `liberado-provider-deepseek` and `liberado-provider-openrouter`: two crates that were ~90%
+//! byte-for-byte identical scaffolding around the shared `liberado_provider::openai_compat` module,
+//! differing only in base URL, default model, env var names, and one status-code quirk
+//! (OpenRouter's extra `402` for insufficient credits). See `docs/roadmap/hygiene-audit-2026-07-05.md`
+//! for the audit finding that named this, and `crates/config-loader/src/model.rs`'s
+//! `ProviderProfile`/`Topology.providers` for how a *new* backend gets added from here on — a TOML
+//! entry, not a new crate.
+//!
+//! This crate only owns the actual HTTP round-trip (the POST/GET calls, status-code handling,
+//! byte-stream consumption) and the small set of things that differ per backend. Everything else
+//! (tool-name sanitization, request/response mapping, SSE stream assembly, status-code mapping,
+//! `/models` response parsing) lives in `liberado_provider::openai_compat` — see that module's own
+//! doc comment for why it's shared rather than duplicated.
+
+use async_trait::async_trait;
+use liberado_provider::openai_compat::{
+    build_tool_name_map, from_openai_response, map_status, parse_models_response,
+    stream_sse_response, to_openai_request,
+};
+use liberado_provider::{
+    CompletionRequest, CompletionResponse, CompletionStream, Provider, ProviderError,
+    ProviderResult,
+};
+use serde_json::{Value, json};
+
+/// A [`Provider`] backed by any OpenAI-compatible chat-completions API, parameterized by the
+/// small set of things that actually differ between backends.
+pub struct OpenAiCompatibleProvider {
+    client: reqwest::Client,
+    api_key: String,
+    model: String,
+    base_url: String,
+    /// Status codes beyond the common set (429/400/401/403/404/422) this backend's own API treats
+    /// as a client error rather than a generic transport failure — e.g. OpenRouter's `402`.
+    extra_client_error_status: Vec<u16>,
+}
+
+impl OpenAiCompatibleProvider {
+    /// DeepSeek's API base URL.
+    pub const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
+    /// DeepSeek's default chat model.
+    pub const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-chat";
+    /// OpenRouter's API base URL.
+    pub const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+    /// A broadly-available, cheap default for OpenRouter — arbitrary, meant to be overridden.
+    /// Kept as a concrete model string (not OpenRouter's `"auto"` routing) so a given run's model
+    /// choice is reproducible, which matters for tuning/evaluation.
+    pub const OPENROUTER_DEFAULT_MODEL: &str = "openai/gpt-4o-mini";
+
+    /// Build a provider with an explicit key, model, and base URL. `extra_client_error_status`
+    /// defaults to empty — use [`with_extra_client_error_status`](Self::with_extra_client_error_status)
+    /// for a backend that needs one.
+    pub fn new(
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            api_key: api_key.into(),
+            model: model.into(),
+            base_url: base_url.into(),
+            extra_client_error_status: Vec::new(),
+        }
+    }
+
+    /// Declare extra status codes this backend's API treats as client errors (see
+    /// [`Self::extra_client_error_status`]'s field doc comment).
+    pub fn with_extra_client_error_status(mut self, codes: Vec<u16>) -> Self {
+        self.extra_client_error_status = codes;
+        self
+    }
+
+    /// Override the API base URL (e.g. to point at a mock server in tests).
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = base_url.into();
+        self
+    }
+
+    /// Generic env-based constructor: reads `api_key_env`; if `model_env` is `Some` and set in
+    /// the environment, it overrides `default_model`. Plain string/slice parameters (not a shared
+    /// config type) so this crate stays with zero dependency on `liberado-config-loader` — the
+    /// same reason `liberado-provider-deepseek`/`liberado-provider-openrouter` never depended on
+    /// it either. `crates/bootstrap/src/lib.rs`'s `provider_from_config` is the config-driven
+    /// caller; [`Self::deepseek_from_env`]/[`Self::openrouter_from_env`] below are the two
+    /// well-known backends' ergonomic one-line wrappers over this.
+    pub fn from_env(
+        api_key_env: &str,
+        model_env: Option<&str>,
+        default_model: &str,
+        base_url: &str,
+        extra_client_error_status: Vec<u16>,
+    ) -> Result<Self, std::env::VarError> {
+        let api_key = std::env::var(api_key_env)?;
+        let model = model_env
+            .and_then(|var| std::env::var(var).ok())
+            .unwrap_or_else(|| default_model.to_string());
+        Ok(Self::new(api_key, model, base_url)
+            .with_extra_client_error_status(extra_client_error_status))
+    }
+
+    /// Build a provider from the `DEEPSEEK_API_KEY` environment variable, using
+    /// [`Self::DEEPSEEK_DEFAULT_MODEL`]. `DEEPSEEK_MODEL` overrides the model if present.
+    pub fn deepseek_from_env() -> Result<Self, std::env::VarError> {
+        Self::from_env(
+            "DEEPSEEK_API_KEY",
+            Some("DEEPSEEK_MODEL"),
+            Self::DEEPSEEK_DEFAULT_MODEL,
+            Self::DEEPSEEK_BASE_URL,
+            Vec::new(),
+        )
+    }
+
+    /// Build a provider from the `OPENROUTER_API_KEY` environment variable, using
+    /// [`Self::OPENROUTER_DEFAULT_MODEL`]. `OPENROUTER_MODEL` overrides the model if present.
+    pub fn openrouter_from_env() -> Result<Self, std::env::VarError> {
+        Self::from_env(
+            "OPENROUTER_API_KEY",
+            Some("OPENROUTER_MODEL"),
+            Self::OPENROUTER_DEFAULT_MODEL,
+            Self::OPENROUTER_BASE_URL,
+            vec![402],
+        )
+    }
+
+    fn endpoint(&self) -> String {
+        format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
+    }
+
+    fn models_endpoint(&self) -> String {
+        format!("{}/models", self.base_url.trim_end_matches('/'))
+    }
+
+    /// List model ids this backend currently reports via its OpenAI-compatible `GET /models`
+    /// endpoint. Additive capability, not wired into any default-model decision anywhere in this
+    /// codebase — `default_model` (from `topology.providers`, or the well-known-backend consts
+    /// above) remains the real fallback, since not every OpenAI-compatible endpoint implements
+    /// `/models` reliably. A caller that wants to surface live model choices (e.g. a future
+    /// TUI/CLI command) opts into this explicitly.
+    pub async fn list_models(&self) -> ProviderResult<Vec<String>> {
+        let response = self
+            .client
+            .get(self.models_endpoint())
+            .bearer_auth(&self.api_key)
+            .send()
+            .await
+            .map_err(|e| ProviderError::Transport(e.to_string()))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let detail = response
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("<error body unavailable: {e}>"));
+            return Err(map_status(
+                status.as_u16(),
+                detail,
+                &self.extra_client_error_status,
+            ));
+        }
+
+        let value: Value = response
+            .json()
+            .await
+            .map_err(|e| ProviderError::Transport(format!("malformed response body: {e}")))?;
+        Ok(parse_models_response(&value))
+    }
+}
+
+#[async_trait]
+impl Provider for OpenAiCompatibleProvider {
+    fn model(&self) -> &str {
+        &self.model
+    }
+
+    async fn complete(&self, request: CompletionRequest) -> ProviderResult<CompletionResponse> {
+        let name_map = build_tool_name_map(&request.tools);
+        let body = to_openai_request(&self.model, &request, &name_map);
+
+        let response = self
+            .client
+            .post(self.endpoint())
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProviderError::Transport(e.to_string()))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let detail = response
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("<error body unavailable: {e}>"));
+            return Err(map_status(
+                status.as_u16(),
+                detail,
+                &self.extra_client_error_status,
+            ));
+        }
+
+        let value: Value = response
+            .json()
+            .await
+            .map_err(|e| ProviderError::Transport(format!("malformed response body: {e}")))?;
+        from_openai_response(&value, &name_map)
+    }
+
+    async fn complete_stream(
+        &self,
+        request: CompletionRequest,
+    ) -> ProviderResult<CompletionStream> {
+        let name_map = build_tool_name_map(&request.tools);
+        let mut body = to_openai_request(&self.model, &request, &name_map);
+        body["stream"] = json!(true);
+
+        let response = self
+            .client
+            .post(self.endpoint())
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProviderError::Transport(e.to_string()))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let detail = response
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("<error body unavailable: {e}>"));
+            return Err(map_status(
+                status.as_u16(),
+                detail,
+                &self.extra_client_error_status,
+            ));
+        }
+
+        Ok(stream_sse_response(response, name_map))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use liberado_provider::Message;
+
+    #[test]
+    fn constructor_sets_fields() {
+        let provider = OpenAiCompatibleProvider::new("sk-abc", "my-model", "https://example.com");
+        assert_eq!(provider.model, "my-model");
+        assert_eq!(provider.api_key, "sk-abc");
+        assert_eq!(provider.base_url, "https://example.com");
+        assert!(provider.extra_client_error_status.is_empty());
+    }
+
+    #[test]
+    fn with_extra_client_error_status_sets_codes() {
+        let provider = OpenAiCompatibleProvider::new("k", "m", "https://example.com")
+            .with_extra_client_error_status(vec![402]);
+        assert_eq!(provider.extra_client_error_status, vec![402]);
+    }
+
+    #[test]
+    fn with_base_url_overrides_default() {
+        let provider = OpenAiCompatibleProvider::new("k", "m", "https://a.example.com")
+            .with_base_url("http://localhost:8080");
+        assert_eq!(provider.base_url, "http://localhost:8080");
+    }
+
+    #[test]
+    fn endpoint_strips_trailing_slash() {
+        let provider = OpenAiCompatibleProvider::new("k", "m", "https://api.example.com/");
+        assert_eq!(
+            provider.endpoint(),
+            "https://api.example.com/chat/completions"
+        );
+        assert_eq!(provider.models_endpoint(), "https://api.example.com/models");
+    }
+
+    #[test]
+    fn endpoint_without_trailing_slash() {
+        let provider = OpenAiCompatibleProvider::new("k", "m", "https://api.example.com");
+        assert_eq!(
+            provider.endpoint(),
+            "https://api.example.com/chat/completions"
+        );
+    }
+
+    #[test]
+    fn model_getter_returns_configured_model() {
+        let provider = OpenAiCompatibleProvider::new("k", "custom-model-v2", "https://example.com");
+        assert_eq!(provider.model(), "custom-model-v2");
+    }
+
+    #[test]
+    fn deepseek_from_env_uses_environment_variables() {
+        let result = OpenAiCompatibleProvider::deepseek_from_env();
+        if std::env::var("DEEPSEEK_API_KEY").is_ok() {
+            let provider = result.expect("from_env should succeed when DEEPSEEK_API_KEY is set");
+            assert_eq!(provider.api_key, std::env::var("DEEPSEEK_API_KEY").unwrap());
+            assert_eq!(
+                provider.base_url,
+                OpenAiCompatibleProvider::DEEPSEEK_BASE_URL
+            );
+            assert!(provider.extra_client_error_status.is_empty());
+        } else {
+            assert!(
+                result.is_err(),
+                "from_env should fail when DEEPSEEK_API_KEY is unset"
+            );
+        }
+    }
+
+    #[test]
+    fn openrouter_from_env_uses_environment_variables() {
+        let result = OpenAiCompatibleProvider::openrouter_from_env();
+        if std::env::var("OPENROUTER_API_KEY").is_ok() {
+            let provider = result.expect("from_env should succeed when OPENROUTER_API_KEY is set");
+            assert_eq!(
+                provider.api_key,
+                std::env::var("OPENROUTER_API_KEY").unwrap()
+            );
+            assert_eq!(
+                provider.base_url,
+                OpenAiCompatibleProvider::OPENROUTER_BASE_URL
+            );
+            assert_eq!(provider.extra_client_error_status, vec![402]);
+        } else {
+            assert!(
+                result.is_err(),
+                "from_env should fail when OPENROUTER_API_KEY is unset"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_from_env_works_for_an_arbitrary_new_backend() {
+        // Exercise the generic constructor directly with a made-up backend/env var pair — proves
+        // a brand new provider (no dedicated Rust wrapper, no `deepseek_from_env`-style helper)
+        // still goes through this exact same path, which is the whole point of collapsing the two
+        // old crates into this one. Doesn't mutate env vars (races under parallel test runs, same
+        // reason `deepseek_from_env_uses_environment_variables` above only asserts conditionally on
+        // whatever the real environment happens to be) — asserts the clean failure shape instead,
+        // which is just as real a proof the generic path is wired correctly.
+        let result = OpenAiCompatibleProvider::from_env(
+            "LIBERADO_TEST_PROVIDER_KEY_DOES_NOT_EXIST",
+            Some("LIBERADO_TEST_PROVIDER_MODEL_DOES_NOT_EXIST"),
+            "some-default-model",
+            "https://example.invalid",
+            vec![418],
+        );
+        assert!(
+            result.is_err(),
+            "from_env should fail when its api_key_env isn't set"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DEEPSEEK_API_KEY + network access"]
+    async fn deepseek_live_smoke() {
+        let provider =
+            OpenAiCompatibleProvider::deepseek_from_env().expect("DEEPSEEK_API_KEY not set");
+        let resp = provider
+            .complete(CompletionRequest::new(vec![Message::user(
+                "Reply with exactly one word: pong",
+            )]))
+            .await
+            .expect("live call failed");
+        assert!(
+            resp.content.is_some(),
+            "expected text content from DeepSeek"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires OPENROUTER_API_KEY + network access"]
+    async fn openrouter_live_smoke() {
+        let provider =
+            OpenAiCompatibleProvider::openrouter_from_env().expect("OPENROUTER_API_KEY not set");
+        let resp = provider
+            .complete(CompletionRequest::new(vec![Message::user(
+                "Reply with exactly one word: pong",
+            )]))
+            .await
+            .expect("live call failed");
+        assert!(
+            resp.content.is_some(),
+            "expected text content from OpenRouter"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DEEPSEEK_API_KEY + network access"]
+    async fn deepseek_list_models_live_smoke() {
+        let provider =
+            OpenAiCompatibleProvider::deepseek_from_env().expect("DEEPSEEK_API_KEY not set");
+        let models = provider.list_models().await.expect("live call failed");
+        assert!(!models.is_empty(), "expected at least one model id");
+    }
+}

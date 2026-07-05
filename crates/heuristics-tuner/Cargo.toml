@@ -22,7 +22,7 @@ liberado-eval = { workspace = true }
 liberado-executor = { workspace = true }
 liberado-orchestrator = { workspace = true }
 liberado-provider = { workspace = true }
-liberado-provider-openrouter = { workspace = true }
+liberado-provider-openai-compat = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

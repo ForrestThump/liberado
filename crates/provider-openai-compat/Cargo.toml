@@ -1,7 +1,7 @@
 [package]
-name = "liberado-provider-deepseek"
+name = "liberado-provider-openai-compat"
 version = "0.1.0"
-description = "A thin DeepSeek (OpenAI-compatible) implementation of the Liberado `Provider` trait: chat completions with tool-calling and JSON mode, over reqwest."
+description = "A single, config-driven Provider implementation for any OpenAI-compatible chat-completions API (DeepSeek, OpenRouter, and future backends like OpenAI direct/Groq/Together) — replaces what used to be one hand-copied crate per backend."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

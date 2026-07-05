@@ -15,7 +15,7 @@ use liberado_executor::{Budget, Executor, Task, ToolRuntime};
 use liberado_heuristics_tuner::tool_scenarios::tool_loop_scenarios;
 use liberado_orchestrator::{DIRECT_INSTRUCTIONS, DIRECT_MAX_TURNS};
 use liberado_provider::{Provider, ToolDef, ToolInvocation};
-use liberado_provider_openrouter::OpenRouterProvider;
+use liberado_provider_openai_compat::OpenAiCompatibleProvider;
 
 struct ScriptedToolRuntime {
     tools: Vec<ToolDef>,
@@ -27,7 +27,9 @@ impl ScriptedToolRuntime {
     fn new(tools: &'static [(&'static str, &'static str, &'static str)]) -> Self {
         let defs = tools
             .iter()
-            .map(|(name, desc, _)| ToolDef::new(*name, *desc, serde_json::json!({ "type": "object" })))
+            .map(|(name, desc, _)| {
+                ToolDef::new(*name, *desc, serde_json::json!({ "type": "object" }))
+            })
             .collect();
         let canned = tools
             .iter()
@@ -70,7 +72,10 @@ async fn main() {
 
     let api_key = std::env::var("OPENROUTER_API_KEY").expect("set OPENROUTER_API_KEY");
 
-    let models = ["deepseek/deepseek-v4-flash", "google/gemini-3-flash-preview"];
+    let models = [
+        "deepseek/deepseek-v4-flash",
+        "google/gemini-3-flash-preview",
+    ];
     const SAMPLES: usize = 3;
 
     let scenario = tool_loop_scenarios()
@@ -83,8 +88,11 @@ async fn main() {
 
     for model in models {
         println!("\n########## model: {model} ##########");
-        let provider: Arc<dyn Provider> =
-            Arc::new(OpenRouterProvider::new(api_key.clone(), model));
+        let provider: Arc<dyn Provider> = Arc::new(OpenAiCompatibleProvider::new(
+            api_key.clone(),
+            model,
+            OpenAiCompatibleProvider::OPENROUTER_BASE_URL,
+        ));
         let executor = Executor::new(provider, Budget::new(DIRECT_MAX_TURNS));
 
         for sample in 1..=SAMPLES {
@@ -106,7 +114,11 @@ async fn main() {
             match result {
                 Ok(report) => {
                     println!("outcome: {:?}", report.outcome);
-                    println!("outcome_matched (expected {:?}): {}", scenario.expect.expected_outcome, report.outcome == scenario.expect.expected_outcome);
+                    println!(
+                        "outcome_matched (expected {:?}): {}",
+                        scenario.expect.expected_outcome,
+                        report.outcome == scenario.expect.expected_outcome
+                    );
                     println!("summary: {}", report.summary);
                     println!("artifacts: {:?}", report.artifacts);
                     println!("follow_up: {:?}", report.follow_up);

@@ -17,5 +17,5 @@ liberado-common = { workspace = true }
 liberado-config-loader = { workspace = true }
 liberado-dispatcher = { workspace = true }
 liberado-provider = { workspace = true }
-liberado-provider-deepseek = { workspace = true }
+liberado-provider-openai-compat = { workspace = true }
 tokio = { workspace = true }

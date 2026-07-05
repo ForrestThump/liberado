@@ -18,6 +18,5 @@ liberado-notify = { workspace = true }
 liberado-orchestrator = { workspace = true }
 liberado-mcp = { workspace = true }
 liberado-provider = { workspace = true }
-liberado-provider-deepseek = { workspace = true }
-liberado-provider-openrouter = { workspace = true }
+liberado-provider-openai-compat = { workspace = true }
 tracing = { workspace = true }

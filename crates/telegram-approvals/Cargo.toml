@@ -25,5 +25,5 @@ tempfile = { workspace = true }
 liberado-daemon = { workspace = true }
 liberado-notify = { workspace = true }
 liberado-orchestrator = { workspace = true }
-liberado-provider-deepseek = { workspace = true }
+liberado-provider-openai-compat = { workspace = true }
 liberado-test-support = { workspace = true }

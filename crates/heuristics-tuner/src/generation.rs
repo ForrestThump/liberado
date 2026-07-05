@@ -64,11 +64,14 @@ pub async fn cold_start(
     }
     let request = CompletionRequest::new(vec![
         Message::system(META_SYSTEM_PROMPT),
-        Message::user(format!("{TASK_DESCRIPTION}\n\nWrite the system prompt now.")),
+        Message::user(format!(
+            "{TASK_DESCRIPTION}\n\nWrite the system prompt now."
+        )),
     ])
     .with_temperature(0.7);
 
-    let output: ProviderResult<PromptOutput> = complete_json(meta_provider, request, schema()).await;
+    let output: ProviderResult<PromptOutput> =
+        complete_json(meta_provider, request, schema()).await;
     Ok(output?.prompt)
 }
 
@@ -95,7 +98,11 @@ pub async fn mutate(
             .map(|s| {
                 format!(
                     "- \"{}\": goal=\"{}\" expected={} — {} — {}",
-                    s.name, s.goal, s.expected, s.trial_breakdown(), s.note
+                    s.name,
+                    s.goal,
+                    s.expected,
+                    s.trial_breakdown(),
+                    s.note
                 )
             })
             .collect::<Vec<_>>()
@@ -113,7 +120,8 @@ pub async fn mutate(
     ])
     .with_temperature(0.5);
 
-    let output: ProviderResult<PromptOutput> = complete_json(meta_provider, request, schema()).await;
+    let output: ProviderResult<PromptOutput> =
+        complete_json(meta_provider, request, schema()).await;
     Ok(output?.prompt)
 }
 
@@ -141,11 +149,14 @@ pub async fn cold_start_executor(
     }
     let request = CompletionRequest::new(vec![
         Message::system(META_SYSTEM_PROMPT_EXECUTOR),
-        Message::user(format!("{TASK_DESCRIPTION_EXECUTOR}\n\nWrite the system prompt now.")),
+        Message::user(format!(
+            "{TASK_DESCRIPTION_EXECUTOR}\n\nWrite the system prompt now."
+        )),
     ])
     .with_temperature(0.7);
 
-    let output: ProviderResult<PromptOutput> = complete_json(meta_provider, request, schema()).await;
+    let output: ProviderResult<PromptOutput> =
+        complete_json(meta_provider, request, schema()).await;
     Ok(output?.prompt)
 }
 
@@ -196,7 +207,8 @@ pub async fn mutate_executor(
     ])
     .with_temperature(0.5);
 
-    let output: ProviderResult<PromptOutput> = complete_json(meta_provider, request, schema()).await;
+    let output: ProviderResult<PromptOutput> =
+        complete_json(meta_provider, request, schema()).await;
     Ok(output?.prompt)
 }
 
@@ -255,7 +267,9 @@ mod tests {
     async fn cold_start_returns_the_parsed_prompt() {
         let mock = MockProvider::with_script(
             "mock",
-            [CompletionResponse::text(r#"{"prompt": "be a careful router"}"#)],
+            [CompletionResponse::text(
+                r#"{"prompt": "be a careful router"}"#,
+            )],
         );
         let budget = Budget::new(10);
         let prompt = cold_start(&mock, &budget).await.unwrap();
@@ -264,10 +278,8 @@ mod tests {
 
     #[tokio::test]
     async fn cold_start_refuses_when_budget_is_exhausted() {
-        let mock = MockProvider::with_script(
-            "mock",
-            [CompletionResponse::text(r#"{"prompt": "x"}"#)],
-        );
+        let mock =
+            MockProvider::with_script("mock", [CompletionResponse::text(r#"{"prompt": "x"}"#)]);
         let budget = Budget::new(0);
         let err = cold_start(&mock, &budget).await.unwrap_err();
         assert!(matches!(err, GenerationError::BudgetExhausted));
@@ -315,10 +327,8 @@ mod tests {
 
     #[tokio::test]
     async fn request_justification_returns_the_raw_text_content() {
-        let mock = MockProvider::with_script(
-            "mock",
-            [CompletionResponse::text("because it generalizes")],
-        );
+        let mock =
+            MockProvider::with_script("mock", [CompletionResponse::text("because it generalizes")]);
         let budget = Budget::new(10);
         let text = request_justification(&mock, "some prompt", &budget)
             .await
@@ -329,10 +339,13 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires OPENROUTER_API_KEY + network access"]
     async fn live_cold_start() {
-        let provider = liberado_provider_openrouter::OpenRouterProvider::from_env()
-            .expect("OPENROUTER_API_KEY not set");
+        let provider =
+            liberado_provider_openai_compat::OpenAiCompatibleProvider::openrouter_from_env()
+                .expect("OPENROUTER_API_KEY not set");
         let budget = Budget::new(1);
-        let prompt = cold_start(&provider, &budget).await.expect("live call failed");
+        let prompt = cold_start(&provider, &budget)
+            .await
+            .expect("live call failed");
         assert!(!prompt.is_empty(), "expected non-empty prompt text");
     }
 
@@ -361,7 +374,9 @@ mod tests {
     async fn cold_start_executor_returns_the_parsed_prompt() {
         let mock = MockProvider::with_script(
             "mock",
-            [CompletionResponse::text(r#"{"prompt": "be a careful executor"}"#)],
+            [CompletionResponse::text(
+                r#"{"prompt": "be a careful executor"}"#,
+            )],
         );
         let budget = Budget::new(10);
         let prompt = cold_start_executor(&mock, &budget).await.unwrap();
@@ -370,7 +385,8 @@ mod tests {
 
     #[tokio::test]
     async fn cold_start_executor_refuses_when_budget_is_exhausted() {
-        let mock = MockProvider::with_script("mock", [CompletionResponse::text(r#"{"prompt": "x"}"#)]);
+        let mock =
+            MockProvider::with_script("mock", [CompletionResponse::text(r#"{"prompt": "x"}"#)]);
         let budget = Budget::new(0);
         let err = cold_start_executor(&mock, &budget).await.unwrap_err();
         assert!(matches!(err, GenerationError::BudgetExhausted));
@@ -380,12 +396,16 @@ mod tests {
     async fn mutate_executor_includes_failure_context_and_returns_prompt() {
         let mock = MockProvider::with_script(
             "mock",
-            [CompletionResponse::text(r#"{"prompt": "improved executor prompt"}"#)],
+            [CompletionResponse::text(
+                r#"{"prompt": "improved executor prompt"}"#,
+            )],
         );
         let budget = Budget::new(10);
         let failing = tool_loop_scenario("avoid-irrelevant-destructive-tool");
         let refs = vec![&failing];
-        let prompt = mutate_executor(&mock, "old executor prompt", &refs, &budget).await.unwrap();
+        let prompt = mutate_executor(&mock, "old executor prompt", &refs, &budget)
+            .await
+            .unwrap();
         assert_eq!(prompt, "improved executor prompt");
 
         let sent = mock.last_request().unwrap();
@@ -399,10 +419,14 @@ mod tests {
     async fn mutate_executor_with_no_failures_still_asks_for_a_refinement() {
         let mock = MockProvider::with_script(
             "mock",
-            [CompletionResponse::text(r#"{"prompt": "refined executor prompt"}"#)],
+            [CompletionResponse::text(
+                r#"{"prompt": "refined executor prompt"}"#,
+            )],
         );
         let budget = Budget::new(10);
-        let prompt = mutate_executor(&mock, "old prompt", &[], &budget).await.unwrap();
+        let prompt = mutate_executor(&mock, "old prompt", &[], &budget)
+            .await
+            .unwrap();
         assert_eq!(prompt, "refined executor prompt");
     }
 }

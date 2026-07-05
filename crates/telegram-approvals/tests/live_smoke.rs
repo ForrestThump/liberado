@@ -24,7 +24,7 @@ use liberado_daemon::Daemon;
 use liberado_notify::{Notifier, TelegramNotifier};
 use liberado_orchestrator::Orchestrator;
 use liberado_provider::{CompletionResponse, MockProvider};
-use liberado_provider_deepseek::DeepSeekProvider;
+use liberado_provider_openai_compat::OpenAiCompatibleProvider;
 use liberado_telegram_approvals::ApprovalBot;
 use liberado_test_support::{InvocationRecordingFactory, InvocationRecordingRuntime};
 use tokio::sync::mpsc::unbounded_channel;
@@ -79,7 +79,8 @@ async fn live_full_approval_loop_smoke_test() {
         .with_proposal_signer(signer.clone())
         .with_notifier(notifier.clone());
 
-    let provider = Arc::new(DeepSeekProvider::from_env().expect("set DEEPSEEK_API_KEY"));
+    let provider =
+        Arc::new(OpenAiCompatibleProvider::deepseek_from_env().expect("set DEEPSEEK_API_KEY"));
     let bot = ApprovalBot::from_env(
         daemon.vault().clone(),
         signer.clone(),

@@ -2816,8 +2816,7 @@ dependencies = [
  "liberado-notify",
  "liberado-orchestrator",
  "liberado-provider",
- "liberado-provider-deepseek",
- "liberado-provider-openrouter",
+ "liberado-provider-openai-compat",
  "tracing",
 ]
 
@@ -2988,7 +2987,7 @@ dependencies = [
  "liberado-config-loader",
  "liberado-dispatcher",
  "liberado-provider",
- "liberado-provider-deepseek",
+ "liberado-provider-openai-compat",
  "tokio",
 ]
 
@@ -3021,7 +3020,7 @@ dependencies = [
  "liberado-executor",
  "liberado-orchestrator",
  "liberado-provider",
- "liberado-provider-openrouter",
+ "liberado-provider-openai-compat",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -3136,18 +3135,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "liberado-provider-deepseek"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "liberado-provider",
- "reqwest 0.12.28",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "liberado-provider-openrouter"
+name = "liberado-provider-openai-compat"
 version = "0.1.0"
 dependencies = [
  "async-trait",
@@ -3200,7 +3188,7 @@ dependencies = [
  "liberado-notify",
  "liberado-orchestrator",
  "liberado-provider",
- "liberado-provider-deepseek",
+ "liberado-provider-openai-compat",
  "liberado-test-support",
  "liberado-vault",
  "reqwest 0.12.28",

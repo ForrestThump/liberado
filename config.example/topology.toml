@@ -12,8 +12,24 @@ vault_path = "/home/shiloh/vault"
 # Unix domain socket the daemon listens on for client attach (optional; has a default).
 # daemon_socket = "/run/liberado/daemon.sock"
 
-# Inference provider (provider-agnostic scaffolding). Defaults to "deepseek".
+# Inference provider (provider-agnostic scaffolding). Must name a `providers` entry below —
+# defaults to "deepseek", which (along with "openrouter") is already declared even if `providers`
+# is never set here. Defaults live in code (`crates/config-loader/src/model.rs`); this file only
+# needs to hold *deltas* — you don't have to redeclare deepseek/openrouter just to select one.
 # provider = "deepseek"
+
+# Declared inference backends — every one is built by the single, generic
+# `liberado-provider-openai-compat` crate, which speaks any OpenAI-compatible chat-completions API.
+# Adding a backend this system doesn't already ship with (OpenAI direct, Groq, Together, ...) is
+# just one more entry here — no new crate, no Rust code change. Uncomment and edit for Groq, then
+# set `provider = "groq"` above:
+# [[providers]]
+# name = "groq"
+# base_url = "https://api.groq.com/openai/v1"
+# default_model = "llama-3.3-70b-versatile"
+# api_key_env = "GROQ_API_KEY"
+# model_env = "GROQ_MODEL"          # optional — omit if this backend has no override-env convention
+# extra_client_error_status = []    # e.g. [402] for a backend with its own "insufficient credits" code
 
 # Enabled MCP servers. Each `name` here is what a policy grant's `ExecuteMcp` must reference, and
 # it is ALSO the name the runtime connects to — `topology.mcps` is the single source for both the
