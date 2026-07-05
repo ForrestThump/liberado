@@ -22,6 +22,13 @@
 zone = "tasks"
 write_class = "agent_writable"   # agents write directly (with provenance + optimistic hash)
 
+# liberado-memory-mcp's own notes (memory/general, memory/procedural) — reversible, git-tracked
+# markdown, so direct agent writes (add_memory/save_tool_guidance/delete_memory, and the periodic
+# consolidation schedule) don't need a human-approval round-trip.
+[[zones]]
+zone = "memory"
+write_class = "agent_writable"
+
 [[zones]]
 zone = "decisions"
 write_class = "agent_writable"
@@ -51,6 +58,7 @@ capabilities = [
     { Write = { Vault = "decisions" } },
     { ReadSummary = { Named = "finance" } },   # finance is human_only: read a summary, never the detail
     { ExecuteMcp = "tasks-mcp" },              # must match a [[mcps]] name in topology.toml
+    { ExecuteMcp = "liberado-memory-mcp" },    # search/save general + procedural memory
     # code-dispatch (self-extension) is deliberately NOT granted here — see "dispatcher" below.
 ]
 
@@ -63,6 +71,7 @@ capabilities = [
     { Write = { Vault = "decisions" } },
     { ReadSummary = { Named = "finance" } },
     { ExecuteMcp = "tasks-mcp" },
+    { ExecuteMcp = "liberado-memory-mcp" },
     { ExecuteMcp = "code-dispatch" },          # dispatcher-only: self-extension goes through the
                                                 # guard pipeline, never a direct chat tool call.
     # { ExecuteMcp = "chat-search" },          # search conversation history mid-reasoning

@@ -22,7 +22,8 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use liberado_common::{
-    BlockReason, CapabilitySet, DispatchAction, DispatchDecision, ProposedAction, ToolCall,
+    BlockReason, CapabilitySet, DispatchAction, DispatchDecision, GuidanceHit, ProposedAction,
+    ToolCall, ToolGuidanceSource, mcp_of,
 };
 use liberado_config_loader::DispatchTuning;
 use liberado_provider::{CompletionRequest, Message, Provider, ProviderError, complete_json};
@@ -71,6 +72,7 @@ pub struct Dispatcher {
     tuning: DispatchTuning,
     max_reaction_depth: u32,
     system_prompt: String,
+    guidance: Option<Arc<dyn ToolGuidanceSource>>,
 }
 
 impl Dispatcher {
@@ -86,6 +88,7 @@ impl Dispatcher {
             tuning,
             max_reaction_depth,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
+            guidance: None,
         }
     }
 
@@ -95,6 +98,14 @@ impl Dispatcher {
     /// reimplementing it.
     pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.system_prompt = prompt.into();
+        self
+    }
+
+    /// Consult `guidance` (procedural memory) before classification, and let it record outcomes
+    /// via [`Dispatcher::record_outcome`] (`liberado-dispatch-logic-spec.md` §2, steps 1/5).
+    /// Optional — a `Dispatcher` without one behaves exactly as before this existed.
+    pub fn with_guidance(mut self, guidance: Arc<dyn ToolGuidanceSource>) -> Self {
+        self.guidance = Some(guidance);
         self
     }
 
@@ -113,7 +124,12 @@ impl Dispatcher {
         );
 
         async {
-            let mut classified = self.classify(req).await?;
+            let hits = self.retrieve_guidance(&req.goal).await;
+
+            let mut classified = match self.guidance_short_circuit(&hits) {
+                Some(decision) => decision,
+                None => self.classify(req, &hits).await?,
+            };
             ensure_correlation(&mut classified, goal_hash);
             enforce_narrow_direct_tools(&mut classified, self.tuning.narrow_direct_tools);
 
@@ -149,12 +165,17 @@ impl Dispatcher {
 
     /// The classification step: one structured-output inference at temperature 0. Malformed or
     /// empty output is treated like very low confidence and degraded to a safe `Clarify`
-    /// (Decision 13 resilience); a real provider failure propagates.
-    async fn classify(&self, req: &DispatchRequest) -> Result<DispatchDecision, DispatchError> {
+    /// (Decision 13 resilience); a real provider failure propagates. `hits` (possibly empty)
+    /// grounds the prompt with retrieved procedural-memory guidance — never narrows the catalog.
+    async fn classify(
+        &self,
+        req: &DispatchRequest,
+        hits: &[GuidanceHit],
+    ) -> Result<DispatchDecision, DispatchError> {
         let span = tracing::info_span!("classify", provider = %self.provider.model());
 
         async {
-            let request = self.build_request(req);
+            let request = self.build_request(req, hits);
             match complete_json::<dyn Provider, DispatchDecision>(
                 self.provider.as_ref(),
                 request,
@@ -186,21 +207,106 @@ impl Dispatcher {
         .await
     }
 
-    fn build_request(&self, req: &DispatchRequest) -> CompletionRequest {
+    fn build_request(&self, req: &DispatchRequest, hits: &[GuidanceHit]) -> CompletionRequest {
         let catalog = req
             .catalog
             .iter()
             .map(|m| format!("- {}: {}", m.name, m.description))
             .collect::<Vec<_>>()
             .join("\n");
+        let mut user_message = format!("Goal:\n{}\n\nAvailable MCPs:\n{}", req.goal, catalog);
+        if !hits.is_empty() {
+            let guidance = hits
+                .iter()
+                .map(|h| format!("- {}", h.content))
+                .collect::<Vec<_>>()
+                .join("\n");
+            user_message.push_str(&format!(
+                "\n\nRelevant past guidance (may or may not apply — use your judgement):\n{guidance}"
+            ));
+        }
         CompletionRequest::new(vec![
             Message::system(&self.system_prompt),
-            Message::user(format!(
-                "Goal:\n{}\n\nAvailable MCPs:\n{}",
-                req.goal, catalog
-            )),
+            Message::user(user_message),
         ])
         .with_temperature(0.0)
+    }
+
+    /// RETRIEVE (`liberado-dispatch-logic-spec.md` §2 step 1): consult procedural memory before
+    /// classification. Empty when no guidance source is configured, or on any backend failure —
+    /// retrieval is a hint, never load-bearing enough to abort a dispatch over.
+    async fn retrieve_guidance(&self, goal: &str) -> Vec<GuidanceHit> {
+        match &self.guidance {
+            Some(source) => source.search_tool_guidance(goal).await,
+            None => Vec::new(),
+        }
+    }
+
+    /// If the top guidance hit clears `guidance_match_floor` and names at least one tool, skip
+    /// the classify LLM call entirely and route straight to `ExecuteDirect` with `relevant_mcps`
+    /// set from the hit — `seed_calls` stays empty (the executor decides every step, exactly as
+    /// `DEFAULT_SYSTEM_PROMPT` documents for a classifier-produced `ExecuteDirect`). This can only
+    /// ever *hint* which MCPs are relevant: the guard pipeline still runs unconditionally
+    /// afterward (capability/consequence/zone/depth/confidence), and `relevant_mcps` is itself
+    /// only ever a narrowing *within* what's already granted (`build_turn_runtime` intersects it
+    /// with the real grant) — never a way to bypass either. This is the same safety property the
+    /// removed verb-keyword advisor violated (silently dropping tools for verb-less phrasing);
+    /// unlike that mechanism, a low-confidence or toolless hit here falls through to full
+    /// classification against the untouched catalog, not a narrowed one.
+    fn guidance_short_circuit(&self, hits: &[GuidanceHit]) -> Option<DispatchDecision> {
+        let top = hits.first()?;
+        if top.score < self.tuning.guidance_match_floor || top.tools_used.is_empty() {
+            return None;
+        }
+        tracing::info!(
+            score = top.score,
+            tools = ?top.tools_used,
+            "classification short-circuited by procedural memory guidance"
+        );
+        Some(DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: Vec::new(),
+                relevant_mcps: top.tools_used.clone(),
+            },
+            confidence: top.score,
+            rationale: format!("procedural memory guidance: {}", top.content),
+        })
+    }
+
+    /// RECORD (`liberado-dispatch-logic-spec.md` §2 step 5): save a new guidance directive once a
+    /// dispatch's outcome is known. Only `ExecuteDirect`/`DispatchSubagent` decisions name
+    /// concrete tools worth remembering; `Clarify`/`Propose` carry nothing to record. Best-effort
+    /// and a no-op without a configured guidance source — callers invoke this after execution
+    /// resolves into a `Report`, once they know whether the decision actually worked.
+    pub async fn record_outcome(&self, goal: &str, decision: &DispatchDecision) {
+        let Some(source) = &self.guidance else {
+            return;
+        };
+        let (task_type, tools_used) = match &decision.action {
+            DispatchAction::ExecuteDirect {
+                relevant_mcps,
+                seed_calls,
+            } if !relevant_mcps.is_empty() || !seed_calls.is_empty() => {
+                let tools = if !relevant_mcps.is_empty() {
+                    relevant_mcps.clone()
+                } else {
+                    let mut names: Vec<String> = seed_calls
+                        .iter()
+                        .map(|c| mcp_of(&c.tool).to_string())
+                        .collect();
+                    names.sort();
+                    names.dedup();
+                    names
+                };
+                (None, tools)
+            }
+            DispatchAction::DispatchSubagent { allowed_mcps, .. } if !allowed_mcps.is_empty() => {
+                (None, allowed_mcps.clone())
+            }
+            _ => return,
+        };
+        let directive = format!("For tasks like \"{goal}\", use: {}", tools_used.join(", "));
+        source.save_tool_guidance(&directive, task_type, tools_used).await;
     }
 }
 
@@ -434,6 +540,40 @@ mod tests {
     use super::*;
     use liberado_common::{Capability, Consequence, ToolCall};
     use liberado_provider::{CompletionResponse, MockProvider, ResponseFormat};
+    use std::sync::Mutex;
+
+    struct MockGuidance {
+        hits: Vec<GuidanceHit>,
+        recorded: Mutex<Vec<(String, Option<String>, Vec<String>)>>,
+    }
+
+    impl MockGuidance {
+        fn with_hits(hits: Vec<GuidanceHit>) -> Arc<Self> {
+            Arc::new(Self {
+                hits,
+                recorded: Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ToolGuidanceSource for MockGuidance {
+        async fn search_tool_guidance(&self, _goal: &str) -> Vec<GuidanceHit> {
+            self.hits.clone()
+        }
+
+        async fn save_tool_guidance(
+            &self,
+            directive: &str,
+            task_type: Option<String>,
+            tools_used: Vec<String>,
+        ) {
+            self.recorded
+                .lock()
+                .unwrap()
+                .push((directive.to_string(), task_type, tools_used));
+        }
+    }
 
     fn scripted(decision: &DispatchDecision) -> Arc<MockProvider> {
         Arc::new(MockProvider::with_script(
@@ -825,5 +965,142 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, DispatchError::Provider(_)));
+    }
+
+    #[tokio::test]
+    async fn high_confidence_guidance_short_circuits_classification() {
+        // An empty-script mock would fail (MockExhausted) if classify() were ever called — proves
+        // the short-circuit genuinely skips the LLM call, not just that it produces the same
+        // answer classification would have.
+        let mock = Arc::new(MockProvider::new("mock"));
+        let guidance = MockGuidance::with_hits(vec![GuidanceHit {
+            content: "Use tasks-mcp for shopping list items".into(),
+            tools_used: vec!["tasks-mcp".into()],
+            score: 0.95,
+        }]);
+        let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4).with_guidance(guidance);
+
+        let out = dispatcher
+            .dispatch(&request(caps("tasks-mcp"), 0))
+            .await
+            .unwrap();
+        match out.action {
+            DispatchAction::ExecuteDirect {
+                seed_calls,
+                relevant_mcps,
+            } => {
+                assert!(seed_calls.is_empty(), "short-circuit must not invent args");
+                assert_eq!(relevant_mcps, vec!["tasks-mcp".to_string()]);
+            }
+            other => panic!("expected ExecuteDirect, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn low_confidence_guidance_falls_through_to_full_classification() {
+        // Guidance below guidance_match_floor must NOT short-circuit — and critically, must not
+        // narrow the catalog either: the classifier still sees every MCP, exactly the failure mode
+        // the removed verb-keyword advisor had (silently dropping tools it didn't recognize).
+        let mock = scripted(&execute_direct("tasks-mcp:add", 0.9));
+        let guidance = MockGuidance::with_hits(vec![GuidanceHit {
+            content: "maybe use tasks-mcp".into(),
+            tools_used: vec!["tasks-mcp".into()],
+            score: 0.5, // below the default 0.8 floor
+        }]);
+        let dispatcher =
+            Dispatcher::new(mock.clone(), DispatchTuning::default(), 4).with_guidance(guidance);
+
+        let out = dispatcher
+            .dispatch(&request(caps("tasks-mcp"), 0))
+            .await
+            .unwrap();
+        assert!(matches!(out.action, DispatchAction::ExecuteDirect { .. }));
+        // The classifier was actually invoked (a real request went to the provider), and the
+        // catalog it saw was the full, untouched one from `request()`.
+        let sent = mock.last_request().unwrap();
+        let user_message = &sent.messages[1].content;
+        assert!(user_message.contains("tasks-mcp"), "catalog must not be narrowed");
+    }
+
+    #[tokio::test]
+    async fn a_toolless_guidance_hit_never_short_circuits() {
+        // A hit with no tools_used can't become relevant_mcps at all — must fall through even at
+        // maximal confidence, rather than short-circuiting to an empty-catalog ExecuteDirect.
+        let mock = scripted(&execute_direct("tasks-mcp:add", 0.9));
+        let guidance = MockGuidance::with_hits(vec![GuidanceHit {
+            content: "general advice, no specific tool".into(),
+            tools_used: Vec::new(),
+            score: 1.0,
+        }]);
+        let dispatcher =
+            Dispatcher::new(mock.clone(), DispatchTuning::default(), 4).with_guidance(guidance);
+
+        let out = dispatcher
+            .dispatch(&request(caps("tasks-mcp"), 0))
+            .await
+            .unwrap();
+        assert!(matches!(out.action, DispatchAction::ExecuteDirect { .. }));
+        assert!(mock.last_request().is_some(), "classifier must have been called");
+    }
+
+    #[tokio::test]
+    async fn guidance_short_circuit_still_passes_through_the_guard_pipeline() {
+        // A confident guidance hit naming an MCP the caller was never granted must still downgrade
+        // to CapabilityGap — the short-circuit produces a candidate decision, it never bypasses the
+        // guards. This is the core safety property distinguishing it from the removed advisor.
+        let mock = Arc::new(MockProvider::new("mock"));
+        let guidance = MockGuidance::with_hits(vec![GuidanceHit {
+            content: "Use email-mcp for this".into(),
+            tools_used: vec!["email-mcp".into()],
+            score: 0.99,
+        }]);
+        let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4).with_guidance(guidance);
+
+        // Granted capability is tasks-mcp, NOT email-mcp.
+        let out = dispatcher
+            .dispatch(&request(caps("tasks-mcp"), 0))
+            .await
+            .unwrap();
+        match out.action {
+            DispatchAction::Clarify { what_blocked, .. } => {
+                assert_eq!(what_blocked, BlockReason::CapabilityGap)
+            }
+            other => panic!("expected Clarify(CapabilityGap), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn record_outcome_saves_a_directive_for_execute_direct() {
+        let guidance = MockGuidance::with_hits(vec![]);
+        let mock = Arc::new(MockProvider::new("mock"));
+        let dispatcher =
+            Dispatcher::new(mock, DispatchTuning::default(), 4).with_guidance(guidance.clone());
+
+        let decision = execute_direct("tasks-mcp:add", 0.9);
+        dispatcher.record_outcome("add milk to the list", &decision).await;
+
+        let recorded = guidance.recorded.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert!(recorded[0].0.contains("add milk to the list"));
+    }
+
+    #[tokio::test]
+    async fn record_outcome_is_a_noop_for_clarify() {
+        let guidance = MockGuidance::with_hits(vec![]);
+        let mock = Arc::new(MockProvider::new("mock"));
+        let dispatcher =
+            Dispatcher::new(mock, DispatchTuning::default(), 4).with_guidance(guidance.clone());
+
+        let decision = DispatchDecision {
+            action: DispatchAction::Clarify {
+                questions: vec!["which one?".into()],
+                what_blocked: BlockReason::Ambiguous,
+            },
+            confidence: 0.4,
+            rationale: "test".into(),
+        };
+        dispatcher.record_outcome("some goal", &decision).await;
+
+        assert!(guidance.recorded.lock().unwrap().is_empty());
     }
 }

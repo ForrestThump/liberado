@@ -60,11 +60,19 @@ description = "current weather and forecast for a location"
 consequence = "read_only"
 transport = { kind = "managed" }
 
+# A workspace-local MCP, not managed (same reasoning as the `chat-search` entry below): it's a
+# thin turbomcp binary over `liberado-memory-store`, native Rust, no external mem0 dependency.
+# Build with `cargo build --bin liberado-memory-mcp` (dev) or `--release` (prod), then point
+# `command` at the resulting path. Exposes `search_memory`/`add_memory` (general: user facts and
+# preferences) and `search_tool_guidance`/`save_tool_guidance`/`delete_memory` (procedural:
+# tool-selection guidance) — see `docs/specs/liberado-dispatch-logic-spec.md` §2. `default_zone`
+# routes this MCP's own writes to the `memory` zone declared in policy.toml.
 [[mcps]]
-name = "liberado-tool-helper-mcp"
-description = "search/save episodic memory and tool-selection guidance"
+name = "liberado-memory-mcp"
+description = "search/save general memory (user facts and preferences) and procedural memory (tool-selection guidance)"
 consequence = "reversible"
-transport = { kind = "managed" }
+transport = { kind = "stdio", command = "target/debug/liberado-memory-mcp", args = [] }
+default_zone = "memory"
 
 [[mcps]]
 name = "liberado-pdf-mcp"
@@ -142,6 +150,21 @@ transport = { kind = "stdio", command = "riggers-mcp", args = ["--config", "rigg
 # name = "nightly-summary"
 # cron_expr = "0 0 21 * * * *"   # every day at 21:00:00
 # goal = "Summarize today's decisions and post the summary."
+# enabled = true
+# pool = "unattended"
+
+# Periodic memory consolidation — a cheap, general-purpose model reviews recent notes in
+# memory/general and memory/procedural via liberado-memory-mcp's own tools (search_memory /
+# add_memory / search_tool_guidance / save_tool_guidance / delete_memory) and merges duplicates or
+# prunes stale entries. This is a real judgement pass, not a mechanical similarity-threshold script
+# — the mechanical near-duplicate guard already runs on every add_memory/add_guidance call and
+# catches the cheap case; this catches everything fuzzier that guard can't. Route it through the
+# "unattended" pool (or a dedicated cheap-model pool) so it never runs with more authority than
+# reading/writing the memory zone.
+# [[schedules]]
+# name = "consolidate-memory"
+# cron_expr = "0 0 4 * * * *"   # daily at 04:00:00
+# goal = "Review recent notes in memory/general and memory/procedural: merge near-duplicates, rewrite outdated ones, and remove anything superseded."
 # enabled = true
 # pool = "unattended"
 

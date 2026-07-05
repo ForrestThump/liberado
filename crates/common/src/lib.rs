@@ -18,6 +18,9 @@
 //!   model the dispatcher emits (Decision 1, `liberado-dispatch-logic-spec.md`).
 //! - [`proposal`] — the [`proposal::Proposal`] human-in-the-loop artifact (Decision 11).
 //! - [`model`] — [`model::ModelProfile`] + role capability floors (Decision 13).
+//! - [`guidance`] — [`guidance::ToolGuidanceSource`], the dispatcher's procedural-memory seam
+//!   (`liberado-dispatch-logic-spec.md` §2 steps 1/5), implemented by
+//!   `liberado_memory_store::MemoryStore`.
 //! - [`error`] — the crate's error type.
 //!
 //! The typed config model (Decision 14) used to live here as a `config` module — moved to
@@ -30,6 +33,7 @@ pub mod catalog;
 pub mod dispatch;
 pub mod error;
 pub mod event;
+pub mod guidance;
 pub mod model;
 pub mod proposal;
 pub mod provenance;
@@ -45,6 +49,7 @@ pub use dispatch::{
 };
 pub use error::{Error, Result};
 pub use event::{DEFAULT_POOL, Event, EventPayload, EventSource, event_source};
+pub use guidance::{GuidanceHit, ToolGuidanceSource};
 pub use model::{ModelChoice, ModelProfile, ModelRole, ModelTier, RequiredCaps};
 pub use proposal::{
     PROPOSALS_DIR, Proposal, ProposalNoteError, ProposalSigner, ProposalStatus, ProposedAction,

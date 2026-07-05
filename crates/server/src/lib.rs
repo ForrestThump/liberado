@@ -76,12 +76,15 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     let mcp = liberado_bootstrap::mcp_registry_from_config(&config);
     let orchestrator_attached = dispatcher_attached && mcp.is_some();
 
+    let guidance = dispatcher_guidance_source(&vault_path).await;
+
     let (chat, chat_tools, chat_tool_names) = build_chat(
         provider.clone(),
         mcp,
         &config,
         capability_catalog.clone(),
         Path::new(&vault_path),
+        guidance.clone(),
     )
     .await;
 
@@ -92,6 +95,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         &config,
         capability_catalog.clone(),
         Path::new(&vault_path),
+        guidance,
     );
 
     // The webhook hooks endpoint's seam into the daemon's reactive pipeline — a clone of the same
@@ -270,6 +274,7 @@ async fn build_chat(
     config: &liberado_bootstrap::Config,
     catalog: Arc<CapabilityCatalog>,
     vault_path: &Path,
+    guidance: Option<Arc<dyn liberado_common::ToolGuidanceSource>>,
 ) -> (Option<Arc<ChatSessions>>, usize, Vec<String>) {
     let provider = match provider {
         Some(p) => p,
@@ -331,11 +336,14 @@ async fn build_chat(
     // Dispatch routing (see `ChatSessions`' module docs): only when an orchestrator exists to
     // execute the non-`ExecuteDirect` outcomes. Mirrors `configure_daemon`'s dispatcher wiring.
     if let Some(orchestrator) = orchestrator {
-        let dispatcher = Dispatcher::new(
+        let mut dispatcher = Dispatcher::new(
             provider,
             config.tuning.dispatch.clone(),
             config.tuning.concurrency.max_reaction_depth,
         );
+        if let Some(g) = guidance {
+            dispatcher = dispatcher.with_guidance(g);
+        }
         info!(
             "chat: dispatch routing enabled (Clarify/Propose/DispatchSubagent handled before execution)"
         );
@@ -343,6 +351,59 @@ async fn build_chat(
     }
 
     (Some(Arc::new(sessions)), tool_count, tool_names)
+}
+
+/// Build the dispatcher's optional procedural-memory guidance source (`liberado-dispatch-logic-spec.md`
+/// §2 steps 1/5), opting in only when `LIBERADO_DISPATCHER_GUIDANCE=1` is set. Off by default:
+/// building one means opening a vault-backed store and loading an embedding model in the daemon
+/// process itself — the same store `liberado-memory-mcp` (a separate subprocess) already exposes
+/// to agents, so an unopted-in deployment isn't paying for a second copy of that model just to run
+/// `liberado serve`. Any failure (bad vault path, model load error) degrades to `None` — this is
+/// an optimization, never something worth failing boot over.
+async fn dispatcher_guidance_source(
+    vault_path: &str,
+) -> Option<Arc<dyn liberado_common::ToolGuidanceSource>> {
+    if std::env::var("LIBERADO_DISPATCHER_GUIDANCE").as_deref() != Ok("1") {
+        return None;
+    }
+
+    let vault = match liberado_vault::Vault::open("dispatcher-guidance", vault_path).await {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(error = %e, "dispatcher guidance: failed to open vault — continuing without it");
+            return None;
+        }
+    };
+
+    let model =
+        std::env::var("LIBERADO_MEMORY_MODEL").unwrap_or_else(|_| "bge-small-en-v1.5".to_string());
+    let embedder: Arc<dyn turbovault_vector::EmbeddingEngine> =
+        match turbovault_vector::FastembedEngine::new(&model, None) {
+            Ok(e) => Arc::new(e),
+            Err(e) => {
+                warn!(error = %e, "dispatcher guidance: failed to load embedding model — continuing without it");
+                return None;
+            }
+        };
+
+    match liberado_memory_store::MemoryStore::open(
+        vault,
+        "memory/procedural",
+        embedder,
+        None,
+        liberado_memory_store::MemoryStoreConfig::default(),
+    )
+    .await
+    {
+        Ok(store) => {
+            info!("dispatcher guidance: procedural memory enabled");
+            Some(Arc::new(store))
+        }
+        Err(e) => {
+            warn!(error = %e, "dispatcher guidance: failed to open procedural memory store — continuing without it");
+            None
+        }
+    }
 }
 
 /// Connect chat's tool runtime once, reused for its lifetime, and — when an MCP registry is

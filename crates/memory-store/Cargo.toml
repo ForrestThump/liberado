@@ -1,0 +1,25 @@
+[package]
+name = "liberado-memory-store"
+version = "0.1.0"
+description = "Vault-backed general (facts/preferences) and procedural (tool-selection guidance) memory stores shared by liberado-memory-mcp and the dispatcher. Cleartext markdown notes are the source of truth; each store also maintains a turbovault-vector HNSW index for semantic recall. Native Rust — no external mem0 dependency."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+liberado-common = { workspace = true }
+liberado-vault = { workspace = true }
+turbovault-vector = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+chrono = { workspace = true }
+ulid = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

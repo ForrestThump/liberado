@@ -10,7 +10,7 @@ members = ["crates/*"]
 exclude = [
     "turbovault",
     "turbomcp",
-    "liberado-tool-helper-mcp", # folded in as the `liberado-memory-mcp` crate later (Decision 7)
+    "liberado-tool-helper-mcp", # superseded by crates/memory-store + crates/memory-mcp (Decision 7)
     "mcps",
 ]
 
@@ -78,6 +78,7 @@ liberado-heuristics-tuner = { path = "crates/heuristics-tuner" }
 liberado-telegram-approvals = { path = "crates/telegram-approvals" }
 liberado-cron = { path = "crates/cron" }
 liberado-chat-search = { path = "crates/chat-search" }
+liberado-memory-store = { path = "crates/memory-store" }
 
 # --- co-developed path dependencies (Decision 7) ---
 # Pinned to whatever is checked out in the sibling directories (currently the
@@ -88,6 +89,10 @@ turbovault-audit = { path = "turbovault/crates/turbovault-audit" }
 turbovault-tools = { path = "turbovault/crates/turbovault-tools" }
 turbovault-batch = { path = "turbovault/crates/turbovault-batch" }
 turbovault = { path = "turbovault/crates/turbovault" } # umbrella (ObsidianMcpServer) — test-only
+# NOTE: pinned to the `feature/vector-db` branch (not yet merged to `develop`) — this is where
+# liberado-memory-store's semantic recall comes from. Once that branch is PR'd and merged
+# upstream, re-point this at `develop` like the other turbovault-* deps above.
+turbovault-vector = { path = "turbovault/crates/turbovault-vector" }
 turbomcp = { path = "turbomcp/crates/turbomcp" }
 turbomcp-client = { path = "turbomcp/crates/turbomcp-client" }
 turbomcp-transport = { path = "turbomcp/crates/turbomcp-transport" } # ChildProcessTransport (stdio connector)

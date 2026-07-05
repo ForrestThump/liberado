@@ -23,7 +23,7 @@ pub use liberado_config::{
 use std::path::Path;
 use std::sync::Arc;
 
-use liberado_common::{CapabilityCatalog, DEFAULT_POOL};
+use liberado_common::{CapabilityCatalog, DEFAULT_POOL, ToolGuidanceSource};
 use liberado_config::{McpTransport, managed_binary_path};
 use liberado_daemon::Daemon;
 use liberado_dispatcher::Dispatcher;
@@ -141,22 +141,32 @@ pub fn cron_source_from_config(
 /// approved can't reach an MCP outside what `"dispatcher"` was actually granted. The orchestrator's
 /// MCP connection comes from `topology.mcps` too (single source with the catalog), so routing and
 /// execution line up by name.
+///
+/// `guidance` is the dispatcher's procedural-memory seam (`liberado-dispatch-logic-spec.md` §2
+/// steps 1/5) — `None` means every `Dispatcher` built here behaves exactly as it did before this
+/// parameter existed. The caller (`liberado-server`'s `run`) constructs it, if at all, since
+/// building one means opening a vault-backed store and loading an embedding model — this crate
+/// stays free of that dependency weight and decision.
 pub fn configure_daemon(
     daemon: Daemon,
     provider: Option<&Arc<dyn Provider>>,
     config: &Config,
     catalog: Arc<CapabilityCatalog>,
     vault_path: &Path,
+    guidance: Option<Arc<dyn ToolGuidanceSource>>,
 ) -> Daemon {
     let Some(provider) = provider else {
         tracing::warn!("DEEPSEEK_API_KEY not set — running watch-only (no dispatch)");
         return daemon;
     };
-    let dispatcher = Dispatcher::new(
+    let mut dispatcher = Dispatcher::new(
         provider.clone(),
         config.tuning.dispatch.clone(),
         config.tuning.concurrency.max_reaction_depth,
     );
+    if let Some(g) = &guidance {
+        dispatcher = dispatcher.with_guidance(g.clone());
+    }
     let capabilities = config.policy.capabilities_for("dispatcher");
     tracing::info!(
         grants = config.policy.grants.len(),
@@ -244,11 +254,14 @@ pub fn configure_daemon(
                 capabilities = pool_capabilities.capabilities.len(),
                 "additional pool capability boundary configured from policy"
             );
-            let pool_dispatcher = Dispatcher::new(
+            let mut pool_dispatcher = Dispatcher::new(
                 provider.clone(),
                 config.tuning.dispatch.clone(),
                 config.tuning.concurrency.max_reaction_depth,
             );
+            if let Some(g) = &guidance {
+                pool_dispatcher = pool_dispatcher.with_guidance(g.clone());
+            }
             let daemon = daemon.with_pool_dispatcher(
                 pool.name.clone(),
                 pool_dispatcher,

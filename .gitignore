@@ -3,6 +3,11 @@
 **/target
 Cargo.lock.bak
 
+# Downloaded ONNX embedding/reranker models (fastembed cache — liberado-memory-store,
+# liberado-memory-mcp), re-downloaded on demand, not source
+.fastembed_cache/
+**/.fastembed_cache/
+
 # Machine-local daemon state (Decision 12 trace sink, idempotency markers)
 .liberado/
 

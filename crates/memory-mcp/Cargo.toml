@@ -1,0 +1,27 @@
+[package]
+name = "liberado-memory-mcp"
+version = "0.1.0"
+description = "MCP server exposing general memory (user facts/preferences) and procedural memory (tool-selection guidance) as agent-callable tools, backed by liberado-memory-store. Registered in topology.toml as a stdio MCP; built in-workspace, not a managed (cargo-installed-from-git) MCP. Replaces the old liberado-tool-helper-mcp, which proxied every call over HTTP to an external mem0 service."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "liberado-memory-mcp"
+path = "src/main.rs"
+
+[dependencies]
+liberado-common = { workspace = true }
+liberado-config = { workspace = true }
+liberado-vault = { workspace = true }
+liberado-memory-store = { workspace = true }
+turbovault-vector = { workspace = true }
+turbomcp = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ulid = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

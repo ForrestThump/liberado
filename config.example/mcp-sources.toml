@@ -9,9 +9,10 @@ name = "liberado-weather-mcp"
 git = "https://github.com/ForrestThump/liberado-weather-mcp"
 # rev = "main"    # branch/tag/commit to install; omitted = track the remote default branch
 
-[[source]]
-name = "liberado-tool-helper-mcp"
-git = "https://github.com/ForrestThump/liberado-tool-helper-mcp"
+# liberado-memory-mcp (formerly liberado-tool-helper-mcp) is now a workspace-local crate
+# (crates/memory-mcp) — a `stdio` MCP built with `cargo build --bin liberado-memory-mcp`, not a
+# managed/cargo-installed-from-git one, so it has no entry here (see its `[[mcps]]` entry in
+# topology.toml, which uses `transport = { kind = "stdio", ... }` instead of `managed`).
 
 # `liberado-pdf-mcp` is a Cargo virtual workspace (multiple packages, no default) whose real
 # server binary is package `mcp-pdf-server`, not a package named after the repo — `package` tells
