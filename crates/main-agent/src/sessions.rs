@@ -49,8 +49,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use liberado_common::{
-    CapabilityCatalog, CapabilitySet, Consequence, DispatchAction, McpDescriptor, ProposalSigner,
-    WriteClass,
+    CapabilityCatalog, CapabilitySet, Consequence, DEFAULT_POOL, DispatchAction, McpDescriptor,
+    PROPOSALS_DIR, ProposalSigner, SignedProposal, WriteClass,
 };
 use liberado_conversation_store::{
     Author, ConversationHeader, ConversationStore, NewConversation, NewNode, StoreError, Ulid,
@@ -364,8 +364,7 @@ impl ChatSessions {
                 DispatchOutcome::Answered(format_questions(&questions))
             }
             Ok(Disposition::Reported(report)) => DispatchOutcome::Answered(report.summary),
-            Ok(Disposition::Propose(proposal)) => match self.write_chat_proposal(&proposal).await
-            {
+            Ok(Disposition::Propose(proposal)) => match self.write_chat_proposal(&proposal).await {
                 Ok(path) => DispatchOutcome::Answered(format!(
                     "I've drafted a proposal for you to review — it needs your approval before it \
                      runs: {}",
@@ -391,11 +390,8 @@ impl ChatSessions {
     /// `tokio::fs::write` under `proposals_dir/proposals/`. `proposals_dir` is the vault's own
     /// `proposals/` directory, so this lands exactly where the daemon's `react()` already watches —
     /// approving it flows through the same pipeline pre-flight proposals use.
-    async fn write_chat_proposal(
-        &self,
-        proposal: &liberado_common::Proposal,
-    ) -> std::io::Result<PathBuf> {
-        let proposals_subdir = self.proposals_dir.join("proposals");
+    async fn write_chat_proposal(&self, proposal: &SignedProposal) -> std::io::Result<PathBuf> {
+        let proposals_subdir = self.proposals_dir.join(PROPOSALS_DIR);
         let proposal_path = proposals_subdir.join(format!("{}.md", proposal.id));
         tokio::fs::create_dir_all(&proposals_subdir).await?;
         tokio::fs::write(&proposal_path, proposal.to_note()).await?;
@@ -447,6 +443,10 @@ impl ChatSessions {
         };
 
         // Wrap in RiskGatedToolRuntime for safety guards (capability / consequence / magnitude).
+        // Chat isn't one of the daemon's named pools (it has its own separate "main-agent"
+        // capability scope) — tagged "default" so an approved chat-originated proposal executes
+        // via the daemon's "default" pool orchestrator on approval, exactly matching today's
+        // pre-pool behavior (one orchestrator handled every approval, regardless of origin).
         Box::new(RiskGatedToolRuntime::new(
             inner,
             self.capabilities.clone(),
@@ -457,6 +457,7 @@ impl ChatSessions {
             user.to_string(),
             session.to_string(),
             self.signer.clone(),
+            DEFAULT_POOL,
         ))
     }
 
@@ -722,13 +723,12 @@ mod tests {
         ));
         let executor = Executor::new(provider, Budget::default());
 
-        let sessions = ChatSessions::new(store, executor, Arc::new(NoTools))
-            .with_guards(
-                vec![("tasks-mcp".into(), Consequence::Reversible)],
-                liberado_common::CapabilitySet::empty(),
-                dir.path().join("proposals"),
-                ProposalSigner::random(),
-            );
+        let sessions = ChatSessions::new(store, executor, Arc::new(NoTools)).with_guards(
+            vec![("tasks-mcp".into(), Consequence::Reversible)],
+            liberado_common::CapabilitySet::empty(),
+            dir.path().join("proposals"),
+            ProposalSigner::random(),
+        );
 
         let id = sessions.create(None).await.unwrap();
         let reply = sessions.turn(id, "hello").await.unwrap();
@@ -862,8 +862,11 @@ mod tests {
         let chat_provider = Arc::new(MockProvider::with_script("chat", chat_replies));
         let executor = Executor::new(chat_provider, liberado_executor::Budget::default());
 
-        ChatSessions::new(store, executor, Arc::new(NoTools))
-            .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()), orchestrator)
+        ChatSessions::new(store, executor, Arc::new(NoTools)).with_dispatch(
+            dispatcher,
+            Arc::new(CapabilityCatalog::new()),
+            orchestrator,
+        )
     }
 
     #[tokio::test]
@@ -888,6 +891,7 @@ mod tests {
             Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),
+            "default",
         );
         let sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), orchestrator);
 
@@ -926,6 +930,7 @@ mod tests {
             Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),
+            "default",
         );
         let sessions = sessions_with_dispatch(
             dir.path(),
@@ -964,6 +969,7 @@ mod tests {
             Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),
+            "default",
         );
         let mut sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), orchestrator);
         sessions = sessions.with_guards(
@@ -1057,6 +1063,7 @@ mod tests {
             Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),
+            "default",
         );
         let capabilities = CapabilitySet::from_iter([
             Capability::ExecuteMcp("tasks-mcp".into()),

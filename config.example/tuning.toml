@@ -32,3 +32,8 @@
 # git_commit_schedule = "per-batch+hourly"
 # maintenance_schedule = "weekly"
 # prune_requires_proposal = true   # pruning human-authored content always proposes first
+
+[telegram_approvals]
+# getupdate_timeout_secs = 25   # Telegram getUpdates long-poll length (1-50, Telegram's own cap)
+# poll_retry_backoff_secs = 10  # backoff before retrying getUpdates after a network/API error
+# revise_temperature = 0.0      # sampling temperature for the Revise button's LLM edit call

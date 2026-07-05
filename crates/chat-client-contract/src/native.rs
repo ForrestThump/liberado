@@ -1,30 +1,20 @@
-//! Native (non-WASM) chat client trait and SSE framing decoder.
+//! Native (non-WASM) SSE framing decoder.
 //!
-//! Gated behind `#[cfg(not(target_arch = "wasm32"))]` in `lib.rs` so the WebUI can
-//! depend on `chat-client-contract` without pulling in `tokio`/`futures`/`async-trait`.
-
-use async_trait::async_trait;
-use std::pin::Pin;
-use ulid::Ulid;
-
-use crate::wire::{ChatError, ChatEvent, ChatResponse};
-
-/// A chat client trait — implemented by HTTP/SSE clients that talk to `liberado serve`.
-#[async_trait]
-pub trait ChatClient {
-    /// Send a message non-streaming, returning the reply and session id.
-    async fn send(&self, message: &str, session: Option<Ulid>) -> Result<ChatResponse, ChatError>;
-
-    /// Send a message and stream events back.
-    async fn stream(
-        &self,
-        message: &str,
-        session: Option<Ulid>,
-    ) -> Result<
-        Pin<Box<dyn futures::Stream<Item = Result<ChatEvent, ChatError>> + Send>>,
-        ChatError,
-    >;
-}
+//! Gated behind `#[cfg(not(target_arch = "wasm32"))]` in `lib.rs` so the WebUI can depend on
+//! `chat-client-contract` without pulling in `tokio`/`futures`.
+//!
+//! This module used to also declare a `ChatClient` trait (`send`/`stream`) meant to be one shared
+//! client implementation for the TUI and `liberado chat` CLI. Neither ever implemented it — each
+//! hand-rolled its own POST + SSE loop directly against `reqwest` (`crates/cli/src/chat_client.rs`,
+//! `crates/tui/src/effects.rs`), because their actual needs diverge past the point a `send`/`stream`
+//! trait usefully captures: the CLI drives a blocking terminal REPL, the TUI feeds a non-blocking
+//! render loop via its own action/effect channels. Removed 2026-07-05
+//! (`docs/roadmap/hygiene-audit-2026-07-05.md`) rather than force an implementation neither client
+//! actually wanted. [`SseDecoder`] below (SSE framing) is the real shared boundary both clients use
+//! today. [`crate::wire::ChatEvent::from_sse_data`] (typed payload decoding) is used on top of it by
+//! the TUI (`liberado-tui`'s `sse::ToAction`) — the CLI still parses its own `tool`/`tool_result`
+//! JSON payloads inline (`crates/cli/src/chat_client.rs`), which is a smaller, separate, optional
+//! follow-up (moving the CLI onto `ChatEvent` too) not folded into this fix.
 
 // ── Incremental SSE parser ───────────────────────────────────────────────────
 //

@@ -99,7 +99,12 @@ distinct, larger change from "move the decoder").
 
 **Status**: Done — decoder moved to `chat_client_contract::native`; `tui/src/sse.rs` and
 `cli/src/chat_client.rs` both import it now (`cli` alone dropped ~150 duplicate lines).
-`ChatClient` trait adoption remains a separate, deferred follow-up.
+The unimplemented `ChatClient` trait was resolved 2026-07-05, not by adopting it — checked both
+real clients first and found their actual transport needs diverge too much for one shared `send`/
+`stream` trait to usefully capture (CLI: blocking terminal REPL; TUI: non-blocking render loop via
+its own action/effect channels). Deleted the trait and documented `SseDecoder` (genuinely shared)
+plus `ChatEvent::from_sse_data` (used by the TUI on top of it) as the real boundary instead — see
+`hygiene-audit-2026-07-05.md` P2.5.
 
 ---
 

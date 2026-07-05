@@ -23,6 +23,13 @@ use crate::dispatch::ToolCall;
 /// fenced block at the top followed by the human-readable body.
 const FRONTMATTER_FENCE: &str = "---";
 
+/// The directory (relative to a vault root) proposal notes live under. Every consumer that reads,
+/// writes, or watches proposal files agrees on this one name — `liberado-daemon`,
+/// `liberado-telegram-approvals`, and `liberado-executor`'s `RiskGatedToolRuntime` each used to
+/// declare their own private copy of the same literal (`docs/roadmap/hygiene-audit-2026-07-05.md`),
+/// with only a doc comment (not the compiler) keeping them in agreement.
+pub const PROPOSALS_DIR: &str = "proposals";
+
 /// Lifecycle state of a proposal. Lives in the note's frontmatter so it is editable from
 /// Obsidian. `Done` marks a proposal whose action has been executed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,8 +101,16 @@ pub struct Proposal {
     pub created: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires: Option<DateTime<Utc>>,
-    /// HMAC-SHA256 (hex-encoded) over `id`/`correlation_id`/`source`/`proposed_action`/`created`,
-    /// computed by a [`ProposalSigner`] at creation and checked before an approval executes.
+    /// Which named dispatcher/executor pool (Decision 18 checkpoint #3) proposed this — so
+    /// approval executes it via the *same* pool's authority it was proposed under, never a
+    /// different (possibly broader) one. `None` routes to the always-present `"default"` pool,
+    /// including every proposal written before pools existed. `#[serde(default)]` so an old note
+    /// still parses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool: Option<String>,
+    /// HMAC-SHA256 (hex-encoded) over `id`/`correlation_id`/`source`/`proposed_action`/`pool`/
+    /// `created`, computed by a [`ProposalSigner`] at creation and checked before an approval
+    /// executes.
     /// Deliberately excludes `status`/`expires`, which are meant to change as part of the normal
     /// human-approval workflow. Raises the bar against *careless* tampering with the proposed
     /// action between propose and approve (a bug, an accidental overwrite, an opportunistic script
@@ -127,6 +142,11 @@ impl Proposal {
             status: ProposalStatus::Pending,
             created: Utc::now(),
             expires: None,
+            // Routes to the "default" pool unless the caller sets it explicitly afterward (see
+            // `pool`'s own doc comment) — callers that don't know about pools at all (most
+            // existing call sites, and every proposal note written before pools existed) get
+            // today's exact single-pool behavior.
+            pool: None,
             // Unsigned until a `ProposalSigner::sign` call sets it — every real production
             // proposal-creation site signs before writing the note; tests that don't care about
             // integrity checking simply never call `execute_approved`/`handle_proposal_change` on
@@ -166,6 +186,48 @@ impl Proposal {
     }
 }
 
+/// A [`Proposal`] whose `integrity` field is guaranteed to have been computed by a real
+/// [`ProposalSigner`] — the only way to construct one is [`ProposalSigner::sign`]. Every
+/// proposal-writing helper (`Daemon::write_proposal`, `ChatSessions::write_chat_proposal`,
+/// `RiskGatedToolRuntime::write_proposal`) takes a `&SignedProposal`, not a `&Proposal`, so a future
+/// call site that forgot to sign is a compile error instead of a proposal that silently fails
+/// verification later, discovered only at approval time
+/// (`docs/roadmap/hygiene-audit-2026-07-05.md`).
+///
+/// Deliberately exposes only immutable access ([`Deref`](std::ops::Deref)) plus a narrow
+/// [`set_status`](Self::set_status) — not a general `DerefMut`, which would let a caller mutate a
+/// signed field after the fact and silently invalidate the signature (exactly the bug class this
+/// type exists to prevent). `status`/`expires` are the two fields `ProposalSigner::compute`
+/// deliberately excludes (see [`Proposal::integrity`]'s doc comment), so changing them never
+/// invalidates the signature and needs no re-sign.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SignedProposal(Proposal);
+
+impl SignedProposal {
+    /// Borrow the wrapped proposal.
+    pub fn as_proposal(&self) -> &Proposal {
+        &self.0
+    }
+
+    /// Consume, discarding the "signed" guarantee — for a caller that genuinely needs an owned
+    /// `Proposal` (e.g. to store it in a place typed for the general case).
+    pub fn into_proposal(self) -> Proposal {
+        self.0
+    }
+
+    /// Flip `status` in place — see this type's doc comment for why that's safe without re-signing.
+    pub fn set_status(&mut self, status: ProposalStatus) {
+        self.0.status = status;
+    }
+}
+
+impl std::ops::Deref for SignedProposal {
+    type Target = Proposal;
+    fn deref(&self) -> &Proposal {
+        &self.0
+    }
+}
+
 /// Signs and verifies a [`Proposal`]'s `integrity` field with a shared key — see that field's doc
 /// comment for exactly what this does and doesn't defend against. Cheap to clone (the key is
 /// reference-counted), so one signer loaded at boot can be threaded to every proposal-creation and
@@ -192,9 +254,11 @@ impl ProposalSigner {
         Self { key: key.into() }
     }
 
-    /// Sign `proposal`, setting its `integrity` field. Call once at creation, before `to_note()`.
-    pub fn sign(&self, proposal: &mut Proposal) {
-        proposal.integrity = self.compute(proposal);
+    /// Sign `proposal`, computing its `integrity` field, and wrap it as a [`SignedProposal`] — the
+    /// only way to construct one. Call once at creation, before writing.
+    pub fn sign(&self, mut proposal: Proposal) -> SignedProposal {
+        proposal.integrity = self.compute(&proposal);
+        SignedProposal(proposal)
     }
 
     /// Whether `proposal`'s `integrity` field matches what this signer computes for its current
@@ -217,6 +281,8 @@ impl ProposalSigner {
         let action_json = serde_json::to_vec(&proposal.proposed_action)
             .expect("ProposedAction serializes to JSON");
         mac.update(&action_json);
+        mac.update(b"\0");
+        mac.update(proposal.pool.as_deref().unwrap_or("").as_bytes());
         mac.update(b"\0");
         mac.update(proposal.created.to_rfc3339().as_bytes());
         hex_encode(&mac.finalize().into_bytes())
@@ -245,7 +311,9 @@ impl ProposedAction {
                     .join(", ");
                 format!("run {} tool call(s): {tools}", calls.len())
             }
-            ProposedAction::Subagent { goal, allowed_mcps, .. } => {
+            ProposedAction::Subagent {
+                goal, allowed_mcps, ..
+            } => {
                 let mcps = allowed_mcps.join(", ");
                 format!("dispatch a subagent for: {goal} (mcps: {mcps})")
             }
@@ -315,9 +383,9 @@ mod tests {
             "liberado",
             ProposedAction::Subagent {
                 goal: "review recent decisions".into(),
-                capabilities: CapabilitySet::from_iter([crate::capability::Capability::ExecuteMcp(
-                    "decisions-mcp".into(),
-                )]),
+                capabilities: CapabilitySet::from_iter([
+                    crate::capability::Capability::ExecuteMcp("decisions-mcp".into()),
+                ]),
                 allowed_mcps: vec!["decisions-mcp".into()],
                 success_criteria: vec!["a review note exists".into()],
             },
@@ -401,27 +469,25 @@ mod tests {
     #[test]
     fn signed_proposal_verifies() {
         let signer = ProposalSigner::random();
-        let mut p = sample_proposal();
+        let p = sample_proposal();
         assert!(!signer.verify(&p), "unsigned proposal must not verify");
-        signer.sign(&mut p);
-        assert!(!p.integrity.is_empty());
-        assert!(signer.verify(&p));
+        let signed = signer.sign(p);
+        assert!(!signed.integrity.is_empty());
+        assert!(signer.verify(signed.as_proposal()));
     }
 
     #[test]
     fn signature_survives_a_note_round_trip() {
         let signer = ProposalSigner::random();
-        let mut p = sample_proposal();
-        signer.sign(&mut p);
-        let back = Proposal::from_note(&p.to_note()).unwrap();
+        let signed = signer.sign(sample_proposal());
+        let back = Proposal::from_note(&signed.to_note()).unwrap();
         assert!(signer.verify(&back));
     }
 
     #[test]
     fn tampered_proposed_action_fails_verification() {
         let signer = ProposalSigner::random();
-        let mut p = sample_proposal();
-        signer.sign(&mut p);
+        let mut p = signer.sign(sample_proposal()).into_proposal();
         // Someone edits the action between propose and approve (directly, or via a note round-trip
         // that a co-resident process rewrote) — the args changed, everything else the same.
         p.proposed_action = ProposedAction::ToolCalls(vec![ToolCall {
@@ -435,14 +501,26 @@ mod tests {
     }
 
     #[test]
+    fn tampered_pool_fails_verification() {
+        // `pool` decides *which authority* an approved proposal executes with (Decision 18
+        // checkpoint #3) — retagging a proposal from a restricted pool onto a broader one would be
+        // a real privilege escalation, so it must be as tamper-evident as `proposed_action`.
+        let signer = ProposalSigner::random();
+        let mut p = sample_proposal();
+        p.pool = Some("restricted".into());
+        let mut p = signer.sign(p).into_proposal();
+        p.pool = Some("default".into());
+        assert!(!signer.verify(&p), "a tampered pool must fail verification");
+    }
+
+    #[test]
     fn approving_status_alone_does_not_invalidate_the_signature() {
         // status is deliberately excluded from the signed fields — flipping pending -> approved is
         // the normal, expected human-approval edit and must not itself break verification.
         let signer = ProposalSigner::random();
-        let mut p = sample_proposal();
-        signer.sign(&mut p);
-        p.status = ProposalStatus::Approved;
-        assert!(signer.verify(&p));
+        let mut signed = signer.sign(sample_proposal());
+        signed.set_status(ProposalStatus::Approved);
+        assert!(signer.verify(&signed));
     }
 
     #[test]
@@ -460,9 +538,8 @@ mod tests {
         // lifetime being checked against a different, unrelated key.
         let signer_a = ProposalSigner::random();
         let signer_b = ProposalSigner::random();
-        let mut p = sample_proposal();
-        signer_a.sign(&mut p);
-        assert!(!signer_b.verify(&p));
+        let signed = signer_a.sign(sample_proposal());
+        assert!(!signer_b.verify(&signed));
     }
 
     #[test]
@@ -473,8 +550,7 @@ mod tests {
         let key: Arc<[u8]> = vec![7u8; 32].into();
         let signer_1 = ProposalSigner::new(key.clone());
         let signer_2 = ProposalSigner::new(key);
-        let mut p = sample_proposal();
-        signer_1.sign(&mut p);
-        assert!(signer_2.verify(&p));
+        let signed = signer_1.sign(sample_proposal());
+        assert!(signer_2.verify(&signed));
     }
 }

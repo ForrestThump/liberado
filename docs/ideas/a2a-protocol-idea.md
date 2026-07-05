@@ -3,6 +3,29 @@
 **Status**: Idea, not decided. Nothing here is scheduled; captured so the seams that already exist
 for it aren't lost, and so A2A isn't confused with the unrelated Agent Client Protocol from Zed.
 
+**Research update (2026-07-04, `agent_pools_research_results.md`, four independent research
+passes)**: this doc's own instinct — A2A as *external* interop, not an internal coordination
+model — came back confirmed, not just assumed. **Internal A2A-style authority-splitting (multiple
+independently-authoritative peer agents negotiating/coordinating) is a confirmed bad fit**, not
+merely deferred: coordinating between independently-authoritative peers requires *some* arbiter
+with superset authority to resolve conflicts, which directly breaks the narrow-only capability
+invariant (Decision 4) this whole system is built on. Every source researched (including
+Anthropic's own published multi-agent research system) converges on staying with
+orchestrator + narrowed-workers (what Liberado already has, and what the "pool" work — Decision 18
+checkpoint #3's second half — extends) rather than peer coordination, until a *concrete* workload
+demonstrates the simpler model fails. None has appeared. A **life-os-to-other-systems** A2A bridge
+— Liberado as *one bounded system* talking to *other* bounded systems over the open protocol — is
+unaffected by this and remains the legitimate version of this idea; everything below in this doc
+was already written with that framing, not the internal one, so it stands as originally captured.
+
+One adjacent idea surfaced by the research, worth naming so it isn't lost either but is **not**
+part of this doc's scope: mediated pub/sub *data* notification between subagents (a subagent
+subscribes to a topic and gets woken when relevant data changes) — explicitly not an
+authority-sharing mechanism, since subscriptions and wake-ups would still gate through the
+dispatcher's normal capability check, not agent-to-agent trust. Judged low-risk and worth
+considering *if* a concrete need shows up once pools exist — not before, and not the same thing as
+A2A.
+
 **Goal**: Let Liberado talk to *other* agent systems (not just its own MCPs/subagents) using the
 open **Agent2Agent (A2A)** protocol — a JSON-RPC/HTTP spec (Linux Foundation, ex-Google) for
 peer-to-peer agent interop: an **AgentCard** (capability discovery document), a **Task** lifecycle

@@ -298,3 +298,52 @@ async fn concurrent_appends_to_one_conversation_are_serialized() {
         "ids must be strictly increasing in file order"
     );
 }
+
+#[tokio::test]
+async fn set_title_updates_the_header_and_preserves_every_node() {
+    let dir = tempdir().unwrap();
+    let store = JsonlStore::new(dir.path());
+    let convo = store.create(new_convo("original title")).await.unwrap().id;
+    let n0 = store.append(convo, user_node(None, "one")).await.unwrap();
+    store
+        .append(convo, user_node(Some(n0.id), "two"))
+        .await
+        .unwrap();
+
+    store
+        .set_title(convo, "renamed title".to_string())
+        .await
+        .unwrap();
+
+    let listed = store.list().await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].title.as_deref(), Some("renamed title"));
+
+    // Both nodes (and their parent-child link) survived the rewrite intact.
+    let path = store.leaf_path(convo, None).await.unwrap();
+    let contents: Vec<&str> = path.iter().map(|n| n.message.content.as_str()).collect();
+    assert_eq!(contents, vec!["one", "two"]);
+}
+
+#[tokio::test]
+async fn set_title_leaves_no_temp_file_behind() {
+    // The atomic write-then-rename this uses (rather than truncate-in-place) writes to a sibling
+    // `.jsonl.tmp` first — confirms the rename actually happens and doesn't leave that temp file
+    // sitting in the directory (which would otherwise show up in a future `list()` scan, though
+    // `.tmp` isn't a `.jsonl` extension so it wouldn't be picked up — this just confirms cleanup).
+    let dir = tempdir().unwrap();
+    let store = JsonlStore::new(dir.path());
+    let convo = store.create(new_convo("title")).await.unwrap().id;
+
+    store
+        .set_title(convo, "new title".to_string())
+        .await
+        .unwrap();
+
+    let tmp_path = dir.path().join(format!("{convo}.jsonl.tmp"));
+    assert!(
+        !tmp_path.exists(),
+        "the temp file must be renamed away, not left behind"
+    );
+    assert!(dir.path().join(format!("{convo}.jsonl")).exists());
+}

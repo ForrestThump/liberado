@@ -140,6 +140,20 @@ html {
     display: flex;
     flex: 1;
     min-height: 0;
+    position: relative;
+}
+
+/* On phone-width viewports, an EXPANDED sidebar takes over the whole content area instead of
+   squeezing chat into a useless sliver next to it — matches the standard mobile chat-app pattern
+   (conversation list OR chat, never both at once). Collapsed stays the same slim rail as desktop. */
+@media (max-width: 768px) {
+    .sidebar:not(.sidebar-collapsed) {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        z-index: 5;
+        border-right: none;
+    }
 }
 
 /* ── Sidebar ─────────────────────────────────────────────────────────────── */
@@ -220,6 +234,44 @@ html {
 
 .sidebar-toggle-btn:hover {
     background: var(--lib-surface);
+}
+
+/* ── Sidebar search ───────────────────────────────────────────────────────── */
+
+.sidebar-search {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--lib-border);
+    flex-shrink: 0;
+}
+
+.sidebar-search-input {
+    width: 100%;
+    padding: 0.35rem 0.6rem;
+    background: color-mix(in srgb, var(--lib-app-bg) 80%, transparent);
+    border: 1px solid var(--lib-border);
+    border-radius: 0.375rem;
+    color: var(--lib-sidebar-text);
+    font-size: 0.8125rem;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.12s;
+}
+
+.sidebar-search-input:focus {
+    border-color: var(--lib-accent);
+}
+
+.sidebar-search-input::placeholder {
+    color: color-mix(in srgb, var(--lib-sidebar-text) 50%, transparent);
+}
+
+.search-result-snippet {
+    font-size: 0.6875rem;
+    color: var(--lib-status-bar-text);
+    margin-top: 0.25rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .sidebar-list {
@@ -1021,6 +1073,60 @@ html {
     font-size: 0.5625rem;
     color: var(--lib-status-bar-text);
     flex-shrink: 0;
+}
+
+/* ── Main-agent / dispatcher visibility badges ───────────────────────────── */
+/* "MA" (main agent / chat) and "DX" (dispatcher / reactive pipeline) — an MCP can be granted to
+   either, both, or neither (Decision 4 capability narrowing is per-component, not all-or-nothing).
+   Compact two-letter badges in the collapsed header row; full-word pills once expanded. */
+
+.mcp-visibility {
+    display: flex;
+    gap: 0.25rem;
+    flex-shrink: 0;
+}
+
+.visibility-badge {
+    font-size: 0.5rem;
+    font-weight: 600;
+    padding: 0.0625rem 0.25rem;
+    border-radius: 0.25rem;
+    letter-spacing: 0.02em;
+}
+
+.visibility-badge.active {
+    background: color-mix(in srgb, var(--lib-accent) 20%, transparent);
+    color: var(--lib-accent);
+}
+
+.visibility-badge.inactive {
+    background: transparent;
+    color: var(--lib-border);
+    border: 1px solid color-mix(in srgb, var(--lib-border) 50%, transparent);
+}
+
+.mcp-server-visibility {
+    display: flex;
+    gap: 0.375rem;
+    margin-bottom: 0.375rem;
+}
+
+.visibility-pill {
+    font-size: 0.5625rem;
+    font-weight: 500;
+    padding: 0.0625rem 0.5rem;
+    border-radius: 999px;
+}
+
+.visibility-pill.active {
+    background: color-mix(in srgb, var(--lib-accent) 20%, transparent);
+    color: var(--lib-accent);
+}
+
+.visibility-pill.inactive {
+    background: transparent;
+    color: var(--lib-border);
+    border: 1px solid color-mix(in srgb, var(--lib-border) 50%, transparent);
 }
 
 /* ── Consequence badge ───────────────────────────────────────────────────── */

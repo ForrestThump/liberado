@@ -118,12 +118,116 @@ findings: [heuristics-tuning-engine-plan.md](heuristics-tuning-engine-plan.md).
   `TELEGRAM_CHAT_ID` env vars (`TelegramNotifier::from_env()`); unset, nothing changes from before
   this existed. Live-verified: a real proposal write through the full `RiskGatedToolRuntime`
   production path actually delivered a Telegram message, not just the bare HTTP call in isolation.
+- **✅ Two-way Telegram approval (approve/reject/revise) — done (2026-07-04).** Closes the follow-up
+  question the notification above raised — can a human approve from their phone, not just find out
+  about it? New `liberado-telegram-approvals` crate (`ApprovalBot`): a `getUpdates` poll loop that
+  answers the Approve/Reject buttons `TelegramNotifier::notify_proposal` now sends (a new defaulted
+  `Notifier::notify_proposal` method, Telegram-only override) with **pure code, no LLM** — a tap
+  reads `proposals/{stem}.md`, flips `status`, and writes it back tagged `WriteProvenance::human()`
+  (a new constructor), which the daemon's existing attribution/`handle_proposal_change` reacts to
+  exactly like a human's Obsidian edit — no execution logic duplicated. Revise is the one
+  LLM-touching path: taps into a `force_reply` prompt, hands the free-text note to the shared
+  `Provider` (`complete_json` + a loose schema, same "the prompt carries the shape" precedent as the
+  dispatcher's own) to redraft `rationale`/`proposed_action`, then **unconditionally re-signs** and
+  writes back still `Pending` with fresh buttons — only a subsequent Approve tap (pure code) can ever
+  execute anything, so an ambiguous or LLM-misjudged revision can never grant approval itself. Poll
+  timing and the revise call's sampling temperature are config-file tunable (`tuning.toml`'s new
+  `[telegram_approvals]` section, `TelegramApprovalsTuning`); credentials stay env-var only, never in
+  a config file (Decision 10). Live-verified end-to-end with a real bot tap: the proposal note
+  showed `status: done` with a matching integrity signature and the mock tool call recorded.
+
+**Hardening pass complete.** All three gaps this pre-Phase-3 pass set out to close — the zone-write
+guard, resource-budget bounds, and unattended-run visibility (now full round-trip approval, not just
+a notification) — are done and live-verified. Combined with the already-fixed real bug and two
+production-reachable panics the 2026-07-04 hygiene audit found (see
+[hygiene-audit-2026-07-04.md](hygiene-audit-2026-07-04.md)), there's no known, named gap left
+blocking Phase 3.
 
 ### Phase 3 — Autonomy breadth
 
 Cron as a bus listener (Hermes gap #2, near-free) + the vault becomes the reactive event-source
 plugin (vault-decoupling lands here, behind an event-source/hook trait). (Mesh checkpoint #3: cron and
 vault-watch are interchangeable event-sources; a second dispatcher/executor is config-enableable.)
+**✅ Checkpoint #3 fully done (2026-07-04)** — both halves, see below.
+
+- **✅ Event-source trait + cron — done (2026-07-04).** The seam Decision 18/19 named: a new
+  `EventSource` trait (`liberado-common`) that `Daemon::run` fans into one channel, reacting to
+  whatever arrives regardless of source. Built in the explicit sequencing the user chose — the
+  *existing* vault-watch loop was refactored into the trait's **first** conformer
+  (`VaultEventSource`, `liberado-daemon`, moved not rewritten; the daemon's whole existing test
+  suite passed unchanged, proving the seam is a true no-op) — before cron, its second conformer,
+  was added. New `liberado-cron` crate (`Schedule`, `CronEventSource`) is deliberately
+  vault-agnostic (no `liberado-vault` dependency at all) — the concrete proof Decision 19's
+  "the core is vault-agnostic" claim is real. Config surface: `Topology.schedules` (parallel to
+  `Topology.mcps`), each entry's `cron_expr`/uniqueness fail-fast validated (Decision 14). Cron
+  reuses the existing `"dispatcher"` component/capability boundary rather than inventing a new one
+  (v1 scope; a `component` field is the natural extension point if per-schedule scoping is ever
+  needed). Live-verified in a daemon integration test asserting a cron firing and a real vault
+  change both produce reactions over the same channel — the literal proof of Decision 18
+  checkpoint #3 ("cron and vault-watch are interchangeable event-sources"). **Deferred, not
+  dropped**: the generic external webhook/hook receiver (`Topology.hooks`, a config stub with
+  nothing wired to it) and running a second, independently-scoped dispatcher/executor pool are
+  separate, later slices.
+- **✅ Named dispatcher/executor pools — done (2026-07-04).** Checkpoint #3's remaining half:
+  multiple independently-authority-scoped dispatcher+executor pairs, routed by trigger. Before
+  building, the user asked for outside research on whether concurrent-agent architectures like this
+  are proven territory — a research prompt doc was written, sent to several external research
+  models, and the results (`agent_pools_research_results.md`) converged hard: **internal**
+  peer-agent authority-coordination is a poor, mostly-unproven fit (even Anthropic's own published
+  multi-agent research system is strictly orchestrator + narrowed-workers, not peer coordination) —
+  confirmed a bad fit, not just deferred. What this slice builds is the well-scoped piece the
+  research didn't object to: pools that never talk to each other at all, each with its own named
+  capability grant. `Daemon` now holds `pools: HashMap<String, DaemonPool>` (an always-present
+  `"default"` entry keeps every pre-existing `with_dispatcher`/`with_orchestrator` call site
+  unchanged — zero call-site breakage anywhere in the codebase). `EventPayload.pool` (set by
+  `CronSchedule.pool`/`HookConfig.pool`, `None` ⇒ `"default"`) routes a trigger to its pool;
+  `topology.toml`'s new `[[pools]]` declares one, validated fail-fast against schedules/hooks
+  naming an undeclared or disabled pool. A pool's authority is nothing new — its name **is** the
+  `component` key in `policy.toml`'s existing `[[grants]]`, the same mechanism `"dispatcher"`/
+  `"main-agent"` already use. A privilege-escalation-shaped gap surfaced mid-implementation, not
+  in the original plan: a proposal needs to remember which pool proposed it, or an approval could
+  execute under a *different*, possibly broader pool's authority. Closed by making `Proposal.pool`
+  a signed field (stamped by the proposing `Orchestrator`/`RiskGatedToolRuntime` before signing,
+  re-verified defensively in `execute_approved`) — surfaced to the user as an explicit scope
+  question (thread `pool_name` through ~10 call sites vs. document the gap) and resolved as "full
+  fix now." Live-verified by a dual-pool daemon integration test: two pools given the identical
+  decision referencing the same MCP, one granted it and one not — the ungranted pool's dispatcher
+  guard (not just the orchestrator's own runtime scoping) catches the gap and never reaches a real
+  runtime. **Deliberately out of scope** (research-confirmed): pools do not coordinate, communicate,
+  or share state — that's the separate, genuinely open research question, not this slice. Also
+  deferred, no concrete need yet: per-pool model/tuning override, per-pool concurrency budgets
+  (there's no live concurrency budget to split today — `dispatch_parallel`'s semaphore isn't wired
+  into the live react() path), zone-based vault-watch pool routing (vault-watch always uses
+  `"default"`).
+- **✅ External webhook hook receiver — done (2026-07-04).** The other half of "cron and hooks":
+  `POST /api/hooks/{name}` (`crates/server/src/hooks.rs`), the push-style counterpart to cron's
+  pull-style `EventSource` — arbitrary software that can `curl` an HTTP endpoint (systemd
+  `ExecStart`, CI webhook steps, monitoring alerts, home-automation HTTP actions) triggers a
+  reaction the same way a vault change or cron firing does. Required a small daemon change first:
+  `Daemon::event_tx`/`event_rx` moved from being built fresh inside `run()` to daemon-owned fields
+  (built once in `open()`), with a new `Daemon::event_sender()` accessor so an external, same-process
+  producer (the HTTP handler) can inject an `Event` without needing its own `EventSource` loop —
+  grabbed before `daemon.run()` consumes `self`, the same "grab a clone before the move" pattern
+  the Telegram approval bot wiring already used for `daemon.vault()`/`daemon.signer()`.
+  `ComponentConfig`/`Topology.hooks`'s old stub type was replaced in place with `HookConfig` (name,
+  `secret_ref`, goal — parallel to `CronSchedule`), since the stub had no room for a secret and
+  nothing else referenced it. Auth is a **per-hook shared secret** (`X-Liberado-Hook-Secret` header,
+  constant-time compared) — the user's explicit choice over HMAC request signing, for the stated
+  goal of being trivially `curl`-able from anything. Idempotency is an in-memory, TTL'd cache keyed
+  on an optional `X-Liberado-Idempotency-Key` header — the original spec's persisted
+  `.liberado/reactions/<id>.json` journal marker was never actually built anywhere in this codebase
+  either, so this is the honest, consistent alternative, not a regression from a real mechanism.
+  **Deferred, documented, not silently dropped**: in-process rate limiting (recommendation is a
+  reverse proxy if this port is ever exposed beyond a LAN — consistent with this project's
+  homelab/ssh-in-to-edit-config operational posture), HMAC signature verification as an available
+  upgrade path, and per-hook capability scoping beyond the pool mechanism below (a hook can route to
+  a named pool via `HookConfig.pool`, but there's no scoping *within* one hook's own single grant).
+  Verified via 11 HTTP-level integration tests
+  (`crates/server/src/hooks.rs`) exercising the full contract (right/wrong/missing secret, unknown
+  hook, context merging, idempotent redelivery) against a real `axum::Router`; a live `curl`-based
+  smoke test was attempted but skipped after a config-directory mixup in the test harness (caught
+  before any request was sent — nothing touched) — the automated coverage was judged sufficient
+  without repeating it.
 
 ### Phase 4 — Scaling
 
@@ -214,8 +318,10 @@ always-on.
   `chat-client-contract`'s `ChatEvent`/SSE decoder and `liberado-commands`' slash-command dispatcher
   instead of three hand-rolled copies. Full plan:
   [tui-shared-code-extraction-plan.md](tui-shared-code-extraction-plan.md) (decoder unification
-  done; the plan's `ChatClient` trait adoption is a separate, still-deferred follow-up — see
-  `crate-modularity-audit.md` finding 2).
+  done). The plan's proposed `ChatClient` trait was deliberately **not** adopted — resolved
+  2026-07-05 by deleting the never-implemented trait instead (`chat-client-contract` module docs
+  now name `SseDecoder` + `ChatEvent::from_sse_data` as the real shared boundary; see
+  `hygiene-audit-2026-07-05.md` P2.5).
 - **WebUI flesh-out** — sidebar, MCP panel, markdown rendering, slash commands, and chat UX landed.
   Design reference, not a live TODO list: [webui-flesh-out-plan.md](webui-flesh-out-plan.md).
 
@@ -263,3 +369,9 @@ path; don't add it on intuition.
   Task lifecycle) and an outbound peer-delegation capability. Not before Phase 3 — same category
   of work as vault-decoupling and cron (another event-source in, another external capability
   out).
+- **Chat history search** — design captured, not scheduled:
+  [`chat-search-plan.md`](chat-search-plan.md). Three tiers (lexical/ripgrep, BM25/`tantivy`,
+  vector/semantic), shipped in that order, stopping whenever the simpler tier proves sufficient —
+  only Tier 1 has a clear "just build it" case today. `liberado-conversation-store`'s per-conversation
+  JSONL layout was already designed to "stay greppable," so Tier 1 is a near-free fit, not a
+  repurposing.

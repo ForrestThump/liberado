@@ -10,22 +10,24 @@
 //! crate separates attribution from I/O.
 
 mod debounce;
+mod vault_source;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use debounce::Debouncer;
 use liberado_common::{
-    CapabilitySet, CapabilityCatalog, DispatchDecision, Event, EventPayload, ProposalSigner,
-    WriteClass, event_source,
+    CapabilityCatalog, CapabilitySet, DEFAULT_POOL, DispatchDecision, Event, EventSource,
+    PROPOSALS_DIR, ProposalSigner, SignedProposal, WriteClass,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_notify::Notifier;
 use liberado_orchestrator::{Disposition, Orchestrator, OrchestratorError};
-use liberado_vault::{Attribution, Vault, VaultError, VaultEvent};
+use liberado_vault::{Vault, VaultError};
 use thiserror::Error;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use vault_source::VaultEventSource;
 
 /// Default debounce window: long enough to coalesce a `notify` burst, short enough to feel live.
 const DEFAULT_DEBOUNCE: Duration = Duration::from_millis(400);
@@ -34,19 +36,10 @@ const DEFAULT_DEBOUNCE: Duration = Duration::from_millis(400);
 /// external change, so it starts the correlation chain at 1 (the depth cap halts longer cascades).
 const DEFAULT_REACTION_DEPTH: u32 = 1;
 
-/// Prefix of the correlation id minted for a vault-change reaction, and how many hex chars of the
-/// content hash to append (enough to distinguish edits; the full id stays short for logs/journals).
-const CORRELATION_PREFIX: &str = "vault-change";
-const CORRELATION_HASH_LEN: usize = 12;
-
 /// Provenance source recorded for the daemon's own vault writes (e.g. a proposal artifact). Agent
 /// provenance is what makes attribution suppress the write, so the daemon won't react to the
 /// proposal it just wrote (loop-break, Decision 5).
 const DAEMON_SOURCE: &str = "liberado";
-
-/// Directory under which proposal artifacts live. Used to route external edits on proposal notes
-/// through the approve→execute path instead of the dispatcher.
-const PROPOSALS_DIR: &str = "proposals";
 
 /// What the daemon produces for each external change it reacts to: the standardized event plus how
 /// far it took the reaction.
@@ -92,13 +85,24 @@ struct DispatcherContext {
 }
 
 impl DispatcherContext {
-    /// Turn a vault-change event into a self-contained dispatch request.
+    /// Turn an event (a vault change, a cron firing, a webhook POST — Decision 18/19, any attached
+    /// [`liberado_common::EventSource`] or external producer via [`Daemon::event_sender`]) into a
+    /// self-contained dispatch request. A vault change has a path to template a goal around; a
+    /// non-vault trigger (`payload.path` absent — cron, webhook, or anything else) instead carries
+    /// its configured goal directly in `payload.summary`.
     fn dispatch_request(&self, event: &Event) -> DispatchRequest {
-        let path = event.payload.path.as_deref().unwrap_or("(unknown)");
-        DispatchRequest {
-            goal: format!(
+        let goal = match event.payload.path.as_deref() {
+            Some(path) => format!(
                 "A note in the vault was created or edited at '{path}'. Decide how to react to it."
             ),
+            None => event
+                .payload
+                .summary
+                .clone()
+                .unwrap_or_else(|| "An event fired with no goal text configured.".to_string()),
+        };
+        DispatchRequest {
+            goal,
             catalog: self.catalog.descriptors(),
             capabilities: self.capabilities.clone(),
             reaction_depth: self.reaction_depth,
@@ -119,12 +123,26 @@ pub enum DaemonError {
     Orchestrator(#[from] OrchestratorError),
 }
 
+/// A named dispatcher/executor pool (Decision 18 checkpoint #3): authority segregation only —
+/// pools never communicate with each other (research-confirmed scope, see
+/// `docs/ideas/a2a-protocol-idea.md`). Both halves stay independently optional, exactly mirroring
+/// `Daemon`'s pre-pool fields, so `with_dispatcher`/`with_orchestrator` keep working regardless of
+/// call order.
+#[derive(Default)]
+struct DaemonPool {
+    dispatcher: Option<DispatcherContext>,
+    orchestrator: Option<Orchestrator>,
+}
+
 /// The Liberado daemon.
 pub struct Daemon {
     vault: Vault,
     debounce: Duration,
-    dispatcher: Option<DispatcherContext>,
-    orchestrator: Option<Orchestrator>,
+    /// Named dispatcher/executor pools, keyed by name. The `"default"` pool (`DEFAULT_POOL`) is
+    /// what every event routed to before pools existed — `with_dispatcher`/`with_orchestrator`
+    /// populate it and no other call site needs to change. Additional named pools are opt-in via
+    /// `with_pool_dispatcher`/`with_pool_orchestrator`.
+    pools: HashMap<String, DaemonPool>,
     /// Verifies a proposal's integrity signature before treating an approval edit as actionable
     /// (see `handle_proposal_change`). Defaults to a fresh random key at `open()` — production
     /// wiring overrides it via [`with_proposal_signer`](Self::with_proposal_signer) with the same
@@ -133,6 +151,21 @@ pub struct Daemon {
     /// Told about every proposal this daemon writes (dispatcher pre-flight `Propose` path) —
     /// optional, `None` by default. Best-effort: a notification failure never blocks the write.
     notifier: Option<Arc<dyn Notifier>>,
+    /// An additional event source run alongside the always-on vault watch (Decision 18/19) — e.g.
+    /// `liberado-cron`'s `CronEventSource`. `None` by default: vault-watch is the only source, same
+    /// as before this seam existed. At most one extra source for now (v1 scope); nothing prevents
+    /// widening this to a `Vec` later if more than cron is ever attached simultaneously.
+    cron_source: Option<Box<dyn EventSource>>,
+    /// The shared sender every event source (vault-watch, cron, and external producers like
+    /// `liberado-server`'s webhook receiver) pushes onto. Built once in `open()` — not per-`run()`
+    /// call — specifically so [`event_sender`](Self::event_sender) can hand a clone to an external
+    /// caller *before* `run` consumes `self`. `Some` until `run()` starts: `run()` `take()`s it (not
+    /// just clones it) so `self`'s own reference is actually dropped once internal sources are
+    /// spawned — otherwise the channel could never close on its own (an ever-alive sender inside
+    /// `self` would keep `event_rx.recv()` from ever returning `None`).
+    event_tx: Option<UnboundedSender<Event>>,
+    /// Taken by `run()`; `None` after the daemon has started running once (it can only run once).
+    event_rx: Option<tokio::sync::mpsc::UnboundedReceiver<Event>>,
 }
 
 impl Daemon {
@@ -141,14 +174,28 @@ impl Daemon {
         name: impl Into<String>,
         vault_path: impl Into<PathBuf>,
     ) -> Result<Self, DaemonError> {
+        let (event_tx, event_rx) = unbounded_channel::<Event>();
         Ok(Self {
             vault: Vault::open(name, vault_path).await?,
             debounce: DEFAULT_DEBOUNCE,
-            dispatcher: None,
-            orchestrator: None,
+            pools: HashMap::new(),
             signer: ProposalSigner::random(),
             notifier: None,
+            cron_source: None,
+            event_tx: Some(event_tx),
+            event_rx: Some(event_rx),
         })
+    }
+
+    /// A clone of the sender every event source pushes onto — the seam an external producer in the
+    /// *same process* (e.g. `liberado-server`'s webhook HTTP handler) uses to inject an `Event`
+    /// without needing its own `EventSource` loop. Grab this **before** calling
+    /// [`run`](Self::run), which consumes `self` by value and takes the sender out.
+    pub fn event_sender(&self) -> UnboundedSender<Event> {
+        self.event_tx
+            .as_ref()
+            .expect("event_sender() called after run() already started")
+            .clone()
     }
 
     /// Override the debounce window (e.g. a short window in tests).
@@ -165,6 +212,15 @@ impl Daemon {
         self
     }
 
+    /// Attach an additional [`EventSource`] to run alongside the always-on vault watch (e.g.
+    /// `liberado-cron`'s `CronEventSource`) — Decision 18/19's "cron and vault-watch are
+    /// interchangeable event-sources" checkpoint. Optional; a daemon with none attached behaves
+    /// exactly as before this seam existed (vault-watch only).
+    pub fn with_cron_source(mut self, source: Box<dyn EventSource>) -> Self {
+        self.cron_source = Some(source);
+        self
+    }
+
     /// Use `signer` to verify proposal integrity signatures, instead of the random ephemeral one
     /// `open()` generates by default. Production callers pass the same installation-wide signer
     /// every proposal-creation site (`Orchestrator`, `RiskGatedToolRuntime`) uses — see
@@ -178,31 +234,54 @@ impl Daemon {
     /// the daemon runs in watch-only mode ([`ReactionOutcome::Observed`]). The `catalog` +
     /// `capabilities` form the disjoint context the dispatcher reasons over. `catalog` is the same
     /// shared, live `CapabilityCatalog` the server's API and (when attached) chat's own dispatch
-    /// read — the daemon snapshots it fresh per reaction, not once at construction.
+    /// read — the daemon snapshots it fresh per reaction, not once at construction. `zone_write_classes`
+    /// (`(zone, write_class)` pairs from `Policy.zones`) is what the zone-write-class guard (§6 #2)
+    /// checks a seed call's resolved target zone against — taken here, not via a separate chained
+    /// setter, so there is no call-order hazard: an earlier `with_zone_write_classes` builder method
+    /// silently did nothing if called before this one (no `DispatcherContext` yet to attach to);
+    /// folding it into this call's own parameters makes that ordering mistake impossible
+    /// (`docs/roadmap/hygiene-audit-2026-07-05.md`).
+    ///
+    /// Attaches to the always-present `"default"` pool — every event that doesn't name a different
+    /// pool (`EventPayload.pool`) routes here, exactly as if pools didn't exist. See
+    /// [`with_pool_dispatcher`](Self::with_pool_dispatcher) to attach an *additional*, named pool
+    /// (which does not take `zone_write_classes` — v1 additional pools don't yet have their own
+    /// zone-write-class configuration; unchanged from before this fix).
     pub fn with_dispatcher(
+        self,
+        dispatcher: Dispatcher,
+        catalog: Arc<CapabilityCatalog>,
+        capabilities: CapabilitySet,
+        zone_write_classes: Vec<(String, WriteClass)>,
+    ) -> Self {
+        let mut daemon = self.with_pool_dispatcher(DEFAULT_POOL, dispatcher, catalog, capabilities);
+        if let Some(pool) = daemon.pools.get_mut(DEFAULT_POOL) {
+            if let Some(ctx) = &mut pool.dispatcher {
+                ctx.zone_write_classes = zone_write_classes;
+            }
+        }
+        daemon
+    }
+
+    /// Attach a dispatcher to the named pool `name` (Decision 18 checkpoint #3) — creating the pool
+    /// if it doesn't exist yet. See [`with_dispatcher`](Self::with_dispatcher) for the always-present
+    /// `"default"` pool convenience wrapper over this (which also takes `zone_write_classes` — this
+    /// method doesn't, since v1 additional pools have no zone-write-class configuration of their own
+    /// yet).
+    pub fn with_pool_dispatcher(
         mut self,
+        name: impl Into<String>,
         dispatcher: Dispatcher,
         catalog: Arc<CapabilityCatalog>,
         capabilities: CapabilitySet,
     ) -> Self {
-        self.dispatcher = Some(DispatcherContext {
+        self.pools.entry(name.into()).or_default().dispatcher = Some(DispatcherContext {
             dispatcher,
             catalog,
             capabilities,
             reaction_depth: DEFAULT_REACTION_DEPTH,
             zone_write_classes: Vec::new(),
         });
-        self
-    }
-
-    /// Override the zone-write-classes the zone-write-class guard (§6 #2) checks against —
-    /// `(zone, write_class)` pairs from `Policy.zones`. Only meaningful alongside
-    /// [`with_dispatcher`](Self::with_dispatcher); a no-op if called before it (there's no
-    /// `DispatcherContext` yet to attach to).
-    pub fn with_zone_write_classes(mut self, zone_write_classes: Vec<(String, WriteClass)>) -> Self {
-        if let Some(ctx) = &mut self.dispatcher {
-            ctx.zone_write_classes = zone_write_classes;
-        }
         self
     }
 
@@ -216,8 +295,22 @@ impl Daemon {
     /// use is invisible from this crate's own `Cargo.toml` alone. That wiring is supplied by the
     /// caller — see `liberado_bootstrap::configure_daemon`, which connects an `McpRegistry` and
     /// passes it in.
-    pub fn with_orchestrator(mut self, orchestrator: Orchestrator) -> Self {
-        self.orchestrator = Some(orchestrator);
+    ///
+    /// Attaches to the always-present `"default"` pool. See
+    /// [`with_pool_orchestrator`](Self::with_pool_orchestrator) for an additional, named pool.
+    pub fn with_orchestrator(self, orchestrator: Orchestrator) -> Self {
+        self.with_pool_orchestrator(DEFAULT_POOL, orchestrator)
+    }
+
+    /// Attach an orchestrator to the named pool `name` (Decision 18 checkpoint #3) — creating the
+    /// pool if it doesn't exist yet. See [`with_orchestrator`](Self::with_orchestrator) for the
+    /// always-present `"default"` pool convenience wrapper over this.
+    pub fn with_pool_orchestrator(
+        mut self,
+        name: impl Into<String>,
+        orchestrator: Orchestrator,
+    ) -> Self {
+        self.pools.entry(name.into()).or_default().orchestrator = Some(orchestrator);
         self
     }
 
@@ -226,36 +319,21 @@ impl Daemon {
         &self.vault
     }
 
-    /// The pure reactive decision: given an observed change to `rel_path`, return a reactable
-    /// [`Event`], or `None` if the change was one of our own writes (suppressed by the hash-join)
-    /// or the path is gone. No filesystem watching here — this is the unit-testable core.
-    pub async fn process_change(&self, rel_path: &Path) -> Result<Option<Event>, DaemonError> {
-        match self.vault.attribute(rel_path).await? {
-            Attribution::External => Ok(Some(self.build_event(rel_path).await)),
-            // Our own write (don't react to ourselves) or a vanished path.
-            Attribution::Agent(_) | Attribution::Missing => Ok(None),
-        }
+    /// The signer this daemon verifies proposal approvals against (cheap to clone) — so an
+    /// external actor on the same signature scheme (e.g. a Telegram approval bot) can flip a
+    /// proposal's `status` using the identical key the daemon will check.
+    pub fn signer(&self) -> &ProposalSigner {
+        &self.signer
     }
 
-    /// Build the standardized event for an attributed-external change. The `correlation_id` keys
-    /// idempotency/loop-breaking downstream; it is derived from the path + a short content hash so
-    /// distinct edits are distinct events while a redelivery of the same state is not.
-    async fn build_event(&self, rel_path: &Path) -> Event {
-        let content = self.vault.read(rel_path).await.unwrap_or_default();
-        let hash = Vault::content_hash(&content);
-        let rel = rel_path.to_string_lossy().replace('\\', "/");
-        // `get(..N)` (not `[..N]`) is panic-safe regardless of the hash's byte boundaries.
-        let short_hash = hash.get(..CORRELATION_HASH_LEN).unwrap_or(&hash);
-        let correlation_id = format!("{CORRELATION_PREFIX}:{rel}:{short_hash}");
-        Event::trigger(
-            VAULT_NOTE_CHANGED,
-            event_source::TURBOVAULT_SUBSCRIPTION,
-            correlation_id,
-            EventPayload {
-                path: Some(rel),
-                ..Default::default()
-            },
-        )
+    /// The pure reactive decision: given an observed change to `rel_path`, return a reactable
+    /// [`Event`], or `None` if the change was one of our own writes (suppressed by the hash-join)
+    /// or the path is gone. No filesystem watching here — this is the unit-testable core. A thin
+    /// wrapper over [`vault_source::attribute_and_build_event`], which [`VaultEventSource`]'s watch
+    /// loop also calls — kept as its own public method so this stays directly testable without a
+    /// filesystem, as before this crate had an `EventSource` seam.
+    pub async fn process_change(&self, rel_path: &Path) -> Result<Option<Event>, DaemonError> {
+        Ok(vault_source::attribute_and_build_event(&self.vault, rel_path).await?)
     }
 
     /// Take a reactable change as far as the attached components allow: observe → decide → act.
@@ -285,7 +363,19 @@ impl Daemon {
             }
         }
 
-        let Some(ctx) = self.dispatcher.as_ref() else {
+        // Which named pool (Decision 18 checkpoint #3) handles this event — the producer sets
+        // `payload.pool` explicitly (cron/webhook); an unset pool (vault-watch, or anything that
+        // doesn't opt in) routes to the always-present "default" pool.
+        let pool_name = event.payload.pool.as_deref().unwrap_or(DEFAULT_POOL);
+        let Some(pool) = self.pools.get(pool_name) else {
+            tracing::warn!(
+                pool = pool_name,
+                "event names an unknown pool — observed only"
+            );
+            return ReactionOutcome::Observed;
+        };
+
+        let Some(ctx) = pool.dispatcher.as_ref() else {
             return ReactionOutcome::Observed; // watch-only
         };
 
@@ -298,7 +388,7 @@ impl Daemon {
             }
         };
 
-        let Some(orchestrator) = self.orchestrator.as_ref() else {
+        let Some(orchestrator) = pool.orchestrator.as_ref() else {
             return ReactionOutcome::Decided(decision); // decided, nothing to execute with
         };
 
@@ -329,11 +419,9 @@ impl Daemon {
     /// the daemon's own source, so the resulting change is attributed to us and not re-reacted to.
     /// The proposal's `id` (a correlation id with `:`/`/`) is slugified for the *filename* only —
     /// the authoritative id stays intact in the frontmatter for idempotency.
-    async fn write_proposal(
-        &self,
-        proposal: &liberado_common::Proposal,
-    ) -> Result<(), DaemonError> {
-        let path = format!("proposals/{}.md", slugify(&proposal.id));
+    async fn write_proposal(&self, proposal: &SignedProposal) -> Result<(), DaemonError> {
+        let stem = slugify(&proposal.id);
+        let path = format!("proposals/{stem}.md");
         let provenance =
             liberado_common::WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
         self.vault
@@ -345,7 +433,7 @@ impl Daemon {
                 "Liberado: a new proposal needs your review.\n{}\nSaved at: {path}",
                 proposal.rationale
             );
-            if let Err(e) = notifier.notify(&message).await {
+            if let Err(e) = notifier.notify_proposal(&stem, &message).await {
                 // Best-effort — see RiskGatedToolRuntime::write_proposal's identical reasoning.
                 tracing::warn!(error = %e, "failed to send proposal notification");
             }
@@ -407,10 +495,22 @@ impl Daemon {
             return Ok(ReactionOutcome::Observed);
         }
 
-        // 6. Execute. An orchestration error is an infra failure and propagates (so it can be
-        //    retried on the next watch cycle). We do NOT mark done on failure.
-        let Some(orch) = self.orchestrator.as_ref() else {
-            tracing::warn!("approved proposal but no orchestrator attached to execute it");
+        // 6. Execute — via the *same* pool this proposal was proposed under (Decision 18
+        //    checkpoint #3), never a different one, so a restricted pool's proposal can never
+        //    execute with a different (possibly broader) pool's authority. `Orchestrator::
+        //    execute_approved` itself defensively re-checks this too (defense in depth).
+        //    An orchestration error is an infra failure and propagates (so it can be retried on
+        //    the next watch cycle). We do NOT mark done on failure.
+        let pool_name = proposal.pool.as_deref().unwrap_or(DEFAULT_POOL);
+        let Some(orch) = self
+            .pools
+            .get(pool_name)
+            .and_then(|pool| pool.orchestrator.as_ref())
+        else {
+            tracing::warn!(
+                pool = pool_name,
+                "approved proposal's pool has no orchestrator attached to execute it"
+            );
             return Ok(ReactionOutcome::Observed);
         };
         let report = orch.execute_approved(&proposal).await?;
@@ -430,58 +530,64 @@ impl Daemon {
             "executed approved proposal and marked done"
         );
 
+        if let Some(notifier) = &self.notifier {
+            let message = format!(
+                "Liberado: proposal executed.\n{}\nOutcome: {:?}",
+                proposal.rationale, report.outcome
+            );
+            if let Err(e) = notifier.notify(&message).await {
+                // Best-effort — the action already ran and was marked done; a failed
+                // confirmation just means the human finds out by checking the vault instead.
+                tracing::warn!(error = %e, "failed to send proposal-executed notification");
+            }
+        }
+
         Ok(ReactionOutcome::Acted(Disposition::Reported(report)))
     }
 
-    /// Run the watch loop until the watcher shuts down. Raw filesystem events are debounced per
-    /// path (coalescing a notify burst into one settled change); each resulting external change is
-    /// attributed, routed through the dispatcher (if attached), and the [`Reaction`] forwarded to
-    /// `reactions`. Returns when the channel's receiver is dropped or the watcher closes.
-    pub async fn run(self, reactions: UnboundedSender<Reaction>) -> Result<(), DaemonError> {
-        let mut watch = self.vault.watch().await?;
-        let mut debouncer = Debouncer::new(self.debounce);
-        tracing::info!(
-            vault = %self.vault.root().display(),
-            debounce_ms = self.debounce.as_millis() as u64,
-            "daemon watching vault"
-        );
+    /// Run every attached [`EventSource`] (the always-on vault watch, plus any extra source like a
+    /// `CronEventSource`) fanned into one channel, reacting to whatever arrives regardless of which
+    /// source produced it — Decision 18/19's event-source seam. Each source runs its own loop in
+    /// its own spawned task; this loop only ever sees the resulting [`Event`]s. Returns once every
+    /// source has finished (or the `reactions` receiver is dropped).
+    pub async fn run(mut self, reactions: UnboundedSender<Reaction>) -> Result<(), DaemonError> {
+        let mut event_rx = self
+            .event_rx
+            .take()
+            .expect("Daemon::run must only be called once");
+        // `take()`, not `clone()` — actually removing it from `self` so `self`'s own reference is
+        // gone once we `drop` our local clone below (see the field's doc comment).
+        let event_tx = self
+            .event_tx
+            .take()
+            .expect("Daemon::run must only be called once");
 
-        loop {
-            // Copy out the next deadline so the timer future borrows nothing from `debouncer`,
-            // leaving the select arms free to mutate it.
-            let next_deadline = debouncer.next_deadline();
+        let vault_source = VaultEventSource::new(self.vault.clone(), self.debounce);
+        tokio::spawn(Box::new(vault_source).run(event_tx.clone()));
 
-            tokio::select! {
-                maybe_event = watch.next_event() => {
-                    let Some(event) = maybe_event else { break }; // watcher shut down
-                    // Deletions carry no content to hash-join; reacting to them is a later iteration.
-                    if let VaultEvent::FileDeleted(_) = event {
-                        continue;
-                    }
-                    if let Some(rel) = self.vault.to_relative(event.path()) {
-                        debouncer.observe(rel, Instant::now());
-                    }
-                }
+        if let Some(cron_source) = self.cron_source.take() {
+            tracing::info!(
+                source = cron_source.name(),
+                "starting additional event source"
+            );
+            tokio::spawn(cron_source.run(event_tx.clone()));
+        }
 
-                _ = sleep_until(next_deadline) => {
-                    for rel in debouncer.drain_ready(Instant::now()) {
-                        match self.process_change(&rel).await {
-                            Ok(Some(event)) => {
-                                let outcome = self.react(&event).await;
-                                tracing::info!(
-                                    path = event.payload.path.as_deref().unwrap_or_default(),
-                                    outcome = outcome.label(),
-                                    "reacting to external change"
-                                );
-                                if reactions.send(Reaction { event, outcome }).is_err() {
-                                    return Ok(()); // receiver gone
-                                }
-                            }
-                            Ok(None) => {} // our own write or vanished path — suppressed
-                            Err(e) => tracing::warn!(error = %e, ?rel, "attribution failed"),
-                        }
-                    }
-                }
+        // Drop our own clone so the channel closes once every spawned source — and any external
+        // producer holding a clone via `event_sender()` — has finished. Otherwise `event_rx.recv()`
+        // would wait forever even after every source exits.
+        drop(event_tx);
+
+        while let Some(event) = event_rx.recv().await {
+            let outcome = self.react(&event).await;
+            tracing::info!(
+                source = %event.source,
+                path = event.payload.path.as_deref().unwrap_or_default(),
+                outcome = outcome.label(),
+                "reacting to external event"
+            );
+            if reactions.send(Reaction { event, outcome }).is_err() {
+                return Ok(()); // receiver gone
             }
         }
 
@@ -507,21 +613,10 @@ fn slugify(id: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
-/// Sleep until `deadline`, or forever when `None` (so the watch loop's select only wakes on
-/// incoming events while nothing is pending).
-async fn sleep_until(deadline: Option<Instant>) {
-    match deadline {
-        Some(deadline) => {
-            tokio::time::sleep(deadline.saturating_duration_since(Instant::now())).await
-        }
-        None => std::future::pending::<()>().await,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liberado_common::{McpDescriptor, WriteProvenance};
+    use liberado_common::{McpDescriptor, WriteProvenance, event_source};
     use std::time::Duration;
     use tempfile::TempDir;
     use tokio::sync::mpsc::unbounded_channel;
@@ -616,8 +711,8 @@ mod tests {
 
     #[tokio::test]
     async fn daemon_routes_reaction_through_dispatcher() {
-        use liberado_config_loader::DispatchTuning;
         use liberado_common::{BlockReason, DispatchAction, DispatchDecision};
+        use liberado_config_loader::DispatchTuning;
         use liberado_provider::{CompletionResponse, MockProvider};
         use std::sync::Arc;
 
@@ -642,7 +737,12 @@ mod tests {
 
         let daemon = daemon
             .with_debounce(Duration::from_millis(80))
-            .with_dispatcher(dispatcher, Arc::new(CapabilityCatalog::new()), CapabilitySet::empty());
+            .with_dispatcher(
+                dispatcher,
+                Arc::new(CapabilityCatalog::new()),
+                CapabilitySet::empty(),
+                Vec::new(),
+            );
 
         let vault_dir = dir.path().to_path_buf();
         let (tx, mut rx) = unbounded_channel();
@@ -667,10 +767,311 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn daemon_acts_on_a_decision_via_the_orchestrator() {
+    async fn cron_and_vault_watch_are_interchangeable_event_sources() {
+        // The literal proof of Decision 18 checkpoint #3: a cron firing and a real vault change
+        // both flow through the exact same `react()` path, over the exact same `Reaction` channel,
+        // indistinguishable to the dispatcher except by `event.source`.
+        use liberado_common::{BlockReason, DispatchAction, DispatchDecision};
         use liberado_config_loader::DispatchTuning;
+        use liberado_cron::{CronEventSource, Schedule};
+        use liberado_provider::{CompletionResponse, MockProvider};
+        use std::collections::HashSet;
+        use std::sync::Arc;
+
+        let (daemon, dir) = temp_daemon().await;
+
+        // Every reaction resolves to the same safe Clarify outcome — two reactions expected (one
+        // per source), so the mock needs two scripted responses.
+        let canned = DispatchDecision {
+            action: DispatchAction::Clarify {
+                questions: vec!["how should I handle this?".into()],
+                what_blocked: BlockReason::Ambiguous,
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        };
+        let canned_json = serde_json::to_string(&canned).unwrap();
+        let mock = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::text(canned_json.clone()),
+                CompletionResponse::text(canned_json),
+            ],
+        ));
+        let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
+
+        let cron_source = CronEventSource::new(vec![Schedule {
+            name: "every-second".into(),
+            cron_expr: "* * * * * * *".into(),
+            goal: "a cron-dispatched goal".into(),
+            pool: None,
+        }])
+        .unwrap();
+
+        let daemon = daemon
+            .with_debounce(Duration::from_millis(80))
+            .with_dispatcher(
+                dispatcher,
+                Arc::new(CapabilityCatalog::new()),
+                CapabilitySet::empty(),
+                Vec::new(),
+            )
+            .with_cron_source(Box::new(cron_source));
+
+        let vault_dir = dir.path().to_path_buf();
+        let (tx, mut rx) = unbounded_channel();
+        let handle = tokio::spawn(daemon.run(tx));
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        std::fs::write(vault_dir.join("idea.md"), "a captured thought").unwrap();
+
+        let mut sources = HashSet::new();
+        for _ in 0..2 {
+            let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .expect("timed out waiting for a reaction")
+                .expect("reaction channel closed");
+            assert!(matches!(reaction.outcome, ReactionOutcome::Decided(_)));
+            sources.insert(reaction.event.source);
+        }
+
+        assert!(sources.contains(event_source::TURBOVAULT_SUBSCRIPTION));
+        assert!(sources.contains("cron:every-second"));
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn pools_are_authority_segregated() {
+        // The direct proof that named pools (Decision 18 checkpoint #3) aren't just routed but
+        // actually authority-segregated: two pools, two schedules, both decisions asking to call
+        // the SAME MCP — but only "granted-pool" was actually given that capability. If pools
+        // shared authority (e.g. a bug reusing one capability set for both), "blocked-pool" would
+        // reach the real runtime too; it must not.
+        use liberado_common::{Capability, DispatchAction, DispatchDecision, EventPayload};
+        use liberado_config_loader::DispatchTuning;
+        use liberado_executor::SUBMIT_REPORT_TOOL;
+        use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
+        use liberado_test_support::CallRecordingFactory;
+
+        let (daemon, _dir) = temp_daemon().await;
+
+        // Both pools' dispatchers classify identically: ExecuteDirect against "shared-mcp".
+        let decision = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: Vec::new(),
+                relevant_mcps: vec!["shared-mcp".into()],
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        };
+        let decision_json = serde_json::to_string(&decision).unwrap();
+        let dispatcher_for = || {
+            Dispatcher::new(
+                Arc::new(MockProvider::with_script(
+                    "dispatch",
+                    [CompletionResponse::text(decision_json.clone())],
+                )),
+                DispatchTuning::default(),
+                4,
+            )
+        };
+
+        // granted-pool: actually holds the "shared-mcp" capability, so its orchestrator's
+        // ExecuteDirect scoping resolves a non-empty `allowed_mcps` and reaches the real factory.
+        let granted_capabilities =
+            CapabilitySet::from_iter([Capability::ExecuteMcp("shared-mcp".into())]);
+        let granted_factory = CallRecordingFactory::default();
+        let granted_calls = granted_factory.calls.clone();
+        let granted_exec = Arc::new(MockProvider::with_script(
+            "exec-granted",
+            [
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "c1",
+                    "shared-mcp:do_thing",
+                    serde_json::json!({}),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "c2",
+                    SUBMIT_REPORT_TOOL,
+                    serde_json::json!({ "outcome": "succeeded", "summary": "granted pool acted" }),
+                )]),
+            ],
+        ));
+        let granted_orch = Orchestrator::new(
+            granted_exec,
+            granted_factory,
+            granted_capabilities.clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            std::env::temp_dir(),
+            liberado_common::ProposalSigner::random(),
+            "granted-pool",
+        );
+
+        // blocked-pool: an EMPTY capability set — the dispatcher's own pre-flight capability guard
+        // (`guards::evaluate`'s `CapabilityGap` check, run against THIS pool's own capabilities)
+        // catches the reference to "shared-mcp" before the decision ever reaches an orchestrator,
+        // downgrading it to Clarify — so `blocked_exec`/`blocked_factory` below must NEVER be
+        // touched at all. That's the segregation proof: the identical decision that runs for real
+        // in granted-pool never even reaches execution in blocked-pool.
+        let blocked_factory = CallRecordingFactory::default();
+        let blocked_calls = blocked_factory.calls.clone();
+        let blocked_exec = Arc::new(MockProvider::with_script("exec-blocked", []));
+        let blocked_orch = Orchestrator::new(
+            blocked_exec,
+            blocked_factory,
+            CapabilitySet::empty(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            std::env::temp_dir(),
+            liberado_common::ProposalSigner::random(),
+            "blocked-pool",
+        );
+
+        let daemon = daemon
+            .with_debounce(Duration::from_millis(80))
+            .with_pool_dispatcher(
+                "granted-pool",
+                dispatcher_for(),
+                Arc::new(CapabilityCatalog::new()),
+                granted_capabilities,
+            )
+            .with_pool_orchestrator("granted-pool", granted_orch)
+            .with_pool_dispatcher(
+                "blocked-pool",
+                dispatcher_for(),
+                Arc::new(CapabilityCatalog::new()),
+                CapabilitySet::empty(),
+            )
+            .with_pool_orchestrator("blocked-pool", blocked_orch);
+
+        // Inject one event per pool directly (the same seam `liberado-server`'s webhook handler
+        // and `liberado-cron` both use) — deterministic, no dependence on real-time cron ticking.
+        let sender = daemon.event_sender();
+
+        let (tx, mut rx) = unbounded_channel();
+        let handle = tokio::spawn(daemon.run(tx));
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        sender
+            .send(Event::trigger(
+                "Trigger",
+                "test:granted",
+                "test:granted:1",
+                EventPayload {
+                    pool: Some("granted-pool".into()),
+                    ..Default::default()
+                },
+            ))
+            .unwrap();
+        sender
+            .send(Event::trigger(
+                "Trigger",
+                "test:blocked",
+                "test:blocked:1",
+                EventPayload {
+                    pool: Some("blocked-pool".into()),
+                    ..Default::default()
+                },
+            ))
+            .unwrap();
+
+        let mut outcomes_by_pool = std::collections::HashMap::new();
+        for _ in 0..2 {
+            let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .expect("timed out waiting for a reaction")
+                .expect("reaction channel closed");
+            outcomes_by_pool.insert(reaction.event.payload.pool.clone(), reaction.outcome);
+        }
+
+        // granted-pool: authorized for "shared-mcp" — the decision runs for real.
+        match outcomes_by_pool.get(&Some("granted-pool".to_string())) {
+            Some(ReactionOutcome::Acted(Disposition::Reported(_))) => {}
+            Some(o) => panic!("expected granted-pool to reach Reported, got {}", o.label()),
+            None => panic!("no reaction recorded for granted-pool"),
+        }
+
+        // blocked-pool: an identical decision naming the same MCP, but this pool was never
+        // granted it — the dispatcher's own pre-flight guard catches it and downgrades to
+        // Clarify, never reaching an orchestrator/runtime at all.
+        match outcomes_by_pool.get(&Some("blocked-pool".to_string())) {
+            Some(ReactionOutcome::Acted(Disposition::Clarify { what_blocked, .. })) => {
+                assert_eq!(*what_blocked, liberado_common::BlockReason::CapabilityGap);
+            }
+            Some(o) => panic!(
+                "expected blocked-pool to be guard-downgraded to Clarify, got {}",
+                o.label()
+            ),
+            None => panic!("no reaction recorded for blocked-pool"),
+        }
+
+        // The load-bearing assertion: granted-pool's own capability actually reached the real
+        // runtime; blocked-pool's identical request never did, despite an identical decision.
+        assert_eq!(
+            granted_calls.lock().unwrap().len(),
+            1,
+            "granted-pool must reach the real runtime for a call it's actually authorized for"
+        );
+        assert!(
+            blocked_calls.lock().unwrap().is_empty(),
+            "blocked-pool must NEVER reach the real runtime for an MCP it wasn't granted, even \
+             though the decision asked for the exact same call granted-pool made"
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn event_sender_lets_an_external_producer_inject_an_event() {
+        // The seam `liberado-server`'s webhook handler uses: grab a sender before `run()` moves
+        // `self`, then push an `Event` in from completely outside any `EventSource` — no cron, no
+        // vault change, just a direct injection — and it must still flow through `react()` exactly
+        // like any other source.
+        use liberado_common::EventPayload;
+
+        let (daemon, _dir) = temp_daemon().await;
+        let sender = daemon.event_sender();
+
+        let (tx, mut rx) = unbounded_channel();
+        let handle = tokio::spawn(daemon.run(tx));
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        sender
+            .send(Event::trigger(
+                "WebhookFired",
+                "webhook:test-hook",
+                "webhook:test-hook:1",
+                EventPayload {
+                    summary: Some("an externally-injected goal".into()),
+                    ..Default::default()
+                },
+            ))
+            .unwrap();
+
+        let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out waiting for the injected event's reaction")
+            .expect("reaction channel closed");
+
+        assert_eq!(reaction.event.source, "webhook:test-hook");
+        // No dispatcher attached in this test daemon — watch-only, so Observed — the point here is
+        // only that the injected event reached `react()` at all, not what it decided.
+        assert!(matches!(reaction.outcome, ReactionOutcome::Observed));
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn daemon_acts_on_a_decision_via_the_orchestrator() {
         use liberado_common::{DispatchAction, DispatchDecision, Outcome};
-        use liberado_executor::{RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime};
+        use liberado_config_loader::DispatchTuning;
+        use liberado_executor::{
+            RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime,
+        };
         use liberado_orchestrator::Orchestrator;
         use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
         use std::sync::Arc;
@@ -735,11 +1136,17 @@ mod tests {
             Vec::new(),
             std::env::temp_dir(),
             liberado_common::ProposalSigner::random(),
+            "default",
         );
 
         let daemon = daemon
             .with_debounce(Duration::from_millis(80))
-            .with_dispatcher(dispatcher, Arc::new(CapabilityCatalog::new()), CapabilitySet::empty())
+            .with_dispatcher(
+                dispatcher,
+                Arc::new(CapabilityCatalog::new()),
+                CapabilitySet::empty(),
+                Vec::new(),
+            )
             .with_orchestrator(orchestrator);
 
         let vault_dir = dir.path().to_path_buf();
@@ -764,11 +1171,11 @@ mod tests {
 
     #[tokio::test]
     async fn daemon_emits_a_proposal_for_a_high_consequence_action() {
-        use liberado_config_loader::DispatchTuning;
         use liberado_common::{
             Capability, Consequence, DispatchAction, DispatchDecision, Proposal, ProposalStatus,
             ProposedAction, ToolCall,
         };
+        use liberado_config_loader::DispatchTuning;
         use liberado_executor::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
         use liberado_orchestrator::Orchestrator;
         use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
@@ -839,11 +1246,12 @@ mod tests {
             Vec::new(),
             std::env::temp_dir(),
             liberado_common::ProposalSigner::random(),
+            "default",
         );
 
         let daemon = daemon
             .with_debounce(Duration::from_millis(80))
-            .with_dispatcher(dispatcher, Arc::new(catalog), capabilities)
+            .with_dispatcher(dispatcher, Arc::new(catalog), capabilities, Vec::new())
             .with_orchestrator(orchestrator);
 
         let vault_dir = dir.path().to_path_buf();
@@ -873,12 +1281,150 @@ mod tests {
         assert_eq!(entries.len(), 1, "exactly one proposal note");
         let contents = std::fs::read_to_string(&entries[0]).unwrap();
         let parsed = Proposal::from_note(&contents).expect("proposal note round-trips");
-        assert_eq!(parsed, proposal);
+        assert_eq!(&parsed, proposal.as_proposal());
         assert_eq!(parsed.status, ProposalStatus::Pending);
         match parsed.proposed_action {
             ProposedAction::ToolCalls(calls) => {
                 assert_eq!(calls.len(), 1);
                 assert_eq!(calls[0].tool, "email:send");
+            }
+            other => panic!("expected ToolCalls, got {other:?}"),
+        }
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn daemon_downgrades_a_zone_restricted_seed_call_to_a_proposal() {
+        // End-to-end regression for the zone-write-class guard (§6 #2) at the daemon level: unit
+        // tests already cover `dispatcher::guards::evaluate` and `RiskGatedToolRuntime` separately
+        // (they share `liberado_common::zone_write_restriction` so they can't drift on the
+        // determination logic itself), but nothing previously proved the daemon actually threads a
+        // configured `zone_write_classes` through `with_dispatcher` into a real reaction
+        // (`docs/roadmap/hygiene-audit-2026-07-05.md` P3.4). The MCP's own `consequence` is
+        // `Reversible` — below the consequence gate — so if a proposal is emitted here, the zone
+        // restriction is provably what caused it, not the (separately already-tested) consequence
+        // check.
+        use liberado_common::{
+            Capability, Consequence, DispatchAction, DispatchDecision, Proposal, ProposalStatus,
+            ProposedAction, ToolCall,
+        };
+        use liberado_config_loader::DispatchTuning;
+        use liberado_executor::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
+        use liberado_orchestrator::Orchestrator;
+        use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
+        use std::sync::Arc;
+
+        // The orchestrator never builds a runtime for a Propose; this factory just satisfies the type.
+        struct UnusedRuntime;
+        #[async_trait::async_trait]
+        impl ToolRuntime for UnusedRuntime {
+            fn catalog(&self) -> Vec<ToolDef> {
+                Vec::new()
+            }
+            async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+                Ok("ok".into())
+            }
+        }
+        struct UnusedFactory;
+        #[async_trait::async_trait]
+        impl RuntimeFactory for UnusedFactory {
+            async fn runtime_for(
+                &self,
+                _allowed_mcps: &[String],
+                _provenance: WriteProvenance,
+            ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+                Ok(Box::new(UnusedRuntime))
+            }
+        }
+
+        let (daemon, dir) = temp_daemon().await;
+
+        let decision = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: vec![ToolCall {
+                    tool: "vault-mcp:write_note".into(),
+                    args: serde_json::json!({ "path": "reviews/q1.md" }),
+                }],
+                relevant_mcps: Vec::new(),
+            },
+            confidence: 0.95,
+            rationale: "file the review note".into(),
+        };
+        let dispatch_provider = Arc::new(MockProvider::with_script(
+            "dispatch",
+            [CompletionResponse::text(
+                serde_json::to_string(&decision).unwrap(),
+            )],
+        ));
+        let dispatcher = Dispatcher::new(dispatch_provider, DispatchTuning::default(), 4);
+
+        // Reversible (not Irreversible/External), granted by capability, and targets a zone this
+        // pool has restricted to ProposalOnly — the only thing that should block direct execution.
+        let catalog = CapabilityCatalog::new();
+        catalog.register(McpDescriptor {
+            name: "vault-mcp".into(),
+            description: "vault note writer".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: Some("reviews".into()),
+            tool_zones: Vec::new(),
+        });
+        let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("vault-mcp".into())]);
+        let zone_write_classes = vec![("reviews".to_string(), WriteClass::ProposalOnly)];
+        let orchestrator = Orchestrator::new(
+            Arc::new(MockProvider::with_script("exec", Vec::new())),
+            UnusedFactory,
+            CapabilitySet::empty(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            std::env::temp_dir(),
+            liberado_common::ProposalSigner::random(),
+            "default",
+        );
+
+        let daemon = daemon
+            .with_debounce(Duration::from_millis(80))
+            .with_dispatcher(
+                dispatcher,
+                Arc::new(catalog),
+                capabilities,
+                zone_write_classes,
+            )
+            .with_orchestrator(orchestrator);
+
+        let vault_dir = dir.path().to_path_buf();
+        let (tx, mut rx) = unbounded_channel();
+        let handle = tokio::spawn(daemon.run(tx));
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        std::fs::write(vault_dir.join("review-me.md"), "please file this review").unwrap();
+
+        let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+
+        let ReactionOutcome::Acted(Disposition::Propose(proposal)) = reaction.outcome else {
+            panic!("expected Acted/Propose, got {}", reaction.outcome.label());
+        };
+
+        let proposals_dir = vault_dir.join("proposals");
+        let entries: Vec<_> = std::fs::read_dir(&proposals_dir)
+            .expect("proposals/ should exist")
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(entries.len(), 1, "exactly one proposal note");
+        let contents = std::fs::read_to_string(&entries[0]).unwrap();
+        let parsed = Proposal::from_note(&contents).expect("proposal note round-trips");
+        assert_eq!(&parsed, proposal.as_proposal());
+        assert_eq!(parsed.status, ProposalStatus::Pending);
+        match parsed.proposed_action {
+            ProposedAction::ToolCalls(calls) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].tool, "vault-mcp:write_note");
             }
             other => panic!("expected ToolCalls, got {other:?}"),
         }
@@ -908,6 +1454,7 @@ mod tests {
             Vec::new(),
             std::env::temp_dir(),
             signer.clone(),
+            "default",
         );
 
         let (daemon, dir) = temp_daemon().await;
@@ -928,7 +1475,7 @@ mod tests {
 
         // Write an approved proposal (simulates a human editing status to approved), signed with
         // the same key the daemon verifies against.
-        let mut proposal = Proposal::pending(
+        let proposal = Proposal::pending(
             "vault-change:test-proposal:abc",
             "vault-change:test-proposal:abc",
             "test",
@@ -938,8 +1485,8 @@ mod tests {
             }]),
             "a test proposal",
         );
-        signer.sign(&mut proposal);
-        proposal.status = ProposalStatus::Approved;
+        let mut proposal = signer.sign(proposal);
+        proposal.set_status(ProposalStatus::Approved);
         std::fs::write(proposals_dir.join("approved.md"), &proposal.to_note()).unwrap();
 
         // Wait for the daemon to react to the proposal change.
@@ -986,6 +1533,7 @@ mod tests {
             Vec::new(),
             std::env::temp_dir(),
             liberado_common::ProposalSigner::random(),
+            "default",
         );
 
         let (daemon, dir) = temp_daemon().await;
@@ -1061,6 +1609,7 @@ mod tests {
             Vec::new(),
             std::env::temp_dir(),
             daemon_signer.clone(),
+            "default",
         );
 
         let (daemon, dir) = temp_daemon().await;
@@ -1080,7 +1629,7 @@ mod tests {
         // Signed with an unrelated key, not the daemon's — a forged or tampered signature either
         // way, from the daemon's point of view.
         let forging_signer = ProposalSigner::random();
-        let mut proposal = Proposal::pending(
+        let proposal = Proposal::pending(
             "forged-test",
             "forged-correlation",
             "test",
@@ -1090,8 +1639,8 @@ mod tests {
             }]),
             "a forged approval",
         );
-        forging_signer.sign(&mut proposal);
-        proposal.status = ProposalStatus::Approved;
+        let mut proposal = forging_signer.sign(proposal);
+        proposal.set_status(ProposalStatus::Approved);
         std::fs::write(proposals_dir.join("forged.md"), &proposal.to_note()).unwrap();
 
         let _reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
@@ -1147,6 +1696,7 @@ mod tests {
             "clean up the vault".into(),
             "runtime-gate-test".into(),
             signer.clone(),
+            "default",
         );
         let call = ToolInvocation::new(
             "c1",
@@ -1185,6 +1735,7 @@ mod tests {
             Vec::new(),
             std::env::temp_dir(),
             signer.clone(),
+            "default",
         );
         let daemon = daemon
             .with_debounce(Duration::from_millis(80))

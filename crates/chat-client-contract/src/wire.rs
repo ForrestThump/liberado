@@ -205,6 +205,15 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
 }
 
+/// Response from `GET /api/conversations/{id}`. Not just `Vec<ChatMessage>` directly at the top
+/// level so a future field (e.g. the conversation's own title/header) can be added without
+/// changing the response from a bare array to an object — a breaking shape change for every
+/// client, whereas adding a field to an existing object isn't.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConversationHistoryResponse {
+    pub messages: Vec<ChatMessage>,
+}
+
 // ──────────────────────────────────────────────────────────────
 // Vault / catalog
 // ──────────────────────────────────────────────────────────────
@@ -235,12 +244,52 @@ pub struct McpInfo {
     /// `None` when absent in older server responses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provenance: Option<String>,
+    /// Whether chat's own tool surface (the `"main-agent"` component in `policy.toml`) is
+    /// granted this MCP. `#[serde(default)]` so an older server that doesn't emit this yet just
+    /// reads as `false` (a missing badge, not a broken response).
+    #[serde(default)]
+    pub visible_to_main_agent: bool,
+    /// Whether the dispatcher/orchestrator pipeline (the `"dispatcher"` component in
+    /// `policy.toml`) is granted this MCP. Independent of `visible_to_main_agent` — an MCP can
+    /// be granted to one component, both, or neither (see Decision 4's capability narrowing).
+    #[serde(default)]
+    pub visible_to_dispatcher: bool,
 }
 
 /// The catalog response from `GET /api/catalog`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CatalogResponse {
     pub mcps: Vec<McpInfo>,
+}
+
+/// One matching message within a conversation search result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SearchMessageMatch {
+    pub node_id: String,
+    pub author: String,
+    pub content_snippet: String,
+    pub created_at: String,
+}
+
+/// One conversation returned by `GET /api/conversations/search` — grouped by conversation (not
+/// one flat row per match), so a query hitting several messages in the same conversation shows
+/// all of them with their own snippets rather than collapsing to a single row.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConversationSearchResult {
+    pub conversation_id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub created_at: String,
+    pub matches: Vec<SearchMessageMatch>,
+}
+
+/// Response shape from `GET /api/conversations/search`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConversationSearchResponse {
+    pub results: Vec<ConversationSearchResult>,
+    /// Count of matching conversations found (the server scans everything before truncating to
+    /// the requested `limit`, so this reflects the true total, not just what's returned).
+    pub total_found: usize,
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -303,9 +352,7 @@ mod tests {
         };
         let json = serde_json::to_string(&event).unwrap();
         let back: ChatEvent = serde_json::from_str(&json).unwrap();
-        assert!(
-            matches!(back, ChatEvent::ToolResult { name, ok: true, .. } if name == "search")
-        );
+        assert!(matches!(back, ChatEvent::ToolResult { name, ok: true, .. } if name == "search"));
     }
 
     #[test]
@@ -329,9 +376,7 @@ mod tests {
     #[test]
     fn all_chat_event_variants_round_trip() {
         let events = vec![
-            ChatEvent::Session {
-                id: "01ABC".into(),
-            },
+            ChatEvent::Session { id: "01ABC".into() },
             ChatEvent::Token { text: "hi".into() },
             ChatEvent::Tool {
                 name: "t".into(),
@@ -389,9 +434,7 @@ mod tests {
     fn from_sse_data_tool_result() {
         let data = r#"{"name":"search","ok":true,"preview":"3 results"}"#;
         let e = ChatEvent::from_sse_data("tool_result", data).unwrap();
-        assert!(
-            matches!(e, ChatEvent::ToolResult { name, ok: true, .. } if name == "search")
-        );
+        assert!(matches!(e, ChatEvent::ToolResult { name, ok: true, .. } if name == "search"));
     }
 
     #[test]
@@ -422,7 +465,10 @@ mod tests {
     #[test]
     fn from_sse_data_tool_result_malformed_json_returns_err() {
         let result = ChatEvent::from_sse_data("tool_result", "{broken}");
-        assert!(result.is_err(), "expected Err for malformed tool_result JSON");
+        assert!(
+            result.is_err(),
+            "expected Err for malformed tool_result JSON"
+        );
     }
 
     // ── DaemonStatus ──────────────────────────────────────────
@@ -568,7 +614,8 @@ mod tests {
 
     #[test]
     fn conv_header_missing_parent_fields_default_to_none() {
-        let json = serde_json::json!({"id": "c2", "title": "plain", "created_at": "2025-06-25T12:00:00Z"});
+        let json =
+            serde_json::json!({"id": "c2", "title": "plain", "created_at": "2025-06-25T12:00:00Z"});
         let h: ConvHeader = serde_json::from_value(json).unwrap();
         assert_eq!(h.parent_conversation, None);
         assert_eq!(h.spawned_by, None);
@@ -609,6 +656,31 @@ mod tests {
         assert_eq!(msg.tool_call_id, None);
     }
 
+    #[test]
+    fn conversation_history_response_roundtrip() {
+        let resp = ConversationHistoryResponse {
+            messages: vec![
+                ChatMessage {
+                    role: "user".into(),
+                    content: "hello".into(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                ChatMessage {
+                    role: "assistant".into(),
+                    content: "hi there".into(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+            ],
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        let back: ConversationHistoryResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(back.messages.len(), 2);
+        assert_eq!(back.messages[0].role, "user");
+        assert_eq!(back.messages[1].content, "hi there");
+    }
+
     // ── VaultInfo / ApiError ──────────────────────────────────
 
     #[test]
@@ -646,12 +718,16 @@ mod tests {
             tool_count: 3,
             tool_names: vec!["read".into(), "write".into(), "search".into()],
             provenance: Some("config/topology.toml".into()),
+            visible_to_main_agent: true,
+            visible_to_dispatcher: false,
         };
         let json = serde_json::to_string(&info).unwrap();
         let back: McpInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(back.name, "vault");
         assert_eq!(back.tool_count, 3);
         assert_eq!(back.provenance, Some("config/topology.toml".into()));
+        assert!(back.visible_to_main_agent);
+        assert!(!back.visible_to_dispatcher);
     }
 
     #[test]
@@ -663,10 +739,15 @@ mod tests {
             tool_count: 0,
             tool_names: vec![],
             provenance: None,
+            visible_to_main_agent: false,
+            visible_to_dispatcher: false,
         };
         let json = serde_json::to_string(&info).unwrap();
         // provenance: None should be omitted entirely from JSON
-        assert!(!json.contains("provenance"), "None provenance should not appear in JSON");
+        assert!(
+            !json.contains("provenance"),
+            "None provenance should not appear in JSON"
+        );
         let back: McpInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(back.provenance, None);
     }
@@ -685,6 +766,19 @@ mod tests {
     }
 
     #[test]
+    fn mcp_info_visibility_flags_default_to_false_when_absent() {
+        // An older server that doesn't emit visible_to_main_agent/visible_to_dispatcher yet.
+        let json = serde_json::json!({
+            "name": "tasks",
+            "description": "task manager",
+            "consequence": "reversible"
+        });
+        let info: McpInfo = serde_json::from_value(json).unwrap();
+        assert!(!info.visible_to_main_agent);
+        assert!(!info.visible_to_dispatcher);
+    }
+
+    #[test]
     fn catalog_response_roundtrip() {
         let catalog = CatalogResponse {
             mcps: vec![McpInfo {
@@ -694,11 +788,73 @@ mod tests {
                 tool_count: 2,
                 tool_names: vec!["read".into(), "write".into()],
                 provenance: None,
+                visible_to_main_agent: true,
+                visible_to_dispatcher: true,
             }],
         };
         let json = serde_json::to_string(&catalog).unwrap();
         let back: CatalogResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(back.mcps.len(), 1);
         assert_eq!(back.mcps[0].name, "vault");
+    }
+
+    // ── ConversationSearchResult / ConversationSearchResponse ─────────────────
+
+    #[test]
+    fn conversation_search_result_roundtrip() {
+        let resp = ConversationSearchResponse {
+            results: vec![ConversationSearchResult {
+                conversation_id: "01ABC".into(),
+                title: Some("My Chat".into()),
+                created_at: "2026-01-01T00:00:00Z".into(),
+                matches: vec![SearchMessageMatch {
+                    node_id: "01DEF".into(),
+                    author: "user".into(),
+                    content_snippet: "…hello world…".into(),
+                    created_at: "2026-01-01T00:01:00Z".into(),
+                }],
+            }],
+            total_found: 1,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        let back: ConversationSearchResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(back.results.len(), 1);
+        assert_eq!(back.results[0].matches[0].author, "user");
+        assert_eq!(back.total_found, 1);
+    }
+
+    #[test]
+    fn conversation_search_result_missing_title_defaults_to_none() {
+        let json = serde_json::json!({
+            "conversation_id": "x",
+            "created_at": "2026-01-01T00:00:00Z",
+            "matches": []
+        });
+        let r: ConversationSearchResult = serde_json::from_value(json).unwrap();
+        assert_eq!(r.title, None);
+    }
+
+    #[test]
+    fn conversation_search_result_groups_multiple_matches_per_conversation() {
+        let result = ConversationSearchResult {
+            conversation_id: "01ABC".into(),
+            title: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            matches: vec![
+                SearchMessageMatch {
+                    node_id: "01DEF".into(),
+                    author: "user".into(),
+                    content_snippet: "first match".into(),
+                    created_at: "2026-01-01T00:01:00Z".into(),
+                },
+                SearchMessageMatch {
+                    node_id: "01GHI".into(),
+                    author: "assistant".into(),
+                    content_snippet: "second match".into(),
+                    created_at: "2026-01-01T00:02:00Z".into(),
+                },
+            ],
+        };
+        assert_eq!(result.matches.len(), 2);
     }
 }

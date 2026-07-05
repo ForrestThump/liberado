@@ -55,6 +55,18 @@ impl WriteProvenance {
         }
     }
 
+    /// A provenance for a human-authored write (e.g. a Telegram approve/reject/revise action).
+    /// Rides through the audit log like an agent write, but [`is_human`](Self::is_human) is what
+    /// keeps it from being suppressed by loop-breaking — see this module's doc comment.
+    pub fn human() -> Self {
+        Self {
+            source: HUMAN_SOURCE.into(),
+            correlation_id: None,
+            zone: None,
+            note: None,
+        }
+    }
+
     /// Builder: set the target zone.
     pub fn with_zone(mut self, zone: impl Into<String>) -> Self {
         self.zone = Some(zone.into());

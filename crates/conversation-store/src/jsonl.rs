@@ -24,9 +24,14 @@ use crate::types::{ConversationHeader, MessageNode, NewConversation, NewNode};
 
 /// One line of a conversation log. The `kind` tag is what lets a single file hold its header and
 /// all its nodes while staying greppable and self-describing line by line.
+///
+/// Public (not `pub(crate)`) so a reader of the raw `.jsonl` files outside this crate —
+/// `liberado-chat-search`'s directory scan is the motivating case — can deserialize a line into the
+/// real, current shape instead of maintaining its own private mirror of this enum that a future new
+/// variant here would silently fall out of sync with (`docs/roadmap/hygiene-audit-2026-07-05.md`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-enum Record {
+pub enum Record {
     Header(ConversationHeader),
     Node(MessageNode),
 }
@@ -273,17 +278,17 @@ impl ConversationStore for JsonlStore {
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
-            // Only the first line is needed — the header — but reading the whole small file and
-            // reusing `load`'s parsing keeps the corruption rules in one place.
-            let contents = tokio::fs::read_to_string(&path).await?;
-            let first = contents.split('\n').find(|l| !l.is_empty());
-            let Some(first) = first else {
+            // Only line 0 (the header) is needed here — read just that line instead of the whole
+            // file, which can be sizeable once a conversation has accumulated many turns.
+            let file = tokio::fs::File::open(&path).await?;
+            let mut lines = tokio::io::AsyncBufReadExt::lines(tokio::io::BufReader::new(file));
+            let Some(first) = lines.next_line().await? else {
                 return Err(StoreError::Corrupt(format!(
                     "conversation log {} is empty",
                     path.display()
                 )));
             };
-            match serde_json::from_str::<Record>(first)? {
+            match serde_json::from_str::<Record>(&first)? {
                 Record::Header(h) => headers.push(h),
                 Record::Node(_) => {
                     return Err(StoreError::Corrupt(format!(
@@ -320,8 +325,17 @@ impl ConversationStore for JsonlStore {
             contents.push_str(&serde_json::to_string(&Record::Node(node))?);
             contents.push('\n');
         }
+        // Write to a sibling temp file, then atomically rename over the real path — a crash between
+        // the two leaves either the untouched original or the fully-written new content, never a
+        // truncated file (a direct `tokio::fs::write` truncates-then-writes in place, so a crash
+        // mid-write would lose the entire conversation, not just the title). `rename` replaces an
+        // existing destination on both POSIX and Windows (`std::fs::rename` uses
+        // `MOVEFILE_REPLACE_EXISTING` there), and staying in the same directory keeps it on one
+        // filesystem, which is what makes the rename atomic.
         let path = self.path_for(conversation);
-        tokio::fs::write(&path, contents).await?;
+        let tmp_path = self.root.join(format!("{conversation}.jsonl.tmp"));
+        tokio::fs::write(&tmp_path, contents).await?;
+        tokio::fs::rename(&tmp_path, &path).await?;
         Ok(())
     }
 }

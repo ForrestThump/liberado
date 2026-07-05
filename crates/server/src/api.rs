@@ -18,7 +18,12 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
-use chat_client_contract::{ApiError, CatalogResponse, DaemonStatus, McpInfo, VaultInfo};
+use chat_client_contract::{
+    ApiError, CatalogResponse, ChatMessage, ConversationHistoryResponse,
+    ConversationSearchResponse, ConversationSearchResult, DaemonStatus, McpInfo,
+    SearchMessageMatch, VaultInfo,
+};
+use liberado_chat_search::ParsedQuery;
 
 use crate::state::AppState;
 
@@ -276,7 +281,13 @@ pub async fn get_conversation(
             .into_response();
     };
     match sessions.history(id).await {
-        Ok(messages) => Json(serde_json::json!({ "messages": messages })).into_response(),
+        Ok(messages) => {
+            let messages: Vec<ChatMessage> = messages
+                .into_iter()
+                .map(chat_message_from_provider)
+                .collect();
+            Json(ConversationHistoryResponse { messages }).into_response()
+        }
         Err(liberado_main_agent::SessionError::Store(
             liberado_conversation_store::StoreError::NotFound(_),
         )) => (
@@ -287,6 +298,27 @@ pub async fn get_conversation(
         )
             .into_response(),
         Err(e) => chat_error(e),
+    }
+}
+
+/// Converts one stored `liberado_provider::Message` (the internal, richer type
+/// `ChatSessions::history` returns) into the wire `ChatMessage` — the single conversion point that
+/// keeps `GET /api/conversations/{id}` honoring `chat-client-contract` instead of leaking an
+/// internal type through a hand-rolled `serde_json::json!` literal.
+fn chat_message_from_provider(m: liberado_provider::Message) -> ChatMessage {
+    let role = match m.role {
+        liberado_provider::Role::System => "system",
+        liberado_provider::Role::User => "user",
+        liberado_provider::Role::Assistant => "assistant",
+        liberado_provider::Role::Tool => "tool",
+    };
+    ChatMessage {
+        role: role.to_string(),
+        content: m.content,
+        tool_calls: (!m.tool_calls.is_empty())
+            .then(|| serde_json::to_value(&m.tool_calls).ok())
+            .flatten(),
+        tool_call_id: m.tool_call_id,
     }
 }
 
@@ -320,10 +352,13 @@ pub async fn catalog(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // `chat_tool_names` is the connected runtime's real, flat `<mcp>:<tool>`-prefixed catalog
     // (built once at boot in `build_chat`) — group it by server name so each row below gets its
     // actual tool breakdown instead of the tool_count:0/tool_names:[] stub this used to return.
-    let mut tools_by_mcp: std::collections::HashMap<&str, Vec<String>> = std::collections::HashMap::new();
+    let mut tools_by_mcp: std::collections::HashMap<&str, Vec<String>> =
+        std::collections::HashMap::new();
     for tool_name in &state.chat_tool_names {
         let mcp = liberado_common::mcp_of(tool_name);
-        let bare = tool_name.strip_prefix(&format!("{mcp}:")).unwrap_or(tool_name);
+        let bare = tool_name
+            .strip_prefix(&format!("{mcp}:"))
+            .unwrap_or(tool_name);
         tools_by_mcp.entry(mcp).or_default().push(bare.to_string());
     }
 
@@ -337,7 +372,10 @@ pub async fn catalog(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 .ok()
                 .and_then(|v| v.as_str().map(String::from))
                 .unwrap_or_default();
-            let tool_names = tools_by_mcp.get(d.name.as_str()).cloned().unwrap_or_default();
+            let tool_names = tools_by_mcp
+                .get(d.name.as_str())
+                .cloned()
+                .unwrap_or_default();
 
             McpInfo {
                 name: d.name.clone(),
@@ -346,11 +384,99 @@ pub async fn catalog(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 tool_count: tool_names.len(),
                 tool_names,
                 provenance: d.provenance.clone(),
+                visible_to_main_agent: state.main_agent_capabilities.grants_mcp(&d.name),
+                visible_to_dispatcher: state.dispatcher_capabilities.grants_mcp(&d.name),
             }
         })
         .collect();
 
     Json(CatalogResponse { mcps })
+}
+
+#[derive(Deserialize)]
+pub struct SearchQuery {
+    pub q: String,
+    #[serde(default)]
+    pub regex: bool,
+    #[serde(default = "default_search_limit")]
+    pub limit: usize,
+}
+
+fn default_search_limit() -> usize {
+    20
+}
+
+/// `GET /api/conversations/search?q=...&regex=false&limit=20`
+///
+/// Searches conversation history for messages matching `q`. In literal mode (default), `q` is
+/// split on whitespace; `"quoted phrases"` are treated as single terms; ALL terms must appear in
+/// **the same message** (case-insensitive AND) — narrows toward a topic from a few
+/// half-remembered keywords rather than flooding results with an OR. This is per-message, not
+/// per-conversation: a query like `"auth token"` will not match a conversation where "auth" and
+/// "token" appear in two different messages, only one where a single message contains both. In
+/// regex mode, `q` is a single Rust regex pattern applied case-insensitively (also per-message).
+///
+/// Returns at most `limit` matching conversations (newest first), each with every matching
+/// message's snippet. 400 on an empty query or invalid regex; 500 on I/O error.
+pub async fn search_conversations(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<SearchQuery>,
+) -> impl IntoResponse {
+    let parsed = if query.regex {
+        ParsedQuery::parse_regex(&query.q)
+    } else {
+        ParsedQuery::parse_literal(&query.q)
+    };
+    let parsed = match parsed {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: e.to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let limit = query.limit.clamp(1, 200);
+    match liberado_chat_search::search(&state.conversations_root, &parsed, limit).await {
+        Ok(sr) => {
+            let total_found = sr.total_found;
+            let results = sr
+                .matches
+                .into_iter()
+                .map(|m| ConversationSearchResult {
+                    conversation_id: m.conversation_id,
+                    title: m.title,
+                    created_at: m.created_at,
+                    matches: m
+                        .matches
+                        .into_iter()
+                        .map(|mm| SearchMessageMatch {
+                            node_id: mm.node_id,
+                            author: mm.author,
+                            content_snippet: mm.content_snippet,
+                            created_at: mm.created_at,
+                        })
+                        .collect(),
+                })
+                .collect();
+            Json(ConversationSearchResponse {
+                results,
+                total_found,
+            })
+            .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn reactions(

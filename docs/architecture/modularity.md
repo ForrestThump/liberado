@@ -12,10 +12,13 @@ the whole, the boundary is not real yet. `conversation-store` already passes: it
 
 ## Concrete seam moves
 
-- **Extract a `chat-client-contract` crate** — the SSE event types plus a `ChatClient` trait. The
-  **TUI depends only on that**, making it a standalone TUI-for-any-agent library rather than a
-  Liberado-coupled binary. This is the near-term modularity proof: a client that needs nothing from
-  the agent internals but the contract.
+- **Extract a `chat-client-contract` crate** — done. Holds the shared wire DTOs and the
+  `SseDecoder` incremental parser. **TUI depends only on that** for its wire/transport-framing
+  needs, making it a standalone TUI-for-any-agent library rather than a Liberado-coupled binary.
+  A `ChatClient` trait was tried here too (one shared `send`/`stream` implementation for every
+  client) but deleted 2026-07-05 — TUI's non-blocking render loop and the CLI's blocking REPL
+  turned out to need different enough transport shapes that forcing one trait wasn't worth it;
+  `SseDecoder`/`ChatEvent::from_sse_data` are the real, working seam.
 - **Define an event-source / hook trait** — the seam that makes the vault a plugin. Vault-watch and
   cron both implement it, so the daemon consumes events without knowing where they came from. This is
   what demotes TurboVault from hard dependency to default-privileged plugin (see Decision 19).

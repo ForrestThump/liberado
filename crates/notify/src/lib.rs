@@ -16,6 +16,16 @@ use async_trait::async_trait;
 #[async_trait]
 pub trait Notifier: Send + Sync {
     async fn notify(&self, message: &str) -> Result<(), NotifyError>;
+
+    /// Notify about a proposal awaiting approval, offering action buttons/replies on channels
+    /// that support them. `proposal_id` is the proposal's filename stem (see
+    /// `liberado_common::Proposal`'s note-writing convention) — the correlation id a tap on this
+    /// channel needs to act back on the right proposal. Defaults to plain [`notify`](Self::notify)
+    /// so only channels that actually support interactive replies (Telegram) need to override this.
+    async fn notify_proposal(&self, proposal_id: &str, message: &str) -> Result<(), NotifyError> {
+        let _ = proposal_id;
+        self.notify(message).await
+    }
 }
 
 /// A notification failed to send. Never a reason to abort the caller's own work — see the module
@@ -60,13 +70,44 @@ fn send_message_url(token: &str) -> String {
     format!("https://api.telegram.org/bot{token}/sendMessage")
 }
 
-#[async_trait]
-impl Notifier for TelegramNotifier {
-    async fn notify(&self, message: &str) -> Result<(), NotifyError> {
+/// Telegram limits `callback_data` to 64 bytes. The longest action prefix used on this button row
+/// is `"approve:"` (8 bytes); capping the id itself well under the remainder leaves headroom for
+/// longer action names later without ever risking a callback Telegram would reject outright.
+const MAX_CALLBACK_PROPOSAL_ID_LEN: usize = 50;
+
+/// Pure — whether `proposal_id` is safe to embed in Telegram `callback_data`. Separated from
+/// `notify_proposal` so the boundary condition is unit-testable without a network call.
+fn fits_in_callback_data(proposal_id: &str) -> bool {
+    proposal_id.len() <= MAX_CALLBACK_PROPOSAL_ID_LEN
+}
+
+/// Pure — the `sendMessage` payload for an Approve/Revise/Reject proposal notification. Separated
+/// from `notify_proposal` so the button/callback_data shape is unit-testable without a network
+/// call. The Revise tap is answered by `liberado-telegram-approvals`' `ApprovalBot`, which prompts
+/// for free text and hands it to the shared provider — never this crate, which stays a one-way
+/// send.
+fn approval_buttons_payload(chat_id: &str, message: &str, proposal_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "chat_id": chat_id,
+        "text": message,
+        "reply_markup": {
+            "inline_keyboard": [[
+                { "text": "✅ Approve", "callback_data": format!("approve:{proposal_id}") },
+                { "text": "📝 Revise", "callback_data": format!("revise:{proposal_id}") },
+                { "text": "❌ Reject", "callback_data": format!("reject:{proposal_id}") }
+            ]]
+        }
+    })
+}
+
+impl TelegramNotifier {
+    /// POST `payload` to `sendMessage` and translate a non-2xx response into a [`NotifyError`] —
+    /// the shared body behind both [`Notifier::notify`] and [`Notifier::notify_proposal`].
+    async fn send(&self, payload: serde_json::Value) -> Result<(), NotifyError> {
         let response = self
             .client
             .post(self.send_message_url())
-            .json(&serde_json::json!({ "chat_id": self.chat_id, "text": message }))
+            .json(&payload)
             .send()
             .await
             .map_err(|e| NotifyError(format!("Telegram request failed: {e}")))?;
@@ -76,6 +117,33 @@ impl Notifier for TelegramNotifier {
             return Err(NotifyError(format!("Telegram API error: {body}")));
         }
         Ok(())
+    }
+}
+
+#[async_trait]
+impl Notifier for TelegramNotifier {
+    async fn notify(&self, message: &str) -> Result<(), NotifyError> {
+        self.send(serde_json::json!({ "chat_id": self.chat_id, "text": message }))
+            .await
+    }
+
+    /// Sends the message with Approve/Reject inline-keyboard buttons whose `callback_data` is
+    /// `"approve:{proposal_id}"` / `"reject:{proposal_id}"` — a proposal-approval bot (see
+    /// `liberado-telegram-approvals`) correlates a tap back to `proposals/{proposal_id}.md`.
+    /// Falls back to a plain [`notify`](Self::notify) call when `proposal_id` is too long for
+    /// Telegram's `callback_data` budget, rather than sending a callback the API would reject.
+    async fn notify_proposal(&self, proposal_id: &str, message: &str) -> Result<(), NotifyError> {
+        if !fits_in_callback_data(proposal_id) {
+            tracing::warn!(
+                proposal_id,
+                len = proposal_id.len(),
+                "proposal id too long for Telegram callback_data — sending a plain notification instead"
+            );
+            return self.notify(message).await;
+        }
+
+        self.send(approval_buttons_payload(&self.chat_id, message, proposal_id))
+            .await
     }
 }
 
@@ -89,6 +157,28 @@ mod tests {
             send_message_url("abc123"),
             "https://api.telegram.org/botabc123/sendMessage"
         );
+    }
+
+    #[test]
+    fn a_short_proposal_id_fits_in_callback_data() {
+        assert!(fits_in_callback_data("prop-sub-1"));
+        assert!(fits_in_callback_data(&"a".repeat(MAX_CALLBACK_PROPOSAL_ID_LEN)));
+    }
+
+    #[test]
+    fn an_overlong_proposal_id_does_not_fit_in_callback_data() {
+        assert!(!fits_in_callback_data(&"a".repeat(MAX_CALLBACK_PROPOSAL_ID_LEN + 1)));
+    }
+
+    #[test]
+    fn approval_buttons_payload_embeds_prefixed_callback_data() {
+        let payload = approval_buttons_payload("42", "a proposal needs review", "prop-1");
+        assert_eq!(payload["chat_id"], "42");
+        assert_eq!(payload["text"], "a proposal needs review");
+        let buttons = &payload["reply_markup"]["inline_keyboard"][0];
+        assert_eq!(buttons[0]["callback_data"], "approve:prop-1");
+        assert_eq!(buttons[1]["callback_data"], "revise:prop-1");
+        assert_eq!(buttons[2]["callback_data"], "reject:prop-1");
     }
 
     #[tokio::test]

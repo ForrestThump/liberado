@@ -67,27 +67,38 @@ fn resolve_remote_sha(source: &McpSource) -> Result<String, BuildError> {
         })
 }
 
-/// `cargo install --git <url> [<package>] --root <install_dir>/<name> --locked --force
-/// [--rev][--bin]`.
+/// `cargo install --git <url> [<package>] --root <install_dir>/<name> --locked --force --rev
+/// <resolved_sha> [--bin]`.
 ///
 /// `cargo install` has no `-p`/`--package` flag (unlike `cargo build`) — for a git source that's
 /// a Cargo workspace, the package to install is selected via the trailing positional `CRATE`
 /// argument instead (`cargo install --git <url> <crate-name>`). `--bin` remains a real flag, for
 /// picking one binary out of a package that builds more than one.
 ///
+/// `--rev` is always the SHA [`resolve_remote_sha`] already resolved, never `source.rev` (a
+/// branch/tag name, or absent) directly — otherwise `cargo install` would re-resolve the ref
+/// itself, and a push to the upstream branch between the two resolutions would silently build a
+/// different commit than the one just checked against the lockfile.
+///
 /// Output is inherited (not captured) — builds run sequentially, so there's no interleaving to
 /// worry about, and passing raw `cargo` output through is more useful than re-wrapping it.
-fn cargo_install(source: &McpSource, install_dir: &Path) -> Result<(), BuildError> {
+fn cargo_install(
+    source: &McpSource,
+    resolved_sha: &str,
+    install_dir: &Path,
+) -> Result<(), BuildError> {
     let root = install_dir.join(&source.name);
     let mut cmd = Command::new("cargo");
     cmd.arg("install").arg("--git").arg(&source.git);
     if let Some(package) = &source.package {
         cmd.arg(package);
     }
-    cmd.arg("--root").arg(&root).arg("--locked").arg("--force");
-    if let Some(rev) = &source.rev {
-        cmd.arg("--rev").arg(rev);
-    }
+    cmd.arg("--root")
+        .arg(&root)
+        .arg("--locked")
+        .arg("--force")
+        .arg("--rev")
+        .arg(resolved_sha);
     if let Some(bin) = &source.bin {
         cmd.arg("--bin").arg(bin);
     }
@@ -123,7 +134,7 @@ pub fn sync_source(
         return Ok(SyncOutcome::UpToDate);
     }
 
-    cargo_install(source, install_dir)?;
+    cargo_install(source, &remote_sha, install_dir)?;
 
     let expected = managed_binary_path(install_dir, &source.name);
     if !expected.is_file() {

@@ -1,0 +1,22 @@
+[package]
+name = "liberado-chat-search-mcp"
+version = "0.1.0"
+description = "MCP server exposing conversation history search as a tool, so the dispatcher can search chat history mid-reasoning (not just the human, via the webui). Registered in topology.toml as a stdio MCP; built in-workspace, not a managed (cargo-installed-from-git) MCP."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "liberado-chat-search-mcp"
+path = "src/main.rs"
+
+[dependencies]
+liberado-chat-search = { workspace = true }
+liberado-config = { workspace = true }
+turbomcp = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

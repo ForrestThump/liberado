@@ -63,7 +63,10 @@ impl McpConnector for StdioConnector {
 }
 
 /// Connect to a remote MCP server over streamable HTTP (e.g. deepwiki at
-/// `https://mcp.deepwiki.com/mcp`). The base URL is the server's MCP endpoint.
+/// `https://mcp.deepwiki.com`). `url` is the server's **base origin**, not its full MCP endpoint
+/// path — `Client::connect_http` appends its own default endpoint path (`/mcp`) internally, so
+/// passing an already-`/mcp`-suffixed URL here doubles it up (`.../mcp/mcp`) and 404s. Confirmed
+/// live against deepwiki before landing this doc fix.
 #[derive(Debug, Clone)]
 pub struct HttpConnector {
     url: String,

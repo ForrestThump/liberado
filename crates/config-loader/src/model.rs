@@ -28,7 +28,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use liberado_common::{Capability, CapabilitySet, Consequence, Error, ModelProfile, ModelRole, Result, WriteClass};
+use liberado_common::{
+    Capability, CapabilitySet, Consequence, DEFAULT_POOL, Error, ModelProfile, ModelRole, Result,
+    WriteClass,
+};
 use serde::{Deserialize, Serialize};
 
 /// The fully-resolved configuration the daemon runs on.
@@ -60,8 +63,20 @@ pub struct Topology {
     pub model_roles: HashMap<ModelRole, String>,
     /// Enabled MCP servers (each carries the routing + risk metadata the dispatcher needs).
     pub mcps: Vec<McpConfig>,
-    /// Enabled hook (webhook) receivers.
-    pub hooks: Vec<ComponentConfig>,
+    /// Enabled external webhook hooks (Decision 6/18/19) — each is reachable at
+    /// `POST /api/hooks/{name}` and dispatches `goal` through the same reactive pipeline a vault
+    /// change or cron firing does.
+    pub hooks: Vec<HookConfig>,
+    /// Cron schedules (Decision 18/19) — each fires on its own timer and dispatches `goal` through
+    /// the same reactive pipeline a vault change does (`liberado-cron`'s `CronEventSource`).
+    pub schedules: Vec<CronSchedule>,
+    /// Named dispatcher/executor pools (Decision 18 checkpoint #3) — each gets its own
+    /// `Policy::capabilities_for(name)` authority boundary, sharing the same provider/tuning/MCP
+    /// registry as everything else. The always-present `"default"` pool (today's single-dispatcher
+    /// behavior) doesn't need to be declared here unless referenced for clarity; only *additional*
+    /// pools need an entry so `CronSchedule.pool`/`HookConfig.pool` have something to validate
+    /// against.
+    pub pools: Vec<PoolConfig>,
 }
 
 impl Default for Topology {
@@ -74,20 +89,65 @@ impl Default for Topology {
             model_roles: HashMap::new(),
             mcps: Vec::new(),
             hooks: Vec::new(),
+            schedules: Vec::new(),
+            pools: Vec::new(),
         }
     }
 }
 
-/// A wired component (hook): how it's reached and whether it's on. MCPs use [`McpConfig`], which
-/// additionally carries the routing description + risk rating the dispatcher needs.
+/// A named dispatcher/executor pool (Decision 18 checkpoint #3): authority segregation only, not
+/// coordination — pools never communicate with each other (see
+/// `docs/ideas/a2a-protocol-idea.md`'s research note on why cross-pool/agent coordination is
+/// explicitly out of scope). A pool's authority is just `Policy::capabilities_for(name)` — no new
+/// capability mechanism, the name *is* the component. v1 shares the same provider/tuning as every
+/// other pool; only the capability grant differs (see this crate's `CronSchedule`/`HookConfig`
+/// `pool` fields for how an event gets routed to one).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ComponentConfig {
+pub struct PoolConfig {
     pub name: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Transport endpoint: a socket path, `http://…`, or webhook URL depending on component.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub endpoint: Option<String>,
+}
+
+/// A configured cron schedule: wiring only (Decision 14) — the daemon-assembly layer
+/// (`liberado-bootstrap`) translates enabled entries into `liberado-cron`'s runtime `Schedule`
+/// type. `cron_expr` uses the `cron` crate's 6/7-field syntax (**seconds first** — not standard
+/// 5-field cron), e.g. `"0 0 9 * * * *"` for "every day at 09:00:00".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CronSchedule {
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    pub cron_expr: String,
+    /// The goal text dispatched.
+    pub goal: String,
+    /// Which named pool (Decision 18 checkpoint #3) handles this schedule's firing — `None` routes
+    /// to the always-present `"default"` pool (today's behavior, unchanged for anyone not opting
+    /// in). If set, must name `"default"` or a declared, enabled `topology.pools` entry
+    /// (fail-fast validated).
+    #[serde(default)]
+    pub pool: Option<String>,
+}
+
+/// A configured external webhook hook: wiring only (Decision 14) — `liberado-server` resolves
+/// `secret_ref` from the environment and registers `POST /api/hooks/{name}` for each enabled entry.
+/// `goal` mirrors [`CronSchedule::goal`]'s role exactly (cron is a *temporal* hook; this is a
+/// *network-triggered* one) — the caller's optional request body only adds runtime context, it
+/// never replaces the configured goal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookConfig {
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Env var holding this hook's shared secret (`X-Liberado-Hook-Secret` header) — never the
+    /// secret itself (Decision 10). Each hook has its own, so leaking one doesn't compromise others.
+    pub secret_ref: String,
+    /// The goal text dispatched.
+    pub goal: String,
+    /// Which named pool (Decision 18 checkpoint #3) handles this hook's trigger — see
+    /// [`CronSchedule::pool`]'s doc comment; identical semantics.
+    #[serde(default)]
+    pub pool: Option<String>,
 }
 
 /// A wired MCP server: how it's reached, plus the routing description and risk classification the
@@ -274,7 +334,10 @@ mod managed_binary_path_tests {
         let expected = PathBuf::from("/opt/liberado/mcp-bin")
             .join("liberado-weather-mcp")
             .join("bin")
-            .join(format!("liberado-weather-mcp{}", std::env::consts::EXE_SUFFIX));
+            .join(format!(
+                "liberado-weather-mcp{}",
+                std::env::consts::EXE_SUFFIX
+            ));
         assert_eq!(path, expected);
     }
 }
@@ -356,6 +419,7 @@ pub struct Tuning {
     pub concurrency: ConcurrencyTuning,
     pub capture: CaptureTuning,
     pub maintenance: MaintenanceTuning,
+    pub telegram_approvals: TelegramApprovalsTuning,
 }
 
 /// Subagent isolation level (Decision 8). Configurable so scaling to process isolation is a
@@ -473,7 +537,12 @@ pub struct CaptureTuning {
     pub ready_now_settle_secs: u64,
     pub ready_flag: String,
     pub hold_flag: String,
-    /// Cron-ish schedule for the low-intensity whole-vault ambient sweep.
+    /// When the low-intensity whole-vault ambient sweep runs (`liberado-inbox-spec.md` §11, e.g.
+    /// `"nightly"`). Free text, not yet a cron expression or any other parsed format — nothing
+    /// consumes this field yet (the ambient sweep itself isn't built), so no concrete schedule
+    /// syntax has been decided. `Config::validate` only rejects it being empty; whichever future
+    /// component actually reads this should pick a real syntax (cron-like, most likely, matching
+    /// `topology.schedules[].cron_expr`) and add proper parse validation here at that point.
     pub ambient_sweep_schedule: String,
     /// Never-process patterns (Syncthing/editor artifacts).
     pub inbox_ignore_globs: Vec<String>,
@@ -503,9 +572,16 @@ impl Default for CaptureTuning {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MaintenanceTuning {
+    /// When batched git commits run (`liberado-vault-maintenance-and-git-spec.md` §5, e.g.
+    /// `"per-batch+hourly"`). Free text, not yet parsed by anything — see
+    /// `CaptureTuning::ambient_sweep_schedule`'s doc comment for why (same situation: the
+    /// git-maintenance component that would consume this isn't built yet, so no concrete syntax is
+    /// fixed). `Config::validate` only rejects it being empty.
     pub git_commit_schedule: String,
     /// Dirs Syncthing must not replicate (the `.git/` footgun + machine-managed dirs).
     pub stignore_machine_dirs: Vec<String>,
+    /// When `maintenance-hook`'s hygiene sweep runs (same spec, e.g. `"weekly"`) — same
+    /// not-yet-consumed, free-text situation as `git_commit_schedule` above.
     pub maintenance_schedule: String,
     /// Pruning human-authored content always proposes first.
     pub prune_requires_proposal: bool,
@@ -522,6 +598,34 @@ impl Default for MaintenanceTuning {
             ],
             maintenance_schedule: "weekly".to_string(),
             prune_requires_proposal: true,
+        }
+    }
+}
+
+/// `liberado-telegram-approvals`' `ApprovalBot` tunables: poll-loop timing plus the revise LLM
+/// call's sampling. Broken out from the crate itself (which has no config-loader dependency of
+/// its own reasoning) so these follow the same file-configurable/recompile-tolerant-default split
+/// as every other tuning knob, rather than living as ungoverned inline constants.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TelegramApprovalsTuning {
+    /// How long to long-poll Telegram's `getUpdates` before retrying (seconds). Telegram caps this
+    /// at 50s server-side; staying under 30s also keeps the connection alive through most NAT
+    /// timeouts.
+    pub getupdate_timeout_secs: u64,
+    /// Backoff before retrying `getUpdates` after a network/API error (seconds).
+    pub poll_retry_backoff_secs: u64,
+    /// Sampling temperature for the revise LLM call — 0 for a faithful, non-creative edit rather
+    /// than an unrelated rewrite.
+    pub revise_temperature: f32,
+}
+
+impl Default for TelegramApprovalsTuning {
+    fn default() -> Self {
+        Self {
+            getupdate_timeout_secs: 25,
+            poll_retry_backoff_secs: 10,
+            revise_temperature: 0.0,
         }
     }
 }
@@ -583,6 +687,45 @@ impl Config {
                 "tuning.concurrency.max_reaction_depth must be >= 1".into(),
             ));
         }
+        // These three are free text, not yet parsed by anything (see their own doc comments) — but
+        // an empty schedule is unambiguously wrong under any future interpretation, so it's caught
+        // here rather than left to surface as a confusing failure once a real consumer exists.
+        if self.tuning.capture.ambient_sweep_schedule.trim().is_empty() {
+            return Err(Error::Config(
+                "tuning.capture.ambient_sweep_schedule must not be empty".into(),
+            ));
+        }
+        if self
+            .tuning
+            .maintenance
+            .git_commit_schedule
+            .trim()
+            .is_empty()
+        {
+            return Err(Error::Config(
+                "tuning.maintenance.git_commit_schedule must not be empty".into(),
+            ));
+        }
+        if self
+            .tuning
+            .maintenance
+            .maintenance_schedule
+            .trim()
+            .is_empty()
+        {
+            return Err(Error::Config(
+                "tuning.maintenance.maintenance_schedule must not be empty".into(),
+            ));
+        }
+        if self.tuning.telegram_approvals.getupdate_timeout_secs == 0
+            || self.tuning.telegram_approvals.getupdate_timeout_secs > 50
+        {
+            return Err(Error::Config(
+                "tuning.telegram_approvals.getupdate_timeout_secs must be between 1 and 50 \
+                 (Telegram's own getUpdates cap)"
+                    .into(),
+            ));
+        }
 
         // Every role assignment must name a declared model that meets the role's floor (D13).
         for (role, model_name) in &self.topology.model_roles {
@@ -603,6 +746,83 @@ impl Config {
                     model: model_name.clone(),
                     role: role.as_str().to_string(),
                 });
+            }
+        }
+
+        // Every schedule's cron expression must actually parse, and names must be unique — a
+        // malformed or ambiguous schedule is a load-time error (Decision 14 fail-fast), not
+        // something discovered only once it fails to fire.
+        let mut seen_schedule_names = std::collections::HashSet::new();
+        for schedule in &self.topology.schedules {
+            if !seen_schedule_names.insert(&schedule.name) {
+                return Err(Error::Config(format!(
+                    "topology.schedules has a duplicate name '{}'",
+                    schedule.name
+                )));
+            }
+            if let Err(e) =
+                std::str::FromStr::from_str(&schedule.cron_expr).map(|_: cron::Schedule| ())
+            {
+                return Err(Error::Config(format!(
+                    "topology.schedules['{}'].cron_expr '{}' is invalid: {e}",
+                    schedule.name, schedule.cron_expr
+                )));
+            }
+        }
+
+        // Hook names must be unique too — the env-var-existence check for each `secret_ref` is a
+        // cross-cutting concern (needs the live process environment), so it lives in
+        // `validate_merged_config` alongside the identical check for `policy.secret_refs`.
+        let mut seen_hook_names = std::collections::HashSet::new();
+        for hook in &self.topology.hooks {
+            if !seen_hook_names.insert(&hook.name) {
+                return Err(Error::Config(format!(
+                    "topology.hooks has a duplicate name '{}'",
+                    hook.name
+                )));
+            }
+        }
+
+        // Pool names must be unique, and any schedule/hook that names a pool must reference one
+        // that actually exists (the always-present "default", or a declared, enabled entry here) —
+        // fail-fast (Decision 14), not a silent typo that quietly falls back or 404s at runtime.
+        let mut seen_pool_names = std::collections::HashSet::new();
+        for pool in &self.topology.pools {
+            if !seen_pool_names.insert(pool.name.as_str()) {
+                return Err(Error::Config(format!(
+                    "topology.pools has a duplicate name '{}'",
+                    pool.name
+                )));
+            }
+        }
+        let pool_exists = |name: &str| {
+            name == DEFAULT_POOL
+                || self
+                    .topology
+                    .pools
+                    .iter()
+                    .any(|p| p.enabled && p.name == name)
+        };
+        for schedule in &self.topology.schedules {
+            if let Some(pool) = &schedule.pool {
+                if !pool_exists(pool) {
+                    return Err(Error::Config(format!(
+                        "topology.schedules['{}'].pool '{pool}' does not name \"default\" or a \
+                         declared, enabled topology.pools entry",
+                        schedule.name
+                    )));
+                }
+            }
+        }
+        for hook in &self.topology.hooks {
+            if let Some(pool) = &hook.pool {
+                if !pool_exists(pool) {
+                    return Err(Error::Config(format!(
+                        "topology.hooks['{}'].pool '{pool}' does not name \"default\" or a \
+                         declared, enabled topology.pools entry",
+                        hook.name
+                    )));
+                }
             }
         }
 
@@ -675,8 +895,14 @@ impl ConfigBuilder {
     }
 
     /// Add a hook component config.
-    pub fn hook(mut self, hook: ComponentConfig) -> Self {
+    pub fn hook(mut self, hook: HookConfig) -> Self {
         self.config.topology.hooks.push(hook);
+        self
+    }
+
+    /// Add a cron schedule.
+    pub fn schedule(mut self, schedule: CronSchedule) -> Self {
+        self.config.topology.schedules.push(schedule);
         self
     }
 
@@ -811,6 +1037,21 @@ mod tests {
         assert_eq!(t.capture.inbox_settle_window_secs, 900);
         assert_eq!(t.capture.ready_now_settle_secs, 120);
         assert!(t.maintenance.prune_requires_proposal);
+        assert_eq!(t.telegram_approvals.getupdate_timeout_secs, 25);
+        assert_eq!(t.telegram_approvals.poll_retry_backoff_secs, 10);
+        assert_eq!(t.telegram_approvals.revise_temperature, 0.0);
+    }
+
+    #[test]
+    fn telegram_approvals_getupdate_timeout_must_be_within_telegrams_own_cap() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.tuning.telegram_approvals.getupdate_timeout_secs = 51;
+        assert!(cfg.validate().is_err());
+        cfg.tuning.telegram_approvals.getupdate_timeout_secs = 0;
+        assert!(cfg.validate().is_err());
+        cfg.tuning.telegram_approvals.getupdate_timeout_secs = 25;
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]
@@ -820,10 +1061,161 @@ mod tests {
     }
 
     #[test]
+    fn blank_schedule_fields_fail_validation() {
+        let base = || {
+            let mut cfg = Config::default();
+            cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+            cfg
+        };
+
+        let mut cfg = base();
+        cfg.tuning.capture.ambient_sweep_schedule = "  ".to_string();
+        assert!(cfg.validate().is_err(), "blank ambient_sweep_schedule");
+
+        let mut cfg = base();
+        cfg.tuning.maintenance.git_commit_schedule = String::new();
+        assert!(cfg.validate().is_err(), "empty git_commit_schedule");
+
+        let mut cfg = base();
+        cfg.tuning.maintenance.maintenance_schedule = String::new();
+        assert!(cfg.validate().is_err(), "empty maintenance_schedule");
+
+        assert!(base().validate().is_ok(), "defaults must still pass");
+    }
+
+    #[test]
     fn minimal_valid_config_passes() {
         let mut cfg = Config::default();
         cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
         assert!(cfg.validate().is_ok());
+    }
+
+    fn cron_schedule(name: &str, cron_expr: &str) -> CronSchedule {
+        CronSchedule {
+            name: name.into(),
+            enabled: true,
+            cron_expr: cron_expr.into(),
+            goal: "do something".into(),
+            pool: None,
+        }
+    }
+
+    #[test]
+    fn a_valid_schedule_passes_validation() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.topology.schedules = vec![cron_schedule("nightly", "0 0 9 * * * *")];
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn a_malformed_cron_expression_fails_validation() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.topology.schedules = vec![cron_schedule("nightly", "not a cron expr")];
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn duplicate_schedule_names_fail_validation() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.topology.schedules = vec![
+            cron_schedule("nightly", "0 0 9 * * * *"),
+            cron_schedule("nightly", "0 0 12 * * * *"),
+        ];
+        assert!(cfg.validate().is_err());
+    }
+
+    fn hook_config(name: &str) -> HookConfig {
+        HookConfig {
+            name: name.into(),
+            enabled: true,
+            secret_ref: format!("{}_SECRET", name.to_uppercase()),
+            goal: "do something".into(),
+            pool: None,
+        }
+    }
+
+    #[test]
+    fn a_valid_hook_passes_validation() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.topology.hooks = vec![hook_config("nightly-backup")];
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn duplicate_hook_names_fail_validation() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.topology.hooks = vec![hook_config("nightly-backup"), hook_config("nightly-backup")];
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn a_schedule_targeting_the_implicit_default_pool_passes_with_no_pools_declared() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        let mut schedule = cron_schedule("nightly", "0 0 9 * * * *");
+        schedule.pool = Some(DEFAULT_POOL.to_string());
+        cfg.topology.schedules = vec![schedule];
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn a_schedule_targeting_a_declared_pool_passes_validation() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.topology.pools = vec![PoolConfig {
+            name: "restricted".into(),
+            enabled: true,
+        }];
+        let mut schedule = cron_schedule("nightly", "0 0 9 * * * *");
+        schedule.pool = Some("restricted".to_string());
+        cfg.topology.schedules = vec![schedule];
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn a_schedule_targeting_an_undeclared_pool_fails_validation() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        let mut schedule = cron_schedule("nightly", "0 0 9 * * * *");
+        schedule.pool = Some("nonexistent".to_string());
+        cfg.topology.schedules = vec![schedule];
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn a_hook_targeting_a_disabled_pool_fails_validation() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.topology.pools = vec![PoolConfig {
+            name: "restricted".into(),
+            enabled: false,
+        }];
+        let mut hook = hook_config("nightly-backup");
+        hook.pool = Some("restricted".to_string());
+        cfg.topology.hooks = vec![hook];
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn duplicate_pool_names_fail_validation() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.topology.pools = vec![
+            PoolConfig {
+                name: "restricted".into(),
+                enabled: true,
+            },
+            PoolConfig {
+                name: "restricted".into(),
+                enabled: true,
+            },
+        ];
+        assert!(cfg.validate().is_err());
     }
 
     #[test]
@@ -1022,10 +1414,12 @@ clarify_threshold_read = 0.8
                 default_zone: None,
                 tools: Vec::new(),
             })
-            .hook(ComponentConfig {
+            .hook(HookConfig {
                 name: "hook1".into(),
                 enabled: true,
-                endpoint: Some("http://localhost:9000".into()),
+                secret_ref: "HOOK1_SECRET".into(),
+                goal: "do something".into(),
+                pool: None,
             })
             .build()
             .expect("valid config");

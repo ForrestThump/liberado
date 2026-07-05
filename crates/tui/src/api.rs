@@ -13,13 +13,9 @@ use reqwest::{Client, StatusCode};
 
 // Re-export the shared wire types so the rest of the crate can still import them
 // from `crate::api::*` without changing call sites.
-pub use chat_client_contract::{ChatMessage, ConvHeader, DaemonStatus, ReactionEvent};
-
-/// Wrapper for `GET /api/conversations/{id}` response: `{"messages": […]}`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct ConversationHistory {
-    messages: Vec<ChatMessage>,
-}
+pub use chat_client_contract::{
+    ChatMessage, ConversationHistoryResponse, ConvHeader, DaemonStatus, ReactionEvent,
+};
 
 /// A tool-call chip rendered inline in the chat: `[tool] name(args preview)`.
 /// Display-only — constructed from `ChatEvent::Tool` data, never serialized to JSON.
@@ -99,7 +95,7 @@ pub async fn fetch_conversation_history(
         return Ok(None);
     }
     resp.error_for_status_ref()?;
-    let history: ConversationHistory = resp.json().await?;
+    let history: ConversationHistoryResponse = resp.json().await?;
     Ok(Some(history.messages))
 }
 
@@ -273,7 +269,7 @@ mod tests {
                 {"role": "assistant", "content": "hello"}
             ]
         });
-        let history: super::ConversationHistory = serde_json::from_value(json).unwrap();
+        let history: super::ConversationHistoryResponse = serde_json::from_value(json).unwrap();
         assert_eq!(history.messages.len(), 2);
         assert_eq!(history.messages[0].role, "user");
     }

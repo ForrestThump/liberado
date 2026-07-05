@@ -42,7 +42,22 @@ fn App() -> Element {
     let base = api_base();
     let mut view = use_signal(|| "chat");
     let active_conv_id = use_signal(|| None::<String>);
-    let sidebar_collapsed = use_signal(|| false);
+    // Default collapsed on narrow (phone-width) viewports so the sidebar doesn't cover the chat
+    // on first load — expanded by default everywhere else, matching prior behavior.
+    let sidebar_collapsed = use_signal(|| {
+        #[cfg(target_arch = "wasm32")]
+        {
+            web_sys::window()
+                .and_then(|w| w.inner_width().ok())
+                .and_then(|v| v.as_f64())
+                .map(|width| width < 768.0)
+                .unwrap_or(false)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            false
+        }
+    });
 
     let chat_cls = if view() == "chat" { "nav-btn active" } else { "nav-btn" };
     let status_cls = if view() == "status" { "nav-btn active" } else { "nav-btn" };

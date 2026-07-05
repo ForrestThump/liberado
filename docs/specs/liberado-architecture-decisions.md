@@ -526,8 +526,32 @@ substrate doesn't quietly stall:
   static config (the same registry the TUI/WebUI query).
 - **Checkpoint #2 (Phase 2)** — the **coding-agent is a bus service**; an MCP hot-reload re-registers
   in the catalog.
-- **Checkpoint #3 (Phase 3)** — **cron and vault-watch are interchangeable event-sources**, and a
-  second dispatcher/executor is **config-enableable**.
+- **Checkpoint #3 (Phase 3)** — ✅ **done (2026-07-04)**: **cron and vault-watch are interchangeable
+  event-sources** — a new `EventSource` trait (`liberado-common`) that `Daemon::run` fans into one
+  channel; the existing vault-watch loop was refactored into its first conformer before cron (new
+  `liberado-cron` crate, vault-agnostic) became the second, proven by a daemon integration test
+  asserting both produce reactions over the same channel. A third source landed the same day,
+  beyond the checkpoint's original wording but the same seam: an external webhook receiver
+  (`POST /api/hooks/{name}`, `crates/server/src/hooks.rs`) — a *push*-style producer (an external
+  caller decides when to fire) rather than cron/vault-watch's *pull*-style (each runs its own loop),
+  enabled by a new `Daemon::event_sender()` accessor so a same-process external producer can inject
+  an `Event` with no `EventSource` loop of its own. Its second half — a second, independently
+  config-enableable dispatcher/executor **pool** — also landed the same day: `Daemon` holds
+  `pools: HashMap<String, DaemonPool>` (an always-present `"default"` entry preserves every
+  pre-existing call site unchanged); `EventPayload.pool`/`CronSchedule.pool`/`HookConfig.pool` route
+  a trigger to a named pool (`topology.toml`'s `[[pools]]`, validated fail-fast against a declared,
+  enabled entry); a pool's authority is just its own `policy.toml` grant (`[[grants]]` keyed by the
+  pool's name, the same mechanism `"dispatcher"`/`"main-agent"` already used) — no new authority
+  mechanism needed. A privilege-escalation-shaped gap surfaced mid-implementation and was closed
+  before landing: `Proposal.pool` is now a signed field (set by the pool's own `Orchestrator`
+  *before* signing, re-verified defensively in `execute_approved`), so an approved proposal always
+  executes under the *same* pool's authority it was proposed under, never a broader one reached via
+  routing drift. Proven by a dual-pool daemon integration test: two pools given identical decisions
+  referencing the same MCP, one granted it and one not — the ungranted pool's dispatcher-level
+  guard (not just the orchestrator) catches the gap and never reaches a real runtime. Deliberately
+  **out of scope** (research-confirmed, see `docs/ideas/a2a-protocol-idea.md`): pools do not
+  coordinate or communicate with each other — that's a different, harder, currently-unproven
+  problem (internal peer-agent authority-sharing), not what this checkpoint built.
 
 **Rationale**: The mesh is the single enabler for the modularity vision (vault-optional, multiple
 dispatchers/executors, cron, partial deploys, self-improvement-as-a-service). A foundation-first
@@ -535,7 +559,8 @@ build risks months of plumbing with nothing shipped; incremental-with-checkpoint
 as a **side effect of feature work** while the checkpoints keep it honest. The public HTTP/SSE API and
 the TUI client never change during the migration.
 
-**Status**: Decided (2026-06-26). Realized incrementally across roadmap Phases 1–3.
+**Status**: Decided (2026-06-26). Realized incrementally across roadmap Phases 1–3; checkpoint #3
+(both its event-source half and its second-dispatcher-pool half) done 2026-07-04.
 
 ### 19. TurboVault as Privileged Plugin, not Hard Dependency
 **Why it matters**: The original Pillar 1 ("the vault is the source of truth") read as a system-wide
@@ -556,8 +581,11 @@ invariant (see the dated clarifying note on Decision 17 above). Pillar 1 in
 perception+storage plugin"; [`docs/architecture/positioning.md`](../architecture/positioning.md)
 states the differentiation this unlocks.
 
-**Status**: Decided (2026-06-26). Privileged-default now; hard-plugin via the event-source trait in
-Phase 3.
+**Status**: Decided (2026-06-26). ✅ **Event-source trait built (2026-07-04)** — the vault's reactive
+coupling is now isolated behind `EventSource` (`liberado-common`), with `liberado-cron` as the proof
+a non-vault source works identically. The vault itself (`liberado-vault`) is unchanged and still the
+default, privileged perception+storage plugin — this decision was about isolating the *coupling*,
+not removing the vault.
 
 ---
 

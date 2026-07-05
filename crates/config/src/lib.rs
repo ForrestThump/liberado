@@ -30,10 +30,10 @@ use liberado_common::CapabilityCatalog;
 use thiserror::Error;
 
 pub use liberado_config_loader::{
-    CURRENT_SCHEMA_VERSION, CaptureTuning, ComponentConfig, ConcurrencyTuning, Config, ConfigBuilder,
-    ContextTuning, DispatchTuning, Grant, MaintenanceTuning, McpConfig, McpTransport, Policy,
-    SubagentIsolation, ToolImpact, Topology, Tuning, ZonePolicy, managed_binary_path,
-    resolve_declared_zone,
+    CURRENT_SCHEMA_VERSION, CaptureTuning, ConcurrencyTuning, Config, ConfigBuilder,
+    ContextTuning, CronSchedule, DEFAULT_POOL, DispatchTuning, Grant, HookConfig, MaintenanceTuning,
+    McpConfig, McpTransport, Policy, PoolConfig, SubagentIsolation, TelegramApprovalsTuning,
+    ToolImpact, Topology, Tuning, ZonePolicy, managed_binary_path, resolve_declared_zone,
 };
 
 /// Records which source file contributed each section of a loaded [`Config`],

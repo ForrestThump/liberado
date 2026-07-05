@@ -23,8 +23,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use liberado_common::{
     BlockReason, CapabilitySet, Consequence, DispatchAction, DispatchDecision, McpDescriptor,
-    Outcome, Proposal, ProposalSigner, ProposedAction, Report, ToolCall, WriteClass,
-    WriteProvenance, mcp_of,
+    Outcome, Proposal, ProposalSigner, ProposedAction, Report, SignedProposal, ToolCall,
+    WriteClass, WriteProvenance, mcp_of,
 };
 use liberado_executor::{
     Budget, ExecError, Executor, RiskGatedToolRuntime, RuntimeFactory, RuntimeSetupError, Task,
@@ -70,7 +70,9 @@ pub enum Disposition {
     },
     /// A high-consequence action was downgraded to a proposal for human approval (Decision 11).
     /// The orchestrator only *builds* the artifact; the daemon (which owns the vault) writes it.
-    Propose(Proposal),
+    /// Already signed (`SignedProposal`, not a bare `Proposal`) — a write helper that takes this
+    /// type can't forget to sign, by construction.
+    Propose(SignedProposal),
 }
 
 /// A single sub-goal to dispatch in parallel. Each is capability-narrowed to the MCPs its
@@ -118,12 +120,81 @@ pub struct Orchestrator {
     /// Signs proposals built by the `Propose` arm and this orchestrator's own runtime-level `gate`
     /// downgrades; also checked defensively in `execute_approved` (see that method's doc comment).
     signer: ProposalSigner,
+    /// Which named dispatcher/executor pool (Decision 18 checkpoint #3) this orchestrator *is* —
+    /// stamped onto every proposal this orchestrator builds (both the `Propose` arm and `gate`'s
+    /// runtime-level downgrades), signed as part of `Proposal.pool`, so an approval later executes
+    /// it via *this same* pool's authority, never a different (possibly broader) one. Every
+    /// `Orchestrator` belongs to exactly one pool — the always-present `"default"` pool for
+    /// anything that predates this, or a caller-chosen name for an additional pool.
+    pool_name: String,
     source: String,
     direct_budget: Budget,
     subagent_budget: Budget,
     /// Told about every proposal a runtime-level `gate` downgrade writes — optional, `None` by
     /// default. Best-effort: a notification failure never blocks the write it's reporting on.
     notifier: Option<Arc<dyn Notifier>>,
+}
+
+/// The 6 of [`Orchestrator::new`]'s 9 parameters that are the same for every pool a given daemon
+/// configures (Decision 18 checkpoint #3) — everything except a pool's own [`RuntimeFactory`]
+/// (registries aren't `Clone`/shareable across orchestrators), its `CapabilitySet` ceiling, and its
+/// name. `crates/bootstrap/src/lib.rs`'s `configure_daemon` used to build these 6 values once via
+/// [`liberado_config::guard_context`] and then re-clone all of them into `Orchestrator::new` at
+/// every pool's call site (`docs/roadmap/hygiene-audit-2026-07-05.md`) — building one
+/// `OrchestratorInfra` and calling [`for_pool`](Self::for_pool) per pool collapses that back down to
+/// naming only what actually differs.
+pub struct OrchestratorInfra {
+    provider: Arc<dyn Provider>,
+    consequence_catalog: Vec<(String, Consequence)>,
+    zone_catalog: Vec<McpDescriptor>,
+    zone_write_classes: Vec<(String, WriteClass)>,
+    proposals_dir: PathBuf,
+    signer: ProposalSigner,
+}
+
+impl OrchestratorInfra {
+    pub fn new(
+        provider: Arc<dyn Provider>,
+        consequence_catalog: Vec<(String, Consequence)>,
+        zone_catalog: Vec<McpDescriptor>,
+        zone_write_classes: Vec<(String, WriteClass)>,
+        proposals_dir: PathBuf,
+        signer: ProposalSigner,
+    ) -> Self {
+        Self {
+            provider,
+            consequence_catalog,
+            zone_catalog,
+            zone_write_classes,
+            proposals_dir,
+            signer,
+        }
+    }
+
+    /// Build the [`Orchestrator`] for one pool: only what's actually pool-specific — its
+    /// [`RuntimeFactory`], its capability ceiling, and its name — combined with this shared infra.
+    pub fn for_pool(
+        &self,
+        factory: impl RuntimeFactory + 'static,
+        capabilities: CapabilitySet,
+        pool_name: impl Into<String>,
+    ) -> Orchestrator {
+        Orchestrator {
+            provider: self.provider.clone(),
+            factory: Box::new(factory),
+            capabilities,
+            consequence_catalog: self.consequence_catalog.clone(),
+            zone_catalog: self.zone_catalog.clone(),
+            zone_write_classes: self.zone_write_classes.clone(),
+            proposals_dir: self.proposals_dir.clone(),
+            signer: self.signer.clone(),
+            pool_name: pool_name.into(),
+            source: DEFAULT_SOURCE.to_string(),
+            direct_budget: Budget::new(DIRECT_MAX_TURNS),
+            subagent_budget: Budget::default(),
+            notifier: None,
+        }
+    }
 }
 
 impl Orchestrator {
@@ -137,6 +208,7 @@ impl Orchestrator {
         zone_write_classes: Vec<(String, WriteClass)>,
         proposals_dir: PathBuf,
         signer: ProposalSigner,
+        pool_name: impl Into<String>,
     ) -> Self {
         Self {
             provider,
@@ -147,6 +219,7 @@ impl Orchestrator {
             zone_write_classes,
             proposals_dir,
             signer,
+            pool_name: pool_name.into(),
             source: DEFAULT_SOURCE.to_string(),
             direct_budget: Budget::new(DIRECT_MAX_TURNS),
             subagent_budget: Budget::default(),
@@ -213,7 +286,8 @@ impl Orchestrator {
                         proposed_action,
                         rationale,
                     );
-                    self.signer.sign(&mut proposal);
+                    proposal.pool = Some(self.pool_name.clone());
+                    let proposal = self.signer.sign(proposal);
                     tracing::Span::current().record("disposition", "proposed");
                     tracing::info!(proposal_id = %proposal.id, "dispatch resulted in a proposal");
                     Ok(Disposition::Propose(proposal))
@@ -249,13 +323,18 @@ impl Orchestrator {
                     );
                     let task = Task::new(DIRECT_INSTRUCTIONS, goal).with_seed(seed_calls);
                     let report = if allowed_mcps.is_empty() {
-                        self.execute(&self.direct_budget, &NoMcpRuntime, task).await?
+                        self.execute(&self.direct_budget, &NoMcpRuntime, task)
+                            .await?
                     } else {
-                        let provenanace =
+                        let provenance =
                             WriteProvenance::agent(self.source.clone(), trigger_correlation);
-                        let runtime = self.factory.runtime_for(&allowed_mcps, provenanace).await?;
-                        let runtime =
-                            self.gate(runtime, self.capabilities.clone(), goal, trigger_correlation);
+                        let runtime = self.factory.runtime_for(&allowed_mcps, provenance).await?;
+                        let runtime = self.gate(
+                            runtime,
+                            self.capabilities.clone(),
+                            goal,
+                            trigger_correlation,
+                        );
                         self.execute(&self.direct_budget, &*runtime, task).await?
                     };
                     tracing::Span::current().record("disposition", "reported");
@@ -331,6 +410,29 @@ impl Orchestrator {
                 return Ok(Report {
                     outcome: Outcome::Failed,
                     summary: "proposal failed integrity verification — not executed".into(),
+                    artifacts: Vec::new(),
+                    new_high_signal_facts: Vec::new(),
+                    follow_up: None,
+                });
+            }
+
+            // Defense in depth (Decision 18 checkpoint #3): the *caller* (`Daemon::handle_proposal_change`)
+            // is responsible for routing an approved proposal to the pool's orchestrator it was
+            // proposed under, so a restricted pool's proposal never executes with a different
+            // (possibly broader) pool's authority. Checked again here in case that routing is ever
+            // wrong — never trust a single enforcement point for an authority boundary.
+            let proposal_pool = proposal.pool.as_deref().unwrap_or(liberado_common::DEFAULT_POOL);
+            if proposal_pool != self.pool_name {
+                tracing::warn!(
+                    proposal_id = %proposal.id,
+                    proposal_pool,
+                    orchestrator_pool = %self.pool_name,
+                    "approved proposal's pool does not match this orchestrator — refusing to execute"
+                );
+                return Ok(Report {
+                    outcome: Outcome::Failed,
+                    summary: "proposal's pool does not match the executing orchestrator — not executed"
+                        .into(),
                     artifacts: Vec::new(),
                     new_high_signal_facts: Vec::new(),
                     follow_up: None,
@@ -482,9 +584,11 @@ impl Orchestrator {
                 .acquire_owned()
                 .await
                 .expect("semaphore is local to this call and never closed");
-            let provenance =
-                WriteProvenance::agent(self.source.clone(), &sub.correlation_id);
-            let runtime = self.factory.runtime_for(&sub.allowed_mcps, provenance).await?;
+            let provenance = WriteProvenance::agent(self.source.clone(), &sub.correlation_id);
+            let runtime = self
+                .factory
+                .runtime_for(&sub.allowed_mcps, provenance)
+                .await?;
             // No per-sub-dispatch CapabilitySet exists on `SubDispatch` today (only `allowed_mcps`),
             // so gate with the orchestrator-level ceiling — the same one `ExecuteDirect` uses.
             let runtime = self.gate(
@@ -499,7 +603,7 @@ impl Orchestrator {
             let label = sub.label.clone();
 
             let handle = tokio::spawn(async move {
-                let result = Executor::new(provider, budget).execute(&*runtime, task).await;
+                let result = Self::execute_with(provider, &budget, &*runtime, task).await;
                 drop(permit);
                 (label, result)
             });
@@ -550,7 +654,22 @@ impl Orchestrator {
         runtime: &dyn ToolRuntime,
         task: Task,
     ) -> Result<Report, ExecError> {
-        Executor::new(self.provider.clone(), budget.clone())
+        Self::execute_with(self.provider.clone(), budget, runtime, task).await
+    }
+
+    /// The one canonical way an `Executor` gets built and run in this crate — takes an owned
+    /// `provider` (not `&self`) specifically so [`dispatch_parallel`](Self::dispatch_parallel)'s
+    /// spawned tasks can call it too: they run past this call's own borrow of `self` (moved into a
+    /// `tokio::spawn`ed future), so they need an owned clone of the provider, not a method that
+    /// borrows `&self`. Before this, `dispatch_parallel` built its own `Executor::new(...)` inline,
+    /// duplicating exactly this line rather than sharing it (`docs/roadmap/hygiene-audit-2026-07-05.md`).
+    async fn execute_with(
+        provider: Arc<dyn Provider>,
+        budget: &Budget,
+        runtime: &dyn ToolRuntime,
+        task: Task,
+    ) -> Result<Report, ExecError> {
+        Executor::new(provider, budget.clone())
             .execute(runtime, task)
             .await
     }
@@ -580,6 +699,7 @@ impl Orchestrator {
             goal_context.into(),
             correlation_base.into(),
             self.signer.clone(),
+            self.pool_name.clone(),
         );
         if let Some(notifier) = &self.notifier {
             gated = gated.with_notifier(notifier.clone());
@@ -619,10 +739,10 @@ fn subagent_instructions(success_criteria: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use liberado_executor::SUBMIT_REPORT_TOOL;
     use liberado_provider::{CompletionResponse, MockProvider};
     use liberado_test_support::CallRecordingFactory;
-    use super::*;
 
     #[test]
     fn subagent_instructions_with_criteria() {
@@ -651,6 +771,7 @@ mod tests {
             Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),
+            "default",
         )
         .with_source("custom-source");
         assert_eq!(orch.source, "custom-source");
@@ -706,6 +827,7 @@ mod tests {
             Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),
+            "default",
         );
 
         let sub_dispatches = vec![
@@ -787,6 +909,7 @@ mod tests {
             Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),
+            "default",
         );
 
         let sub_dispatches = vec![
@@ -816,10 +939,7 @@ mod tests {
         assert!(report.summary.contains("task B partial"));
         // Artifacts and facts are merged
         assert_eq!(report.artifacts, vec!["/path/a.md", "/path/b.md"]);
-        assert_eq!(
-            report.new_high_signal_facts,
-            vec!["fact A", "fact B"]
-        );
+        assert_eq!(report.new_high_signal_facts, vec!["fact A", "fact B"]);
         // Overall outcome reflects partial failure
         assert_eq!(report.outcome, Outcome::PartiallySucceeded);
     }
@@ -845,6 +965,7 @@ mod tests {
             Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),
+            "default",
         );
 
         let sub_dispatches = vec![
@@ -894,6 +1015,7 @@ mod tests {
             Vec::new(),
             std::env::temp_dir(),
             ProposalSigner::random(),
+            "default",
         );
 
         let sub_dispatches = vec![SubDispatch {

@@ -6,6 +6,7 @@
 //! 1. Every zone named in a grant capability must be declared in `policy.zones`.
 //! 2. Every `ExecuteMcp(name)` in a grant must name an MCP present in `topology.mcps`.
 //! 3. Every `policy.secret_refs` entry must be set as an environment variable.
+//! 4. Every `topology.hooks[].secret_ref` must be set as an environment variable, same as #3.
 //!
 //! These checks are the "merged-config" slice of Decision 14's fail-fast contract.
 //! They live here — in the loader crate — alongside the merging machinery, so that
@@ -53,6 +54,15 @@ pub fn validate_merged_config(config: &Config) -> Result<(), ConfigLoadError> {
         if std::env::var_os(secret).is_none() {
             return Err(invalid(format!(
                 "secret_ref '{secret}' has no corresponding environment variable"
+            )));
+        }
+    }
+
+    for hook in &config.topology.hooks {
+        if std::env::var_os(&hook.secret_ref).is_none() {
+            return Err(invalid(format!(
+                "topology.hooks['{}'].secret_ref '{}' has no corresponding environment variable",
+                hook.name, hook.secret_ref
             )));
         }
     }
@@ -181,6 +191,33 @@ mod tests {
         assert!(msg.contains("secret_ref"), "got: {msg}");
         assert!(
             msg.contains("LIBERADO_TEST_DEFINITELY_UNSET_SECRET_XYZZY"),
+            "should name the secret: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_hook_secret_ref_with_no_env_var() {
+        let mut topology = topology_with_mcp("mcp");
+        topology.hooks = vec![crate::model::HookConfig {
+            name: "nightly-backup".into(),
+            enabled: true,
+            secret_ref: "LIBERADO_TEST_DEFINITELY_UNSET_HOOK_SECRET_XYZZY".into(),
+            goal: "do something".into(),
+            pool: None,
+        }];
+        let cfg = config(
+            topology,
+            Policy {
+                zones: vec![],
+                grants: vec![],
+                secret_refs: vec![],
+            },
+        );
+        let err = validate_merged_config(&cfg).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("secret_ref"), "got: {msg}");
+        assert!(
+            msg.contains("LIBERADO_TEST_DEFINITELY_UNSET_HOOK_SECRET_XYZZY"),
             "should name the secret: {msg}"
         );
     }

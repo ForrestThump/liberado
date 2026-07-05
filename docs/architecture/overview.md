@@ -34,21 +34,20 @@ change-stream the daemon reacts to; it reaches the vault only as a one-way, deri
 
 ## The loop (perceive → decide → act → don't loop)
 
-- AGENT TO DO: CONVERT ALL GRAPHS TO MERMAID BLOCKS ON NEXT DOCS UPDATE RUN.
+```mermaid
+flowchart LR
+    V[("vault<br/>(Obsidian Markdown,<br/>Turbovault)")]
+    D["daemon<br/>watch · debounce · attribute<br/>(loop-break)"]
+    P["dispatcher<br/>classify + guards"]
+    O["orchestrator<br/>decision → Task + provenance"]
+    E["executor<br/>agent loop + ToolRuntime<br/>(liberado-mcp)"]
 
-```
-            ┌─────────────────────────── vault (Obsidian Markdown, Turbovault) ───────────────────────────┐
-            │                                                                                             │
-            ▼                                                                                             │
-  ┌──────────────────┐   external    ┌──────────────┐   decision   ┌───────────────┐   tool calls  ┌──────┴───────┐
-  │  daemon: watch   │──── change ───▶│  dispatcher  │─────────────▶│ orchestrator  │──────────────▶│   executor  │
-  │  debounce        │   (attributed │  classify +  │  Execute /   │ decision →    │   agent loop  │  + ToolRuntime │
-  │  attribute ◀─────┼── as External)│   guards     │  Subagent /  │ Task + prov.  │               │  (liberado-   │
-  │  (loop-break)    │               └──────────────┘   Clarify    └───────────────┘               │   mcp)       │
-  └────────┬─────────┘                                                                              └──────┬───────┘
-           │  Agent/Missing → SUPPRESS (our own write)                                                     │
-           │                                                                                  writes carry │
-           └──────────────── provenance in the audit log ◀──────── _meta provenance ◀─────────────────────┘
+    V -- "external change<br/>(attributed as External)" --> D
+    D -- "Execute / Subagent / Clarify" --> P
+    P --> O
+    O -- "tool calls" --> E
+    E -- "writes carry provenance<br/>(_meta) into the audit log" --> V
+    D -. "Agent/Missing → SUPPRESS<br/>(our own write)" .-> D
 ```
 
 The dashed return path is the **loop-break** (Decision 5): an agent's tool call carries
@@ -69,21 +68,24 @@ Bottom-up (each depends roughly on those above it):
 | Inference | [`provider-deepseek`](../../crates/provider-deepseek/ARCHITECTURE.md) | Concrete DeepSeek backend — the wired production backend (`cli`'s dependency). |
 | Inference | [`provider-openrouter`](../../crates/provider-openrouter/ARCHITECTURE.md) | Concrete OpenRouter backend — many models behind one API/key, for running concurrent evaluations without one provider's rate limit as the bottleneck. Wired into `heuristics-tuner`, not the daemon/chat path. |
 | Vault | [`vault`](../../crates/vault/ARCHITECTURE.md) | Turbovault adapter: provenance writes + hash-join attribution (loop-breaking). |
+| Perceive | [`cron`](../../crates/cron/Cargo.toml) | `EventSource` (from `common`) that fires on a schedule instead of a file change — cron and vault-watch are interchangeable event-sources (Decision 18 checkpoint #3). Deliberately vault-agnostic: no `liberado-vault` dependency. |
 | Decide | [`dispatcher`](../../crates/dispatcher/ARCHITECTURE.md) | classify (LLM) → guards (deterministic, downgrade-only) → `DispatchDecision`. |
 | Act | [`executor`](../../crates/executor/ARCHITECTURE.md) | The agent loop: drive a `Provider` over a `ToolRuntime` to a `Report`. MCP-agnostic. |
 | Act | [`mcp`](../../crates/mcp/ARCHITECTURE.md) | `TurbomcpRuntime`: the `ToolRuntime` over real MCP tools; injects provenance into `_meta`. |
 | Act | [`orchestrator`](../../crates/orchestrator/ARCHITECTURE.md) | Bridges a `DispatchDecision` to an execution; chooses the provenance correlation. |
+| Notify | [`notify`](../../crates/notify/Cargo.toml) | `Notifier` trait for events a human should know about even unattended (the cron/Phase-3 case); `TelegramNotifier` is the first implementation. `notify_proposal` sends Approve/Revise/Reject buttons on channels that support them. |
+| Notify | [`telegram-approvals`](../../crates/telegram-approvals/Cargo.toml) | `ApprovalBot`: answers those buttons. Approve/Reject are pure code (no LLM) — flip `status` in `proposals/{stem}.md`, tagged `WriteProvenance::human()` so the daemon's own attribution reacts to it like an Obsidian edit. Revise is the one LLM-touching path, and it can only redraft content, never grant approval — see `current.md`'s "Before Phase 3" section. |
 | Converse | [`main-agent`](../../crates/main-agent/Cargo.toml) | Multi-turn `Conversation`: drives the executor's conversational loop, carries context across turns, streams `AgentEvent`s (tokens, tool start/result), atomic-under-cancel turns. The thing a chat client talks to. |
 | Store | [`conversation-store`](../../crates/conversation-store/Cargo.toml) | Decision-17 append-only JSONL store of DAG message-nodes — outside the vault, high-volume writes don't pollute the change-stream the daemon reacts to. |
 | Core | [`daemon`](../../crates/daemon/ARCHITECTURE.md) | The long-running watch→debounce→attribute→dispatch loop. |
 | Compose | [`bootstrap`](../../crates/bootstrap/Cargo.toml) | Builds provider/dispatcher/orchestrator from the environment — the shared composition logic for the `cli` and server binaries. |
-| Client | [`chat-client-contract`](../../crates/chat-client-contract/Cargo.toml) | Shared HTTP/SSE wire types + `ChatClient` trait + the `SseDecoder` incremental parser, so TUI/WebUI/CLI don't each hand-roll their own. |
+| Client | [`chat-client-contract`](../../crates/chat-client-contract/Cargo.toml) | Shared HTTP/SSE wire types + the `SseDecoder` incremental parser, so TUI/WebUI/CLI don't each hand-roll their own (a `ChatClient` trait was tried and deleted 2026-07-05 — TUI/CLI's transport needs diverged too much to share one). |
 | Client | [`liberado-commands`](../../crates/liberado-commands/Cargo.toml) | Shared slash-command parser + handlers (`/help`, `/new`, `/model`, ...) for all chat clients via a `CommandContext` trait. |
 | Client | [`markdown`](../../crates/markdown/Cargo.toml) | Lightweight, UI-agnostic Markdown parser (no external dep) — one parser shared by ratatui, Dioxus, and terminal output. |
 | Client | [`theme`](../../crates/theme/Cargo.toml) | Shared color-token `Theme`/`ThemeRegistry` — no UI dependency, discovered from `<config>/themes/*.toml`. |
 | Client | [`tui`](../../crates/tui/ARCHITECTURE.md) | ratatui TUI client: chat pane, sidebar, slash commands, SSE streaming — same chat/SSE contract as the browser web UI. |
 | Root | [`cli`](../../crates/cli/ARCHITECTURE.md) | The single `liberado` binary — client + launcher (`serve` runs the daemon, `chat` streams). |
-| Server | [`server`](../../crates/server/Cargo.toml) | The daemon process — watch loop + chat + HTTP/SSE API (`docs/reference/api.md`); run via `liberado serve`. |
+| Server | [`server`](../../crates/server/Cargo.toml) | The daemon process — watch loop + chat + HTTP/SSE API (`docs/reference/api.md`); run via `liberado serve`. Also hosts `POST /api/hooks/{name}` (`src/hooks.rs`) — the external-webhook event source, the push-style counterpart to `cron`'s pull-style one; injects into the daemon's reactive channel via `Daemon::event_sender()`. |
 | Web UI | [`webui`](../../crates/webui/Cargo.toml) | Dioxus WASM frontend — dashboard, reactions feed, vault panel, streaming chat. Excluded from workspace native builds; built with `dx build`. |
 | Eval | [`eval`](../../crates/eval/Cargo.toml) | Real-model routing/safety eval suite (routing accuracy, safe-default rate, UNSAFE-acts that must never increase). Not a build dependency of the system. |
 | Tooling | [`heuristics-tuner`](../../crates/heuristics-tuner/ARCHITECTURE.md) | Automates the eval-and-tweak loop for the dispatcher/executor/subagent prompts via beam search — proposes a diff + rubric, never auto-merges. Not a build dependency of the system. |
@@ -115,8 +117,11 @@ changes live on feature branches and have a draft issue in `turbomcp-request-met
 
 The reactive backbone, the web UI, a **streaming conversational chat loop**, and **persisted,
 session-keyed conversations** (Decision 17) are complete, all hosted by **one `liberado` binary**
-(daemon-first, Decision 2 — `serve` hosts everything; `chat` is a client). The next work is deepening
-the main agent (context policy + dispatcher integration) and the TUI.
+(daemon-first, Decision 2 — `serve` hosts everything; `chat` is a client). The pre-Phase-3 hardening
+pass (item 15 below) is done, and Phase 3 is now fully landed — cron, the external webhook hook
+receiver, and named dispatcher/executor pools (items 16-18 below), completing Decision 18
+checkpoint #3. The next work is deepening the main agent (context policy + dispatcher integration)
+and the TUI, or Phase 4 (execution environment scaling).
 
 **Done:**
 1. ✅ **Reactive pipeline** — daemon watches → attributes → dispatches → orchestrates → executes, end-to-end wired and tested.
@@ -134,27 +139,35 @@ the main agent (context policy + dispatcher integration) and the TUI.
 12. ✅ **Phase 2 — the self-improvement moat** — `riggers/` (`liberado-pr-dispatch-mcp`) registered as `code-dispatch` (reversible, human-approved draft PRs only), with a greenfield mode to scaffold brand-new MCPs from scratch. Full report: [`phase-2-implementation-report.md`](../roadmap/phase-2-implementation-report.md).
 13. ✅ **`crates/tui`** — a ratatui TUI client hitting the same chat/SSE contract as the browser web UI and `liberado chat`; shares its SSE decoder and slash-command dispatcher with the other clients (`chat-client-contract`, `liberado-commands`) rather than hand-rolling its own.
 14. ✅ **Web UI flesh-out** — sidebar, MCP capability panel, Markdown rendering, and slash commands landed in `liberado-webui`. Design reference: [`webui-flesh-out-plan.md`](../roadmap/webui-flesh-out-plan.md).
+15. ✅ **Pre-Phase-3 hardening pass** — the heuristics tuning engine (`liberado-heuristics-tuner`, now tuning the dispatcher, executor, and subagent layers), the zone-write-class guard (§6 #2), resource-budget bounds (`ResourceLimit`, wall-clock + token-count), and two-way Telegram proposal approval (`liberado-notify` + `liberado-telegram-approvals`: Approve/Reject are pure code, Revise is the one LLM-touching path and can only redraft content, never grant approval). Also found and fixed, via the tuner: a multi-step tool-chaining doom-loop bug (was the "Known limitations" entry below). Full detail: [`current.md`](../roadmap/current.md)'s "Before Phase 3" section.
+16. ✅ **Phase 3, slice 1 — the event-source trait + cron (Decision 18/19)** — a new `EventSource` trait (`liberado-common`) the daemon fans into one channel; the *existing* vault-watch loop was refactored into its first conformer (`VaultEventSource`, moved not rewritten — the daemon's whole prior test suite passed unchanged) before cron, the second conformer, was added (new `liberado-cron` crate, deliberately vault-agnostic). Config surface: `Topology.schedules`, fail-fast validated. Live-verified: a daemon integration test proves a cron firing and a real vault change both produce reactions over the same channel — Decision 18 checkpoint #3, literally.
+17. ✅ **Phase 3, slice 2 — the external webhook hook receiver** — `POST /api/hooks/{name}` (`crates/server/src/hooks.rs`), the *push*-style counterpart to cron's *pull*-style `EventSource`: arbitrary software that can `curl` an endpoint triggers a reaction the same way. Required `Daemon::event_tx`/`event_rx` to become daemon-owned fields (built once in `open()`) plus a new `Daemon::event_sender()` accessor, so a same-process external producer can inject an `Event` without its own `EventSource` loop. Auth is a per-hook shared secret (`X-Liberado-Hook-Secret`, constant-time compared) — chosen explicitly over HMAC signing for "trivially `curl`-able." `Topology.hooks`'s old `ComponentConfig` stub was replaced in place with `HookConfig` (name/secret_ref/goal). Verified via 11 HTTP-level integration tests against a real `axum::Router`; a live `curl` smoke test was attempted but skipped after a test-harness config-directory mixup (caught before any request was sent) — deemed unnecessary given the integration-test coverage. **Deferred, documented**: in-process rate limiting (reverse-proxy recommendation instead), HMAC signing as an available upgrade path, and per-hook capability scoping beyond the pool mechanism below.
+18. ✅ **Phase 3, slice 3 — named dispatcher/executor pools (Decision 18 checkpoint #3's remaining half)** — before building, outside research was commissioned on whether concurrent-agent architectures are proven territory; the results (`agent_pools_research_results.md`, four independent passes) confirmed internal peer-agent authority-coordination is a poor, mostly-unproven fit (even Anthropic's own published multi-agent system is orchestrator + narrowed-workers, not peer coordination) — so this slice builds only the well-scoped piece: multiple dispatcher+executor pools with their own capability grant, that never talk to each other. `Daemon` holds `pools: HashMap<String, DaemonPool>` (an always-present `"default"` entry keeps every pre-existing call site unchanged); `EventPayload.pool` (set from `CronSchedule.pool`/`HookConfig.pool`) routes a trigger to a pool declared in `topology.toml`'s `[[pools]]`; a pool's authority is just its name used as the `component` key in `policy.toml`'s existing `[[grants]]` — no new authority mechanism. A privilege-escalation-shaped gap surfaced mid-implementation (a proposal must remember which pool proposed it, or an approval could execute under a different, broader pool's authority) and was closed by making `Proposal.pool` a signed field, re-verified defensively in `execute_approved`. Live-verified by a dual-pool daemon integration test: two pools given an identical decision referencing the same MCP, one granted it and one not — the ungranted pool's dispatcher-level guard catches the gap before a real runtime is ever reached. **Deliberately out of scope** (research-confirmed): cross-pool coordination/communication — see [`a2a-protocol-idea.md`](../ideas/a2a-protocol-idea.md)'s research note.
 
 **Not yet built (next slice):**
-- Inbox hook, hooks generally, multi-MCP registry UX, connection pooling.
-- The `ChatClient` trait in `chat_client_contract::native` exists but is implemented nowhere — TUI and CLI still use separate ad-hoc transport functions instead of adopting it (see [`crate-modularity-audit.md`](../roadmap/crate-modularity-audit.md) finding 2).
+- Multi-MCP registry UX, connection pooling.
 - Splitting `liberado-common`'s grab-bag along its natural boundaries — partially underway (`config`
   and `config-loader` have already been carved off into their own crates), but `common` still has
-  nine modules (`provenance`, `capability`, `catalog`, `dispatch`, `event`, `model`, `config`,
+  eight modules (`provenance`, `capability`, `catalog`, `dispatch`, `event`, `model`,
   `proposal`, `error`) — the last open item in [`crate-modularity-audit.md`](../roadmap/crate-modularity-audit.md).
+  (Finding 2 of that same audit, `ChatClient` trait adoption, was resolved 2026-07-05 — the
+  never-implemented trait was deleted rather than adopted; `chat_client_contract::native` now just
+  documents `SseDecoder`/`ChatEvent::from_sse_data` as the real shared boundary.)
 - Writer-identity verification on proposal approval (item 1 of [`hardening-audit-2026-07-02.md`](../roadmap/hardening-audit-2026-07-02.md)) — needs OS-level MCP process isolation or an out-of-band approval channel, not a code patch.
-- Phase 3 (cron as a bus listener, vault-decoupling) and Phase 4 (execution environment scaling) — see [`current.md`](../roadmap/current.md).
+- Phase 4 (execution environment scaling) — see [`current.md`](../roadmap/current.md). Phase 3 is
+  now fully done (cron, the external webhook receiver, and named dispatcher/executor pools, items
+  16-18 above).
 
 ## Known limitations
 
-- **Multi-step tool chaining is not fully reliable.** Both `ExecuteDirect` and `DispatchSubagent`
-  terminate in the same engine (`liberado-executor`'s `Executor::execute`) — live tuning found that a
-  simple, unambiguous two-tool-call goal fails to reach a clean success report a large fraction of the
-  time against `deepseek/deepseek-v4-flash`, even under an explicit instruction to perform both steps.
-  One real engine bug was found and fixed (`REPORT_NUDGE` was biasing away from continuing a multi-step
-  plan); the gap narrowed but didn't close. Since `DispatchSubagent`'s whole reason to exist is handling
-  multi-step goals, this is a project-level reliability question, not a narrow tuning nit — full
-  writeup, evidence, and open threads:
+- **Multi-step tool chaining — substantially resolved (2026-07-04), one small gap remains.** Both
+  `ExecuteDirect` and `DispatchSubagent` terminate in the same engine (`liberado-executor`'s
+  `Executor::execute`); live tuning had found a model could get stuck repeating one tool call with
+  reworded-but-same-intent arguments, defeating byte-equality detection. Fixed with a doom-loop guard
+  (`is_doom_loop`/`detect_short_cycle`, TF-IDF argument similarity rather than exact match) that
+  escalates nudge → tool removal → honest failure, plus a progress-aware budget-exhaustion report —
+  live-verified 0/6 → 5/6 on the original failing scenario. Remaining gap: a fast-finish timing case
+  (not a loop). Full evidence:
   [`multi-step-execution-reliability-finding.md`](../roadmap/multi-step-execution-reliability-finding.md).
 
 ## Where to start reading

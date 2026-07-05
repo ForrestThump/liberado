@@ -9,6 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
 liberado-common = { workspace = true }
 liberado-notify = { workspace = true }
 liberado-vault = { workspace = true }
@@ -21,6 +22,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+liberado-cron = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-executor = { workspace = true }
 liberado-test-support = { workspace = true }

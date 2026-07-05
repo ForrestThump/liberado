@@ -35,11 +35,12 @@ mod validation;
 
 pub use chain::ChainLoader;
 pub use file_source::FileSource;
+pub use liberado_common::DEFAULT_POOL;
 pub use model::{
-    CURRENT_SCHEMA_VERSION, CaptureTuning, Config, ConfigBuilder, ComponentConfig, ConcurrencyTuning,
-    ContextTuning, DispatchTuning, Grant, MaintenanceTuning, McpConfig, McpTransport, Policy,
-    SubagentIsolation, ToolImpact, Topology, Tuning, ZonePolicy, managed_binary_path,
-    resolve_declared_zone,
+    CURRENT_SCHEMA_VERSION, CaptureTuning, ConcurrencyTuning, Config, ConfigBuilder, ContextTuning,
+    CronSchedule, DispatchTuning, Grant, HookConfig, MaintenanceTuning, McpConfig, McpTransport,
+    Policy, PoolConfig, SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning,
+    ZonePolicy, managed_binary_path, resolve_declared_zone,
 };
 pub use source::{ConfigLoadError, ConfigSource};
 pub use validation::validate_merged_config;

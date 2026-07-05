@@ -32,8 +32,9 @@ shipped and `cargo test --workspace` is green. The system is:
   record: [`docs/roadmap/hygiene-audit-2026-07-02.md`](../roadmap/hygiene-audit-2026-07-02.md).
 
 **Not yet built (next slice)**: inbox hook, hooks generally, multi-MCP registry UX, connection pooling.
-`ChatClient` trait adoption (crate-modularity-audit finding 2) and splitting `liberado-common`'s
-nine-module grab-bag (finding 3) are the primary crate-structure deferred items. Phases 3 and 4 are on
+Splitting `liberado-common`'s nine-module grab-bag (crate-modularity-audit finding 3) is the primary
+crate-structure deferred item — finding 2 (`ChatClient` trait adoption) was resolved 2026-07-05 by
+deleting the never-implemented trait instead of adopting it. Phases 3 and 4 are on
 the roadmap. See [`docs/roadmap/current.md`](../roadmap/current.md) for the full list.
 
 ---

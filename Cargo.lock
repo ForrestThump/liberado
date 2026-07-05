@@ -516,13 +516,9 @@ dependencies = [
 name = "chat-client-contract"
 version = "0.1.0"
 dependencies = [
- "async-trait",
- "futures",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
- "tokio",
- "ulid",
 ]
 
 [[package]]
@@ -876,6 +872,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "cron"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f8c3e73077b4b4a6ab1ea5047c37c57aee77657bc8ecd6f29b0af082d0b0c07"
+dependencies = [
+ "chrono",
+ "nom",
+ "once_cell",
 ]
 
 [[package]]
@@ -2802,6 +2809,7 @@ version = "0.1.0"
 dependencies = [
  "liberado-common",
  "liberado-config",
+ "liberado-cron",
  "liberado-daemon",
  "liberado-dispatcher",
  "liberado-mcp",
@@ -2809,7 +2817,37 @@ dependencies = [
  "liberado-orchestrator",
  "liberado-provider",
  "liberado-provider-deepseek",
+ "liberado-provider-openrouter",
  "tracing",
+]
+
+[[package]]
+name = "liberado-chat-search"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "liberado-conversation-store",
+ "liberado-provider",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "ulid",
+]
+
+[[package]]
+name = "liberado-chat-search-mcp"
+version = "0.1.0"
+dependencies = [
+ "liberado-chat-search",
+ "liberado-config",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "turbomcp",
 ]
 
 [[package]]
@@ -2836,6 +2874,7 @@ dependencies = [
 name = "liberado-common"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "hmac",
  "liberado-config-loader",
@@ -2868,6 +2907,7 @@ dependencies = [
 name = "liberado-config-loader"
 version = "0.1.0"
 dependencies = [
+ "cron",
  "liberado-common",
  "serde",
  "tempfile",
@@ -2892,6 +2932,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "liberado-cron"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "cron",
+ "liberado-common",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "liberado-daemon"
 version = "0.1.0"
 dependencies = [
@@ -2899,6 +2952,7 @@ dependencies = [
  "chrono",
  "liberado-common",
  "liberado-config-loader",
+ "liberado-cron",
  "liberado-dispatcher",
  "liberado-executor",
  "liberado-notify",
@@ -3070,8 +3124,10 @@ dependencies = [
 name = "liberado-provider"
 version = "0.1.0"
 dependencies = [
+ "async-stream",
  "async-trait",
  "futures",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -3083,9 +3139,7 @@ dependencies = [
 name = "liberado-provider-deepseek"
 version = "0.1.0"
 dependencies = [
- "async-stream",
  "async-trait",
- "futures",
  "liberado-provider",
  "reqwest 0.12.28",
  "serde_json",
@@ -3096,9 +3150,7 @@ dependencies = [
 name = "liberado-provider-openrouter"
 version = "0.1.0"
 dependencies = [
- "async-stream",
  "async-trait",
- "futures",
  "liberado-provider",
  "reqwest 0.12.28",
  "serde_json",
@@ -3115,7 +3167,9 @@ dependencies = [
  "chrono",
  "futures",
  "liberado-bootstrap",
+ "liberado-chat-search",
  "liberado-common",
+ "liberado-config",
  "liberado-conversation-store",
  "liberado-daemon",
  "liberado-dispatcher",
@@ -3124,6 +3178,7 @@ dependencies = [
  "liberado-mcp",
  "liberado-orchestrator",
  "liberado-provider",
+ "liberado-telegram-approvals",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -3131,6 +3186,28 @@ dependencies = [
  "tokio-stream",
  "tower",
  "tower-http",
+ "tracing",
+]
+
+[[package]]
+name = "liberado-telegram-approvals"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "liberado-common",
+ "liberado-config-loader",
+ "liberado-daemon",
+ "liberado-notify",
+ "liberado-orchestrator",
+ "liberado-provider",
+ "liberado-provider-deepseek",
+ "liberado-test-support",
+ "liberado-vault",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
  "tracing",
 ]
 

@@ -12,14 +12,12 @@
 //! only owns the actual HTTP round-trip and its own defaults/env-var names/status-code mapping.
 
 use async_trait::async_trait;
-use futures::StreamExt;
 use liberado_provider::openai_compat::{
-    ToolAcc, accumulate_tool_deltas, build_tool_name_map, from_openai_response, map_finish_reason,
-    to_openai_request,
+    build_tool_name_map, from_openai_response, stream_sse_response, to_openai_request,
 };
 use liberado_provider::{
-    CompletionRequest, CompletionResponse, CompletionStream, FinishReason, Provider, ProviderError,
-    ProviderResult, StreamItem, ToolInvocation,
+    CompletionRequest, CompletionResponse, CompletionStream, Provider, ProviderError,
+    ProviderResult,
 };
 use serde_json::{Value, json};
 
@@ -127,56 +125,7 @@ impl Provider for DeepSeekProvider {
             return Err(map_status(status.as_u16(), detail));
         }
 
-        // Parse the OpenAI SSE stream: each `data:` line is a chunk with a `delta`. Emit content
-        // deltas as tokens; accumulate tool-call deltas (id once, name once, arguments concatenated)
-        // and the finish reason, then emit the assembled response as the final `Done`.
-        let stream = async_stream::try_stream! {
-            let mut bytes = response.bytes_stream();
-            let mut buf = String::new();
-            let mut content = String::new();
-            let mut tools: Vec<ToolAcc> = Vec::new();
-            let mut finish = FinishReason::Stop;
-
-            while let Some(chunk) = bytes.next().await {
-                let chunk = chunk.map_err(|e| ProviderError::Transport(e.to_string()))?;
-                buf.push_str(&String::from_utf8_lossy(&chunk));
-
-                while let Some(nl) = buf.find('\n') {
-                    let line: String = buf.drain(..=nl).collect();
-                    let Some(data) = line.trim().strip_prefix("data:") else { continue };
-                    let data = data.trim();
-                    if data.is_empty() || data == "[DONE]" {
-                        continue;
-                    }
-                    let Ok(v) = serde_json::from_str::<Value>(data) else { continue };
-                    let choice = &v["choices"][0];
-                    if let Some(fr) = choice["finish_reason"].as_str() {
-                        finish = map_finish_reason(fr);
-                    }
-                    let delta = &choice["delta"];
-                    if let Some(t) = delta["content"].as_str()
-                        && !t.is_empty()
-                    {
-                        content.push_str(t);
-                        yield StreamItem::Token(t.to_string());
-                    }
-                    if let Some(deltas) = delta["tool_calls"].as_array() {
-                        accumulate_tool_deltas(&mut tools, deltas);
-                    }
-                }
-            }
-
-            let tool_calls: Vec<ToolInvocation> =
-                tools.into_iter().filter_map(|acc| acc.into_invocation(&name_map)).collect();
-            yield StreamItem::Done(CompletionResponse {
-                content: (!content.is_empty()).then_some(content),
-                tool_calls,
-                finish_reason: finish,
-                usage: None,
-            });
-        };
-
-        Ok(Box::pin(stream))
+        Ok(stream_sse_response(response, name_map))
     }
 }
 

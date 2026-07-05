@@ -31,9 +31,11 @@ DispatchRequest ──► classify ──► guards.evaluate ──► downgrade
    The zone-write-class gate is pre-flight only, checking `ExecuteDirect`'s seed calls against
    per-tool zone declarations (`McpDescriptor.default_zone`/`tool_zones`, human-authored in
    `topology.toml`'s `McpConfig`, unlabeled tools inheriting the MCP's `default_zone`) resolved via
-   `resolve_zone` and checked against `DispatchRequest.zone_write_classes` (from `Policy.zones`).
-   The real, always-enforced boundary for every call (including a subagent's later adaptive ones)
-   is `RiskGatedToolRuntime` (`liberado-executor`), which shares the same resolution helper — this
+   `liberado_common::zone_write_restriction` and checked against `DispatchRequest.zone_write_classes`
+   (from `Policy.zones`). The real, always-enforced boundary for every call (including a subagent's
+   later adaptive ones) is `RiskGatedToolRuntime` (`liberado-executor`), which calls the same
+   `zone_write_restriction` function (not just "a shared resolution helper" informally — the two
+   enforcement points literally can't drift on what counts as restricted, unified 2026-07-05) — this
    pre-flight check only ever sees the classifier's opening move.
 
 ## The core safety property

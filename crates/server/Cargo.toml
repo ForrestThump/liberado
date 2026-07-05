@@ -11,7 +11,9 @@ repository.workspace = true
 [dependencies]
 chat-client-contract = { workspace = true }
 liberado-bootstrap = { workspace = true }
+liberado-chat-search = { workspace = true }
 liberado-common = { workspace = true }
+liberado-config = { workspace = true }
 liberado-daemon = { workspace = true }
 liberado-dispatcher = { workspace = true }
 liberado-orchestrator = { workspace = true }
@@ -20,6 +22,7 @@ liberado-executor = { workspace = true }
 liberado-main-agent = { workspace = true }
 liberado-conversation-store = { workspace = true }
 liberado-provider = { workspace = true }
+liberado-telegram-approvals = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 futures = { workspace = true }

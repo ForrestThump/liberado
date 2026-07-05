@@ -4,8 +4,8 @@
 use std::sync::{Arc, Mutex};
 
 use liberado_common::{
-    BlockReason, Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision,
-    Outcome, Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall, WriteProvenance,
+    BlockReason, Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision, Outcome,
+    Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall, WriteProvenance,
 };
 use liberado_executor::SUBMIT_REPORT_TOOL;
 use liberado_orchestrator::{Disposition, Orchestrator, SubDispatch};
@@ -24,7 +24,10 @@ fn submit_report_response() -> CompletionResponse {
     )])
 }
 
-fn orchestrator(script: Vec<CompletionResponse>, capabilities: CapabilitySet) -> (Calls, Orchestrator) {
+fn orchestrator(
+    script: Vec<CompletionResponse>,
+    capabilities: CapabilitySet,
+) -> (Calls, Orchestrator) {
     let provider = Arc::new(MockProvider::with_script("mock", script));
     let factory = CallRecordingFactory::default();
     let calls = factory.calls.clone();
@@ -37,6 +40,7 @@ fn orchestrator(script: Vec<CompletionResponse>, capabilities: CapabilitySet) ->
         Vec::new(),
         std::env::temp_dir(),
         ProposalSigner::random(),
+        "default",
     );
     (calls, orch)
 }
@@ -45,8 +49,7 @@ fn orchestrator(script: Vec<CompletionResponse>, capabilities: CapabilitySet) ->
 async fn execute_direct_scopes_the_runtime_to_the_granted_mcps() {
     // ExecuteDirect scopes to exactly what `capabilities` grants — an empty allow-list would mean
     // "every registered MCP" to the factory, which is the bug this test guards against.
-    let capabilities =
-        CapabilitySet::from_iter([Capability::ExecuteMcp("tasks-mcp".into())]);
+    let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("tasks-mcp".into())]);
     let (calls, orch) = orchestrator(vec![submit_report_response()], capabilities);
 
     let decision = DispatchDecision {
@@ -271,20 +274,21 @@ async fn execute_approved_runs_the_exact_calls_without_a_classifier_or_guard() {
         Vec::new(),
         std::env::temp_dir(),
         signer.clone(),
+        "default",
     );
 
     let call = ToolCall {
         tool: "email:send".into(),
         args: serde_json::json!({ "to": "boss@example.com", "body": "hi" }),
     };
-    let mut proposal = Proposal::pending(
+    let proposal = Proposal::pending(
         "vault-change:inbox/x.md:abc",
         "vault-change:inbox/x.md:abc",
         "liberado",
         ProposedAction::ToolCalls(vec![call.clone()]),
         "the note asks to email the boss",
     );
-    signer.sign(&mut proposal);
+    let mut proposal = signer.sign(proposal).into_proposal();
     proposal.status = ProposalStatus::Approved;
 
     let report = orch.execute_approved(&proposal).await.expect("execute");
@@ -317,6 +321,7 @@ async fn execute_approved_rejects_a_proposal_with_no_valid_signature() {
         Vec::new(),
         std::env::temp_dir(),
         ProposalSigner::random(),
+        "default",
     );
 
     let mut proposal = Proposal::pending(
@@ -332,7 +337,10 @@ async fn execute_approved_rejects_a_proposal_with_no_valid_signature() {
     proposal.status = ProposalStatus::Approved;
     // proposal.integrity is left empty — never signed by this orchestrator's signer.
 
-    let report = orch.execute_approved(&proposal).await.expect("execute_approved");
+    let report = orch
+        .execute_approved(&proposal)
+        .await
+        .expect("execute_approved");
     assert_eq!(
         report.outcome,
         Outcome::Failed,
@@ -377,6 +385,7 @@ async fn execute_direct_downgrades_a_high_consequence_adaptive_call() {
         Vec::new(),
         proposals_dir.path().to_path_buf(),
         signer.clone(),
+        "default",
     );
 
     let decision = DispatchDecision {
@@ -405,8 +414,14 @@ async fn execute_direct_downgrades_a_high_consequence_adaptive_call() {
     // A proposal file was written instead, and it's signed with the orchestrator's own signer.
     let mut entries = std::fs::read_dir(proposals_dir.path().join("proposals"))
         .expect("proposals dir should exist");
-    let entry = entries.next().expect("exactly one proposal file should be written").unwrap();
-    assert!(entries.next().is_none(), "exactly one proposal file should be written");
+    let entry = entries
+        .next()
+        .expect("exactly one proposal file should be written")
+        .unwrap();
+    assert!(
+        entries.next().is_none(),
+        "exactly one proposal file should be written"
+    );
     let content = std::fs::read_to_string(entry.path()).unwrap();
     let written_proposal = Proposal::from_note(&content).unwrap();
     assert!(
@@ -440,6 +455,7 @@ async fn execute_direct_rejects_an_out_of_capability_adaptive_call() {
         Vec::new(),
         std::env::temp_dir(),
         ProposalSigner::random(),
+        "default",
     );
 
     let decision = DispatchDecision {
@@ -491,6 +507,7 @@ async fn dispatch_subagent_gates_with_the_narrowed_capability_set() {
         Vec::new(),
         std::env::temp_dir(),
         ProposalSigner::random(),
+        "default",
     );
 
     let decision = DispatchDecision {
@@ -542,6 +559,7 @@ async fn dispatch_parallel_gates_each_sub_dispatch() {
         Vec::new(),
         std::env::temp_dir(),
         ProposalSigner::random(),
+        "default",
     );
 
     let sub_dispatches = vec![SubDispatch {
@@ -585,20 +603,21 @@ async fn execute_approved_bypasses_gating_by_design() {
         Vec::new(),
         std::env::temp_dir(),
         signer.clone(),
+        "default",
     );
 
     let call = ToolCall {
         tool: "email-mcp:send".into(),
         args: serde_json::json!({ "to": "boss@example.com" }),
     };
-    let mut proposal = Proposal::pending(
+    let proposal = Proposal::pending(
         "id-1",
         "id-1",
         "liberado",
         ProposedAction::ToolCalls(vec![call.clone()]),
         "approved email",
     );
-    signer.sign(&mut proposal);
+    let mut proposal = signer.sign(proposal).into_proposal();
     proposal.status = ProposalStatus::Approved;
 
     let report = orch.execute_approved(&proposal).await.expect("execute");
@@ -639,9 +658,10 @@ async fn execute_approved_subagent_dispatches_the_approved_goal() {
         Vec::new(),
         std::env::temp_dir(),
         signer.clone(),
+        "default",
     );
 
-    let mut proposal = Proposal::pending(
+    let proposal = Proposal::pending(
         "review-2026-07-02",
         "review-2026-07-02",
         "liberado",
@@ -655,7 +675,7 @@ async fn execute_approved_subagent_dispatches_the_approved_goal() {
         },
         "open-ended, touches an external-consequence MCP",
     );
-    signer.sign(&mut proposal);
+    let mut proposal = signer.sign(proposal).into_proposal();
     proposal.status = ProposalStatus::Approved;
 
     let report = orch.execute_approved(&proposal).await.expect("execute");
@@ -698,9 +718,10 @@ async fn execute_approved_subagent_still_gates_adaptive_calls_outside_its_capabi
         Vec::new(),
         std::env::temp_dir(),
         signer.clone(),
+        "default",
     );
 
-    let mut proposal = Proposal::pending(
+    let proposal = Proposal::pending(
         "c1",
         "c1",
         "liberado",
@@ -712,7 +733,7 @@ async fn execute_approved_subagent_still_gates_adaptive_calls_outside_its_capabi
         },
         "narrowly scoped",
     );
-    signer.sign(&mut proposal);
+    let mut proposal = signer.sign(proposal).into_proposal();
     proposal.status = ProposalStatus::Approved;
 
     orch.execute_approved(&proposal).await.expect("execute");

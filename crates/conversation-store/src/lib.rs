@@ -27,7 +27,7 @@ mod store;
 mod types;
 
 pub use error::{StoreError, StoreResult};
-pub use jsonl::JsonlStore;
+pub use jsonl::{JsonlStore, Record};
 pub use store::ConversationStore;
 pub use types::{Author, ConversationHeader, MessageNode, NewConversation, NewNode, Timestamp};
 // Re-exported so downstream crates can name session/node ids without depending on `ulid` directly.

@@ -22,4 +22,7 @@ desktop.ini
 config/*.toml
 crates/*/config/*.toml
 
+# Local secrets (Decision 10 — secrets stay in the environment/local files, never committed)
+telegram_bot_info.md
+
 .kilo

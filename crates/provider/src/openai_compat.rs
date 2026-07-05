@@ -13,11 +13,12 @@
 
 use std::collections::{HashMap, HashSet};
 
+use futures::StreamExt;
 use serde_json::{Value, json};
 
 use crate::{
-    CompletionRequest, CompletionResponse, FinishReason, Message, ProviderError, ProviderResult,
-    ResponseFormat, Role, ToolDef, ToolInvocation, Usage,
+    CompletionRequest, CompletionResponse, CompletionStream, FinishReason, Message, ProviderError,
+    ProviderResult, ResponseFormat, Role, StreamItem, ToolDef, ToolInvocation, Usage,
 };
 
 /// Bidirectional mapping between original (internal `mcp:tool` convention) and sanitized
@@ -123,6 +124,67 @@ pub fn accumulate_tool_deltas(acc: &mut Vec<ToolAcc>, deltas: &[Value]) {
     }
 }
 
+/// Drive an already-successful (status checked by the caller) OpenAI-compatible SSE response body
+/// into a [`CompletionStream`]: parse each `data:` line as a chunk with a `delta`, emit content
+/// deltas as [`StreamItem::Token`], accumulate tool-call deltas and the finish reason, then emit the
+/// assembled response as the final [`StreamItem::Done`].
+///
+/// Extracted from `liberado-provider-deepseek`/`liberado-provider-openrouter`, which had this loop
+/// duplicated verbatim (`docs/roadmap/hygiene-audit-2026-07-05.md`) — unlike the request/response
+/// mapping functions above (already shared before this), the streaming loop is where chunk-boundary
+/// bugs actually hide, so it's the part most worth not maintaining twice. Callers own the HTTP POST,
+/// status-code check, and building `name_map` (via [`build_tool_name_map`]) — this only owns turning
+/// a 200 response's body into normalized stream items.
+pub fn stream_sse_response(response: reqwest::Response, name_map: ToolNameMap) -> CompletionStream {
+    let stream = async_stream::try_stream! {
+        let mut bytes = response.bytes_stream();
+        let mut buf = String::new();
+        let mut content = String::new();
+        let mut tools: Vec<ToolAcc> = Vec::new();
+        let mut finish = FinishReason::Stop;
+
+        while let Some(chunk) = bytes.next().await {
+            let chunk = chunk.map_err(|e| ProviderError::Transport(e.to_string()))?;
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(nl) = buf.find('\n') {
+                let line: String = buf.drain(..=nl).collect();
+                let Some(data) = line.trim().strip_prefix("data:") else { continue };
+                let data = data.trim();
+                if data.is_empty() || data == "[DONE]" {
+                    continue;
+                }
+                let Ok(v) = serde_json::from_str::<Value>(data) else { continue };
+                let choice = &v["choices"][0];
+                if let Some(fr) = choice["finish_reason"].as_str() {
+                    finish = map_finish_reason(fr);
+                }
+                let delta = &choice["delta"];
+                if let Some(t) = delta["content"].as_str()
+                    && !t.is_empty()
+                {
+                    content.push_str(t);
+                    yield StreamItem::Token(t.to_string());
+                }
+                if let Some(deltas) = delta["tool_calls"].as_array() {
+                    accumulate_tool_deltas(&mut tools, deltas);
+                }
+            }
+        }
+
+        let tool_calls: Vec<ToolInvocation> =
+            tools.into_iter().filter_map(|acc| acc.into_invocation(&name_map)).collect();
+        yield StreamItem::Done(CompletionResponse {
+            content: (!content.is_empty()).then_some(content),
+            tool_calls,
+            finish_reason: finish,
+            usage: None,
+        });
+    };
+
+    Box::pin(stream)
+}
+
 /// Translate a normalized request into the OpenAI chat-completions request body.
 pub fn to_openai_request(model: &str, req: &CompletionRequest, name_map: &ToolNameMap) -> Value {
     let mut body = json!({
@@ -203,7 +265,10 @@ fn tool_to_json(t: &ToolDef, name_map: &ToolNameMap) -> Value {
 }
 
 /// Translate an OpenAI chat-completions response body into a normalized [`CompletionResponse`].
-pub fn from_openai_response(v: &Value, name_map: &ToolNameMap) -> ProviderResult<CompletionResponse> {
+pub fn from_openai_response(
+    v: &Value,
+    name_map: &ToolNameMap,
+) -> ProviderResult<CompletionResponse> {
     // Some OpenAI-compatible servers return 2xx with a top-level `error` object instead of
     // `choices`; surface it rather than the misleading "empty response".
     if let Some(error) = v.get("error") {

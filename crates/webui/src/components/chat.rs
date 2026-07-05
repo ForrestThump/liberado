@@ -65,17 +65,11 @@ async fn fetch_conversation(
     let resp = reqwest::get(&url)
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
-    let json: serde_json::Value = resp
+    let history: chat_client_contract::ConversationHistoryResponse = resp
         .json()
         .await
         .map_err(|e| format!("Bad response: {e}"))?;
-    let wire_msgs: Vec<ChatMessage> = serde_json::from_value(
-        json.get("messages")
-            .cloned()
-            .unwrap_or(serde_json::Value::Array(Vec::new())),
-    )
-    .map_err(|e| format!("Bad messages shape: {e}"))?;
-    Ok(wire_msgs.iter().map(ChatMsg::from_wire).collect())
+    Ok(history.messages.iter().map(ChatMsg::from_wire).collect())
 }
 
 // ── Chat component ──────────────────────────────────────────────────────────
@@ -421,16 +415,18 @@ fn resize_input_to_content() {}
 // ── SSE streaming (browser-only) ────────────────────────────────────────────
 
 #[cfg(target_arch = "wasm32")]
-static mut CURRENT_SOURCE: Option<std::rc::Rc<web_sys::EventSource>> = None;
+thread_local! {
+    static CURRENT_SOURCE: std::cell::RefCell<Option<std::rc::Rc<web_sys::EventSource>>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 #[cfg(target_arch = "wasm32")]
 fn close_current_stream() {
-    unsafe {
-        if let Some(ref s) = CURRENT_SOURCE {
+    CURRENT_SOURCE.with(|cell| {
+        if let Some(s) = cell.borrow_mut().take() {
             s.close();
-            CURRENT_SOURCE = None;
         }
-    }
+    });
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -461,9 +457,9 @@ fn open_stream(
             return;
         }
     };
-    unsafe {
-        CURRENT_SOURCE = Some(source.clone());
-    }
+    CURRENT_SOURCE.with(|cell| {
+        *cell.borrow_mut() = Some(source.clone());
+    });
 
     // session -> record it and update active_conv_id so the sidebar highlights it.
     {
@@ -545,19 +541,19 @@ fn open_stream(
                 {
                     messages.with_mut(|m| {
                         // Find the last assistant message that has a pending step matching `name`.
-                        let found = m.iter_mut().rev().find_map(|msg| {
-                            if msg.role == "assistant" {
+                        // `find_map` hands back a `&mut ThinkingStep` borrowed from `m` itself —
+                        // no raw pointer needed; NLL is fine with using it right after.
+                        let found = m
+                            .iter_mut()
+                            .rev()
+                            .filter(|msg| msg.role == "assistant")
+                            .find_map(|msg| {
                                 msg.thinking_steps
                                     .iter_mut()
                                     .rev()
                                     .find(|s| s.ok.is_none() && s.tool_name == name)
-                                    .map(|step| (step as *mut ThinkingStep, msg.role))
-                            } else {
-                                None
-                            }
-                        });
-                        if let Some((ptr, _)) = found {
-                            let step = unsafe { &mut *ptr };
+                            });
+                        if let Some(step) = found {
                             step.ok = Some(ok);
                             step.preview = preview;
                         }
@@ -577,7 +573,7 @@ fn open_stream(
         let on_done = Closure::<dyn FnMut(MessageEvent)>::new(move |_e: MessageEvent| {
             source_done.close();
             sending.set(false);
-            unsafe { CURRENT_SOURCE = None; }
+            CURRENT_SOURCE.with(|cell| *cell.borrow_mut() = None);
 
             if should_set_title() {
                 should_set_title.set(false);
@@ -641,7 +637,7 @@ fn open_stream(
             });
             source_fail.close();
             sending.set(false);
-            unsafe { CURRENT_SOURCE = None; }
+            CURRENT_SOURCE.with(|cell| *cell.borrow_mut() = None);
         });
         let _ =
             source.add_event_listener_with_callback("failed", on_fail.as_ref().unchecked_ref());
@@ -654,7 +650,7 @@ fn open_stream(
         let on_err = Closure::<dyn FnMut(MessageEvent)>::new(move |_e: MessageEvent| {
             source_err.close();
             sending.set(false);
-            unsafe { CURRENT_SOURCE = None; }
+            CURRENT_SOURCE.with(|cell| *cell.borrow_mut() = None);
         });
         source.set_onerror(Some(on_err.as_ref().unchecked_ref()));
         on_err.forget();

@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
-use crate::Consequence;
+use crate::{Consequence, WriteClass};
 
 /// A catalog entry: describes one MCP server that the system can route to.
 ///
@@ -65,6 +65,39 @@ pub fn resolve_zone(descriptor: &McpDescriptor, bare_tool_name: &str) -> Option<
         Some((_, zone)) => zone.clone(),
         None => descriptor.default_zone.clone(),
     }
+}
+
+/// The zone-write-class guard (dispatch-logic-spec §6 #2): whether a call to `bare_tool_name` on
+/// `mcp_name` targets a vault zone whose declared write class doesn't allow a direct agent write
+/// (`ProposalOnly`/`HumanOnly`). Returns the restricted zone's name if so, `None` if the call is
+/// unrestricted.
+///
+/// Shared between the dispatcher's pre-flight guard (`liberado-dispatcher/src/guards.rs`, checked
+/// against a decision's *seed calls* before anything runs) and the runtime guard
+/// (`liberado-executor`'s `RiskGatedToolRuntime`, checked against every adaptive call as it
+/// happens) — this is the actual authority boundary; the pre-flight check is a best-effort early
+/// warning. Both call sites used to implement this lookup independently; unifying it here is what
+/// keeps them from silently drifting apart if the resolution rules ever change.
+///
+/// An MCP not in `zone_catalog` returns `None` (not a zone-write concern here — the capability
+/// guard, checked separately by each caller, already rejects an MCP that isn't granted at all). A
+/// tool that hasn't opted into zone tracking (`resolve_zone` returns `None`) is not restricted. A
+/// resolved zone absent from `zone_write_classes` fails safe to `WriteClass::default()`
+/// (`ProposalOnly`) rather than silently passing.
+pub fn zone_write_restriction(
+    mcp_name: &str,
+    bare_tool_name: &str,
+    zone_catalog: &[McpDescriptor],
+    zone_write_classes: &[(String, WriteClass)],
+) -> Option<String> {
+    let descriptor = zone_catalog.iter().find(|d| d.name == mcp_name)?;
+    let zone = resolve_zone(descriptor, bare_tool_name)?;
+    let write_class = zone_write_classes
+        .iter()
+        .find(|(z, _)| *z == zone)
+        .map(|(_, wc)| *wc)
+        .unwrap_or_default();
+    (!write_class.allows_direct_agent_write()).then_some(zone)
 }
 
 /// A live, queryable capability catalog. Multiple consumers can independently query
@@ -250,5 +283,89 @@ mod tests {
         let desc = catalog.get("mcp").unwrap();
         assert_eq!(desc.description, "v2");
         assert_eq!(desc.consequence, Consequence::External);
+    }
+
+    // ── zone_write_restriction ────────────────────────────────────────────
+    // Shared between the dispatcher's pre-flight guard and RiskGatedToolRuntime — see the
+    // function's own doc comment. Each individual case here used to live duplicated (in spirit)
+    // across both call sites' own test suites; it's tested once, here, now.
+
+    fn vault_descriptor() -> McpDescriptor {
+        McpDescriptor {
+            name: "vault".into(),
+            description: "git-tracked vault".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: Some("tasks".into()),
+            tool_zones: vec![("write_review".into(), Some("reviews".into()))],
+        }
+    }
+
+    #[test]
+    fn restricted_zone_is_flagged() {
+        let restriction = zone_write_restriction(
+            "vault",
+            "write_review",
+            &[vault_descriptor()],
+            &[("reviews".to_string(), WriteClass::ProposalOnly)],
+        );
+        assert_eq!(restriction, Some("reviews".to_string()));
+    }
+
+    #[test]
+    fn agent_writable_zone_is_not_restricted() {
+        let restriction = zone_write_restriction(
+            "vault",
+            "write_review",
+            &[vault_descriptor()],
+            &[("reviews".to_string(), WriteClass::AgentWritable)],
+        );
+        assert_eq!(restriction, None);
+    }
+
+    #[test]
+    fn unlisted_zone_fails_safe_to_restricted() {
+        // "reviews" isn't in zone_write_classes at all — must fail safe (ProposalOnly default),
+        // not silently pass just because nothing was configured for it.
+        let restriction = zone_write_restriction(
+            "vault",
+            "write_review",
+            &[vault_descriptor()],
+            &[("tasks".to_string(), WriteClass::AgentWritable)],
+        );
+        assert_eq!(restriction, Some("reviews".to_string()));
+    }
+
+    #[test]
+    fn mcp_not_in_catalog_is_not_restricted() {
+        // The capability guard (checked separately by each caller) already rejects an ungranted
+        // MCP — this function isn't the place that catches that.
+        let restriction = zone_write_restriction(
+            "some-other-mcp",
+            "anything",
+            &[vault_descriptor()],
+            &[("reviews".to_string(), WriteClass::ProposalOnly)],
+        );
+        assert_eq!(restriction, None);
+    }
+
+    #[test]
+    fn tool_not_opted_into_zone_tracking_is_not_restricted() {
+        // "tasks-mcp" has no default_zone/tool_zones at all, so resolve_zone returns None
+        // regardless of what's restricted elsewhere.
+        let untracked = McpDescriptor {
+            name: "tasks-mcp".into(),
+            description: "task ops".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            ..Default::default()
+        };
+        let restriction = zone_write_restriction(
+            "tasks-mcp",
+            "add",
+            &[untracked],
+            &[("reviews".to_string(), WriteClass::ProposalOnly)],
+        );
+        assert_eq!(restriction, None);
     }
 }

@@ -13,11 +13,3 @@ repository.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-
-# Native-only deps — tokio/futures/async-trait/ulid require non-WASM targets.
-# These power the ChatClient trait in src/native.rs.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-async-trait = { workspace = true }
-tokio = { workspace = true }
-futures = { workspace = true }
-ulid = { workspace = true }

@@ -65,7 +65,26 @@ capabilities = [
     { ExecuteMcp = "tasks-mcp" },
     { ExecuteMcp = "code-dispatch" },          # dispatcher-only: self-extension goes through the
                                                 # guard pipeline, never a direct chat tool call.
+    # { ExecuteMcp = "chat-search" },          # search conversation history mid-reasoning
+                                                # (read_only — safe for unattended dispatch). Not
+                                                # granted to main-agent: this is a dispatched-work
+                                                # tool, same tier as code-dispatch above; add it
+                                                # there too if direct chat should also search
+                                                # history.
 ]
+
+# A named pool (Decision 18 checkpoint #3, declared via topology.toml's `[[pools]]`) is granted
+# authority the exact same way as "main-agent"/"dispatcher" above — its pool `name` IS the grant's
+# `component`. This is the whole mechanism: narrower authority for an unattended trigger needs
+# nothing but a smaller capabilities list here, no separate pool-specific config surface.
+# [[grants]]
+# component = "unattended"
+# capabilities = [
+#     { Read = { Vault = "tasks" } },
+#     { ExecuteMcp = "liberado-weather-mcp" },   # read_only only — no tasks-mcp write, no
+#                                                  # code-dispatch: an unattended trigger gets far
+#                                                  # less than "dispatcher"'s own grant above.
+# ]
 
 # Names of secrets the components need, resolved from the environment (never inlined). Each entry
 # must be present as an env var at boot — `config check` reports any that are missing.

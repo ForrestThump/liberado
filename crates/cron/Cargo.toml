@@ -1,0 +1,21 @@
+[package]
+name = "liberado-cron"
+version = "0.1.0"
+description = "Cron as an EventSource (Decision 18/19): a schedule fires on its own timer and produces the same standardized Event vault-watch does, so the daemon reacts to it identically. Vault-agnostic by construction — no liberado-vault dependency — the concrete proof the core doesn't need the vault."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+chrono = { workspace = true }
+cron = { workspace = true }
+liberado-common = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

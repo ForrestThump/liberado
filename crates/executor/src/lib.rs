@@ -139,6 +139,38 @@ const ARG_SIMILARITY_THRESHOLD: f32 = 0.2;
 /// `max_turns + DOOM_LOOP_RECOVERY_BONUS_TURNS`, never unbounded.
 const DOOM_LOOP_RECOVERY_BONUS_TURNS: u32 = 2;
 
+/// The 3-step escalation ladder (1st -> nudge, 2nd -> remove, 3rd+ -> give up) for one loop-detection
+/// mechanism. `run_loop` keeps one `LoopGuard` per mechanism (doom-loop, short-cycle) rather than a
+/// single counter shared between them — an earlier version shared one `loop_strikes: u8` across
+/// both, so whichever mechanism detected a problem *second* silently skipped its own nudge step
+/// whenever the other had already struck once (e.g. a short cycle nudging first meant the very next,
+/// entirely unrelated doom-loop detection jumped straight to tool removal, never having nudged for
+/// that behavior at all). The one-time turn-budget top-up (`DOOM_LOOP_RECOVERY_BONUS_TURNS`) stays a
+/// single `bonus_granted` flag shared by both in `run_loop`, since that grant is genuinely per-run,
+/// not per-mechanism.
+#[derive(Default)]
+struct LoopGuard {
+    strikes: u8,
+}
+
+/// What a [`LoopGuard`] says to do in response to its mechanism detecting a problem again.
+enum Escalation {
+    Nudge,
+    Remove,
+    GiveUp,
+}
+
+impl LoopGuard {
+    fn strike(&mut self) -> Escalation {
+        self.strikes += 1;
+        match self.strikes {
+            1 => Escalation::Nudge,
+            2 => Escalation::Remove,
+            _ => Escalation::GiveUp,
+        }
+    }
+}
+
 /// The first, softest escalation step when the doom-loop guard fires — mirrors `REPORT_NUDGE`'s
 /// nudge shape: engine-level, independent of whatever `DIRECT_INSTRUCTIONS`/`SUBAGENT_PREAMBLE`
 /// text the tuner eventually settles on. If it fires again, the guard stops asking and starts
@@ -510,7 +542,8 @@ impl Executor {
         self.run_seed(runtime, &mut messages, &task.seed_calls)
             .await;
 
-        self.run_loop(runtime, &mut messages, &mut tools, mode).await
+        self.run_loop(runtime, &mut messages, &mut tools, mode)
+            .await
     }
 
     /// Run a conversational turn over an existing message history (multi-turn chat). The caller owns
@@ -618,13 +651,13 @@ impl Executor {
         // failure report can show what actually happened instead of a bare "ran out of turns" —
         // see `budget_failed_report_with_progress`.
         let mut call_history: Vec<(String, serde_json::Value, String)> = Vec::new();
-        // Escalates each time a loop/cycle is (re-)detected, shared across both mechanisms: 1st ->
-        // nudge, 2nd -> remove the offending tool(s) and explain why, 3rd+ -> give up honestly.
-        // See this function's guard block below for why removal (not just another nudge) is the
-        // second step: a nudge alone did not change DeepSeek/Gemini's behavior in live testing —
-        // they repeated anyway — so the next escalation needs to change what's *possible*, not just
-        // what's *said*.
-        let mut loop_strikes: u8 = 0;
+        // One escalation ladder per mechanism (see `LoopGuard`'s doc comment for why these must NOT
+        // share a counter): 1st detection -> nudge, 2nd -> remove the offending tool(s) and explain
+        // why, 3rd+ -> give up honestly. Removal (not just another nudge) is the second step because
+        // a nudge alone did not change DeepSeek/Gemini's behavior in live testing — they repeated
+        // anyway — so the next escalation needs to change what's *possible*, not just what's *said*.
+        let mut doom_guard = LoopGuard::default();
+        let mut cycle_guard = LoopGuard::default();
         // Mutable so the tool-removal escalation step can grant its one-time top-up (see
         // `DOOM_LOOP_RECOVERY_BONUS_TURNS`); `bonus_granted` caps that to once per run. Distinct
         // from `usage`/`extra_limits` below: the turn cap is the loop's own mechanical bound (it
@@ -723,14 +756,13 @@ impl Executor {
                 messages.push(Message::tool_result(&call.id, result));
 
                 if is_doom_loop(&call_history) {
-                    loop_strikes += 1;
-                    match loop_strikes {
-                        1 => {
+                    match doom_guard.strike() {
+                        Escalation::Nudge => {
                             tracing::warn!(turn, tool = %call.name, "doom loop detected; nudging once");
                             messages.push(Message::user(DOOM_LOOP_NUDGE));
                             continue 'turn_loop;
                         }
-                        2 => {
+                        Escalation::Remove => {
                             let removed = call.name.clone();
                             tools.retain(|t| t.name != removed);
                             tracing::warn!(
@@ -749,7 +781,7 @@ impl Executor {
                             }
                             continue 'turn_loop;
                         }
-                        _ => {
+                        Escalation::GiveUp => {
                             tracing::warn!(
                                 turn,
                                 tool = %call.name,
@@ -760,14 +792,13 @@ impl Executor {
                     }
                 }
                 if let Some(cycling) = detect_short_cycle(&call_history) {
-                    loop_strikes += 1;
-                    match loop_strikes {
-                        1 => {
+                    match cycle_guard.strike() {
+                        Escalation::Nudge => {
                             tracing::warn!(turn, ?cycling, "tool cycle detected; nudging once");
                             messages.push(Message::user(CYCLE_NUDGE));
                             continue 'turn_loop;
                         }
-                        2 => {
+                        Escalation::Remove => {
                             tools.retain(|t| !cycling.contains(&t.name));
                             tracing::warn!(
                                 turn,
@@ -785,8 +816,12 @@ impl Executor {
                             }
                             continue 'turn_loop;
                         }
-                        _ => {
-                            tracing::warn!(turn, ?cycling, "tool cycle persisted after tool removal; aborting");
+                        Escalation::GiveUp => {
+                            tracing::warn!(
+                                turn,
+                                ?cycling,
+                                "tool cycle persisted after tool removal; aborting"
+                            );
                             return Ok(Terminal::Filed(cycle_failed_report()));
                         }
                     }
@@ -1110,7 +1145,10 @@ fn tf_idf_vectors(docs: &[Vec<String>]) -> Vec<std::collections::HashMap<String,
         .collect()
 }
 
-fn cosine(a: &std::collections::HashMap<String, f32>, b: &std::collections::HashMap<String, f32>) -> f32 {
+fn cosine(
+    a: &std::collections::HashMap<String, f32>,
+    b: &std::collections::HashMap<String, f32>,
+) -> f32 {
     let dot: f32 = a
         .iter()
         .map(|(term, weight)| weight * b.get(term).copied().unwrap_or(0.0))
@@ -1515,7 +1553,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn doom_loop_persisting_past_the_nudge_removes_the_tool_then_aborts_if_it_still_repeats() {
+    async fn doom_loop_persisting_past_the_nudge_removes_the_tool_then_aborts_if_it_still_repeats()
+    {
         // Escalation ladder: 1st detection (3rd identical call) nudges; 2nd (4th) removes the tool
         // from what's offered and explains why; 3rd (5th — the tool somehow got called again
         // anyway) gives up rather than burn the rest of the turn budget.
@@ -1568,8 +1607,8 @@ mod tests {
             vec![
                 call_tool("search"),
                 call_tool("search"),
-                call_tool("search"), // 1st detection: nudged
-                call_tool("search"), // 2nd detection: `search` removed
+                call_tool("search"),         // 1st detection: nudged
+                call_tool("search"),         // 2nd detection: `search` removed
                 submit(valid_report_args()), // no longer able to repeat `search` -> finishes instead
             ],
             Budget::default(),
@@ -1597,7 +1636,7 @@ mod tests {
                 call_tool("search"),
                 call_tool("search"),
                 call_tool("search"),         // turn 3: 1st detection, nudged
-                call_tool("search"),         // turn 4: 2nd detection, `search` removed + bonus granted
+                call_tool("search"), // turn 4: 2nd detection, `search` removed + bonus granted
                 submit(valid_report_args()), // turn 5: only reachable because of the bonus
             ],
             Budget::new(4),
@@ -1655,7 +1694,6 @@ mod tests {
         CompletionResponse::tool_calls(vec![ToolInvocation::new("c", name, args)])
     }
 
-
     #[tokio::test]
     async fn doom_loop_catches_a_rephrased_repeat_not_just_a_byte_identical_one() {
         // Regression for the real live finding: DeepSeek rewording the same question each call
@@ -1712,9 +1750,18 @@ mod tests {
         // must NOT trip the guard just because the tool name repeats.
         let (provider, exec) = executor(
             vec![
-                call_tool_with_args("search", serde_json::json!({ "query": "weather in Denver" })),
-                call_tool_with_args("search", serde_json::json!({ "query": "capital of France" })),
-                call_tool_with_args("search", serde_json::json!({ "query": "current bitcoin price" })),
+                call_tool_with_args(
+                    "search",
+                    serde_json::json!({ "query": "weather in Denver" }),
+                ),
+                call_tool_with_args(
+                    "search",
+                    serde_json::json!({ "query": "capital of France" }),
+                ),
+                call_tool_with_args(
+                    "search",
+                    serde_json::json!({ "query": "current bitcoin price" }),
+                ),
                 submit(valid_report_args()),
             ],
             Budget::default(),
@@ -1813,8 +1860,8 @@ mod tests {
                 call_tool("tool-a"),
                 call_tool("tool-b"),
                 call_tool("tool-a"),
-                call_tool("tool-b"), // 1st detection: nudged
-                call_tool("tool-a"), // 2nd detection: tool-a and tool-b both removed
+                call_tool("tool-b"),         // 1st detection: nudged
+                call_tool("tool-a"),         // 2nd detection: tool-a and tool-b both removed
                 submit(valid_report_args()), // no longer able to cycle -> finishes instead
             ],
             Budget::default(),
@@ -1828,6 +1875,66 @@ mod tests {
 
         assert_eq!(report.outcome, Outcome::Succeeded);
         assert_eq!(runtime.invoked().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn a_doom_loop_gets_its_own_nudge_even_after_the_cycle_guard_already_struck_once() {
+        // Regression for the shared-counter bug (`docs/roadmap/hygiene-audit-2026-07-05.md` P2.1):
+        // the short-cycle guard strikes first (tool-a/tool-b alternating), then, entirely
+        // unrelated, `search` repeats 3x in a row for the FIRST time. With one counter shared
+        // between both mechanisms, doom-loop's first-ever detection would have inherited the
+        // cycle guard's strike count and jumped straight to tool removal — never nudging for the
+        // doom loop at all. With independent `LoopGuard`s, doom-loop's first detection must still
+        // be a nudge.
+        let (provider, exec) = executor(
+            vec![
+                call_tool("tool-a"),
+                call_tool("tool-b"),
+                call_tool("tool-a"),
+                call_tool("tool-b"), // cycle guard: 1st detection -> nudged
+                call_tool("filler"), // breaks the cycle tail pattern
+                call_tool("search"),
+                call_tool("search"),
+                call_tool("search"), // doom guard: 1st-ever detection -> must also be nudged
+                call_tool("other_tool"),
+                submit(valid_report_args()),
+            ],
+            // 10 scripted turns exceed `DEFAULT_MAX_TURNS` (8), so this needs its own explicit budget.
+            Budget::new(10),
+        );
+        let runtime = MockToolRuntime::new(
+            &["tool-a", "tool-b", "filler", "search", "other_tool"],
+            Ok("result".into()),
+        );
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        assert_eq!(runtime.invoked().len(), 9);
+        assert!(
+            provider
+                .received_requests()
+                .iter()
+                .any(|r| r.messages.iter().any(|m| m.content == CYCLE_NUDGE)),
+            "expected the cycle nudge to have fired first"
+        );
+        assert!(
+            provider
+                .received_requests()
+                .iter()
+                .any(|r| r.messages.iter().any(|m| m.content == DOOM_LOOP_NUDGE)),
+            "expected the doom-loop guard's own 1st-strike nudge, not a skip-straight-to-removal"
+        );
+        assert!(
+            !provider.received_requests().iter().any(|r| r
+                .messages
+                .iter()
+                .any(|m| m.content.contains("removed for the rest of this task"))),
+            "neither guard should have escalated to removal — each only struck once"
+        );
     }
 
     #[tokio::test]

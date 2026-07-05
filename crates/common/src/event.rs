@@ -7,10 +7,19 @@
 //! deliberate: any hook-capable system must be able to mint a valid event without linking our
 //! crates.
 
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::provenance::WriteProvenance;
+
+/// The always-present dispatcher/executor pool name (Decision 18 checkpoint #3) — every daemon has
+/// this one even when no additional pools are configured, matching the single-dispatcher behavior
+/// that predates pools exactly. Shared here (rather than duplicated per-crate) since both
+/// `liberado-config-loader` (validating pool references) and `liberado-daemon` (routing events to
+/// a pool) need the identical literal.
+pub const DEFAULT_POOL: &str = "default";
 
 /// Well-known [`Event::source`] values. Free-form by design — these are the ones the system
 /// produces or recognizes; external hooks may use others.
@@ -19,6 +28,35 @@ pub mod event_source {
     pub const SYSTEMD_TIMER: &str = "systemd-timer";
     pub const GIT_HOOK: &str = "git-hook";
     pub const DOCKER_EVENT: &str = "docker-event";
+    /// A cron-scheduled trigger (`liberado-cron`'s `CronEventSource`). Individual schedules use
+    /// `"cron:{name}"` as the full `Event::source`; this is the shared prefix consumers match on.
+    pub const CRON: &str = "cron";
+    /// An external webhook trigger (`liberado-server`'s `POST /api/hooks/{name}`). Individual hooks
+    /// use `"webhook:{name}"` as the full `Event::source`; this is the shared prefix consumers
+    /// match on — mirrors [`CRON`]'s convention exactly (both carry their goal in
+    /// `payload.summary`, not a vault path).
+    pub const WEBHOOK: &str = "webhook";
+}
+
+/// Something that produces [`Event`]s for the daemon to react to (Decision 18/19 — the seam that
+/// makes the vault a plugin rather than a hard dependency). Vault-watch and cron both implement
+/// this; the daemon fans every attached source into one channel and reacts uniformly, never
+/// knowing or caring how a given event was produced.
+///
+/// A fan-in-to-one-channel shape (not a polled `next_event()`) is deliberate: each source owns its
+/// own internal timing/looping and is `tokio::spawn`ed independently against a shared
+/// `UnboundedSender<Event>`, which composes cleanly for a heterogeneous, possibly-growing set of
+/// sources without a dynamic `select!` over differently-shaped futures.
+#[async_trait]
+pub trait EventSource: Send + Sync {
+    /// A short, human-readable name for logging (e.g. `"vault-watch"`, `"cron"`).
+    fn name(&self) -> &str;
+
+    /// Run until this source is closed/exhausted, pushing every reactable event onto `tx`.
+    /// Returns when there is nothing left to produce (the caller's `while let Some(event) =
+    /// rx.recv().await` loop ends once every attached source's `run` has returned and every
+    /// sender clone is dropped).
+    async fn run(self: Box<Self>, tx: UnboundedSender<Event>);
 }
 
 /// A trigger event delivered to a hook (or routed internally by the daemon).
@@ -55,6 +93,13 @@ pub struct EventPayload {
     /// Short high-signal excerpt or metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+
+    /// Which named dispatcher/executor pool (Decision 18 checkpoint #3) should handle this event
+    /// — set by the producer (e.g. a cron `Schedule` or webhook `HookConfig`'s own configured
+    /// `pool`). `None` routes to the always-present `"default"` pool — vault-watch events never
+    /// set this, so this is a zero-behavior-change addition for anyone not opting into pools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool: Option<String>,
 
     /// Arbitrary structured payload for domain-specific events.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]

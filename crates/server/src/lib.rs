@@ -7,6 +7,7 @@
 //! us doesn't fight over it).
 
 mod api;
+mod hooks;
 mod state;
 
 use std::sync::Arc;
@@ -15,7 +16,7 @@ use std::time::Instant;
 use std::path::Path;
 
 use axum::Router;
-use liberado_common::{CapabilityCatalog, CapabilitySet, WriteProvenance};
+use liberado_common::{CapabilityCatalog, CapabilitySet, DEFAULT_POOL, WriteProvenance};
 use liberado_conversation_store::JsonlStore;
 use liberado_daemon::Daemon;
 use liberado_dispatcher::Dispatcher;
@@ -69,7 +70,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     let capability_catalog = Arc::new(liberado_bootstrap::capability_catalog_from_config(&config));
 
     // Build the provider once and share it between the daemon (dispatch/execute) and chat.
-    let provider = liberado_bootstrap::provider_from_env();
+    let provider = liberado_bootstrap::provider_from_config(&config);
     let dispatcher_attached = provider.is_some();
     let model_name = provider.as_ref().map(|p| p.model().to_string());
     let mcp = liberado_bootstrap::mcp_registry_from_config(&config);
@@ -84,6 +85,28 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     )
     .await;
 
+    let daemon = Daemon::open("webui", &vault_path).await?;
+    let daemon = liberado_bootstrap::configure_daemon(
+        daemon,
+        provider.as_ref(),
+        &config,
+        capability_catalog.clone(),
+        Path::new(&vault_path),
+    );
+
+    // The webhook hooks endpoint's seam into the daemon's reactive pipeline — a clone of the same
+    // channel every `EventSource` (vault-watch, cron) pushes onto. Grabbed before `daemon` moves
+    // into its own spawned task below, same pattern as the vault/signer clones just above it.
+    let hook_tx = daemon.event_sender();
+    let resolved_hooks = hooks::resolve_hooks(&config.topology);
+    info!(hooks = resolved_hooks.len(), "webhook hooks resolved");
+
+    // For `GET /api/catalog`'s per-MCP visibility labeling — the same two component names
+    // `build_chat`/`configure_daemon` already resolve grants for (see their own
+    // `capabilities_for("main-agent")`/`capabilities_for("dispatcher")` calls below).
+    let main_agent_capabilities = config.policy.capabilities_for("main-agent");
+    let dispatcher_capabilities = config.policy.capabilities_for("dispatcher");
+
     let state = Arc::new(AppState {
         start_time: Instant::now(),
         reactions: Arc::new(Mutex::new(Vec::new())),
@@ -93,18 +116,33 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         chat,
         chat_tools,
         chat_tool_names,
-        catalog: capability_catalog.clone(),
+        catalog: capability_catalog,
+        conversations_root: liberado_bootstrap::data_dir().join("conversations"),
+        main_agent_capabilities,
+        dispatcher_capabilities,
         model_name,
+        hooks: resolved_hooks,
+        hook_tx,
+        hook_idempotency: Default::default(),
     });
 
-    let daemon = Daemon::open("webui", &vault_path).await?;
-    let daemon = liberado_bootstrap::configure_daemon(
-        daemon,
-        provider.as_ref(),
-        &config,
-        capability_catalog,
-        Path::new(&vault_path),
-    );
+    // Optional — a proposal Telegram approval bot, answering the Approve/Reject buttons
+    // `TelegramNotifier::notify_proposal` sends. Only meaningful when a provider is attached (no
+    // provider ⇒ no dispatcher/orchestrator ⇒ no proposals are ever created in the first place),
+    // and only runs when TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID are set (same env vars the notifier
+    // itself uses). Cloning the vault/signer here, before `daemon` moves into its own spawn below,
+    // gives the bot its own handle onto the exact same underlying vault (`Vault` is cheap to
+    // clone — see `liberado_vault::Vault`'s doc comment).
+    if let Some(p) = provider.as_ref() {
+        if let Some(bot) = liberado_telegram_approvals::ApprovalBot::from_env(
+            daemon.vault().clone(),
+            daemon.signer().clone(),
+            p.clone(),
+            config.tuning.telegram_approvals.clone(),
+        ) {
+            tokio::spawn(bot.run());
+        }
+    }
 
     let reaction_tx = state.reaction_tx();
     let daemon_handle = tokio::spawn(async move {
@@ -126,8 +164,16 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
             axum::routing::get(api::list_conversations),
         )
         .route(
+            "/api/conversations/search",
+            axum::routing::get(api::search_conversations),
+        )
+        .route(
             "/api/conversations/{id}",
             axum::routing::get(api::get_conversation).patch(api::patch_conversation_title),
+        )
+        .route(
+            "/api/hooks/{name}",
+            axum::routing::post(hooks::trigger_hook),
         )
         .layer(CorsLayer::permissive())
         .with_state(state)
@@ -290,7 +336,9 @@ async fn build_chat(
             config.tuning.dispatch.clone(),
             config.tuning.concurrency.max_reaction_depth,
         );
-        info!("chat: dispatch routing enabled (Clarify/Propose/DispatchSubagent handled before execution)");
+        info!(
+            "chat: dispatch routing enabled (Clarify/Propose/DispatchSubagent handled before execution)"
+        );
         sessions = sessions.with_dispatch(dispatcher, catalog, orchestrator);
     }
 
@@ -327,6 +375,7 @@ async fn connect_chat_runtime(
                 guard.zone_write_classes.clone(),
                 guard.proposals_dir.clone(),
                 guard.signer.clone(),
+                DEFAULT_POOL,
             );
             (rt, Some(orchestrator))
         }

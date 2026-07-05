@@ -112,6 +112,19 @@ fn McpServerItem(mcp: McpInfo) -> Element {
                         span { class: "mcp-server-tool-count", "{tool_count}" }
                     }
                 }
+                div {
+                    class: "mcp-visibility",
+                    span {
+                        class: if mcp.visible_to_main_agent { "visibility-badge active" } else { "visibility-badge inactive" },
+                        title: "Main agent (chat)",
+                        "MA"
+                    }
+                    span {
+                        class: if mcp.visible_to_dispatcher { "visibility-badge active" } else { "visibility-badge inactive" },
+                        title: "Dispatcher (reactive pipeline)",
+                        "DX"
+                    }
+                }
                 span { class: "{badge}", "{mcp.consequence}" }
             }
             if server_expanded() {
@@ -119,6 +132,17 @@ fn McpServerItem(mcp: McpInfo) -> Element {
                     class: "mcp-server-body",
                     if !mcp.description.is_empty() {
                         p { class: "mcp-server-desc", "{mcp.description}" }
+                    }
+                    div {
+                        class: "mcp-server-visibility",
+                        span {
+                            class: if mcp.visible_to_main_agent { "visibility-pill active" } else { "visibility-pill inactive" },
+                            "Main agent"
+                        }
+                        span {
+                            class: if mcp.visible_to_dispatcher { "visibility-pill active" } else { "visibility-pill inactive" },
+                            "Dispatcher"
+                        }
                     }
                     if !mcp.tool_names.is_empty() {
                         div {

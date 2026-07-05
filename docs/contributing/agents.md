@@ -28,7 +28,7 @@ crates/
   conversation-store/   # Decision-17 append-only JSONL conversation store
   daemon/               # Watch → debounce → attribute → dispatch (the long-running core)
   bootstrap/            # Shared env→provider/dispatcher/orchestrator wiring for the binaries
-  chat-client-contract/ # Shared wire types + ChatClient trait + SseDecoder for all chat clients
+  chat-client-contract/ # Shared wire types + SseDecoder for all chat clients
   liberado-commands/    # Shared slash-command parser/handlers for all chat clients
   markdown/             # Shared, UI-agnostic Markdown parser
   theme/                # Shared color-token Theme/ThemeRegistry

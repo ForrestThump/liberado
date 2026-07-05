@@ -23,26 +23,47 @@ pub use liberado_config::{
 use std::path::Path;
 use std::sync::Arc;
 
-use liberado_common::CapabilityCatalog;
+use liberado_common::{CapabilityCatalog, DEFAULT_POOL};
 use liberado_config::{McpTransport, managed_binary_path};
 use liberado_daemon::Daemon;
 use liberado_dispatcher::Dispatcher;
 use liberado_mcp::{HttpConnector, McpRegistry, StdioConnector};
 use liberado_notify::Notifier;
-use liberado_orchestrator::Orchestrator;
+use liberado_orchestrator::OrchestratorInfra;
 use liberado_provider::Provider;
 use liberado_provider_deepseek::DeepSeekProvider;
+use liberado_provider_openrouter::OpenRouterProvider;
 
-/// Build the shared inference provider from the environment (`DEEPSEEK_API_KEY`). `None` means no key
-/// is set, so the daemon runs watch-only and chat is disabled.
-pub fn provider_from_env() -> Option<Arc<dyn Provider>> {
-    match DeepSeekProvider::from_env() {
-        Ok(provider) => {
-            let provider: Arc<dyn Provider> = Arc::new(provider);
-            tracing::info!(model = provider.model(), "provider configured (DeepSeek)");
-            Some(provider)
+/// Build the shared inference provider from the environment, selecting the backend named by
+/// `config.topology.provider` (`"deepseek"` or `"openrouter"` — unknown values fall back to
+/// `"deepseek"` with a warning, same as the pre-existing default). `None` means the selected
+/// backend's API key isn't set, so the daemon runs watch-only and chat is disabled.
+pub fn provider_from_config(config: &Config) -> Option<Arc<dyn Provider>> {
+    match config.topology.provider.as_str() {
+        "openrouter" => match OpenRouterProvider::from_env() {
+            Ok(provider) => {
+                let provider: Arc<dyn Provider> = Arc::new(provider);
+                tracing::info!(model = provider.model(), "provider configured (OpenRouter)");
+                Some(provider)
+            }
+            Err(_) => None,
+        },
+        other => {
+            if other != "deepseek" {
+                tracing::warn!(
+                    provider = other,
+                    "unknown topology.provider — falling back to deepseek"
+                );
+            }
+            match DeepSeekProvider::from_env() {
+                Ok(provider) => {
+                    let provider: Arc<dyn Provider> = Arc::new(provider);
+                    tracing::info!(model = provider.model(), "provider configured (DeepSeek)");
+                    Some(provider)
+                }
+                Err(_) => None,
+            }
         }
-        Err(_) => None,
     }
 }
 
@@ -67,6 +88,32 @@ pub fn mcp_registry_from_config(config: &Config) -> Option<McpRegistry> {
         },
     );
     (!registry.is_empty()).then_some(registry)
+}
+
+/// Build a [`liberado_cron::CronEventSource`] from the enabled entries in
+/// `config.topology.schedules` (Decision 18/19). `None` when there are none enabled — a daemon then
+/// behaves exactly as before this existed (vault-watch only). Construction only fails on a
+/// malformed cron expression or duplicate name, which [`Config::validate`] should already have
+/// caught (Decision 14 fail-fast) before this is ever called — surfaced anyway rather than assumed.
+pub fn cron_source_from_config(
+    config: &Config,
+) -> Result<Option<liberado_cron::CronEventSource>, liberado_cron::CronError> {
+    let schedules: Vec<liberado_cron::Schedule> = config
+        .topology
+        .schedules
+        .iter()
+        .filter(|s| s.enabled)
+        .map(|s| liberado_cron::Schedule {
+            name: s.name.clone(),
+            cron_expr: s.cron_expr.clone(),
+            goal: s.goal.clone(),
+            pool: s.pool.clone(),
+        })
+        .collect();
+    if schedules.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(liberado_cron::CronEventSource::new(schedules)?))
 }
 
 /// Attach the dispatcher and (when an MCP server is configured) the orchestrator to `daemon`, using
@@ -110,35 +157,55 @@ pub fn configure_daemon(
     // same consequence catalog, vault-rooted proposals directory, and integrity signer chat's own
     // RiskGatedToolRuntime uses (see `RiskGatedToolRuntime`'s doc comment).
     let guard = guard_context(&catalog, &config.policy, vault_path);
+    // Everything an `Orchestrator` needs that's identical across every pool (see
+    // `OrchestratorInfra`'s doc comment) — built once here, then combined per pool below with just
+    // that pool's own factory/capabilities/name.
+    let orchestrator_infra = OrchestratorInfra::new(
+        provider.clone(),
+        guard.consequences.clone(),
+        guard.zone_catalog.clone(),
+        guard.zone_write_classes.clone(),
+        guard.proposals_dir.clone(),
+        guard.signer.clone(),
+    );
 
     // Optional — a daemon/orchestrator with no TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID set just never
     // sends anything, same as before this existed. The motivating case is exactly this daemon
     // path: an unattended (cron-triggered, Phase 3) proposal nobody's watching the vault for.
-    let notifier: Option<Arc<dyn Notifier>> = liberado_notify::TelegramNotifier::from_env()
-        .map(|n| Arc::new(n) as Arc<dyn Notifier>);
+    let notifier: Option<Arc<dyn Notifier>> =
+        liberado_notify::TelegramNotifier::from_env().map(|n| Arc::new(n) as Arc<dyn Notifier>);
     tracing::info!(enabled = notifier.is_some(), "proposal notifications");
 
     let daemon = daemon
-        .with_dispatcher(dispatcher, catalog, capabilities.clone())
-        .with_proposal_signer(guard.signer.clone())
-        .with_zone_write_classes(guard.zone_write_classes.clone());
+        .with_dispatcher(
+            dispatcher,
+            catalog.clone(),
+            capabilities.clone(),
+            guard.zone_write_classes.clone(),
+        )
+        .with_proposal_signer(guard.signer.clone());
     let daemon = match &notifier {
         Some(n) => daemon.with_notifier(n.clone()),
         None => daemon,
     };
-    match mcp_registry_from_config(config) {
+    let daemon = match cron_source_from_config(config) {
+        Ok(Some(cron_source)) => {
+            tracing::info!(
+                schedules = config.topology.schedules.len(),
+                "cron event source attached"
+            );
+            daemon.with_cron_source(Box::new(cron_source))
+        }
+        Ok(None) => daemon,
+        Err(e) => {
+            tracing::error!(error = %e, "cron schedules failed to construct — running without cron");
+            daemon
+        }
+    };
+    let daemon = match mcp_registry_from_config(config) {
         Some(factory) => {
             tracing::info!("orchestrator enabled (MCP execution)");
-            let orchestrator = Orchestrator::new(
-                provider.clone(),
-                factory,
-                capabilities,
-                guard.consequences,
-                guard.zone_catalog,
-                guard.zone_write_classes,
-                guard.proposals_dir,
-                guard.signer,
-            );
+            let orchestrator = orchestrator_infra.for_pool(factory, capabilities, DEFAULT_POOL);
             let orchestrator = match &notifier {
                 Some(n) => orchestrator.with_notifier(n.clone()),
                 None => orchestrator,
@@ -149,7 +216,62 @@ pub fn configure_daemon(
             tracing::warn!("no enabled MCP in topology.mcps — decide-only (no MCP execution)");
             daemon
         }
-    }
+    };
+
+    // Additional named pools (Decision 18 checkpoint #3) — same provider/tuning/consequence
+    // catalog/proposals dir/signer as the default pool, differing only in the capability grant
+    // named after the pool and (necessarily) their own `McpRegistry` instance, since registries
+    // aren't `Clone`/shareable across orchestrators.
+    config
+        .topology
+        .pools
+        .iter()
+        .filter(|p| p.enabled)
+        .fold(daemon, |daemon, pool| {
+            let pool_capabilities = config.policy.capabilities_for(&pool.name);
+            tracing::info!(
+                pool = pool.name,
+                capabilities = pool_capabilities.capabilities.len(),
+                "additional pool capability boundary configured from policy"
+            );
+            let pool_dispatcher = Dispatcher::new(
+                provider.clone(),
+                config.tuning.dispatch.clone(),
+                config.tuning.concurrency.max_reaction_depth,
+            );
+            let daemon = daemon.with_pool_dispatcher(
+                pool.name.clone(),
+                pool_dispatcher,
+                catalog.clone(),
+                pool_capabilities.clone(),
+            );
+            // Intentionally called again here (once per enabled pool, so N+1 total calls across
+            // this function for N additional pools) rather than reusing the default pool's registry
+            // built above: each pool needs its own, independently owned `McpRegistry` (registries
+            // aren't `Clone`/shareable across orchestrators — see the `fold`'s own doc comment
+            // above), so there is no cheaper way to get N separate registries than building each
+            // from `config.topology.mcps` N times. Cheap in absolute terms (this reads the same
+            // small, already-in-memory `config`, not a file or network round-trip), so not worth
+            // caching or restructuring around.
+            match mcp_registry_from_config(config) {
+                Some(factory) => {
+                    let orchestrator =
+                        orchestrator_infra.for_pool(factory, pool_capabilities, pool.name.clone());
+                    let orchestrator = match &notifier {
+                        Some(n) => orchestrator.with_notifier(n.clone()),
+                        None => orchestrator,
+                    };
+                    daemon.with_pool_orchestrator(pool.name.clone(), orchestrator)
+                }
+                None => {
+                    tracing::warn!(
+                        pool = pool.name,
+                        "no enabled MCP in topology.mcps — pool is decide-only (no MCP execution)"
+                    );
+                    daemon
+                }
+            }
+        })
 }
 
 #[cfg(test)]
@@ -157,6 +279,31 @@ mod tests {
     use super::*;
     use liberado_common::capability::Consequence;
     use liberado_config::McpConfig;
+
+    // These mirror the existing `from_env_uses_environment_variables`-style tests in
+    // `liberado-provider-deepseek`/`liberado-provider-openrouter`: they don't mutate process env
+    // vars (races under parallel test execution), they just assert `provider_from_config` routes
+    // to the same underlying `from_env()` call the config selects, whatever this process's env
+    // happens to be.
+    #[test]
+    fn unknown_provider_name_falls_back_to_deepseek_selection() {
+        let mut config = Config::default();
+        config.topology.provider = "not-a-real-provider".to_string();
+        assert_eq!(
+            provider_from_config(&config).is_some(),
+            DeepSeekProvider::from_env().is_ok()
+        );
+    }
+
+    #[test]
+    fn openrouter_provider_name_routes_to_openrouter() {
+        let mut config = Config::default();
+        config.topology.provider = "openrouter".to_string();
+        assert_eq!(
+            provider_from_config(&config).is_some(),
+            OpenRouterProvider::from_env().is_ok()
+        );
+    }
 
     fn mcp(name: &str, enabled: bool, transport: McpTransport) -> McpConfig {
         McpConfig {
@@ -228,5 +375,35 @@ mod tests {
             },
         )];
         assert!(mcp_registry_from_config(&config).is_none());
+    }
+
+    fn cron_schedule(name: &str, enabled: bool) -> liberado_config::CronSchedule {
+        liberado_config::CronSchedule {
+            name: name.into(),
+            enabled,
+            cron_expr: "0 0 9 * * * *".into(),
+            goal: "summarize today's decisions".into(),
+            pool: None,
+        }
+    }
+
+    #[test]
+    fn no_schedules_yields_none() {
+        let config = Config::default();
+        assert!(cron_source_from_config(&config).unwrap().is_none());
+    }
+
+    #[test]
+    fn disabled_schedules_are_excluded() {
+        let mut config = Config::default();
+        config.topology.schedules = vec![cron_schedule("nightly", false)];
+        assert!(cron_source_from_config(&config).unwrap().is_none());
+    }
+
+    #[test]
+    fn an_enabled_schedule_builds_a_cron_source() {
+        let mut config = Config::default();
+        config.topology.schedules = vec![cron_schedule("nightly", true)];
+        assert!(cron_source_from_config(&config).unwrap().is_some());
     }
 }

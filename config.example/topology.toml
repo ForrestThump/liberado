@@ -82,6 +82,18 @@ description = "Plan, implement, and review code changes; scaffold and build new 
 consequence = "reversible"
 transport = { kind = "stdio", command = "riggers-mcp", args = ["--config", "riggers/riggers.yaml"] }
 
+# A workspace-local MCP (not managed — mcp-forge's "managed" transport only supports cargo-
+# installing from an external git repo; a crate that already lives in this workspace just points
+# `command` at its own built binary). Build first with `cargo build --bin liberado-chat-search-mcp`
+# (dev) or `--release` (prod), then point `command` at the resulting path. Exposes one tool,
+# `search_conversations`, backed by the same search `GET /api/conversations/search` uses — see
+# docs/roadmap/chat-search-plan.md.
+# [[mcps]]
+# name = "chat-search"
+# description = "Search conversation history by keyword or regex"
+# consequence = "read_only"
+# transport = { kind = "stdio", command = "target/debug/liberado-chat-search-mcp", args = [] }
+
 # An external-effect MCP (leaves the system / can't be taken back) is rated `external`, the
 # highest risk — the consequence guard will gate direct action toward it. A remote server is reached
 # over http instead of a spawned process:
@@ -90,3 +102,60 @@ transport = { kind = "stdio", command = "riggers-mcp", args = ["--config", "rigg
 # description = "send email on the user's behalf"
 # consequence = "external"
 # transport = { kind = "http", url = "https://mcp.example.com/mcp" }
+
+# Named dispatcher/executor pools (Decision 18 checkpoint #3) — an ALWAYS-PRESENT "default" pool
+# handles anything below that doesn't set `pool`, so declaring pools here is opt-in. A pool is pure
+# authority segregation: it has its own capability grant (see policy.toml's `[[grants]]`, keyed by
+# this same `name`) and its own MCP connections — it does NOT coordinate with other pools or share
+# state with them (deliberately out of scope; see docs/ideas/a2a-protocol-idea.md's research note
+# on why cross-pool/cross-agent coordination is NOT built here). Useful for giving an unattended
+# trigger (a cron schedule, a webhook) a narrower authority than a human-attended one, without
+# touching the "default" pool's grant at all.
+# [[pools]]
+# name = "unattended"
+# enabled = true
+
+# Cron schedules (Decision 18/19) — each fires on its own timer and dispatches `goal` through the
+# exact same reactive pipeline a vault change does (the same dispatcher, same capability boundary,
+# same guards). `cron_expr` uses the `cron` crate's 6/7-FIELD syntax — SECONDS FIRST, not standard
+# 5-field cron: sec min hour day-of-month month day-of-week [year]. No catch-up/backfill on
+# restart: a schedule due while the daemon was down simply doesn't fire retroactively. `pool`
+# (optional) routes this schedule's dispatch through a named pool declared above instead of
+# "default" — e.g. an unattended nightly job that should run with narrower authority than chat.
+# [[schedules]]
+# name = "nightly-summary"
+# cron_expr = "0 0 21 * * * *"   # every day at 21:00:00
+# goal = "Summarize today's decisions and post the summary."
+# enabled = true
+# pool = "unattended"
+
+# External webhook hooks (Decision 6/18/19) — the network-triggered counterpart to schedules
+# above: reachable at `POST /api/hooks/{name}` and dispatches `goal` through the exact same
+# reactive pipeline. Trivially callable from anything that can set an HTTP header — systemd
+# `ExecStart=curl ...`, a CI webhook step, a monitoring alert integration, a home-automation HTTP
+# action. `secret_ref` names an env var holding this hook's shared secret (never the secret itself
+# — set it wherever you set other secrets); the caller sends it back as the
+# `X-Liberado-Hook-Secret` header. Each hook has its own secret, so leaking one doesn't compromise
+# others.
+#
+# Example:
+#   export LIBERADO_HOOK_BACKUP_SECRET="$(openssl rand -hex 32)"
+#   curl -X POST -H "X-Liberado-Hook-Secret: $LIBERADO_HOOK_BACKUP_SECRET" \
+#        http://localhost:4201/api/hooks/nightly-backup
+#
+# Optional per-request extras (neither is required — a bare `curl -X POST` with no body just fires
+# the configured goal as-is):
+#   - a JSON body `{"context": "free text"}` appended to `goal` as runtime context (e.g. a
+#     monitoring alert's message)
+#   - an `X-Liberado-Idempotency-Key` header — a redelivery of the same key within ~10 minutes is
+#     accepted but not re-dispatched, for senders that retry on failure
+#
+# No internet-facing rate limiting is built in — if this port is ever exposed beyond your LAN, put
+# a reverse proxy in front of it. `pool` (optional) routes this hook through a named pool declared
+# above, same as a schedule's `pool` — a network-triggered call is as "unattended" as a cron fire.
+# [[hooks]]
+# name = "nightly-backup"
+# secret_ref = "LIBERADO_HOOK_BACKUP_SECRET"
+# goal = "Run the nightly vault backup and report the result."
+# enabled = true
+# pool = "unattended"

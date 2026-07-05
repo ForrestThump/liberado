@@ -26,6 +26,15 @@
 //! correctly. Only a genuine **capability denial** stays `Err` (the action is refused, not deferred).
 //! A dedicated `proposal` SSE event would be a nicer future refinement than overloading the result
 //! string, but this keeps the streaming UX clean without a new event type.
+//!
+//! ## Keeping this in sync with the dispatcher's pre-flight guard (`liberado-dispatcher/src/guards.rs`)
+//!
+//! The zone-write-class check is unified (`liberado_common::zone_write_restriction`) so it cannot
+//! drift between the two enforcement points. The capability and consequence checks below are NOT
+//! unified — they operate over different shapes for good reason (this runtime checks one live
+//! call; the dispatcher's guard checks a decision's declared seed calls before anything runs) — but
+//! if you add a **new** guard here, check whether `guards.rs::evaluate` needs the equivalent, and
+//! vice versa. That sequencing risk is the reason this note exists.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,7 +42,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use liberado_common::{
     CapabilitySet, Consequence, McpDescriptor, Proposal, ProposalSigner, ProposedAction,
-    WriteClass, bare_tool_name, is_sweeping_destructive, mcp_of, resolve_zone,
+    WriteClass, bare_tool_name, is_sweeping_destructive, mcp_of, zone_write_restriction,
 };
 use liberado_notify::Notifier;
 use liberado_provider::{ToolDef, ToolInvocation};
@@ -66,6 +75,10 @@ pub struct RiskGatedToolRuntime {
     correlation_base: String,
     /// Signs every downgraded proposal so the daemon can detect tampering before approving it.
     signer: ProposalSigner,
+    /// Which named dispatcher/executor pool (Decision 18 checkpoint #3) this runtime's owning
+    /// `Orchestrator` *is* — stamped onto every proposal this runtime downgrades to, so approval
+    /// later executes it via this same pool's authority, never a different one.
+    pool_name: String,
     /// Told about every proposal this runtime writes — optional (`None` by default via
     /// [`with_notifier`](Self::with_notifier), added as a builder step rather than a `new()`
     /// parameter so existing call sites don't need to change). Best-effort: a notification
@@ -87,6 +100,7 @@ impl RiskGatedToolRuntime {
     /// * `goal_context` - The user message / goal context for magnitude assessment.
     /// * `correlation_base` - A unique base string for naming generated proposals.
     /// * `signer` - Signs every downgraded proposal (see [`Proposal::integrity`]'s doc comment).
+    /// * `pool_name` - The owning `Orchestrator`'s pool name, stamped onto every proposal built here.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         inner: Arc<dyn ToolRuntime>,
@@ -98,6 +112,7 @@ impl RiskGatedToolRuntime {
         goal_context: String,
         correlation_base: String,
         signer: ProposalSigner,
+        pool_name: impl Into<String>,
     ) -> Self {
         Self {
             inner,
@@ -109,6 +124,7 @@ impl RiskGatedToolRuntime {
             goal_context,
             correlation_base,
             signer,
+            pool_name: pool_name.into(),
             notifier: None,
         }
     }
@@ -170,39 +186,29 @@ impl ToolRuntime for RiskGatedToolRuntime {
                 return Ok(proposal_message(&proposal_path));
             }
 
-            // 3b. Zone-write-class check (§6 #2): does this specific call's resolved target zone
-            // allow a direct agent write? Only applies to tools that have opted into zone
-            // tracking (`resolve_zone` returns `None` for anything else — most MCPs aren't vault
-            // writers at all). A resolved zone absent from `zone_write_classes` fails safe to
-            // `WriteClass::default()` (`ProposalOnly`) rather than silently passing.
-            if let Some(descriptor) = self.zone_catalog.iter().find(|d| d.name == mcp_name) {
-                let bare_tool = bare_tool_name(&call.name);
-                if let Some(zone) = resolve_zone(descriptor, bare_tool) {
-                    let write_class = self
-                        .zone_write_classes
-                        .iter()
-                        .find(|(z, _)| *z == zone)
-                        .map(|(_, wc)| *wc)
-                        .unwrap_or_default();
-                    if !write_class.allows_direct_agent_write() {
-                        tracing::warn!(
-                            mcp = %mcp_name,
-                            tool = %bare_tool,
-                            %zone,
-                            ?write_class,
-                            "tool call downgraded to proposal: zone write-class restricted"
-                        );
-                        let proposal_path = self
-                            .write_proposal(
-                                call,
-                                &format!(
-                                    "Write targets the '{zone}' zone, which requires human approval"
-                                ),
-                            )
-                            .await?;
-                        return Ok(proposal_message(&proposal_path));
-                    }
-                }
+            // 3b. Zone-write-class check (§6 #2) — shared with the dispatcher's pre-flight guard
+            // via `liberado_common::zone_write_restriction` (see its doc comment) so the two
+            // enforcement points can't silently drift apart on what counts as restricted.
+            let bare_tool = bare_tool_name(&call.name);
+            if let Some(zone) = zone_write_restriction(
+                &mcp_name,
+                bare_tool,
+                &self.zone_catalog,
+                &self.zone_write_classes,
+            ) {
+                tracing::warn!(
+                    mcp = %mcp_name,
+                    tool = %bare_tool,
+                    %zone,
+                    "tool call downgraded to proposal: zone write-class restricted"
+                );
+                let proposal_path = self
+                    .write_proposal(
+                        call,
+                        &format!("Write targets the '{zone}' zone, which requires human approval"),
+                    )
+                    .await?;
+                return Ok(proposal_message(&proposal_path));
             }
 
             // 4. Magnitude check: sweeping destructive behavior in args or goal context.
@@ -214,7 +220,10 @@ impl ToolRuntime for RiskGatedToolRuntime {
                     "tool call downgraded to proposal: sweeping destructive action"
                 );
                 let proposal_path = self
-                    .write_proposal(call, "Sweeping destructive action — requires human approval")
+                    .write_proposal(
+                        call,
+                        "Sweeping destructive action — requires human approval",
+                    )
                     .await?;
                 return Ok(proposal_message(&proposal_path));
             }
@@ -252,7 +261,7 @@ impl RiskGatedToolRuntime {
         // `proposals_dir` is the vault's proposals/ directory (see this module's doc comment) — the
         // daemon's react() routes changes here into the same approve/execute pipeline the
         // dispatcher's own pre-flight proposals use.
-        let proposals_subdir = self.proposals_dir.join("proposals");
+        let proposals_subdir = self.proposals_dir.join(liberado_common::PROPOSALS_DIR);
         let proposal_path = proposals_subdir.join(format!("{proposal_id}.md"));
 
         let mut proposal = Proposal::pending(
@@ -265,7 +274,8 @@ impl RiskGatedToolRuntime {
             }]),
             rationale,
         );
-        self.signer.sign(&mut proposal);
+        proposal.pool = Some(self.pool_name.clone());
+        let proposal = self.signer.sign(proposal);
 
         let note = proposal.to_note();
 
@@ -310,7 +320,7 @@ impl RiskGatedToolRuntime {
                 call.name,
                 proposal_path.display()
             );
-            if let Err(e) = notifier.notify(&message).await {
+            if let Err(e) = notifier.notify_proposal(&proposal_id, &message).await {
                 // Best-effort — the proposal itself is already safely written; a failed
                 // notification just means the human finds out by checking the vault instead of
                 // their phone, not that the safety property (a human gets to review it) broke.
@@ -391,6 +401,7 @@ mod tests {
             "test goal".into(),
             "test-correlation".into(),
             ProposalSigner::random(),
+            "default",
         )
     }
 
@@ -421,6 +432,7 @@ mod tests {
             "send an email".into(),
             "test-email".into(),
             signer.clone(),
+            "default",
         );
 
         let call = ToolInvocation::new("c1", "email-mcp:send", serde_json::json!({"to": "boss"}));
@@ -441,7 +453,11 @@ mod tests {
         // Verify the proposal file was written, and it's signed with the runtime's own signer.
         let proposals_dir = dir.path().join("proposals");
         let mut entries = tokio::fs::read_dir(&proposals_dir).await.unwrap();
-        let entry = entries.next_entry().await.unwrap().expect("proposal file should exist");
+        let entry = entries
+            .next_entry()
+            .await
+            .unwrap()
+            .expect("proposal file should exist");
         let content = tokio::fs::read_to_string(entry.path()).await.unwrap();
         let written = liberado_common::Proposal::from_note(&content).unwrap();
         assert!(
@@ -485,7 +501,9 @@ mod tests {
         // Err, not a fabricated "PROPOSAL CREATED" success with nothing actually written.
         let dir = tempfile::TempDir::new().unwrap();
         let occupied_by_a_file = dir.path().join("occupied");
-        tokio::fs::write(&occupied_by_a_file, b"not a directory").await.unwrap();
+        tokio::fs::write(&occupied_by_a_file, b"not a directory")
+            .await
+            .unwrap();
 
         let inner = Arc::new(MockInner::new(&["email-mcp:send"], Ok("sent".into())));
         let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("email-mcp".into())]);
@@ -499,6 +517,7 @@ mod tests {
             "send an email".into(),
             "test-write-failure".into(),
             ProposalSigner::random(),
+            "default",
         );
 
         let call = ToolInvocation::new("c1", "email-mcp:send", serde_json::json!({"to": "boss"}));
@@ -532,9 +551,11 @@ mod tests {
             "delete all notes".into(), // Sweeping+destructive goal
             "test-sweep".into(),
             ProposalSigner::random(),
+            "default",
         );
 
-        let call = ToolInvocation::new("c1", "vault-mcp:delete", serde_json::json!({"path": "all"}));
+        let call =
+            ToolInvocation::new("c1", "vault-mcp:delete", serde_json::json!({"path": "all"}));
         let result = rt.invoke(&call).await;
         // A downgrade is a tool *result* (Ok), not an error.
         let msg = result.expect("downgrade should be an Ok tool result, not an Err");
@@ -572,6 +593,7 @@ mod tests {
             "write a review note".into(),
             "test-zone".into(),
             ProposalSigner::random(),
+            "default",
         );
 
         let call = ToolInvocation::new(
@@ -603,6 +625,7 @@ mod tests {
             "write a review note".into(),
             "test-zone-ok".into(),
             ProposalSigner::random(),
+            "default",
         );
 
         let call = ToolInvocation::new(
@@ -632,6 +655,7 @@ mod tests {
             "write a review note".into(),
             "test-zone-untracked".into(),
             ProposalSigner::random(),
+            "default",
         );
 
         let call = ToolInvocation::new(
@@ -665,11 +689,16 @@ mod tests {
             "send an email".into(),
             "live-notify-test".into(),
             ProposalSigner::random(),
+            "default",
         )
         .with_notifier(Arc::new(notifier));
 
         let call = ToolInvocation::new("c1", "email-mcp:send", serde_json::json!({"to": "boss"}));
         let result = rt.invoke(&call).await;
-        assert!(result.expect("downgrade should be Ok").contains("PROPOSAL CREATED"));
+        assert!(
+            result
+                .expect("downgrade should be Ok")
+                .contains("PROPOSAL CREATED")
+        );
     }
 }

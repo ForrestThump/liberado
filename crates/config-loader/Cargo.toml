@@ -12,6 +12,7 @@ repository.workspace = true
 serde = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
+cron = { workspace = true }
 liberado-common = { workspace = true }
 
 [dev-dependencies]

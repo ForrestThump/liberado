@@ -10,10 +10,20 @@
 //! confidence-floor guards. (This comment previously listed the consequence gate, then the
 //! zone-write-class gate, as deferred — stale as of whenever each actually shipped; the code below
 //! has implemented both for a while by the time you're reading this.)
+//!
+//! ## Keeping this in sync with the runtime guard (`liberado-executor`'s `RiskGatedToolRuntime`)
+//!
+//! This is the pre-flight half of a two-part safety net; `RiskGatedToolRuntime` is the runtime half
+//! that applies the equivalent checks to every *adaptive* (non-seed) call, since a call this guard
+//! never saw at dispatch time still has to pass something before it runs. The zone-write-class
+//! check is unified (`liberado_common::zone_write_restriction`) so it can't drift between the two.
+//! The capability/consequence/magnitude checks are NOT unified — different shapes at each site for
+//! good reason — but if you add a **new** guard here, check whether `risk_gated.rs` needs the
+//! runtime equivalent, and vice versa.
 
 use liberado_common::{
     BlockReason, Consequence, DispatchAction, DispatchDecision, bare_tool_name,
-    is_sweeping_destructive, mcp_of, resolve_zone,
+    is_sweeping_destructive, mcp_of, zone_write_restriction,
 };
 use liberado_config_loader::DispatchTuning;
 
@@ -139,32 +149,21 @@ fn max_consequence(action: &DispatchAction, req: &DispatchRequest) -> Consequenc
 /// Only `ExecuteDirect`'s seed calls are checked — the same pre-flight scope `max_consequence`
 /// above already accepts: a `DispatchSubagent`'s adaptive calls aren't known yet at dispatch time,
 /// and this is a check, not the boundary (`RiskGatedToolRuntime` is, for every call including
-/// adaptive ones). A call whose MCP isn't in the catalog is skipped here (the capability guard
-/// already caught that, earlier and more specifically). A call whose tool hasn't opted into zone
-/// tracking (`resolve_zone` returns `None`) is not a zone-write concern and passes. A call whose
-/// resolved zone isn't in `req.zone_write_classes` fails safe to `WriteClass::default()`
-/// (`ProposalOnly`), the same conservative default `Policy::write_class` itself uses for an
-/// unlisted zone.
+/// adaptive ones — see `liberado_common::zone_write_restriction`'s own doc comment, the shared
+/// determination logic both this guard and that runtime call so the two can't silently drift
+/// apart on what counts as restricted).
 fn zone_restricted(action: &DispatchAction, req: &DispatchRequest) -> bool {
     let DispatchAction::ExecuteDirect { seed_calls, .. } = action else {
         return false;
     };
     seed_calls.iter().any(|call| {
-        let Some(descriptor) = req.catalog.iter().find(|d| d.name == mcp_of(&call.tool)) else {
-            return false;
-        };
-        match resolve_zone(descriptor, bare_tool_name(&call.tool)) {
-            None => false,
-            Some(zone) => {
-                let write_class = req
-                    .zone_write_classes
-                    .iter()
-                    .find(|(z, _)| *z == zone)
-                    .map(|(_, wc)| *wc)
-                    .unwrap_or_default();
-                !write_class.allows_direct_agent_write()
-            }
-        }
+        zone_write_restriction(
+            mcp_of(&call.tool),
+            bare_tool_name(&call.tool),
+            &req.catalog,
+            &req.zone_write_classes,
+        )
+        .is_some()
     })
 }
 

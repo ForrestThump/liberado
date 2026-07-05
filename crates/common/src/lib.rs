@@ -38,13 +38,16 @@ pub use capability::{
     Capability, CapabilitySet, Consequence, Magnitude, WriteClass, Zone, assess_magnitude,
     is_sweeping_destructive, mentions_destructive,
 };
-pub use catalog::{CapabilityCatalog, McpDescriptor, resolve_zone};
+pub use catalog::{CapabilityCatalog, McpDescriptor, resolve_zone, zone_write_restriction};
 pub use dispatch::{
     BlockReason, DispatchAction, DispatchDecision, ExecMode, JobHandle, JobStatus, Outcome, Report,
     ToolCall, bare_tool_name, mcp_of,
 };
 pub use error::{Error, Result};
-pub use event::{Event, EventPayload, event_source};
+pub use event::{DEFAULT_POOL, Event, EventPayload, EventSource, event_source};
 pub use model::{ModelChoice, ModelProfile, ModelRole, ModelTier, RequiredCaps};
-pub use proposal::{Proposal, ProposalNoteError, ProposalSigner, ProposalStatus, ProposedAction};
+pub use proposal::{
+    PROPOSALS_DIR, Proposal, ProposalNoteError, ProposalSigner, ProposalStatus, ProposedAction,
+    SignedProposal,
+};
 pub use provenance::{HUMAN_SOURCE, PROVENANCE_KEY, WriteProvenance};
