@@ -38,12 +38,16 @@ pub enum BuildError {
     MissingBinary { name: String, expected: String },
 }
 
-/// `git ls-remote <url> <rev-or-HEAD>` — the resolved commit SHA for the target rev, without a
-/// full clone. Used to decide whether a rebuild is even necessary.
-fn resolve_remote_sha(source: &McpSource) -> Result<String, BuildError> {
+/// A `git` source's remote SHA, for deciding whether a rebuild is even necessary. `None` for a
+/// `path` source — there's no remote ref to check, so `sync_source` always rebuilds it (see
+/// [`McpSource::path`]'s doc comment).
+fn resolve_source_version(source: &McpSource) -> Result<Option<String>, BuildError> {
+    let Some(git) = &source.git else {
+        return Ok(None);
+    };
     let rev = source.rev.as_deref().unwrap_or("HEAD");
     let output = Command::new("git")
-        .args(["ls-remote", &source.git, rev])
+        .args(["ls-remote", git, rev])
         .output()
         .map_err(|e| BuildError::LsRemoteIo {
             name: source.name.clone(),
@@ -61,6 +65,7 @@ fn resolve_remote_sha(source: &McpSource) -> Result<String, BuildError> {
         .next()
         .and_then(|line| line.split_whitespace().next())
         .map(str::to_string)
+        .map(Some)
         .ok_or_else(|| BuildError::LsRemoteStatus {
             name: source.name.clone(),
             detail: format!("no ref '{rev}' found (empty ls-remote output)"),
@@ -68,42 +73,59 @@ fn resolve_remote_sha(source: &McpSource) -> Result<String, BuildError> {
 }
 
 /// `cargo install --git <url> [<package>] --root <install_dir>/<name> --locked --force --rev
-/// <resolved_sha> [--bin]`.
+/// <resolved_sha> [--bin]` for a `git` source, or
+/// `cargo install --path <dir> [-p <package>] --root <install_dir>/<name> --locked --force [--bin]`
+/// for a `path` one.
 ///
-/// `cargo install` has no `-p`/`--package` flag (unlike `cargo build`) — for a git source that's
-/// a Cargo workspace, the package to install is selected via the trailing positional `CRATE`
-/// argument instead (`cargo install --git <url> <crate-name>`). `--bin` remains a real flag, for
-/// picking one binary out of a package that builds more than one.
+/// For `--git`, `cargo install` has no `-p`/`--package` flag (unlike `cargo build`) — for a source
+/// that's a Cargo workspace, the package to install is selected via the trailing positional `CRATE`
+/// argument instead (`cargo install --git <url> <crate-name>`). `--path` installs use the real
+/// `-p`/`--package` flag instead — the positional-crate-name form is specific to registry/git
+/// installs. `--bin` remains a real flag either way, for picking one binary out of a package that
+/// builds more than one.
 ///
-/// `--rev` is always the SHA [`resolve_remote_sha`] already resolved, never `source.rev` (a
-/// branch/tag name, or absent) directly — otherwise `cargo install` would re-resolve the ref
-/// itself, and a push to the upstream branch between the two resolutions would silently build a
-/// different commit than the one just checked against the lockfile.
+/// `--rev` is always the SHA [`resolve_source_version`] already resolved for a `git` source
+/// (`resolved_version` is `None` for `path`, which also skips `--rev` entirely — a plain directory
+/// has no git ref concept) — never `source.rev` directly, otherwise `cargo install` would
+/// re-resolve the ref itself, and a push to the upstream branch between the two resolutions would
+/// silently build a different commit than the one just checked against the lockfile.
 ///
 /// Output is inherited (not captured) — builds run sequentially, so there's no interleaving to
 /// worry about, and passing raw `cargo` output through is more useful than re-wrapping it.
 fn cargo_install(
     source: &McpSource,
-    resolved_sha: &str,
+    resolved_version: Option<&str>,
     install_dir: &Path,
 ) -> Result<(), BuildError> {
     let root = install_dir.join(&source.name);
     let mut cmd = Command::new("cargo");
-    cmd.arg("install").arg("--git").arg(&source.git);
-    if let Some(package) = &source.package {
-        cmd.arg(package);
+    cmd.arg("install");
+
+    let describe = if let Some(git) = &source.git {
+        cmd.arg("--git").arg(git);
+        if let Some(package) = &source.package {
+            cmd.arg(package);
+        }
+        format!("--git {git}")
+    } else if let Some(path) = &source.path {
+        cmd.arg("--path").arg(path);
+        if let Some(package) = &source.package {
+            cmd.arg("-p").arg(package);
+        }
+        format!("--path {path}")
+    } else {
+        unreachable!("load_sources validates exactly one of git/path is set")
+    };
+
+    cmd.arg("--root").arg(&root).arg("--locked").arg("--force");
+    if let Some(version) = resolved_version {
+        cmd.arg("--rev").arg(version);
     }
-    cmd.arg("--root")
-        .arg(&root)
-        .arg("--locked")
-        .arg("--force")
-        .arg("--rev")
-        .arg(resolved_sha);
     if let Some(bin) = &source.bin {
         cmd.arg("--bin").arg(bin);
     }
 
-    println!("== [{}] cargo install --git {} ==", source.name, source.git);
+    println!("== [{}] cargo install {describe} ==", source.name);
     let status = cmd.status().map_err(|e| BuildError::CargoInstallIo {
         name: source.name.clone(),
         source: e,
@@ -120,21 +142,26 @@ fn cargo_install(
     Ok(())
 }
 
-/// Sync one source: skip if already built at the current remote SHA (unless `force`), otherwise
-/// build and verify. Updates `lock` in-memory on success — the caller is responsible for saving
-/// it (once, after all sources, so a mid-run failure doesn't lose earlier progress).
+/// Sync one source: for a `git` source, skip if already built at the current remote SHA (unless
+/// `force`); a `path` source has no remote SHA to check, so it always rebuilds (cargo's own
+/// incremental cache keeps a no-op rebuild cheap — see [`McpSource::path`]'s doc comment). Updates
+/// `lock` in-memory on success — the caller is responsible for saving it (once, after all sources,
+/// so a mid-run failure doesn't lose earlier progress).
 pub fn sync_source(
     source: &McpSource,
     install_dir: &Path,
     lock: &mut LockFile,
     force: bool,
 ) -> Result<SyncOutcome, BuildError> {
-    let remote_sha = resolve_remote_sha(source)?;
-    if !force && lock.built_sha(&source.name) == Some(remote_sha.as_str()) {
+    let version = resolve_source_version(source)?;
+    if let Some(version) = &version
+        && !force
+        && lock.built_sha(&source.name) == Some(version.as_str())
+    {
         return Ok(SyncOutcome::UpToDate);
     }
 
-    cargo_install(source, &remote_sha, install_dir)?;
+    cargo_install(source, version.as_deref(), install_dir)?;
 
     let expected = managed_binary_path(install_dir, &source.name);
     if !expected.is_file() {
@@ -144,6 +171,8 @@ pub fn sync_source(
         });
     }
 
-    lock.record(&source.name, &remote_sha);
+    if let Some(version) = &version {
+        lock.record(&source.name, version);
+    }
     Ok(SyncOutcome::Built)
 }

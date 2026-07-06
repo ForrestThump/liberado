@@ -30,3 +30,14 @@ git = "https://github.com/ForrestThump/liberado-rentcast-mcp"
 [[source]]
 name = "liberado-anythingllm-mcp"
 git = "https://github.com/ForrestThump/liberado-anythingllm-mcp"
+
+# A `path` source instead of `git` — for an MCP that can't be built from an isolated git clone at
+# all because it has a local path dependency on something unpublished (this workspace's own
+# crates, or a fork's local checkout). Built via `cargo install --path <dir>` instead; always
+# rebuilds on `sync` (no remote ref to check against the lockfile — cargo's own incremental cache
+# keeps a no-op rebuild cheap). Exactly one of `git`/`path` is required per source, never both.
+# Package selection for a `path` source uses the real `-p`/`--package` flag (not `--git`'s
+# trailing-positional-CRATE convention above) — see crates/mcp-forge/ARCHITECTURE.md.
+# [[source]]
+# name = "liberado-deliberate-mcp"
+# path = "../liberado-deliberate-mcp"
