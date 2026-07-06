@@ -22,6 +22,8 @@ desktop.ini
 /turbomcp/
 /turbovault/
 /riggers/
+/liberado-deliberate-mcp/
+/liberado-wakeup-mcp/
 
 # Local configuration overrides (committed starters live in config.example/ and crates/*/config.example/)
 config/*.toml

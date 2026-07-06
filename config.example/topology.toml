@@ -198,3 +198,15 @@ transport = { kind = "stdio", command = "riggers-mcp", args = ["--config", "rigg
 # goal = "Run the nightly vault backup and report the result."
 # enabled = true
 # pool = "unattended"
+
+# Fired by `wakeup-poller` (liberado-wakeup-mcp, a standalone repo) when a wake-up the agent
+# scheduled for itself comes due — the `context` body carries the specific goal text given at
+# scheduling time, appended after this hook's own generic framing. See
+# liberado-wakeup-mcp/ARCHITECTURE.md for the full design (why this goes through the existing
+# webhook contract rather than a new mechanism, and why storage is a standalone turbovault HTTP
+# server rather than this daemon's own in-process vault access).
+# [[hooks]]
+# name = "wakeup-fired"
+# secret_ref = "WAKEUP_HOOK_SECRET"
+# goal = "A wake-up you previously scheduled for yourself has fired. Read the context below for what you asked to be reminded to do, and act on it."
+# enabled = true
