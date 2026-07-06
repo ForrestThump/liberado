@@ -1,0 +1,14 @@
+[package]
+name = "liberado-scratchpad"
+version = "0.1.0"
+description = "Per-execution scratchpad (todo-list) tool for the Liberado engine — engine-injected, not an MCP."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+liberado-provider = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

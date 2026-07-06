@@ -35,6 +35,7 @@ use liberado_provider::{
     CompletionRequest, CompletionResponse, Message, Provider, ProviderError, Role, StreamItem,
     ToolDef, ToolInvocation,
 };
+use liberado_scratchpad::{SCRATCHPAD_TOOL, Scratchpad};
 use thiserror::Error;
 use tokio::sync::mpsc::Sender;
 use tracing::Instrument;
@@ -536,13 +537,15 @@ impl Executor {
         let mut tools = runtime.catalog();
         if matches!(mode, Mode::Report) {
             tools.push(submit_report_tool());
+            tools.push(Scratchpad::tool_def());
         }
+        let mut scratchpad = matches!(mode, Mode::Report).then(Scratchpad::new);
 
         // The classifier's opening move, executed as if the model had emitted it.
         self.run_seed(runtime, &mut messages, &task.seed_calls)
             .await;
 
-        self.run_loop(runtime, &mut messages, &mut tools, mode)
+        self.run_loop(runtime, &mut messages, &mut tools, mode, &mut scratchpad)
             .await
     }
 
@@ -559,8 +562,11 @@ impl Executor {
         messages: &mut Vec<Message>,
     ) -> Result<String, ExecError> {
         let mut tools = runtime.catalog();
+        // Conversational mode gets no scratchpad this pass (see liberado-scratchpad's module
+        // docs) — the call site is ready for it, just not enabled yet.
+        let mut scratchpad: Option<Scratchpad> = None;
         match self
-            .run_loop(runtime, messages, &mut tools, Mode::Conversational)
+            .run_loop(runtime, messages, &mut tools, Mode::Conversational, &mut scratchpad)
             .await?
         {
             Terminal::Spoke(text) => Ok(text),
@@ -643,6 +649,7 @@ impl Executor {
         messages: &mut Vec<Message>,
         tools: &mut Vec<ToolDef>,
         mode: Mode,
+        scratchpad: &mut Option<Scratchpad>,
     ) -> Result<Terminal, ExecError> {
         let mut nudged = false;
         // (tool name, arguments, result) of every real invocation, in call order, across the whole
@@ -747,6 +754,18 @@ impl Executor {
                     let report = serde_json::from_value::<Report>(call.arguments.clone())
                         .map_err(|e| ExecError::Decode(e.to_string()))?;
                     return Ok(Terminal::Filed(report));
+                }
+                // Engine-injected, like `submit_report` above: handled in-process, never reaches
+                // `ToolRuntime`, and — deliberately, before `call_history.push` below — never
+                // enters doom-loop/cycle tracking. Legitimate scratchpad usage (update after a
+                // real tool call, repeated; several updates in a row while planning) would
+                // otherwise misfire both guards (see `liberado-scratchpad`'s module docs).
+                if let Some(pad) = scratchpad
+                    && call.name == SCRATCHPAD_TOOL
+                {
+                    let result = pad.apply(&call.arguments);
+                    messages.push(Message::tool_result(&call.id, result));
+                    continue;
                 }
                 let tool_span = tracing::debug_span!("tool_call", name = %call.name, id = %call.id);
                 let result = async { run_tool(runtime, call).await }
@@ -1997,5 +2016,156 @@ mod tests {
         // Both search calls ran (200 tokens spent) before the 3rd turn's token check stopped it —
         // the 3rd scripted response (submit) was never reached.
         assert_eq!(runtime.invoked().len(), 2);
+    }
+
+    fn scratchpad_call(id: &str, items: serde_json::Value) -> ToolInvocation {
+        ToolInvocation::new(id, SCRATCHPAD_TOOL, serde_json::json!({ "items": items }))
+    }
+
+    /// Whether any message sent to the provider across the whole run contains `needle` — used to
+    /// prove a nudge (doom-loop/cycle) never fired, without depending on internal escalation state.
+    fn any_message_contains(provider: &MockProvider, needle: &str) -> bool {
+        provider.received_requests().iter().any(|req| {
+            req.messages
+                .iter()
+                .any(|m| m.content.contains(needle))
+        })
+    }
+
+    #[tokio::test]
+    async fn scratchpad_injected_in_report_mode_only() {
+        let (provider, exec) = executor(vec![submit(valid_report_args())], Budget::default());
+        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        exec.execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+        assert!(offered_tools(&provider).contains(&SCRATCHPAD_TOOL.to_string()));
+
+        let (provider, exec) = executor(vec![CompletionResponse::text("done")], Budget::default());
+        exec.converse(&runtime, Task::new("assistant", "hi"))
+            .await
+            .unwrap();
+        assert!(!offered_tools(&provider).contains(&SCRATCHPAD_TOOL.to_string()));
+    }
+
+    #[tokio::test]
+    async fn scratchpad_call_handled_in_process_never_reaches_the_runtime() {
+        let (_, exec) = executor(
+            vec![
+                CompletionResponse::tool_calls(vec![scratchpad_call(
+                    "c1",
+                    serde_json::json!([{"content": "step one", "status": "in_progress"}]),
+                )]),
+                submit(valid_report_args()),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        // The scratchpad call never went through ToolRuntime at all.
+        assert!(runtime.invoked().is_empty());
+    }
+
+    #[tokio::test]
+    async fn scratchpad_result_is_fed_back_as_a_tool_result() {
+        let (provider, exec) = executor(
+            vec![
+                CompletionResponse::tool_calls(vec![scratchpad_call(
+                    "sp-1",
+                    serde_json::json!([{"content": "step one", "status": "in_progress"}]),
+                )]),
+                submit(valid_report_args()),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        exec.execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        // The 2nd request (sent after the scratchpad call) must include a tool-result message
+        // correlated to "sp-1" with the scratchpad's own confirmation text.
+        let requests = provider.received_requests();
+        let second_request = &requests[1];
+        let tool_result = second_request
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("sp-1"))
+            .expect("expected a tool-result message for the scratchpad call");
+        assert!(tool_result.content.contains("in_progress"), "{}", tool_result.content);
+    }
+
+    #[tokio::test]
+    async fn three_consecutive_scratchpad_updates_do_not_trigger_the_doom_loop_guard() {
+        // Near-identical args each time (same content, only the status token differs) — exactly
+        // the shape that would trip `is_doom_loop`'s cosine-similarity check if scratchpad calls
+        // were tracked in `call_history` like a real tool.
+        let (provider, exec) = executor(
+            vec![
+                CompletionResponse::tool_calls(vec![scratchpad_call(
+                    "c1",
+                    serde_json::json!([{"content": "investigate the bug", "status": "todo"}]),
+                )]),
+                CompletionResponse::tool_calls(vec![scratchpad_call(
+                    "c2",
+                    serde_json::json!([{"content": "investigate the bug", "status": "in_progress"}]),
+                )]),
+                CompletionResponse::tool_calls(vec![scratchpad_call(
+                    "c3",
+                    serde_json::json!([{"content": "investigate the bug", "status": "done"}]),
+                )]),
+                call_tool("search"),
+                submit(valid_report_args()),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        assert!(!any_message_contains(&provider, DOOM_LOOP_NUDGE));
+    }
+
+    #[tokio::test]
+    async fn alternating_real_tool_and_scratchpad_does_not_trigger_the_cycle_guard() {
+        // [real_tool, scratchpad_write, real_tool, scratchpad_write] is a textbook period-2 cycle
+        // by tool NAME alone (which is all `detect_short_cycle` checks) — the exact "call a tool,
+        // then record progress" pattern this guard must not punish.
+        let (provider, exec) = executor(
+            vec![
+                call_tool("search"),
+                CompletionResponse::tool_calls(vec![scratchpad_call(
+                    "c1",
+                    serde_json::json!([{"content": "step one", "status": "done"}]),
+                )]),
+                call_tool("search"),
+                CompletionResponse::tool_calls(vec![scratchpad_call(
+                    "c2",
+                    serde_json::json!([{"content": "step one", "status": "done"}, {"content": "step two", "status": "in_progress"}]),
+                )]),
+                submit(valid_report_args()),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        assert!(!any_message_contains(&provider, CYCLE_NUDGE));
+        assert_eq!(runtime.invoked().len(), 2, "both real search calls should have run");
     }
 }
