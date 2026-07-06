@@ -16,6 +16,9 @@
 //!   §5).
 //! - [`dispatch`] — [`dispatch::DispatchDecision`] / [`dispatch::Report`] and the execution
 //!   model the dispatcher emits (Decision 1, `liberado-dispatch-logic-spec.md`).
+//! - [`frontmatter`] — the YAML-frontmatter-fence note convention (render/extract), shared by
+//!   every vault artifact that's structured metadata + a human-readable body: [`proposal`] here,
+//!   `liberado_memory_store`'s notes, and `liberado-deliberate-mcp`'s deliberation transcripts.
 //! - [`proposal`] — the [`proposal::Proposal`] human-in-the-loop artifact (Decision 11).
 //! - [`model`] — [`model::ModelProfile`] + role capability floors (Decision 13).
 //! - [`guidance`] — [`guidance::ToolGuidanceSource`], the dispatcher's procedural-memory seam
@@ -33,6 +36,7 @@ pub mod catalog;
 pub mod dispatch;
 pub mod error;
 pub mod event;
+pub mod frontmatter;
 pub mod guidance;
 pub mod model;
 pub mod proposal;
@@ -49,6 +53,7 @@ pub use dispatch::{
 };
 pub use error::{Error, Result};
 pub use event::{DEFAULT_POOL, Event, EventPayload, EventSource, event_source};
+pub use frontmatter::{FRONTMATTER_FENCE, body_after_frontmatter, extract_frontmatter, render_note};
 pub use guidance::{GuidanceHit, ToolGuidanceSource};
 pub use model::{ModelChoice, ModelProfile, ModelRole, ModelTier, RequiredCaps};
 pub use proposal::{

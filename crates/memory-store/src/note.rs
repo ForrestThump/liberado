@@ -1,11 +1,7 @@
 use crate::error::MemoryError;
 use chrono::{DateTime, Utc};
+use liberado_common::frontmatter::{body_after_frontmatter, extract_frontmatter, render_note};
 use serde::{Deserialize, Serialize};
-
-/// The fence that separates YAML frontmatter from the note body, matching the convention already
-/// used by `liberado_common::Proposal` — one fenced metadata block followed by human-readable
-/// text, so both note kinds are edited/read the same way in Obsidian.
-const FRONTMATTER_FENCE: &str = "---";
 
 /// A single memory note: structured metadata in frontmatter, the actual memory/guidance text as
 /// the body (so it reads as plain markdown, not YAML-escaped, and is what gets chunked/embedded
@@ -61,14 +57,7 @@ impl MemoryNote {
 
     /// Render as a markdown note: YAML frontmatter (metadata) + the memory/guidance text as body.
     pub fn to_note_text(&self) -> String {
-        // serde_yaml emits a trailing newline; all fields are plain serde types, so this can't
-        // fail on real data.
-        let yaml = serde_yaml::to_string(self).expect("MemoryNote serializes to YAML");
-        format!(
-            "{fence}\n{yaml}{fence}\n\n{content}\n",
-            fence = FRONTMATTER_FENCE,
-            content = self.content,
-        )
+        render_note(self, &format!("{}\n", self.content))
     }
 
     /// Parse a memory note back from its rendered text (frontmatter + body).
@@ -78,34 +67,6 @@ impl MemoryNote {
         note.content = body_after_frontmatter(text).trim().to_string();
         Ok(note)
     }
-}
-
-/// Split out the YAML between the leading `---` fences.
-fn extract_frontmatter(content: &str) -> Option<&str> {
-    let rest = content.strip_prefix(FRONTMATTER_FENCE)?;
-    let after_open = rest
-        .strip_prefix('\n')
-        .or_else(|| rest.strip_prefix("\r\n"))?;
-    let close = after_open.find(&format!("\n{FRONTMATTER_FENCE}"))?;
-    Some(&after_open[..close])
-}
-
-/// The note body: everything after the closing frontmatter fence.
-fn body_after_frontmatter(content: &str) -> &str {
-    let Some(rest) = content.strip_prefix(FRONTMATTER_FENCE) else {
-        return content;
-    };
-    let Some(after_open) = rest
-        .strip_prefix('\n')
-        .or_else(|| rest.strip_prefix("\r\n"))
-    else {
-        return content;
-    };
-    let fence_with_nl = format!("\n{FRONTMATTER_FENCE}");
-    let Some(close) = after_open.find(&fence_with_nl) else {
-        return content;
-    };
-    &after_open[close + fence_with_nl.len()..]
 }
 
 #[cfg(test)]

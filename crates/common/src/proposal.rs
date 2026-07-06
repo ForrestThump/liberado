@@ -19,10 +19,6 @@ use thiserror::Error;
 use crate::capability::CapabilitySet;
 use crate::dispatch::ToolCall;
 
-/// The fence that separates YAML frontmatter from the note body. A proposal note is exactly one
-/// fenced block at the top followed by the human-readable body.
-const FRONTMATTER_FENCE: &str = "---";
-
 /// The directory (relative to a vault root) proposal notes live under. Every consumer that reads,
 /// writes, or watches proposal files agrees on this one name — `liberado-daemon`,
 /// `liberado-telegram-approvals`, and `liberado-executor`'s `RiskGatedToolRuntime` each used to
@@ -164,24 +160,21 @@ impl Proposal {
     /// editable in Obsidian and the daemon can parse the action back) + a human-readable body. The
     /// body is for the human — `from_note` reads only the frontmatter, so editing it is harmless.
     pub fn to_note(&self) -> String {
-        // serde_yaml emits a trailing newline; the struct serializes infallibly (all fields are
-        // plain serde types), so the unwrap can't trip on real data.
-        let yaml = serde_yaml::to_string(self).expect("Proposal serializes to YAML");
-        format!(
-            "{fence}\n{yaml}{fence}\n\n# Proposal: {id}\n\n{rationale}\n\n**Proposed action:** {action}\n\nTo approve, change `status: pending` to `status: approved` above (or use the TUI).\n",
-            fence = FRONTMATTER_FENCE,
+        let body = format!(
+            "# Proposal: {id}\n\n{rationale}\n\n**Proposed action:** {action}\n\nTo approve, change `status: pending` to `status: approved` above (or use the TUI).\n",
             id = self.id,
             rationale = self.rationale,
             action = self.proposed_action.summary(),
-        )
+        );
+        crate::frontmatter::render_note(self, &body)
     }
 
     /// Parse a proposal note (read its frontmatter). Ignores the body — a human editing the
     /// `status:` line in Obsidian is exactly how approval flows back, so only the frontmatter is
     /// authoritative.
     pub fn from_note(content: &str) -> Result<Proposal, ProposalNoteError> {
-        let frontmatter =
-            extract_frontmatter(content).ok_or(ProposalNoteError::MissingFrontmatter)?;
+        let frontmatter = crate::frontmatter::extract_frontmatter(content)
+            .ok_or(ProposalNoteError::MissingFrontmatter)?;
         Ok(serde_yaml::from_str(frontmatter)?)
     }
 }
@@ -322,18 +315,6 @@ impl ProposedAction {
             ProposedAction::Other(value) => format!("other action: {value}"),
         }
     }
-}
-
-/// Split out the YAML between the leading `---` fences. Returns `None` when the note has no
-/// frontmatter block (so the caller reports [`ProposalNoteError::MissingFrontmatter`]).
-fn extract_frontmatter(content: &str) -> Option<&str> {
-    let rest = content.strip_prefix(FRONTMATTER_FENCE)?;
-    // Skip to the end of the opening fence line, then find the closing fence on its own line.
-    let after_open = rest
-        .strip_prefix('\n')
-        .or_else(|| rest.strip_prefix("\r\n"))?;
-    let close = after_open.find(&format!("\n{FRONTMATTER_FENCE}"))?;
-    Some(&after_open[..close])
 }
 
 /// Errors from parsing a proposal note back into a [`Proposal`].
