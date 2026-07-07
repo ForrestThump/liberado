@@ -36,16 +36,6 @@ pub fn relative_time(iso: &str) -> String {
     ts.format("%b %e").to_string()
 }
 
-pub fn format_uptime(seconds: u64) -> String {
-    let h = seconds / SECS_IN_HOUR;
-    let m = (seconds % SECS_IN_HOUR) / SECS_IN_MINUTE;
-    if h > 0 {
-        format!("{h}h {m}m")
-    } else {
-        format!("{m}m {}s", seconds % 60)
-    }
-}
-
 /// Safely truncates a string to `max` bytes at a valid UTF-8 char boundary.
 pub(crate) fn safe_truncate(s: &str, max: usize) -> &str {
     if s.len() <= max {

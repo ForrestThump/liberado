@@ -10,9 +10,10 @@ use ratatui::{
 };
 
 use crate::app::App;
-use crate::format::{format_uptime, safe_truncate, truncate_path};
+use crate::format::{safe_truncate, truncate_path};
 use crate::tuning::VAULT_PATH_TRUNCATE;
 use crate::ui::c;
+use liberado_commands::format_uptime;
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
     let block = Block::default()

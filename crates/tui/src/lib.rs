@@ -55,7 +55,7 @@
 //! | `command_context` | `impl CommandContext for App` — wires the shared `liberado-commands` slash-command crate (`/new`, `/help`, `/theme`, `/session`, etc.) to TUI state. | `CommandContext for App` |
 //! | `conversations` | Conversation tree builder and flattener. | `visible_tree()`, `filtered_list()` |
 //! | `effects` | Side-effect execution runtime. Spawns SSE/HTTP tokio tasks. | `EffectRunner`, `StreamState` |
-//! | `format` | Shared formatting utilities (no App dependency). | `relative_time`, `format_uptime`, `truncate_for_display`, `short_id`, `truncate_path` |
+//! | `format` | Shared formatting utilities (no App dependency). | `relative_time`, `truncate_for_display`, `short_id`, `truncate_path` (`format_uptime` re-exported from `liberado-commands` instead — shared with the other clients) |
 //! | `handlers` | Keyboard/mouse input handlers, one module per focus/device. | `input::handle`, `sidebar::handle`, `chat::handle`, `mouse::handle`, `point_in_rect` |
 //! | `render` | Ratatui rendering — one module per pane. | `draw()`, `chat::draw`, `sidebar_status::draw`, `sidebar_reactions::draw`, `sidebar_conversations::draw`, `status_bar::draw`, `input::draw` |
 //! | `sse` | TUI-specific `SseEvent -> Action` conversion. The decoder itself (`SseDecoder`/`SseEvent`) lives in `chat_client_contract::native`, shared with the CLI. | `ToAction::to_action() -> Result<Action, String>` |
@@ -241,4 +241,5 @@ pub mod ui;
 
 pub use api::{ConvHeader, DaemonStatus, ReactionEvent};
 pub use app::{Action, App, Effect, Focus, Message, StatusSummary};
-pub use format::{format_uptime, relative_time, short_id, truncate_for_display};
+pub use format::{relative_time, short_id, truncate_for_display};
+pub use liberado_commands::format_uptime;

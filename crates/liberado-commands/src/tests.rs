@@ -636,4 +636,9 @@ mod tests {
         assert_eq!(crate::format::format_uptime(120), "2m 0s");
         assert_eq!(crate::format::format_uptime(65), "1m 5s");
     }
+
+    #[test]
+    fn format_uptime_zero() {
+        assert_eq!(crate::format::format_uptime(0), "0m 0s");
+    }
 }
