@@ -23,8 +23,10 @@ things off or delete them once done; add a dated note if something's blocked on 
       you want that turned into something that survives a reboot; I didn't build it since I didn't
       want to guess at your actual deployment setup (systemd? Task Scheduler? Docker?).
 - [ ] Run `wakeup-poller` as its own long-running process, with `TURBOVAULT_URL`,
-      `LIFEOS_WEBHOOK_URL` (e.g. `http://127.0.0.1:8080/api/hooks/wakeup-fired` — check the real
-      port your life-os server binds), and `LIFEOS_HOOK_SECRET` set.
+      `LIFEOS_WEBHOOK_URL` (e.g. `http://127.0.0.1:4201/api/hooks/wakeup-fired` — 4201 is
+      `crates/server`'s default `LIBERADO_PORT`; the poller's own built-in fallback was wrong
+      before this was caught and fixed — check `$env:LIBERADO_PORT` if you've overridden it), and
+      `LIFEOS_HOOK_SECRET` set.
 - [ ] Point your MCP client at `liberado-wakeup-mcp/target/release/wakeup-mcp` (stdio) wherever you
       want `schedule_wakeup`/`cancel_wakeup`/`list_wakeups` available — I haven't wired it into
       life-os's own `topology.toml` `[[mcps]]` list yet; tell me if/how you want that done (I'll
