@@ -304,13 +304,24 @@ always-on.
   [hardening-audit-2026-07-02.md](hardening-audit-2026-07-02.md),
   [crate-modularity-audit.md](crate-modularity-audit.md) (a broader coupling/duplication sweep;
   items 1, 2, 4, 5 done, item 3 — splitting `liberado-common` — still deferred).
-- **⚠️ Dedup/coupling/decomposition/hygiene/coverage audit (2026-07-04)** — `cargo dupes` +
+- ✅ **Dedup/coupling/decomposition/hygiene/coverage audit (2026-07-04)** — `cargo dupes` +
   `cargo llvm-cov` + 3 subagents across the whole workspace. Found one real bug (a failed proposal
   write in `RiskGatedToolRuntime` is silently reported to the user as success — the propose→approve
   loop's whole safety property depends on this), two reachable-in-production panics, and confirmed
-  `provider-deepseek`/`provider-openrouter` are ~90% duplicated code with a concrete extraction plan.
-  Nothing fixed yet — this is a survey. Full writeup:
+  `provider-deepseek`/`provider-openrouter` (since collapsed into `provider-openai-compat`) were
+  ~90% duplicated code. All Priority 1 items fixed same-session; the remaining Priority 2 backlog
+  (heuristics-tuner module split, test extraction from oversized files, a couple of small dedups)
+  closed out 2026-07-07 — see below. Full writeup:
   [hygiene-audit-2026-07-04.md](hygiene-audit-2026-07-04.md).
+- **Hygiene audit + strategic reprioritization (2026-07-07)** — closed out three remaining
+  `hygiene-audit-2026-07-04.md` backlog items (heuristics-tuner module split, test extraction from
+  `tui/app.rs`/`main-agent/sessions.rs`, a `consequence_catalog` silent-fail-open log) plus stale
+  doc references. Found one new Priority 1 item (a vault read failure in `build_event` is silently
+  treated as "the file is now empty" rather than propagated) and two lock-poisoning landmines
+  (low-probability, total-blast-radius). Concluded the project's hygiene discipline is genuinely
+  healthy, not a stall tactic, and recommended Phase 4 (`ExecutionEnvironment`) as the next
+  highest-leverage work — the one gap still open against `positioning.md`'s own competitive thesis.
+  Full writeup: [hygiene-audit-2026-07-07.md](hygiene-audit-2026-07-07.md).
 - ✅ **Catalog population** — done; this entry used to describe an open TODO ("the live daemon
   dispatches against an *empty* MCP catalog today") that was stale — `topology.mcps` has been the
   single source for both the dispatcher's catalog and the runtime's MCP connection since Phase 1.
