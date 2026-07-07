@@ -5,41 +5,42 @@ because it needs a secret only you should hold, needs a real running service sta
 machine, or needs eyes on an actual rendered UI). I'll keep this updated as work continues — check
 things off or delete them once done; add a dated note if something's blocked on you for a while.
 
-## Wake-up scheduler (`liberado-wakeup-mcp`) — 2026-07-06
+## Wake-up scheduler (`liberado-wakeup-mcp`) — live end-to-end, confirmed 2026-07-07
 
-- [ ] Set two environment variables to the **same** secret value: `WAKEUP_HOOK_SECRET` (read by
-      the life-os daemon, resolves the `wakeup-fired` hook in `config/topology.toml`) and
-      `LIFEOS_HOOK_SECRET` (read by `wakeup-poller`). Pick any random string; they just need to
-      match each other.
-- [ ] Start a standalone `turbovault` instance with HTTP transport, pointed at your real vault —
-      this is a separate, long-running process from the life-os daemon:
+Full pipeline verified for real: `schedule_wakeup` (driven manually over stdio) → `wakeup-poller`
+picked up the due note, POSTed to the daemon's webhook, deleted the note → daemon's own
+`/api/reactions` log shows `WebhookFired` with `outcome: "acted"`. Env vars, the standalone
+`turbovault` instance, and `wakeup-poller` are all confirmed working together against your real
+vault and real daemon.
+
+- [x] `WAKEUP_HOOK_SECRET` / `LIFEOS_HOOK_SECRET` set (matching values).
+- [x] Standalone `turbovault` running with HTTP transport against the real vault:
       ```
       cd turbovault
       cargo run --package turbovault --features http --bin turbovault -- \
           --transport http --port 3737 --vault "C:/Users/Shiloh/Obsidian/Main" --init
       ```
-      No process supervision exists for this yet (no systemd unit, no Docker wiring for HTTP mode —
-      see `liberado-wakeup-mcp/ARCHITECTURE.md`) — it's a manual `cargo run` for now. Let me know if
-      you want that turned into something that survives a reboot; I didn't build it since I didn't
-      want to guess at your actual deployment setup (systemd? Task Scheduler? Docker?).
-- [ ] Run `wakeup-poller` as its own long-running process, with `TURBOVAULT_URL`,
-      `LIFEOS_WEBHOOK_URL` (e.g. `http://127.0.0.1:4201/api/hooks/wakeup-fired` — 4201 is
-      `crates/server`'s default `LIBERADO_PORT`; the poller's own built-in fallback was wrong
-      before this was caught and fixed — check `$env:LIBERADO_PORT` if you've overridden it), and
-      `LIFEOS_HOOK_SECRET` set.
+      No process supervision yet (no systemd unit, no Docker wiring for HTTP mode) — still a manual
+      `cargo run`, and confirmed **not** to survive a machine restart (went down in the power-loss
+      incident this session). Let me know if you want this turned into something that survives a
+      reboot — didn't build it since I didn't want to guess at your actual deployment setup
+      (systemd? Task Scheduler? Docker?).
+- [x] `wakeup-poller` run and confirmed firing real wake-ups.
 - [ ] Point your MCP client at `liberado-wakeup-mcp/target/release/wakeup-mcp` (stdio) wherever you
-      want `schedule_wakeup`/`cancel_wakeup`/`list_wakeups` available — I haven't wired it into
-      life-os's own `topology.toml` `[[mcps]]` list yet; tell me if/how you want that done (I'll
-      need your input on the `consequence` rating, since that's deliberately not something an MCP
-      or I self-declare).
+      want `schedule_wakeup`/`cancel_wakeup`/`list_wakeups` available day-to-day — so far only
+      driven manually (a hand-crafted `initialize`/`tools/call` sequence piped into its stdin) for
+      verification, not wired into an actual MCP client. Not yet wired into life-os's own
+      `topology.toml` `[[mcps]]` list either; tell me if/how you want that done (I'll need your
+      input on the `consequence` rating, since that's deliberately not something an MCP or I
+      self-declare).
 
-## Full live end-to-end test (not yet run)
-
-- [ ] With all of the above running: schedule a real wake-up a minute or two out, confirm it
-      actually fires as a new dispatched task once it's due. I verified every piece against a
-      scratch vault + a mock webhook receiver, but haven't run the real path against your real
-      daemon/vault — that's a "start new services against real infrastructure" step I held off on
-      without your go-ahead.
+**Known cosmetic issue**: the poller's log showed a few `ERROR turbomcp_http::transport: Error
+reading SSE stream` lines during the live test. Traced to `turbomcp-client`'s background, optional
+GET `/sse` push-notification listener — a separate code path from the actual `search_by_frontmatter`/
+`read_note`/`delete_note` calls this repo uses, and it retries independently with its own backoff.
+The real fire-and-delete cycle succeeded despite these, confirming they're noise, not a functional
+problem (this client never subscribes to server-push notifications in the first place). Worth
+quieting eventually — not urgent.
 
 ## `liberado-deliberate-mcp` fully decoupled from life-os — 2026-07-06
 
