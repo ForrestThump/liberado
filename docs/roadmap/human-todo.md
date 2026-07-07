@@ -135,6 +135,57 @@ new unit tests passing (config round-trip, validation, `docker_argv`, registry r
       test on the Debian target whenever that deployment happens, just to confirm nothing
       Windows-Docker-Desktop-specific snuck in unnoticed.
 
+## `riggers` repo-context injection — important: not committed anywhere yet — 2026-07-07
+
+Built `util::read_repo_context` (reads whichever `AGENT_CONTEXT_PATHS` files exist in a task's
+fresh clone — default list covers `CLAUDE.md`/`AGENTS.md`/`ARCHITECTURE.md`/
+`docs/architecture/overview.md`/`docs/contributing/agents.md` — caps at `AGENT_CONTEXT_MAX_BYTES`)
+and wired it into both the normal and revision coding prompts, merged with the task's own
+`context` rather than replacing it. Full design + rationale in `riggers/ARCHITECTURE.md`'s new
+"Per-repo agent context" section. `cargo build`/`cargo test`/`cargo clippy` all clean (4
+pre-existing test failures in `vtcode_client`'s tests are Windows-can't-spawn-a-Unix-shell-script
+issues, unrelated to this change and not something I introduced).
+
+- [ ] **Important — `riggers/` has no git repo of its own in this checkout.** It's a plain,
+      `.gitignore`d directory inside the life-os working tree (confirmed: no `.git` inside it, and
+      it's listed in life-os's own `.gitignore`). My edits are real files on disk at
+      `riggers/src/util.rs`, `riggers/src/config.rs`, `riggers/src/worker.rs`,
+      `riggers/.env.example`, `riggers/ARCHITECTURE.md`, `riggers/repos.toml` — but there's no
+      commit anywhere, and I have no visibility into wherever the *actual* deployed riggers
+      instance's source/git history lives (your homelab's Gitea, most likely, given
+      `riggers.yaml`'s own "Docker Compose homelab" framing and its `Dockerfile`'s
+      `services/agent-workspace` build-context reference — that path suggests the real deployment
+      repo has a different directory layout than this checkout). You'll need to port these six
+      files' changes into wherever that real repo actually is before they take effect.
+- [ ] **Confirmed real, still true**: `riggers/Cargo.toml` has `liberado-provider = { path =
+      "../crates/provider" }` — a literal path dependency on life-os's own crate. Building riggers
+      (Docker or otherwise) requires life-os's `crates/provider` available at that exact relative
+      path at build time. Worth confirming the real deployment's build process actually satisfies
+      this (vendors/copies the crate in, or checks out life-os alongside it) — I can't verify this
+      from here since I don't know that deployment's actual layout.
+- [ ] **To target `liberado` without touching the homelab's working primary-repo config**: add it
+      as an *additional* repo, not the primary (which stays on `GITEA_URL`/`GITEA_REPO`/
+      `GITEA_TOKEN` env vars, untouched). A commented example is already in `riggers/repos.toml`:
+      ```toml
+      [[repos]]
+      slug = "ForrestThump/liberado"
+      url = "https://github.com"
+      token = "ghp_..."
+      provider = "github"
+      ```
+      Needs a **new GitHub PAT** scoped to just this repo (contents + pull-requests write is
+      enough for a fine-grained token). If `ALLOWED_REPOS` is set in whatever's actually deployed,
+      add `ForrestThump/liberado` to that allowlist too, or it'll be rejected even though it's in
+      `repos.toml`.
+- [ ] **Recommend one small, real smoke-test task before the 10-task shotgun** — dispatch something
+      trivial and easily-reversible against `ForrestThump/liberado` first (e.g. "fix a typo in a
+      doc comment") and actually look at the resulting draft PR: does the repo context show up in
+      vtcode's behavior (does it follow this project's actual conventions), does the PR land
+      against `main` (not `develop` — `riggers.yaml`'s `default_base_branch: develop` is the
+      homelab's own default; override per-task via the task's `target_branch` field, e.g.
+      `"main"`, rather than changing the global default and risking the homelab's own tasks), does
+      auth/push/PR-creation work end-to-end. Cheap insurance before committing to volume.
+
 ## Standing category: GUI verification
 
 I don't have a way to visually drive a browser or a real terminal UI in this environment. Whenever
