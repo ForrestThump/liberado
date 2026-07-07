@@ -65,9 +65,11 @@ Module usage across the workspace: `config` (14 crates, 967 lines) and `catalog`
 dispatcher/config/eval) has no dependency on `capability`/`catalog` and is cleanly separable — a
 `liberado-proposal` crate is a reasonable second carve-out (still open). `event` (145 lines, 1 crate —
 `daemon` only) should stay put until hooks/cron actually land and give it more consumers, per the
-doc's own stated plan. **`model` (`ModelProfile`/`ModelRole`) appears to have zero consumers outside
-`common` itself** — worth a quick check on whether it's dead weight or reached only through
-re-exports before deciding anything (still open).
+doc's own stated plan. **`model` (`ModelProfile`/`ModelRole`) checked (2026-07-07) — not dead
+weight**: `config-loader`'s `Config.topology.models`/`model_roles` (the Decision-13 model-tier/role
+floor system) is a real consumer (`crates/config-loader/src/model.rs`), just one hop removed from
+the obvious grep since it goes through `liberado_config`'s re-export rather than a direct
+`liberado_common::model` import in a leaf crate. No action needed here.
 
 `config`'s case: `common::config`'s 967-line `Config`/`Topology`/`Policy`/`Tuning` type model overlapped
 semantically with what `crates/config` already validated and `crates/config-loader` already
@@ -92,12 +94,37 @@ the executor/subagent-tuning code into its own module (e.g. `src/tool_loop_tunin
 separate crate — `Budget`/`Candidate`/`TunerConfig` are genuinely shared scaffolding that a full crate
 split would have to duplicate or re-thread. A one-afternoon internal reorganization, not urgent.
 
+**Resolution (2026-07-07):** Done, matching the recommendation exactly — `scoring.rs` turned out to
+already be properly split (`ToolLoopFitness` already lived in its own `tool_loop_scoring.rs`, from
+before this audit), so only `search.rs` and `generation.rs` needed the cut. Moved
+`select_beam_executor`/`advance_beam_executor`/`ExecutorGenerationRecord`/`ExecutorTunerResult`/
+`run_executor_tuner`/`run_subagent_tuner`/`run_tool_loop_tuner` into a new `tool_loop_search.rs`,
+and `cold_start_executor`/`mutate_executor` into a new `tool_loop_generation.rs` — flat files
+alongside the existing `tool_loop_scoring.rs`/`tool_scenarios.rs`, not a `tool_loop_tuning/`
+subdirectory, to match that established naming convention. `request_justification_if_budget_allows`
+(in `search.rs`) and `request_justification`/`schema`/`PromptOutput` (in `generation.rs`) stayed put
+and went `pub(crate)` — genuinely shared by both layers, not executor-specific. Verified: all 83
+tests redistribute correctly with zero count change (`cargo test -p liberado-heuristics-tuner`),
+clean `cargo clippy -p liberado-heuristics-tuner --all-targets`.
+
 ### Test extraction from two oversized files
 
 `tui/src/app.rs` (2527 lines) and `main-agent/src/sessions.rs` (1081 lines) are each roughly half
 production code, half `#[cfg(test)]` module. Neither is a god-file — the logic itself is cohesive —
 but extracting the test modules into `tests/` (or a `src/app/tests.rs` submodule) would substantially
 improve navigability for a cold read. Routine housekeeping, not urgent.
+
+**Resolution (2026-07-07):** Done via the `src/app/tests.rs`-submodule option, not a top-level
+`tests/` integration directory — both test modules use `use super::*;` to reach private
+items (`App`'s private fields/helpers, `ChatSessions`'s internals), which a real top-level `tests/`
+integration test can't access at all (it's a separate compilation unit, public-API-only). A
+`#[path = "app/tests.rs"] mod tests;` (and the `sessions/` equivalent) keeps the exact same
+compilation semantics — still a private inline module, just physically relocated — so this is a
+pure file-layout change, zero behavior difference. `app.rs` 2514 → 658 lines (production only),
+new `app/tests.rs` 1857 lines; `sessions.rs` 1125 → 571 lines, new `sessions/tests.rs` 555 lines.
+Verified: `cargo test -p liberado-tui` (213/213, unchanged) and `cargo test -p liberado-main-agent`
+(15/15, unchanged), clean `cargo clippy --all-targets` for both (the handful of remaining warnings
+in each are pre-existing, in untouched production-code lines).
 
 ### Minor dedup
 

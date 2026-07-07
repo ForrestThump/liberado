@@ -17,8 +17,8 @@ crates/
   config/               # Config-file loader/validator (Decision 14), dependency-light
   config-loader/        # ConfigSource trait + ChainLoader beneath `config`
   provider/             # Provider trait + MockProvider
-  provider-deepseek/    # DeepSeek HTTP backend
-  provider-openrouter/  # OpenRouter backend (many models, one key) — wired into heuristics-tuner
+  provider-openai-compat/ # One config-driven Provider for any OpenAI-compatible API (DeepSeek,
+                          # OpenRouter, ...) — replaces what used to be one crate per backend
   vault/                # Turbovault adapter (attribution, loop-breaking)
   dispatcher/           # Goal → DispatchDecision (LLM classify + deterministic guards)
   executor/             # Bounded tool-calling agent loop → Report

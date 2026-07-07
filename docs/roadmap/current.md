@@ -77,8 +77,11 @@ and the GIT_ASKPASS credential hygiene.
 Automate the manual "run eval → read the misses → tune the prompt → run again" loop
 `liberado-eval` already documents doing by hand, so weak points in routing/tool-use surface
 proactively instead of through slow dogfooding — the goal is a solid tool-use architecture
-*before* Phase 3 autonomy breadth widens the surface area further. New crates
-(`liberado-heuristics-tuner`, `liberado-provider-openrouter`), local-search prompt tuning with
+*before* Phase 3 autonomy breadth widens the surface area further. New crate
+`liberado-heuristics-tuner` (using `provider-openai-compat`'s `openrouter_from_env()` — many
+models behind one API/key, so concurrent evaluations aren't bottlenecked on one provider's rate
+limit; this used to be its own `liberado-provider-openrouter` crate, collapsed into
+`provider-openai-compat` since), local-search prompt tuning with
 Monte Carlo restarts against local maxima, proposed prompt diffs reviewed by a human (never
 auto-merged, same trust boundary as riggers' draft-PR pattern), plus a separate, lower-frequency
 architecture-critique mode (not yet built). Started dispatcher-only; extended to the executor and

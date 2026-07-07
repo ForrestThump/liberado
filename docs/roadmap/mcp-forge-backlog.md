@@ -42,6 +42,11 @@ amount of ceremony:
   but a **task-management surface** for the agent to itself schedule/cancel future wake-ups
   (the equivalent of this session's own `ScheduleWakeup`) is genuinely model-invoked, capability-
   gated, external-effect (it changes what will happen later) — that part fits `mcp-forge` cleanly.
+  **Built**: `liberado-wakeup-mcp` (its own repo,
+  [github.com/ForrestThump/liberado-wakeup-mcp](https://github.com/ForrestThump/liberado-wakeup-mcp))
+  is exactly this — `schedule_wakeup`/`cancel_wakeup`/`list_wakeups`, live-verified end-to-end
+  against a real turbovault instance and the real daemon's webhook hook. Not yet registered as a
+  `topology.toml` `[[mcps]]` entry (needs a human `consequence` rating — see `human-todo.md`).
 - **A hooks/webhook-receiver MCP** — inbound HTTP webhooks are event sources (core, below), but a
   companion tool letting the agent *register a new webhook endpoint for itself* (rather than one
   hand-wired in `topology.toml`) would be genuinely capability-gated, external-effect work.
