@@ -9,8 +9,8 @@ use liberado_heuristics_tuner::{ExecutorTunerResult, Layer, TunerConfig, run_exe
 use std::path::Path;
 
 /// Shared by the executor and subagent branches below — both produce an `ExecutorTunerResult` via
-/// the same underlying search loop (`search::run_tool_loop_tuner`), differing only in which prompt
-/// const seeded it.
+/// the same underlying search loop (`tool_loop_search::run_tool_loop_tuner`), differing only in
+/// which prompt const seeded it.
 async fn save_tool_loop_result(
     result: ExecutorTunerResult,
     out_dir: &Path,

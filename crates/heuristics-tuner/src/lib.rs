@@ -22,16 +22,18 @@ pub mod generation;
 pub mod rubric;
 pub mod scoring;
 pub mod search;
+pub mod tool_loop_generation;
 pub mod tool_loop_scoring;
+pub mod tool_loop_search;
 pub mod tool_scenarios;
 
 pub use candidate::{Candidate, CandidateOrigin};
 pub use config::{ConfigError, Layer, TunerConfig};
 pub use generation::GenerationError;
 pub use scoring::{CandidateFitness, ScenarioTrial, ScoredScenario};
-pub use search::{
-    Budget, ExecutorGenerationRecord, ExecutorTunerResult, GenerationRecord, TunerResult,
-    run_executor_tuner, run_subagent_tuner, run_tuner,
-};
+pub use search::{Budget, GenerationRecord, TunerResult, run_tuner};
 pub use tool_loop_scoring::{ToolLoopFitness, ToolLoopScoredScenario, ToolLoopTrial, score_executor_candidate};
+pub use tool_loop_search::{
+    ExecutorGenerationRecord, ExecutorTunerResult, run_executor_tuner, run_subagent_tuner,
+};
 pub use tool_scenarios::{ToolLoopExpect, ToolLoopScenario, tool_loop_scenarios};
