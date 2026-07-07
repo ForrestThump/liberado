@@ -165,13 +165,23 @@ impl ToolRuntime for RiskGatedToolRuntime {
                 ));
             }
 
-            // 2. Consequence check: look up the MCP's consequence.
-            let consequence = self
-                .consequence_catalog
-                .iter()
-                .find(|(name, _)| name == &mcp_name)
-                .map(|(_, c)| *c)
-                .unwrap_or(Consequence::ReadOnly);
+            // 2. Consequence check: look up the MCP's consequence. A miss here means the
+            // capability set (checked above) and consequence_catalog have drifted — the MCP is
+            // granted but undescribed, most likely a name mismatch between the two catalogs.
+            // Fails open to ReadOnly (matching the dispatcher pre-flight guard's own documented
+            // "undescribed contributes nothing" stance — see guards.rs's max_consequence), but
+            // logs so a catalog typo isn't a silent risk downgrade.
+            let consequence = match self.consequence_catalog.iter().find(|(name, _)| name == &mcp_name) {
+                Some((_, c)) => *c,
+                None => {
+                    tracing::warn!(
+                        mcp = %mcp_name,
+                        "MCP is capability-granted but missing from consequence_catalog — \
+                         defaulting to ReadOnly; check for a name mismatch between the two catalogs"
+                    );
+                    Consequence::ReadOnly
+                }
+            };
 
             // 3. If consequence >= Irreversible, downgrade to proposal.
             if consequence >= Consequence::Irreversible {
