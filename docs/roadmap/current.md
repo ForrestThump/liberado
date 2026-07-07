@@ -234,8 +234,27 @@ vault-watch are interchangeable event-sources; a second dispatcher/executor is c
 
 ### Phase 4 — Scaling
 
-An `ExecutionEnvironment` trait (Local / Docker / serverless hibernation) — Hermes gap #3; cheap
-always-on.
+- **✅ Docker MCP transport — done (2026-07-07).** The v1 slice of Hermes gap #3 (execution
+  environments). Confirmed while designing this that a Hermes-style `ExecutionEnvironment` trait
+  *in the executor crate* would be the wrong layer here: `liberado-executor` is MCP-agnostic and
+  owns no transport/connection concerns (Hermes' agent runs raw shell commands directly in a chosen
+  backend; Liberado's agent only ever calls capability-gated MCP tools through `ToolRuntime`, so
+  "which environment" really means "where does the MCP *server* process live" — a
+  `crates/mcp`/`crates/bootstrap` connector concern). New `McpTransport::Docker { image, command,
+  args, volumes, env }` (`crates/config-loader`) plus a `docker_argv` builder wired into
+  `mcp_registry_from_config` (`crates/bootstrap`) — deliberately **no new connector type**:
+  MCP-over-stdio doesn't care whether the child process is a bare binary or `docker run -i --rm
+  image ...`, so the existing `StdioConnector`/`ChildProcessTransport` machinery (its `kill_on_drop`
+  breaks the container's stdin, which a well-behaved MCP server exits on, and `--rm` removes it —
+  no explicit `docker stop`/container-ID tracking needed) handles it unchanged. Isolation for a
+  less-trusted or freshly-scaffolded MCP (e.g. one `riggers` just produced, not yet human-reviewed)
+  is the concrete motivation, not "because Hermes has it." **Deferred, not built**: serverless
+  hibernation (Modal/Daytona-style spin-to-zero) — no MCP today has an idle-cost problem that
+  justifies the real cloud-backend integration this needs; and wiring `riggers` itself through this
+  mechanism for per-task ephemeral sandboxing — the generic capability now exists, but `riggers`
+  remains an externally-deployed long-running container today (`riggers/Dockerfile`), not something
+  Liberado's own connector layer spawns. Full design:
+  [phase-4-docker-transport.md](phase-4-docker-transport.md).
 
 ## Landed (substrate already built)
 

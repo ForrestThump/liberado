@@ -107,6 +107,34 @@ real — this is a small decision + config change, not something requiring new c
       (`path = "../liberado-deliberate-mcp"`). If yes, I need your input on the `consequence`
       rating (deliberately human-owned, not something I self-declare).
 
+## Phase 4: Docker MCP transport — needs a live smoke test — 2026-07-07
+
+Built `McpTransport::Docker` (a config-driven way to run an MCP server inside a container instead of
+directly as a host process — isolation for a less-trusted or freshly-scaffolded MCP) — full design in
+[phase-4-docker-transport.md](phase-4-docker-transport.md). Everything that can be verified without
+a running Docker daemon is done: `cargo build --workspace`/`cargo clippy --all-targets` clean, all
+new unit tests passing (config round-trip, validation, `docker_argv`, registry registration).
+
+- [ ] **Live end-to-end smoke test still needed** — checked, and Docker Desktop's CLI is installed
+      on this machine but its daemon isn't running (`docker version` connects fine to the client,
+      but fails to reach `npipe:////./pipe/dockerDesktopLinuxEngine`). Once Docker Desktop is
+      started:
+      1. Wrap `tasks-mcp` in a throwaway Dockerfile: `FROM node:22-slim` /
+         `CMD ["npx", "--yes", "@liberado/tasks-mcp"]`, then
+         `docker build -t liberado-tasks-mcp:docker-test .`
+      2. Add a `[[mcps]]` entry using the commented example already in
+         `config.example/topology.toml` (`transport = { kind = "docker", image =
+         "liberado-tasks-mcp:docker-test" }`).
+      3. Confirm the daemon's live MCP registry shows the same tools as the existing
+         `npx`-based `tasks-mcp` entry — proves the full path (config parse → `docker_argv` →
+         `StdioConnector` → `docker run -i --rm` → MCP handshake → `list_tools()`) works for real,
+         not just that it compiles.
+- [ ] This dev machine is Windows (Docker Desktop/WSL2); the actual deployment target is Debian,
+      where none of the Windows-specific notes in `phase-4-docker-transport.md` (forward-slash
+      volume paths, pre-pulling to avoid WSL2 VM-wake latency) apply — worth a second, real smoke
+      test on the Debian target whenever that deployment happens, just to confirm nothing
+      Windows-Docker-Desktop-specific snuck in unnoticed.
+
 ## Standing category: GUI verification
 
 I don't have a way to visually drive a browser or a real terminal UI in this environment. Whenever

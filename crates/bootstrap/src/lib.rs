@@ -77,6 +77,38 @@ pub fn provider_from_config(config: &Config) -> Option<Arc<dyn Provider>> {
     }
 }
 
+/// Build the `docker run` argv for a `McpTransport::Docker` MCP — `StdioConnector::new("docker",
+/// argv)` then spawns it exactly like any other child process; MCP-over-stdio doesn't care whether
+/// the process on the other end of the pipe is a bare binary or `docker run -i --rm ...`, so no
+/// dedicated connector type is needed. `-i` (stdin attached) is required for MCP's stdio framing;
+/// deliberately no `-t` (pseudo-TTY) — a TTY inserts `\r` into every line, corrupting the
+/// newline-delimited JSON-RPC stream. `--rm` plus the child process dying (`ChildProcessTransport`'s
+/// `kill_on_drop`, which breaks the attached stdin pipe and sends the container EOF) is enough to
+/// clean up the container — no explicit `docker stop`/container-ID tracking needed.
+fn docker_argv(
+    image: &str,
+    command: Option<&str>,
+    args: &[String],
+    volumes: &[String],
+    env: &[String],
+) -> Vec<String> {
+    let mut argv = vec!["run".to_string(), "-i".to_string(), "--rm".to_string()];
+    for volume in volumes {
+        argv.push("--volume".to_string());
+        argv.push(volume.clone());
+    }
+    for var in env {
+        argv.push("--env".to_string());
+        argv.push(var.clone());
+    }
+    argv.push(image.to_string());
+    if let Some(command) = command {
+        argv.push(command.to_string());
+    }
+    argv.extend(args.iter().cloned());
+    argv
+}
+
 /// Build the MCP registry from the ENABLED MCPs in `config.topology.mcps`, registering each by its
 /// `name` with a connector from its transport. `None` when no MCP is enabled (decide-only daemon,
 /// tool-less chat). This shares ONE source (topology.mcps) with the dispatcher catalog, so a name the
@@ -94,6 +126,10 @@ pub fn mcp_registry_from_config(config: &Config) -> Option<McpRegistry> {
             McpTransport::Managed => {
                 let bin = managed_binary_path(&mcp_install_dir(), &m.name);
                 registry.register(&m.name, StdioConnector::new(bin.to_string_lossy(), vec![]))
+            }
+            McpTransport::Docker { image, command, args, volumes, env } => {
+                let argv = docker_argv(image, command.as_deref(), args, volumes, env);
+                registry.register(&m.name, StdioConnector::new("docker", argv))
             }
         },
     );
@@ -410,6 +446,75 @@ mod tests {
         let registry = mcp_registry_from_config(&config).expect("one enabled MCP => Some");
         let names: Vec<&str> = registry.names().collect();
         assert_eq!(names, vec!["weather-mcp"]);
+    }
+
+    #[test]
+    fn docker_transport_registers_by_name_too() {
+        let mut config = Config::default();
+        config.topology.mcps = vec![mcp(
+            "tasks-mcp-docker",
+            true,
+            McpTransport::Docker {
+                image: "liberado-tasks-mcp:latest".into(),
+                command: None,
+                args: Vec::new(),
+                volumes: Vec::new(),
+                env: Vec::new(),
+            },
+        )];
+
+        let registry = mcp_registry_from_config(&config).expect("one enabled MCP => Some");
+        let names: Vec<&str> = registry.names().collect();
+        assert_eq!(names, vec!["tasks-mcp-docker"]);
+    }
+
+    #[test]
+    fn docker_argv_with_only_image() {
+        assert_eq!(
+            docker_argv("liberado-tasks-mcp:latest", None, &[], &[], &[]),
+            vec!["run", "-i", "--rm", "liberado-tasks-mcp:latest"]
+        );
+    }
+
+    #[test]
+    fn docker_argv_with_command_and_args() {
+        let args = vec!["-y".to_string(), "@scope/tasks".to_string()];
+        assert_eq!(
+            docker_argv("node:22-slim", Some("npx"), &args, &[], &[]),
+            vec!["run", "-i", "--rm", "node:22-slim", "npx", "-y", "@scope/tasks"]
+        );
+    }
+
+    #[test]
+    fn docker_argv_with_volumes() {
+        let volumes = vec!["/home/shiloh/vault:/vault:ro".to_string()];
+        assert_eq!(
+            docker_argv("image", None, &[], &volumes, &[]),
+            vec!["run", "-i", "--rm", "--volume", "/home/shiloh/vault:/vault:ro", "image"]
+        );
+    }
+
+    #[test]
+    fn docker_argv_with_env() {
+        let env = vec!["API_KEY".to_string(), "MODE=prod".to_string()];
+        assert_eq!(
+            docker_argv("image", None, &[], &[], &env),
+            vec!["run", "-i", "--rm", "--env", "API_KEY", "--env", "MODE=prod", "image"]
+        );
+    }
+
+    #[test]
+    fn docker_argv_with_everything_combined() {
+        let args = vec!["serve".to_string()];
+        let volumes = vec!["/host:/container".to_string()];
+        let env = vec!["API_KEY".to_string()];
+        assert_eq!(
+            docker_argv("my-mcp:latest", Some("my-mcp"), &args, &volumes, &env),
+            vec![
+                "run", "-i", "--rm", "--volume", "/host:/container", "--env", "API_KEY",
+                "my-mcp:latest", "my-mcp", "serve"
+            ]
+        );
     }
 
     #[test]

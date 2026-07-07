@@ -43,6 +43,10 @@ vault_path = "/home/shiloh/vault"
 #   { kind = "managed" }                                 # spawn a binary that `liberado-mcp-forge`
 #                                                         # built from a git URL (see mcp-sources.toml)
 #                                                         # — resolved by `name`, no path to hand-edit
+#   { kind = "docker", image = "..." }                   # spawn `docker run -i --rm image` and speak
+#                                                         # MCP over its stdin/stdout — identical to
+#                                                         # stdio, just isolated in a container (see
+#                                                         # the commented example below)
 [[mcps]]
 name = "tasks-mcp"
 description = "create, complete, and query tasks"
@@ -126,6 +130,24 @@ transport = { kind = "stdio", command = "riggers-mcp", args = ["--config", "rigg
 # description = "send email on the user's behalf"
 # consequence = "external"
 # transport = { kind = "http", url = "https://mcp.example.com/mcp" }
+
+# A Docker-hosted MCP: isolation for a less-trusted or freshly-scaffolded server (e.g. one
+# `code-dispatch`/riggers just produced, not yet human-reviewed). Same StdioConnector underneath —
+# `command`/`args` default to the image's own CMD/ENTRYPOINT if omitted. Two things worth knowing
+# before enabling one:
+#   - Pre-pull the image first (`docker pull image:tag`) — the first `docker run` can otherwise hit
+#     the connect timeout, especially on Docker Desktop (Windows/macOS), where the VM backing it may
+#     need to wake from idle on top of the pull itself. Not a concern on a native Linux Docker host
+#     (the actual deployment target), where there's no VM to wake.
+#   - `volumes` host paths need forward slashes even on Windows (Docker Desktop's WSL2 backend
+#     requirement) — this is what a native Linux path looks like anyway, so only Windows needs the
+#     reminder.
+# [[mcps]]
+# name = "tasks-mcp-docker"
+# description = "create, complete, and query tasks (containerized)"
+# consequence = "reversible"
+# transport = { kind = "docker", image = "liberado-tasks-mcp:latest", volumes = ["/home/shiloh/vault:/vault:ro"], env = ["TASKS_MCP_API_KEY"] }
+# # `env = ["TASKS_MCP_API_KEY"]` is a passthrough from the host env — never the value itself.
 
 # Named dispatcher/executor pools (Decision 18 checkpoint #3) — an ALWAYS-PRESENT "default" pool
 # handles anything below that doesn't set `pool`, so declaring pools here is opt-in. A pool is pure

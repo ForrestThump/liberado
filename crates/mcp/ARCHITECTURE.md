@@ -7,8 +7,8 @@ tool-mediated vault writes **self-attributed** (loop-broken).
 
 Three pieces:
 - `TurbomcpRuntime` — the `ToolRuntime` itself (below).
-- `ClientConnector` + `StdioConnector` — how to obtain a connected client (`connector.rs`).
-- `TurbomcpRuntimeFactory` — the `RuntimeFactory` the orchestrator depends on (`factory.rs`).
+- `McpConnector` + `StdioConnector`/`HttpConnector` — how to obtain a connected client (`connector.rs`).
+- `McpRegistry` — the `RuntimeFactory` the orchestrator depends on (`factory.rs`).
 
 ## `TurbomcpRuntime<T: Transport>`
 
@@ -30,23 +30,30 @@ vault, the write's audit entry carries our provenance; the daemon's `attribute()
 resulting change as ours and suppresses it. Without it, every agent write would trigger a reaction →
 infinite loop. The mechanism is proven end-to-end in `liberado-vault`'s `provenance_e2e`.
 
-## The factory + connectors
+## The registry + connectors
 
-`TurbomcpRuntimeFactory<C: ClientConnector>` implements the orchestrator's `RuntimeFactory`:
-`runtime_for(allowed_mcps, provenance)` connects (via the injected `ClientConnector`), builds a
-`TurbomcpRuntime` bound to that provenance, and **scopes** it to the allowed MCPs.
+`McpRegistry` (`factory.rs`) implements the orchestrator's `RuntimeFactory`: `runtime_for(allowed_mcps,
+provenance)` connects to each registered server (via its `McpConnector`), builds a `MultiMcpRuntime`
+namespacing every server's tools `<name>:<tool>`, and **scopes** the result to the allowed MCPs.
 
-- **`ClientConnector`** (associated `Transport`) abstracts connection so the same factory serves the
-  production path and tests. `StdioConnector` is the production connector — it runs an MCP server as
-  a **child process** and speaks MCP over its stdin/stdout (the process is spawned lazily by
-  `initialize()`'s transport auto-connect). Tests inject an in-process channel connector.
+- **`McpConnector`** (`connector.rs`) — connect to one MCP server, return a boxed `ToolRuntime`
+  (transport-erased, so servers of different transports sit side by side in one registry).
+  Implementations:
+  - `StdioConnector` — runs the server as a **child process**, speaking MCP over its stdin/stdout
+    (`turbomcp_transport::ChildProcessTransport`, spawned lazily on first connect). The production
+    connector for `McpTransport::Stdio`/`McpTransport::Managed` — and, since MCP-over-stdio doesn't
+    care whether the child process is a bare binary or `docker run -i --rm image ...`, also
+    `McpTransport::Docker` (`liberado-bootstrap`'s `docker_argv` builds the argv; no dedicated
+    connector type needed — see `liberado-bootstrap/src/lib.rs`'s doc comment on `docker_argv` for
+    why `--rm` + the child dying is enough cleanup, no explicit `docker stop`).
+  - `HttpConnector` — connects to a remote MCP server over streamable HTTP (`McpTransport::Http`).
 - **Scoping (`ScopedToolRuntime`)** enforces Decision 4 at runtime: a non-empty `allowed_mcps`
   filters the catalog the model *sees* (by the `<mcp>:<tool>` convention, via `common::mcp_of`) and
   **rejects** an out-of-scope call before it reaches the server. An empty list = no narrowing
   (`ExecuteDirect`); a narrowed list = a subagent's disjoint slice.
 
 v1 opens a fresh connection per execution (no pooling) and assumes one server per connector;
-connection reuse and a multi-server registry are later refinements.
+connection reuse is a later refinement.
 
 ## Dependencies
 

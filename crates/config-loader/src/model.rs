@@ -365,6 +365,28 @@ pub enum McpTransport {
         url: String,
     },
     Managed,
+    /// Runs the MCP server inside a container instead of directly as a host child process —
+    /// isolation for a less-trusted or freshly-scaffolded MCP (e.g. one `riggers` just produced,
+    /// not yet human-reviewed). Reuses the exact same `StdioConnector`/`ChildProcessTransport`
+    /// machinery as [`McpTransport::Stdio`]: MCP-over-stdio doesn't care whether the child process
+    /// is a bare binary or `docker run -i --rm image ...`, both are just a piped stdin/stdout
+    /// process. `command: None` means "use the image's own `CMD`/`ENTRYPOINT`."
+    Docker {
+        image: String,
+        #[serde(default)]
+        command: Option<String>,
+        #[serde(default)]
+        args: Vec<String>,
+        /// Docker CLI format: `"host:container"` or `"host:container:ro"`. Host paths need
+        /// forward slashes even on Windows (Docker Desktop's WSL2 backend requirement).
+        #[serde(default)]
+        volumes: Vec<String>,
+        /// Docker CLI format: `"KEY=value"`, or a bare `"KEY"` to pass its value through from the
+        /// host's own environment — the way to reach a container without a secret ever touching
+        /// `topology.toml` (Decision 10).
+        #[serde(default)]
+        env: Vec<String>,
+    },
 }
 
 fn default_true() -> bool {
@@ -848,6 +870,21 @@ impl Config {
                 return Err(Error::Config(format!(
                     "topology.schedules['{}'].cron_expr '{}' is invalid: {e}",
                     schedule.name, schedule.cron_expr
+                )));
+            }
+        }
+
+        // A Docker-transport MCP's image is the one thing that can't be a blank string — image
+        // existence/daemon reachability are connect-time concerns (surfaced as an ordinary
+        // RuntimeSetupError, same as a missing stdio binary), but an empty image is unambiguously
+        // wrong under any interpretation, so it's rejected here at load time instead.
+        for mcp in &self.topology.mcps {
+            if let McpTransport::Docker { image, .. } = &mcp.transport
+                && image.trim().is_empty()
+            {
+                return Err(Error::Config(format!(
+                    "topology.mcps['{}'].transport.image must not be empty",
+                    mcp.name
                 )));
             }
         }
@@ -1388,6 +1425,76 @@ transport = { kind = "http", url = "https://mcp.deepwiki.com/mcp" }
             McpTransport::Http { url } => assert_eq!(url, "https://mcp.deepwiki.com/mcp"),
             other => panic!("expected http, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn docker_transport_with_only_image_deserializes_with_defaults() {
+        let toml = r#"
+[[mcps]]
+name = "tasks-mcp-docker"
+description = "tasks-mcp in a container"
+consequence = "reversible"
+transport = { kind = "docker", image = "liberado-tasks-mcp:latest" }
+"#;
+        let topology: Topology = toml::from_str(toml).expect("docker transport must deserialize");
+        match &topology.mcps[0].transport {
+            McpTransport::Docker { image, command, args, volumes, env } => {
+                assert_eq!(image, "liberado-tasks-mcp:latest");
+                assert_eq!(command, &None);
+                assert!(args.is_empty());
+                assert!(volumes.is_empty());
+                assert!(env.is_empty());
+            }
+            other => panic!("expected docker, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn docker_transport_with_all_fields_deserializes() {
+        let toml = r#"
+[[mcps]]
+name = "tasks-mcp-docker"
+description = "tasks-mcp in a container"
+consequence = "reversible"
+transport = { kind = "docker", image = "liberado-tasks-mcp:latest", command = "npx", args = ["-y", "@scope/tasks"], volumes = ["/home/shiloh/vault:/vault:ro"], env = ["API_KEY"] }
+"#;
+        let topology: Topology = toml::from_str(toml).expect("docker transport must deserialize");
+        match &topology.mcps[0].transport {
+            McpTransport::Docker { image, command, args, volumes, env } => {
+                assert_eq!(image, "liberado-tasks-mcp:latest");
+                assert_eq!(command.as_deref(), Some("npx"));
+                assert_eq!(args, &["-y", "@scope/tasks"]);
+                assert_eq!(volumes, &["/home/shiloh/vault:/vault:ro"]);
+                assert_eq!(env, &["API_KEY"]);
+            }
+            other => panic!("expected docker, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn docker_transport_with_blank_image_fails_validation() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.topology.mcps = vec![McpConfig {
+            name: "broken-docker-mcp".into(),
+            enabled: true,
+            description: "should fail validation".into(),
+            consequence: Consequence::Reversible,
+            transport: McpTransport::Docker {
+                image: "   ".to_string(),
+                command: None,
+                args: Vec::new(),
+                volumes: Vec::new(),
+                env: Vec::new(),
+            },
+            default_zone: None,
+            tools: Vec::new(),
+        }];
+        let err = cfg.validate().expect_err("blank image must fail validation");
+        assert!(
+            err.to_string().contains("broken-docker-mcp"),
+            "error should name the offending MCP: {err}"
+        );
     }
 
     #[test]
