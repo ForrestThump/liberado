@@ -104,40 +104,54 @@ pub enum ConfigError {
 /// Returns `None` if none of the above yields a directory (headless environment, no env var,
 /// no home, and no binary path).
 pub fn config_dir() -> Option<PathBuf> {
+    let env_dir = std::env::var_os(CONFIG_DIR_ENV).map(PathBuf::from);
+    let platform_dir = dirs::config_dir().map(|base| base.join(APP_DIR));
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    resolve_config_dir(env_dir, platform_dir, exe_dir)
+}
+
+/// The pure tiered-resolution logic `config_dir()` wraps, with its three real-world inputs
+/// (env var, platform dir, running-binary's directory) taken as plain parameters instead of read
+/// directly — so the 4-tier fallback order is unit-testable without mutating process-global env
+/// vars (`dirs::config_dir()` reads platform env vars like `APPDATA`/`XDG_CONFIG_HOME` that aren't
+/// mockable, and process env mutation races under `cargo test`'s default parallel execution).
+fn resolve_config_dir(
+    env_dir: Option<PathBuf>,
+    platform_dir: Option<PathBuf>,
+    exe_dir: Option<PathBuf>,
+) -> Option<PathBuf> {
     // 1. Explicit env var always wins.
-    if let Some(dir) = std::env::var_os(CONFIG_DIR_ENV) {
-        let dir = PathBuf::from(dir);
-        if !dir.as_os_str().is_empty() {
-            return Some(dir);
-        }
+    if let Some(dir) = env_dir
+        && !dir.as_os_str().is_empty()
+    {
+        return Some(dir);
     }
 
     // 2. Platform config dir, but only if it already has config files.
-    let platform = dirs::config_dir().map(|base| base.join(APP_DIR));
-    if let Some(ref dir) = platform {
-        if has_any_config_file(dir) {
-            return Some(dir.clone());
-        }
+    if let Some(ref dir) = platform_dir
+        && has_any_config_file(dir)
+    {
+        return Some(dir.clone());
     }
 
     // 3. Walk up from the binary checking for a `config/` subdirectory.
-    if let Ok(exe) = std::env::current_exe() {
-        let mut current = exe.parent().map(Path::to_path_buf);
-        for _ in 0..5 {
-            if let Some(ref dir) = current {
-                let candidate = dir.join("config");
-                if has_any_config_file(&candidate) {
-                    return Some(candidate);
-                }
-                current = dir.parent().map(Path::to_path_buf);
-            } else {
-                break;
+    let mut current = exe_dir;
+    for _ in 0..5 {
+        if let Some(ref dir) = current {
+            let candidate = dir.join("config");
+            if has_any_config_file(&candidate) {
+                return Some(candidate);
             }
+            current = dir.parent().map(Path::to_path_buf);
+        } else {
+            break;
         }
     }
 
     // 4. Final fallback: platform config dir (may be empty — validated downstream).
-    platform
+    platform_dir
 }
 
 /// True when `dir` exists and contains at least one of the three known config section files.
@@ -658,5 +672,84 @@ transport = { kind = "stdio", command = "tasks-mcp", args = [] }
             msg.contains("consequence"),
             "error should reference the missing field: {msg}"
         );
+    }
+
+    // ── config_dir()'s 4-tier resolution order (resolve_config_dir, the pure helper) ──
+
+    fn dir_with_topology(dir: &Path) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        write_file(dir, TOPOLOGY_FILE, TOPOLOGY_TOML);
+        dir.to_path_buf()
+    }
+
+    #[test]
+    fn env_dir_wins_over_everything_else() {
+        let platform = TempDir::new().unwrap();
+        let env = PathBuf::from("/explicit/env/dir");
+        let resolved = resolve_config_dir(
+            Some(env.clone()),
+            Some(dir_with_topology(platform.path())),
+            None,
+        );
+        assert_eq!(resolved, Some(env));
+    }
+
+    #[test]
+    fn empty_env_dir_is_treated_as_absent() {
+        let platform = TempDir::new().unwrap();
+        let populated = dir_with_topology(platform.path());
+        let resolved = resolve_config_dir(Some(PathBuf::new()), Some(populated.clone()), None);
+        assert_eq!(resolved, Some(populated));
+    }
+
+    #[test]
+    fn platform_dir_wins_when_populated() {
+        let platform = TempDir::new().unwrap();
+        let populated = dir_with_topology(platform.path());
+        let resolved = resolve_config_dir(None, Some(populated.clone()), None);
+        assert_eq!(resolved, Some(populated));
+    }
+
+    #[test]
+    fn empty_platform_dir_falls_through_to_exe_walk_up() {
+        let platform = TempDir::new().unwrap(); // no config file written — empty
+        let exe_root = TempDir::new().unwrap();
+        let exe_dir = exe_root.path().join("a").join("b").join("c").join("d");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        let config_dir = dir_with_topology(&exe_root.path().join("config"));
+
+        let resolved = resolve_config_dir(None, Some(platform.path().to_path_buf()), Some(exe_dir));
+        assert_eq!(resolved, Some(config_dir));
+    }
+
+    #[test]
+    fn exe_walk_up_stops_after_five_levels() {
+        let platform = TempDir::new().unwrap(); // no config file — the eventual fallback
+        let exe_root = TempDir::new().unwrap();
+        // One level deeper than `empty_platform_dir_falls_through_to_exe_walk_up`'s passing case —
+        // puts the config dir just past the 5-ancestor walk-up limit.
+        let exe_dir = exe_root.path().join("a").join("b").join("c").join("d").join("e");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        dir_with_topology(&exe_root.path().join("config"));
+
+        let resolved = resolve_config_dir(
+            None,
+            Some(platform.path().to_path_buf()),
+            Some(exe_dir),
+        );
+        // Never found within 5 levels — falls back to tier 4 (platform dir, even though empty).
+        assert_eq!(resolved, Some(platform.path().to_path_buf()));
+    }
+
+    #[test]
+    fn everything_absent_falls_back_to_empty_platform_dir() {
+        let platform = TempDir::new().unwrap(); // no config file
+        let resolved = resolve_config_dir(None, Some(platform.path().to_path_buf()), None);
+        assert_eq!(resolved, Some(platform.path().to_path_buf()));
+    }
+
+    #[test]
+    fn everything_none_resolves_to_none() {
+        assert_eq!(resolve_config_dir(None, None, None), None);
     }
 }
