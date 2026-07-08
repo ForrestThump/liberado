@@ -267,6 +267,7 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
                     class: "send-btn",
                     r#type: "submit",
                     disabled: sending(),
+                    title: "Send (Enter)",
                     "Send"
                 }
             }
