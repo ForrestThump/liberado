@@ -230,6 +230,58 @@ a single misconfigured flag waiting to be found. It looks either like a deeper i
 factors compounding) or a genuine model-response-handling defect in a code path none of these seven
 config knobs touch.
 
+## Round 3: diffing the actual outgoing HTTP request against opencode's (2026-07-08, same day)
+
+Per the user's explicit direction — keep `deepseek/deepseek-v4-flash` fixed on both sides (it's
+independently known-good at tool use, proven with opencode/kilocode/MCP elsewhere), and treat this as
+a vtcode defect to fix, not a reason to switch models or tools long-term.
+
+Added a second permanent diagnostic hook, `VTCODE_DUMP_HTTP_REQUEST_DIR=<dir>` in
+`openrouter/provider/mod.rs::dispatch_request` — writes the exact outgoing JSON payload (pretty-printed)
+to `{dir}/{nanos}.json` before every send. For opencode's side, since it has no built-in raw-request
+dump, stood up a minimal local logging reverse-proxy (`opencode-test/log_proxy.py` — throwaway,
+diagnostic-only, not part of either project) in front of `https://openrouter.ai`, and pointed opencode
+at it via a custom `openai-compatible` provider entry in `opencode.json` (`baseURL` →
+`http://127.0.0.1:8899/api/v1`). Confirmed opencode still writes correctly through the proxy before
+trusting any captured data from it.
+
+Structural differences found by direct comparison of the two request sets:
+
+- **Tool design**: opencode sends **10 discrete, single-purpose tools** (`read`, `write`, `edit`, `bash`,
+  `grep`, `glob`, `webfetch`, `todowrite`, `task`, `skill`), each with its own schema and a `required`
+  array (`write`: `["content", "filePath"]`; `edit`: `["filePath", "oldString", "newString"]`). vtcode
+  sends **17 tools**, several of them "unified" multi-action tools — `unified_file` bundles
+  read/write/edit/patch/delete/move/copy behind one `action` enum parameter, across 14 total properties,
+  **with no `required` array at all** — every field, including `action` itself, is optional, and
+  `action`'s own description says "Optional; inferred from old_str/patch/content/destination/path."
+  **Tested**: added `"required": ["action", "path"]` to `unified_file_parameters()`
+  (`vtcode-utility-tool-specs/src/lib.rs`), rebuilt, retested live. **No effect** — model still only ever
+  sent `action: "read"`, same as before. Ruled out as the (sole) cause, though arguably still worth
+  keeping upstream as better API design regardless.
+- **`tool_choice`**: opencode's requests explicitly include `"tool_choice": "auto"`. vtcode's requests
+  **never include `tool_choice` at all** — traced to `runner/execute.rs`: it's only constructed when
+  `provider_name.eq_ignore_ascii_case("openai")`, so for our `provider = "openrouter"` config the
+  condition is always false and the field is always omitted. Confirmed via `to_provider_format` /
+  `to_openai_format` (`vtcode-llm/src/provider/request.rs`) that the value vtcode would send if enabled
+  (`ToolChoice::allowed_tools_auto(...)`) actually serializes to the exact same plain `json!("auto")`
+  string opencode sends — the `AllowedTools` variant's own `tools` list isn't even used in that
+  serialization path, so there was no compatibility reason for the `"openai"`-only gate.
+  **Tested**: widened the gate to also match `"openrouter"`, rebuilt, retested live, **confirmed via the
+  HTTP dump that `tool_choice: "auto"` now actually appears in the request**. **Still no effect on the
+  core symptom** — same read-only exploration pattern, same `success` outcome, zero writes.
+- Everything else structurally matched or was already covered by Round 1/2: same model string, `stream:
+  true` both sides, `max_tokens` present both sides (vtcode: 2000/turn — confirmed not zero, not
+  obviously starving a request), message roles/shape consistent with normal chat-completions format on
+  both sides.
+
+Total now: **10 distinct interventions tested** (8 config-level in Round 2, 2 source-level fixes in
+Round 3 — the schema `required` fix and the `tool_choice` provider-gate fix), each independently
+confirmed to actually take effect (verified in the live HTTP request or event log, not just assumed),
+none changing the core outcome. The `tool_choice` fix in particular was the strongest structural lead
+found — matches the request shape exactly, no plausible reason left to expect it *wouldn't* help — and
+it didn't move the needle at all. That's a meaningfully stronger negative result than the earlier config
+tests: it says the remaining gap is very unlikely to be in request-level parameters at all.
+
 ## Current state
 
 - Committed to `liberado-pr-dispatch-mcp`, local `master` only (3 ahead of `origin/master`, not
@@ -239,24 +291,33 @@ config knobs touch.
   `git_ops.rs`, `lib.rs`, `vtcode_client.rs`, `worker.rs`, `dispatch.yaml.example`, `.gitignore`).
 - `vtcode-src/` — cloned from **`ForrestThump/VTCode`** (`origin` repointed there from upstream
   mid-session; content was identical at clone time), built locally at the `liberado-pr-dispatch-mcp`
-  repo root, gitignored. Has one uncommitted local diagnostic patch: the `VTCODE_DUMP_SYSTEM_PROMPT`
-  env-var hook in `vtcode-core/src/core/agent/runner/execute.rs` — worth keeping (or upstreaming
-  separately as a small, genuinely useful debug feature) since it's what made Round 2 possible at all.
-- Scratch diagnostic harness at `<session scratchpad>/opencode-test/` — `vtcode-home/` (a hand-built
-  per-task `HOME`/`VTCODE_CONFIG` dir, currently has `max_parallel_tool_calls = 1` and
-  `system_prompt_mode = "minimal"` set from the last test — **reset both before the next real test**,
-  neither is a confirmed fix), `vtcode-prompt.txt` (the exact prompt text used, for exact
-  reproducibility), and multiple `vtcode-*-output.jsonl`/`*-stderr.txt` pairs from each numbered test
-  above.
-- No fix yet for the core symptom. Next session should not keep testing individual `vtcode.toml` flags
-  one at a time — that space is largely exhausted for now. More promising next moves: (a) diff vtcode's
-  actual outgoing HTTP request to OpenRouter against what a working opencode run sends, to see what's
-  structurally different in the request itself (tool schema shape, message structure) rather than
-  config; (b) try a *second* model through vtcode (not to fix context size — already ruled out — but to
-  see whether the symptom is deepseek-v4-flash-specific to vtcode's request shape specifically); (c)
-  consider filing this as a vtcode issue with the reproduction case documented here, even without a
-  confirmed root cause — the evidence (opencode A/B, the eight ruled-out variables) is substantial
-  enough to be useful to vtcode's own maintainers.
+  repo root, gitignored. Three uncommitted local patches, all worth keeping regardless of the core
+  symptom's fate:
+  1. `VTCODE_DUMP_SYSTEM_PROMPT` env-var hook (`runner/execute.rs`) — dumps the composed system prompt.
+  2. `VTCODE_DUMP_HTTP_REQUEST_DIR` env-var hook (`openrouter/provider/mod.rs::dispatch_request`) —
+     dumps every outgoing request JSON.
+  3. `unified_file_parameters()` `required: ["action", "path"]` (`vtcode-utility-tool-specs/src/lib.rs`)
+     — better API design even though it didn't fix the symptom.
+  4. `tool_choice` provider-gate widened to include `"openrouter"` (`runner/execute.rs`) — structurally
+     correct (confirmed-safe serialization, matches opencode's shape), even though it didn't fix the
+     symptom either.
+- Scratch diagnostic harness at `<session scratchpad>/opencode-test/` — `vtcode-home/` (hand-built
+  per-task `HOME`/`VTCODE_CONFIG` dir — **reset to the plain baseline before any new test**, no test-only
+  overrides should be left in it), `vtcode-prompt.txt` (exact prompt text for reproducibility),
+  `log_proxy.py` (throwaway logging reverse-proxy for capturing opencode's real requests, not part of
+  either project), `opencode.json` (opencode's custom-provider config pointing at the proxy), and
+  `http-dumps-*`/`vtcode-*-output.jsonl` pairs from every numbered test across all three rounds.
+- **No fix yet for the core symptom**, despite 10 independently-confirmed interventions. The evidence
+  base is now large enough that further blind config/request-parameter guessing has a low expected
+  payoff — three real options going forward, in rough order of promise: (a) full message-history content
+  diff between a vtcode turn and an equivalent opencode turn (not just top-level request keys, which
+  Round 3 already covered) — specifically how tool results get echoed back into conversation history,
+  since that's the one major structural area not yet compared; (b) try a different model through vtcode
+  to see if the symptom is deepseek-v4-flash-×-vtcode-specific or affects every model (would need to
+  violate the "keep the model fixed" constraint deliberately, as a diagnostic-only, one-off check, not a
+  workaround); (c) file this as a vtcode issue/discussion with the full reproduction case and the list of
+  ruled-out causes — genuinely useful to their maintainers even without a confirmed root cause, and they
+  may recognize the pattern immediately from experience with other providers.
 
 ## Related docs
 
