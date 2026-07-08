@@ -142,6 +142,94 @@ got an equivalent prompt and had no trouble). **The problem is specific to vtcod
 its tool-calling pipeline, or something about non-interactive headless invocation — not the model, not
 our surrounding prompt construction or dispatch-server scaffolding.
 
+## Round 2: direct source investigation inside vtcode itself (2026-07-08, same day)
+
+Re-cloned `vtcode-src/` from **`ForrestThump/VTCode`** (the user's fork, byte-identical to upstream
+`vinhnx/VTCode main` at the time — confirmed via `gh api .../compare`, `ahead_by`/`behind_by` both 0)
+instead of upstream directly, so any fix found here can be pushed straight to a branch for a PR, matching
+the pattern from the earlier "inherit" bug. `origin` on the existing built clone was just repointed
+(`git remote set-url`) rather than re-cloned, since the content was identical — saved a ~15 minute
+rebuild.
+
+Built a small, permanent diagnostic aid before going further: `VTCODE_DUMP_SYSTEM_PROMPT=<path>` (added
+to `runner/execute.rs`, one `if let Ok(path) = std::env::var(...)` before returning the assembled
+`RuntimePromptBundle`) — writes the fully-composed system prompt to a file on every run. This is what
+made the rest of this round possible; without it, everything below would have stayed speculation about
+code paths instead of read directly off what the model actually receives.
+
+Also switched to driving `vtcode.exe` **directly** (bypassing the dispatch server entirely, using a
+hand-built per-task `HOME`/`VTCODE_CONFIG` dir matching `setup_task_config`'s template) for this round —
+much faster iteration than restarting the whole dispatch server between each single-variable test.
+
+### A second, distinct bug found and fixed: `orchestration_mode` default is crash-prone
+
+The dispatch server's config never sets `agent.harness.orchestration_mode`, so it uses the `#[default]`
+variant, `HarnessOrchestrationMode::PlanBuildEvaluate` (`vtcode-config/src/core/agent.rs`) — a three-phase
+pipeline: a tool-less **planner** call that must return strict JSON (`spec_markdown`, `contract_markdown`,
+`task_title`, `items`), the actual tool-calling **build** loop, then a skeptical **evaluator** call
+("prefer failing borderline cases"). The intermittent hard crash from earlier today
+(`Execution failed: parse planner response`, 3-event JSONL, no `thread.completed`) is this planner
+phase's JSON response occasionally failing to parse — confirmed by reproducing it again on a direct run,
+this time with full untruncated stderr (the diagnostic gap from Round 1 is now closed).
+
+The alternative, `HarnessOrchestrationMode::Single`, skips this multi-phase JSON-round-trip machinery.
+Tested: **no crash across repeated runs** — a real, confirmed fix for the crash specifically. But it did
+**not** change the "never writes" symptom at all (identical tool-call pattern, same outcome) — the two
+symptoms are independent bugs, not one root cause. `orchestration_mode = "single"` is worth setting in
+`vtcode.toml` regardless, purely for the crash fix, once the write issue is separately resolved (setting
+it now would just make failures quieter without making runs succeed).
+
+### Further theories tested for "never writes" — also ruled out or inconclusive
+
+5. **`task_tracker`/`plan_task_tracker` denied while the system prompt repeatedly instructs their use.**
+   The dumped system prompt's "Operating Profile" section says, verbatim, "Use `task_tracker` for
+   non-trivial work" and "only stop when the tracker is current and verification is resolved" — but the
+   prompt's own `Runtime Tool Catalog` line confirms `task_tracker` is not among the 17 available tools
+   (denied in our `vtcode.toml`, inherited from copying `vtcode-explorer.toml`'s read-only denial list
+   into the main coding config, where it doesn't belong). This is a real, genuine misconfiguration —
+   the model is told to use its own primary progress/completion-tracking mechanism and that mechanism
+   doesn't exist for it. **Fixed it (`task_tracker`/`plan_task_tracker` → `"allow"`) and retested: no
+   effect on the core symptom** — still zero writes — though this run surfaced a second, previously-unseen
+   anomaly (next item). Worth keeping the allow either way; it's correct regardless of whether it moves
+   the needle on writes.
+6. **Tool-call parsing anomaly under parallel calls.** The system prompt explicitly instructs "Run
+   independent tools in parallel." In the `task_tracker`-allowed run, several real tool calls
+   (`unified_file`, `unified_search`) that were immediately followed by a second tool-call item with an
+   **empty tool name** (`""`) ended up marked `status: "failed"` — even though their own arguments looked
+   completely valid. Traced the actual (non-test-only — the first file found,
+   `vtcode-llm/.../openrouter/stream_decoder.rs`, is entirely `#[cfg(test)]` and not what runs in
+   release) streaming tool-call accumulator, `providers/shared/mod.rs::update_tool_calls` — it correctly
+   reads each delta's own `"index"` field rather than trusting array position, so the obvious version of
+   this bug class isn't present. Found `agent.harness.max_parallel_tool_calls` (default 4) and tested
+   `= 1`: the anomaly didn't appear in that run (0 failed/empty calls) — but a **later** run (the
+   `system_prompt_mode = "minimal"` test, below) showed the identical empty-name/failed pattern again
+   with the same setting in place. So `max_parallel_tool_calls = 1` is **not a real fix**, just
+   apparently lowered the odds in one sample — the anomaly is real and reproducible but still not
+   root-caused. Left at `1` since forcing sequential calls is harmless and clearly doesn't hurt.
+7. **System prompt verbosity.** vtcode ships four `system_prompt_mode` levels (`minimal` ~150-250 tokens
+   through `default`'s full ~6-7k-token guidance, `vtcode-config/src/types/mod.rs`). Hypothesis: a dense,
+   heavily-instruction-laden default prompt could overload a "flash"-tier model's ability to prioritize
+   and act, independent of raw context-window size (already ruled out in Round 1). Tested
+   `system_prompt_mode = "minimal"`: **made things worse, not better** — 14 turns (vs. 4-6 typical),
+   7205 events, the same file re-read 7+ times in overlapping chunks (confused, repetitive exploration),
+   multiple failed/null tool calls, still zero writes, still reported `success`. Retracted as a fix
+   direction — if anything this suggests the *default* prompt's structure is load-bearing for this model,
+   not excessive.
+
+### Where this leaves it
+
+Eight hypotheses tested end to end this session (4 in Round 1, 4 more here), two real bugs found and
+fixed (the `NoChanges`-gate ordering bug from Round 1; the `orchestration_mode` crash here), one
+genuine misconfiguration fixed on principle (`task_tracker` denial) even though it didn't move the core
+symptom, one reproducible-but-not-root-caused parsing anomaly (parallel tool calls sometimes corrupt an
+adjacent call) — and the central "vtcode never writes for this task, opencode does" symptom is still
+unexplained. Every individual lever tested changes *something* (crash frequency, turn count, event
+volume, which calls fail) without changing the one outcome that matters. That pattern — many real,
+verifiable side-effects, no effect on the core behavior — is itself informative: this doesn't look like
+a single misconfigured flag waiting to be found. It looks either like a deeper interaction (multiple
+factors compounding) or a genuine model-response-handling defect in a code path none of these seven
+config knobs touch.
+
 ## Current state
 
 - Committed to `liberado-pr-dispatch-mcp`, local `master` only (3 ahead of `origin/master`, not
@@ -149,13 +237,26 @@ our surrounding prompt construction or dispatch-server scaffolding.
   validation + NoChanges ordering fix + diagnostics).
 - **Uncommitted**: the coder/critic retry loop (`src/critic.rs`, `config.rs`, `constants.rs`,
   `git_ops.rs`, `lib.rs`, `vtcode_client.rs`, `worker.rs`, `dispatch.yaml.example`, `.gitignore`).
-- `vtcode-src/` — a fresh clone of `vinhnx/VTCode` (includes the earlier-merged `#697` fix), built
-  locally at the `liberado-pr-dispatch-mcp` repo root, gitignored. Used for source investigation and as
-  the scratch dispatch server's `VTCODE_BIN`. Not a dependency of the actual project.
-- No vtcode-side fix yet. Next session should resume source investigation inside `vtcode-src/`, now
-  scoped specifically to headless `exec --json` invocation — something between "the model decides what
-  to call" and "the write actually lands" is different between vtcode and opencode for this exact
-  scenario, and that gap hasn't been located yet.
+- `vtcode-src/` — cloned from **`ForrestThump/VTCode`** (`origin` repointed there from upstream
+  mid-session; content was identical at clone time), built locally at the `liberado-pr-dispatch-mcp`
+  repo root, gitignored. Has one uncommitted local diagnostic patch: the `VTCODE_DUMP_SYSTEM_PROMPT`
+  env-var hook in `vtcode-core/src/core/agent/runner/execute.rs` — worth keeping (or upstreaming
+  separately as a small, genuinely useful debug feature) since it's what made Round 2 possible at all.
+- Scratch diagnostic harness at `<session scratchpad>/opencode-test/` — `vtcode-home/` (a hand-built
+  per-task `HOME`/`VTCODE_CONFIG` dir, currently has `max_parallel_tool_calls = 1` and
+  `system_prompt_mode = "minimal"` set from the last test — **reset both before the next real test**,
+  neither is a confirmed fix), `vtcode-prompt.txt` (the exact prompt text used, for exact
+  reproducibility), and multiple `vtcode-*-output.jsonl`/`*-stderr.txt` pairs from each numbered test
+  above.
+- No fix yet for the core symptom. Next session should not keep testing individual `vtcode.toml` flags
+  one at a time — that space is largely exhausted for now. More promising next moves: (a) diff vtcode's
+  actual outgoing HTTP request to OpenRouter against what a working opencode run sends, to see what's
+  structurally different in the request itself (tool schema shape, message structure) rather than
+  config; (b) try a *second* model through vtcode (not to fix context size — already ruled out — but to
+  see whether the symptom is deepseek-v4-flash-specific to vtcode's request shape specifically); (c)
+  consider filing this as a vtcode issue with the reproduction case documented here, even without a
+  confirmed root cause — the evidence (opencode A/B, the eight ruled-out variables) is substantial
+  enough to be useful to vtcode's own maintainers.
 
 ## Related docs
 
