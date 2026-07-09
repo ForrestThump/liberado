@@ -16,6 +16,7 @@ use liberado_common::Outcome;
 use liberado_executor::{Budget, Executor, Task, ToolRuntime};
 use liberado_provider::{Provider, ToolDef, ToolInvocation};
 use serde_json::{Value, json};
+use tokio::process::Command;
 
 #[derive(Clone)]
 pub struct LiberadoLoopBackend {
@@ -81,7 +82,7 @@ impl CoderBackend for LiberadoLoopBackend {
             },
         );
 
-        let files_changed = changed_files(&runtime).await?;
+        let files_changed = changed_files(&request.workspace.root).await?;
         if files_changed.is_empty() && report.outcome != Outcome::Failed {
             push_event(
                 &events,
@@ -150,14 +151,6 @@ struct TracingToolRuntime {
 impl TracingToolRuntime {
     fn new(inner: CodingToolRuntime, events: Arc<Mutex<Vec<CoderEvent>>>) -> Self {
         Self { inner, events }
-    }
-
-    async fn invoke_json_for_backend(
-        &self,
-        name: &str,
-        args: Value,
-    ) -> Result<Value, liberado_coder_tools::ToolError> {
-        self.inner.invoke_json_for_backend(name, args).await
     }
 }
 
@@ -232,21 +225,21 @@ fn coder_goal(request: &CoderRunRequest) -> String {
     goal
 }
 
-async fn changed_files(runtime: &TracingToolRuntime) -> Result<Vec<String>, CoderError> {
-    let output = runtime
-        .invoke_json_for_backend(
-            "run_command",
-            json!({
-                "program": "git",
-                "args": ["status", "--porcelain"],
-            }),
-        )
+async fn changed_files(workspace_root: &str) -> Result<Vec<String>, CoderError> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(workspace_root)
+        .output()
         .await
-        .map_err(|e| CoderError::Tool(e.to_string()))?;
-    let stdout = output
-        .get("stdout")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
+        .map_err(|e| CoderError::Backend(format!("git status: {e}")))?;
+    if !output.status.success() {
+        return Err(CoderError::Backend(format!(
+            "git status exited {:?}: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout.lines().filter_map(parse_status_path).collect())
 }
 
@@ -430,6 +423,39 @@ mod tests {
         let result = backend.run(request(dir.path(), "HEAD")).await.unwrap();
 
         assert_eq!(result.outcome, Outcome::Succeeded);
+        assert_eq!(result.files_changed, vec!["hello.txt"]);
+    }
+
+    #[tokio::test]
+    async fn internal_git_status_is_not_blocked_by_model_command_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "write-1",
+                    "write_file",
+                    json!({"path": "hello.txt", "content": "hello\n"}),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "report-1",
+                    liberado_executor::SUBMIT_REPORT_TOOL,
+                    json!({
+                        "outcome": "succeeded",
+                        "summary": "Wrote hello.txt",
+                        "artifacts": ["hello.txt"],
+                        "new_high_signal_facts": [],
+                        "follow_up": null
+                    }),
+                )]),
+            ],
+        ));
+        let backend = LiberadoLoopBackend::new(provider);
+        let mut request = request(dir.path(), "HEAD");
+        request.config.command_policy.deny = vec!["git status".to_string()];
+
+        let result = backend.run(request).await.unwrap();
         assert_eq!(result.files_changed, vec!["hello.txt"]);
     }
 

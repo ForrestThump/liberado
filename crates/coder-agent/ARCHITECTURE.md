@@ -11,7 +11,8 @@ a `CoderRunResult`.
 - Runs `Executor::execute` in report mode.
 - Loads the coder role prompt from inline config or `prompt_path`.
 - Checks `git status --porcelain` after the loop and fails `NoChanges` if the model filed a success
-  report without a real workspace change.
+  report without a real workspace change. This backend invariant does not go through the
+  model-visible `run_command` tool or its command policy.
 - Writes a `CoderTrace` JSON replay artifact when `trace_dir` is configured. Current events include
   session/role/report/tool-start/tool-finish/file-change/guard/finish events.
 
