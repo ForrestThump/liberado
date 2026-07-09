@@ -254,7 +254,11 @@ vault-watch are interchangeable event-sources; a second dispatcher/executor is c
   mechanism for per-task ephemeral sandboxing — the generic capability now exists, but `riggers`
   remains an externally-deployed long-running container today (`riggers/Dockerfile`), not something
   Liberado's own connector layer spawns. Full design:
-  [phase-4-docker-transport.md](phase-4-docker-transport.md).
+  [phase-4-docker-transport.md](phase-4-docker-transport.md). **Not yet live-verified**: the Docker
+  daemon wasn't running on the dev machine when this landed, so the actual `docker run` → MCP
+  handshake path is unit-tested (config round-trip, `docker_argv`, registry registration) but not
+  yet proven against a real container — see
+  [human-todo.md](human-todo.md#phase-4-docker-mcp-transport--needs-a-live-smoke-test--2026-07-07).
 
 ## Landed (substrate already built)
 

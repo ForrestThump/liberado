@@ -117,10 +117,11 @@ changes live on feature branches and have a draft issue in `turbomcp-request-met
 The reactive backbone, the web UI, a **streaming conversational chat loop**, and **persisted,
 session-keyed conversations** (Decision 17) are complete, all hosted by **one `liberado` binary**
 (daemon-first, Decision 2 — `serve` hosts everything; `chat` is a client). The pre-Phase-3 hardening
-pass (item 15 below) is done, and Phase 3 is now fully landed — cron, the external webhook hook
-receiver, and named dispatcher/executor pools (items 16-18 below), completing Decision 18
-checkpoint #3. The next work is deepening the main agent (context policy + dispatcher integration)
-and the TUI, or Phase 4 (execution environment scaling).
+pass (item 15 below) is done, Phase 3 is fully landed (cron, the external webhook hook receiver, and
+named dispatcher/executor pools, items 16-18 below, completing Decision 18 checkpoint #3), and
+Phase 4 v1 (Docker MCP transport, item 19 below) is built and unit-tested, pending only its live
+Docker-daemon smoke test. The next work is deepening the main agent (context policy + dispatcher
+integration) and the TUI, that live smoke test, or a further Phase 4 slice.
 
 **Done:**
 1. ✅ **Reactive pipeline** — daemon watches → attributes → dispatches → orchestrates → executes, end-to-end wired and tested.
@@ -142,6 +143,19 @@ and the TUI, or Phase 4 (execution environment scaling).
 16. ✅ **Phase 3, slice 1 — the event-source trait + cron (Decision 18/19)** — a new `EventSource` trait (`liberado-common`) the daemon fans into one channel; the *existing* vault-watch loop was refactored into its first conformer (`VaultEventSource`, moved not rewritten — the daemon's whole prior test suite passed unchanged) before cron, the second conformer, was added (new `liberado-cron` crate, deliberately vault-agnostic). Config surface: `Topology.schedules`, fail-fast validated. Live-verified: a daemon integration test proves a cron firing and a real vault change both produce reactions over the same channel — Decision 18 checkpoint #3, literally.
 17. ✅ **Phase 3, slice 2 — the external webhook hook receiver** — `POST /api/hooks/{name}` (`crates/server/src/hooks.rs`), the *push*-style counterpart to cron's *pull*-style `EventSource`: arbitrary software that can `curl` an endpoint triggers a reaction the same way. Required `Daemon::event_tx`/`event_rx` to become daemon-owned fields (built once in `open()`) plus a new `Daemon::event_sender()` accessor, so a same-process external producer can inject an `Event` without its own `EventSource` loop. Auth is a per-hook shared secret (`X-Liberado-Hook-Secret`, constant-time compared) — chosen explicitly over HMAC signing for "trivially `curl`-able." `Topology.hooks`'s old `ComponentConfig` stub was replaced in place with `HookConfig` (name/secret_ref/goal). Verified via 11 HTTP-level integration tests against a real `axum::Router`; a live `curl` smoke test was attempted but skipped after a test-harness config-directory mixup (caught before any request was sent) — deemed unnecessary given the integration-test coverage. **Deferred, documented**: in-process rate limiting (reverse-proxy recommendation instead), HMAC signing as an available upgrade path, and per-hook capability scoping beyond the pool mechanism below.
 18. ✅ **Phase 3, slice 3 — named dispatcher/executor pools (Decision 18 checkpoint #3's remaining half)** — before building, outside research was commissioned on whether concurrent-agent architectures are proven territory; the results (`agent_pools_research_results.md`, four independent passes) confirmed internal peer-agent authority-coordination is a poor, mostly-unproven fit (even Anthropic's own published multi-agent system is orchestrator + narrowed-workers, not peer coordination) — so this slice builds only the well-scoped piece: multiple dispatcher+executor pools with their own capability grant, that never talk to each other. `Daemon` holds `pools: HashMap<String, DaemonPool>` (an always-present `"default"` entry keeps every pre-existing call site unchanged); `EventPayload.pool` (set from `CronSchedule.pool`/`HookConfig.pool`) routes a trigger to a pool declared in `topology.toml`'s `[[pools]]`; a pool's authority is just its name used as the `component` key in `policy.toml`'s existing `[[grants]]` — no new authority mechanism. A privilege-escalation-shaped gap surfaced mid-implementation (a proposal must remember which pool proposed it, or an approval could execute under a different, broader pool's authority) and was closed by making `Proposal.pool` a signed field, re-verified defensively in `execute_approved`. Live-verified by a dual-pool daemon integration test: two pools given an identical decision referencing the same MCP, one granted it and one not — the ungranted pool's dispatcher-level guard catches the gap before a real runtime is ever reached. **Deliberately out of scope** (research-confirmed): cross-pool coordination/communication — see [`a2a-protocol-idea.md`](../ideas/a2a-protocol-idea.md)'s research note.
+19. ✅ **Phase 4 v1 — Docker MCP transport (2026-07-07)** — a config-driven way to run an MCP server
+    inside a container instead of directly as a host process, for isolating a less-trusted or
+    freshly-scaffolded MCP. New `McpTransport::Docker { image, command, args, volumes, env }`
+    (`crates/config-loader`) plus a `docker_argv` builder wired into `mcp_registry_from_config`
+    (`crates/bootstrap`) — deliberately no new connector type: the existing
+    `StdioConnector`/`ChildProcessTransport` machinery handles a `docker run -i --rm image ...` child
+    process unchanged (`kill_on_drop` breaks the container's stdin, a well-behaved MCP server exits
+    on that, and `--rm` removes it). `cargo build`/`cargo clippy`/all new unit tests are clean; the
+    **live Docker-daemon smoke test is still outstanding** (Docker Desktop's CLI is installed on the
+    dev machine but its daemon wasn't running) — see
+    [`human-todo.md`](../roadmap/human-todo.md#phase-4-docker-mcp-transport--needs-a-live-smoke-test--2026-07-07).
+    Deferred, not built: serverless hibernation (no MCP has an idle-cost problem that justifies the
+    integration cost yet). Full design: [`phase-4-docker-transport.md`](../roadmap/phase-4-docker-transport.md).
 
 **Not yet built (next slice):**
 - Multi-MCP registry UX, connection pooling.
@@ -153,9 +167,8 @@ and the TUI, or Phase 4 (execution environment scaling).
   never-implemented trait was deleted rather than adopted; `chat_client_contract::native` now just
   documents `SseDecoder`/`ChatEvent::from_sse_data` as the real shared boundary.)
 - Writer-identity verification on proposal approval (item 1 of [`hardening-audit-2026-07-02.md`](../roadmap/hardening-audit-2026-07-02.md)) — needs OS-level MCP process isolation or an out-of-band approval channel, not a code patch.
-- Phase 4 (execution environment scaling) — see [`current.md`](../roadmap/current.md). Phase 3 is
-  now fully done (cron, the external webhook receiver, and named dispatcher/executor pools, items
-  16-18 above).
+- Phase 4's live Docker-daemon smoke test (item 19 above) and its serverless-hibernation slice
+  (deferred, no concrete need yet).
 
 ## Known limitations
 

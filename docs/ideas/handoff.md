@@ -1,41 +1,101 @@
-# Liberado — Handoff (2026-07-02)
+# Liberado — Handoff (2026-07-08)
 
-Current-state handoff. Kept in sync by the Dream skill after each session arc. For the authoritative
-system map read [`docs/architecture/overview.md`](../architecture/overview.md); for build/run/configure
-read [`docs/contributing/agents.md`](../contributing/agents.md); for the development process (how to
+Current-state handoff. Kept in sync after each session arc. For the authoritative system map read
+[`docs/architecture/overview.md`](../architecture/overview.md); for build/run/configure read
+[`docs/contributing/agents.md`](../contributing/agents.md); for the development process (how to
 research, plan, delegate, test, commit) read
 [`docs/contributing/development-workflow.md`](../contributing/development-workflow.md); for the chat
 API contract read [`docs/reference/api.md`](../reference/api.md); for the rationale behind any
-"Decision N" read [`docs/specs/liberado-architecture-decisions.md`](../specs/liberado-architecture-decisions.md).
+"Decision N" read [`docs/specs/liberado-architecture-decisions.md`](../specs/liberado-architecture-decisions.md);
+for open human-only action items read [`docs/roadmap/human-todo.md`](../roadmap/human-todo.md) — it's
+more current than this file on anything it covers, since it's updated the moment an item lands rather
+than at session-arc boundaries.
 
 > Note: keep this file lowercase (`handoff.md`, not `HANDOFF.md`). On Windows (case-insensitive
 > filesystem) the two names collide — see Pitfalls below.
 
 ---
 
-## What's built (as of 2026-07-02)
+## What's built (as of 2026-07-08)
 
-All fourteen "Done" milestones in [`docs/architecture/overview.md`](../architecture/overview.md) are
-shipped and `cargo test --workspace` is green. The system is:
+All nineteen "Done" milestones in [`docs/architecture/overview.md`](../architecture/overview.md) are
+shipped and `cargo test --workspace` is green (unchanged this session — no life-os source was
+touched; all work below happened in sibling/standalone repos and this session's own tooling setup).
+The system is:
 
 - **One `liberado` binary** (daemon-first, Decision 2): `liberado serve [vault]` runs the daemon + chat
   + HTTP/SSE API; `liberado chat [session]` is a native client; bare `liberado <vault>` aliases `serve`.
-- **Phases 1 and 2 complete**: chat routes through the dispatcher; capability catalog is live and shared;
-  `crates/tui` is a ratatui client; web UI has sidebar/MCP panel/Markdown/slash commands; Riggers
-  (`code-dispatch`) enables self-improvement via draft PRs.
-- **Proposal loop hardened (2026-07-02)**: HMAC-SHA256 integrity signing on every proposal (item 2 of
-  hardening audit); runtime-gated proposals now land in the vault's own `proposals/` dir so approve→execute
-  works for adaptive-call downgrades too (item 3). Item 1 (writer-identity verification) remains open —
-  needs OS-level MCP sandboxing or an out-of-band approval channel.
-- **Crate hygiene passes (2026-07-01 to 2026-07-02)**: three tiers — test-mock dedup, `RuntimeFactory`
-  relocation to `liberado-executor`, new `liberado-config` crate extracted from `liberado-bootstrap`. Full
-  record: [`docs/roadmap/hygiene-audit-2026-07-02.md`](../roadmap/hygiene-audit-2026-07-02.md).
+- **Phases 1-3 complete, Phase 4 v1 landed 2026-07-07**: chat routes through the dispatcher; capability
+  catalog is live and shared; `crates/tui` is a ratatui client; web UI has sidebar/MCP panel/Markdown/
+  slash commands; self-improvement (`liberado-pr-dispatch-mcp`, née `riggers/`) enables draft-PR-only
+  self-extension; cron + external webhooks + named dispatcher/executor pools are all live; Docker MCP
+  transport (`McpTransport::Docker`) is built and unit-tested, with its live Docker-daemon smoke test
+  still the one open item (see `human-todo.md`).
+- **`liberado-pr-dispatch-mcp` proven end-to-end on Windows this session, with a real upstream bug
+  found and fixed along the way** — see "This session's work" below. This validates Phase 2's
+  self-improvement engine on a second platform; it previously only ran on the Linux/Docker homelab
+  deployment.
+- **`liberado-deliberate-mcp`** (multi-model deliberation MCP, standalone repo, fully decoupled from
+  life-os as of 2026-07-06) is built, configured against the real vault, and registered as an MCP
+  server for this Claude Code project — see "This session's work" below.
 
 **Not yet built (next slice)**: inbox hook, hooks generally, multi-MCP registry UX, connection pooling.
 Splitting `liberado-common`'s nine-module grab-bag (crate-modularity-audit finding 3) is the primary
-crate-structure deferred item — finding 2 (`ChatClient` trait adoption) was resolved 2026-07-05 by
-deleting the never-implemented trait instead of adopting it. Phases 3 and 4 are on
-the roadmap. See [`docs/roadmap/current.md`](../roadmap/current.md) for the full list.
+crate-structure deferred item. See [`docs/roadmap/current.md`](../roadmap/current.md) for the full list.
+
+---
+
+## This session's work (2026-07-08)
+
+Two threads, both outside `life-os`'s own tracked source (no `crates/*` or workspace file was
+touched):
+
+**1. Proved the PR-dispatch pipeline on Windows before "shotgunning" a batch of WebUI tasks through
+it**, per your request to test on one low-risk real task first. It failed twice before succeeding,
+and every failure was a real bug:
+
+- Six fixes landed in `liberado-pr-dispatch-mcp` (env-var path overrides instead of hardcoded Unix
+  paths, a Windows `git-askpass` helper, a Git-Credential-Manager bypass for the specific git
+  invocations, stdin-piped prompts instead of a CLI arg to dodge Windows' command-line length limit,
+  a TOML literal string to survive Windows path backslashes, and excluding vtcode's own `.vtcode/`
+  scratch directory from commits). **Committed 2026-07-08** (`5157b21`, local only, not pushed).
+- Found and fixed a genuine bug in upstream `vtcode` itself (not this project, not a config mistake —
+  confirmed by reading the actual source across three versions): primary-agent model resolution
+  clobbered a real configured model with the literal string `"inherit"`. Fixed on
+  [ForrestThump/VTCode](https://github.com/ForrestThump/VTCode) (branch
+  `fix/primary-agent-inherit-model`); you opened
+  [vinhnx/VTCode#697](https://github.com/vinhnx/VTCode/pull/697) upstream, and it **merged into
+  `main` 2026-07-08** (`fe45c4e`) — no tagged release includes it yet, so
+  `liberado-pr-dispatch-mcp` was cleaned up to build `vtcode` from git source tracking upstream
+  `vinhnx/VTCode` `main` (not the fork) rather than depend on the fork or wait on a crates.io
+  release; subagents (disabled as a workaround for this exact bug) are re-enabled. The
+  `ForrestThump/VTCode` fork is no longer needed — safe to archive/delete whenever.
+- The smoke test itself succeeded cleanly on the second attempt (patched fork binary):
+  [ForrestThump/liberado#2](https://github.com/ForrestThump/liberado/pull/2), a single-line diff
+  (a `title="Send (Enter)"` tooltip on the chat send button) — exactly the intended change. It's a
+  **draft, awaiting your review/approval**; I did not approve or merge it.
+
+Full detail, including the two throwaway/junk PRs closed along the way: `human-todo.md`'s
+"`liberado-pr-dispatch-mcp` Windows portability pass" section.
+
+**2. Kicked off a multi-model deliberation on WebUI polish/feature ideas**, per your request to
+brainstorm a batch of ~10 small PR-dispatch tasks for a Saturday review session. In progress, paused
+partway to do this doc refresh instead:
+
+- Surveyed the current WebUI state (`crates/webui/src/components/`) — see "Where key things live"
+  below for the read-out.
+- Stood up the infrastructure: started a `turbovault` HTTP instance against your real vault
+  (`C:/Users/Shiloh/Obsidian/Main`, port 3737 — found an earlier attempt's process had actually
+  survived despite looking dead, so no fresh start was needed); registered both
+  `liberado-deliberate-mcp` (stdio) and `liberado-pr-dispatch-mcp` (HTTP, against the same scratch
+  dispatch server PR #2 came from) as MCP servers for this Claude Code project
+  (`claude mcp add ... --scope local`), confirmed `Connected` via `claude mcp list`.
+- **Blocked on a session restart**: Claude Code only loads a newly-registered MCP server's tools at
+  session startup. Both servers are configured and healthy, but *this* running session can't call
+  their tools yet. That's what triggered "start fresh and update the docs first."
+- **Not yet done**: writing the actual context brief for the deliberation participants, running the
+  deliberation rounds, picking the top 10 with you, and submitting them as `liberado-pr-dispatch-mcp`
+  queue entries. All of that resumes in the fresh session, once its MCP tools are live.
 
 ---
 
@@ -60,80 +120,139 @@ the roadmap. See [`docs/roadmap/current.md`](../roadmap/current.md) for the full
 | Web UI (Dioxus WASM) | `crates/webui/src/` — `dx build` only, excluded from native workspace build |
 | Conversation store | `crates/conversation-store/src/{jsonl,store,types,error}.rs` |
 | Shared SSE decoder + slash-command dispatcher | `crates/chat-client-contract/` and `crates/liberado-commands/` |
+| PR-dispatch self-improvement engine (standalone repo, own git remote) | `liberado-pr-dispatch-mcp/` — [ForrestThump/liberado-pr-dispatch-mcp](https://github.com/ForrestThump/liberado-pr-dispatch-mcp) |
+| Multi-model deliberation engine (standalone repo) | `liberado-deliberate-mcp/` — config at `%APPDATA%\liberado-deliberate-mcp\deliberation.toml` |
+| Shared no-life-os-dependency crates (`turbovault-client`, `frontmatter-note`, `openai-compat-client`) | [liberado-standalone-kit](https://github.com/ForrestThump/liberado-standalone-kit) (private), pinned `git` dep of both MCPs above |
+
+### WebUI component read-out (for the in-flight deliberation)
+
+`crates/webui/src/main.rs` renders a header (Chat/Status nav) over a `Sidebar` + main content area
+(`Chat` or `Dashboard`). Components, each in `crates/webui/src/components/`:
+
+- **`chat.rs`** — the chat pane: message bubbles (user/assistant/tool/system/error), collapsible
+  "thinking steps" (tool call + result, pending/ok/err), an auto-growing textarea, SSE streaming
+  (`token`/`tool`/`tool_result`/`done`/`failed` events), stop-generating, and slash-command dispatch.
+  Auto-titles a new conversation from its first message after the stream completes.
+- **`sidebar.rs`** — conversation list (relative-time labels), live search-as-you-type, "+ New Chat",
+  collapse/expand (auto-collapsed under 768px), hosts `McpPanel` in its footer.
+- **`dashboard.rs`** — daemon status banner (running/uptime/vault path/watcher/dispatcher/model/
+  reactions-seen) plus a two-panel grid: `VaultPanel` (root/note-count/watcher) and `ReactionsPanel`
+  (last 20 reactions: event type, outcome badge, path, time).
+- **`mcp_panel.rs`** — collapsible registered-MCP list with tool counts, consequence badges
+  (read_only/reversible/irreversible/external), and per-server expand showing tool names, main-agent/
+  dispatcher visibility badges, and provenance.
+- **`slash_commands.rs`** — `/new`, `/clear`, `/session ...`, `/status`, `/model`, `/help`, etc., via
+  `liberado-commands`' shared `CommandContext` trait; results not needing a network round trip are
+  instant. No modal/picker widget yet — `/theme list`/`/session list` fall back to a numbered
+  plain-text list.
+- **`markdown.rs`**, **`reactions.rs`**, **`vault.rs`** — small, focused renderers/fetchers backing
+  the above.
+
+No dark/light theme toggle in the WebUI yet (`set_theme` is a hardcoded no-op returning `false`);
+no in-chat image/file upload; no conversation delete/rename/pin from the sidebar; no keyboard-shortcut
+help; no unread/typing indicators; no per-message copy/regenerate/edit actions. These are exactly the
+shape of gap the in-flight deliberation is aimed at.
 
 ---
 
 ## Working patterns that succeed (keep doing)
 
-- **Research before design — verify claims against code.** Read the struct/function/route before trusting
-  a doc that describes it. Checking the actual `Cargo.toml` and `wc -l` caught at least one hygiene
-  finding this session that turned out to be **false on both counts** — a plausible-sounding claim the
-  premise check ruled out immediately.
-- **Dispatch 3 parallel research subagents for audit-shaped work**, one per independent angle (coupling /
-  duplication / dead code; or guard coverage / integrity / injection surfaces). Each agent gets the full
-  architecture context already known, a narrow angle, a demand for file:line verdicts, and a word budget
-  (~600-700 words). Three complementary deep reports, not three overlapping shallow ones.
-- **Verify code staleness claims against code, not narrative** — the docs review pass that found
-  `api.md` missing two routes (`GET /api/catalog`, `PATCH /api/conversations/{id}`) was only reliable
-  because the claim was checked against the actual `crates/server/src/api.rs` route table, not accepted
-  from a summary.
-- **Cheap link-checking catches bugs human review misses.** Walking `docs/`, regex-extracting markdown
-  links, and verifying each target path caught 22 broken links in a single pass — several of which
-  predated this session's own edits.
-- **Dispatch a subagent for code, then verify independently**: read the produced code, run `cargo build`
-  then `cargo test --workspace --no-run` (they're different — the second compiles `#[cfg(test)]`), then
-  `cargo test --workspace`. Don't trust the subagent's own report.
-- **Live smoke recipe** (proven repeatedly): hydrate the key from the Windows User env via
-  `[Environment]::GetEnvironmentVariable("DEEPSEEK_API_KEY","User")` (NEVER print it; only confirm
-  length 35 / prefix `sk-`); start `liberado serve <scratch-vault>` on a scratch `LIBERADO_PORT` +
-  `LIBERADO_DATA_DIR`; drive a two-turn message through `liberado chat`; assert continuity (turn 2
-  recalls a word from turn 1) and a persisted ULID `.jsonl` under `<LIBERADO_DATA_DIR>/conversations`.
-- A force-killed server (`Stop-Process -Force`) exits **255** — expected, not a failure.
-- **Split audit into two commits**: first the findings doc (`docs/roadmap/`), then the fix. Each is
-  individually reviewable and the findings survive even if the fix is later revisited.
+- **Research before design — verify claims against code.** Read the struct/function/route before
+  trusting a doc that describes it.
+- **Dispatch parallel research subagents for audit-shaped work**, one per independent angle, each with
+  full context, a narrow angle, a demand for file:line verdicts, and a word budget.
+- **Verify code-staleness claims against code, not narrative.**
+- **Cheap link-checking catches bugs human review misses** — regex-extract markdown links, verify
+  each target path.
+- **Dispatch a subagent for code, then verify independently**: read the produced code, `cargo build`
+  then `cargo test --workspace --no-run` (different from build — compiles `#[cfg(test)]`), then
+  `cargo test --workspace`.
+- **Live smoke recipe** (proven repeatedly): hydrate secrets from env (confirm only length/prefix,
+  never print); start on a scratch port/data-dir; drive a real request through; assert the actual
+  external side effect (a file written, a PR opened), not just an exit code.
+- **Rigorously confirm an external-dependency bug before treating it as real**: read the actual source
+  across multiple versions (crates.io-published *and* a fresh git clone of HEAD), compare the buggy
+  path against an analogous *correct* path in the same codebase, check `git log --grep` for whether
+  it was ever addressed. This is what turned "plausible vtcode bug" into "certain, with a byte-level
+  fix" this session.
+- **When a fix works, write the PR case for someone else's project like you're the one being
+  reviewed**: root cause, side-by-side code comparison, how it was tested (including the live
+  reproduction), a clean single commit — not a raw diff dump. Delivered as a copy-paste-able
+  `*-pr-description.md` when the user is opening the PR themselves, not you.
+- **Split audit into two commits**: first the findings doc (`docs/roadmap/`), then the fix.
 
 ---
 
 ## Pitfalls learned (don't relearn)
 
 - **Windows is case-insensitive**: `handoff.md` and `HANDOFF.md` collide. Keep one lowercase handoff.
+- **`cargo build` is not enough** — does not compile `#[cfg(test)]`. Always run
+  `cargo test --workspace --no-run` separately, then `cargo test --workspace`.
+- **`cargo install` ignores the crate's own `Cargo.lock` by default** — use `--locked`, or you can hit
+  a compile failure (a dependency version mismatch) that the crate's own CI never sees.
+- **Double-backgrounding a process is fragile on this setup**: `(cmd &) && sleep N && curl ...` inside
+  one Bash-tool call, itself run with `run_in_background`, can let the inner backgrounded process die
+  with the outer wrapper instead of surviving independently. Prefer handing the actual long-running
+  command directly to the tool's own `run_in_background: true`, not a shell-level `&` inside it.
+- **A "bind: address already in use" failure on a port you just tried to start something on** usually
+  means an *earlier* attempt actually succeeded and is still alive (didn't die the way it looked like
+  it did) — check `netstat -ano | grep :<port>` and just reuse it before assuming the new start
+  failed.
+- **Windows' Git Credential Manager intercepts auth before `GIT_ASKPASS` is consulted** and hangs
+  non-interactively if no credential is cached. Fix: `-c credential.helper=` on the specific git
+  invocation (clone/push), not a global config change.
+- **`gh`/`git` over HTTPS with `credential.helper=` disabled has no non-interactive auth path at all**
+  — if `gh auth status` shows `ssh` as the Git protocol, switch the remote to `git@github.com:...`
+  rather than fighting HTTPS credentials.
+- **Windows' ~32K CLI argument length limit** (vs. Linux's ~2MB) — a long prompt/argument passed as a
+  literal CLI arg can silently truncate or fail (`error 206`) on Windows where it'd work fine on the
+  actual Linux deployment target. Pipe over stdin instead where the receiving program supports it.
+- **TOML double-quoted strings interpret backslash escapes** — a Windows path written into a
+  double-quoted TOML string can break on its own backslashes. Use a literal (single-quoted) TOML
+  string for any value that might contain a raw Windows path.
+- **`dirs::home_dir()` ignores `HOME` on Windows** (uses `SHGetKnownFolderPath` instead) — a
+  per-process `HOME` override that works on Linux/Mac silently no-ops on Windows for anything using
+  that crate. Windows-only quirk, irrelevant to an actual Linux deployment target; don't chase it as
+  if it were a real bug.
+- **A newly `claude mcp add`-ed server doesn't get its tools into an already-running Claude Code
+  session** — registration + connection health (`claude mcp list` showing `Connected`) happens
+  immediately, but the session's own tool list only refreshes at startup. Needs a restart/reload,
+  every time, no exception found this session.
+- **`claude mcp add` (run from a shell where cwd shows as `C:/...`) stores servers under a
+  case-sensitive project key in `~/.claude.json`** — a *fresh* Claude Code session invoked with a
+  lowercase-drive-letter cwd (`c:/...`) is a *different* key in `projects{}` and sees an empty
+  `mcpServers`, even though `claude mcp list` reports the servers `Connected` (that command appears
+  to resolve/normalize case, session startup's tool-loading does not). Confirmed 2026-07-08: found
+  two sibling project entries, one `C:/Users/Shiloh/Code/life-os` holding
+  `liberado-deliberate-mcp`/`liberado-pr-dispatch-mcp`, one `c:/Users/Shiloh/Code/life-os` empty.
+  Fixed by copying `mcpServers` into the lowercase-key entry (backed up `.claude.json` first). Even
+  after the config fix, the *already-running* session still needs a restart — this is a second,
+  independent cause of "MCP tools not visible" on Windows, not just the restart-timing one above.
+- **GitHub has no PR-deletion mechanism**, even for repo owners on private repos — only closing.
+  Distinct from issues (which admins can delete). Don't promise otherwise.
 - **SSE event naming**: the error event is named **`failed`**, not `error` — browser `EventSource`
-  reserves `error` for its own connection errors. Structured events (`tool`, `tool_result`) are
-  JSON-encoded so multi-line previews don't split across `data:` lines.
-- **`cargo build` is not enough.** It does not compile `#[cfg(test)]` code. A trimmed "unused" import
-  that only a test module uses will silently break the test suite. Always run `cargo test --workspace
-  --no-run` as a separate step, then `cargo test --workspace`.
-- **`cargo tree` for structural dependency claims.** If a change's point is "crate X no longer depends on
-  crate Y," compile success alone does not prove the edge is gone (transitive paths still compile).
-  Run `cargo tree -p X` and grep for `Y`.
-- **`tokio::select!` borrow tangles**: don't reuse the same `&mut` in one branch's body that another
-  branch's future borrowed; clone the channel sender, and keep rollback **inside** the awaited future
-  (a Drop guard) rather than in the select arm.
-- **Keep the `liberado-orchestrator` dep wherever `RuntimeFactory::runtime_for` is called** — the trait
-  must be in scope. A removal that looked safe broke the build.
-- The executor's **"termination follows the consumer"** design is the seam that makes
-  chat-vs-autonomous a configuration, not a fork.
+  reserves `error` for its own connection errors.
 - **MCP server child processes have zero filesystem sandboxing** (confirmed:
-  `turbomcp/crates/turbomcp-transport/src/child_process.rs` does not set `current_dir` or restrict
-  environment on spawned processes). A co-resident MCP process can write directly to the vault. This is
-  why writer-identity verification (hardening audit item 1) cannot be closed with a code patch — it
-  needs OS-level process isolation or an out-of-band approval channel.
+  `turbomcp/crates/turbomcp-transport/src/child_process.rs` sets no `current_dir`/env restriction on
+  spawned processes). A co-resident MCP process can write directly to the vault — why writer-identity
+  verification (hardening audit item 1) needs OS-level isolation, not a code patch.
 - **WASM builds need the rustup toolchain, not the standalone Rust install on PATH** — full
-  explanation and the exact `dx build` command:
-  [`docs/contributing/agents.md`](../contributing/agents.md#building-the-wasm-frontend) ("Building
-  the WASM frontend"). Documented there, not duplicated here, since that's the living build guide
-  and this file gets rewritten wholesale each Dream pass.
+  explanation: [`docs/contributing/agents.md`](../contributing/agents.md#building-the-wasm-frontend).
 
 ---
 
 ## Live constraints (must not violate)
 
-- **Never print or echo `DEEPSEEK_API_KEY`** (or any secret) — confirm only length/prefix.
+- **Never print or echo `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, or any secret/token/PAT** — confirm
+  only length/prefix.
 - `turbovault` / `turbomcp` PR branches push to the **`ForrestThump` fork only** — no upstream PRs
-  without explicit permission.
+  without explicit permission. (The `vtcode` fork PR is a documented, one-off exception — the user
+  explicitly directed forking, fixing, and opening it themselves.)
 - **Outward-facing actions need confirmation.**
-- Don't commit, push, or run servers/daemons without being asked.
+- Don't commit, push, or run servers/daemons without being asked. (Starting `turbovault` and the
+  PR-dispatch server this session was in direct service of an explicit request to stand up the
+  deliberation/dispatch tooling — still worth re-confirming before doing it reflexively elsewhere.)
 - **Never amend a prior commit** unless explicitly asked — create new commits.
-- **Stage explicit file lists**, not `git add -A`/`-u` — unrelated WIP on the same branch (the
-  `ui-polish` branch has uncommitted webui component work alongside hardening fixes) must not get swept
-  into an unrelated commit by accident.
+- **Stage explicit file lists**, not `git add -A`/`-u`.
+- **`liberado-pr-dispatch-mcp`'s six Windows-portability fixes are uncommitted** — don't let a future
+  session assume they're already shipped; check `git status` in that repo first.

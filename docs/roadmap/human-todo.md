@@ -66,10 +66,18 @@ instance read it back correctly (`server::write_then_resume_round_trips_through_
       power mid-session). It'll need restarting (see the command above) before either MCP can be
       used live again. Same open question as above: let me know if you want a persistent-process
       story (systemd? Task Scheduler? Docker?) for the one `turbovault` instance both MCPs share.
-- [ ] Point your MCP client at `liberado-deliberate-mcp/target/release/liberado-deliberate-mcp`
-      (stdio) wherever you want the deliberation tools available — not yet wired into life-os's own
-      `topology.toml` `[[mcps]]` list (see the `mcp-forge` section below, which covers exactly that
-      decision).
+- [x] **Point your MCP client at it — done for this Claude Code project, 2026-07-08**, via
+      `claude mcp add liberado-deliberate-mcp --scope local -- <path to the .exe>` (local-scoped, so
+      it's saved in this project's `.claude.json` entry, not global). A fresh `turbovault` was
+      started against your real vault (`C:/Users/Shiloh/Obsidian/Main`) first — same "does not
+      survive a restart" caveat as above; PID found still alive and healthy from an earlier attempt
+      in this same session, so no restart was actually needed this time. **Not yet wired into
+      life-os's own `topology.toml`** — this registration is Claude-Code-side only, for using the
+      deliberation tools *from this chat*, which is a distinct decision from the `mcp-forge`/
+      `topology.toml` question in the section below. New MCP servers only load into a running
+      Claude Code session at startup, so **this session needs a restart/reload** before the
+      registered tools (`initiate_deliberation`, `run_deliberation_round`, etc.) actually appear —
+      confirmed via `claude mcp list` showing both as `Connected` already.
 
 ## Shared crates extracted: `liberado-standalone-kit`
 
@@ -135,56 +143,116 @@ new unit tests passing (config round-trip, validation, `docker_argv`, registry r
       test on the Debian target whenever that deployment happens, just to confirm nothing
       Windows-Docker-Desktop-specific snuck in unnoticed.
 
-## `riggers` repo-context injection — important: not committed anywhere yet — 2026-07-07
+## `liberado-pr-dispatch-mcp` repo-context injection — 2026-07-07 (superseded in part, see below)
 
 Built `util::read_repo_context` (reads whichever `AGENT_CONTEXT_PATHS` files exist in a task's
 fresh clone — default list covers `CLAUDE.md`/`AGENTS.md`/`ARCHITECTURE.md`/
 `docs/architecture/overview.md`/`docs/contributing/agents.md` — caps at `AGENT_CONTEXT_MAX_BYTES`)
 and wired it into both the normal and revision coding prompts, merged with the task's own
-`context` rather than replacing it. Full design + rationale in `riggers/ARCHITECTURE.md`'s new
-"Per-repo agent context" section. `cargo build`/`cargo test`/`cargo clippy` all clean (4
-pre-existing test failures in `vtcode_client`'s tests are Windows-can't-spawn-a-Unix-shell-script
-issues, unrelated to this change and not something I introduced).
+`context` rather than replacing it. Full design + rationale in
+`liberado-pr-dispatch-mcp/ARCHITECTURE.md`'s "Per-repo agent context" section (still under its old
+`riggers/` name inside that doc's own text in places — not re-verified this pass). `cargo
+build`/`cargo test`/`cargo clippy` all clean (4 pre-existing test failures in `vtcode_client`'s
+tests are Windows-can't-spawn-a-Unix-shell-script issues, unrelated to this change).
 
-- [ ] **Important — `riggers/` has no git repo of its own in this checkout.** It's a plain,
-      `.gitignore`d directory inside the life-os working tree (confirmed: no `.git` inside it, and
-      it's listed in life-os's own `.gitignore`). My edits are real files on disk at
-      `riggers/src/util.rs`, `riggers/src/config.rs`, `riggers/src/worker.rs`,
-      `riggers/.env.example`, `riggers/ARCHITECTURE.md`, `riggers/repos.toml` — but there's no
-      commit anywhere, and I have no visibility into wherever the *actual* deployed riggers
-      instance's source/git history lives (your homelab's Gitea, most likely, given
+> **Update, 2026-07-08**: the directory this describes is `liberado-pr-dispatch-mcp/` (renamed
+> from `riggers/` 2026-07-06) and — contrary to the note below — **does** now have its own git repo
+> with a GitHub remote (`git@github.com:ForrestThump/liberado-pr-dispatch-mcp.git`, one initial
+> commit, 2026-07-06 22:52). The "no git repo of its own" concern below was accurate when written
+> but no longer describes this checkout. The separate, real concern about a different
+> homelab-deployed instance (Gitea, `riggers.yaml`, `services/agent-workspace`) is untouched by
+> that fact and still stands as its own open item — I have no visibility into that deployment
+> either way. See the new section below for what changed in this checkout since this entry was
+> written, including a real bug found in `vtcode` itself along the way.
+
+- [ ] **`riggers.yaml`'s homelab deployment is a separate instance from this checkout** — I have no
+      visibility into its source/git history (your homelab's Gitea, most likely, given
       `riggers.yaml`'s own "Docker Compose homelab" framing and its `Dockerfile`'s
-      `services/agent-workspace` build-context reference — that path suggests the real deployment
-      repo has a different directory layout than this checkout). You'll need to port these six
-      files' changes into wherever that real repo actually is before they take effect.
-- [ ] **Confirmed real, still true**: `riggers/Cargo.toml` has `liberado-provider = { path =
-      "../crates/provider" }` — a literal path dependency on life-os's own crate. Building riggers
-      (Docker or otherwise) requires life-os's `crates/provider` available at that exact relative
-      path at build time. Worth confirming the real deployment's build process actually satisfies
+      `services/agent-workspace` build-context reference — that path suggests a different directory
+      layout than this checkout). Porting this checkout's fixes there (both the repo-context
+      injection above and the Windows-portability + `.vtcode`-scratch-dir fixes below) is still on
+      you, whenever/if that homelab instance needs them.
+- [ ] **Confirmed real, still true**: `liberado-pr-dispatch-mcp/Cargo.toml` has `liberado-provider =
+      { path = "../crates/provider" }` — a literal path dependency on life-os's own crate. Building
+      it (Docker or otherwise) requires life-os's `crates/provider` available at that exact relative
+      path at build time. Worth confirming the homelab deployment's build process actually satisfies
       this (vendors/copies the crate in, or checks out life-os alongside it) — I can't verify this
       from here since I don't know that deployment's actual layout.
-- [ ] **To target `liberado` without touching the homelab's working primary-repo config**: add it
-      as an *additional* repo, not the primary (which stays on `GITEA_URL`/`GITEA_REPO`/
-      `GITEA_TOKEN` env vars, untouched). A commented example is already in `riggers/repos.toml`:
-      ```toml
-      [[repos]]
-      slug = "ForrestThump/liberado"
-      url = "https://github.com"
-      token = "ghp_..."
-      provider = "github"
-      ```
-      Needs a **new GitHub PAT** scoped to just this repo (contents + pull-requests write is
-      enough for a fine-grained token). If `ALLOWED_REPOS` is set in whatever's actually deployed,
-      add `ForrestThump/liberado` to that allowlist too, or it'll be rejected even though it's in
-      `repos.toml`.
-- [ ] **Recommend one small, real smoke-test task before the 10-task shotgun** — dispatch something
-      trivial and easily-reversible against `ForrestThump/liberado` first (e.g. "fix a typo in a
-      doc comment") and actually look at the resulting draft PR: does the repo context show up in
-      vtcode's behavior (does it follow this project's actual conventions), does the PR land
-      against `main` (not `develop` — `riggers.yaml`'s `default_base_branch: develop` is the
-      homelab's own default; override per-task via the task's `target_branch` field, e.g.
-      `"main"`, rather than changing the global default and risking the homelab's own tasks), does
-      auth/push/PR-creation work end-to-end. Cheap insurance before committing to volume.
+- [x] **Smoke-test task against `ForrestThump/liberado` — done, clean, 2026-07-08.** See the new
+      section directly below for the full story (it took two attempts and surfaced a real upstream
+      `vtcode` bug along the way). Result:
+      [ForrestThump/liberado#2](https://github.com/ForrestThump/liberado/pull/2) — draft, single-line
+      diff (`chat.rs` `title` attribute), awaiting your review/approval. **Not merged — I never
+      merge draft PRs myself.**
+
+## `liberado-pr-dispatch-mcp` Windows portability pass + a real upstream `vtcode` bug — 2026-07-08
+
+Goal was to prove the PR-dispatch pipeline actually works end-to-end on this Windows dev machine
+before "shotgunning" a batch of WebUI tasks through it. It didn't work on the first try, and every
+failure was real, not environmental noise:
+
+- **Fixed in `liberado-pr-dispatch-mcp`** (uncommitted — see checkbox below): hardcoded Unix paths
+  (`/data/tasks.db`, `/workspace`) now read `DB_PATH`/`WORKSPACE_DIR`/`BIND_ADDR` env vars; a
+  Windows `git-askpass` helper was added (`git_ops.rs` previously hard-bailed on non-Unix); Windows'
+  Git Credential Manager was intercepting auth before `GIT_ASKPASS` was consulted and hanging
+  non-interactively, fixed with `-c credential.helper=` on the specific git invocations; the coding
+  prompt is now piped over stdin instead of passed as a CLI arg (Windows' ~32K command-line length
+  limit was truncating it); a TOML double-quoted string in the generated per-task vtcode config was
+  breaking on Windows path backslashes, fixed with a TOML literal (single-quoted) string; and
+  vtcode's own `.vtcode/` scratch directory was leaking into task commits (a bad draft PR, #1 on
+  `ForrestThump/liberado`, closed + branch deleted once diagnosed) — `commit_pending` now removes it
+  first.
+- **Found and fixed a genuine bug in upstream `vtcode`** (not this repo, not a config mistake —
+  verified by reading the actual source across three versions before concluding it was real):
+  `build_primary_agent_runtime_config` in `vtcode-core/src/primary_agent.rs` unconditionally
+  overwrote the resolved model with the literal string `"inherit"` (the sentinel built-in primary
+  agents default `model` to), instead of falling back to the parent's real model the way the
+  analogous `resolve_subagent_model` already correctly does. Every plain `exec` run failed with
+  `Model 'inherit' is not recognized`. Fixed on a fork
+  ([ForrestThump/VTCode](https://github.com/ForrestThump/VTCode), branch
+  `fix/primary-agent-inherit-model`), 28/28 `vtcode-core` tests pass, `cargo fmt`/`clippy` clean.
+  **PR opened upstream**: [vinhnx/VTCode#697](https://github.com/vinhnx/VTCode/pull/697) — you
+  opened it yourself 2026-07-08; awaiting the maintainer's review/merge.
+- End-to-end smoke test then succeeded cleanly against the patched fork binary:
+  [ForrestThump/liberado#2](https://github.com/ForrestThump/liberado/pull/2), a single-line diff
+  adding a `title="Send (Enter)"` tooltip to the chat send button — exactly the intended change,
+  nothing else touched.
+
+- [x] **The six Windows-portability fixes committed — 2026-07-08** (`5157b21`, local only, not
+      pushed — say the word if you want it on `origin/master`). The `vtcode`-fork cleanup above
+      (Dockerfile/vtcode.toml revert) is a separate, still-uncommitted change on top of that commit.
+- [ ] **Two stray untracked files in that repo**, `config.toml` and `sessions/` — vtcode's own local
+      scratch config/session logs from testing, not secrets, but not gitignored either. Harmless to
+      leave, cheap to add to `.gitignore` if you want them out of `git status` noise.
+- [x] **`vtcode` fork PR merged upstream — 2026-07-08.**
+      [vinhnx/VTCode#697](https://github.com/vinhnx/VTCode/pull/697) merged into `main` at `fe45c4e`
+      (confirmed via `gh pr view`). No tagged release includes it yet as of this writing (latest is
+      `0.134.14`, published *before* the merge) — cleaned up
+      `liberado-pr-dispatch-mcp` accordingly: `Dockerfile` reverted from the temporary
+      `cargo install vtcode` (crates.io) workaround back to building from source, now pointing at
+      upstream `vinhnx/VTCode` (not the `ForrestThump` fork) tracking `main` by default
+      (`VTCODE_REF`, still overridable to pin a tag/commit later). `vtcode.toml`'s `[subagents]` are
+      re-enabled (`enabled = true`) now that the fix that required disabling them is upstream. The
+      `ForrestThump/VTCode` fork itself is no longer needed by this checkout — safe to archive or
+      delete whenever you want, not urgent.
+- [ ] **`ForrestThump/liberado` PR #2 is a draft, awaiting your review/approval** — I deliberately
+      did not approve or merge it myself.
+- [x] **`liberado-pr-dispatch-mcp` also registered as an MCP server for this Claude Code project —
+      2026-07-08**, via `claude mcp add --transport http liberado-pr-dispatch-mcp
+      http://127.0.0.1:8000/mcp --header "Authorization: Bearer <token>" --scope local`, pointing at
+      the already-running smoke-test dispatch server (same instance PR #2 came from — found still
+      alive from earlier in this session; a second instance I tried to start hit "port already in
+      use" against it, confirming it survived). Same restart caveat as `liberado-deliberate-mcp`
+      above: registered and `Connected` per `claude mcp list`, but this session needs a
+      restart/reload before `submit_pr_factory_task`/`get_pr_status` actually appear as usable
+      tools. **This dispatch server is the scratch smoke-test instance** (`REPOS_CONFIG`/
+      `DISPATCH_CONFIG` pointed at a temp scratchpad dir, `VTCODE_BIN` pointed at the patched fork
+      binary) — not a persistent, reboot-surviving deployment. The 10-task WebUI batch (2026-07-08)
+      was submitted through this same scratch instance, still on the fork binary — functionally fine
+      since the fork *has* the fix, just no longer necessary now that it's upstream. Worth deciding,
+      once you're ready to actually "shotgun" further batches, whether to keep using this scratch
+      instance or stand up a real one; if/when you do rebuild it, it can point `VTCODE_BIN` at a
+      binary built from upstream `vinhnx/VTCode` `main` instead of the fork.
 
 ## Standing category: GUI verification
 
