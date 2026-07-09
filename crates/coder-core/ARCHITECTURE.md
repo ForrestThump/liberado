@@ -25,7 +25,8 @@ It exists so several surfaces can share one vocabulary:
   diagnostics, and optional trace path.
 - `CoderEvent` / `CoderTrace` — stable replay/render vocabulary for logs and future UI clients.
 - `SandboxSpec`, `CoderCommandConfig`, `CommandPolicy`, `PathPolicy`, `ProgressPolicy` —
-  config-shaped policy structs.
+  config-shaped policy structs. `ProgressPolicy` owns loop/watchdog thresholds and trace shaping
+  caps such as event-preview length.
 
 ## Design Rules
 

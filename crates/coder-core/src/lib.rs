@@ -200,6 +200,7 @@ pub struct ProgressPolicy {
     pub same_tool_limit: u32,
     pub validation_repeat_limit: u32,
     pub max_attempts: u32,
+    pub event_preview_max_chars: usize,
 }
 
 impl Default for ProgressPolicy {
@@ -209,6 +210,7 @@ impl Default for ProgressPolicy {
             same_tool_limit: 3,
             validation_repeat_limit: 2,
             max_attempts: 3,
+            event_preview_max_chars: 500,
         }
     }
 }

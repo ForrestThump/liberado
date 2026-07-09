@@ -7,6 +7,8 @@ a `CoderRunResult`.
 ## Current MVP
 
 - Uses one configured coder role.
+- Requires the coder role to arrive with a resolved `max_turns`; config loading should supply
+  defaults before building `CoderRunRequest`.
 - Builds `CodingToolRuntime` over the prepared workspace.
 - Runs `Executor::execute` in report mode.
 - Loads the coder role prompt from inline config or `prompt_path`.
@@ -17,6 +19,7 @@ a `CoderRunResult`.
   model-visible `run_command` tool or its command policy.
 - Writes a `CoderTrace` JSON replay artifact when `trace_dir` is configured. Current events include
   session/role/report/tool-start/tool-finish/file-change/validation/guard/finish events.
+  Tool argument/result previews obey `ProgressPolicy.event_preview_max_chars`.
 
 ## Not Done Yet
 

@@ -44,7 +44,10 @@ impl CoderBackend for LiberadoLoopBackend {
             task_id: request.task.id.clone(),
             at: Utc::now(),
         }]));
-        let max_turns = request.config.coder.max_turns.unwrap_or(30);
+        let max_turns = request.config.coder.max_turns.ok_or_else(|| {
+            CoderError::Setup("coder role requires max_turns in resolved config".to_string())
+        })?;
+        let event_preview_max_chars = request.config.progress.event_preview_max_chars;
         let mut runtime = CodingToolRuntime::new(
             &request.workspace.root,
             request.config.command_policy.clone(),
@@ -55,7 +58,7 @@ impl CoderBackend for LiberadoLoopBackend {
             runtime = runtime.with_validation_command(command_request(command));
         }
         let backend_runtime = runtime.clone();
-        let runtime = TracingToolRuntime::new(runtime, events.clone());
+        let runtime = TracingToolRuntime::new(runtime, events.clone(), event_preview_max_chars);
 
         push_event(
             &events,
@@ -204,11 +207,20 @@ async fn run_validation_gate(
 struct TracingToolRuntime {
     inner: CodingToolRuntime,
     events: Arc<Mutex<Vec<CoderEvent>>>,
+    preview_max_chars: usize,
 }
 
 impl TracingToolRuntime {
-    fn new(inner: CodingToolRuntime, events: Arc<Mutex<Vec<CoderEvent>>>) -> Self {
-        Self { inner, events }
+    fn new(
+        inner: CodingToolRuntime,
+        events: Arc<Mutex<Vec<CoderEvent>>>,
+        preview_max_chars: usize,
+    ) -> Self {
+        Self {
+            inner,
+            events,
+            preview_max_chars,
+        }
     }
 }
 
@@ -223,7 +235,7 @@ impl ToolRuntime for TracingToolRuntime {
             &self.events,
             CoderEvent::ToolStarted {
                 name: call.name.clone(),
-                args_preview: preview_value(&call.arguments),
+                args_preview: preview_value(&call.arguments, self.preview_max_chars),
                 at: Utc::now(),
             },
         );
@@ -234,8 +246,8 @@ impl ToolRuntime for TracingToolRuntime {
                 name: call.name.clone(),
                 ok: result.is_ok(),
                 result_preview: match &result {
-                    Ok(value) => preview_str(value),
-                    Err(value) => preview_str(value),
+                    Ok(value) => preview_str(value, self.preview_max_chars),
+                    Err(value) => preview_str(value, self.preview_max_chars),
                 },
                 at: Utc::now(),
             },
@@ -312,13 +324,12 @@ fn snapshot_events(events: &Arc<Mutex<Vec<CoderEvent>>>) -> Vec<CoderEvent> {
     events.lock().expect("coder event mutex poisoned").clone()
 }
 
-fn preview_value(value: &Value) -> String {
-    preview_str(&value.to_string())
+fn preview_value(value: &Value, max_chars: usize) -> String {
+    preview_str(&value.to_string(), max_chars)
 }
 
-fn preview_str(value: &str) -> String {
-    const MAX_PREVIEW_CHARS: usize = 500;
-    value.chars().take(MAX_PREVIEW_CHARS).collect()
+fn preview_str(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
 }
 
 fn validation_summary(result: &Value) -> String {
@@ -595,6 +606,66 @@ mod tests {
                 CoderEvent::ToolFinished { name, ok: true, .. } if name == "write_file"
             )
         }));
+    }
+
+    #[tokio::test]
+    async fn tool_trace_preview_uses_progress_policy_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "write-1",
+                    "write_file",
+                    json!({"path": "hello.txt", "content": "abcdefghijklmnopqrstuvwxyz"}),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "report-1",
+                    liberado_executor::SUBMIT_REPORT_TOOL,
+                    json!({
+                        "outcome": "succeeded",
+                        "summary": "Wrote hello.txt",
+                        "artifacts": ["hello.txt"],
+                        "new_high_signal_facts": [],
+                        "follow_up": null
+                    }),
+                )]),
+            ],
+        ));
+        let backend = LiberadoLoopBackend::new(provider);
+        let mut request = request(dir.path(), "HEAD");
+        request.config.trace_dir = Some(dir.path().join("traces").to_string_lossy().to_string());
+        request.config.progress.event_preview_max_chars = 12;
+
+        let result = backend.run(request).await.unwrap();
+        let trace_json = std::fs::read_to_string(result.trace_path.unwrap()).unwrap();
+        let trace: CoderTrace = serde_json::from_str(&trace_json).unwrap();
+        let args_preview = trace
+            .events
+            .iter()
+            .find_map(|event| match event {
+                CoderEvent::ToolStarted { args_preview, .. } => Some(args_preview),
+                _ => None,
+            })
+            .expect("tool args preview");
+
+        assert!(args_preview.chars().count() <= 12);
+    }
+
+    #[tokio::test]
+    async fn coder_role_requires_resolved_max_turns() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let provider = Arc::new(MockProvider::new("mock"));
+        let backend = LiberadoLoopBackend::new(provider);
+        let mut request = request(dir.path(), "HEAD");
+        request.config.coder.max_turns = None;
+
+        let err = backend.run(request).await.unwrap_err();
+
+        assert!(matches!(err, CoderError::Setup(_)));
+        assert!(err.to_string().contains("max_turns"));
     }
 
     #[tokio::test]

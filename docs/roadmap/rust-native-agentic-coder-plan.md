@@ -329,6 +329,7 @@ temperature = 0.1
 read_only_turn_limit = 4
 same_tool_limit = 3
 validation_repeat_limit = 2
+event_preview_max_chars = 500
 
 [coder.sandbox]
 backend = "docker"
