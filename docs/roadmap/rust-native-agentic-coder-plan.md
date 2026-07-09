@@ -14,7 +14,8 @@ Current checkpoints:
 - `crates/coder-tools` exposes the first discrete coding `ToolRuntime` over file/search/git/command
   and validation tools.
 - `crates/coder-agent` has an Executor-backed MVP that runs the coder role through `CodingToolRuntime`,
-  verifies real workspace changes with `git status --porcelain`, and rejects false success reports.
+  loads the coder prompt from inline config or `prompt_path`, verifies real workspace changes with
+  `git status --porcelain`, and rejects false success reports.
 - Workspace verification currently expects the nested `turbovault/` checkout to be on
   `feature/vector-db`, because root `Cargo.toml` pins `turbovault-vector` from that branch.
 
@@ -351,7 +352,7 @@ prompt paths, model roles, sandbox backends, command policies, and unknown field
 
 - Add `coder-agent`. **Started.**
 - Wire `liberado-executor::Executor` to the coding tools with config-loaded prompts. **Started for
-  inline `config.coder.prompt`; prompt-file loading remains.**
+  inline `config.coder.prompt` and resolved `config.coder.prompt_path`.**
 - Implement no-diff progress detection and report verification. **Started with deterministic
   post-loop `git status --porcelain`; in-loop progress guards remain.**
 - Produce structured `CoderEvent` traces.

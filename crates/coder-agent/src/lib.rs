@@ -38,7 +38,7 @@ impl CoderBackend for LiberadoLoopBackend {
         )
         .map_err(|e| CoderError::Tool(e.to_string()))?;
 
-        let task = Task::new(coder_instructions(&request)?, coder_goal(&request));
+        let task = Task::new(coder_instructions(&request).await?, coder_goal(&request));
         let executor = Executor::new(self.provider.clone(), Budget::new(max_turns));
         let report = executor
             .execute(&runtime, task)
@@ -66,14 +66,14 @@ impl CoderBackend for LiberadoLoopBackend {
     }
 }
 
-fn coder_instructions(request: &CoderRunRequest) -> Result<String, CoderError> {
+async fn coder_instructions(request: &CoderRunRequest) -> Result<String, CoderError> {
     if let Some(prompt) = request.config.coder.prompt.clone() {
         return Ok(prompt);
     }
-    if request.config.coder.prompt_path.is_some() {
-        return Err(CoderError::Setup(
-            "coder prompt_path loading is not implemented yet".to_string(),
-        ));
+    if let Some(path) = &request.config.coder.prompt_path {
+        return tokio::fs::read_to_string(path)
+            .await
+            .map_err(|e| CoderError::Setup(format!("read coder prompt_path {path}: {e}")));
     }
     Err(CoderError::Setup(
         "coder role requires prompt or prompt_path".to_string(),
@@ -178,6 +178,16 @@ mod tests {
         }
     }
 
+    fn request_with_role(
+        root: &std::path::Path,
+        base_ref: &str,
+        coder: CoderRoleConfig,
+    ) -> CoderRunRequest {
+        let mut request = request(root, base_ref);
+        request.config.coder = coder;
+        request
+    }
+
     #[tokio::test]
     async fn mocked_loop_edits_workspace_and_reports_changed_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -231,6 +241,45 @@ mod tests {
         let backend = LiberadoLoopBackend::new(provider);
         let err = backend.run(request(dir.path(), "HEAD")).await.unwrap_err();
         assert!(matches!(err, CoderError::NoChanges));
+    }
+
+    #[tokio::test]
+    async fn loads_coder_prompt_from_prompt_path() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let prompt_path = dir.path().join("coder.md");
+        std::fs::write(&prompt_path, "Prompt loaded from disk.").unwrap();
+        let mut coder = role();
+        coder.prompt = None;
+        coder.prompt_path = Some(prompt_path.to_string_lossy().to_string());
+
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "report-1",
+                liberado_executor::SUBMIT_REPORT_TOOL,
+                json!({
+                    "outcome": "failed",
+                    "summary": "No edit requested",
+                    "artifacts": [],
+                    "new_high_signal_facts": [],
+                    "follow_up": null
+                }),
+            )])],
+        ));
+        let backend = LiberadoLoopBackend::new(provider.clone());
+        let result = backend
+            .run(request_with_role(dir.path(), "HEAD", coder))
+            .await
+            .unwrap();
+
+        assert_eq!(result.outcome, Outcome::Failed);
+        let sent = provider.last_request().unwrap();
+        assert!(
+            sent.messages[0]
+                .content
+                .contains("Prompt loaded from disk.")
+        );
     }
 
     #[test]

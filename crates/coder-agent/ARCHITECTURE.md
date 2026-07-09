@@ -9,8 +9,9 @@ a `CoderRunResult`.
 - Uses one configured coder role.
 - Builds `CodingToolRuntime` over the prepared workspace.
 - Runs `Executor::execute` in report mode.
-- Checks `git diff --name-only <base_ref>` after the loop and fails `NoChanges` if the model filed a
-  success report without a real diff.
+- Loads the coder role prompt from inline config or `prompt_path`.
+- Checks `git status --porcelain` after the loop and fails `NoChanges` if the model filed a success
+  report without a real workspace change.
 
 ## Not Done Yet
 
@@ -18,7 +19,7 @@ a `CoderRunResult`.
 - Docker sandbox execution.
 - Structured `CoderEvent` trace emission.
 - No-progress loop guards beyond what `liberado-executor` already provides generically.
-- Prompt loading from config paths.
+- Config-dir-relative prompt path resolution. The current MVP reads the resolved path it is given.
 
 Those belong here as the backend matures; PR factory and TUI clients should still consume only
 `liberado-coder-core` contracts.
