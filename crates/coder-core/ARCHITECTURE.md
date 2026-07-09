@@ -19,6 +19,7 @@ It exists so several surfaces can share one vocabulary:
   and returns a `CoderRunResult`; it does not commit, push, or open PRs.
 - `CoderRunRequest` — `CoderTask` + `WorkspaceRef` + resolved `CoderRunConfig`.
 - `CoderRunConfig` — backend name, role configs, sandbox spec, command/path/progress policies.
+- `trace_dir` — optional run-config path where backends can write durable `CoderTrace` artifacts.
 - `CoderRunResult` — backend outcome, summary, files changed, validation notes, critic verdict,
   diagnostics, and optional trace path.
 - `CoderEvent` / `CoderTrace` — stable replay/render vocabulary for logs and future UI clients.
@@ -35,7 +36,8 @@ It exists so several surfaces can share one vocabulary:
 - **Sandbox-neutral.** Docker and host-local are typed specs here; lifecycle and command execution
   belong in `coder-sandbox`/`coder-tools`.
 - **Trace-first.** Every meaningful loop action should eventually become a `CoderEvent`, so a future
-  TUI/CLI can render a live session and an eval harness can replay what happened.
+  TUI/CLI can render a live session and an eval harness can replay what happened. Backends should
+  return `trace_path` when they persist a trace artifact.
 
 ## Dependencies
 

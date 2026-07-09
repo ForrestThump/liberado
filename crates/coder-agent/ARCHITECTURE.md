@@ -12,12 +12,15 @@ a `CoderRunResult`.
 - Loads the coder role prompt from inline config or `prompt_path`.
 - Checks `git status --porcelain` after the loop and fails `NoChanges` if the model filed a success
   report without a real workspace change.
+- Writes a `CoderTrace` JSON replay artifact when `trace_dir` is configured. Current events are
+  coarse session/role/report/file-change/guard/finish events.
 
 ## Not Done Yet
 
 - Planner/critic/repair roles.
 - Docker sandbox execution.
-- Structured `CoderEvent` trace emission.
+- Fine-grained `CoderEvent` trace emission for individual model turns and tool calls. This likely
+  needs executor streaming hooks instead of wrapping the loop from outside.
 - No-progress loop guards beyond what `liberado-executor` already provides generically.
 - Config-dir-relative prompt path resolution. The current MVP reads the resolved path it is given.
 

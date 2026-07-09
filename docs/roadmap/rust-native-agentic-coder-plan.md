@@ -15,7 +15,8 @@ Current checkpoints:
   and validation tools.
 - `crates/coder-agent` has an Executor-backed MVP that runs the coder role through `CodingToolRuntime`,
   loads the coder prompt from inline config or `prompt_path`, verifies real workspace changes with
-  `git status --porcelain`, and rejects false success reports.
+  `git status --porcelain`, rejects false success reports, and writes coarse `CoderTrace` JSON
+  artifacts when `trace_dir` is configured.
 - Workspace verification currently expects the nested `turbovault/` checkout to be on
   `feature/vector-db`, because root `Cargo.toml` pins `turbovault-vector` from that branch.
 
@@ -355,7 +356,8 @@ prompt paths, model roles, sandbox backends, command policies, and unknown field
   inline `config.coder.prompt` and resolved `config.coder.prompt_path`.**
 - Implement no-diff progress detection and report verification. **Started with deterministic
   post-loop `git status --porcelain`; in-loop progress guards remain.**
-- Produce structured `CoderEvent` traces.
+- Produce structured `CoderEvent` traces. **Started with coarse session/role/report/file-change/
+  guard/finish events persisted as `CoderTrace`; model-turn/tool-call events remain.**
 - Run against a mocked provider first, then a small live smoke task.
 
 ### Phase 4: PR Factory Integration

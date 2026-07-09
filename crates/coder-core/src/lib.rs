@@ -191,6 +191,8 @@ impl Default for ProgressPolicy {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CoderRunConfig {
     pub backend: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_dir: Option<String>,
     pub planner: CoderRoleConfig,
     pub coder: CoderRoleConfig,
     pub critic: CoderRoleConfig,
@@ -385,6 +387,7 @@ mod tests {
             workspace: WorkspaceRef::new("C:/repo", "main"),
             config: CoderRunConfig {
                 backend: LIBERADO_LOOP_BACKEND.to_string(),
+                trace_dir: Some("coder-traces".to_string()),
                 planner: role("deepseek/deepseek-v4-pro"),
                 coder: role("deepseek/deepseek-v4-pro"),
                 critic: role("deepseek/deepseek-v4-flash"),
