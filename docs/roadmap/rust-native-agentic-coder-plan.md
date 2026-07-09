@@ -13,6 +13,8 @@ Current checkpoints:
 - `crates/coder-sandbox` defines the workspace/command boundary and a host-local implementation.
 - `crates/coder-tools` exposes the first discrete coding `ToolRuntime` over file/search/git/command
   and validation tools.
+- `crates/coder-agent` has an Executor-backed MVP that runs the coder role through `CodingToolRuntime`,
+  verifies real workspace changes with `git status --porcelain`, and rejects false success reports.
 - Workspace verification currently expects the nested `turbovault/` checkout to be on
   `feature/vector-db`, because root `Cargo.toml` pins `turbovault-vector` from that branch.
 
@@ -66,6 +68,50 @@ framework.
 7. **Empiricism is part of the product.** The coder must ship with fixture tests, live smoke tests,
    eval scenarios, and `heuristics-tuner` integration from the beginning, not after dogfooding finds
    regressions.
+
+## Proven Harness Patterns To Steal
+
+The design should shamelessly reuse good ideas from the strongest existing coding harnesses while
+keeping Liberado's Rust/modular/config-first constraints.
+
+Research inputs:
+
+- DeepWiki comparison of `sst/opencode` and `langchain-ai/langgraph` for loop state, tool execution,
+  sessions/events, checkpointing, provider abstraction, and loop safeguards:
+  <https://deepwiki.com/search/what-architecture-patterns-in_ad6db9d1-5ec2-4da3-a409-05ffa20c3191>
+- Claude Code Agent SDK docs on the core autonomous loop, tools, permissions, cost limits, hooks,
+  and output control:
+  <https://code.claude.com/docs/en/agent-sdk/agent-loop>
+- Claude Code architecture analysis paper identifying the simple model/tool/result loop plus the
+  surrounding systems that make it work: permission modes, context compaction, extensibility,
+  subagent/worktree isolation, and append-oriented session storage:
+  <https://arxiv.org/abs/2604.14228>
+
+Implementation lessons:
+
+- **Session first.** Treat a coding run as a durable session with append-only messages/events, not
+  just a function call. `CoderTrace` should become replayable enough for debugging, eval promotion,
+  and future TUI rendering.
+- **State checkpoints after meaningful steps.** LangGraph-style checkpointing suggests persisting
+  state after tool/action supersteps, not only at the final report. This matters for long PR tasks,
+  crashes, and self-improvement loops.
+- **Explicit continuation decisions.** The loop should have named terminal states and deterministic
+  `should_continue` gates: success, no changes, validation failed, needs human review, budget
+  exhausted, policy denied, or blocked.
+- **Tool runtime as a hard boundary.** Like opencode/Claude Code, tool names and arguments must be
+  validated against a registered catalog before execution; tool failures return in-band where the
+  model can adapt, while infrastructure failures abort.
+- **Events are product surface.** Tool called/succeeded/failed, file changed, validation result,
+  loop guard, model turn, and report events should be first-class API, not log scraping.
+- **Permissions and sandboxing are layered.** Combine command/path policy, Docker isolation,
+  deletion guards, capability scoping, and human draft-PR approval. No single prompt or permission
+  mode is the safety boundary.
+- **Context compaction is core architecture.** Large context windows are useful, but the harness
+  should still summarize, stage retrieval, and keep raw tool output out of main context unless it is
+  needed.
+- **Subagents should isolate work.** Planner/coder/critic/repair roles need configurable prompts and
+  models, but they also need isolated state/workspace assumptions so one role's churn does not pollute
+  the others.
 
 ## Target Architecture
 
@@ -303,9 +349,11 @@ prompt paths, model roles, sandbox backends, command policies, and unknown field
 
 ### Phase 3: Liberado Loop Backend MVP
 
-- Add `coder-agent`.
-- Wire `liberado-executor::Executor` to the coding tools with config-loaded prompts.
-- Implement no-diff progress detection and report verification.
+- Add `coder-agent`. **Started.**
+- Wire `liberado-executor::Executor` to the coding tools with config-loaded prompts. **Started for
+  inline `config.coder.prompt`; prompt-file loading remains.**
+- Implement no-diff progress detection and report verification. **Started with deterministic
+  post-loop `git status --porcelain`; in-loop progress guards remain.**
 - Produce structured `CoderEvent` traces.
 - Run against a mocked provider first, then a small live smoke task.
 

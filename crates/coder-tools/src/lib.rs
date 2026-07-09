@@ -53,6 +53,14 @@ impl CodingToolRuntime {
         self
     }
 
+    pub async fn invoke_json_for_backend(
+        &self,
+        name: &str,
+        args: Value,
+    ) -> Result<Value, ToolError> {
+        self.invoke_json(name, args).await
+    }
+
     fn rel_path(&self, rel_path: &str, write: bool) -> Result<PathBuf, ToolError> {
         if path_denied(rel_path, &self.path_policy) {
             return Err(ToolError::PathDenied(rel_path.to_string()));

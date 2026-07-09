@@ -3392,6 +3392,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "liberado-coder-agent"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "liberado-coder-core",
+ "liberado-coder-tools",
+ "liberado-common",
+ "liberado-executor",
+ "liberado-provider",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "liberado-coder-core"
 version = "0.1.0"
 dependencies = [

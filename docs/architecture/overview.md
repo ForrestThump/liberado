@@ -106,7 +106,7 @@ Rust-native coder crate family:
 | Coding | [`coder-core`](../../crates/coder-core/ARCHITECTURE.md) | Provider-agnostic coding contracts: backend trait, task/session/event/report types, sandbox specs, and trace schema. |
 | Coding | [`coder-sandbox`](../../crates/coder-sandbox/ARCHITECTURE.md) | Workspace and command-execution boundaries. Host-local exists for tests/dev; Docker is the first production backend target. |
 | Coding | [`coder-tools`](../../crates/coder-tools/ARCHITECTURE.md) | Discrete file/search/git/command/validation tools exposed as a `ToolRuntime`, with path and output policy. |
-| Coding | `coder-agent` | Planned Liberado-loop coding backend: role prompts/models from config, executor wiring, progress guards, and trace/event emission. |
+| Coding | [`coder-agent`](../../crates/coder-agent/ARCHITECTURE.md) | Executor-backed Liberado loop backend. MVP uses the coder role and deterministic no-diff verification; planner/critic/repair, Docker, and trace emission are next. |
 
 ## Cross-cutting concepts
 
