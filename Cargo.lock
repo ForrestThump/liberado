@@ -3421,6 +3421,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "liberado-coder-runner"
+version = "0.1.0"
+dependencies = [
+ "liberado-coder-agent",
+ "liberado-coder-core",
+ "liberado-config-loader",
+ "liberado-provider",
+ "liberado-provider-openai-compat",
+ "serde_json",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "liberado-coder-sandbox"
 version = "0.1.0"
 dependencies = [

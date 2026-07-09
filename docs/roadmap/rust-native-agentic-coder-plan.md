@@ -23,6 +23,10 @@ Current checkpoints:
   `git status --porcelain`, rejects false success reports, runs a configured validation command as a
   deterministic post-loop gate, and writes coarse `CoderTrace` JSON artifacts when `trace_dir` is
   configured.
+- `crates/coder-runner` exposes the same backend through `liberado-coder-run`, a JSON
+  `CoderRunRequest` -> `CoderRunResult` subprocess boundary. This is the intended low-friction bridge
+  for nested/process callers such as `liberado-pr-dispatch-mcp` while the in-process loop crates stay
+  reusable for a future TUI/API.
 - `liberado-config-loader` exposes `tuning.coder`/`[coder]` in `tuning.toml` as the first
   config-owned surface for backend selection, role prompts/models/budgets, sandbox/policy, validation
   command, and progress thresholds. It converts directly to `CoderRunConfig`.
@@ -396,6 +400,9 @@ prompt paths, model roles, sandbox backends, command policies, and unknown field
   guards remain.**
 - Produce structured `CoderEvent` traces. **Started with session/role/report/tool-start/tool-finish/
   file-change/validation/guard/finish events persisted as `CoderTrace`; model-turn events remain.**
+- Add a process boundary for callers that cannot or should not link the loop stack directly.
+  **Started with `liberado-coder-run`, which accepts `CoderRunRequest` JSON and emits
+  `CoderRunResult` JSON.**
 - Run against a mocked provider first, then a small live smoke task.
 
 ### Phase 4: PR Factory Integration
