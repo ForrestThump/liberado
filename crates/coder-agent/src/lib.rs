@@ -48,8 +48,9 @@ impl CoderBackend for LiberadoLoopBackend {
             CoderError::Setup("coder role requires max_turns in resolved config".to_string())
         })?;
         let event_preview_max_chars = request.config.progress.event_preview_max_chars;
-        let mut runtime = CodingToolRuntime::new(
+        let mut runtime = CodingToolRuntime::from_sandbox(
             &request.workspace.root,
+            request.config.sandbox.clone(),
             request.config.command_policy.clone(),
             request.config.path_policy.clone(),
         )

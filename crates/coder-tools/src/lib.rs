@@ -3,12 +3,13 @@
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use async_trait::async_trait;
-use liberado_coder_core::{CommandPolicy, PathPolicy};
+use liberado_coder_core::{CommandPolicy, PathPolicy, SandboxSpec};
 use liberado_coder_sandbox::{
-    CommandRequest, CommandRunner, HostWorkspace, SandboxError, Workspace,
+    CommandRequest, DockerWorkspace, HostWorkspace, SandboxError, Workspace,
 };
 use liberado_executor::ToolRuntime;
 use liberado_provider::{ToolDef, ToolInvocation};
@@ -28,9 +29,9 @@ pub enum ToolError {
     Sandbox(#[from] SandboxError),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CodingToolRuntime {
-    workspace: HostWorkspace,
+    workspace: Arc<dyn Workspace>,
     path_policy: PathPolicy,
     validation_command: Option<CommandRequest>,
 }
@@ -41,11 +42,31 @@ impl CodingToolRuntime {
         command_policy: CommandPolicy,
         path_policy: PathPolicy,
     ) -> Result<Self, ToolError> {
-        Ok(Self {
-            workspace: HostWorkspace::new(root, command_policy)?,
+        let workspace = HostWorkspace::new(root, command_policy)?;
+        Ok(Self::from_workspace(workspace, path_policy))
+    }
+
+    pub fn from_sandbox(
+        root: impl Into<PathBuf>,
+        sandbox: SandboxSpec,
+        command_policy: CommandPolicy,
+        path_policy: PathPolicy,
+    ) -> Result<Self, ToolError> {
+        match sandbox {
+            SandboxSpec::HostLocal => Self::new(root, command_policy, path_policy),
+            SandboxSpec::Docker(spec) => {
+                let workspace = DockerWorkspace::new(root, spec, command_policy)?;
+                Ok(Self::from_workspace(workspace, path_policy))
+            }
+        }
+    }
+
+    pub fn from_workspace(workspace: impl Workspace + 'static, path_policy: PathPolicy) -> Self {
+        Self {
+            workspace: Arc::new(workspace),
             path_policy,
             validation_command: None,
-        })
+        }
     }
 
     pub fn with_validation_command(mut self, command: CommandRequest) -> Self {
@@ -563,6 +584,7 @@ fn relative_string(root: &Path, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use liberado_coder_core::DockerSandboxSpec;
 
     fn runtime() -> (tempfile::TempDir, CodingToolRuntime) {
         let dir = tempfile::tempdir().unwrap();
@@ -734,5 +756,36 @@ mod tests {
         let result = runtime.invoke_json("validate", json!({})).await.unwrap();
         assert_eq!(result["configured"], false);
         assert!(result["passed"].is_null());
+    }
+
+    #[tokio::test]
+    async fn can_construct_runtime_from_docker_sandbox_spec() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = CodingToolRuntime::from_sandbox(
+            dir.path(),
+            SandboxSpec::Docker(DockerSandboxSpec {
+                image: "liberado-coder:latest".to_string(),
+                network: Some("none".to_string()),
+                env_allowlist: Vec::new(),
+                volumes: Vec::new(),
+                user: None,
+            }),
+            CommandPolicy::default(),
+            PathPolicy::default(),
+        )
+        .unwrap();
+
+        runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "hello.txt", "content": "hello\n"}),
+            )
+            .await
+            .unwrap();
+        let read = runtime
+            .invoke_json("read_file", json!({"path": "hello.txt"}))
+            .await
+            .unwrap();
+        assert_eq!(read["content"], "hello");
     }
 }

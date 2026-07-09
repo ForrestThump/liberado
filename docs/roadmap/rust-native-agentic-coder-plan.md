@@ -16,7 +16,8 @@ Current checkpoints:
   from `DockerSandboxSpec`, with argv tests that do not require a live Docker daemon.
 - `crates/coder-tools` exposes the first discrete coding `ToolRuntime` over file/search/git/command
   and validation tools, including an atomic multi-edit `apply_patch` tool that validates all edits
-  before writing.
+  before writing. Runtime construction now honors `SandboxSpec`, so command execution can route
+  through host-local or Docker workspaces.
 - `crates/coder-agent` has an Executor-backed MVP that runs the coder role through `CodingToolRuntime`,
   loads the coder prompt from inline config or `prompt_path`, verifies real workspace changes with
   `git status --porcelain`, rejects false success reports, runs a configured validation command as a
@@ -379,6 +380,8 @@ prompt paths, model roles, sandbox backends, command policies, and unknown field
   `list_files`, `search_text`, `read_file`, `write_file`, `edit_file`, `git_status`, `git_diff`,
   `apply_patch`, `run_command`, and `validate`.**
 - Enforce root path containment and output caps. **Started.**
+- Honor configured sandbox backend in the tool runtime. **Started with host-local and Docker
+  workspace selection via `CodingToolRuntime::from_sandbox`; live Docker task smoke remains.**
 - Add unit tests for path escapes, ambiguous edits, patch failures, command denial, and output caps.
   **Path escapes, command denial, ambiguous edit, atomic patch failure, basic read/write/search, and
   read output caps are covered.**

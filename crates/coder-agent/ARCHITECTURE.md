@@ -9,7 +9,8 @@ a `CoderRunResult`.
 - Uses one configured coder role.
 - Requires the coder role to arrive with a resolved `max_turns`; config loading should supply
   defaults before building `CoderRunRequest`.
-- Builds `CodingToolRuntime` over the prepared workspace.
+- Builds `CodingToolRuntime` over the prepared workspace using the configured `SandboxSpec`
+  (`HostLocal` or Docker).
 - Runs `Executor::execute` in report mode.
 - Loads the coder role prompt from inline config or `prompt_path`.
 - Wires the optional configured validation command into the model-visible `validate` tool and reruns
@@ -24,7 +25,7 @@ a `CoderRunResult`.
 ## Not Done Yet
 
 - Planner/critic/repair roles.
-- Docker sandbox execution.
+- Live Docker smoke coverage and long-lived container lifecycle.
 - Fine-grained `CoderEvent` trace emission for individual model turns. Tool calls are captured by a
   tracing runtime wrapper; model-turn events likely need executor streaming hooks.
 - No-progress loop guards beyond what `liberado-executor` already provides generically.

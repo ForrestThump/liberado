@@ -10,6 +10,7 @@ model through `liberado-executor::ToolRuntime`.
   can adapt.
 - Path containment comes from `liberado-coder-sandbox`; this crate does not concatenate arbitrary
   model paths.
+- Runtime construction can select host-local or Docker workspace execution from `SandboxSpec`.
 - Prompts and model choices do not live here.
 
 ## Initial Tool Catalog
@@ -35,6 +36,6 @@ multi-file edit affordance without introducing a broad textual patch parser as a
 
 ## Next Steps
 
-- Route command execution through Docker sandbox implementations.
+- Wire live Docker smoke coverage once the backend can run an end-to-end task in a container.
 - Emit `CoderEvent` values for every invocation.
 - Add output shaping tuned by `heuristics-tuner` scenarios instead of changing tool semantics.
