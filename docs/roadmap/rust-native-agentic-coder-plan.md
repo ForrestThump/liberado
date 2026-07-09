@@ -356,8 +356,8 @@ prompt paths, model roles, sandbox backends, command policies, and unknown field
   inline `config.coder.prompt` and resolved `config.coder.prompt_path`.**
 - Implement no-diff progress detection and report verification. **Started with deterministic
   post-loop `git status --porcelain`; in-loop progress guards remain.**
-- Produce structured `CoderEvent` traces. **Started with coarse session/role/report/file-change/
-  guard/finish events persisted as `CoderTrace`; model-turn/tool-call events remain.**
+- Produce structured `CoderEvent` traces. **Started with session/role/report/tool-start/tool-finish/
+  file-change/guard/finish events persisted as `CoderTrace`; model-turn events remain.**
 - Run against a mocked provider first, then a small live smoke task.
 
 ### Phase 4: PR Factory Integration

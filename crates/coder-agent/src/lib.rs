@@ -2,7 +2,7 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use async_trait::async_trait;
@@ -13,9 +13,9 @@ use liberado_coder_core::{
 };
 use liberado_coder_tools::CodingToolRuntime;
 use liberado_common::Outcome;
-use liberado_executor::{Budget, Executor, Task};
-use liberado_provider::Provider;
-use serde_json::json;
+use liberado_executor::{Budget, Executor, Task, ToolRuntime};
+use liberado_provider::{Provider, ToolDef, ToolInvocation};
+use serde_json::{Value, json};
 
 #[derive(Clone)]
 pub struct LiberadoLoopBackend {
@@ -36,12 +36,12 @@ impl CoderBackend for LiberadoLoopBackend {
 
     async fn run(&self, request: CoderRunRequest) -> Result<CoderRunResult, CoderError> {
         let session_id = session_id(&request);
-        let mut events = vec![CoderEvent::SessionStarted {
+        let events = Arc::new(Mutex::new(vec![CoderEvent::SessionStarted {
             session_id: session_id.clone(),
             backend: self.name().to_string(),
             task_id: request.task.id.clone(),
             at: Utc::now(),
-        }];
+        }]));
         let max_turns = request.config.coder.max_turns.unwrap_or(30);
         let runtime = CodingToolRuntime::new(
             &request.workspace.root,
@@ -49,52 +49,74 @@ impl CoderBackend for LiberadoLoopBackend {
             request.config.path_policy.clone(),
         )
         .map_err(|e| CoderError::Tool(e.to_string()))?;
+        let runtime = TracingToolRuntime::new(runtime, events.clone());
 
-        events.push(CoderEvent::RoleStarted {
-            role: "coder".to_string(),
-            model: request.config.coder.model.clone(),
-            at: Utc::now(),
-        });
+        push_event(
+            &events,
+            CoderEvent::RoleStarted {
+                role: "coder".to_string(),
+                model: request.config.coder.model.clone(),
+                at: Utc::now(),
+            },
+        );
         let task = Task::new(coder_instructions(&request).await?, coder_goal(&request));
         let executor = Executor::new(self.provider.clone(), Budget::new(max_turns));
         let report = executor
             .execute(&runtime, task)
             .await
             .map_err(|e| CoderError::Provider(e.to_string()))?;
-        events.push(CoderEvent::RoleFinished {
-            role: "coder".to_string(),
-            at: Utc::now(),
-        });
-        events.push(CoderEvent::ReportFiled {
-            outcome: report.outcome,
-            summary: report.summary.clone(),
-            at: Utc::now(),
-        });
+        push_event(
+            &events,
+            CoderEvent::RoleFinished {
+                role: "coder".to_string(),
+                at: Utc::now(),
+            },
+        );
+        push_event(
+            &events,
+            CoderEvent::ReportFiled {
+                outcome: report.outcome,
+                summary: report.summary.clone(),
+                at: Utc::now(),
+            },
+        );
 
         let files_changed = changed_files(&runtime).await?;
         if files_changed.is_empty() && report.outcome != Outcome::Failed {
-            events.push(CoderEvent::LoopGuardTriggered {
-                guard: "no_changes".to_string(),
-                action: "fail_run".to_string(),
-                at: Utc::now(),
-            });
-            events.push(CoderEvent::SessionFinished {
-                outcome: Outcome::Failed,
-                at: Utc::now(),
-            });
-            let _ = write_trace(&request, &session_id, events, None).await;
+            push_event(
+                &events,
+                CoderEvent::LoopGuardTriggered {
+                    guard: "no_changes".to_string(),
+                    action: "fail_run".to_string(),
+                    at: Utc::now(),
+                },
+            );
+            push_event(
+                &events,
+                CoderEvent::SessionFinished {
+                    outcome: Outcome::Failed,
+                    at: Utc::now(),
+                },
+            );
+            let _ = write_trace(&request, &session_id, snapshot_events(&events), None).await;
             return Err(CoderError::NoChanges);
         }
         for path in &files_changed {
-            events.push(CoderEvent::FileChanged {
-                path: path.clone(),
-                at: Utc::now(),
-            });
+            push_event(
+                &events,
+                CoderEvent::FileChanged {
+                    path: path.clone(),
+                    at: Utc::now(),
+                },
+            );
         }
-        events.push(CoderEvent::SessionFinished {
-            outcome: report.outcome,
-            at: Utc::now(),
-        });
+        push_event(
+            &events,
+            CoderEvent::SessionFinished {
+                outcome: report.outcome,
+                at: Utc::now(),
+            },
+        );
 
         let mut result = CoderRunResult {
             backend: self.name().to_string(),
@@ -109,9 +131,65 @@ impl CoderBackend for LiberadoLoopBackend {
                 "attempt": request.attempt,
             }),
         };
-        result.trace_path =
-            write_trace(&request, &session_id, events, Some(result.clone())).await?;
+        result.trace_path = write_trace(
+            &request,
+            &session_id,
+            snapshot_events(&events),
+            Some(result.clone()),
+        )
+        .await?;
         Ok(result)
+    }
+}
+
+struct TracingToolRuntime {
+    inner: CodingToolRuntime,
+    events: Arc<Mutex<Vec<CoderEvent>>>,
+}
+
+impl TracingToolRuntime {
+    fn new(inner: CodingToolRuntime, events: Arc<Mutex<Vec<CoderEvent>>>) -> Self {
+        Self { inner, events }
+    }
+
+    async fn invoke_json_for_backend(
+        &self,
+        name: &str,
+        args: Value,
+    ) -> Result<Value, liberado_coder_tools::ToolError> {
+        self.inner.invoke_json_for_backend(name, args).await
+    }
+}
+
+#[async_trait]
+impl ToolRuntime for TracingToolRuntime {
+    fn catalog(&self) -> Vec<ToolDef> {
+        self.inner.catalog()
+    }
+
+    async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
+        push_event(
+            &self.events,
+            CoderEvent::ToolStarted {
+                name: call.name.clone(),
+                args_preview: preview_value(&call.arguments),
+                at: Utc::now(),
+            },
+        );
+        let result = self.inner.invoke(call).await;
+        push_event(
+            &self.events,
+            CoderEvent::ToolFinished {
+                name: call.name.clone(),
+                ok: result.is_ok(),
+                result_preview: match &result {
+                    Ok(value) => preview_str(value),
+                    Err(value) => preview_str(value),
+                },
+                at: Utc::now(),
+            },
+        );
+        result
     }
 }
 
@@ -154,7 +232,7 @@ fn coder_goal(request: &CoderRunRequest) -> String {
     goal
 }
 
-async fn changed_files(runtime: &CodingToolRuntime) -> Result<Vec<String>, CoderError> {
+async fn changed_files(runtime: &TracingToolRuntime) -> Result<Vec<String>, CoderError> {
     let output = runtime
         .invoke_json_for_backend(
             "run_command",
@@ -170,6 +248,26 @@ async fn changed_files(runtime: &CodingToolRuntime) -> Result<Vec<String>, Coder
         .and_then(|v| v.as_str())
         .unwrap_or_default();
     Ok(stdout.lines().filter_map(parse_status_path).collect())
+}
+
+fn push_event(events: &Arc<Mutex<Vec<CoderEvent>>>, event: CoderEvent) {
+    events
+        .lock()
+        .expect("coder event mutex poisoned")
+        .push(event);
+}
+
+fn snapshot_events(events: &Arc<Mutex<Vec<CoderEvent>>>) -> Vec<CoderEvent> {
+    events.lock().expect("coder event mutex poisoned").clone()
+}
+
+fn preview_value(value: &Value) -> String {
+    preview_str(&value.to_string())
+}
+
+fn preview_str(value: &str) -> String {
+    const MAX_PREVIEW_CHARS: usize = 500;
+    value.chars().take(MAX_PREVIEW_CHARS).collect()
 }
 
 fn parse_status_path(line: &str) -> Option<String> {
@@ -374,6 +472,18 @@ mod tests {
             matches!(
                 event,
                 CoderEvent::FileChanged { path, .. } if path == "hello.txt"
+            )
+        }));
+        assert!(trace.events.iter().any(|event| {
+            matches!(
+                event,
+                CoderEvent::ToolStarted { name, .. } if name == "write_file"
+            )
+        }));
+        assert!(trace.events.iter().any(|event| {
+            matches!(
+                event,
+                CoderEvent::ToolFinished { name, ok: true, .. } if name == "write_file"
             )
         }));
     }
