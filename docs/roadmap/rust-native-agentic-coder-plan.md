@@ -19,6 +19,9 @@ Current checkpoints:
   `git status --porcelain`, rejects false success reports, runs a configured validation command as a
   deterministic post-loop gate, and writes coarse `CoderTrace` JSON artifacts when `trace_dir` is
   configured.
+- `liberado-config-loader` exposes `tuning.coder`/`[coder]` in `tuning.toml` as the first
+  config-owned surface for backend selection, role prompts/models/budgets, sandbox/policy, validation
+  command, and progress thresholds. It converts directly to `CoderRunConfig`.
 - Workspace verification currently expects the nested `turbovault/` checkout to be on
   `feature/vector-db`, because root `Cargo.toml` pins `turbovault-vector` from that branch.
 - Process checkpoint: after meaningful coder slices, run a fresh debt audit for anti-patterns,
@@ -298,8 +301,8 @@ loop implementation without a config type and a documented default.
 
 ## Config Surface
 
-Add a `coder.toml` or `[coder]` section in the existing config stack. Exact placement can be decided
-during implementation, but ownership must be clear and validated.
+Add a `[coder]` section in `tuning.toml` for the existing config stack. Ownership is now clear:
+`liberado-config-loader::CoderTuning` validates and converts to `CoderRunConfig`.
 
 Likely sections:
 
@@ -307,20 +310,19 @@ Likely sections:
 [coder]
 backend = "liberado-loop" # or "vtcode" during migration
 trace_dir = "coder-traces"
-max_attempts = 3
 
-[coder.roles.planner]
+[coder.planner]
 model = "deepseek/deepseek-v4-pro"
 prompt_path = "prompts/coder/planner.md"
 temperature = 0.1
 max_tokens = 8192
 
-[coder.roles.coder]
+[coder.coder]
 model = "deepseek/deepseek-v4-pro"
 prompt_path = "prompts/coder/coder.md"
 max_turns = 30
 
-[coder.roles.critic]
+[coder.critic]
 model = "deepseek/deepseek-v4-flash"
 prompt_path = "prompts/coder/critic.md"
 temperature = 0.1
@@ -329,6 +331,7 @@ temperature = 0.1
 read_only_turn_limit = 4
 same_tool_limit = 3
 validation_repeat_limit = 2
+max_attempts = 3
 event_preview_max_chars = 500
 
 [coder.sandbox]
@@ -363,6 +366,8 @@ prompt paths, model roles, sandbox backends, command policies, and unknown field
   `CoderTrace`, `SandboxSpec`, `CoderCommandConfig`, `CommandPolicy`, and config structs.
 - Add serialization tests and examples.
 - Add architecture doc for the crate.
+- Expose coder settings through the main config stack. **Started with `CoderTuning` in
+  `liberado-config-loader`, re-exported by `liberado-config`, plus `config.example/tuning.toml`.**
 
 ### Phase 2: Tool Runtime and Host Sandbox
 

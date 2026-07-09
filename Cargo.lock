@@ -3493,6 +3493,7 @@ name = "liberado-config-loader"
 version = "0.1.0"
 dependencies = [
  "cron",
+ "liberado-coder-core",
  "liberado-common",
  "serde",
  "tempfile",

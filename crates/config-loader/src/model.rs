@@ -28,6 +28,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use liberado_coder_core::{
+    CoderCommandConfig, CoderRoleConfig, CoderRunConfig, CommandPolicy, LIBERADO_LOOP_BACKEND,
+    PathPolicy, ProgressPolicy, SandboxSpec,
+};
 use liberado_common::{
     Capability, CapabilitySet, Consequence, DEFAULT_POOL, Error, ModelProfile, ModelRole, Result,
     WriteClass,
@@ -500,6 +504,7 @@ pub struct Tuning {
     pub capture: CaptureTuning,
     pub maintenance: MaintenanceTuning,
     pub telegram_approvals: TelegramApprovalsTuning,
+    pub coder: CoderTuning,
 }
 
 /// Subagent isolation level (Decision 8). Configurable so scaling to process isolation is a
@@ -714,6 +719,195 @@ impl Default for TelegramApprovalsTuning {
 // Validation — the model-level slice of the Decision 14 fail-fast contract.
 // ---------------------------------------------------------------------------
 
+/// Rust-native coding backend tunables. The shape mirrors `CoderRunConfig`, but this type owns
+/// defaults and load-time validation so PR dispatch, TUI clients, and evals can all consume one
+/// resolved backend contract instead of each hand-building their own.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CoderTuning {
+    #[serde(default = "default_coder_backend")]
+    pub backend: String,
+    #[serde(
+        default = "default_coder_trace_dir",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub trace_dir: Option<String>,
+    #[serde(default = "default_coder_planner")]
+    pub planner: CoderRoleConfig,
+    #[serde(default = "default_coder_role")]
+    pub coder: CoderRoleConfig,
+    #[serde(default = "default_coder_critic")]
+    pub critic: CoderRoleConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair: Option<CoderRoleConfig>,
+    pub sandbox: SandboxSpec,
+    pub command_policy: CommandPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_command: Option<CoderCommandConfig>,
+    pub path_policy: PathPolicy,
+    pub progress: ProgressPolicy,
+}
+
+impl CoderTuning {
+    pub fn run_config(&self) -> CoderRunConfig {
+        CoderRunConfig {
+            backend: self.backend.clone(),
+            trace_dir: self.trace_dir.clone(),
+            planner: self.planner.clone(),
+            coder: self.coder.clone(),
+            critic: self.critic.clone(),
+            repair: self.repair.clone(),
+            sandbox: self.sandbox.clone(),
+            command_policy: self.command_policy.clone(),
+            validation_command: self.validation_command.clone(),
+            path_policy: self.path_policy.clone(),
+            progress: self.progress.clone(),
+        }
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.backend.trim().is_empty() {
+            return Err(Error::Config(
+                "tuning.coder.backend must not be empty".into(),
+            ));
+        }
+        validate_coder_role("planner", &self.planner)?;
+        validate_coder_role("coder", &self.coder)?;
+        validate_coder_role("critic", &self.critic)?;
+        if let Some(repair) = &self.repair {
+            validate_coder_role("repair", repair)?;
+        }
+        if self.command_policy.timeout_secs == 0 {
+            return Err(Error::Config(
+                "tuning.coder.command_policy.timeout_secs must be >= 1".into(),
+            ));
+        }
+        if self.command_policy.output_max_bytes == 0 {
+            return Err(Error::Config(
+                "tuning.coder.command_policy.output_max_bytes must be >= 1".into(),
+            ));
+        }
+        if self.path_policy.read_max_bytes == 0 {
+            return Err(Error::Config(
+                "tuning.coder.path_policy.read_max_bytes must be >= 1".into(),
+            ));
+        }
+        if self.path_policy.search_max_results == 0 {
+            return Err(Error::Config(
+                "tuning.coder.path_policy.search_max_results must be >= 1".into(),
+            ));
+        }
+        if self.progress.read_only_turn_limit == 0
+            || self.progress.same_tool_limit == 0
+            || self.progress.validation_repeat_limit == 0
+            || self.progress.max_attempts == 0
+            || self.progress.event_preview_max_chars == 0
+        {
+            return Err(Error::Config(
+                "tuning.coder.progress limits must all be >= 1".into(),
+            ));
+        }
+        if let Some(command) = &self.validation_command
+            && command.program.trim().is_empty()
+        {
+            return Err(Error::Config(
+                "tuning.coder.validation_command.program must not be empty".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for CoderTuning {
+    fn default() -> Self {
+        Self {
+            backend: default_coder_backend(),
+            trace_dir: default_coder_trace_dir(),
+            planner: default_coder_planner(),
+            coder: default_coder_role(),
+            critic: default_coder_critic(),
+            repair: None,
+            sandbox: SandboxSpec::HostLocal,
+            command_policy: CommandPolicy::default(),
+            validation_command: None,
+            path_policy: PathPolicy::default(),
+            progress: ProgressPolicy::default(),
+        }
+    }
+}
+
+fn default_coder_backend() -> String {
+    LIBERADO_LOOP_BACKEND.to_string()
+}
+
+fn default_coder_trace_dir() -> Option<String> {
+    Some("coder-traces".to_string())
+}
+
+fn default_coder_planner() -> CoderRoleConfig {
+    coder_role(
+        "deepseek/deepseek-v4-pro",
+        "prompts/coder/planner.md",
+        Some(8),
+    )
+}
+
+fn default_coder_role() -> CoderRoleConfig {
+    coder_role(
+        "deepseek/deepseek-v4-pro",
+        "prompts/coder/coder.md",
+        Some(30),
+    )
+}
+
+fn default_coder_critic() -> CoderRoleConfig {
+    coder_role(
+        "deepseek/deepseek-v4-flash",
+        "prompts/coder/critic.md",
+        Some(8),
+    )
+}
+
+fn coder_role(model: &str, prompt_path: &str, max_turns: Option<u32>) -> CoderRoleConfig {
+    CoderRoleConfig {
+        model: model.to_string(),
+        prompt_path: Some(prompt_path.to_string()),
+        prompt: None,
+        temperature: Some(0.1),
+        max_tokens: None,
+        max_turns,
+    }
+}
+
+fn validate_coder_role(name: &str, role: &CoderRoleConfig) -> Result<()> {
+    if role.model.trim().is_empty() {
+        return Err(Error::Config(format!(
+            "tuning.coder.{name}.model must not be empty"
+        )));
+    }
+    let prompt_path_empty = role
+        .prompt_path
+        .as_deref()
+        .map(|path| path.trim().is_empty())
+        .unwrap_or(true);
+    let prompt_empty = role
+        .prompt
+        .as_deref()
+        .map(|prompt| prompt.trim().is_empty())
+        .unwrap_or(true);
+    if prompt_path_empty && prompt_empty {
+        return Err(Error::Config(format!(
+            "tuning.coder.{name} requires prompt_path or prompt"
+        )));
+    }
+    if role.max_turns.unwrap_or(0) == 0 {
+        return Err(Error::Config(format!(
+            "tuning.coder.{name}.max_turns must be >= 1"
+        )));
+    }
+    Ok(())
+}
+
 impl std::str::FromStr for Config {
     type Err = Error;
 
@@ -806,6 +1000,7 @@ impl Config {
                     .into(),
             ));
         }
+        self.tuning.coder.validate()?;
 
         // Provider names must be unique, and `topology.provider` must actually name a declared
         // one — the same fail-fast shape as the model_roles check just below, so a typo'd or
@@ -1159,6 +1354,78 @@ mod tests {
         assert_eq!(t.telegram_approvals.getupdate_timeout_secs, 25);
         assert_eq!(t.telegram_approvals.poll_retry_backoff_secs, 10);
         assert_eq!(t.telegram_approvals.revise_temperature, 0.0);
+        assert_eq!(t.coder.backend, LIBERADO_LOOP_BACKEND);
+        assert_eq!(t.coder.coder.model, "deepseek/deepseek-v4-pro");
+        assert_eq!(t.coder.coder.max_turns, Some(30));
+        assert_eq!(t.coder.progress.event_preview_max_chars, 500);
+    }
+
+    #[test]
+    fn coder_tuning_converts_to_run_config() {
+        let mut tuning = CoderTuning::default();
+        tuning.trace_dir = Some("custom-traces".to_string());
+        tuning.progress.event_preview_max_chars = 123;
+
+        let run_config = tuning.run_config();
+
+        assert_eq!(run_config.backend, LIBERADO_LOOP_BACKEND);
+        assert_eq!(run_config.trace_dir.as_deref(), Some("custom-traces"));
+        assert_eq!(run_config.coder.model, "deepseek/deepseek-v4-pro");
+        assert_eq!(run_config.progress.event_preview_max_chars, 123);
+    }
+
+    #[test]
+    fn coder_tuning_parses_toml_overrides() {
+        let toml = r#"
+[topology]
+vault_path = "/vault"
+
+[tuning.coder]
+backend = "liberado-loop"
+trace_dir = "traces"
+
+[tuning.coder.coder]
+model = "deepseek/deepseek-v4-pro"
+prompt_path = "prompts/custom-coder.md"
+temperature = 0.2
+max_turns = 44
+
+[tuning.coder.progress]
+read_only_turn_limit = 5
+same_tool_limit = 4
+validation_repeat_limit = 3
+max_attempts = 2
+event_preview_max_chars = 321
+"#;
+        let cfg = Config::from_str(toml).expect("valid coder tuning");
+
+        assert_eq!(cfg.tuning.coder.trace_dir.as_deref(), Some("traces"));
+        assert_eq!(
+            cfg.tuning.coder.coder.prompt_path.as_deref(),
+            Some("prompts/custom-coder.md")
+        );
+        assert_eq!(cfg.tuning.coder.coder.max_turns, Some(44));
+        assert_eq!(cfg.tuning.coder.progress.event_preview_max_chars, 321);
+    }
+
+    #[test]
+    fn coder_tuning_validation_rejects_missing_role_budget() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.tuning.coder.coder.max_turns = None;
+        let err = cfg.validate().unwrap_err();
+
+        assert!(err.to_string().contains("tuning.coder.coder.max_turns"));
+    }
+
+    #[test]
+    fn coder_tuning_validation_rejects_zero_preview_cap() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.tuning.coder.progress.event_preview_max_chars = 0;
+        let err = cfg.validate().unwrap_err();
+
+        assert!(err.to_string().contains("tuning.coder.progress"));
     }
 
     #[test]
@@ -1438,7 +1705,13 @@ transport = { kind = "docker", image = "liberado-tasks-mcp:latest" }
 "#;
         let topology: Topology = toml::from_str(toml).expect("docker transport must deserialize");
         match &topology.mcps[0].transport {
-            McpTransport::Docker { image, command, args, volumes, env } => {
+            McpTransport::Docker {
+                image,
+                command,
+                args,
+                volumes,
+                env,
+            } => {
                 assert_eq!(image, "liberado-tasks-mcp:latest");
                 assert_eq!(command, &None);
                 assert!(args.is_empty());
@@ -1460,7 +1733,13 @@ transport = { kind = "docker", image = "liberado-tasks-mcp:latest", command = "n
 "#;
         let topology: Topology = toml::from_str(toml).expect("docker transport must deserialize");
         match &topology.mcps[0].transport {
-            McpTransport::Docker { image, command, args, volumes, env } => {
+            McpTransport::Docker {
+                image,
+                command,
+                args,
+                volumes,
+                env,
+            } => {
                 assert_eq!(image, "liberado-tasks-mcp:latest");
                 assert_eq!(command.as_deref(), Some("npx"));
                 assert_eq!(args, &["-y", "@scope/tasks"]);
@@ -1490,7 +1769,9 @@ transport = { kind = "docker", image = "liberado-tasks-mcp:latest", command = "n
             default_zone: None,
             tools: Vec::new(),
         }];
-        let err = cfg.validate().expect_err("blank image must fail validation");
+        let err = cfg
+            .validate()
+            .expect_err("blank image must fail validation");
         assert!(
             err.to_string().contains("broken-docker-mcp"),
             "error should name the offending MCP: {err}"

@@ -37,3 +37,32 @@
 # getupdate_timeout_secs = 25   # Telegram getUpdates long-poll length (1-50, Telegram's own cap)
 # poll_retry_backoff_secs = 10  # backoff before retrying getUpdates after a network/API error
 # revise_temperature = 0.0      # sampling temperature for the Revise button's LLM edit call
+
+[coder]
+# backend = "liberado-loop"     # vtcode remains a migration backend elsewhere
+# trace_dir = "coder-traces"    # durable replay artifacts for PR factory, evals, and future TUI
+
+# [coder.planner]
+# model = "deepseek/deepseek-v4-pro"
+# prompt_path = "prompts/coder/planner.md"
+# temperature = 0.1
+# max_turns = 8
+
+# [coder.coder]
+# model = "deepseek/deepseek-v4-pro"
+# prompt_path = "prompts/coder/coder.md"
+# temperature = 0.1
+# max_turns = 30
+
+# [coder.critic]
+# model = "deepseek/deepseek-v4-flash"
+# prompt_path = "prompts/coder/critic.md"
+# temperature = 0.1
+# max_turns = 8
+
+# [coder.progress]
+# read_only_turn_limit = 4
+# same_tool_limit = 3
+# validation_repeat_limit = 2
+# max_attempts = 3
+# event_preview_max_chars = 500

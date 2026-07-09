@@ -30,10 +30,11 @@ use liberado_common::CapabilityCatalog;
 use thiserror::Error;
 
 pub use liberado_config_loader::{
-    CURRENT_SCHEMA_VERSION, CaptureTuning, ConcurrencyTuning, Config, ConfigBuilder, ContextTuning,
-    CronSchedule, DEFAULT_POOL, DispatchTuning, Grant, HookConfig, MaintenanceTuning, McpConfig,
-    McpTransport, Policy, PoolConfig, ProviderProfile, SubagentIsolation, TelegramApprovalsTuning,
-    ToolImpact, Topology, Tuning, ZonePolicy, managed_binary_path, resolve_declared_zone,
+    CURRENT_SCHEMA_VERSION, CaptureTuning, CoderTuning, ConcurrencyTuning, Config, ConfigBuilder,
+    ContextTuning, CronSchedule, DEFAULT_POOL, DispatchTuning, Grant, HookConfig,
+    MaintenanceTuning, McpConfig, McpTransport, Policy, PoolConfig, ProviderProfile,
+    SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning, ZonePolicy,
+    managed_binary_path, resolve_declared_zone,
 };
 
 /// Records which source file contributed each section of a loaded [`Config`],
@@ -728,15 +729,17 @@ transport = { kind = "stdio", command = "tasks-mcp", args = [] }
         let exe_root = TempDir::new().unwrap();
         // One level deeper than `empty_platform_dir_falls_through_to_exe_walk_up`'s passing case —
         // puts the config dir just past the 5-ancestor walk-up limit.
-        let exe_dir = exe_root.path().join("a").join("b").join("c").join("d").join("e");
+        let exe_dir = exe_root
+            .path()
+            .join("a")
+            .join("b")
+            .join("c")
+            .join("d")
+            .join("e");
         std::fs::create_dir_all(&exe_dir).unwrap();
         dir_with_topology(&exe_root.path().join("config"));
 
-        let resolved = resolve_config_dir(
-            None,
-            Some(platform.path().to_path_buf()),
-            Some(exe_dir),
-        );
+        let resolved = resolve_config_dir(None, Some(platform.path().to_path_buf()), Some(exe_dir));
         // Never found within 5 levels — falls back to tier 4 (platform dir, even though empty).
         assert_eq!(resolved, Some(platform.path().to_path_buf()));
     }
