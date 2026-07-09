@@ -9,7 +9,8 @@ Current checkpoints:
 
 - `liberado-pr-dispatch-mcp` has a `CoderBackend` seam around modify-task coding, JSON correction,
   validation self-correction, revisions, greenfield initial coding, and greenfield cargo-test repair.
-  `VtcodeBackend` remains the only concrete adapter there until the Liberado loop adapter is wired in.
+  It can now select either the migration `VtcodeBackend` or a `LiberadoLoopProcessBackend` that
+  spawns `liberado-coder-run` through the same `ExecResult`-shaped worker contract.
 - `crates/coder-core` defines provider-agnostic run/config/event/result contracts.
 - `crates/coder-sandbox` defines the workspace/command boundary and a host-local implementation.
   It also has a first Docker command-runner scaffold that builds/runs `docker run --rm -i` commands
@@ -408,7 +409,8 @@ prompt paths, model roles, sandbox backends, command policies, and unknown field
 ### Phase 4: PR Factory Integration
 
 - Collapse or restructure `liberado-pr-dispatch-mcp` as needed.
-- Let config select `vtcode` or `liberado-loop`.
+- Let config select `vtcode` or `liberado-loop`. **Started with `CODING_BACKEND`; `liberado-loop`
+  spawns `liberado-coder-run` and maps `CoderRunResult` back into the existing worker contract.**
 - Keep PR lifecycle behavior unchanged: draft PR only, human approval, revision loop.
 - Preserve useful existing modules: forge client, DB, branch validation, GIT_ASKPASS, deletion guard,
   validation/self-correction, repo-context injection, critic loop.
