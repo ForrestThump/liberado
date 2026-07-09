@@ -19,6 +19,10 @@ Current checkpoints:
   artifacts when `trace_dir` is configured.
 - Workspace verification currently expects the nested `turbovault/` checkout to be on
   `feature/vector-db`, because root `Cargo.toml` pins `turbovault-vector` from that branch.
+- Process checkpoint: after meaningful coder slices, run a fresh debt audit for anti-patterns,
+  coupling, duplication, doc drift, and missing tests. The first audit caught and fixed a status-gate
+  coupling bug where backend `git status` verification could be blocked by the model-facing command
+  policy.
 
 **Goal**: replace `vtcode` with Liberado's own loop-based coding system, written in Rust, using the
 existing `Provider` + `Executor` + `ToolRuntime` architecture as the core. The result should be a
