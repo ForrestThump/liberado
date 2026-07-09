@@ -8,7 +8,8 @@ draft-PR-only human review.
 Current checkpoints:
 
 - `liberado-pr-dispatch-mcp` has a `CoderBackend` seam around modify-task coding, JSON correction,
-  and validation self-correction. Revisions and greenfield paths still use `VTCodeClient` directly.
+  validation self-correction, revisions, greenfield initial coding, and greenfield cargo-test repair.
+  `VtcodeBackend` remains the only concrete adapter there until the Liberado loop adapter is wired in.
 - `crates/coder-core` defines provider-agnostic run/config/event/result contracts.
 - `crates/coder-sandbox` defines the workspace/command boundary and a host-local implementation.
 - `crates/coder-tools` exposes the first discrete coding `ToolRuntime` over file/search/git/command
