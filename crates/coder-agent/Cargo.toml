@@ -22,3 +22,4 @@ tokio.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+liberado-provider-openai-compat.workspace = true

@@ -3403,6 +3403,7 @@ dependencies = [
  "liberado-common",
  "liberado-executor",
  "liberado-provider",
+ "liberado-provider-openai-compat",
  "serde_json",
  "tempfile",
  "tokio",

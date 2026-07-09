@@ -407,7 +407,8 @@ prompt paths, model roles, sandbox backends, command policies, and unknown field
   `CoderRunResult` JSON.**
 - Add per-role provider selection so planner/coder/critic/repair can use different configured
   models. **Started with `CoderProviderFactory`; only the coder role consumes it today.**
-- Run against a mocked provider first, then a small live smoke task.
+- Run against a mocked provider first, then a small live smoke task. **Mocked provider tests are
+  covered; an ignored OpenRouter/DeepSeek live smoke exists for manual runs.**
 
 ### Phase 4: PR Factory Integration
 

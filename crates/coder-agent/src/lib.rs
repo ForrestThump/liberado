@@ -981,4 +981,43 @@ mod tests {
             }
         }
     }
+
+    #[tokio::test]
+    #[ignore = "requires OPENROUTER_API_KEY and network access"]
+    async fn openrouter_deepseek_live_coding_smoke() {
+        use liberado_provider_openai_compat::OpenAiCompatibleProvider;
+
+        let api_key = std::env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY not set");
+        let model = std::env::var("LIBERADO_CODER_LIVE_MODEL")
+            .unwrap_or_else(|_| "deepseek/deepseek-v4-pro".to_string());
+        let provider = Arc::new(
+            OpenAiCompatibleProvider::new(
+                api_key,
+                &model,
+                OpenAiCompatibleProvider::OPENROUTER_BASE_URL,
+            )
+            .with_extra_client_error_status(vec![402]),
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let mut request = request(dir.path(), "HEAD");
+        request.task.description =
+            "Create a file named hello.txt containing exactly: hello from liberado\n".to_string();
+        request.config.coder.model = model;
+        request.config.coder.prompt = Some(
+            "You are a careful autonomous coding agent. Inspect the workspace when useful, make the requested code or file edits with the available tools, then submit a concise success report."
+                .to_string(),
+        );
+        request.config.coder.max_turns = Some(10);
+        request.config.progress.event_preview_max_chars = 1_000;
+
+        let backend = LiberadoLoopBackend::new(provider);
+        let result = backend.run(request).await.unwrap();
+
+        assert_eq!(result.outcome, Outcome::Succeeded);
+        assert!(result.files_changed.iter().any(|path| path == "hello.txt"));
+        let content = std::fs::read_to_string(dir.path().join("hello.txt")).unwrap();
+        assert_eq!(content, "hello from liberado\n");
+    }
 }

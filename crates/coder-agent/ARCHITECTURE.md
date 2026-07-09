@@ -23,6 +23,8 @@ a `CoderRunResult`.
 - Writes a `CoderTrace` JSON replay artifact when `trace_dir` is configured. Current events include
   session/role/report/tool-start/tool-finish/file-change/validation/guard/finish events.
   Tool argument/result previews obey `ProgressPolicy.event_preview_max_chars`.
+- Includes an ignored live smoke test for OpenRouter-backed DeepSeek coding runs:
+  `cargo test -p liberado-coder-agent openrouter_deepseek_live_coding_smoke -- --ignored`.
 
 ## Not Done Yet
 
