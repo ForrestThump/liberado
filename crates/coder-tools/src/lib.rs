@@ -1,0 +1,575 @@
+//! Coding tool runtime for Liberado's Rust-native agent loop.
+
+use std::{
+    collections::VecDeque,
+    path::{Path, PathBuf},
+};
+
+use async_trait::async_trait;
+use liberado_coder_core::{CommandPolicy, PathPolicy};
+use liberado_coder_sandbox::{
+    CommandRequest, CommandRunner, HostWorkspace, SandboxError, Workspace,
+};
+use liberado_executor::ToolRuntime;
+use liberado_provider::{ToolDef, ToolInvocation};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ToolError {
+    #[error("{0}")]
+    BadRequest(String),
+    #[error("path denied by policy: {0}")]
+    PathDenied(String),
+    #[error("filesystem error: {0}")]
+    Filesystem(String),
+    #[error("sandbox error: {0}")]
+    Sandbox(#[from] SandboxError),
+}
+
+#[derive(Debug, Clone)]
+pub struct CodingToolRuntime {
+    workspace: HostWorkspace,
+    path_policy: PathPolicy,
+    validation_command: Option<CommandRequest>,
+}
+
+impl CodingToolRuntime {
+    pub fn new(
+        root: impl Into<PathBuf>,
+        command_policy: CommandPolicy,
+        path_policy: PathPolicy,
+    ) -> Result<Self, ToolError> {
+        Ok(Self {
+            workspace: HostWorkspace::new(root, command_policy)?,
+            path_policy,
+            validation_command: None,
+        })
+    }
+
+    pub fn with_validation_command(mut self, command: CommandRequest) -> Self {
+        self.validation_command = Some(command);
+        self
+    }
+
+    fn rel_path(&self, rel_path: &str, write: bool) -> Result<PathBuf, ToolError> {
+        if path_denied(rel_path, &self.path_policy) {
+            return Err(ToolError::PathDenied(rel_path.to_string()));
+        }
+        if write && !path_allowed_to_write(rel_path, &self.path_policy) {
+            return Err(ToolError::PathDenied(rel_path.to_string()));
+        }
+        Ok(self.workspace.resolve_path(rel_path)?)
+    }
+
+    async fn invoke_json(&self, name: &str, args: Value) -> Result<Value, ToolError> {
+        match name {
+            "list_files" => self.list_files(args).await,
+            "search_text" => self.search_text(args).await,
+            "read_file" => self.read_file(args).await,
+            "write_file" => self.write_file(args).await,
+            "edit_file" => self.edit_file(args).await,
+            "git_status" => self.git_status().await,
+            "git_diff" => self.git_diff(args).await,
+            "run_command" => self.run_command(args).await,
+            "validate" => self.validate().await,
+            other => Err(ToolError::BadRequest(format!("unknown tool: {other}"))),
+        }
+    }
+
+    async fn list_files(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            #[serde(default = "default_limit")]
+            limit: usize,
+        }
+        let args: Args = parse_args(args)?;
+        let mut files = Vec::new();
+        walk_files(self.workspace.root(), args.limit, |path| {
+            let rel = relative_string(self.workspace.root(), path);
+            if !path_denied(&rel, &self.path_policy) {
+                files.push(rel);
+            }
+        })?;
+        Ok(json!({ "files": files, "limit": args.limit }))
+    }
+
+    async fn search_text(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            query: String,
+            #[serde(default = "default_limit")]
+            limit: usize,
+        }
+        let args: Args = parse_args(args)?;
+        if args.query.is_empty() {
+            return Err(ToolError::BadRequest("query must not be empty".to_string()));
+        }
+
+        let mut matches = Vec::new();
+        walk_files(
+            self.workspace.root(),
+            self.path_policy.search_max_results,
+            |path| {
+                if matches.len() >= args.limit {
+                    return;
+                }
+                let rel = relative_string(self.workspace.root(), path);
+                if path_denied(&rel, &self.path_policy) {
+                    return;
+                }
+                let Ok(content) = std::fs::read_to_string(path) else {
+                    return;
+                };
+                for (idx, line) in content.lines().enumerate() {
+                    if line.contains(&args.query) {
+                        matches.push(json!({
+                            "path": rel,
+                            "line": idx + 1,
+                            "text": line,
+                        }));
+                        if matches.len() >= args.limit {
+                            break;
+                        }
+                    }
+                }
+            },
+        )?;
+        Ok(json!({ "matches": matches }))
+    }
+
+    async fn read_file(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            path: String,
+            #[serde(default)]
+            start_line: Option<usize>,
+            #[serde(default)]
+            line_count: Option<usize>,
+        }
+        let args: Args = parse_args(args)?;
+        let path = self.rel_path(&args.path, false)?;
+        let bytes = std::fs::read(&path).map_err(fs_err)?;
+        let capped = cap_bytes(bytes, self.path_policy.read_max_bytes);
+        let content = String::from_utf8_lossy(&capped).into_owned();
+        let content = slice_lines(&content, args.start_line, args.line_count);
+        Ok(json!({ "path": args.path, "content": content }))
+    }
+
+    async fn write_file(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            path: String,
+            content: String,
+        }
+        let args: Args = parse_args(args)?;
+        let path = self.rel_path(&args.path, true)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(fs_err)?;
+        }
+        std::fs::write(&path, args.content.as_bytes()).map_err(fs_err)?;
+        Ok(json!({ "path": args.path, "written": true }))
+    }
+
+    async fn edit_file(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            path: String,
+            old: String,
+            new: String,
+        }
+        let args: Args = parse_args(args)?;
+        if args.old.is_empty() {
+            return Err(ToolError::BadRequest("old must not be empty".to_string()));
+        }
+        let path = self.rel_path(&args.path, true)?;
+        let content = std::fs::read_to_string(&path).map_err(fs_err)?;
+        let count = content.matches(&args.old).count();
+        if count == 0 {
+            return Err(ToolError::BadRequest("old text was not found".to_string()));
+        }
+        if count > 1 {
+            return Err(ToolError::BadRequest(format!(
+                "old text matched {count} times; provide more context"
+            )));
+        }
+        let updated = content.replacen(&args.old, &args.new, 1);
+        std::fs::write(&path, updated.as_bytes()).map_err(fs_err)?;
+        Ok(json!({ "path": args.path, "replacements": 1 }))
+    }
+
+    async fn git_status(&self) -> Result<Value, ToolError> {
+        let mut request = CommandRequest::new("git");
+        request.args = vec!["status".to_string(), "--porcelain".to_string()];
+        let output = self.workspace.run_command(request).await?;
+        Ok(json!({
+            "exit_code": output.exit_code,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+            "timed_out": output.timed_out,
+        }))
+    }
+
+    async fn git_diff(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            #[serde(default = "default_diff_mode")]
+            mode: String,
+        }
+        let args: Args = parse_args(args)?;
+        let mut request = CommandRequest::new("git");
+        request.args = match args.mode.as_str() {
+            "name_only" => vec!["diff".to_string(), "--name-only".to_string()],
+            "stat" => vec!["diff".to_string(), "--stat".to_string()],
+            "patch" => vec!["diff".to_string()],
+            other => {
+                return Err(ToolError::BadRequest(format!(
+                    "unsupported diff mode: {other}"
+                )));
+            }
+        };
+        let output = self.workspace.run_command(request).await?;
+        Ok(json!({
+            "mode": args.mode,
+            "exit_code": output.exit_code,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+            "timed_out": output.timed_out,
+        }))
+    }
+
+    async fn run_command(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            program: String,
+            #[serde(default)]
+            args: Vec<String>,
+        }
+        let args: Args = parse_args(args)?;
+        let mut request = CommandRequest::new(args.program);
+        request.args = args.args;
+        let output = self.workspace.run_command(request).await?;
+        Ok(json!({
+            "exit_code": output.exit_code,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+            "timed_out": output.timed_out,
+        }))
+    }
+
+    async fn validate(&self) -> Result<Value, ToolError> {
+        let Some(command) = self.validation_command.clone() else {
+            return Ok(json!({ "configured": false, "passed": null }));
+        };
+        let output = self.workspace.run_command(command).await?;
+        Ok(json!({
+            "configured": true,
+            "passed": output.exit_code == Some(0) && !output.timed_out,
+            "exit_code": output.exit_code,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+            "timed_out": output.timed_out,
+        }))
+    }
+}
+
+#[async_trait]
+impl ToolRuntime for CodingToolRuntime {
+    fn catalog(&self) -> Vec<ToolDef> {
+        vec![
+            tool(
+                "list_files",
+                "List workspace files with policy filtering.",
+                json!({
+                    "type": "object",
+                    "properties": { "limit": { "type": "integer", "minimum": 1 } }
+                }),
+            ),
+            tool(
+                "search_text",
+                "Search workspace files for exact text.",
+                json!({
+                    "type": "object",
+                    "required": ["query"],
+                    "properties": {
+                        "query": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1 }
+                    }
+                }),
+            ),
+            tool(
+                "read_file",
+                "Read a file, optionally by line range.",
+                json!({
+                    "type": "object",
+                    "required": ["path"],
+                    "properties": {
+                        "path": { "type": "string" },
+                        "start_line": { "type": ["integer", "null"], "minimum": 1 },
+                        "line_count": { "type": ["integer", "null"], "minimum": 1 }
+                    }
+                }),
+            ),
+            tool(
+                "write_file",
+                "Write a complete file under the workspace.",
+                json!({
+                    "type": "object",
+                    "required": ["path", "content"],
+                    "properties": {
+                        "path": { "type": "string" },
+                        "content": { "type": "string" }
+                    }
+                }),
+            ),
+            tool(
+                "edit_file",
+                "Replace one exact text span in a file.",
+                json!({
+                    "type": "object",
+                    "required": ["path", "old", "new"],
+                    "properties": {
+                        "path": { "type": "string" },
+                        "old": { "type": "string" },
+                        "new": { "type": "string" }
+                    }
+                }),
+            ),
+            tool(
+                "git_status",
+                "Return git status --porcelain.",
+                json!({ "type": "object" }),
+            ),
+            tool(
+                "git_diff",
+                "Return git diff in name_only, stat, or patch mode.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "mode": { "type": "string", "enum": ["name_only", "stat", "patch"] }
+                    }
+                }),
+            ),
+            tool(
+                "run_command",
+                "Run a policy-checked command in the workspace.",
+                json!({
+                    "type": "object",
+                    "required": ["program"],
+                    "properties": {
+                        "program": { "type": "string" },
+                        "args": { "type": "array", "items": { "type": "string" } }
+                    }
+                }),
+            ),
+            tool(
+                "validate",
+                "Run the configured validation command.",
+                json!({ "type": "object" }),
+            ),
+        ]
+    }
+
+    async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
+        self.invoke_json(&call.name, call.arguments.clone())
+            .await
+            .and_then(|value| {
+                serde_json::to_string(&value).map_err(|e| ToolError::BadRequest(e.to_string()))
+            })
+            .map_err(|e| e.to_string())
+    }
+}
+
+fn tool(name: &str, description: &str, parameters: Value) -> ToolDef {
+    ToolDef::new(name, description, parameters)
+}
+
+fn parse_args<T: for<'de> Deserialize<'de>>(args: Value) -> Result<T, ToolError> {
+    serde_json::from_value(args).map_err(|e| ToolError::BadRequest(e.to_string()))
+}
+
+fn default_limit() -> usize {
+    200
+}
+
+fn default_diff_mode() -> String {
+    "patch".to_string()
+}
+
+fn fs_err(error: std::io::Error) -> ToolError {
+    ToolError::Filesystem(error.to_string())
+}
+
+fn path_denied(rel: &str, policy: &PathPolicy) -> bool {
+    policy
+        .deny_globs
+        .iter()
+        .any(|pattern| path_matches(pattern, rel))
+}
+
+fn path_allowed_to_write(rel: &str, policy: &PathPolicy) -> bool {
+    policy
+        .allow_write_globs
+        .iter()
+        .any(|pattern| path_matches(pattern, rel))
+}
+
+fn path_matches(pattern: &str, rel: &str) -> bool {
+    let pattern = pattern.replace('\\', "/");
+    let rel = rel.replace('\\', "/");
+    pattern == "**"
+        || pattern == rel
+        || pattern
+            .strip_suffix("/**")
+            .is_some_and(|prefix| rel == prefix || rel.starts_with(&format!("{prefix}/")))
+}
+
+fn cap_bytes(mut bytes: Vec<u8>, max: usize) -> Vec<u8> {
+    if bytes.len() > max {
+        bytes.truncate(max);
+    }
+    bytes
+}
+
+fn slice_lines(content: &str, start_line: Option<usize>, line_count: Option<usize>) -> String {
+    let start = start_line.unwrap_or(1).saturating_sub(1);
+    let count = line_count.unwrap_or(usize::MAX);
+    content
+        .lines()
+        .skip(start)
+        .take(count)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn walk_files(root: &Path, limit: usize, mut visit: impl FnMut(&Path)) -> Result<(), ToolError> {
+    let mut queue = VecDeque::from([root.to_path_buf()]);
+    let mut visited = 0usize;
+    while let Some(dir) = queue.pop_front() {
+        for entry in std::fs::read_dir(&dir).map_err(fs_err)? {
+            let entry = entry.map_err(fs_err)?;
+            let path = entry.path();
+            if path.is_dir() {
+                queue.push_back(path);
+            } else if path.is_file() {
+                visit(&path);
+                visited += 1;
+                if visited >= limit {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn relative_string(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn runtime() -> (tempfile::TempDir, CodingToolRuntime) {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        (dir, runtime)
+    }
+
+    #[tokio::test]
+    async fn write_then_read_file() {
+        let (_dir, runtime) = runtime();
+        runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "src/lib.rs", "content": "pub fn answer() -> u8 { 42 }"}),
+            )
+            .await
+            .unwrap();
+        let read = runtime
+            .invoke_json("read_file", json!({"path": "src/lib.rs"}))
+            .await
+            .unwrap();
+        assert_eq!(read["content"], "pub fn answer() -> u8 { 42 }");
+    }
+
+    #[tokio::test]
+    async fn edit_file_rejects_ambiguous_old_text() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("a.txt"), "one\none\n").unwrap();
+        let err = runtime
+            .invoke_json(
+                "edit_file",
+                json!({"path": "a.txt", "old": "one", "new": "two"}),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("matched 2 times"));
+    }
+
+    #[tokio::test]
+    async fn denied_path_is_not_read() {
+        let (dir, runtime) = runtime();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+        std::fs::write(dir.path().join(".git/config"), "secret").unwrap();
+        let err = runtime
+            .invoke_json("read_file", json!({"path": ".git/config"}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ToolError::PathDenied(_)));
+    }
+
+    #[tokio::test]
+    async fn search_text_returns_line_matches() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("notes.txt"), "alpha\nbeta\n").unwrap();
+        let result = runtime
+            .invoke_json("search_text", json!({"query": "beta"}))
+            .await
+            .unwrap();
+        assert_eq!(result["matches"][0]["path"], "notes.txt");
+        assert_eq!(result["matches"][0]["line"], 2);
+    }
+
+    #[tokio::test]
+    async fn run_command_obeys_command_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let current_exe = std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let runtime = CodingToolRuntime::new(
+            dir.path(),
+            CommandPolicy {
+                allow: vec![current_exe.clone()],
+                ..CommandPolicy::default()
+            },
+            PathPolicy::default(),
+        )
+        .unwrap();
+
+        let result = runtime
+            .invoke_json(
+                "run_command",
+                json!({"program": current_exe, "args": ["--help"]}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["timed_out"], false);
+    }
+
+    #[tokio::test]
+    async fn validate_reports_unconfigured_state() {
+        let (_dir, runtime) = runtime();
+        let result = runtime.invoke_json("validate", json!({})).await.unwrap();
+        assert_eq!(result["configured"], false);
+        assert!(result["passed"].is_null());
+    }
+}

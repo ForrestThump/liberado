@@ -1,9 +1,20 @@
 # Rust-Native Agentic Coder Plan
 
-**Status**: planning and docs-alignment pass, 2026-07-09. This supersedes the long-term reliance on
+**Status**: implementation in progress, 2026-07-09. This supersedes the long-term reliance on
 `vtcode` inside `liberado-pr-dispatch-mcp`, while preserving the good PR-factory pieces already built
 there: repo cloning, forge abstraction, task DB, validation, revision loop, Telegram approval, and
 draft-PR-only human review.
+
+Current checkpoints:
+
+- `liberado-pr-dispatch-mcp` has a `CoderBackend` seam around modify-task coding, JSON correction,
+  and validation self-correction. Revisions and greenfield paths still use `VTCodeClient` directly.
+- `crates/coder-core` defines provider-agnostic run/config/event/result contracts.
+- `crates/coder-sandbox` defines the workspace/command boundary and a host-local implementation.
+- `crates/coder-tools` exposes the first discrete coding `ToolRuntime` over file/search/git/command
+  and validation tools.
+- Workspace verification currently expects the nested `turbovault/` checkout to be on
+  `feature/vector-db`, because root `Cargo.toml` pins `turbovault-vector` from that branch.
 
 **Goal**: replace `vtcode` with Liberado's own loop-based coding system, written in Rust, using the
 existing `Provider` + `Executor` + `ToolRuntime` architecture as the core. The result should be a
@@ -281,10 +292,14 @@ prompt paths, model roles, sandbox backends, command policies, and unknown field
 
 ### Phase 2: Tool Runtime and Host Sandbox
 
-- Add `coder-tools` and host-local `coder-sandbox` implementation for tests/dev.
-- Implement discrete file/git/search/command/validation tools behind `ToolRuntime`.
-- Enforce root path containment and output caps.
+- Add `coder-tools` and host-local `coder-sandbox` implementation for tests/dev. **Started.**
+- Implement discrete file/git/search/command/validation tools behind `ToolRuntime`. **Started with
+  `list_files`, `search_text`, `read_file`, `write_file`, `edit_file`, `git_status`, `git_diff`,
+  `run_command`, and `validate`.**
+- Enforce root path containment and output caps. **Started.**
 - Add unit tests for path escapes, ambiguous edits, patch failures, command denial, and output caps.
+  **Path escapes, command denial, ambiguous edit, basic read/write/search are covered; patch and
+  output-cap tests remain.**
 
 ### Phase 3: Liberado Loop Backend MVP
 

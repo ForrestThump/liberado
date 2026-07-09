@@ -3392,6 +3392,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "liberado-coder-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "liberado-common",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "liberado-coder-sandbox"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "liberado-coder-core",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "liberado-coder-tools"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "liberado-coder-core",
+ "liberado-coder-sandbox",
+ "liberado-executor",
+ "liberado-provider",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "liberado-commands"
 version = "0.1.0"
 dependencies = [

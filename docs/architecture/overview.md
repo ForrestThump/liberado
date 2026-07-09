@@ -99,14 +99,14 @@ Bottom-up (each depends roughly on those above it):
 | Tooling | [`mcp-forge`](../../crates/mcp-forge/ARCHITECTURE.md) | Builds/installs Liberado MCP servers from git URLs (`cargo install --git`), keyed by `mcp-sources.toml`. |
 | Testing | [`test-support`](../../crates/test-support/Cargo.toml) | Dev-dependency-only: shared `ToolRuntime`/`RuntimeFactory` test doubles, consolidating what used to be duplicated across `orchestrator`/`daemon` test modules. |
 
-Planned next crate family:
+Rust-native coder crate family:
 
 | Layer | Crate | Role |
 |---|---|---|
-| Coding | `coder-core` | Provider-agnostic coding contracts: backend trait, task/session/event/report types, sandbox specs, and trace schema. |
-| Coding | `coder-tools` | Discrete file/search/git/command/validation tools exposed as a `ToolRuntime`, with path and output policy. |
-| Coding | `coder-agent` | The Liberado-loop coding backend: role prompts/models from config, executor wiring, progress guards, and trace/event emission. |
-| Coding | `coder-sandbox` | Workspace and command-execution backends, with Docker as the first production sandbox and host-local for tests/dev. |
+| Coding | [`coder-core`](../../crates/coder-core/ARCHITECTURE.md) | Provider-agnostic coding contracts: backend trait, task/session/event/report types, sandbox specs, and trace schema. |
+| Coding | [`coder-sandbox`](../../crates/coder-sandbox/ARCHITECTURE.md) | Workspace and command-execution boundaries. Host-local exists for tests/dev; Docker is the first production backend target. |
+| Coding | [`coder-tools`](../../crates/coder-tools/ARCHITECTURE.md) | Discrete file/search/git/command/validation tools exposed as a `ToolRuntime`, with path and output policy. |
+| Coding | `coder-agent` | Planned Liberado-loop coding backend: role prompts/models from config, executor wiring, progress guards, and trace/event emission. |
 
 ## Cross-cutting concepts
 
@@ -128,6 +128,8 @@ co-development (Decision 7) and excluded from this workspace. A root `[patch.cra
 Turbovault's published `turbomcp` to the local fork so the whole tree builds against one Turbomcp —
 the one carrying the request-`_meta` pass-through that the provenance loop depends on. (Those upstream
 changes live on feature branches and have a draft issue in `turbomcp-request-meta-issue-draft.md`.)
+Current Liberado workspace checks also expect `turbovault/` on its local `feature/vector-db` branch,
+because `turbovault-vector` is pinned as a path dependency until that branch is merged upstream.
 
 ## Current status
 
