@@ -12,7 +12,8 @@ Current checkpoints:
 - `crates/coder-core` defines provider-agnostic run/config/event/result contracts.
 - `crates/coder-sandbox` defines the workspace/command boundary and a host-local implementation.
 - `crates/coder-tools` exposes the first discrete coding `ToolRuntime` over file/search/git/command
-  and validation tools.
+  and validation tools, including an atomic multi-edit `apply_patch` tool that validates all edits
+  before writing.
 - `crates/coder-agent` has an Executor-backed MVP that runs the coder role through `CodingToolRuntime`,
   loads the coder prompt from inline config or `prompt_path`, verifies real workspace changes with
   `git status --porcelain`, rejects false success reports, and writes coarse `CoderTrace` JSON
@@ -23,6 +24,11 @@ Current checkpoints:
   coupling, duplication, doc drift, and missing tests. The first audit caught and fixed a status-gate
   coupling bug where backend `git status` verification could be blocked by the model-facing command
   policy.
+- Local loop-architecture source: [`loop_architecture_reference_article.md`](../ideas/loop_architecture_reference_article.md)
+  reinforces the non-negotiables for this project: automated verifier gates, durable state,
+  explicit stop conditions, real tools, separated maker/checker roles, connectors into the actual
+  environment, and a future outer loop that improves the inner loop using traces/evals rather than
+  vibes.
 
 **Goal**: replace `vtcode` with Liberado's own loop-based coding system, written in Rust, using the
 existing `Provider` + `Executor` + `ToolRuntime` architecture as the core. The result should be a
@@ -92,12 +98,23 @@ Research inputs:
   surrounding systems that make it work: permission modes, context compaction, extensibility,
   subagent/worktree isolation, and append-oriented session storage:
   <https://arxiv.org/abs/2604.14228>
+- Local loop-architecture note captured from the user's reference article:
+  [`loop_architecture_reference_article.md`](../ideas/loop_architecture_reference_article.md)
 
 Implementation lessons:
 
 - **Session first.** Treat a coding run as a durable session with append-only messages/events, not
   just a function call. `CoderTrace` should become replayable enough for debugging, eval promotion,
   and future TUI rendering.
+- **Verifier first.** A loop without an automated verifier is only repetition. Success has to pass
+  deterministic gates: real diff, path policy, validation, deletion guard, report/diff consistency,
+  and critic review where configured.
+- **State compounds.** Every attempt should leave enough state that the next attempt can resume from
+  what was tried, what failed, what changed, and why. This belongs in trace/session artifacts, not
+  transient model memory.
+- **Stop conditions are product behavior.** Every autonomous run must terminate as one of a small
+  number of named states: success, no changes, validation failed, budget exhausted, blocked, policy
+  denied, needs human review. Silent endless retry is a bug.
 - **State checkpoints after meaningful steps.** LangGraph-style checkpointing suggests persisting
   state after tool/action supersteps, not only at the final report. This matters for long PR tasks,
   crashes, and self-improvement loops.
@@ -118,6 +135,9 @@ Implementation lessons:
 - **Subagents should isolate work.** Planner/coder/critic/repair roles need configurable prompts and
   models, but they also need isolated state/workspace assumptions so one role's churn does not pollute
   the others.
+- **Outer-loop improvement is separate authority.** The eventual bilevel loop should read traces,
+  evals, and heuristic-tuner output to propose prompt/config/tool-policy changes, but those changes
+  remain draft artifacts or PRs unless explicitly approved.
 
 ## Target Architecture
 
@@ -167,7 +187,7 @@ The v1 tool catalog should be intentionally boring:
 | `read_file` | Requires path and optional range; hard byte/line caps. |
 | `write_file` | Full-file write for new/small files; gated by path policy. |
 | `edit_file` | Exact old/new replacement; returns failure with context if old text is absent or ambiguous. |
-| `apply_patch` | Structured patch application for multi-file edits; deterministic parse before mutation. |
+| `apply_patch` | Atomic multi-file exact replacements; deterministic validation before any mutation. |
 | `git_status` | Porcelain plus ignored/scratch filtering. |
 | `git_diff` | Name-only/stat/patch modes with caps. |
 | `run_command` | Policy-checked command execution inside sandbox. |
@@ -347,11 +367,11 @@ prompt paths, model roles, sandbox backends, command policies, and unknown field
 - Add `coder-tools` and host-local `coder-sandbox` implementation for tests/dev. **Started.**
 - Implement discrete file/git/search/command/validation tools behind `ToolRuntime`. **Started with
   `list_files`, `search_text`, `read_file`, `write_file`, `edit_file`, `git_status`, `git_diff`,
-  `run_command`, and `validate`.**
+  `apply_patch`, `run_command`, and `validate`.**
 - Enforce root path containment and output caps. **Started.**
 - Add unit tests for path escapes, ambiguous edits, patch failures, command denial, and output caps.
-  **Path escapes, command denial, ambiguous edit, basic read/write/search are covered; patch and
-  output-cap tests remain.**
+  **Path escapes, command denial, ambiguous edit, atomic patch failure, basic read/write/search, and
+  read output caps are covered.**
 
 ### Phase 3: Liberado Loop Backend MVP
 

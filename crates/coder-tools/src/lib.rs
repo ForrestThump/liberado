@@ -78,6 +78,7 @@ impl CodingToolRuntime {
             "read_file" => self.read_file(args).await,
             "write_file" => self.write_file(args).await,
             "edit_file" => self.edit_file(args).await,
+            "apply_patch" => self.apply_patch(args).await,
             "git_status" => self.git_status().await,
             "git_diff" => self.git_diff(args).await,
             "run_command" => self.run_command(args).await,
@@ -205,6 +206,63 @@ impl CodingToolRuntime {
         let updated = content.replacen(&args.old, &args.new, 1);
         std::fs::write(&path, updated.as_bytes()).map_err(fs_err)?;
         Ok(json!({ "path": args.path, "replacements": 1 }))
+    }
+
+    async fn apply_patch(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            edits: Vec<PatchEdit>,
+        }
+        #[derive(Deserialize)]
+        struct PatchEdit {
+            path: String,
+            old: String,
+            new: String,
+        }
+
+        let args: Args = parse_args(args)?;
+        if args.edits.is_empty() {
+            return Err(ToolError::BadRequest(
+                "edits must contain at least one edit".to_string(),
+            ));
+        }
+
+        let mut prepared = Vec::with_capacity(args.edits.len());
+        for edit in args.edits {
+            if edit.old.is_empty() {
+                return Err(ToolError::BadRequest(format!(
+                    "old must not be empty for {}",
+                    edit.path
+                )));
+            }
+            let path = self.rel_path(&edit.path, true)?;
+            let content = std::fs::read_to_string(&path).map_err(fs_err)?;
+            let count = content.matches(&edit.old).count();
+            if count == 0 {
+                return Err(ToolError::BadRequest(format!(
+                    "old text was not found in {}",
+                    edit.path
+                )));
+            }
+            if count > 1 {
+                return Err(ToolError::BadRequest(format!(
+                    "old text matched {count} times in {}; provide more context",
+                    edit.path
+                )));
+            }
+            let updated = content.replacen(&edit.old, &edit.new, 1);
+            prepared.push((edit.path, path, updated));
+        }
+
+        let changed = prepared
+            .iter()
+            .map(|(rel, _, _)| rel.clone())
+            .collect::<Vec<_>>();
+        let edit_count = changed.len();
+        for (_, path, updated) in prepared {
+            std::fs::write(&path, updated.as_bytes()).map_err(fs_err)?;
+        }
+        Ok(json!({ "files": changed, "edits": edit_count }))
     }
 
     async fn git_status(&self) -> Result<Value, ToolError> {
@@ -341,6 +399,29 @@ impl ToolRuntime for CodingToolRuntime {
                         "path": { "type": "string" },
                         "old": { "type": "string" },
                         "new": { "type": "string" }
+                    }
+                }),
+            ),
+            tool(
+                "apply_patch",
+                "Apply multiple exact replacements atomically after validating every edit.",
+                json!({
+                    "type": "object",
+                    "required": ["edits"],
+                    "properties": {
+                        "edits": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {
+                                "type": "object",
+                                "required": ["path", "old", "new"],
+                                "properties": {
+                                    "path": { "type": "string" },
+                                    "old": { "type": "string" },
+                                    "new": { "type": "string" }
+                                }
+                            }
+                        }
                     }
                 }),
             ),
@@ -520,6 +601,80 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("matched 2 times"));
+    }
+
+    #[tokio::test]
+    async fn apply_patch_updates_multiple_files() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("a.txt"), "alpha\n").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "beta\n").unwrap();
+
+        let result = runtime
+            .invoke_json(
+                "apply_patch",
+                json!({
+                    "edits": [
+                        {"path": "a.txt", "old": "alpha", "new": "ALPHA"},
+                        {"path": "b.txt", "old": "beta", "new": "BETA"}
+                    ]
+                }),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result["edits"], 2);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "ALPHA\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("b.txt")).unwrap(),
+            "BETA\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_patch_rejects_without_partial_write() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("a.txt"), "alpha\n").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "beta\n").unwrap();
+
+        let err = runtime
+            .invoke_json(
+                "apply_patch",
+                json!({
+                    "edits": [
+                        {"path": "a.txt", "old": "alpha", "new": "ALPHA"},
+                        {"path": "b.txt", "old": "missing", "new": "BETA"}
+                    ]
+                }),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("old text was not found"));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "alpha\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("b.txt")).unwrap(),
+            "beta\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_file_caps_large_content() {
+        let (dir, mut runtime) = runtime();
+        runtime.path_policy.read_max_bytes = 4;
+        std::fs::write(dir.path().join("big.txt"), "abcdef").unwrap();
+
+        let result = runtime
+            .invoke_json("read_file", json!({"path": "big.txt"}))
+            .await
+            .unwrap();
+
+        assert_eq!(result["content"], "abcd");
     }
 
     #[tokio::test]

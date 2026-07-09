@@ -19,6 +19,7 @@ model through `liberado-executor::ToolRuntime`.
 - `read_file`
 - `write_file`
 - `edit_file`
+- `apply_patch`
 - `git_status`
 - `git_diff`
 - `run_command`
@@ -27,9 +28,13 @@ model through `liberado-executor::ToolRuntime`.
 The catalog is intentionally decomposed. Higher-level behavior belongs in `coder-agent`, which can
 choose which tools a role sees and can layer progress guards over the event stream.
 
+`apply_patch` is currently a conservative atomic multi-edit tool: each edit names a file plus one
+exact `old`/`new` replacement. The runtime validates path policy, file existence, non-empty old text,
+and exactly-one match for every edit before it writes any file. This gives models a compact
+multi-file edit affordance without introducing a broad textual patch parser as an authority boundary.
+
 ## Next Steps
 
-- Add deterministic `apply_patch` once the patch schema is settled.
 - Route command execution through Docker sandbox implementations.
 - Emit `CoderEvent` values for every invocation.
 - Add output shaping tuned by `heuristics-tuner` scenarios instead of changing tool semantics.
