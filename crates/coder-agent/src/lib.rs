@@ -8,8 +8,8 @@ use std::{
 use async_trait::async_trait;
 use chrono::Utc;
 use liberado_coder_core::{
-    CoderBackend, CoderCommandConfig, CoderError, CoderEvent, CoderRunRequest, CoderRunResult,
-    CoderTrace, LIBERADO_LOOP_BACKEND,
+    CoderBackend, CoderCommandConfig, CoderError, CoderEvent, CoderRoleConfig, CoderRunRequest,
+    CoderRunResult, CoderTrace, LIBERADO_LOOP_BACKEND,
 };
 use liberado_coder_sandbox::CommandRequest;
 use liberado_coder_tools::CodingToolRuntime;
@@ -21,12 +21,45 @@ use tokio::process::Command;
 
 #[derive(Clone)]
 pub struct LiberadoLoopBackend {
+    providers: Arc<dyn CoderProviderFactory>,
+}
+
+pub trait CoderProviderFactory: Send + Sync {
+    fn provider_for(
+        &self,
+        role: &str,
+        config: &CoderRoleConfig,
+    ) -> Result<Arc<dyn Provider>, CoderError>;
+}
+
+#[derive(Clone)]
+pub struct SingleProviderFactory {
     provider: Arc<dyn Provider>,
+}
+
+impl SingleProviderFactory {
+    pub fn new(provider: Arc<dyn Provider>) -> Self {
+        Self { provider }
+    }
+}
+
+impl CoderProviderFactory for SingleProviderFactory {
+    fn provider_for(
+        &self,
+        _role: &str,
+        _config: &CoderRoleConfig,
+    ) -> Result<Arc<dyn Provider>, CoderError> {
+        Ok(self.provider.clone())
+    }
 }
 
 impl LiberadoLoopBackend {
     pub fn new(provider: Arc<dyn Provider>) -> Self {
-        Self { provider }
+        Self::with_provider_factory(Arc::new(SingleProviderFactory::new(provider)))
+    }
+
+    pub fn with_provider_factory(providers: Arc<dyn CoderProviderFactory>) -> Self {
+        Self { providers }
     }
 }
 
@@ -69,8 +102,11 @@ impl CoderBackend for LiberadoLoopBackend {
                 at: Utc::now(),
             },
         );
+        let provider = self
+            .providers
+            .provider_for("coder", &request.config.coder)?;
         let task = Task::new(coder_instructions(&request).await?, coder_goal(&request));
-        let executor = Executor::new(self.provider.clone(), Budget::new(max_turns));
+        let executor = Executor::new(provider, Budget::new(max_turns));
         let report = executor
             .execute(&runtime, task)
             .await
@@ -489,6 +525,25 @@ mod tests {
         request
     }
 
+    struct RecordingProviderFactory {
+        provider: Arc<dyn Provider>,
+        calls: Arc<Mutex<Vec<(String, String)>>>,
+    }
+
+    impl CoderProviderFactory for RecordingProviderFactory {
+        fn provider_for(
+            &self,
+            role: &str,
+            config: &CoderRoleConfig,
+        ) -> Result<Arc<dyn Provider>, CoderError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((role.to_string(), config.model.clone()));
+            Ok(self.provider.clone())
+        }
+    }
+
     #[tokio::test]
     async fn mocked_loop_edits_workspace_and_reports_changed_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -519,6 +574,49 @@ mod tests {
 
         assert_eq!(result.outcome, Outcome::Succeeded);
         assert_eq!(result.files_changed, vec!["hello.txt"]);
+    }
+
+    #[tokio::test]
+    async fn backend_asks_provider_factory_for_coder_role_model() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "write-1",
+                    "write_file",
+                    json!({"path": "hello.txt", "content": "hello\n"}),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "report-1",
+                    liberado_executor::SUBMIT_REPORT_TOOL,
+                    json!({
+                        "outcome": "succeeded",
+                        "summary": "Wrote hello.txt",
+                        "artifacts": ["hello.txt"],
+                        "new_high_signal_facts": [],
+                        "follow_up": null
+                    }),
+                )]),
+            ],
+        ));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let backend = LiberadoLoopBackend::with_provider_factory(Arc::new(
+            RecordingProviderFactory {
+                provider,
+                calls: calls.clone(),
+            },
+        ));
+        let mut request = request(dir.path(), "HEAD");
+        request.config.coder.model = "deepseek/deepseek-v4-pro".to_string();
+
+        backend.run(request).await.unwrap();
+
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            &[("coder".to_string(), "deepseek/deepseek-v4-pro".to_string())]
+        );
     }
 
     #[tokio::test]

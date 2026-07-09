@@ -10,8 +10,8 @@ use std::{
     sync::Arc,
 };
 
-use liberado_coder_agent::LiberadoLoopBackend;
-use liberado_coder_core::{CoderBackend, CoderRunRequest};
+use liberado_coder_agent::{CoderProviderFactory, LiberadoLoopBackend};
+use liberado_coder_core::{CoderBackend, CoderError, CoderRoleConfig, CoderRunRequest};
 use liberado_config_loader::{ProviderProfile, Topology};
 use liberado_provider::Provider;
 use liberado_provider_openai_compat::OpenAiCompatibleProvider;
@@ -38,8 +38,8 @@ async fn run() -> Result<(), String> {
     let args = Args::parse(env::args().skip(1))?;
     let request = read_request(args.request.as_deref()).await?;
     let profile = provider_profile(args.config_dir.as_deref())?;
-    let provider = provider_from_profile(&profile, &request.config.coder.model)?;
-    let backend = LiberadoLoopBackend::new(provider);
+    let providers = Arc::new(OpenAiProfileProviderFactory::from_profile(profile)?);
+    let backend = LiberadoLoopBackend::with_provider_factory(providers);
     let result = backend
         .run(request)
         .await
@@ -122,19 +122,35 @@ fn read_topology(config_dir: &Path) -> Result<Topology, String> {
     toml::from_str(&raw).map_err(|error| format!("parse topology {}: {error}", path.display()))
 }
 
-fn provider_from_profile(
-    profile: &ProviderProfile,
-    model: &str,
-) -> Result<Arc<dyn Provider>, String> {
-    let api_key = env::var(&profile.api_key_env).map_err(|_| {
-        format!(
-            "{} is required for provider '{}'",
-            profile.api_key_env, profile.name
-        )
-    })?;
-    let provider = OpenAiCompatibleProvider::new(api_key, model, &profile.base_url)
-        .with_extra_client_error_status(profile.extra_client_error_status.clone());
-    Ok(Arc::new(provider))
+#[derive(Debug, Clone)]
+struct OpenAiProfileProviderFactory {
+    profile: ProviderProfile,
+    api_key: String,
+}
+
+impl OpenAiProfileProviderFactory {
+    fn from_profile(profile: ProviderProfile) -> Result<Self, String> {
+        let api_key = env::var(&profile.api_key_env).map_err(|_| {
+            format!(
+                "{} is required for provider '{}'",
+                profile.api_key_env, profile.name
+            )
+        })?;
+        Ok(Self { profile, api_key })
+    }
+}
+
+impl CoderProviderFactory for OpenAiProfileProviderFactory {
+    fn provider_for(
+        &self,
+        _role: &str,
+        config: &CoderRoleConfig,
+    ) -> Result<Arc<dyn Provider>, CoderError> {
+        let provider =
+            OpenAiCompatibleProvider::new(&self.api_key, &config.model, &self.profile.base_url)
+                .with_extra_client_error_status(self.profile.extra_client_error_status.clone());
+        Ok(Arc::new(provider))
+    }
 }
 
 fn usage() -> String {

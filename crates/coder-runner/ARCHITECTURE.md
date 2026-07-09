@@ -15,8 +15,8 @@ future TUI/API can still use `liberado-coder-agent` as a normal library.
 - Provider profile: loaded from `topology.toml` in `--config-dir <dir>` when supplied, otherwise
   `Topology::default()`.
 - Provider selection: `LIBERADO_CODER_PROVIDER` overrides `topology.provider`.
-- Model selection: the coder role's `model` in the request wins. This lets prompt/model tuning live
-  in `tuning.coder` without recompiling.
+- Model selection: each role's `model` in the request wins when the backend asks for that role's
+  provider. This lets prompt/model tuning live in `tuning.coder` without recompiling.
 
 ## Why This Exists
 
@@ -29,5 +29,6 @@ from live loop runs. A JSON subprocess boundary is more stable: dispatch can swa
 
 - Streaming events over stdout/stderr or a sidecar trace channel.
 - Config-dir-relative prompt path resolution before the request reaches `liberado-coder-agent`.
-- Multi-provider role routing for planner/coder/critic/repair.
+- Executing planner/critic/repair roles. The runner can construct providers for role configs, but
+  the current backend still only asks for the coder role.
 - A first-class CLI UX. This binary is a machine contract, not the future human-facing coding TUI.

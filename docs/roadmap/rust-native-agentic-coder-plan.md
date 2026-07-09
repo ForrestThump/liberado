@@ -23,7 +23,8 @@ Current checkpoints:
   loads the coder prompt from inline config or `prompt_path`, verifies real workspace changes with
   `git status --porcelain`, rejects false success reports, runs a configured validation command as a
   deterministic post-loop gate, and writes coarse `CoderTrace` JSON artifacts when `trace_dir` is
-  configured.
+  configured. It now selects model providers through a role-provider factory seam, though only the
+  coder role is executed so far.
 - `crates/coder-runner` exposes the same backend through `liberado-coder-run`, a JSON
   `CoderRunRequest` -> `CoderRunResult` subprocess boundary. This is the intended low-friction bridge
   for nested/process callers such as `liberado-pr-dispatch-mcp` while the in-process loop crates stay
@@ -404,6 +405,8 @@ prompt paths, model roles, sandbox backends, command policies, and unknown field
 - Add a process boundary for callers that cannot or should not link the loop stack directly.
   **Started with `liberado-coder-run`, which accepts `CoderRunRequest` JSON and emits
   `CoderRunResult` JSON.**
+- Add per-role provider selection so planner/coder/critic/repair can use different configured
+  models. **Started with `CoderProviderFactory`; only the coder role consumes it today.**
 - Run against a mocked provider first, then a small live smoke task.
 
 ### Phase 4: PR Factory Integration

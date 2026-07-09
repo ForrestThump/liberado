@@ -7,6 +7,8 @@ a `CoderRunResult`.
 ## Current MVP
 
 - Uses one configured coder role.
+- Selects the role provider through `CoderProviderFactory`. The compatibility constructor wraps a
+  single provider, while process/CLI callers can supply factories that instantiate per-role models.
 - Requires the coder role to arrive with a resolved `max_turns`; config loading should supply
   defaults before building `CoderRunRequest`.
 - Builds `CodingToolRuntime` over the prepared workspace using the configured `SandboxSpec`
@@ -24,7 +26,8 @@ a `CoderRunResult`.
 
 ## Not Done Yet
 
-- Planner/critic/repair roles.
+- Planner/critic/repair roles. The provider-selection seam exists, but those roles are not executed
+  yet.
 - Live Docker smoke coverage and long-lived container lifecycle.
 - Fine-grained `CoderEvent` trace emission for individual model turns. Tool calls are captured by a
   tracing runtime wrapper; model-turn events likely need executor streaming hooks.
