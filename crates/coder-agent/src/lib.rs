@@ -8,9 +8,10 @@ use std::{
 use async_trait::async_trait;
 use chrono::Utc;
 use liberado_coder_core::{
-    CoderBackend, CoderError, CoderEvent, CoderRunRequest, CoderRunResult, CoderTrace,
-    LIBERADO_LOOP_BACKEND,
+    CoderBackend, CoderCommandConfig, CoderError, CoderEvent, CoderRunRequest, CoderRunResult,
+    CoderTrace, LIBERADO_LOOP_BACKEND,
 };
+use liberado_coder_sandbox::CommandRequest;
 use liberado_coder_tools::CodingToolRuntime;
 use liberado_common::Outcome;
 use liberado_executor::{Budget, Executor, Task, ToolRuntime};
@@ -44,12 +45,16 @@ impl CoderBackend for LiberadoLoopBackend {
             at: Utc::now(),
         }]));
         let max_turns = request.config.coder.max_turns.unwrap_or(30);
-        let runtime = CodingToolRuntime::new(
+        let mut runtime = CodingToolRuntime::new(
             &request.workspace.root,
             request.config.command_policy.clone(),
             request.config.path_policy.clone(),
         )
         .map_err(|e| CoderError::Tool(e.to_string()))?;
+        if let Some(command) = &request.config.validation_command {
+            runtime = runtime.with_validation_command(command_request(command));
+        }
+        let backend_runtime = runtime.clone();
         let runtime = TracingToolRuntime::new(runtime, events.clone());
 
         push_event(
@@ -111,6 +116,12 @@ impl CoderBackend for LiberadoLoopBackend {
                 },
             );
         }
+        let validation_notes =
+            if request.config.validation_command.is_some() && report.outcome != Outcome::Failed {
+                Some(run_validation_gate(&backend_runtime, &events, &request, &session_id).await?)
+            } else {
+                None
+            };
         push_event(
             &events,
             CoderEvent::SessionFinished {
@@ -124,7 +135,7 @@ impl CoderBackend for LiberadoLoopBackend {
             outcome: report.outcome,
             summary: report.summary,
             files_changed,
-            validation_notes: None,
+            validation_notes,
             critic_verdict: None,
             trace_path: None,
             diagnostics: json!({
@@ -141,6 +152,53 @@ impl CoderBackend for LiberadoLoopBackend {
         .await?;
         Ok(result)
     }
+}
+
+fn command_request(command: &CoderCommandConfig) -> CommandRequest {
+    CommandRequest {
+        program: command.program.clone(),
+        args: command.args.clone(),
+        env: command.env.clone(),
+        timeout_secs: command.timeout_secs,
+        output_max_bytes: command.output_max_bytes,
+    }
+}
+
+async fn run_validation_gate(
+    runtime: &CodingToolRuntime,
+    events: &Arc<Mutex<Vec<CoderEvent>>>,
+    request: &CoderRunRequest,
+    session_id: &str,
+) -> Result<String, CoderError> {
+    let result = runtime
+        .invoke_json_for_backend("validate", json!({}))
+        .await
+        .map_err(|e| CoderError::Validation(e.to_string()))?;
+    let passed = result
+        .get("passed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let summary = validation_summary(&result);
+    push_event(
+        events,
+        CoderEvent::ValidationFinished {
+            ok: passed,
+            summary: summary.clone(),
+            at: Utc::now(),
+        },
+    );
+    if !passed {
+        push_event(
+            events,
+            CoderEvent::SessionFinished {
+                outcome: Outcome::Failed,
+                at: Utc::now(),
+            },
+        );
+        let _ = write_trace(request, session_id, snapshot_events(events), None).await;
+        return Err(CoderError::Validation(summary));
+    }
+    Ok(summary)
 }
 
 struct TracingToolRuntime {
@@ -263,6 +321,30 @@ fn preview_str(value: &str) -> String {
     value.chars().take(MAX_PREVIEW_CHARS).collect()
 }
 
+fn validation_summary(result: &Value) -> String {
+    let exit_code = result
+        .get("exit_code")
+        .and_then(Value::as_i64)
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let timed_out = result
+        .get("timed_out")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let stdout = result.get("stdout").and_then(Value::as_str).unwrap_or("");
+    let stderr = result.get("stderr").and_then(Value::as_str).unwrap_or("");
+    let mut summary = format!("exit_code={exit_code}, timed_out={timed_out}");
+    if !stdout.trim().is_empty() {
+        summary.push_str("\nstdout:\n");
+        summary.push_str(stdout.trim());
+    }
+    if !stderr.trim().is_empty() {
+        summary.push_str("\nstderr:\n");
+        summary.push_str(stderr.trim());
+    }
+    summary
+}
+
 fn parse_status_path(line: &str) -> Option<String> {
     if line.len() < 4 {
         return None;
@@ -376,6 +458,7 @@ mod tests {
                 repair: None,
                 sandbox: SandboxSpec::HostLocal,
                 command_policy: CommandPolicy::default(),
+                validation_command: None,
                 path_policy: PathPolicy::default(),
                 progress: ProgressPolicy::default(),
             },
@@ -515,6 +598,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_validation_gate_sets_notes_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "write-1",
+                    "write_file",
+                    json!({"path": "hello.txt", "content": "hello\n"}),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "report-1",
+                    liberado_executor::SUBMIT_REPORT_TOOL,
+                    json!({
+                        "outcome": "succeeded",
+                        "summary": "Wrote hello.txt",
+                        "artifacts": ["hello.txt"],
+                        "new_high_signal_facts": [],
+                        "follow_up": null
+                    }),
+                )]),
+            ],
+        ));
+        let backend = LiberadoLoopBackend::new(provider);
+        let mut request = request(dir.path(), "HEAD");
+        request.config.validation_command = Some(test_command("validation-ok"));
+
+        let result = backend.run(request).await.unwrap();
+
+        assert_eq!(result.outcome, Outcome::Succeeded);
+        assert!(result.validation_notes.unwrap().contains("validation-ok"));
+    }
+
+    #[tokio::test]
+    async fn configured_validation_gate_fails_run_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "write-1",
+                    "write_file",
+                    json!({"path": "hello.txt", "content": "hello\n"}),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "report-1",
+                    liberado_executor::SUBMIT_REPORT_TOOL,
+                    json!({
+                        "outcome": "succeeded",
+                        "summary": "Wrote hello.txt",
+                        "artifacts": ["hello.txt"],
+                        "new_high_signal_facts": [],
+                        "follow_up": null
+                    }),
+                )]),
+            ],
+        ));
+        let backend = LiberadoLoopBackend::new(provider);
+        let mut request = request(dir.path(), "HEAD");
+        request.config.validation_command = Some(failing_test_command());
+
+        let err = backend.run(request).await.unwrap_err();
+
+        assert!(matches!(err, CoderError::Validation(_)));
+        assert!(err.to_string().contains("validation-failed"));
+    }
+
+    #[tokio::test]
     async fn success_report_without_diff_is_no_changes() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path());
@@ -605,5 +758,57 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success(), "command failed: {command:?}");
+    }
+
+    fn test_command(message: &str) -> liberado_coder_core::CoderCommandConfig {
+        #[cfg(windows)]
+        {
+            liberado_coder_core::CoderCommandConfig {
+                program: "cmd".to_string(),
+                args: vec!["/C".to_string(), format!("echo {message}")],
+                env: Default::default(),
+                timeout_secs: None,
+                output_max_bytes: None,
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            liberado_coder_core::CoderCommandConfig {
+                program: "sh".to_string(),
+                args: vec!["-c".to_string(), format!("echo {message}")],
+                env: Default::default(),
+                timeout_secs: None,
+                output_max_bytes: None,
+            }
+        }
+    }
+
+    fn failing_test_command() -> liberado_coder_core::CoderCommandConfig {
+        #[cfg(windows)]
+        {
+            liberado_coder_core::CoderCommandConfig {
+                program: "cmd".to_string(),
+                args: vec![
+                    "/C".to_string(),
+                    "echo validation-failed >&2 && exit /B 1".to_string(),
+                ],
+                env: Default::default(),
+                timeout_secs: None,
+                output_max_bytes: None,
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            liberado_coder_core::CoderCommandConfig {
+                program: "sh".to_string(),
+                args: vec![
+                    "-c".to_string(),
+                    "echo validation-failed >&2; exit 1".to_string(),
+                ],
+                env: Default::default(),
+                timeout_secs: None,
+                output_max_bytes: None,
+            }
+        }
     }
 }

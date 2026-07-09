@@ -125,6 +125,32 @@ impl Default for CommandPolicy {
     }
 }
 
+/// A configured command the backend can expose through `validate` and run as a deterministic gate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoderCommandConfig {
+    pub program: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_max_bytes: Option<usize>,
+}
+
+impl CoderCommandConfig {
+    pub fn new(program: impl Into<String>) -> Self {
+        Self {
+            program: program.into(),
+            args: Vec::new(),
+            env: std::collections::BTreeMap::new(),
+            timeout_secs: None,
+            output_max_bytes: None,
+        }
+    }
+}
+
 /// Path containment and write policy for the workspace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PathPolicy {
@@ -202,6 +228,8 @@ pub struct CoderRunConfig {
     pub sandbox: SandboxSpec,
     #[serde(default)]
     pub command_policy: CommandPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_command: Option<CoderCommandConfig>,
     #[serde(default)]
     pub path_policy: PathPolicy,
     #[serde(default)]
@@ -394,6 +422,13 @@ mod tests {
                 repair: None,
                 sandbox: SandboxSpec::HostLocal,
                 command_policy: CommandPolicy::default(),
+                validation_command: Some(CoderCommandConfig {
+                    program: "cargo".to_string(),
+                    args: vec!["test".to_string()],
+                    env: std::collections::BTreeMap::new(),
+                    timeout_secs: Some(300),
+                    output_max_bytes: Some(4096),
+                }),
                 path_policy: PathPolicy::default(),
                 progress: ProgressPolicy::default(),
             },

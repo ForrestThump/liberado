@@ -12,6 +12,7 @@ description = "Liberado Executor-backed coding backend MVP"
 async-trait.workspace = true
 chrono.workspace = true
 liberado-coder-core.workspace = true
+liberado-coder-sandbox.workspace = true
 liberado-coder-tools.workspace = true
 liberado-common.workspace = true
 liberado-executor.workspace = true

@@ -16,8 +16,9 @@ Current checkpoints:
   before writing.
 - `crates/coder-agent` has an Executor-backed MVP that runs the coder role through `CodingToolRuntime`,
   loads the coder prompt from inline config or `prompt_path`, verifies real workspace changes with
-  `git status --porcelain`, rejects false success reports, and writes coarse `CoderTrace` JSON
-  artifacts when `trace_dir` is configured.
+  `git status --porcelain`, rejects false success reports, runs a configured validation command as a
+  deterministic post-loop gate, and writes coarse `CoderTrace` JSON artifacts when `trace_dir` is
+  configured.
 - Workspace verification currently expects the nested `turbovault/` checkout to be on
   `feature/vector-db`, because root `Cargo.toml` pins `turbovault-vector` from that branch.
 - Process checkpoint: after meaningful coder slices, run a fresh debt audit for anti-patterns,
@@ -358,7 +359,7 @@ prompt paths, model roles, sandbox backends, command policies, and unknown field
 
 - Add `coder-core`.
 - Define `CoderTask`, `CoderRunRequest`, `CoderRunResult`, `CoderBackend`, `CoderEvent`,
-  `CoderTrace`, `SandboxSpec`, `CommandPolicy`, and config structs.
+  `CoderTrace`, `SandboxSpec`, `CoderCommandConfig`, `CommandPolicy`, and config structs.
 - Add serialization tests and examples.
 - Add architecture doc for the crate.
 
@@ -379,9 +380,10 @@ prompt paths, model roles, sandbox backends, command policies, and unknown field
 - Wire `liberado-executor::Executor` to the coding tools with config-loaded prompts. **Started for
   inline `config.coder.prompt` and resolved `config.coder.prompt_path`.**
 - Implement no-diff progress detection and report verification. **Started with deterministic
-  post-loop `git status --porcelain`; in-loop progress guards remain.**
+  post-loop `git status --porcelain` and configured validation-command gating; in-loop progress
+  guards remain.**
 - Produce structured `CoderEvent` traces. **Started with session/role/report/tool-start/tool-finish/
-  file-change/guard/finish events persisted as `CoderTrace`; model-turn events remain.**
+  file-change/validation/guard/finish events persisted as `CoderTrace`; model-turn events remain.**
 - Run against a mocked provider first, then a small live smoke task.
 
 ### Phase 4: PR Factory Integration

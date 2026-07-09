@@ -3398,6 +3398,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "liberado-coder-core",
+ "liberado-coder-sandbox",
  "liberado-coder-tools",
  "liberado-common",
  "liberado-executor",

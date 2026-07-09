@@ -18,12 +18,14 @@ It exists so several surfaces can share one vocabulary:
 - `CoderBackend` — the async trait a PR factory or UI client calls. It receives a prepared workspace
   and returns a `CoderRunResult`; it does not commit, push, or open PRs.
 - `CoderRunRequest` — `CoderTask` + `WorkspaceRef` + resolved `CoderRunConfig`.
-- `CoderRunConfig` — backend name, role configs, sandbox spec, command/path/progress policies.
+- `CoderRunConfig` — backend name, role configs, sandbox spec, optional validation command, and
+  command/path/progress policies.
 - `trace_dir` — optional run-config path where backends can write durable `CoderTrace` artifacts.
 - `CoderRunResult` — backend outcome, summary, files changed, validation notes, critic verdict,
   diagnostics, and optional trace path.
 - `CoderEvent` / `CoderTrace` — stable replay/render vocabulary for logs and future UI clients.
-- `SandboxSpec`, `CommandPolicy`, `PathPolicy`, `ProgressPolicy` — config-shaped policy structs.
+- `SandboxSpec`, `CoderCommandConfig`, `CommandPolicy`, `PathPolicy`, `ProgressPolicy` —
+  config-shaped policy structs.
 
 ## Design Rules
 

@@ -10,11 +10,13 @@ a `CoderRunResult`.
 - Builds `CodingToolRuntime` over the prepared workspace.
 - Runs `Executor::execute` in report mode.
 - Loads the coder role prompt from inline config or `prompt_path`.
+- Wires the optional configured validation command into the model-visible `validate` tool and reruns
+  that same command as a deterministic backend gate after a claimed non-failed result.
 - Checks `git status --porcelain` after the loop and fails `NoChanges` if the model filed a success
   report without a real workspace change. This backend invariant does not go through the
   model-visible `run_command` tool or its command policy.
 - Writes a `CoderTrace` JSON replay artifact when `trace_dir` is configured. Current events include
-  session/role/report/tool-start/tool-finish/file-change/guard/finish events.
+  session/role/report/tool-start/tool-finish/file-change/validation/guard/finish events.
 
 ## Not Done Yet
 
