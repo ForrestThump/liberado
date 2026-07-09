@@ -191,7 +191,7 @@ Goal was to prove the PR-dispatch pipeline actually works end-to-end on this Win
 before "shotgunning" a batch of WebUI tasks through it. It didn't work on the first try, and every
 failure was real, not environmental noise:
 
-- **Fixed in `liberado-pr-dispatch-mcp`** (uncommitted — see checkbox below): hardcoded Unix paths
+- **Fixed in `liberado-pr-dispatch-mcp`** (committed locally; see checkpoint notes below): hardcoded Unix paths
   (`/data/tasks.db`, `/workspace`) now read `DB_PATH`/`WORKSPACE_DIR`/`BIND_ADDR` env vars; a
   Windows `git-askpass` helper was added (`git_ops.rs` previously hard-bailed on non-Unix); Windows'
   Git Credential Manager was intercepting auth before `GIT_ASKPASS` was consulted and hanging
@@ -219,11 +219,12 @@ failure was real, not environmental noise:
   nothing else touched.
 
 - [x] **The six Windows-portability fixes committed — 2026-07-08** (`5157b21`, local only, not
-      pushed — say the word if you want it on `origin/master`). The `vtcode`-fork cleanup above
-      (Dockerfile/vtcode.toml revert) is a separate, still-uncommitted change on top of that commit.
-- [ ] **Two stray untracked files in that repo**, `config.toml` and `sessions/` — vtcode's own local
-      scratch config/session logs from testing, not secrets, but not gitignored either. Harmless to
-      leave, cheap to add to `.gitignore` if you want them out of `git status` noise.
+      pushed — say the word if you want it on `origin/master`).
+- [x] **Follow-up PR-dispatch iteration checkpoint committed locally — 2026-07-09** (`32e5815`,
+      local only, not pushed): the vtcode cleanup/coder-critic retry-loop work, `config.toml`, and
+      `sessions/` diagnostics were committed as-is before the Rust-native coder planning pass, per
+      the user's request for a clean working tree. The files are diagnostic/scratch state rather than
+      secrets, but they are now part of the local repo history.
 - [x] **`vtcode` fork PR merged upstream — 2026-07-08.**
       [vinhnx/VTCode#697](https://github.com/vinhnx/VTCode/pull/697) merged into `main` at `fe45c4e`
       (confirmed via `gh pr view`). No tagged release includes it yet as of this writing (latest is

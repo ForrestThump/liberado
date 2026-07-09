@@ -13,6 +13,28 @@ than being built as a months-long plumbing project up front (see Decision 18, th
 event-bus mesh). The substrate work itself (config/policy, catalog, proposal loop — Decisions
 11/14/17) is largely landed; this roadmap is what's next.
 
+### Strategic pivot — Rust-native agentic coder
+
+Phase 2 proved the self-improvement moat's outer workflow: a coding task can become a draft PR behind
+a human approval gate. The current `liberado-pr-dispatch-mcp` implementation did that through
+`vtcode`, but the live diagnosis in
+[pr-dispatch-vtcode-no-write-finding.md](pr-dispatch-vtcode-no-write-finding.md) showed the coding
+harness itself is not reliable enough to be the long-term substrate. The new direction is to replace
+`vtcode` with a first-party Rust loop backend built on the existing `Provider` + `Executor` +
+`ToolRuntime` architecture, while preserving the good PR-factory pieces already built.
+
+Master plan:
+[rust-native-agentic-coder-plan.md](rust-native-agentic-coder-plan.md). The short version:
+`vtcode` becomes a migration backend behind a `CoderBackend` seam; new `coder-core`/`coder-tools`/
+`coder-agent`/`coder-sandbox` crates provide a config-driven, sandboxed, event-streaming coding loop;
+the PR factory consumes that backend first; the TUI/CLI can later target the same session/event API
+without owning the agent loop.
+
+This is a fundamental architecture slice, not a cosmetic agent swap. It advances the same mesh,
+modularity, context-efficiency, and empirical-tuning goals as the rest of Liberado: small explicit
+tools, config-owned prompts/models/budgets, Docker sandbox abstraction from day one, traces promoted
+into eval fixtures, and `heuristics-tuner` integration for prompt/model/policy changes.
+
 ### Phase 1 — The general MCP agent ✅ (done, 2026-07-02)
 
 The vault-agnostic interactive agent; proves the core runs without TurboVault (none of it touches the

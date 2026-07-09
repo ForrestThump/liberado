@@ -28,6 +28,14 @@ For how these pillars position Liberado against the free alternatives, see
    is sometimes unexpectedly useful, so this can be taken too far in the conservative direction.
    Empirical testing finds the balance.
 
+The next strategic slice applies these same pillars to coding. The `liberado-pr-dispatch-mcp`
+workflow proved the draft-PR approval gate, but its `vtcode` harness is being replaced by a modular
+Rust-native coder loop that reuses Liberado's own `Provider` + `Executor` + `ToolRuntime` substrate.
+See the roadmap plan:
+[`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md). The coder is a
+mesh service, not a new center of gravity: PR production is the first consumer, and a TUI/CLI coding
+surface can later target the same session/event contract.
+
 **Operational data** (the runtime trace — Decision 12; conversation history — Decision 17)
 deliberately lives *outside* the vault as append-only JSONL, so high-volume writes don't pollute the
 change-stream the daemon reacts to; it reaches the vault only as a one-way, derived Markdown export.
@@ -91,6 +99,15 @@ Bottom-up (each depends roughly on those above it):
 | Tooling | [`mcp-forge`](../../crates/mcp-forge/ARCHITECTURE.md) | Builds/installs Liberado MCP servers from git URLs (`cargo install --git`), keyed by `mcp-sources.toml`. |
 | Testing | [`test-support`](../../crates/test-support/Cargo.toml) | Dev-dependency-only: shared `ToolRuntime`/`RuntimeFactory` test doubles, consolidating what used to be duplicated across `orchestrator`/`daemon` test modules. |
 
+Planned next crate family:
+
+| Layer | Crate | Role |
+|---|---|---|
+| Coding | `coder-core` | Provider-agnostic coding contracts: backend trait, task/session/event/report types, sandbox specs, and trace schema. |
+| Coding | `coder-tools` | Discrete file/search/git/command/validation tools exposed as a `ToolRuntime`, with path and output policy. |
+| Coding | `coder-agent` | The Liberado-loop coding backend: role prompts/models from config, executor wiring, progress guards, and trace/event emission. |
+| Coding | `coder-sandbox` | Workspace and command-execution backends, with Docker as the first production sandbox and host-local for tests/dev. |
+
 ## Cross-cutting concepts
 
 - **Provenance & loop-breaking (Decision 5)** — `WriteProvenance` (`source` + `correlation_id`) rides
@@ -120,8 +137,10 @@ session-keyed conversations** (Decision 17) are complete, all hosted by **one `l
 pass (item 15 below) is done, Phase 3 is fully landed (cron, the external webhook hook receiver, and
 named dispatcher/executor pools, items 16-18 below, completing Decision 18 checkpoint #3), and
 Phase 4 v1 (Docker MCP transport, item 19 below) is built and unit-tested, pending only its live
-Docker-daemon smoke test. The next work is deepening the main agent (context policy + dispatcher
-integration) and the TUI, that live smoke test, or a further Phase 4 slice.
+Docker-daemon smoke test. The next strategic work is the Rust-native agentic coder plan: replace
+`vtcode` as the PR-dispatch coding engine with modular Liberado loop crates, keeping PR production,
+future TUI/CLI coding sessions, sandboxing, and eval/tuning behind shared contracts. Other open work
+remains valid: deepening the main agent, the TUI, the Docker smoke test, and further Phase 4 slices.
 
 **Done:**
 1. ✅ **Reactive pipeline** — daemon watches → attributes → dispatches → orchestrates → executes, end-to-end wired and tested.
@@ -136,7 +155,7 @@ integration) and the TUI, that live smoke test, or a further Phase 4 slice.
 
 10. ✅ **Proposal workflow (Decision 11, emit AND approve→execute)** — the full propose→approve→execute loop is closed. The EMIT path writes a `proposals/<id>.md` artifact for high-consequence concrete actions (YAML frontmatter with `status: pending`); the APPROVE→EXECUTE half picks up a human `status: approved` edit via the watch loop, calls `orchestrator.execute_approved()` with the proposal's `correlation_id` as provenance (no re-dispatch, no guards — the edit is the authorization), and flips `status` to `done` (loop-broken, idempotent). As of 2026-07-02 every proposal also carries an HMAC-SHA256 integrity signature (tamper detection) and runtime-gated proposals (adaptive, non-seed tool calls) land in the vault too, not a data-dir dead end — see [`hardening-audit-2026-07-02.md`](../roadmap/hardening-audit-2026-07-02.md).
 11. ✅ **Phase 1 — the general MCP agent** — chat now routes every turn through `Dispatcher::dispatch` before executing (the "main-agent depth" item below is done); the three independently-static capability catalogs (daemon/chat/API) are one live, shared `Arc<CapabilityCatalog>`; `Grant.component` narrows both dispatch routing and runtime tool surfacing. Full writeups: [`chat-dispatcher-and-component-scoping.md`](../roadmap/chat-dispatcher-and-component-scoping.md), [`live-catalog-and-dispatcher-narrowed-tools.md`](../roadmap/live-catalog-and-dispatcher-narrowed-tools.md).
-12. ✅ **Phase 2 — the self-improvement moat** — `riggers/` (`liberado-pr-dispatch-mcp`) registered as `code-dispatch` (reversible, human-approved draft PRs only), with a greenfield mode to scaffold brand-new MCPs from scratch. Full report: [`phase-2-implementation-report.md`](../roadmap/phase-2-implementation-report.md).
+12. ✅ **Phase 2 — the self-improvement moat** — `riggers/` (`liberado-pr-dispatch-mcp`) registered as `code-dispatch` (reversible, human-approved draft PRs only), with a greenfield mode to scaffold brand-new MCPs from scratch. Full report: [`phase-2-implementation-report.md`](../roadmap/phase-2-implementation-report.md). **Updated direction, 2026-07-09:** the PR factory workflow stays, but `vtcode` is no longer the strategic coding engine; see [`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md).
 13. ✅ **`crates/tui`** — a ratatui TUI client hitting the same chat/SSE contract as the browser web UI and `liberado chat`; shares its SSE decoder and slash-command dispatcher with the other clients (`chat-client-contract`, `liberado-commands`) rather than hand-rolling its own.
 14. ✅ **Web UI flesh-out** — sidebar, MCP capability panel, Markdown rendering, and slash commands landed in `liberado-webui`. Design reference: [`webui-flesh-out-plan.md`](../roadmap/webui-flesh-out-plan.md).
 15. ✅ **Pre-Phase-3 hardening pass** — the heuristics tuning engine (`liberado-heuristics-tuner`, now tuning the dispatcher, executor, and subagent layers), the zone-write-class guard (§6 #2), resource-budget bounds (`ResourceLimit`, wall-clock + token-count), and two-way Telegram proposal approval (`liberado-notify` + `liberado-telegram-approvals`: Approve/Reject are pure code, Revise is the one LLM-touching path and can only redraft content, never grant approval). Also found and fixed, via the tuner: a multi-step tool-chaining doom-loop bug (was the "Known limitations" entry below). Full detail: [`current.md`](../roadmap/current.md)'s "Before Phase 3" section.
@@ -158,6 +177,8 @@ integration) and the TUI, that live smoke test, or a further Phase 4 slice.
     integration cost yet). Full design: [`phase-4-docker-transport.md`](../roadmap/phase-4-docker-transport.md).
 
 **Not yet built (next slice):**
+- Rust-native agentic coder crates and PR-factory integration; see
+  [`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md).
 - Multi-MCP registry UX, connection pooling.
 - Splitting `liberado-common`'s grab-bag along its natural boundaries — partially underway (`config`
   and `config-loader` have already been carved off into their own crates), but `common` still has

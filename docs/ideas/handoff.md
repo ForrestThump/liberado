@@ -31,6 +31,13 @@ The system is:
   self-extension; cron + external webhooks + named dispatcher/executor pools are all live; Docker MCP
   transport (`McpTransport::Docker`) is built and unit-tested, with its live Docker-daemon smoke test
   still the one open item (see `human-todo.md`).
+- **Strategic pivot, 2026-07-09**: the draft-PR self-improvement workflow stays, but `vtcode` is no
+  longer the long-term coding engine. The plan is to build a Rust-native agentic coder loop using
+  Liberado's existing `Provider` + `Executor` + `ToolRuntime` infrastructure, with modular
+  `coder-core`/`coder-tools`/`coder-agent`/`coder-sandbox` crates, Docker sandbox abstraction from day
+  one, config-owned prompts/models/budgets, event traces, and `heuristics-tuner` integration. Read
+  [`docs/roadmap/rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md)
+  before doing new PR-dispatch or coding-agent work.
 - **`liberado-pr-dispatch-mcp` proven end-to-end on Windows this session, with a real upstream bug
   found and fixed along the way** — see "This session's work" below. This validates Phase 2's
   self-improvement engine on a second platform; it previously only ran on the Linux/Docker homelab
@@ -39,9 +46,10 @@ The system is:
   life-os as of 2026-07-06) is built, configured against the real vault, and registered as an MCP
   server for this Claude Code project — see "This session's work" below.
 
-**Not yet built (next slice)**: inbox hook, hooks generally, multi-MCP registry UX, connection pooling.
-Splitting `liberado-common`'s nine-module grab-bag (crate-modularity-audit finding 3) is the primary
-crate-structure deferred item. See [`docs/roadmap/current.md`](../roadmap/current.md) for the full list.
+**Not yet built (next slice)**: the Rust-native coding backend described above, multi-MCP registry UX,
+connection pooling, and the remaining `liberado-common` decomposition. External webhook hooks are
+already built; an inbox-specific hook/workflow may still be future work depending on product direction.
+See [`docs/roadmap/current.md`](../roadmap/current.md) for the full list.
 
 ---
 
