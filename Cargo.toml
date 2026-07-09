@@ -80,6 +80,7 @@ liberado-telegram-approvals = { path = "crates/telegram-approvals" }
 liberado-cron = { path = "crates/cron" }
 liberado-chat-search = { path = "crates/chat-search" }
 liberado-memory-store = { path = "crates/memory-store" }
+liberado-coder-core = { path = "crates/coder-core" }
 
 # --- co-developed path dependencies (Decision 7) ---
 # Pinned to whatever is checked out in the sibling directories (currently the

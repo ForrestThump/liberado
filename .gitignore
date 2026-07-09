@@ -34,3 +34,4 @@ crates/*/config/*.toml
 telegram_bot_info.md
 
 .kilo
+.codex/
