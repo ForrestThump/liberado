@@ -12,6 +12,8 @@ Current checkpoints:
   `VtcodeBackend` remains the only concrete adapter there until the Liberado loop adapter is wired in.
 - `crates/coder-core` defines provider-agnostic run/config/event/result contracts.
 - `crates/coder-sandbox` defines the workspace/command boundary and a host-local implementation.
+  It also has a first Docker command-runner scaffold that builds/runs `docker run --rm -i` commands
+  from `DockerSandboxSpec`, with argv tests that do not require a live Docker daemon.
 - `crates/coder-tools` exposes the first discrete coding `ToolRuntime` over file/search/git/command
   and validation tools, including an atomic multi-edit `apply_patch` tool that validates all edits
   before writing.
@@ -404,8 +406,12 @@ prompt paths, model roles, sandbox backends, command policies, and unknown field
 
 ### Phase 5: Docker Sandbox
 
-- Implement Docker `SandboxBackend`.
-- Add config validation and examples.
+- Implement Docker `SandboxBackend`. **Started with `DockerWorkspace`, policy-checked Docker argv
+  construction, configured workspace bind mount, volumes, network mode, user, env allowlist, and
+  command execution. Long-lived lifecycle/image management is not built yet.**
+- Add config validation and examples. **Config validation exists for blank Docker image in the main
+  config model; coder-specific Docker examples still need to be added once the agent selects sandbox
+  backends from `CoderRunConfig`.**
 - Run a live end-to-end smoke test in a container.
 - Ensure no host filesystem access outside mounted workspace and configured cache dirs.
 

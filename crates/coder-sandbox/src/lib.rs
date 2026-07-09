@@ -11,7 +11,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use liberado_coder_core::CommandPolicy;
+use liberado_coder_core::{CommandPolicy, DockerSandboxSpec, SandboxVolume};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{process::Command, time::timeout};
@@ -26,6 +26,8 @@ pub enum SandboxError {
     PathEscape(String),
     #[error("path contains unsupported component: {0}")]
     InvalidPath(String),
+    #[error("invalid docker sandbox config: {0}")]
+    InvalidDockerConfig(String),
     #[error("command denied by policy: {0}")]
     CommandDenied(String),
     #[error("command spawn failed: {0}")]
@@ -110,6 +112,111 @@ impl HostWorkspace {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct DockerWorkspace {
+    host: HostWorkspace,
+    spec: DockerSandboxSpec,
+}
+
+impl DockerWorkspace {
+    pub fn new(
+        root: impl Into<PathBuf>,
+        spec: DockerSandboxSpec,
+        command_policy: CommandPolicy,
+    ) -> Result<Self, SandboxError> {
+        Ok(Self {
+            host: HostWorkspace::new(root, command_policy)?,
+            spec,
+        })
+    }
+
+    pub fn docker_run_args(&self, request: &CommandRequest) -> Result<Vec<String>, SandboxError> {
+        ensure_command_allowed(self.host.command_policy(), request)?;
+        if self.spec.image.trim().is_empty() {
+            return Err(SandboxError::InvalidDockerConfig(
+                "docker image must not be empty".to_string(),
+            ));
+        }
+
+        let mut args = vec![
+            "run".to_string(),
+            "--rm".to_string(),
+            "-i".to_string(),
+            "-v".to_string(),
+            docker_volume_arg(self.host.root(), "/workspace", false),
+            "-w".to_string(),
+            "/workspace".to_string(),
+        ];
+        if let Some(network) = &self.spec.network {
+            args.push("--network".to_string());
+            args.push(network.clone());
+        }
+        if let Some(user) = &self.spec.user {
+            args.push("--user".to_string());
+            args.push(user.clone());
+        }
+        for key in &self.spec.env_allowlist {
+            args.push("-e".to_string());
+            args.push(key.clone());
+        }
+        for (key, value) in &request.env {
+            args.push("-e".to_string());
+            args.push(format!("{key}={value}"));
+        }
+        for volume in &self.spec.volumes {
+            args.push("-v".to_string());
+            args.push(sandbox_volume_arg(volume));
+        }
+        args.push(self.spec.image.clone());
+        args.push(request.program.clone());
+        args.extend(request.args.clone());
+        Ok(args)
+    }
+}
+
+impl Workspace for DockerWorkspace {
+    fn root(&self) -> &Path {
+        self.host.root()
+    }
+
+    fn resolve_path(&self, rel_path: &str) -> Result<PathBuf, SandboxError> {
+        self.host.resolve_path(rel_path)
+    }
+}
+
+#[async_trait]
+impl CommandRunner for DockerWorkspace {
+    async fn run_command(&self, request: CommandRequest) -> Result<CommandOutput, SandboxError> {
+        let docker_args = self.docker_run_args(&request)?;
+        let mut command = Command::new("docker");
+        command.args(&docker_args);
+        command.kill_on_drop(true);
+
+        let timeout_secs = request
+            .timeout_secs
+            .unwrap_or(self.host.command_policy().timeout_secs);
+        let output_result = timeout(Duration::from_secs(timeout_secs), command.output()).await;
+        let (exit_code, stdout, stderr, timed_out) = match output_result {
+            Ok(Ok(output)) => (output.status.code(), output.stdout, output.stderr, false),
+            Ok(Err(e)) => return Err(SandboxError::Spawn(e.to_string())),
+            Err(_) => (None, Vec::new(), Vec::new(), true),
+        };
+
+        let max = request
+            .output_max_bytes
+            .unwrap_or(self.host.command_policy().output_max_bytes);
+        let stdout = capped_utf8(stdout, max);
+        let stderr = capped_utf8(stderr, max);
+
+        Ok(CommandOutput {
+            exit_code,
+            stdout,
+            stderr,
+            timed_out,
+        })
+    }
+}
+
 impl Workspace for HostWorkspace {
     fn root(&self) -> &Path {
         &self.root
@@ -137,6 +244,34 @@ impl Workspace for HostWorkspace {
         }
         Ok(resolved)
     }
+}
+
+fn docker_volume_arg(host: &Path, container: &str, read_only: bool) -> String {
+    let mut arg = format!("{}:{container}", docker_path(host));
+    if read_only {
+        arg.push_str(":ro");
+    }
+    arg
+}
+
+fn sandbox_volume_arg(volume: &SandboxVolume) -> String {
+    let mut arg = format!(
+        "{}:{}",
+        normalize_docker_path(&volume.host),
+        normalize_docker_path(&volume.container)
+    );
+    if volume.read_only {
+        arg.push_str(":ro");
+    }
+    arg
+}
+
+fn docker_path(path: &Path) -> String {
+    normalize_docker_path(&path.to_string_lossy())
+}
+
+fn normalize_docker_path(path: &str) -> String {
+    path.replace('\\', "/")
 }
 
 #[async_trait]
@@ -261,5 +396,77 @@ mod tests {
     fn capped_utf8_truncates_large_output() {
         let text = capped_utf8(b"abcdef".to_vec(), 3);
         assert_eq!(text, "abc");
+    }
+
+    #[test]
+    fn docker_workspace_builds_docker_run_args() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = DockerWorkspace::new(
+            dir.path(),
+            DockerSandboxSpec {
+                image: "liberado-coder:latest".to_string(),
+                network: Some("none".to_string()),
+                env_allowlist: vec!["OPENROUTER_API_KEY".to_string()],
+                volumes: vec![SandboxVolume {
+                    host: "C:\\cache".to_string(),
+                    container: "/cache".to_string(),
+                    read_only: true,
+                }],
+                user: Some("1000:1000".to_string()),
+            },
+            CommandPolicy::default(),
+        )
+        .unwrap();
+        let mut request = CommandRequest::new("cargo");
+        request.args = vec!["test".to_string()];
+        request
+            .env
+            .insert("RUST_LOG".to_string(), "info".to_string());
+
+        let args = ws.docker_run_args(&request).unwrap();
+
+        assert_eq!(args[0], "run");
+        assert!(args.contains(&"--rm".to_string()));
+        assert!(args.contains(&"--network".to_string()));
+        assert!(args.contains(&"none".to_string()));
+        assert!(args.contains(&"--user".to_string()));
+        assert!(args.contains(&"1000:1000".to_string()));
+        assert!(args.contains(&"OPENROUTER_API_KEY".to_string()));
+        assert!(args.contains(&"RUST_LOG=info".to_string()));
+        assert!(args.contains(&"C:/cache:/cache:ro".to_string()));
+        assert_eq!(
+            args.iter().rev().take(3).cloned().collect::<Vec<_>>(),
+            vec![
+                "test".to_string(),
+                "cargo".to_string(),
+                "liberado-coder:latest".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn docker_workspace_obeys_command_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = DockerWorkspace::new(
+            dir.path(),
+            DockerSandboxSpec {
+                image: "liberado-coder:latest".to_string(),
+                network: None,
+                env_allowlist: Vec::new(),
+                volumes: Vec::new(),
+                user: None,
+            },
+            CommandPolicy {
+                allow: vec!["cargo test".to_string()],
+                ..CommandPolicy::default()
+            },
+        )
+        .unwrap();
+        let mut request = CommandRequest::new("cargo");
+        request.args = vec!["publish".to_string()];
+
+        let err = ws.docker_run_args(&request).unwrap_err();
+
+        assert!(matches!(err, SandboxError::CommandDenied(_)));
     }
 }
