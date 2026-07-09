@@ -414,7 +414,9 @@ prompt paths, model roles, sandbox backends, command policies, and unknown field
 
 - Collapse or restructure `liberado-pr-dispatch-mcp` as needed.
 - Let config select `vtcode` or `liberado-loop`. **Started with `CODING_BACKEND`; `liberado-loop`
-  spawns `liberado-coder-run` and maps `CoderRunResult` back into the existing worker contract.**
+  spawns `liberado-coder-run` and maps `CoderRunResult` back into the existing worker contract.
+  `LIBERADO_CODER_RUN_CONFIG_PATH` can now point PR dispatch at a full `CoderRunConfig` JSON file so
+  sandbox/tool/progress/prompt knobs do not have to be duplicated in the nested crate.**
 - Keep PR lifecycle behavior unchanged: draft PR only, human approval, revision loop.
 - Preserve useful existing modules: forge client, DB, branch validation, GIT_ASKPASS, deletion guard,
   validation/self-correction, repo-context injection, critic loop.
