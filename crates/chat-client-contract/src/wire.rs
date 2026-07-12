@@ -73,6 +73,17 @@ pub enum SessionEventKind {
     LoopGuard { guard: String, action: String },
     /// The turn / goal session completed. Chat turns finish with `status: "done"`.
     SessionFinished { status: String, summary: String },
+    /// A chat turn spawned an interactive specialist session and **offers** the human the option to
+    /// join it (session-focus S4). Emitted on the *chat* stream (not a goal session's own stream);
+    /// surfaces render a "join?" affordance that drives the same `/join <session_id>` focus switch.
+    /// The generalist keeps running — this is an offer, not a forced hand-off.
+    /// `id` (not `session_id`): the flattened envelope already owns a `session_id` field, so the
+    /// offered session's id travels as `id` to avoid the flatten collision.
+    SessionOffered {
+        id: String,
+        domain: String,
+        description: String,
+    },
     /// Hard failure. Named `failed` (not `error`): browser `EventSource` reserves the `error`
     /// event name for its own connection errors.
     Failed { message: String },
@@ -114,6 +125,7 @@ impl SessionEvent {
             | "validation_finished"
             | "loop_guard"
             | "session_finished"
+            | "session_offered"
             | "failed" => {
                 // The payload may or may not carry the `type` tag (goals frames serialize the
                 // full event including the tag; hand-built chat frames may omit it). Inject the
@@ -513,6 +525,20 @@ mod tests {
         assert!(
             matches!(e.kind, SessionEventKind::Failed { message } if message == "connection refused")
         );
+    }
+
+    #[test]
+    fn from_sse_data_session_offered_decodes() {
+        let e = SessionEvent::from_sse_data(
+            "session_offered",
+            r#"{"id":"g_01ABC","domain":"coding","description":"build a hello CLI"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            e.kind,
+            SessionEventKind::SessionOffered { id, domain, description }
+                if id == "g_01ABC" && domain == "coding" && description == "build a hello CLI"
+        ));
     }
 
     #[test]

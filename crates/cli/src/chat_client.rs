@@ -150,6 +150,16 @@ fn dispatch(event: &SseEvent, session: &mut Option<String>) -> bool {
             eprintln!("\n[error] {message}");
             true
         }
+        // A chat turn offered a specialist session — print the join hint (the `liberado chat` CLI
+        // can't focus-switch, but the daemon-side session is joinable from the TUI / API by id).
+        SessionEventKind::SessionOffered {
+            id,
+            domain,
+            description,
+        } => {
+            println!("\n  ▸ {domain} session offered: {description}  (join: {id})");
+            false
+        }
         // Goal-session-only kinds — a chat turn doesn't emit these today; ignore quietly.
         SessionEventKind::SessionStarted { .. }
         | SessionEventKind::RoleStarted { .. }

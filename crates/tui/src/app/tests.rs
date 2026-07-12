@@ -2178,6 +2178,28 @@ fn back_leaves_the_session() {
 }
 
 #[test]
+fn offer_renders_a_joinable_affordance_in_the_chat() {
+    let mut app = test_app();
+    app.update(Action::GoalOffered {
+        session_id: "g_01ABC".into(),
+        domain: "coding".into(),
+        description: "build a hello CLI".into(),
+    });
+    // The offer appears in the primary chat as a system message with the /join hint.
+    let last = app.messages.last().unwrap();
+    match last {
+        Message::System(t) => {
+            assert!(t.contains("Coding"), "should name the kind: {t}");
+            assert!(t.contains("build a hello CLI"), "should show the description: {t}");
+            assert!(t.contains("/join g_01ABC"), "should offer /join with the id: {t}");
+        }
+        other => panic!("expected a System offer message, got {other:?}"),
+    }
+    // Ignoring the offer keeps input on the primary chat (D3 consent — no forced switch).
+    assert!(app.joined.is_none());
+}
+
+#[test]
 fn sending_a_chat_message_after_finish_auto_leaves_the_session() {
     let mut app = test_app();
     app.join_session("g1".to_string());

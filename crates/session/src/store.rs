@@ -349,6 +349,7 @@ mod tests {
             domain: DomainHint::Life,
             max_turns: 0,
             max_idle_secs: None,
+            origin: None,
             payload: serde_json::json!({}),
         })
     }

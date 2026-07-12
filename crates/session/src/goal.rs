@@ -26,6 +26,21 @@ impl DomainHint {
     }
 }
 
+/// Where a goal session came from — the link back to a parent conversation when a chat turn spawned
+/// it (session-focus D2/S4). Separate-but-linked: the session's transcript stays its own, but on
+/// terminal its summary can be folded back into `conversation_id`, and `correlation_id` stitches it
+/// to the dispatch journal — the same linkage `delegate` already uses. `None` for sessions a human
+/// started directly (`POST /api/goals`, `/sessions` switcher).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOrigin {
+    /// The parent conversation id (a `conversation-store` ULID, as a string here to keep the
+    /// session kernel off that store-tier crate).
+    pub conversation_id: String,
+    /// The dispatch correlation id that ties this session to the journal entry that spawned it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<String>,
+}
+
 /// Input to start a goal session (HTTP body / client contract).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GoalSpec {
@@ -46,6 +61,10 @@ pub struct GoalSpec {
     /// budget, not a pack knob — enforced by [`InputChannel`](crate::InputChannel).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_idle_secs: Option<u64>,
+    /// Set when a chat turn spawned this session — the link back to the parent conversation for the
+    /// offer/return handoff (S4). `None` for human-started sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<SessionOrigin>,
     /// Opaque pack payload (workspace root, vault path, contract JSON, …).
     #[serde(default)]
     pub payload: serde_json::Value,
@@ -130,5 +149,38 @@ impl GoalSessionRecord {
             event_count: 0,
             awaiting_input: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn origin_round_trips_and_is_omitted_when_absent() {
+        let with = GoalSpec {
+            id: None,
+            description: "build a CLI".into(),
+            success_criteria: vec![],
+            domain: DomainHint::Coding,
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: Some(SessionOrigin {
+                conversation_id: "01CONV".into(),
+                correlation_id: Some("corr-1".into()),
+            }),
+            payload: serde_json::json!({}),
+        };
+        let json = serde_json::to_value(&with).unwrap();
+        assert_eq!(json["origin"]["conversation_id"], "01CONV");
+        let back: GoalSpec = serde_json::from_value(json).unwrap();
+        assert_eq!(back.origin.as_ref().unwrap().conversation_id, "01CONV");
+
+        // Absent origin is skipped in the wire form (backward-compatible with human-started goals).
+        let without = GoalSpec { origin: None, ..with };
+        let json = serde_json::to_value(&without).unwrap();
+        assert!(json.get("origin").is_none(), "origin should be omitted when None");
+        let rec = GoalSessionRecord::new(without);
+        assert!(rec.goal.origin.is_none());
     }
 }

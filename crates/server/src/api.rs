@@ -843,6 +843,7 @@ mod goal_message_tests {
                 domain: DomainHint::Life,
                 max_turns: 0,
                 max_idle_secs: None,
+                origin: None,
                 payload: serde_json::json!({ "interactive": true }),
             })
             .await
@@ -930,6 +931,7 @@ mod goal_message_tests {
                 domain: DomainHint::Life,
                 max_turns: 0,
                 max_idle_secs: None,
+                origin: None,
                 payload: serde_json::json!({}),
             })
             .await

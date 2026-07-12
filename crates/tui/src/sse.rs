@@ -50,6 +50,16 @@ impl ToAction for SseEvent {
                 },
                 SessionEventKind::SessionFinished { .. } => Action::SseDone,
                 SessionEventKind::Failed { message } => Action::SseFailed(message),
+                // The chat turn offered a specialist session — render a joinable affordance.
+                SessionEventKind::SessionOffered {
+                    id,
+                    domain,
+                    description,
+                } => Action::GoalOffered {
+                    session_id: id,
+                    domain,
+                    description,
+                },
                 // Goal-session-only kinds — not rendered in the chat view (yet; session-focus S3
                 // adds the session panel that renders these, incl. AwaitingInput prompts).
                 SessionEventKind::SessionStarted { .. }
@@ -119,8 +129,11 @@ pub fn to_goal_event(event: &SseEvent) -> Result<Option<GoalUiEvent>, String> {
             status: "failed".into(),
             summary: message,
         }),
-        // Nothing to render: role end, the chat-only session head, unknown/future kinds.
-        SessionEventKind::RoleFinished { .. } | SessionEventKind::Session { .. } => None,
+        // Nothing to render on a goal session's own stream: role end, the chat-only session head,
+        // and `session_offered` (a chat-stream affordance, not a pack event).
+        SessionEventKind::RoleFinished { .. }
+        | SessionEventKind::Session { .. }
+        | SessionEventKind::SessionOffered { .. } => None,
     })
 }
 

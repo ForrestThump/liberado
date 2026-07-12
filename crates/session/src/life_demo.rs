@@ -314,6 +314,7 @@ mod tests {
                 domain: DomainHint::Life,
                 max_turns: 0,
                 max_idle_secs: None,
+                origin: None,
                 payload: serde_json::json!({ "interactive": true }),
             })
             .await
@@ -372,6 +373,7 @@ mod tests {
                 domain: DomainHint::Life,
                 max_turns: 0,
                 max_idle_secs: Some(0), // expires immediately with no answer
+                origin: None,
                 payload: serde_json::json!({ "interactive": true }),
             })
             .await
@@ -401,6 +403,7 @@ mod tests {
                 domain: DomainHint::Life,
                 max_turns: 0,
                 max_idle_secs: None,
+                origin: None,
                 payload: serde_json::json!({}),
             })
             .await
@@ -434,6 +437,7 @@ mod tests {
                 domain: DomainHint::Life,
                 max_turns: 4,
                 max_idle_secs: None,
+                origin: None,
                 payload: serde_json::json!({}),
             })
             .await
@@ -470,6 +474,7 @@ mod tests {
                 domain: DomainHint::Coding,
                 max_turns: 1,
                 max_idle_secs: None,
+                origin: None,
                 payload: serde_json::json!({}),
             })
             .await

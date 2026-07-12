@@ -880,6 +880,14 @@ pub enum Action {
     GoalStreamClosed(Option<String>),
     /// Result of `POST /api/goals/{id}/message` — so a 404/409 surfaces in the joined view.
     GoalMessageOutcome(GoalMessageOutcome),
+    /// A chat turn offered an interactive specialist session (`session_offered` on the chat stream).
+    /// Rendered as a joinable affordance; the human accepts with `/join <id>` (or declines by
+    /// ignoring it — the generalist keeps running).
+    GoalOffered {
+        session_id: String,
+        domain: String,
+        description: String,
+    },
     /// Daemon connectivity transition (true = connected, false = lost).
     ConnectionStatus(bool),
     /// Periodic heartbeat from the poller (currently a no-op in `update()`).
@@ -1061,6 +1069,32 @@ impl App {
             }
             Action::GoalStreamEvent(ev) => {
                 self.apply_goal_event(ev);
+                vec![Effect::None]
+            }
+            Action::GoalOffered {
+                session_id,
+                domain,
+                description,
+            } => {
+                // Render the offer inline in the chat as a joinable affordance. The human accepts by
+                // running `/join <id>`; ignoring it just leaves the generalist running (D3 consent).
+                let kind = crate::api::SessionKind::from_domain(
+                    &if domain == "life" {
+                        chat_client_contract::DomainWire::Life
+                    } else if domain == "coding" {
+                        chat_client_contract::DomainWire::Coding
+                    } else {
+                        chat_client_contract::DomainWire::Custom(domain.clone())
+                    },
+                );
+                self.messages.push(Message::System(format!(
+                    "▸ {} session offered: {}\n  /join {}  to focus it   (or keep chatting here)",
+                    kind.label(),
+                    if description.is_empty() { session_id.as_str() } else { description.as_str() },
+                    session_id
+                )));
+                self.scroll_offset = 0;
+                self.mark_dirty();
                 vec![Effect::None]
             }
             Action::GoalStreamClosed(err) => {
