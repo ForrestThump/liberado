@@ -31,7 +31,12 @@ use liberado_common::{Outcome, Report};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Stable name for the first-party Rust loop backend.
+/// Stable name for the first-party Rust coding backend.
+///
+/// Naming note (2026-07-12): the string predates the goal/loop vocabulary split
+/// (`docs/architecture/agentic-loops.md` §Vocabulary — this backend runs *goals*, not *loops*).
+/// The value is config-visible (`dispatch.yaml`, task DB, `CODING_BACKEND`), so it is kept
+/// unchanged as a legacy identifier rather than breaking deployments over a word.
 pub const LIBERADO_LOOP_BACKEND: &str = "liberado-loop";
 
 /// Stable name for the migration backend that wraps the existing vtcode client.

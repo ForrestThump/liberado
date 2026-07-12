@@ -42,7 +42,7 @@ language-agnostic; coding is the first profile.
 
 ## Kernel placement
 
-Agentic loops **compose** existing Liberado pieces; they do not replace the existing kernel.
+The loop hierarchy **composes** existing Liberado pieces; it does not replace the existing kernel.
 
 ```
 Surfaces (clients — no loop ownership)
@@ -57,7 +57,7 @@ Surfaces (clients — no loop ownership)
 └────────────────────────────┬──────────────────────────────────┘
                              │ N bounded Executor runs
                              ▼
-              liberado-executor  (inner tool loop — already general)
+              liberado-executor  (turn loop — already general)
                              │
           ┌──────────────────┼──────────────────┐
           ▼                  ▼                  ▼
@@ -70,7 +70,7 @@ Surfaces (clients — no loop ownership)
 | Existing piece | Kernel role |
 |---|---|
 | `Provider` | Inference only — no control flow |
-| `Executor` | **Inner loop** — tools + budget + generic doom-loop |
+| `Executor` | **Turn loop** — tools + budget + generic doom-loop |
 | `ToolRuntime` | **Domain limb** — the primary extension point |
 | `Dispatcher` / `Orchestrator` | Route goals; subagent dispatch with capability ∩ |
 | `main-agent` / `ChatSessions` | Human-in-the-chair converse mode (not goal-until-done) |
@@ -129,9 +129,27 @@ one domain. Patterns proven here graduate upward (common types or a future `sess
 
 ---
 
-## What a loop is
+## Vocabulary: turn loop · goal · loop · meta-loop
 
-> Define a goal once. The system plans when useful, acts with tools, verifies against something the
+**Fixed 2026-07-12.** "Loop" used to cover three different things in these docs; each now has one
+name. The community/harness convention (`/goal` = success-based, `/loop` = time-based) is adopted
+as-is.
+
+| Term | Shape | Terminates when | Lives in |
+|---|---|---|---|
+| **Turn loop** | model → tool → observation → model, bounded, doom-loop-guarded | report filed / prose answer / budget | `liberado-executor` (the inner engine — "loop" is correct and stays; this is what every harness calls the agent loop) |
+| **Goal** | success-based: act → verify → repair, until a **terminal state** | verifiers pass, or Blocked / BudgetExhausted / … | goal-session kernel (`liberado-session`) + packs; each attempt runs turn loops |
+| **Loop** | time-based recurrence: wake on schedule → inspect state → one improvement pass → log → sleep | **never succeeds closed** — stops on cap, checker-satisfied-N-times, or human close | designed, not yet built — [`loops-plan.md`](../roadmap/loops-plan.md). A loop's body **is a goal**; the loop is a scheduler + series state, not a fourth engine |
+| **Meta-loop** | evidence → proposed prompt/config diff → human review | never auto-merges (Decision 14) | `heuristics-tuner` |
+
+Hierarchy: turn loop ⊂ goal ⊂ loop ⊂ meta-loop. Unrelated senses that keep their names:
+**doom loop** (a turn-loop failure mode) and **loop-break** (Decision-5 provenance suppression —
+and the reason artifact-editing *loops* are safe here: a loop's own writes never re-trigger the
+watch pipeline).
+
+### What a goal is
+
+> Define it once. The system plans when useful, acts with tools, verifies against something the
 > model does not control, records durable state, and continues, escalates, or stops.
 
 | Piece | Without it |
@@ -142,17 +160,6 @@ one domain. Patterns proven here graduate upward (common types or a future `sess
 
 Doom loops are a **control-flow** problem. Guards live in the harness. See
 [`doomloop_research.md`](../ideas/doomloop_research.md).
-
-### Two loop levels
-
-**Inner** (`liberado-executor`): one role, one `ToolRuntime`, budget, report or converse termination.
-Generic doom-loop / short-cycle detection lives here.
-
-**Outer (goal session)**: multi-role graph, domain verifiers, progress metric, attempt log, named
-terminals. Coding pack implements this in `coder-agent` today.
-
-**Meta**: `heuristics-tuner` + draft PRs — improve process from evidence; never silent self-widening
-of authority (Decision 14).
 
 ### Maker ≠ checker
 
@@ -201,7 +208,7 @@ Map to `liberado_common::Outcome` at kernel boundaries.
 Headless first (PR dispatch, evals). **Event vocabulary converged (2026-07-11):** chat and goal
 sessions speak one wire language — `SessionEventKind` (kernel: `liberado-session`; wire mirror:
 `chat-client-contract`), one `from_sse_data` decoder for both streams. `AgentEvent` remains the
-executor's in-process inner-loop tap, mapped at the server boundary exactly as the coding pack
+executor's in-process turn-loop tap, mapped at the server boundary exactly as the coding pack
 maps `CoderEvent` → `SessionEvent`.
 
 ---
@@ -210,7 +217,7 @@ maps `CoderEvent` → `SessionEvent`.
 
 | Layer | Status |
 |---|---|
-| Inner loop (`executor`) | Production |
+| Turn loop (`executor`) | Production |
 | Coding pack tools + sandbox | Landed |
 | Coding goal session (`coder-agent`) | Worker + optional planner + repair (signature routing) + critic + progress guards + gates + traces |
 | Neutral Goal/Session types | **`liberado-session` crate** (GoalSpec, SessionEvent, hub) |

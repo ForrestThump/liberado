@@ -32,7 +32,10 @@ Master plan: [rust-native-agentic-coder-plan.md](rust-native-agentic-coder-plan.
 Mesh hygiene audit: [agentic-mesh-hygiene-audit-2026-07-10.md](agentic-mesh-hygiene-audit-2026-07-10.md).  
 Next interaction slice: [session-focus-plan.md](session-focus-plan.md) — interactive goal
 sessions + UI focus switching ("specialist hats"), building directly on the converged event
-vocabulary.
+vocabulary.  
+Recurrence slice: [loops-plan.md](loops-plan.md) — *loops* (time-based series over goals; the
+`/goal` vs `/loop` vocabulary was fixed 2026-07-12 in
+[`agentic-loops.md`](../architecture/agentic-loops.md) §Vocabulary).
 
 Short version: Liberado **owns** the coding engine. `coder-*` implement a coding **goal session**.
 PR factory **defaults to `liberado-loop`** (`liberado-coder-run`); VTCode is legacy-only. Next:

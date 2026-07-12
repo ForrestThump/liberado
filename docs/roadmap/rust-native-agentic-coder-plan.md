@@ -23,9 +23,12 @@ What we *do* keep from the PR factory (not from VTCode): repo cloning, forge abs
 validation, revision loop, Telegram approval, and draft-PR-only human review.
 
 It is **not only a coding-agent swap**. The product is an open-source **Rust agentic orchestration
-mesh** that:
+framework** (kernel + domain packs + stores + surfaces) that:
 
-1. Runs **goal-oriented loops** until success, blocker, or budget exhaustion — without drift.
+1. Runs **goals** until success, blocker, or budget exhaustion — without drift. (Vocabulary fixed
+   2026-07-12: *goal* = success-based run-to-terminal; *loop* = scheduled recurrence, see
+   [`loops-plan.md`](loops-plan.md); the `liberado-loop` backend string predates this and is kept
+   as a legacy config value.)
 2. Separates **maker from checker** (deterministic verifiers + model critics).
 3. Delegates **subagents** with capability narrowing and isolated state.
 4. Exposes a **session/event backend** that TUI, WebUI, CLI, and headless workers share.

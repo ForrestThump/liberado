@@ -16,6 +16,7 @@ New users should begin here:
 - [Positioning](docs/architecture/positioning.md) — the thesis and how Liberado is grounded against the free alternatives
 - [Roadmap (current)](docs/roadmap/current.md) — what is committed and in-flight
 - [Session focus plan](docs/roadmap/session-focus-plan.md) — the "specialist hat" interaction: interactive goal sessions + UI focus switching (no new daemon)
+- [Loops plan](docs/roadmap/loops-plan.md) — scheduled recurrence over goals (loop = scheduler + series memory, not a fourth engine); vocabulary: turn loop ⊂ goal ⊂ loop ⊂ meta-loop
 - [Agentic orchestration plan](docs/roadmap/rust-native-agentic-coder-plan.md) — implementation roadmap (coding pack first)
 - [Agentic mesh hygiene audit](docs/roadmap/agentic-mesh-hygiene-audit-2026-07-10.md) — coupling, duplication, generality
 - [Architecture alignment audit](docs/roadmap/architecture-alignment-audit-2026-07-11.md) — dependency-graph verification, the "mesh" framing verdict, complexity-management plan
