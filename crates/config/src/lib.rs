@@ -30,8 +30,8 @@ use liberado_common::CapabilityCatalog;
 use thiserror::Error;
 
 pub use liberado_config_loader::{
-    CURRENT_SCHEMA_VERSION, CaptureTuning, CoderTuning, ConcurrencyTuning, Config, ConfigBuilder,
-    ContextTuning, CronSchedule, DEFAULT_POOL, DispatchTuning, Grant, HookConfig, MainAgentConfig,
+    CURRENT_SCHEMA_VERSION, CaptureTuning, ConcurrencyTuning, Config, ConfigBuilder, ContextTuning,
+    CronSchedule, DEFAULT_POOL, DispatchTuning, Grant, HookConfig, MainAgentConfig,
     MaintenanceTuning, McpConfig, McpTransport, Policy, PoolConfig, ProviderProfile,
     SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning, ZonePolicy,
     managed_binary_path, resolve_declared_zone,
@@ -187,15 +187,15 @@ pub fn load_config(dir: Option<&Path>) -> Result<(Config, ConfigProvenance), Con
     // Warn if the tuning file carries a schema_version that differs from the current one.
     // This is a soft deprecation signal: users who copied an old `tuning.toml` and never
     // updated it will see a warning, but the config still loads (all fields default).
-    if let Some(ref ver) = tuning.schema_version {
-        if ver != CURRENT_SCHEMA_VERSION {
-            tracing::warn!(
-                "tuning.toml schema_version '{}' does not match current '{}' \
+    if let Some(ref ver) = tuning.schema_version
+        && ver != CURRENT_SCHEMA_VERSION
+    {
+        tracing::warn!(
+            "tuning.toml schema_version '{}' does not match current '{}' \
                  — the file may be outdated; consider reviewing config.example/tuning.toml",
-                ver,
-                CURRENT_SCHEMA_VERSION,
-            );
-        }
+            ver,
+            CURRENT_SCHEMA_VERSION,
+        );
     }
 
     let config = Config {
@@ -373,10 +373,10 @@ const PROPOSAL_KEY_LEN: usize = 32;
 /// does and doesn't defend against.
 pub fn load_or_create_proposal_key() -> Vec<u8> {
     let path = data_dir().join(PROPOSAL_KEY_FILE);
-    if let Ok(bytes) = std::fs::read(&path) {
-        if bytes.len() == PROPOSAL_KEY_LEN {
-            return bytes;
-        }
+    if let Ok(bytes) = std::fs::read(&path)
+        && bytes.len() == PROPOSAL_KEY_LEN
+    {
+        return bytes;
     }
     let mut key = vec![0u8; PROPOSAL_KEY_LEN];
     {

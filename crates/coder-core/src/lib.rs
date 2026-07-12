@@ -10,7 +10,10 @@
 //! first consumed by the coding pack; see `docs/architecture/verifiers.md`.
 
 mod intake;
+mod tuning;
 mod verify;
+
+pub use tuning::CoderTuning;
 
 pub use intake::{
     FreezeAuthority, GoalContract, GoalContractDraft, IntakeOutcome, IntakeQuestion,
@@ -86,16 +89,12 @@ impl WorkspaceRef {
 /// How code execution is isolated.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "backend", rename_all = "snake_case")]
+#[derive(Default)]
 pub enum SandboxSpec {
     /// For tests/dev only. Production coding runs should prefer Docker or a stronger backend.
+    #[default]
     HostLocal,
     Docker(DockerSandboxSpec),
-}
-
-impl Default for SandboxSpec {
-    fn default() -> Self {
-        Self::HostLocal
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

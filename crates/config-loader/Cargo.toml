@@ -14,7 +14,10 @@ toml = { workspace = true }
 thiserror = { workspace = true }
 cron = { workspace = true }
 liberado-common = { workspace = true }
-liberado-coder-core = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
+role = "foundation"
