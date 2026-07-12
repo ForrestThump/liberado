@@ -7,7 +7,7 @@
 //! Wire DTOs (`DaemonStatus`, `ReactionEvent`, `ConvHeader`, `ChatMessage`) are imported
 //! from `chat-client-contract` — the single source of truth. The display-only chips
 //! (`ToolCallChip`, `ToolResultChip`) remain here because they are constructed from
-//! `ChatEvent` data and never serialized.
+//! `SessionEventKind` data and never serialized.
 
 use reqwest::{Client, StatusCode};
 
@@ -19,7 +19,7 @@ pub use chat_client_contract::{
 };
 
 /// A tool-call chip rendered inline in the chat: `[tool] name(args preview)`.
-/// Display-only — constructed from `ChatEvent::Tool` data, never serialized to JSON.
+/// Display-only — constructed from `SessionEventKind::ToolStarted` data, never serialized to JSON.
 #[derive(Debug, Clone)]
 pub struct ToolCallChip {
     pub name: String,
@@ -27,7 +27,7 @@ pub struct ToolCallChip {
 }
 
 /// The outcome chip for a completed tool call: `[tool] name ok|err preview`.
-/// Display-only — constructed from `ChatEvent::ToolResult` data, never serialized.
+/// Display-only — constructed from `SessionEventKind::ToolFinished` data, never serialized.
 #[derive(Debug, Clone)]
 pub struct ToolResultChip {
     pub name: String,

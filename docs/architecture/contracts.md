@@ -83,8 +83,9 @@ Pack-level contracts (same discipline, scoped to one domain): `CoderBackend` and
   proof — no `coder-*` anywhere in its path).
 - **Promise**: the kernel never imports git/cargo/sandbox types; a pack that only makes sense for
   coding belongs under `coder-*`, not here (design rule #10, the pigeonhole detector).
-- **Blast radius**: every registered pack + the goals API. Young contract — expect additive churn
-  while the chat `AgentEvent` / `SessionEvent` envelope convergence lands.
+- **Blast radius**: every registered pack + the goals API. The `SessionEventKind` vocabulary is
+  now also the chat stream's wire language (converged 2026-07-11), so variant changes reach every
+  surface — additive only.
 
 ## ConversationStore
 
@@ -126,6 +127,12 @@ Pack-level contracts (same discipline, scoped to one domain): `CoderBackend` and
   crates (`chat-client-contract`, `liberado-commands`, `markdown`, `theme`) — enforced by
   `layer_rules.rs`. A deleted `ChatClient` trait (2026-07-05) is the cautionary tale for
   over-abstracting this seam; the decoder + DTOs are the real boundary.
+- **Converged (2026-07-11)**: chat and goal-session streams share **one** event vocabulary —
+  `wire::SessionEvent`/`SessionEventKind`, decoded by one `from_sse_data` for both streams. The
+  executor's in-process `AgentEvent` is mapped onto it at the server boundary, mirroring the
+  coding pack's `CoderEvent` → kernel `SessionEvent` mapping; the old chat-only `ChatEvent` is
+  gone. SSE names are the kind's serde tags (`session`/`token` ride as bare payloads; `failed`
+  not `error`, since browser `EventSource` reserves `error`).
 - **Blast radius**: every surface at once. Version additively (new SSE event kinds are ignored by
   old clients).
 

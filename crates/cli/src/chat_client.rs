@@ -10,6 +10,7 @@
 //! daemon continues the same conversation.
 
 use chat_client_contract::native::{SseDecoder, SseEvent};
+use chat_client_contract::{SessionEvent, SessionEventKind};
 use futures::StreamExt;
 use std::io::Write as _;
 use tokio::io::{AsyncBufReadExt, BufReader, stdin};
@@ -105,64 +106,58 @@ async fn turn(
 }
 
 /// Render one SSE event to the terminal and fold any session id back into `session`. Returns `true`
-/// when the event terminates the turn (`done`/`failed`).
+/// when the event terminates the turn (`session_finished`/`failed`). Decoding goes through the
+/// shared converged vocabulary (`SessionEvent::from_sse_data`) — the same decoder the TUI uses.
 fn dispatch(event: &SseEvent, session: &mut Option<String>) -> bool {
-    match event.event.as_str() {
-        "session" => {
-            *session = Some(event.data.clone());
+    let decoded = match SessionEvent::from_sse_data(&event.event, &event.data) {
+        Ok(decoded) => decoded,
+        Err(_) => {
+            println!("\n  [?] {}", event.data);
+            return false;
+        }
+    };
+    match decoded.kind {
+        SessionEventKind::Session { id } => {
+            *session = Some(id);
             false
         }
-        "token" => {
-            print!("{}", event.data);
+        SessionEventKind::Token { text } => {
+            print!("{text}");
             let _ = std::io::stdout().flush();
             false
         }
-        "tool" => {
-            match serde_json::from_str::<serde_json::Value>(&event.data) {
-                Ok(call) => println!(
-                    "\n  [tool] {}({})",
-                    field(&call, "name"),
-                    truncate(&field(&call, "args"), 200)
-                ),
-                Err(_) => println!("\n  [tool] {}", event.data),
-            }
+        SessionEventKind::ToolStarted { name, args_preview } => {
+            println!("\n  [tool] {name}({})", truncate(&args_preview, 200));
             false
         }
-        "tool_result" => {
-            match serde_json::from_str::<serde_json::Value>(&event.data) {
-                Ok(result) => println!(
-                    "\n  [tool] {} {} {}",
-                    field(&result, "name"),
-                    if result.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-                        "ok"
-                    } else {
-                        "err"
-                    },
-                    truncate(&field(&result, "preview"), 200)
-                ),
-                Err(_) => println!("\n  [tool] {}", event.data),
-            }
+        SessionEventKind::ToolFinished {
+            name,
+            ok,
+            result_preview,
+        } => {
+            println!(
+                "\n  [tool] {name} {} {}",
+                if ok { "ok" } else { "err" },
+                truncate(&result_preview, 200)
+            );
             false
         }
-        "done" => {
+        SessionEventKind::SessionFinished { .. } => {
             println!();
             true
         }
-        "failed" => {
-            eprintln!("\n[error] {}", event.data);
+        SessionEventKind::Failed { message } => {
+            eprintln!("\n[error] {message}");
             true
         }
-        _ => false, // unknown event type — ignore
+        // Goal-session-only kinds — a chat turn doesn't emit these today; ignore quietly.
+        SessionEventKind::SessionStarted { .. }
+        | SessionEventKind::RoleStarted { .. }
+        | SessionEventKind::RoleFinished { .. }
+        | SessionEventKind::Progress { .. }
+        | SessionEventKind::ValidationFinished { .. }
+        | SessionEventKind::LoopGuard { .. } => false,
     }
-}
-
-/// Read a string field from a tool event's JSON, falling back to empty when absent or non-string.
-fn field(value: &serde_json::Value, key: &str) -> String {
-    value
-        .get(key)
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string()
 }
 
 /// Clamp a preview string for terminal legibility, appending an ellipsis marker when cut.

@@ -11,10 +11,9 @@
 //! render loop via its own action/effect channels. Removed 2026-07-05
 //! (`docs/roadmap/hygiene-audit-2026-07-05.md`) rather than force an implementation neither client
 //! actually wanted. [`SseDecoder`] below (SSE framing) is the real shared boundary both clients use
-//! today. [`crate::wire::ChatEvent::from_sse_data`] (typed payload decoding) is used on top of it by
-//! the TUI (`liberado-tui`'s `sse::ToAction`) — the CLI still parses its own `tool`/`tool_result`
-//! JSON payloads inline (`crates/cli/src/chat_client.rs`), which is a smaller, separate, optional
-//! follow-up (moving the CLI onto `ChatEvent` too) not folded into this fix.
+//! today. [`crate::wire::SessionEvent::from_sse_data`] (typed payload decoding — the converged
+//! chat + goal-session vocabulary, 2026-07-11) is used on top of it by the TUI
+//! (`liberado-tui`'s `sse::ToAction`) and the CLI (`crates/cli/src/chat_client.rs`).
 
 // ── Incremental SSE parser ───────────────────────────────────────────────────
 //
@@ -180,11 +179,11 @@ mod sse_tests {
     }
 
     #[test]
-    fn tool_result_event() {
+    fn tool_finished_event() {
         let mut decoder = SseDecoder::default();
-        let events = decoder.push("event: tool_result\ndata: {\"name\":\"search\",\"ok\":true,\"preview\":\"3 results\"}\n\n");
+        let events = decoder.push("event: tool_finished\ndata: {\"name\":\"search\",\"ok\":true,\"result_preview\":\"3 results\"}\n\n");
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event, "tool_result");
+        assert_eq!(events[0].event, "tool_finished");
         assert!(events[0].data.contains("search"));
     }
 

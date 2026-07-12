@@ -205,7 +205,7 @@ impl DomainPackRunner for CodingSessionPack {
                 let _ = events
                     .send(SessionEvent::new(
                         session_id,
-                        SessionEventKind::Error {
+                        SessionEventKind::Failed {
                             message: msg.clone(),
                         },
                     ))

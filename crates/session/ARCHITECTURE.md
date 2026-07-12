@@ -8,7 +8,7 @@
 | Type | Role |
 |---|---|
 | `GoalSpec` | Start a goal (description, criteria, domain, payload) |
-| `SessionEvent` / `SessionEventKind` | SSE/TUI event envelope |
+| `SessionEvent` / `SessionEventKind` | SSE/TUI event envelope — since 2026-07-11 the **one** event vocabulary for goal sessions *and* chat turns (chat's in-process `AgentEvent` maps onto it at the server boundary; wire mirror in `chat-client-contract`). Includes `Token` for streamed deltas; hard errors are `Failed` (tag `failed` — browser `EventSource` reserves `error`) |
 | `GoalSessionStore` | In-memory records + broadcast bus |
 | `GoalSessionHub` | Register packs, start/cancel, fan-out events |
 | `LifeOpsDemoRunner` | Second-domain proof (no coder-tools) |

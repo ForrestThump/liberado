@@ -38,8 +38,9 @@ pub struct ChatRequest {
 }
 
 /// Streaming chat — the shared client contract (see `docs/reference/api.md`). Returns
-/// `text/event-stream`; events: `token` (answer delta), `tool` (a call starting, `{name,args}`),
-/// `tool_result` (its outcome, `{name,ok,preview}`), `done`, `failed`. Available as both `POST`
+/// `text/event-stream`; events use the converged session-event vocabulary: `token` (answer
+/// delta), `tool_started` (`{name,args_preview}`), `tool_finished` (`{name,ok,result_preview}`),
+/// `session_finished` (`{status,summary}`), `failed` (`{message}`). Available as both `POST`
 /// (JSON body — native clients) and `GET` (`?message=…` — browser
 /// `EventSource`); both funnel through [`chat_stream_core`].
 pub async fn chat_stream_post(
@@ -142,21 +143,33 @@ fn stream_with_session(session: Option<Ulid>, rx: mpsc::Receiver<AgentEvent>) ->
     Box::pin(head.chain(body))
 }
 
+/// Map the executor's in-process [`AgentEvent`] tap onto the **converged** session-event wire
+/// vocabulary (2026-07-11) — the same SSE names/shapes `session_event_to_sse` emits for goal
+/// sessions, so every surface renders chat turns and goal sessions with one decoder
+/// (`chat_client_contract::SessionEvent::from_sse_data`). This boundary mapping is the chat
+/// counterpart of the coding pack's `CoderEvent` → `SessionEvent` translation.
 fn to_sse(event: AgentEvent) -> Event {
     match event {
         AgentEvent::Token(text) => Event::default().event("token").data(text),
-        // Tool events carry structured fields, JSON-encoded so the payload stays a single SSE line
-        // (newlines in a preview would otherwise split into multiple `data:` lines).
+        // Structured events carry JSON so the payload stays a single SSE line (newlines in a
+        // preview would otherwise split into multiple `data:` lines).
         AgentEvent::ToolStarted { name, args } => Event::default()
-            .event("tool")
-            .data(serde_json::json!({ "name": name, "args": args }).to_string()),
-        AgentEvent::ToolFinished { name, ok, preview } => Event::default()
-            .event("tool_result")
-            .data(serde_json::json!({ "name": name, "ok": ok, "preview": preview }).to_string()),
-        AgentEvent::Done => Event::default().event("done").data(""),
+            .event("tool_started")
+            .data(serde_json::json!({ "name": name, "args_preview": args }).to_string()),
+        AgentEvent::ToolFinished { name, ok, preview } => {
+            Event::default().event("tool_finished").data(
+                serde_json::json!({ "name": name, "ok": ok, "result_preview": preview })
+                    .to_string(),
+            )
+        }
+        AgentEvent::Done => Event::default()
+            .event("session_finished")
+            .data(serde_json::json!({ "status": "done", "summary": "" }).to_string()),
         // Named `failed`, not `error`: browser `EventSource` reserves the `error` event for its own
         // connection errors, so a custom `error` event can't be listened for cleanly.
-        AgentEvent::Error(msg) => Event::default().event("failed").data(msg),
+        AgentEvent::Error(msg) => Event::default()
+            .event("failed")
+            .data(serde_json::json!({ "message": msg }).to_string()),
     }
 }
 
@@ -702,18 +715,27 @@ pub async fn goals_stream(
     Sse::new(Box::pin(stream) as SseBody).into_response()
 }
 
+/// Encode a kernel [`liberado_session::SessionEvent`] as SSE. Event names are the kind's serde
+/// tags — the same converged vocabulary `to_sse` maps chat's `AgentEvent` onto, decoded
+/// client-side by `chat_client_contract::SessionEvent::from_sse_data`. `token` frames carry the
+/// bare text (they're high-frequency); everything else carries the full event JSON.
 fn session_event_to_sse(ev: &liberado_session::SessionEvent) -> Event {
+    use liberado_session::SessionEventKind as K;
+    if let K::Token { text } = &ev.kind {
+        return Event::default().event("token").data(text.clone());
+    }
     let name = match &ev.kind {
-        liberado_session::SessionEventKind::SessionStarted { .. } => "session_started",
-        liberado_session::SessionEventKind::RoleStarted { .. } => "role_started",
-        liberado_session::SessionEventKind::RoleFinished { .. } => "role_finished",
-        liberado_session::SessionEventKind::ToolStarted { .. } => "tool_started",
-        liberado_session::SessionEventKind::ToolFinished { .. } => "tool_finished",
-        liberado_session::SessionEventKind::Progress { .. } => "progress",
-        liberado_session::SessionEventKind::ValidationFinished { .. } => "validation_finished",
-        liberado_session::SessionEventKind::LoopGuard { .. } => "loop_guard",
-        liberado_session::SessionEventKind::SessionFinished { .. } => "session_finished",
-        liberado_session::SessionEventKind::Error { .. } => "goal_error",
+        K::SessionStarted { .. } => "session_started",
+        K::RoleStarted { .. } => "role_started",
+        K::RoleFinished { .. } => "role_finished",
+        K::Token { .. } => unreachable!("handled above"),
+        K::ToolStarted { .. } => "tool_started",
+        K::ToolFinished { .. } => "tool_finished",
+        K::Progress { .. } => "progress",
+        K::ValidationFinished { .. } => "validation_finished",
+        K::LoopGuard { .. } => "loop_guard",
+        K::SessionFinished { .. } => "session_finished",
+        K::Failed { .. } => "failed",
     };
     let data = serde_json::to_string(ev).unwrap_or_else(|_| "{}".into());
     Event::default().event(name).data(data)

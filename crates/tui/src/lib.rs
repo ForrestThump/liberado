@@ -185,7 +185,7 @@
 //!   `SlashCommand`, a case in `parse()`, a handler in `handlers/`, a route in `dispatch()`).
 //!   `App::handle_slash_command()` in `app.rs` maps the resulting `CommandResult`s to `Effect`s;
 //!   `command_context.rs` (`impl CommandContext for App`) is where state access is wired up.
-//! * **New SSE event types** — Add a variant to `ChatEvent` (`chat-client-contract`), a branch
+//! * **New SSE event types** — Add a variant to `SessionEventKind` (`chat-client-contract`), a branch
 //!   in `ToAction::to_action()` in `sse.rs`, a variant to `Action`, and a handler in `App::update()`.
 //! * **New effects** — Add a variant to `Effect`, a branch in `EffectRunner::run()`,
 //!   and return it from `App::update()` or `App::handle_key()`.

@@ -9,87 +9,115 @@ use serde::{Deserialize, Serialize};
 // Chat streaming types
 // ──────────────────────────────────────────────────────────────
 
-/// A streaming chat event — maps 1:1 with the SSE events produced by the server's
-/// `/api/chat/stream` endpoint.
+/// One streamed session event — the **converged** wire vocabulary (2026-07-11) shared by the
+/// chat stream (`/api/chat/stream`) and the goal-session stream (`/api/goals/{id}/stream`).
+/// Mirrors `liberado_session::SessionEvent` (this crate stays wasm-clean and client-tier, so it
+/// owns its own copy of the shape rather than importing the kernel crate).
 ///
-/// **Serialization note:** `ChatEvent` uses `#[serde(tag = "type")]` for JSON round-trips
-/// (used in tests and non-SSE contexts). When parsing from a live SSE stream, use
-/// [`ChatEvent::from_sse_data`] instead — the SSE wire format carries the event type in
-/// the `event:` line, not in the JSON payload.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The envelope fields are `None` on chat frames (chat scopes the whole stream with one
+/// leading `session` event instead of stamping every frame) and `Some` on goal-session frames.
+///
+/// **Serialization note:** `SessionEventKind` uses `#[serde(tag = "type")]` for JSON
+/// round-trips. When parsing a live SSE stream, use [`SessionEvent::from_sse_data`] — the SSE
+/// wire carries the event type in the `event:` line, and `session` / `token` frames carry bare
+/// (non-JSON) payloads.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionEvent {
+    /// Goal-session id (goals stream only; `None` on chat frames).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// RFC 3339 timestamp (goals stream only). Kept a string so this crate stays dep-light.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+    #[serde(flatten)]
+    pub kind: SessionEventKind,
+}
+
+/// Event variants — one vocabulary for chat turns and goal sessions. Serde tags match the SSE
+/// `event:` names (`session` and `token` additionally use bare payloads on the wire).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum ChatEvent {
-    /// The conversation session id — the first event emitted in a stream.
+pub enum SessionEventKind {
+    /// The conversation id — the first event of a chat stream (chat only).
     Session { id: String },
-    /// An incremental text token of the assistant's reply.
+    /// A goal session began (goals stream; the first event of a session's history).
+    SessionStarted { domain: String, description: String },
+    /// A role (planner / worker / critic / chat assistant) started.
+    RoleStarted { role: String, model: String },
+    /// A role finished.
+    RoleFinished { role: String },
+    /// An incremental text delta of the reply.
     Token { text: String },
     /// A tool call is starting.
-    Tool {
-        name: String,
-        args: serde_json::Value,
-    },
+    ToolStarted { name: String, args_preview: String },
     /// A tool call completed.
-    ToolResult {
+    ToolFinished {
         name: String,
         ok: bool,
-        preview: String,
+        result_preview: String,
     },
-    /// The turn completed successfully.
-    Done,
-    /// Something failed.
+    /// Free-form progress note.
+    Progress { message: String },
+    /// A verifier/validation pass finished.
+    ValidationFinished { ok: bool, summary: String },
+    /// A harness guard fired (doom-loop, no-progress, …).
+    LoopGuard { guard: String, action: String },
+    /// The turn / goal session completed. Chat turns finish with `status: "done"`.
+    SessionFinished { status: String, summary: String },
+    /// Hard failure. Named `failed` (not `error`): browser `EventSource` reserves the `error`
+    /// event name for its own connection errors.
     Failed { message: String },
 }
 
-impl ChatEvent {
-    /// Parse from an SSE data payload where the event type is already known from the SSE
-    /// `event:` line (so no `"type"` field exists in the JSON).
+impl SessionEvent {
+    fn bare(kind: SessionEventKind) -> Self {
+        Self {
+            session_id: None,
+            at: None,
+            kind,
+        }
+    }
+
+    /// Parse from an SSE frame where the event type comes from the SSE `event:` line.
     ///
-    /// **Unknown event types** return `Ok(ChatEvent::Token { text: String::new() })` — a
-    /// benign no-op — so forward-compatible servers can add new event types without
-    /// breaking older clients. Only *malformed JSON* for a *known* `tool`/`tool_result`
-    /// event returns `Err`.
+    /// - `session` and `token` carry **bare** (non-JSON) payloads.
+    /// - Every other known type carries JSON: the kind's fields, plus optional
+    ///   `session_id`/`at` envelope fields on goal-session streams.
+    /// - **Unknown event types** return `Ok` with an empty `Token` — a benign no-op — so newer
+    ///   servers can add event types without breaking older clients. Only malformed JSON for a
+    ///   known structured type returns `Err`.
     pub fn from_sse_data(event_type: &str, data: &str) -> Result<Self, serde_json::Error> {
         match event_type {
-            "session" => Ok(ChatEvent::Session {
+            "session" => Ok(Self::bare(SessionEventKind::Session {
                 id: data.to_string(),
-            }),
-            "token" => Ok(ChatEvent::Token {
+            })),
+            "token" => Ok(Self::bare(SessionEventKind::Token {
                 text: data.to_string(),
-            }),
-            "tool" => {
-                #[derive(Deserialize)]
-                struct ToolPayload {
-                    name: String,
-                    args: serde_json::Value,
+            })),
+            "session_started"
+            | "role_started"
+            | "role_finished"
+            | "tool_started"
+            | "tool_finished"
+            | "progress"
+            | "validation_finished"
+            | "loop_guard"
+            | "session_finished"
+            | "failed" => {
+                // The payload may or may not carry the `type` tag (goals frames serialize the
+                // full event including the tag; hand-built chat frames may omit it). Inject the
+                // tag from the `event:` line so both decode through one serde path.
+                let mut value: serde_json::Value = serde_json::from_str(data)?;
+                if let Some(obj) = value.as_object_mut() {
+                    obj.entry("type")
+                        .or_insert_with(|| serde_json::Value::String(event_type.to_string()));
                 }
-                let p: ToolPayload = serde_json::from_str(data)?;
-                Ok(ChatEvent::Tool {
-                    name: p.name,
-                    args: p.args,
-                })
+                serde_json::from_value(value)
             }
-            "tool_result" => {
-                #[derive(Deserialize)]
-                struct ToolResultPayload {
-                    name: String,
-                    ok: bool,
-                    preview: String,
-                }
-                let p: ToolResultPayload = serde_json::from_str(data)?;
-                Ok(ChatEvent::ToolResult {
-                    name: p.name,
-                    ok: p.ok,
-                    preview: p.preview,
-                })
-            }
-            "done" => Ok(ChatEvent::Done),
-            "failed" => Ok(ChatEvent::Failed {
-                message: data.to_string(),
-            }),
             // Unknown event type — benign no-op, forward-compatible.
-            _ => Ok(ChatEvent::Token {
+            _ => Ok(Self::bare(SessionEventKind::Token {
                 text: String::new(),
-            }),
+            })),
         }
     }
 }
@@ -325,92 +353,91 @@ pub struct ApiError {
 mod tests {
     use super::*;
 
-    // ── ChatEvent ─────────────────────────────────────────────
+    // ── SessionEvent (converged wire vocabulary) ─────────────
 
-    #[test]
-    fn chat_event_serialization_round_trips() {
-        let event = ChatEvent::Token {
-            text: "hello".into(),
-        };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: ChatEvent = serde_json::from_str(&json).unwrap();
-        assert!(matches!(back, ChatEvent::Token { text } if text == "hello"));
+    fn bare(kind: SessionEventKind) -> SessionEvent {
+        SessionEvent {
+            session_id: None,
+            at: None,
+            kind,
+        }
     }
 
     #[test]
-    fn tool_event_serialization() {
-        let event = ChatEvent::Tool {
-            name: "vault:read".into(),
-            args: serde_json::json!({"path": "foo.md"}),
-        };
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("vault:read"));
-        assert!(json.contains("foo.md"));
-    }
-
-    #[test]
-    fn session_event_serialization() {
-        let event = ChatEvent::Session {
-            id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
-        };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: ChatEvent = serde_json::from_str(&json).unwrap();
-        assert!(matches!(back, ChatEvent::Session { .. }));
-    }
-
-    #[test]
-    fn tool_result_event_serialization() {
-        let event = ChatEvent::ToolResult {
-            name: "search".into(),
-            ok: true,
-            preview: "3 results".into(),
-        };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: ChatEvent = serde_json::from_str(&json).unwrap();
-        assert!(matches!(back, ChatEvent::ToolResult { name, ok: true, .. } if name == "search"));
-    }
-
-    #[test]
-    fn done_event_serialization() {
-        let event = ChatEvent::Done;
-        let json = serde_json::to_string(&event).unwrap();
-        let back: ChatEvent = serde_json::from_str(&json).unwrap();
-        assert!(matches!(back, ChatEvent::Done));
-    }
-
-    #[test]
-    fn failed_event_serialization() {
-        let event = ChatEvent::Failed {
-            message: "connection lost".into(),
-        };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: ChatEvent = serde_json::from_str(&json).unwrap();
-        assert!(matches!(back, ChatEvent::Failed { message } if message == "connection lost"));
-    }
-
-    #[test]
-    fn all_chat_event_variants_round_trip() {
-        let events = vec![
-            ChatEvent::Session { id: "01ABC".into() },
-            ChatEvent::Token { text: "hi".into() },
-            ChatEvent::Tool {
-                name: "t".into(),
-                args: serde_json::json!({}),
+    fn all_session_event_variants_round_trip() {
+        let kinds = vec![
+            SessionEventKind::Session { id: "01ABC".into() },
+            SessionEventKind::SessionStarted {
+                domain: "life".into(),
+                description: "file a note".into(),
             },
-            ChatEvent::ToolResult {
+            SessionEventKind::RoleStarted {
+                role: "worker".into(),
+                model: "deepseek/deepseek-v4-pro".into(),
+            },
+            SessionEventKind::RoleFinished {
+                role: "worker".into(),
+            },
+            SessionEventKind::Token { text: "hi".into() },
+            SessionEventKind::ToolStarted {
+                name: "t".into(),
+                args_preview: "{}".into(),
+            },
+            SessionEventKind::ToolFinished {
                 name: "t".into(),
                 ok: true,
-                preview: "ok".into(),
+                result_preview: "ok".into(),
             },
-            ChatEvent::Done,
-            ChatEvent::Failed {
+            SessionEventKind::Progress {
+                message: "step 2".into(),
+            },
+            SessionEventKind::ValidationFinished {
+                ok: false,
+                summary: "cargo test failed".into(),
+            },
+            SessionEventKind::LoopGuard {
+                guard: "doom_loop".into(),
+                action: "nudge".into(),
+            },
+            SessionEventKind::SessionFinished {
+                status: "done".into(),
+                summary: "".into(),
+            },
+            SessionEventKind::Failed {
                 message: "err".into(),
             },
         ];
-        for e in events {
-            let json = serde_json::to_string(&e).unwrap();
-            let _back: ChatEvent = serde_json::from_str(&json).unwrap();
+        for kind in kinds {
+            let event = bare(kind);
+            let json = serde_json::to_string(&event).unwrap();
+            let back: SessionEvent = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, event);
         }
+    }
+
+    #[test]
+    fn envelope_fields_round_trip_when_present() {
+        let event = SessionEvent {
+            session_id: Some("g1".into()),
+            at: Some("2026-07-11T00:00:00Z".into()),
+            kind: SessionEventKind::Progress {
+                message: "working".into(),
+            },
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("session_id"));
+        let back: SessionEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, event);
+    }
+
+    #[test]
+    fn failed_tag_is_failed_not_error() {
+        // Browser EventSource reserves `error`; the tag (and SSE name) must be `failed`.
+        let json = serde_json::to_string(&bare(SessionEventKind::Failed {
+            message: "boom".into(),
+        }))
+        .unwrap();
+        assert!(json.contains("\"type\":\"failed\""));
     }
 
     #[test]
@@ -427,63 +454,67 @@ mod tests {
     // ── from_sse_data ─────────────────────────────────────────
 
     #[test]
-    fn from_sse_data_session() {
-        let e = ChatEvent::from_sse_data("session", "abc123").unwrap();
-        assert!(matches!(e, ChatEvent::Session { id } if id == "abc123"));
+    fn from_sse_data_session_is_bare_payload() {
+        let e = SessionEvent::from_sse_data("session", "abc123").unwrap();
+        assert!(matches!(e.kind, SessionEventKind::Session { id } if id == "abc123"));
     }
 
     #[test]
-    fn from_sse_data_token() {
-        let e = ChatEvent::from_sse_data("token", "hello").unwrap();
-        assert!(matches!(e, ChatEvent::Token { text } if text == "hello"));
+    fn from_sse_data_token_is_bare_payload() {
+        let e = SessionEvent::from_sse_data("token", "hello").unwrap();
+        assert!(matches!(e.kind, SessionEventKind::Token { text } if text == "hello"));
     }
 
     #[test]
-    fn from_sse_data_tool() {
-        let data = r#"{"name":"search","args":{"q":"test"}}"#;
-        let e = ChatEvent::from_sse_data("tool", data).unwrap();
-        assert!(matches!(e, ChatEvent::Tool { name, .. } if name == "search"));
+    fn from_sse_data_tool_started_without_type_tag() {
+        // Chat-stream shape: fields only; the type comes from the SSE event: line.
+        let data = r#"{"name":"search","args_preview":"q=test"}"#;
+        let e = SessionEvent::from_sse_data("tool_started", data).unwrap();
+        assert!(matches!(e.kind, SessionEventKind::ToolStarted { name, .. } if name == "search"));
+        assert!(e.session_id.is_none());
     }
 
     #[test]
-    fn from_sse_data_tool_result() {
-        let data = r#"{"name":"search","ok":true,"preview":"3 results"}"#;
-        let e = ChatEvent::from_sse_data("tool_result", data).unwrap();
-        assert!(matches!(e, ChatEvent::ToolResult { name, ok: true, .. } if name == "search"));
+    fn from_sse_data_goals_frame_with_type_tag_and_envelope() {
+        // Goals-stream shape: full event JSON including tag + envelope.
+        let data = r#"{"session_id":"g1","at":"2026-07-11T00:00:00Z","type":"tool_finished","name":"write_note","ok":true,"result_preview":"ok"}"#;
+        let e = SessionEvent::from_sse_data("tool_finished", data).unwrap();
+        assert_eq!(e.session_id.as_deref(), Some("g1"));
+        assert!(
+            matches!(e.kind, SessionEventKind::ToolFinished { name, ok: true, .. } if name == "write_note")
+        );
     }
 
     #[test]
-    fn from_sse_data_done() {
-        let e = ChatEvent::from_sse_data("done", "").unwrap();
-        assert!(matches!(e, ChatEvent::Done));
+    fn from_sse_data_session_finished() {
+        let e =
+            SessionEvent::from_sse_data("session_finished", r#"{"status":"done","summary":""}"#)
+                .unwrap();
+        assert!(
+            matches!(e.kind, SessionEventKind::SessionFinished { status, .. } if status == "done")
+        );
     }
 
     #[test]
-    fn from_sse_data_failed() {
-        let e = ChatEvent::from_sse_data("failed", "connection refused").unwrap();
-        assert!(matches!(e, ChatEvent::Failed { message } if message == "connection refused"));
+    fn from_sse_data_failed_is_json() {
+        let e =
+            SessionEvent::from_sse_data("failed", r#"{"message":"connection refused"}"#).unwrap();
+        assert!(
+            matches!(e.kind, SessionEventKind::Failed { message } if message == "connection refused")
+        );
     }
 
     #[test]
     fn from_sse_data_unknown_event_type_is_benign_empty_token() {
         // Unknown/future event types must NOT error — they become an empty token (no-op).
-        let e = ChatEvent::from_sse_data("future_event_type", "some payload").unwrap();
-        assert!(matches!(e, ChatEvent::Token { text } if text.is_empty()));
+        let e = SessionEvent::from_sse_data("future_event_type", "some payload").unwrap();
+        assert!(matches!(e.kind, SessionEventKind::Token { text } if text.is_empty()));
     }
 
     #[test]
-    fn from_sse_data_tool_malformed_json_returns_err() {
-        let result = ChatEvent::from_sse_data("tool", "not valid json");
-        assert!(result.is_err(), "expected Err for malformed tool JSON");
-    }
-
-    #[test]
-    fn from_sse_data_tool_result_malformed_json_returns_err() {
-        let result = ChatEvent::from_sse_data("tool_result", "{broken}");
-        assert!(
-            result.is_err(),
-            "expected Err for malformed tool_result JSON"
-        );
+    fn from_sse_data_malformed_json_returns_err() {
+        assert!(SessionEvent::from_sse_data("tool_started", "not valid json").is_err());
+        assert!(SessionEvent::from_sse_data("tool_finished", "{broken}").is_err());
     }
 
     // ── DaemonStatus ──────────────────────────────────────────

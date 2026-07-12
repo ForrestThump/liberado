@@ -514,18 +514,21 @@ fn open_stream(
         on_token.forget();
     }
 
-    // tool -> append a pending ThinkingStep to the last assistant message (creating one if needed).
+    // tool_started -> append a pending ThinkingStep to the last assistant message (creating one if
+    // needed). Payload decoding goes through the shared converged vocabulary
+    // (chat_client_contract::SessionEvent — same decoder as the TUI/CLI).
     {
         let on_tool = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
             if let Some(data) = e.data().as_string() {
-                if let Ok(chat_client_contract::ChatEvent::Tool { name, args }) =
-                    chat_client_contract::ChatEvent::from_sse_data("tool", &data)
+                if let Ok(chat_client_contract::SessionEvent {
+                    kind: chat_client_contract::SessionEventKind::ToolStarted { name, args_preview },
+                    ..
+                }) = chat_client_contract::SessionEvent::from_sse_data("tool_started", &data)
                 {
-                    let args_str = args.to_string();
-                    let clean_args = if args_str == "{}" || args_str == "null" {
+                    let clean_args = if args_preview == "{}" || args_preview == "null" {
                         String::new()
                     } else {
-                        args_str
+                        args_preview
                     };
                     messages.with_mut(|m| match m.last_mut() {
                         Some(last) if last.role == "assistant" => {
@@ -550,16 +553,24 @@ fn open_stream(
                 }
             }
         });
-        let _ = source.add_event_listener_with_callback("tool", on_tool.as_ref().unchecked_ref());
+        let _ = source
+            .add_event_listener_with_callback("tool_started", on_tool.as_ref().unchecked_ref());
         on_tool.forget();
     }
 
-    // tool_result -> resolve the most recent pending ThinkingStep with matching name.
+    // tool_finished -> resolve the most recent pending ThinkingStep with matching name.
     {
         let on_result = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
             if let Some(data) = e.data().as_string() {
-                if let Ok(chat_client_contract::ChatEvent::ToolResult { name, ok, preview }) =
-                    chat_client_contract::ChatEvent::from_sse_data("tool_result", &data)
+                if let Ok(chat_client_contract::SessionEvent {
+                    kind:
+                        chat_client_contract::SessionEventKind::ToolFinished {
+                            name,
+                            ok,
+                            result_preview: preview,
+                        },
+                    ..
+                }) = chat_client_contract::SessionEvent::from_sse_data("tool_finished", &data)
                 {
                     messages.with_mut(|m| {
                         // Find the last assistant message that has a pending step matching `name`.
@@ -584,11 +595,11 @@ fn open_stream(
             }
         });
         let _ = source
-            .add_event_listener_with_callback("tool_result", on_result.as_ref().unchecked_ref());
+            .add_event_listener_with_callback("tool_finished", on_result.as_ref().unchecked_ref());
         on_result.forget();
     }
 
-    // done -> close + stop + optionally set title.
+    // session_finished -> close + stop + optionally set title.
     {
         let source_done = source.clone();
         let title_base = api_base_for_title.to_string();
@@ -650,18 +661,27 @@ fn open_stream(
                 }
             }
         });
-        let _ = source.add_event_listener_with_callback("done", on_done.as_ref().unchecked_ref());
+        let _ = source
+            .add_event_listener_with_callback("session_finished", on_done.as_ref().unchecked_ref());
         on_done.forget();
     }
 
-    // failed -> replace in-flight message with error, close + stop.
+    // failed -> replace in-flight message with error, close + stop. Payload is JSON {message}
+    // (converged vocabulary); fall back to the raw data if it isn't.
     {
         let source_fail = source.clone();
         let on_fail = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
-            let msg = e
+            let raw = e
                 .data()
                 .as_string()
                 .unwrap_or_else(|| "stream error".into());
+            let msg = match chat_client_contract::SessionEvent::from_sse_data("failed", &raw) {
+                Ok(chat_client_contract::SessionEvent {
+                    kind: chat_client_contract::SessionEventKind::Failed { message },
+                    ..
+                }) => message,
+                _ => raw,
+            };
             messages.with_mut(|m| m.push(ChatMsg::new_error(msg)));
             source_fail.close();
             sending.set(false);

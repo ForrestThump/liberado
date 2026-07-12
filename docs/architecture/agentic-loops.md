@@ -198,9 +198,11 @@ Map to `liberado_common::Outcome` at kernel boundaries.
 | Send goals, approvals, cancel | Bypass capability / draft-PR gates |
 | Replay traces | Reimplement planner/critic loops |
 
-Headless first (PR dispatch, evals). TUI/WebUI target one session/event API later — converge
-`AgentEvent` (chat) and `CoderEvent` (coding) into a shared envelope with domain payloads
-(see hygiene audit).
+Headless first (PR dispatch, evals). **Event vocabulary converged (2026-07-11):** chat and goal
+sessions speak one wire language — `SessionEventKind` (kernel: `liberado-session`; wire mirror:
+`chat-client-contract`), one `from_sse_data` decoder for both streams. `AgentEvent` remains the
+executor's in-process inner-loop tap, mapped at the server boundary exactly as the coding pack
+maps `CoderEvent` → `SessionEvent`.
 
 ---
 
@@ -213,7 +215,7 @@ Headless first (PR dispatch, evals). TUI/WebUI target one session/event API late
 | Coding goal session (`coder-agent`) | Worker + optional planner + repair (signature routing) + critic + progress guards + gates + traces |
 | Neutral Goal/Session types | **`liberado-session` crate** (GoalSpec, SessionEvent, hub) |
 | Non-coding domain pack proof | **LifeOpsDemoRunner** (no coder-tools) |
-| Unified session API for TUI/WebUI | **HTTP/SSE** `/api/goals*` on `liberado-server` |
+| Unified session API for TUI/WebUI | **HTTP/SSE** `/api/goals*` on `liberado-server`; **one event vocabulary** with chat (converged 2026-07-11) |
 | Meta-loop | Tuner + draft proposal export (Decision 14) |
 
 Module layout in `coder-agent` (composition, not kernel): `roles`, `gates`, `critic`, `progress`,

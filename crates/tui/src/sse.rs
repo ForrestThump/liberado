@@ -7,7 +7,7 @@
 
 pub use chat_client_contract::native::{SseDecoder, SseEvent};
 
-use chat_client_contract::ChatEvent;
+use chat_client_contract::{SessionEvent, SessionEventKind};
 
 use crate::app::Action;
 
@@ -18,31 +18,45 @@ use crate::app::Action;
 /// `chat_client_contract`, not this crate — Rust's orphan rules only allow implementing a
 /// *local* trait for a foreign type.
 pub trait ToAction {
-    /// Delegates JSON parsing to [`ChatEvent::from_sse_data`] (the shared wire helper).
+    /// Delegates JSON parsing to [`SessionEvent::from_sse_data`] (the shared wire helper for
+    /// both the chat stream and the goal-session stream — the converged vocabulary).
     ///
-    /// **Semantics preserved from the original hand-rolled implementation:**
+    /// **Semantics:**
     /// - Unknown/future event types → `Ok(Action::SseToken(String::new()))` (benign no-op)
-    /// - Malformed JSON for a *known* `tool`/`tool_result` event → `Err(description)`
+    /// - Goal-session-only kinds the chat view doesn't render (roles, progress, guards) →
+    ///   the same benign no-op, until the TUI grows a session panel
+    /// - Malformed JSON for a known structured event → `Err(description)`
     fn to_action(&self) -> Result<Action, String>;
 }
 
 impl ToAction for SseEvent {
     fn to_action(&self) -> Result<Action, String> {
-        // from_sse_data maps unknown event types to ChatEvent::Token { text: "" } (benign),
-        // and returns Err only for malformed JSON on known tool/tool_result events.
-        match ChatEvent::from_sse_data(&self.event, &self.data) {
-            Ok(event) => Ok(match event {
-                ChatEvent::Session { id } => Action::SseSession(id),
-                ChatEvent::Token { text } => Action::SseToken(text),
-                ChatEvent::Tool { name, args } => Action::SseTool {
+        match SessionEvent::from_sse_data(&self.event, &self.data) {
+            Ok(event) => Ok(match event.kind {
+                SessionEventKind::Session { id } => Action::SseSession(id),
+                SessionEventKind::Token { text } => Action::SseToken(text),
+                SessionEventKind::ToolStarted { name, args_preview } => Action::SseTool {
                     name,
-                    args: args.to_string(),
+                    args: args_preview,
                 },
-                ChatEvent::ToolResult { name, ok, preview } => {
-                    Action::SseToolResult { name, ok, preview }
-                }
-                ChatEvent::Done => Action::SseDone,
-                ChatEvent::Failed { message } => Action::SseFailed(message),
+                SessionEventKind::ToolFinished {
+                    name,
+                    ok,
+                    result_preview,
+                } => Action::SseToolResult {
+                    name,
+                    ok,
+                    preview: result_preview,
+                },
+                SessionEventKind::SessionFinished { .. } => Action::SseDone,
+                SessionEventKind::Failed { message } => Action::SseFailed(message),
+                // Goal-session-only kinds — not rendered in the chat view (yet).
+                SessionEventKind::SessionStarted { .. }
+                | SessionEventKind::RoleStarted { .. }
+                | SessionEventKind::RoleFinished { .. }
+                | SessionEventKind::Progress { .. }
+                | SessionEventKind::ValidationFinished { .. }
+                | SessionEventKind::LoopGuard { .. } => Action::SseToken(String::new()),
             }),
             Err(e) => Err(format!("malformed SSE data ({e}): {}", self.data)),
         }
@@ -54,27 +68,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tool_event_converts_to_sse_tool_action() {
+    fn tool_started_event_converts_to_sse_tool_action() {
         let mut decoder = SseDecoder::default();
         let events = decoder.push(
-            "event: tool\ndata: {\"name\":\"search\",\"args\":\"{\\\"q\\\":\\\"test\\\"}\"}\n\n",
+            "event: tool_started\ndata: {\"name\":\"search\",\"args_preview\":\"q=test\"}\n\n",
         );
         let action = events[0].to_action().unwrap();
         assert!(matches!(action, Action::SseTool { name, .. } if name == "search"));
     }
 
     #[test]
-    fn tool_result_event_converts_to_sse_tool_result_action() {
+    fn tool_finished_event_converts_to_sse_tool_result_action() {
         let mut decoder = SseDecoder::default();
-        let events = decoder.push("event: tool_result\ndata: {\"name\":\"search\",\"ok\":true,\"preview\":\"3 results\"}\n\n");
+        let events = decoder.push("event: tool_finished\ndata: {\"name\":\"search\",\"ok\":true,\"result_preview\":\"3 results\"}\n\n");
         let action = events[0].to_action().unwrap();
         assert!(matches!(action, Action::SseToolResult { name, ok: true, .. } if name == "search"));
     }
 
     #[test]
-    fn tool_malformed_json_returns_err() {
+    fn session_finished_event_converts_to_done() {
+        let mut decoder = SseDecoder::default();
+        let events = decoder
+            .push("event: session_finished\ndata: {\"status\":\"done\",\"summary\":\"\"}\n\n");
+        assert!(matches!(events[0].to_action().unwrap(), Action::SseDone));
+    }
+
+    #[test]
+    fn goal_session_frame_with_envelope_decodes_too() {
+        // A goals-stream frame: full JSON including the serde tag + envelope fields.
+        let mut decoder = SseDecoder::default();
+        let events = decoder.push(
+            "event: tool_started\ndata: {\"session_id\":\"g1\",\"at\":\"2026-07-11T00:00:00Z\",\"type\":\"tool_started\",\"name\":\"write_note\",\"args_preview\":\"...\"}\n\n",
+        );
+        let action = events[0].to_action().unwrap();
+        assert!(matches!(action, Action::SseTool { name, .. } if name == "write_note"));
+    }
+
+    #[test]
+    fn tool_started_malformed_json_returns_err() {
         let event = SseEvent {
-            event: "tool".to_string(),
+            event: "tool_started".to_string(),
             data: "not valid json".to_string(),
         };
         let result = event.to_action();
@@ -87,9 +120,9 @@ mod tests {
     }
 
     #[test]
-    fn tool_result_malformed_json_returns_err() {
+    fn tool_finished_malformed_json_returns_err() {
         let event = SseEvent {
-            event: "tool_result".to_string(),
+            event: "tool_finished".to_string(),
             data: "{broken}".to_string(),
         };
         let result = event.to_action();

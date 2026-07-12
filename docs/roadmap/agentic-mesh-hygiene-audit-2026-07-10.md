@@ -186,7 +186,7 @@ Status of the action items above, verified against the working tree:
 | B | Module-split `coder-agent` | ✅ done (`roles`, `gates`, `critic`, `progress`, `trace`, `runtime`, `verify_pipeline`, …) |
 | C | Fix outdated status lines | ✅ done |
 | E | Extract neutral session types | ✅ done early — `liberado-session` (GoalSpec/SessionEvent/hub) exists; `coder-agent` and `server` consume it |
-| F | Unify event vocabulary | 🟡 partial — `/api/goals*` + `SessionEvent` exist; chat `AgentEvent` not yet converged |
+| F | Unify event vocabulary | ✅ done 2026-07-11 — one `SessionEventKind` wire vocabulary for chat + goals (`chat-client-contract`), one decoder for all surfaces; `AgentEvent` stays the inner-loop tap, mapped at the server boundary |
 | D/G/H | planner API / VTCode deletion / coder eval layer | in flight per plan |
 
 **New finding (supersedes "avoid premature extraction" for verify types only):**

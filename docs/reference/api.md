@@ -40,22 +40,35 @@ without owning the loop. Packs registered at boot: **`life`** (always, second-do
 | GET | `/api/goals/{id}/stream` | SSE: catch-up then live `session_started`, `tool_*`, `session_finished`, … |
 | POST | `/api/goals/{id}/cancel` | Cooperative cancel |
 
-SSE `data` is the full `SessionEvent` JSON. Event names match kind tags (`session_started`,
-`tool_started`, `goal_error`, …). Clients must not reimplement tools/sandbox — only render.
+SSE `data` is the full `SessionEvent` JSON (envelope `session_id`/`at` + kind fields). Event names
+match kind tags (`session_started`, `tool_started`, `failed`, …) — the **same converged vocabulary
+the chat stream uses** (below), so one client decoder
+(`chat_client_contract::SessionEvent::from_sse_data`) serves both streams. Clients must not
+reimplement tools/sandbox — only render.
 
 ## The chat stream contract (the spine)
 
 `POST /api/chat/stream` with `{"message": "..."}` returns `Content-Type: text/event-stream`. The body
-is a sequence of SSE events; a client renders them in order:
+is a sequence of SSE events; a client renders them in order.
+
+> **Wire change, 2026-07-11 (converged session-event vocabulary):** the former chat-only names
+> `tool` / `tool_result` / `done` were replaced by `tool_started` / `tool_finished` /
+> `session_finished`, and `failed` became JSON `{"message"}` — one vocabulary shared with
+> `/api/goals/{id}/stream`. All in-repo clients (TUI, CLI, WebUI) moved atomically; there is no
+> compatibility shim for the old names.
 
 | `event:` | `data:` | Client does |
 |---|---|---|
-| `session`     | the conversation id for this stream | record it and send it back as `?session=…` (or the `session` field) on the next turn, to continue this conversation |
-| `token`       | a text delta of the answer | append to the current assistant message |
-| `tool`        | JSON `{"name","args"}` — a tool call starting (`args` is a truncated preview of its arguments) | show "calling `<name>`…" with the args (legibility) |
-| `tool_result` | JSON `{"name","ok","preview"}` — that call finished (`ok` = succeeded; `preview` is a truncated result/error) | update the chip to ✓/✗ with the preview |
-| `done`        | *(empty)* | finalize the message, stop reading |
-| `failed`      | an error message | show it; stop. (Named `failed`, not `error`, because browser `EventSource` reserves the `error` event for its own connection errors.) |
+| `session`          | the conversation id for this stream (bare, not JSON) | record it and send it back as `?session=…` (or the `session` field) on the next turn, to continue this conversation |
+| `token`            | a text delta of the answer (bare, not JSON) | append to the current assistant message |
+| `tool_started`     | JSON `{"name","args_preview"}` — a tool call starting (`args_preview` is a truncated preview of its arguments) | show "calling `<name>`…" with the args (legibility) |
+| `tool_finished`    | JSON `{"name","ok","result_preview"}` — that call finished (`ok` = succeeded; `result_preview` is a truncated result/error) | update the chip to ✓/✗ with the preview |
+| `session_finished` | JSON `{"status","summary"}` — chat turns finish with `status: "done"` | finalize the message, stop reading |
+| `failed`           | JSON `{"message"}` | show it; stop. (Named `failed`, not `error`, because browser `EventSource` reserves the `error` event for its own connection errors.) |
+
+Goal-session streams may additionally emit `session_started`, `role_started`, `role_finished`,
+`progress`, `validation_finished`, and `loop_guard` — same decoder; chat clients ignore what they
+don't render.
 
 The `session` event is emitted **first**, before any agent events. A turn carries its conversation
 either by the `session` field on the chat request body (`POST`) or the `?session=…` query (`GET`);
@@ -88,14 +101,15 @@ name. Visibility flags reflect `policy.toml` grants for `"main-agent"` vs `"disp
 TUI: `/model` opens a full-screen searchable browser over `GET /api/models`; Enter calls
 `POST /api/models/select`.
 
-Tool events are **JSON-encoded** (not bare strings) so a multi-line preview can't split across SSE
-`data:` lines, and so the fields stay typed. `args`/`preview` are truncated server-side (~200 chars)
-— a chip is a glance, not a log. `tool` and `tool_result` always come in pairs around one call, in
-order, and before the `token`s of the answer that follows the tool use.
+Structured events are **JSON-encoded** (not bare strings) so a multi-line preview can't split across
+SSE `data:` lines, and so the fields stay typed. `args_preview`/`result_preview` are truncated
+server-side (~200 chars) — a chip is a glance, not a log. `tool_started` and `tool_finished` always
+come in pairs around one call, in order, and before the `token`s of the answer that follows the tool
+use.
 
 The endpoint is reachable two ways, same SSE either way: **`POST`** with a JSON body (native clients
 like the TUI, via `reqwest`) and **`GET /api/chat/stream?message=…`** (browsers, via `EventSource`,
-which can't issue a streaming `POST`). The browser closes the `EventSource` on `done`/`failed` to
+which can't issue a streaming `POST`). The browser closes the `EventSource` on `session_finished`/`failed` to
 stop it auto-reconnecting and re-firing the turn.
 
 ### Stop / cancel
@@ -114,7 +128,7 @@ Properties that make this client-agnostic:
   by native `reqwest` byte-streaming in the TUI. Same bytes, two parsers.
 - **One POST endpoint** (not GET+query) — messages aren't length-limited or URL-encoded, and there's
   no `EventSource` auto-reconnect re-firing the turn.
-- **Events, not raw tokens** — `tool` and `failed` are first-class, so tool use and failures are
+- **Events, not raw tokens** — `tool_started` and `failed` are first-class, so tool use and failures are
   legible in any client without server changes.
 - **Stateless client** — the server owns the conversation; a client reconnecting just sends the next
   message.
@@ -129,8 +143,8 @@ Ordered by feel-impact. Each is a client + (sometimes) server change behind the 
 ### Landed
 - **Multi-turn chat with context + tool use** — `POST /api/chat`, server-side `Conversation`.
 - **Token streaming** — `POST /api/chat/stream` (the contract above); web UI renders it live.
-- **Tool-call visibility (contract)** — the stream emits `tool` (call starting, with args) and
-  `tool_result` (outcome: ok + result preview) around every tool call. The backend half is done and
+- **Tool-call visibility (contract)** — the stream emits `tool_started` (call starting, with an args preview) and
+  `tool_finished` (outcome: ok + result preview) around every tool call. The backend half is done and
   tested; the web UI renders them as inline chips (visual polish still wants a human eye).
 - **Stop / cancel** — closing the stream aborts the in-flight turn and rolls history back (see
   *Stop / cancel* above). Connection-lifecycle, no endpoint. The web UI's Stop button
@@ -183,7 +197,7 @@ Both native clients are landed and share code (`chat-client-contract`'s `ChatEve
 
 1. **No client-specific endpoints.** If the web UI needs data, it goes through an endpoint the TUI
    could also call. Rendering differences (HTML vs. cells) live entirely in the client.
-2. **Events over payloads.** Stream typed events (`token`/`tool`/`tool_result`/`done`/`failed`), not pre-rendered
+2. **Events over payloads.** Stream typed events (`token`/`tool_started`/`tool_finished`/`session_finished`/`failed`), not pre-rendered
    HTML — so each client renders natively.
 3. **Server owns state, clients stay thin.** Conversation/session/history live server-side; a client
    is a renderer + an input box.
