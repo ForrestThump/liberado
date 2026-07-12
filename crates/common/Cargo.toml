@@ -27,3 +27,7 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 toml = { workspace = true }
 liberado-config-loader = { workspace = true }
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
+role = "foundation"

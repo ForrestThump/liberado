@@ -13,3 +13,10 @@ async-trait = { workspace = true }
 liberado-common = { workspace = true }
 liberado-executor = { workspace = true }
 liberado-provider = { workspace = true }
+
+[dev-dependencies]
+toml = { workspace = true }
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
+role = "testing"

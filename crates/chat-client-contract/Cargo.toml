@@ -1,6 +1,7 @@
 [package]
 name = "chat-client-contract"
 version = "0.1.0"
+description = "Shared HTTP/SSE wire DTOs + the SseDecoder incremental parser -- the one contract every chat surface (TUI, WebUI, CLI) speaks."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -13,3 +14,7 @@ repository.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
+role = "client"

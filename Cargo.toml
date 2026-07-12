@@ -16,7 +16,7 @@ exclude = [
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.91"
 license = "MIT"
 authors = ["Shiloh Mangus"]
 repository = "https://github.com/shilohmangus/liberado"
@@ -95,9 +95,9 @@ turbovault-audit = { path = "turbovault/crates/turbovault-audit" }
 turbovault-tools = { path = "turbovault/crates/turbovault-tools" }
 turbovault-batch = { path = "turbovault/crates/turbovault-batch" }
 turbovault = { path = "turbovault/crates/turbovault" } # umbrella (ObsidianMcpServer) — test-only
-# NOTE: pinned to the `feature/vector-db` branch (not yet merged to `develop`) — this is where
-# liberado-memory-store's semantic recall comes from. Once that branch is PR'd and merged
-# upstream, re-point this at `develop` like the other turbovault-* deps above.
+# liberado-memory-store's semantic recall. (2026-07-11: the vector-db work is on the fork's
+# `develop` like the other turbovault-* deps — the old "pinned to feature/vector-db" note was
+# stale; CI checks out `develop` for both siblings.)
 turbovault-vector = { path = "turbovault/crates/turbovault-vector" }
 turbomcp = { path = "turbomcp/crates/turbomcp" }
 turbomcp-client = { path = "turbomcp/crates/turbomcp-client" }

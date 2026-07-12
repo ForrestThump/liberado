@@ -1,0 +1,72 @@
+# Liberado CI — fmt, clippy, tests, and the layer-rules gate.
+#
+# Sibling repos: the workspace consumes `turbovault/` and `turbomcp/` as path dependencies
+# (Decision 7 co-development), so CI checks them out into the same layout the dev machine uses.
+# If the ForrestThump forks are private, add a classic PAT with `repo` scope as the
+# `SIBLINGS_TOKEN` repository secret; for public forks the default token suffices.
+#
+# The layer-rules test (crates/test-support/tests/layer_rules.rs) runs as part of the normal
+# test suite — a dependency-layering violation fails CI, not just an audit.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Path deps + lockfile: build exactly what's checked in.
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout liberado
+        uses: actions/checkout@v4
+
+      - name: Checkout turbovault (sibling path dep)
+        uses: actions/checkout@v4
+        with:
+          repository: ForrestThump/turbovault
+          ref: develop
+          path: turbovault
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+
+      - name: Checkout turbomcp (sibling path dep)
+        uses: actions/checkout@v4
+        with:
+          repository: ForrestThump/turbomcp
+          ref: develop
+          path: turbomcp
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo fmt --check
+
+      # webui is excluded: it is a Dioxus WASM crate (shipped via `dx build --web`), and its
+      # native cdylib build reports component scaffolding as dead code. Re-include once the
+      # webui matures past pre-alpha or grows a wasm CI job of its own.
+      - name: Clippy
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings
+
+      - name: Tests (includes layer-rules gate)
+        run: cargo test --workspace

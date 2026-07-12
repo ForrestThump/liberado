@@ -27,3 +27,7 @@ liberado-notify = { workspace = true }
 liberado-orchestrator = { workspace = true }
 liberado-provider-openai-compat = { workspace = true }
 liberado-test-support = { workspace = true }
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
+role = "service"

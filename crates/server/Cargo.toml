@@ -41,3 +41,7 @@ axum = { version = "0.8", features = ["json"] }
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 tower = { version = "0.5", features = ["util"] }
 thiserror = { workspace = true }
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
+role = "root"

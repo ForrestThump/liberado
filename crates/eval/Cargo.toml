@@ -19,3 +19,7 @@ liberado-dispatcher = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-provider-openai-compat = { workspace = true }
 tokio = { workspace = true }
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
+role = "tooling"
