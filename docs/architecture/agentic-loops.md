@@ -4,7 +4,8 @@
 **Implementation roadmap**: [`docs/roadmap/rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md)  
 **Hygiene audit**: [`docs/roadmap/agentic-mesh-hygiene-audit-2026-07-10.md`](../roadmap/agentic-mesh-hygiene-audit-2026-07-10.md)  
 **Modularity**: [`modularity.md`](modularity.md) · **Contracts**: [`contracts.md`](contracts.md) ·
-**Event-bus idea (annotated, partly superseded)**: [`meshify.md`](../ideas/meshify.md)
+**Event-bus idea (annotated, partly superseded)**: [`meshify.md`](../ideas/meshify.md)  
+**Channels & interactivity** (authority vs information graph; interactivity as a capability, not a subtype): [`channels-and-interactivity.md`](channels-and-interactivity.md)
 
 Design inputs:
 [`loop_architecture_reference_article.md`](../ideas/loop_architecture_reference_article.md),

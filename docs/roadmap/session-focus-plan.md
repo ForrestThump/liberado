@@ -6,6 +6,7 @@ It is the UI moving its *input focus* onto an interactive goal session running o
 same daemon, same wire contract. Transcripts are **separate but linked** (the same pattern
 delegation already uses: dispatch journals + correlation ids).  
 **Related**: [`agentic-loops.md`](../architecture/agentic-loops.md) ·
+[`channels-and-interactivity.md`](../architecture/channels-and-interactivity.md) (D7 interactivity + the three channels) ·
 [`contracts.md`](../architecture/contracts.md) · [`api.md`](../reference/api.md) ·
 [`verifiers.md`](../architecture/verifiers.md) §3 (intake) ·
 [`delegate_dogfood_issues.md`](delegate_dogfood_issues.md) ·
@@ -128,15 +129,24 @@ watch, nothing inbound. Needed in `liberado-session`:
   delivered → 202 + `human_input` echoed + session drives to `Succeeded`; unknown → 404; finished
   → 409.
 
-### G3 — The offer: how a chat turn hands the human a session
+### G3 — Launching an interactive session (revised 2026-07-12)
 
-- **Dispatch side**: the dispatcher (or the face agent's `delegate` result) marks a decision as
-  *interactive* — a goal whose success needs a human in the loop (development work, anything
-  opening with intake). Likely a field on the decision/goal rather than a new action type.
-- **Server side**: when a chat turn spawns an interactive session, the chat stream emits
-  `SessionOffered { session_id, domain, description }` before `session_finished`. Explicit event,
-  not client-side sniffing of tool-result text.
-- **Linkage**: the spawned session's `origin` carries the conversation id + correlation id; the
+> **Superseded framing**: the original G3 had the *dispatcher classify a goal as interactive*.
+> [`channels-and-interactivity.md`](../architecture/channels-and-interactivity.md) Decision A
+> retires that — the dispatcher can't know whether the human wants to babysit, so it doesn't try.
+> Interactivity is a **capability** (`ask_human`) × **visibility** (fg/bg) × **budget**, not a
+> classification. Two launch paths remain, both human-gated:
+
+- **`/spawn <domain> <goal>` (primary)**: a human explicitly starts a foreground session with
+  `ask_human: on` and `origin` = the current conversation. No dispatch-side heuristic.
+- **The offer (`SessionOffered`, secondary)**: a chat turn where a human *is* present and whose
+  `delegate` result decides the work is better done hands-on — the chat stream emits
+  `SessionOffered { id, domain, description }` and the surface renders a `/join` affordance. Still an
+  offer the human accepts, never an auto-switch.
+- **`ask_human` capability**: a component-style grant on the session / hat profile — whether the pack
+  *may* emit `AwaitingInput`. Background (cron/dispatch-spawned) sessions run with it off, or on with
+  questions queued against `max_idle_secs`.
+- **Linkage**: the spawned session's `origin` carries the conversation id (+ correlation id); the
   dispatch journal entry gains the session id. Both directions navigable.
 
 ### G4 — TUI: the focus model
@@ -199,7 +209,7 @@ watch, nothing inbound. Needed in `liberado-session`:
 | ✅ S1 | Kernel input channel + `AwaitingInput`/`HumanInput` + idle budget (`liberado-session`; trait change ripples to both packs) — **done 2026-07-12** | Unit tests (green): interactive `LifeOpsDemoRunner` asks → awaits → echoes; idle-budget → `BudgetExhausted`; `send_input` to finished session errors |
 | ✅ S2 | `POST /api/goals/{id}/message` + `api.md` (wire variants landed in S1) — **done 2026-07-12** | HTTP integration tests (green) against a real router (the hooks-test pattern): 202 + echo + drives to success; 404 unknown; 409 finished |
 | S3 | TUI focus MVP: **unified `/sessions` switcher** (one list — primary + goal sessions, kind chips + goal-status) · `/join <id>` · `/back` · session-kind renderers | Live smoke: full Q&A with the life demo through the TUI |
-| S4 | The offer + return handoff. **Foundation landed 2026-07-12**: `SessionOrigin`/`origin` on `GoalSpec` (additive, persisted); `SessionOffered { id, domain, description }` wire variant decoded by all clients; the TUI renders an offer as a joinable `/join <id>` affordance. **Pending** (design-sensitive, wants the TUI smoke): the *trigger* (dispatch/delegate recognizes an interactive goal → spawns a session with `origin` → chat stream emits `SessionOffered`) and the *return handoff* (terminal session's summary folded into the parent conversation via a server-side bridge). | Live smoke: "build a hello CLI" → offer → join → watch → `/back` → summary in main chat |
+| S4 | The offer + return handoff. **Foundation landed 2026-07-12**: `SessionOrigin`/`origin` on `GoalSpec` (additive, persisted); `SessionOffered { id, domain, description }` wire variant decoded by all clients; the TUI renders an offer as a joinable `/join <id>` affordance. **Trigger re-scoped (2026-07-12, [`channels-and-interactivity.md`](../architecture/channels-and-interactivity.md) Decision A): `/spawn <domain> <goal>` — human-initiated, foreground, `ask_human: on`.** The dispatcher does **not** classify interactivity; `SessionOffered` is retained only for the human-attended offer (a chat turn's `delegate` proposing a hands-on session). **Pending** (wants the TUI smoke): `/spawn`, the `ask_human` capability flag, and the *return handoff* (terminal session's summary folded into the parent conversation via a server-side bridge). | Live smoke: `/spawn coding "hello CLI"` → join → watch → `/back` → summary in main chat |
 | ✅ S5 | Durable session transcripts (append-only JSONL per session) + rehydrate on boot — **done 2026-07-12** | Store unit tests (green): reopen rehydrates a finished session's record + events; a non-terminal session coerces to `Failed`; in-memory store persists nothing. Live: restart daemon → `rehydrated sessions=1` → `GET /api/goals` shows the finished session + full transcript |
 | S5′ | **Store convergence (D7)**: one `Session` store — `goal: Option`, durable node-graph transcripts, `origin` links, cron/hook/subagent folded in as background sessions; replaces S3's surface adapter | Both a chat and a goal session load from the same store; a subagent run shows as a background session linked to its parent |
 | S6 | Hat profiles in topology + "new session as <hat>" | Config-driven second hat (e.g. `research` on the life pack) with a narrower component grant |
