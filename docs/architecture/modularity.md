@@ -70,6 +70,16 @@ Extract domain-neutral session vocabulary when **any** of:
 
 Until then, coding types stay specialized and map to mesh `Report`/`Outcome` at boundaries.
 
+> **Status 2026-07-11 (audit): the third trigger has fired.** `liberado-config-loader` now has a
+> *real* (non-dev) dependency on `liberado-coder-core` — it imports `VerifierSpec` and
+> `PipelinePolicy` to parse the `[coder]` config section (`config-loader/src/model.rs`). Because
+> `config-loader` sits beneath `config` → `bootstrap` → everything, this puts the coding pack's
+> contract crate underneath the entire system, inverting the pack/kernel layering. The fix is the
+> one `verifiers.md` §7 already sketches: lift the verify vocabulary (`VerifierSpec`,
+> `PipelinePolicy`, `Verdict`, `Finding`, `Verifier` trait) into `liberado-common` or a thin
+> `liberado-verify` crate; `coder-core` keeps only coding-specific verifiers (`git_*`). See
+> [architecture-alignment-audit-2026-07-11](../roadmap/architecture-alignment-audit-2026-07-11.md).
+
 ## Where this connects
 
 - The [mesh vision](../ideas/meshify.md) is the destination these seams lead to.

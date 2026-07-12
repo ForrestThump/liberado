@@ -121,6 +121,11 @@ one domain. Patterns proven here graduate upward (common types or a future `sess
 4. Kernel must not import git, cargo, or path sandbox types.
 5. Config: kernel knobs (budgets, terminals) vs pack knobs (`[coder]`, MCP grants) stay separate.
 
+> **Known violation (2026-07-11 audit):** `config-loader` → `coder-core` is a real dependency
+> (verify/intake DTOs for the `[coder]` section), so the whole config stack sits on the coding
+> pack. Fix = lift neutral verify types into `common`/`liberado-verify`
+> ([modularity.md](modularity.md) extraction-trigger status note), not a pack import in config.
+
 ---
 
 ## What a loop is

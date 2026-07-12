@@ -3,6 +3,11 @@
 **Status**: design sketch + **v1 coding-pack implementation** (2026-07-10).  
 Shared crate extraction deferred; DTOs live in `liberado-coder-core::{verify,intake}`, pipeline in
 `liberado-coder-agent::verify_pipeline`.  
+**Update 2026-07-11 (audit)**: extraction is no longer "deferred until a second domain" — the
+trigger fired. `liberado-config-loader` now takes a real dependency on `liberado-coder-core` for
+`VerifierSpec`/`PipelinePolicy`, putting the coding pack beneath the whole config stack. Lift the
+neutral verify types into `liberado-common` (or `liberado-verify`) per §7; see
+[modularity.md](modularity.md)'s extraction-trigger status note.  
 **Related**: [`agentic-loops.md`](agentic-loops.md), [`coder-eval-curriculum.md`](../roadmap/coder-eval-curriculum.md),
 dispatcher `Clarify` / `success_criteria` in `liberado-common`.
 

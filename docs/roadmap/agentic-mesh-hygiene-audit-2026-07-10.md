@@ -173,4 +173,26 @@ with TurbomcpRuntime + vault verifiers + turn budget — same session machinery,
 - Executor doom-loop implementation (proven; complementary to progress guards).
 - Process boundary `liberado-coder-run` (good adapter pattern for nested workspaces).
 - Host vs Docker sandbox split.
+
+---
+
+## Follow-up — 2026-07-11 architecture-alignment audit
+
+Status of the action items above, verified against the working tree:
+
+| # | Action | Status |
+|---|---|---|
+| A | Doc reframe kernel vs domain pack | ✅ done (overview/plan/modularity/agentic-loops all carry it) |
+| B | Module-split `coder-agent` | ✅ done (`roles`, `gates`, `critic`, `progress`, `trace`, `runtime`, `verify_pipeline`, …) |
+| C | Fix outdated status lines | ✅ done |
+| E | Extract neutral session types | ✅ done early — `liberado-session` (GoalSpec/SessionEvent/hub) exists; `coder-agent` and `server` consume it |
+| F | Unify event vocabulary | 🟡 partial — `/api/goals*` + `SessionEvent` exist; chat `AgentEvent` not yet converged |
+| D/G/H | planner API / VTCode deletion / coder eval layer | in flight per plan |
+
+**New finding (supersedes "avoid premature extraction" for verify types only):**
+`config-loader` gained a *real* dependency on `coder-core` (`VerifierSpec`/`PipelinePolicy` in
+`config-loader/src/model.rs`) — the pigeonhole risk this audit warned about (risk 1) materialized
+one layer lower than predicted, in config rather than a second domain pack. Extraction of the
+neutral verify vocabulary into `common`/`liberado-verify` is now warranted. Full analysis:
+[`architecture-alignment-audit-2026-07-11.md`](architecture-alignment-audit-2026-07-11.md).
 - Draft-PR-only self-extension gate.

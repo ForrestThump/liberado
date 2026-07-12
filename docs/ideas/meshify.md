@@ -1,5 +1,17 @@
 # meshify-idea.md — Loosening Liberado into a True Mesh
 
+> **[audit note, 2026-07-11]** Partially superseded — keep for history, but read with these
+> corrections:
+> - "The Problem Today" is stale: the hard-coded flow is gone. `EventSource` (vault-watch + cron),
+>   `POST /api/hooks/{name}`, and named dispatcher/executor pools (`[[pools]]` in `topology.toml`)
+>   all landed — steps 1–4 here happened in spirit, via traits + config rather than a broadcast bus.
+> - Step 5's "no component holds a direct pointer to another" was deliberately **not** adopted: the
+>   agent-pools research (2026-07, four passes) found peer-agent coordination unproven; pools never
+>   talk to each other, and the runtime is a hub around one daemon, not a peer mesh.
+> - The live capability catalog (step 3) landed as the shared `Arc<CapabilityCatalog>`.
+> - Verdict on the "mesh" framing overall:
+>   [`architecture-alignment-audit-2026-07-11.md`](../roadmap/architecture-alignment-audit-2026-07-11.md).
+
 **Goal**: Turn the current tight pipeline (watch → dispatch → execute) into a set of independent, swappable services that talk through events instead of direct calls.
 
 This makes the system easier to extend, test, run partially, or move to other machines later — while keeping every safety guarantee intact.

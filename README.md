@@ -15,6 +15,7 @@ New users should begin here:
 - [Roadmap (current)](docs/roadmap/current.md) — what is committed and in-flight
 - [Agentic orchestration plan](docs/roadmap/rust-native-agentic-coder-plan.md) — implementation roadmap (coding pack first)
 - [Agentic mesh hygiene audit](docs/roadmap/agentic-mesh-hygiene-audit-2026-07-10.md) — coupling, duplication, generality
+- [Architecture alignment audit](docs/roadmap/architecture-alignment-audit-2026-07-11.md) — dependency-graph verification, the "mesh" framing verdict, complexity-management plan
 - [Interface / API Reference](docs/reference/api.md) — only public contract (HTTP + SSE)
 - [Delegate dogfood notes](docs/roadmap/delegate_dogfood_issues.md) — face/mesh capability, journals, hot-swap lessons
 
