@@ -15,6 +15,7 @@ New users should begin here:
 - [Verifiers & completeness gates](docs/architecture/verifiers.md) — CI-in-the-loop schema/trait sketch (domain-agnostic)
 - [Positioning](docs/architecture/positioning.md) — the thesis and how Liberado is grounded against the free alternatives
 - [Roadmap (current)](docs/roadmap/current.md) — what is committed and in-flight
+- [Session focus plan](docs/roadmap/session-focus-plan.md) — the "specialist hat" interaction: interactive goal sessions + UI focus switching (no new daemon)
 - [Agentic orchestration plan](docs/roadmap/rust-native-agentic-coder-plan.md) — implementation roadmap (coding pack first)
 - [Agentic mesh hygiene audit](docs/roadmap/agentic-mesh-hygiene-audit-2026-07-10.md) — coupling, duplication, generality
 - [Architecture alignment audit](docs/roadmap/architecture-alignment-audit-2026-07-11.md) — dependency-graph verification, the "mesh" framing verdict, complexity-management plan
