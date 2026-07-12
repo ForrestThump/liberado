@@ -61,6 +61,7 @@ LoopSeries (runtime state, durable)   ── the NEW piece
 
 each firing:
    cron fires → loop runner loads LoopSeries → stop_when already met? close, notify
+   → previous pass still running? SKIP (log a skipped-pass record; see settled decisions)
    → else spawn ORDINARY goal session (template + artifact + changelog tail as context)
    → session runs to terminal (verifiers = checker) → append pass record to changelog
    → update streaks/counts → evaluate stop_when → close + notify, or sleep
@@ -106,26 +107,35 @@ test for L1–L4: if a pack needs a "loop mode," the composition is wrong.
 P4's dogfood loop is the acceptance test for the whole concept: artifact = a real vault doc,
 checker = content/structure verifiers, cap = 10 passes, human gate = review the changelog.
 
-## 6. Open questions
+## 6. Settled decisions (2026-07-12)
+
+- **Overlap policy: skip, never queue.** If a pass is still running when the schedule fires, the
+  firing is skipped and a skipped-pass record lands in the changelog (so a chronically-skipping
+  loop is visible, not silent). Rationale: a queue can only build endlessly while the work is
+  already being done — a skipped firing costs nothing because the next one inspects current
+  state anyway. Revisit only if a real case demands it; skip is the zero-risk default.
+- **Agent-created loops go through `ProposeLoop`, never config writes.** Decision 14 stands:
+  agents never write `topology.toml`. When chat-created loops are wanted ("keep my weekly-review
+  note groomed"), the sanctioned door is a `ProposeLoop` proposal — the drafted `[[loops]]` entry
+  rides the existing propose → human review → approve flow (same trust boundary as draft PRs and
+  every other high-consequence act), and the human's approval is what lands the config. v1 ships
+  config-authored loops only; `ProposeLoop` is the designed extension, not an open question.
+- **Naming collision tolerance** — "loop" coexists with doom-loop/loop-break/turn loop; accepted
+  deliberately (matches the `/loop` convention in other harnesses). The vocabulary table in
+  `agentic-loops.md` is the disambiguation point.
+
+## 7. Open questions
 
 1. **Where does `LoopSeries` live** — `liberado-session` (series as kernel vocabulary, keeps one
    home for session-shaped state) vs a module in the daemon (loops as a trigger concern, like
    cron)? Lean: `liberado-session`, since surfaces will want to render series state through the
    same store patterns.
-2. **Overlap policy** — if a pass is still running when the schedule fires again: skip (default,
-   log it) vs queue. Lean skip; loops are low-frequency by nature.
-3. **Checker placement** — per-pass verifiers (each pass judged alone) vs series-level checker run
+2. **Checker placement** — per-pass verifiers (each pass judged alone) vs series-level checker run
    against the artifact after the pass. These differ once passes can fail without harming the
    artifact. Lean: they're the same `VerifierSpec` list, run as the pass's goal verifiers, with
    `green_streak` computed from pass outcomes.
-4. **Dispatcher-spawned loops** — can chat create a loop ("keep my weekly-review note groomed")?
-   Later; v1 loops are config-authored (`topology.toml` edit = human-owned, Decision 14). A
-   `ProposeLoop` path can ride the proposal flow when wanted.
-5. **Naming collision tolerance** — "loop" coexists with doom-loop/loop-break/turn loop; accepted
-   deliberately (2026-07-12, matches `/loop` convention in other harnesses). The vocabulary table
-   in `agentic-loops.md` is the disambiguation point.
 
-## 7. Docs to touch when implementing
+## 8. Docs to touch when implementing
 
 `agentic-loops.md` (flip the vocabulary table's loop row from "designed" to "built"),
 `overview.md` (crate map row if a module becomes visible; cron row gains "loops ride this"),
