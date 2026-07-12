@@ -154,10 +154,14 @@ watch, nothing inbound. Needed in `liberado-session`:
 
 ### G5 — Persistence + the return handoff
 
-- `GoalSessionStore` is **in-memory only** — a restart loses transcripts. Add an append-only JSONL
-  transcript log under `<LIBERADO_DATA_DIR>/goal-sessions/` (same Decision-12/17 reasoning:
-  operational data lives outside the vault; conversation-store is the pattern). Rehydrate the
-  list/snapshot views from it on boot.
+- ✅ **Durable transcripts (S5, done 2026-07-12)**: `GoalSessionStore::open(dir)` backs each session
+  with an append-only `<dir>/goal-sessions/<id>.jsonl` log (`start` record line, one `event` line
+  per event, `status`/`finish` lines), rehydrating list/snapshot views on boot. In-memory
+  (`::new()`) stays the default for tests. A non-terminal session in a replayed log is coerced to
+  `Failed` (no pack runs it post-restart; packs aren't resumable yet — the transcript is view-only).
+  The daemon wires `<LIBERADO_DATA_DIR>/goal-sessions`. Same Decision-12/17 reasoning (operational
+  data outside the vault; conversation-store is the pattern).
+- **Return handoff** — still pending (S4).
 - **Return handoff**: when a session with an `origin` reaches terminal, append a summary message
   to the parent conversation (`GoalResult.summary` + artifacts + session id link) — the same
   "report folds back into the conversation" shape `delegate` already produces, so the main agent
@@ -196,7 +200,7 @@ watch, nothing inbound. Needed in `liberado-session`:
 | ✅ S2 | `POST /api/goals/{id}/message` + `api.md` (wire variants landed in S1) — **done 2026-07-12** | HTTP integration tests (green) against a real router (the hooks-test pattern): 202 + echo + drives to success; 404 unknown; 409 finished |
 | S3 | TUI focus MVP: **unified `/sessions` switcher** (one list — primary + goal sessions, kind chips + goal-status) · `/join <id>` · `/back` · session-kind renderers | Live smoke: full Q&A with the life demo through the TUI |
 | S4 | The offer + return handoff: interactive flag on dispatch, `SessionOffered`, summary folded into parent conversation, journal cross-links | Live smoke: "build a hello CLI" → offer → join → watch → `/back` → summary in main chat |
-| S5 | Durable session transcripts (JSONL) + rehydrate on boot | Restart daemon, rejoin a finished session from the browser |
+| ✅ S5 | Durable session transcripts (append-only JSONL per session) + rehydrate on boot — **done 2026-07-12** | Store unit tests (green): reopen rehydrates a finished session's record + events; a non-terminal session coerces to `Failed`; in-memory store persists nothing. Live: restart daemon → `rehydrated sessions=1` → `GET /api/goals` shows the finished session + full transcript |
 | S5′ | **Store convergence (D7)**: one `Session` store — `goal: Option`, durable node-graph transcripts, `origin` links, cron/hook/subagent folded in as background sessions; replaces S3's surface adapter | Both a chat and a goal session load from the same store; a subagent run shows as a background session linked to its parent |
 | S6 | Hat profiles in topology + "new session as <hat>" | Config-driven second hat (e.g. `research` on the life pack) with a narrower component grant |
 | S7 | Intake-first coding sessions (clarify → freeze UI in the TUI) | The §3.4 worked example (todo CLI) end-to-end from chat |

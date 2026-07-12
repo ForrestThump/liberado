@@ -112,8 +112,12 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     let dispatcher_capabilities = config.policy.capabilities_for("dispatcher");
 
     // Goal session hub (scratchpad F): life-ops demo always; coding when a provider is available.
-    let mut goals_hub =
-        liberado_session::GoalSessionHub::new(liberado_session::GoalSessionStore::new());
+    // Durable, append-only JSONL transcripts under `<data_dir>/goal-sessions/` (Decision 12/17;
+    // session-focus S5) — rehydrated on boot so finished sessions survive a restart.
+    let goals_store =
+        liberado_session::GoalSessionStore::open(liberado_bootstrap::data_dir().join("goal-sessions"))
+            .await;
+    let mut goals_hub = liberado_session::GoalSessionHub::new(goals_store);
     goals_hub.register_pack(Arc::new(liberado_session::LifeOpsDemoRunner));
     if let Some(p) = provider.as_ref() {
         let work_parent = liberado_bootstrap::data_dir().join("goal-workspaces");
