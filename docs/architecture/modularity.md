@@ -1,8 +1,10 @@
 # Modularity — The Seam Plan
 
 This page records the concrete moves that turn the three pillars' "modular MCP/hook substrate" into
-reality. It is the engineering companion to the [mesh vision](../ideas/meshify.md) and the
-[roadmap's mesh checkpoints](../roadmap/current.md).
+reality. It is the engineering companion to [contracts.md](contracts.md) (the narrow-waist
+inventory) and the [roadmap's modularity checkpoints](../roadmap/current.md). (The original
+[meshify idea](../ideas/meshify.md) is annotated — partly landed via traits + config, partly
+rejected; the canonical vocabulary is now kernel · domain packs · stores · surfaces.)
 
 ## The test that keeps loose coupling honest
 
@@ -38,7 +40,7 @@ orchestration types.
 See [agentic-loops.md](agentic-loops.md) and the
 [hygiene audit](../roadmap/agentic-mesh-hygiene-audit-2026-07-10.md).
 
-| Seam | Reusable kernel / mesh | Coding domain pack (first) |
+| Seam | Reusable kernel | Coding domain pack (first) |
 |---|---|---|
 | Inner tool loop | `liberado-executor` + `ToolRuntime` | — |
 | Domain tools | trait only | `coder-tools` + `coder-sandbox` |
@@ -68,22 +70,26 @@ Extract domain-neutral session vocabulary when **any** of:
 - TUI/WebUI need one event stream for chat + coding + life-ops; or
 - a second pack would take a dependency on `liberado-coder-core` for non-coding reasons.
 
-Until then, coding types stay specialized and map to mesh `Report`/`Outcome` at boundaries.
+Until then, coding types stay specialized and map to kernel `Report`/`Outcome` at boundaries.
 
-> **Status 2026-07-11 (audit): the third trigger has fired.** `liberado-config-loader` now has a
-> *real* (non-dev) dependency on `liberado-coder-core` — it imports `VerifierSpec` and
-> `PipelinePolicy` to parse the `[coder]` config section (`config-loader/src/model.rs`). Because
-> `config-loader` sits beneath `config` → `bootstrap` → everything, this puts the coding pack's
-> contract crate underneath the entire system, inverting the pack/kernel layering. The fix is the
-> one `verifiers.md` §7 already sketches: lift the verify vocabulary (`VerifierSpec`,
-> `PipelinePolicy`, `Verdict`, `Finding`, `Verifier` trait) into `liberado-common` or a thin
-> `liberado-verify` crate; `coder-core` keeps only coding-specific verifiers (`git_*`). See
+> **Status 2026-07-11 (audit): the trigger fired and was fixed the same day — by inversion, not
+> extraction.** `liberado-config-loader` had grown a *real* dependency on `liberado-coder-core`
+> (the whole `[coder]` tuning vocabulary: `CoderTuning`, role configs, `VerifierSpec`, …), putting
+> the coding pack underneath the entire config stack. Since nothing consumed the typed
+> `Tuning::coder` yet, the fix was the cheaper, more general one: `Tuning::coder` is now an
+> **opaque `toml::Value`** in config-loader, and `liberado_coder_core::CoderTuning::from_value`
+> parses + validates it at composition time — the pack owns its own config section (design rule
+> "domain packs load their own role/policy sections"), and fail-fast at boot is preserved in the
+> pack's parser. A second pack's section generalizes `Tuning` to a name → raw-value map.
+> Verify-DTO extraction into a `liberado-verify` crate remains available later, but is no longer
+> forced by config layering. See
 > [architecture-alignment-audit-2026-07-11](../roadmap/architecture-alignment-audit-2026-07-11.md).
 
 ## Where this connects
 
-- The [mesh vision](../ideas/meshify.md) is the destination these seams lead to.
-- The [roadmap](../roadmap/current.md) ties each seam to a feature phase and a "the mesh is real now"
-  checkpoint, so modularity is verified by shipped behavior rather than asserted.
+- [contracts.md](contracts.md) is the inventory of the frozen seams these moves protect; the
+  generated [crate map](../reference/crate-map.md) shows where every crate sits.
+- The [roadmap](../roadmap/current.md) ties each seam to a feature phase and a "the seam is real
+  now" checkpoint, so modularity is verified by shipped behavior rather than asserted.
 - [Agentic loops](agentic-loops.md) describe kernel vs domain packs and the second-domain reusability
   test.

@@ -29,7 +29,8 @@ capability boundary the LLM can only narrow. Liberado can: a **Rust-native, memo
 the LLM proposes and deterministic code disposes**, where self-improvement happens via **`ProposeMcp`
 -> a Rust/WASM-sandboxed MCP -> capability-gated hot-reload** rather than arbitrary code execution,
 where the **dispatcher-as-tool-advisor** keeps context lean, and where the **MCP/hook-first
-event-mesh** makes the whole thing modular and partially deployable.
+event architecture** (kernel + domain packs + stores + surfaces, a star around one daemon) makes
+the whole thing modular and partially deployable.
 
 ## What we deliberately do NOT chase
 

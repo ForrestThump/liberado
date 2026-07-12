@@ -8,10 +8,14 @@ items up as they're picked, and record *why* something is deferred so the reason
 
 The matured vision (see [Positioning](../architecture/positioning.md) and
 [Overview's three pillars](../architecture/overview.md)) sequences the next work into four phases.
-Each phase **ships value AND advances the mesh** — the substrate falls out of feature work rather
-than being built as a months-long plumbing project up front (see Decision 18, the incremental
-event-bus mesh). The substrate work itself (config/policy, catalog, proposal loop — Decisions
-11/14/17) is largely landed; this roadmap is what's next.
+Each phase **ships value AND advances the modular substrate** — the substrate falls out of feature
+work rather than being built as a months-long plumbing project up front (see Decision 18, the
+incremental event-source/bus seams). The substrate work itself (config/policy, catalog, proposal
+loop — Decisions 11/14/17) is largely landed; this roadmap is what's next. (Vocabulary note,
+2026-07-11: "mesh" in older entries below means the kernel · domain packs · stores · surfaces
+architecture — a star around one daemon — not peer routing; see
+[contracts.md](../architecture/contracts.md) and the
+[alignment audit](architecture-alignment-audit-2026-07-11.md).)
 
 ### Strategic pivot — Rust-native agentic orchestration (coding first)
 
@@ -32,7 +36,7 @@ PR factory **defaults to `liberado-loop`** (`liberado-coder-run`); VTCode is leg
 live smokes, then a **coder eval layer in heuristics-tuner**. Same session/event direction backs
 TUI/WebUI later; non-coding domains stay pack-shaped.
 
-This is not a cosmetic agent swap. It advances mesh modularity, context efficiency, maker≠checker
+This is not a cosmetic agent swap. It advances kernel modularity, context efficiency, maker≠checker
 critics, drift-resistant stop conditions, and empirical tuning (`heuristics-tuner` as the meta-loop).
 
 ### Phase 1 — The general MCP agent ✅ (done, 2026-07-02)

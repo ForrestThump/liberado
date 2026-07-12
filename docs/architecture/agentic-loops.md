@@ -3,7 +3,8 @@
 **Status**: living architecture, 2026-07-10  
 **Implementation roadmap**: [`docs/roadmap/rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md)  
 **Hygiene audit**: [`docs/roadmap/agentic-mesh-hygiene-audit-2026-07-10.md`](../roadmap/agentic-mesh-hygiene-audit-2026-07-10.md)  
-**Modularity**: [`modularity.md`](modularity.md) · **Mesh vision**: [`meshify.md`](../ideas/meshify.md)
+**Modularity**: [`modularity.md`](modularity.md) · **Contracts**: [`contracts.md`](contracts.md) ·
+**Event-bus idea (annotated, partly superseded)**: [`meshify.md`](../ideas/meshify.md)
 
 Design inputs:
 [`loop_architecture_reference_article.md`](../ideas/loop_architecture_reference_article.md),
@@ -15,8 +16,8 @@ Claude Code / Codex / OpenCode / Grok Build harness patterns, Liberado's
 
 ## Product intent (read this first)
 
-Liberado is building a **general, mesh-like agentic orchestration framework** in Rust — not a
-coding-only product that happens to use agents.
+Liberado is building a **general agentic orchestration framework** in Rust — kernel + domain packs
++ stores + surfaces — not a coding-only product that happens to use agents.
 
 | | |
 |---|---|
@@ -24,7 +25,7 @@ coding-only product that happens to use agents.
 | **Domain packs** | Pluggable limbs: tools (`ToolRuntime`), env/sandbox, progress metric, domain verifiers, role prompts |
 | **Surfaces** | TUI, WebUI, CLI, PR-factory MCP, cron/hooks — **clients only**; they never own the loop |
 | **First domain pack** | **Coding** (`coder-*`) — unblocks PR-dispatch self-improvement and proves the harness |
-| **Other domains** | Life-ops MCP mesh, research, custom tools — same kernel, different packs |
+| **Other domains** | Life-ops MCPs, research, custom tools — same kernel, different packs |
 
 Coding is first because reliability there is the self-improvement gate. **It is not the center of
 gravity.** If a design only makes sense for git/diff/cargo, it belongs in the coding pack, not the
@@ -39,9 +40,9 @@ language-agnostic; coding is the first profile.
 
 ---
 
-## Mesh placement
+## Kernel placement
 
-Agentic loops **compose** existing Liberado pieces; they do not replace the mesh.
+Agentic loops **compose** existing Liberado pieces; they do not replace the existing kernel.
 
 ```
 Surfaces (clients — no loop ownership)
@@ -66,7 +67,7 @@ Surfaces (clients — no loop ownership)
    git/validate gates  vault verifiers
 ```
 
-| Existing piece | Mesh role |
+| Existing piece | Kernel role |
 |---|---|
 | `Provider` | Inference only — no control flow |
 | `Executor` | **Inner loop** — tools + budget + generic doom-loop |
@@ -75,7 +76,7 @@ Surfaces (clients — no loop ownership)
 | `main-agent` / `ChatSessions` | Human-in-the-chair converse mode (not goal-until-done) |
 | `coder-*` | **Coding domain pack** (specialization, not kernel) |
 | `heuristics-tuner` | Meta-loop seed (draft proposals only) |
-| `Report` / `Outcome` / `CapabilitySet` | Shared mesh boundary types |
+| `Report` / `Outcome` / `CapabilitySet` | Shared kernel boundary types |
 
 **Reusability test**: a non-coding goal (“update vault note + mark task done”) with MCP tools,
 automated criteria, turn budget, and critic-on-evidence must reuse the **same kernel** without
@@ -115,16 +116,16 @@ one domain. Patterns proven here graduate upward (common types or a future `sess
 
 ### Dependency rules (loose coupling)
 
-1. Domain packs depend on kernel/mesh types (`common`, `provider`, `executor`) — not on other packs.
+1. Domain packs depend on kernel types (`common`, `provider`, `executor`, `session`) — not on other packs.
 2. Surfaces depend on session contracts — not on domain tool implementations.
 3. PR factory / forge lifecycle is a **consumer**, not part of the coding loop.
 4. Kernel must not import git, cargo, or path sandbox types.
 5. Config: kernel knobs (budgets, terminals) vs pack knobs (`[coder]`, MCP grants) stay separate.
 
-> **Known violation (2026-07-11 audit):** `config-loader` → `coder-core` is a real dependency
-> (verify/intake DTOs for the `[coder]` section), so the whole config stack sits on the coding
-> pack. Fix = lift neutral verify types into `common`/`liberado-verify`
-> ([modularity.md](modularity.md) extraction-trigger status note), not a pack import in config.
+> **Resolved (2026-07-11, same-day):** `config-loader` → `coder-core` was a real dependency (the
+> `[coder]` tuning vocabulary). Fixed by inversion: config-loader carries `[tuning.coder]` as an
+> opaque `toml::Value`; `CoderTuning::from_value` (now in `coder-core`) parses + validates at
+> composition time. Rule 5 now has teeth: pack config sections are *opaque* to the config stack.
 
 ---
 
@@ -162,7 +163,7 @@ artifacts). Never critic alone for success.
 
 ## Terminal states (kernel vocabulary)
 
-Map to `liberado_common::Outcome` at mesh boundaries.
+Map to `liberado_common::Outcome` at kernel boundaries.
 
 | State | Meaning |
 |---|---|
@@ -223,13 +224,14 @@ Module layout in `coder-agent` (composition, not kernel): `roles`, `gates`, `cri
 ## Patterns stolen deliberately
 
 Claude Code, Codex, OpenCode, Grok Build-class TUIs, Karpathy/bilevel loops, MAST/doom-loop research
-— **harness patterns**, not framework imports. Liberado keeps the Rust modular mesh.
+— **harness patterns**, not framework imports. Liberado keeps its modular Rust kernel-and-packs
+architecture.
 
 ---
 
 ## Design rules
 
-1. **Mesh first, domain packs second** — coding is a pack, not the product identity.  
+1. **Kernel first, domain packs second** — coding is a pack, not the product identity.  
 2. **Verifier before vibes.**  
 3. **State compounds; named terminals only.**  
 4. **Maker ≠ checker; intake ≠ worker.** Criteria come from human/profile/**intake freeze**, not the worker.  

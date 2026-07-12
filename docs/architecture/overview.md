@@ -28,7 +28,7 @@ For how these pillars position Liberado against the free alternatives, see
    is sometimes unexpectedly useful, so this can be taken too far in the conservative direction.
    Empirical testing finds the balance.
 
-The next strategic slice is a **general agentic orchestration mesh** (goal sessions, verifiers,
+The next strategic slice is the **general agentic orchestration kernel** (goal sessions, verifiers,
 subagents, session/events). Coding is the **first domain pack** (PR-dispatch reliability), not the
 product identity. Architecture: [`agentic-loops.md`](agentic-loops.md). Roadmap:
 [`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md). Hygiene:
@@ -39,6 +39,28 @@ VTCode wrap. Surfaces (TUI, WebUI, CLI, PR factory) are session clients; they do
 **Operational data** (the runtime trace — Decision 12; conversation history — Decision 17)
 deliberately lives *outside* the vault as append-only JSONL, so high-volume writes don't pollute the
 change-stream the daemon reacts to; it reaches the vault only as a one-way, derived Markdown export.
+
+## Vocabulary: kernel · domain packs · stores · surfaces
+
+The canonical decomposition (2026-07-11; each crate carries its tier in
+`[package.metadata.liberado] role` — see [contracts.md](contracts.md) for the frozen seams and the
+generated [crate map](../reference/crate-map.md) for the full inventory):
+
+- **Kernel** — the domain-agnostic orchestration engine: dispatch, execution loops, goal sessions,
+  capability narrowing (`common`, `provider`, `executor`, `orchestrator`, `dispatcher`, `session`, …).
+- **Domain packs** — pluggable specializations (coding first: `coder-*`). Packs sit on the kernel;
+  nothing in the kernel/config/store tiers may sit on a pack (enforced mechanically by
+  `crates/test-support/tests/layer_rules.rs`).
+- **Stores** — persistent and shared information: the vault, conversations, memory, chat search.
+- **Surfaces** — UIs (TUI, WebUI, CLI). Clients of the HTTP/SSE wire contract, never loop owners.
+- **Composition roots** — the only crates that see everything (`server`, `bootstrap`, `cli`, `daemon`).
+
+At runtime the processes form a **star around one daemon**: surfaces attach over HTTP/SSE, MCP
+servers over stdio/http/docker, and all event sources feed one channel. This is deliberately *not*
+a peer mesh — the agent-pools research (2026-07) rejected peer coordination, and pools never talk
+to each other. Older docs and dated audits say "mesh" for all of this; read that as this star +
+crate DAG, never as any-to-any routing (see the
+[alignment audit](../roadmap/architecture-alignment-audit-2026-07-11.md), verdict 2).
 
 ## The loop (perceive → decide → act → don't loop)
 
@@ -83,7 +105,7 @@ Bottom-up (each depends roughly on those above it):
 | Act | [`orchestrator`](../../crates/orchestrator/ARCHITECTURE.md) | Bridges a `DispatchDecision` to an execution; chooses the provenance correlation. |
 | Notify | [`notify`](../../crates/notify/Cargo.toml) | `Notifier` trait for events a human should know about even unattended (the cron/Phase-3 case); `TelegramNotifier` is the first implementation. `notify_proposal` sends Approve/Revise/Reject buttons on channels that support them. |
 | Notify | [`telegram-approvals`](../../crates/telegram-approvals/Cargo.toml) | `ApprovalBot`: answers those buttons. Approve/Reject are pure code (no LLM) — flip `status` in `proposals/{stem}.md`, tagged `WriteProvenance::human()` so the daemon's own attribution reacts to it like an Obsidian edit. Revise is the one LLM-touching path, and it can only redraft content, never grant approval — see `current.md`'s "Before Phase 3" section. |
-| Converse | [`main-agent`](../../crates/main-agent/Cargo.toml) | Multi-turn `Conversation` + `ChatSessions`: face-agent mode (`delegate` → mesh) or legacy thick chat. Streams `AgentEvent`s; persists only on success. Dispatch journals for mesh handoffs. |
+| Converse | [`main-agent`](../../crates/main-agent/Cargo.toml) | Multi-turn `Conversation` + `ChatSessions`: face-agent mode (`delegate` → dispatcher/orchestrator) or legacy thick chat. Streams `AgentEvent`s; persists only on success. Dispatch journals for delegation handoffs. |
 | Store | [`conversation-store`](../../crates/conversation-store/Cargo.toml) | Decision-17 append-only JSONL store of DAG message-nodes — outside the vault, high-volume writes don't pollute the change-stream the daemon reacts to. |
 | Store | [`chat-search`](../../crates/chat-search/Cargo.toml) | Full-text/regex search over the conversation JSONL store — one implementation behind both `GET /api/conversations/search` and the `chat-search-mcp` MCP. |
 | Store | [`chat-search-mcp`](../../crates/chat-search-mcp/Cargo.toml) | MCP wrapper over `chat-search` so the dispatcher can search chat history mid-reasoning. |
@@ -105,14 +127,14 @@ Bottom-up (each depends roughly on those above it):
 | Tooling | [`mcp-forge`](../../crates/mcp-forge/ARCHITECTURE.md) | Builds/installs Liberado MCP servers from git URLs (`cargo install --git`), keyed by `mcp-sources.toml`. |
 | Testing | [`test-support`](../../crates/test-support/Cargo.toml) | Dev-dependency-only: shared `ToolRuntime`/`RuntimeFactory` test doubles, consolidating what used to be duplicated across `orchestrator`/`daemon` test modules. |
 
-Agentic mesh: shared kernel pieces are `provider`, `executor`, `orchestrator`, `common`, and
+Orchestration kernel: shared pieces are `provider`, `executor`, `orchestrator`, `common`, and
 [`session`](../../crates/session/ARCHITECTURE.md) (the domain-neutral goal-session crate — goal
 specs, event envelope, hub; `LifeOpsDemoRunner` proves a non-coding pack runs on it). The **coding
-domain pack** (first pack — not the mesh center; see [`agentic-loops.md`](agentic-loops.md)):
+domain pack** (first pack — not the product center; see [`agentic-loops.md`](agentic-loops.md)):
 
 | Layer | Crate | Role |
 |---|---|---|
-| Pack contracts | [`coder-core`](../../crates/coder-core/ARCHITECTURE.md) | Coding specialization of goal/session vocabulary: backend trait, events, sandbox specs, traces. Maps to mesh `Report`/`Outcome`. |
+| Pack contracts | [`coder-core`](../../crates/coder-core/ARCHITECTURE.md) | Coding specialization of goal/session vocabulary: backend trait, events, sandbox specs, traces. Maps to kernel `Report`/`Outcome`. |
 | Pack env | [`coder-sandbox`](../../crates/coder-sandbox/ARCHITECTURE.md) | Workspace/command isolation (host-local + Docker scaffold). |
 | Pack tools | [`coder-tools`](../../crates/coder-tools/ARCHITECTURE.md) | Coding `ToolRuntime` (discrete file/search/git/command/validate). |
 | Pack session | [`coder-agent`](../../crates/coder-agent/ARCHITECTURE.md) | Coding goal-session composition: worker/repair, progress guards, critic, deterministic gates, attempts. |
@@ -131,7 +153,7 @@ domain pack** (first pack — not the mesh center; see [`agentic-loops.md`](agen
 - **Provider-agnostic inference (Decision 13)** — one `Provider` trait, swappable from config, with
   role-tiered model floors. The active model id is hot-swappable at runtime (`Provider::set_model`,
   `POST /api/models/select`) without restarting the daemon. Tests inject `MockProvider` (Decision 16).
-- **Face agent + mesh** — with `topology.main_agent.delegation_mode = true` (default), chat only
+- **Face agent + delegation** — with `topology.main_agent.delegation_mode = true` (default), chat only
   surfaces `delegate` (plus optional main-agent MCP grants). Work runs through dispatcher →
   orchestrator → subagent/direct execute. Delegation journals land under
   `<LIBERADO_DATA_DIR>/dispatches/` (linked by correlation id from the face tool result).
@@ -147,8 +169,8 @@ co-development (Decision 7) and excluded from this workspace. A root `[patch.cra
 Turbovault's published `turbomcp` to the local fork so the whole tree builds against one Turbomcp —
 the one carrying the request-`_meta` pass-through that the provenance loop depends on. (Those upstream
 changes live on feature branches and have a draft issue in `turbomcp-request-meta-issue-draft.md`.)
-Current Liberado workspace checks also expect `turbovault/` on its local `feature/vector-db` branch,
-because `turbovault-vector` is pinned as a path dependency until that branch is merged upstream.
+Both siblings build from the fork's `develop` branch (the vector-db work landed there —
+2026-07-11; the old feature/vector-db pin note was stale). CI checks out `develop` for both.
 
 ## Current status
 
@@ -198,7 +220,7 @@ remains valid: deepening the main agent, the TUI, the Docker smoke test, and fur
     [`human-todo.md`](../roadmap/human-todo.md#phase-4-docker-mcp-transport--needs-a-live-smoke-test--2026-07-07).
     Deferred, not built: serverless hibernation (no MCP has an idle-cost problem that justifies the
     integration cost yet). Full design: [`phase-4-docker-transport.md`](../roadmap/phase-4-docker-transport.md).
-20. ✅ **Face-agent chat + mesh dogfood (2026-07-10/11)** — default main agent is a thin human
+20. ✅ **Face-agent chat + delegation dogfood (2026-07-10/11)** — default main agent is a thin human
     interfacer (`delegate` only); vault/MCP work runs on the dispatcher ceiling. Subagent risk-gate
     derives `ceiling ∩ allowed_mcps` when decision capabilities are empty. Classifier MCP names are
     sanitized against the catalog (bare `list_tasks` no longer false-CapabilityGaps). Model catalog

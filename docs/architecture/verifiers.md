@@ -3,11 +3,11 @@
 **Status**: design sketch + **v1 coding-pack implementation** (2026-07-10).  
 Shared crate extraction deferred; DTOs live in `liberado-coder-core::{verify,intake}`, pipeline in
 `liberado-coder-agent::verify_pipeline`.  
-**Update 2026-07-11 (audit)**: extraction is no longer "deferred until a second domain" — the
-trigger fired. `liberado-config-loader` now takes a real dependency on `liberado-coder-core` for
-`VerifierSpec`/`PipelinePolicy`, putting the coding pack beneath the whole config stack. Lift the
-neutral verify types into `liberado-common` (or `liberado-verify`) per §7; see
-[modularity.md](modularity.md)'s extraction-trigger status note.  
+**Update 2026-07-11 (audit)**: the config-layering pressure on these DTOs is resolved — not by
+extraction but by inversion: `config-loader` now carries `[tuning.coder]` as an opaque
+`toml::Value` and `liberado_coder_core::CoderTuning::from_value` parses/validates it, so the
+config stack no longer depends on the pack. Extraction into `liberado-verify` stays a
+second-domain decision per §7. See [modularity.md](modularity.md)'s extraction-trigger note.  
 **Related**: [`agentic-loops.md`](agentic-loops.md), [`coder-eval-curriculum.md`](../roadmap/coder-eval-curriculum.md),
 dispatcher `Clarify` / `success_criteria` in `liberado-common`.
 
@@ -44,7 +44,7 @@ turns intent into frozen verifier specs (and clarifiers), before the worker is a
 
 ---
 
-## 2. Placement in the mesh
+## 2. Placement in the kernel
 
 ```
 Human writeup (vague)

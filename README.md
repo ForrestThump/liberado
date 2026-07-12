@@ -8,8 +8,10 @@ New users should begin here:
 - [Getting Started → Quickstart](docs/getting-started/quickstart.md)
 
 ## High-Level
-- [Overview & Architecture](docs/architecture/overview.md) — system pillars, loop, and safety model
-- [Agentic Loops](docs/architecture/agentic-loops.md) — mesh kernel vs domain packs; goal sessions, verifiers, subagents
+- [Overview & Architecture](docs/architecture/overview.md) — system pillars, loop, safety model, and the kernel · domain packs · stores · surfaces vocabulary
+- [Contracts](docs/architecture/contracts.md) — the narrow-waist inventory: the frozen seams that *are* the architecture
+- [Crate map](docs/reference/crate-map.md) — generated per-crate layer/deps/description table (`scripts/gen-crate-map.ps1`)
+- [Agentic Loops](docs/architecture/agentic-loops.md) — kernel vs domain packs; goal sessions, verifiers, subagents
 - [Verifiers & completeness gates](docs/architecture/verifiers.md) — CI-in-the-loop schema/trait sketch (domain-agnostic)
 - [Positioning](docs/architecture/positioning.md) — the thesis and how Liberado is grounded against the free alternatives
 - [Roadmap (current)](docs/roadmap/current.md) — what is committed and in-flight
@@ -17,11 +19,11 @@ New users should begin here:
 - [Agentic mesh hygiene audit](docs/roadmap/agentic-mesh-hygiene-audit-2026-07-10.md) — coupling, duplication, generality
 - [Architecture alignment audit](docs/roadmap/architecture-alignment-audit-2026-07-11.md) — dependency-graph verification, the "mesh" framing verdict, complexity-management plan
 - [Interface / API Reference](docs/reference/api.md) — only public contract (HTTP + SSE)
-- [Delegate dogfood notes](docs/roadmap/delegate_dogfood_issues.md) — face/mesh capability, journals, hot-swap lessons
+- [Delegate dogfood notes](docs/roadmap/delegate_dogfood_issues.md) — face/delegation capability, journals, hot-swap lessons
 
 ## Deep Dive
 - [Architecture Components](docs/architecture/) — per-crate `ARCHITECTURE.md` pages
-- [Modularity — the seam plan](docs/architecture/modularity.md) — the per-crate "could someone use just this?" test and the mesh seams
+- [Modularity — the seam plan](docs/architecture/modularity.md) — the per-crate "could someone use just this?" test and the seam moves
 - [Specifications & Decisions](docs/specs/) — detailed design specs and architecture decisions
 - [Ideas & Experiments](docs/ideas/) — competitive analysis (Hermes, mesh), concurrency thoughts, future directions
 - [Contributing](docs/contributing/agents.md) — build/run instructions and agent guide

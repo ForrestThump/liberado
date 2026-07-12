@@ -138,15 +138,20 @@ Ranked by leverage; 1–3 are cheap and concrete.
 
 ## Actions
 
-| # | Action | Size |
-|---|---|---|
-| 1 | Extract neutral verify/intake DTOs from `coder-core` → `common` (or `liberado-verify`); drop `config-loader → coder-core` | S |
-| 2 | Add the mechanical layer-rule test to CI | S |
-| 3 | Write `docs/architecture/contracts.md` (the narrow-waist inventory) | S |
-| 4 | Generate `overview.md` crate map from `cargo metadata` (fill missing `description` fields) | M |
-| 5 | Converge `AgentEvent`/`SessionEvent` envelopes before more TUI session UI | M |
-| 6 | Vocabulary shift "mesh" → "kernel + packs + surfaces / star around the daemon", opportunistically | ongoing |
-| 7 | `.gitignore` the `tmp-liberado-*.log` files (they were swept into the 2026-07-11 WIP commit) | XS |
+| # | Action | Size | Status (2026-07-11 follow-up pass) |
+|---|---|---|---|
+| 1 | Drop `config-loader → coder-core` | S | ✅ done — by **inversion**, not extraction: `[tuning.coder]` is an opaque `toml::Value` in config-loader; `CoderTuning` (struct/defaults/validation) moved to `coder-core::tuning`, parsed via `CoderTuning::from_value` at composition time. Deeper than first scoped: the edge carried the whole coder config vocabulary, not just verify DTOs |
+| 2 | Add the mechanical layer-rule test to CI | S | ✅ done — `crates/test-support/tests/layer_rules.rs` over `[package.metadata.liberado] role` tags on all 40 crates (pack containment, surface thinness, client/foundation purity, dep budget, mandatory tagging); runs in `cargo test --workspace`, wired into `.github/workflows/ci.yml` |
+| 3 | Write `docs/architecture/contracts.md` | S | ✅ done — 10-contract narrow-waist inventory; depth stays in crate ARCHITECTURE.mds |
+| 4 | Generate the crate map | M | ✅ done — `scripts/gen-crate-map.ps1` → `docs/reference/crate-map.md` from manifest `description` + `role` (same tags as the layer test, so graph and map cannot drift apart silently) |
+| 5 | Converge `AgentEvent`/`SessionEvent` envelopes before more TUI session UI | M | open — the top remaining unification |
+| 6 | Vocabulary shift "mesh" → kernel · domain packs · stores · surfaces | ongoing | ✅ canonical docs done (overview vocabulary section, agentic-loops, modularity, positioning, verifiers, README, roadmap top); historical/dated docs keep the old word with a pointer |
+| 7 | `.gitignore` the `tmp-liberado-*.log` files | XS | ✅ done + untracked |
+
+Also landed in the follow-up pass: GitHub Actions CI (fmt + clippy `-D warnings` + full test
+suite, ubuntu/windows matrix, sibling turbovault/turbomcp checkouts), workspace `cargo fmt`,
+clippy cleanup to zero warnings (webui excluded from the gate — pre-alpha Dioxus scaffolding),
+`rust-version` corrected to 1.91 (code already used 1.91-stable APIs).
 
 **Doc fixes landed in this pass**: overview crate map (+6 crates, kernel line includes `session`),
 modularity/verifiers/agentic-loops now record the fired extraction trigger, hygiene-audit follow-up
