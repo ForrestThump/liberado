@@ -24,8 +24,20 @@ pub type CompletionStream = Pin<Box<dyn Stream<Item = ProviderResult<StreamItem>
 /// mock.
 #[async_trait]
 pub trait Provider: Send + Sync {
-    /// The underlying model id (for tracing + role validation).
-    fn model(&self) -> &str;
+    /// The underlying model id (for tracing + role validation + status display).
+    ///
+    /// Returns an owned `String` so implementations can hot-swap the model under a lock
+    /// without tying the return value to a short-lived guard.
+    fn model(&self) -> String;
+
+    /// Hot-swap the model used for subsequent completions (same base URL / API key).
+    ///
+    /// Default is a no-op success so test doubles and non-swappable backends stay simple.
+    /// Production OpenAI-compatible providers override this. Does not validate the id against
+    /// `list_models` — callers may pass any id the upstream accepts.
+    fn set_model(&self, model: String) {
+        let _ = model;
+    }
 
     /// Run one completion turn.
     async fn complete(&self, request: CompletionRequest) -> ProviderResult<CompletionResponse>;
@@ -47,6 +59,15 @@ pub trait Provider: Send + Sync {
         }
         items.push(Ok(StreamItem::Done(response)));
         Ok(Box::pin(futures::stream::iter(items)))
+    }
+
+    /// List model ids the backend currently reports (OpenAI-compatible `GET /models`).
+    ///
+    /// Default is empty: not every backend implements `/models`, and the configured
+    /// [`model`](Self::model) remains the authority for completions. OpenAI-compatible
+    /// clients override this; the daemon exposes the result via `GET /api/models`.
+    async fn list_models(&self) -> ProviderResult<Vec<String>> {
+        Ok(Vec::new())
     }
 }
 

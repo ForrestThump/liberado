@@ -84,6 +84,7 @@ liberado-coder-agent = { path = "crates/coder-agent" }
 liberado-coder-core = { path = "crates/coder-core" }
 liberado-coder-sandbox = { path = "crates/coder-sandbox" }
 liberado-coder-tools = { path = "crates/coder-tools" }
+liberado-session = { path = "crates/session" }
 
 # --- co-developed path dependencies (Decision 7) ---
 # Pinned to whatever is checked out in the sibling directories (currently the

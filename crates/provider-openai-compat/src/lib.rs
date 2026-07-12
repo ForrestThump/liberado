@@ -33,7 +33,8 @@ use serde_json::{Value, json};
 pub struct OpenAiCompatibleProvider {
     client: reqwest::Client,
     api_key: String,
-    model: String,
+    /// Active model id — `RwLock` so chat can hot-swap without restarting the daemon (TUI `/model`).
+    model: std::sync::RwLock<String>,
     base_url: String,
     /// Status codes beyond the common set (429/400/401/403/404/422) this backend's own API treats
     /// as a client error rather than a generic transport failure — e.g. OpenRouter's `402`.
@@ -63,7 +64,7 @@ impl OpenAiCompatibleProvider {
         Self {
             client: reqwest::Client::new(),
             api_key: api_key.into(),
-            model: model.into(),
+            model: std::sync::RwLock::new(model.into()),
             base_url: base_url.into(),
             extra_client_error_status: Vec::new(),
         }
@@ -136,13 +137,8 @@ impl OpenAiCompatibleProvider {
         format!("{}/models", self.base_url.trim_end_matches('/'))
     }
 
-    /// List model ids this backend currently reports via its OpenAI-compatible `GET /models`
-    /// endpoint. Additive capability, not wired into any default-model decision anywhere in this
-    /// codebase — `default_model` (from `topology.providers`, or the well-known-backend consts
-    /// above) remains the real fallback, since not every OpenAI-compatible endpoint implements
-    /// `/models` reliably. A caller that wants to surface live model choices (e.g. a future
-    /// TUI/CLI command) opts into this explicitly.
-    pub async fn list_models(&self) -> ProviderResult<Vec<String>> {
+    /// `GET {base}/models` — used by [`Provider::list_models`].
+    async fn fetch_model_ids(&self) -> ProviderResult<Vec<String>> {
         let response = self
             .client
             .get(self.models_endpoint())
@@ -174,13 +170,29 @@ impl OpenAiCompatibleProvider {
 
 #[async_trait]
 impl Provider for OpenAiCompatibleProvider {
-    fn model(&self) -> &str {
-        &self.model
+    fn model(&self) -> String {
+        self.model
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    fn set_model(&self, model: String) {
+        let model = model.trim();
+        if model.is_empty() {
+            return;
+        }
+        *self.model.write().unwrap_or_else(|e| e.into_inner()) = model.to_string();
+    }
+
+    async fn list_models(&self) -> ProviderResult<Vec<String>> {
+        self.fetch_model_ids().await
     }
 
     async fn complete(&self, request: CompletionRequest) -> ProviderResult<CompletionResponse> {
         let name_map = build_tool_name_map(&request.tools);
-        let body = to_openai_request(&self.model, &request, &name_map);
+        let model = self.model();
+        let body = to_openai_request(&model, &request, &name_map);
 
         let response = self
             .client
@@ -216,7 +228,8 @@ impl Provider for OpenAiCompatibleProvider {
         request: CompletionRequest,
     ) -> ProviderResult<CompletionStream> {
         let name_map = build_tool_name_map(&request.tools);
-        let mut body = to_openai_request(&self.model, &request, &name_map);
+        let model = self.model();
+        let mut body = to_openai_request(&model, &request, &name_map);
         body["stream"] = json!(true);
 
         let response = self
@@ -253,7 +266,7 @@ mod tests {
     #[test]
     fn constructor_sets_fields() {
         let provider = OpenAiCompatibleProvider::new("sk-abc", "my-model", "https://example.com");
-        assert_eq!(provider.model, "my-model");
+        assert_eq!(provider.model(), "my-model");
         assert_eq!(provider.api_key, "sk-abc");
         assert_eq!(provider.base_url, "https://example.com");
         assert!(provider.extra_client_error_status.is_empty());
@@ -296,6 +309,16 @@ mod tests {
     fn model_getter_returns_configured_model() {
         let provider = OpenAiCompatibleProvider::new("k", "custom-model-v2", "https://example.com");
         assert_eq!(provider.model(), "custom-model-v2");
+    }
+
+    #[test]
+    fn set_model_hot_swaps_active_id() {
+        let provider = OpenAiCompatibleProvider::new("k", "deepseek-chat", "https://example.com");
+        assert_eq!(provider.model(), "deepseek-chat");
+        provider.set_model("deepseek-v4-pro".into());
+        assert_eq!(provider.model(), "deepseek-v4-pro");
+        provider.set_model("  ".into()); // empty/whitespace ignored
+        assert_eq!(provider.model(), "deepseek-v4-pro");
     }
 
     #[test]

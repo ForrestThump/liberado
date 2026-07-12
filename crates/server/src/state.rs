@@ -11,6 +11,8 @@ use liberado_provider::{ToolDef, ToolInvocation};
 use tokio::sync::{Mutex, mpsc::UnboundedSender};
 
 use liberado_common::{CapabilityCatalog, CapabilitySet};
+use liberado_provider::Provider;
+use liberado_session::GoalSessionHub;
 
 use chat_client_contract::{ReactionEvent, ReactionOutcome};
 
@@ -22,6 +24,8 @@ pub struct AppState {
     pub dispatcher_attached: bool,
     pub orchestrator_attached: bool,
     pub vault_path: String,
+    /// Domain-neutral goal sessions (coding + life packs). Surfaces are clients of this hub.
+    pub goals: Arc<GoalSessionHub>,
     /// Present when `DEEPSEEK_API_KEY` is set — the durable, session-keyed chat agent. All
     /// persistence orchestration lives inside [`ChatSessions`]; the HTTP handlers are thin adapters.
     pub chat: Option<Arc<ChatSessions>>,
@@ -49,6 +53,9 @@ pub struct AppState {
     /// Display-only for now — there is no runtime model switch; the model is fixed at daemon
     /// startup by config/env (`DEEPSEEK_MODEL`).
     pub model_name: Option<String>,
+    /// Shared inference backend — used by `GET /api/models` to call `Provider::list_models`.
+    /// `None` when no provider is configured.
+    pub provider: Option<Arc<dyn Provider>>,
     /// Resolved external webhook hooks (`crates/server/src/hooks.rs`), keyed by name — only
     /// enabled hooks whose secret was actually resolvable from the environment. Empty when
     /// `topology.hooks` is empty (the endpoint 404s every request in that case, same as today

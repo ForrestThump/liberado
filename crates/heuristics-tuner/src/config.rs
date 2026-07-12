@@ -29,6 +29,8 @@ use liberado_provider::Provider;
 use liberado_provider_openai_compat::OpenAiCompatibleProvider;
 use serde::Deserialize;
 
+use crate::coder_scenarios::CoderTier;
+
 /// Plays "the real dispatcher" during scoring — defaults to OpenRouter's slug for a small, cheap
 /// DeepSeek model, so a winning prompt is likely to transfer without every run being expensive.
 /// Spot-checked against OpenRouter's own site as of this writing; OpenRouter can rename slugs,
@@ -45,16 +47,17 @@ const DEFAULT_CALL_BUDGET: usize = 350;
 
 const TUNER_CONFIG_FILE: &str = "tuner.toml";
 
-/// Which role's system prompt this session tunes
-/// (`docs/roadmap/heuristics-tuning-engine-plan.md`'s executor/subagent tuning extension).
-/// `Dispatcher` is the default — preserves this crate's original, only behavior — `Executor`/
-/// `Subagent` are opt-in via `tuner.toml`'s `layer = "executor"`/`"subagent"` or `TUNER_LAYER`.
+/// Which role's system prompt this session tunes.
+/// `Dispatcher` is the default; `Executor`/`Subagent` tune tool-loop preambles; `Coder` tunes the
+/// Liberado coding-worker system prompt against real workspace scenarios.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Layer {
     #[default]
     Dispatcher,
     Executor,
     Subagent,
+    /// Liberado `coder-agent` / PR-dispatch coding worker prompt.
+    Coder,
 }
 
 /// Everything a tuning session needs, resolved once at startup.
@@ -67,10 +70,14 @@ pub struct TunerConfig {
     pub meta_provider: Arc<dyn Provider>,
     /// How many times each scenario is sampled per scoring model.
     pub samples_per_scenario: usize,
-    /// Score only the first `max_scenarios` of `liberado_eval::scenarios()` (declaration order),
+    /// Score only the first `max_scenarios` of the active scenario list (declaration order),
     /// or all of them when `None`. For cheaply smoke-testing the pipeline before a comprehensive
     /// run — not meant to be a representative subset, just a quick, reproducible slice.
     pub max_scenarios: Option<usize>,
+    /// Progressive coding curriculum tier (smoke ⊂ core ⊂ stress ⊂ greenfield).
+    pub coder_tier: CoderTier,
+    /// Optional allowlist of coder scenario names (`TUNER_CODER_SCENARIOS=a,b,c`).
+    pub coder_scenario_filter: Option<Vec<String>>,
     pub beam_width: usize,
     pub cold_starts_per_generation: usize,
     pub mutations_per_candidate: usize,
@@ -93,6 +100,10 @@ struct TunerFileConfig {
     meta_model: Option<String>,
     samples_per_scenario: Option<usize>,
     max_scenarios: Option<usize>,
+    /// `smoke` | `core` | `stress` | `greenfield` — coder curriculum only.
+    coder_tier: Option<String>,
+    /// Comma-separated scenario names when set via file (usually use env instead).
+    coder_scenarios: Option<String>,
     beam_width: Option<usize>,
     cold_starts_per_generation: Option<usize>,
     mutations_per_candidate: Option<usize>,
@@ -144,6 +155,8 @@ impl TunerConfig {
                 DEFAULT_SAMPLES_PER_SCENARIO,
             ),
             max_scenarios: resolve_optional_usize("TUNER_MAX_SCENARIOS", file.max_scenarios),
+            coder_tier: resolve_coder_tier(file.coder_tier.clone()),
+            coder_scenario_filter: resolve_scenario_filter(file.coder_scenarios.clone()),
             beam_width: resolve_usize("TUNER_BEAM_WIDTH", file.beam_width, DEFAULT_BEAM_WIDTH),
             cold_starts_per_generation: resolve_usize(
                 "TUNER_COLD_STARTS_PER_GENERATION",
@@ -217,10 +230,41 @@ fn resolve_layer(file_value: Option<String>) -> Layer {
         Some("dispatcher") | None => Layer::Dispatcher,
         Some("executor") => Layer::Executor,
         Some("subagent") => Layer::Subagent,
+        Some("coder") | Some("coding") => Layer::Coder,
         Some(other) => {
             tracing::warn!(value = %other, "unknown tuner layer — defaulting to dispatcher");
             Layer::Dispatcher
         }
+    }
+}
+
+/// Default **core** so first serious runs include multi-file + safety without full stress cost.
+fn resolve_coder_tier(file_value: Option<String>) -> CoderTier {
+    let raw = env_string("TUNER_CODER_TIER").or(file_value);
+    match raw.as_deref() {
+        None => CoderTier::Core,
+        Some(s) => match CoderTier::parse(s) {
+            Some(t) => t,
+            None => {
+                tracing::warn!(value = %s, "unknown TUNER_CODER_TIER — defaulting to core");
+                CoderTier::Core
+            }
+        },
+    }
+}
+
+fn resolve_scenario_filter(file_value: Option<String>) -> Option<Vec<String>> {
+    let raw = env_string("TUNER_CODER_SCENARIOS").or(file_value)?;
+    let list: Vec<String> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+    if list.is_empty() {
+        None
+    } else {
+        Some(list)
     }
 }
 
@@ -297,6 +341,25 @@ mod tests {
     #[test]
     fn resolve_layer_recognizes_subagent() {
         assert_eq!(resolve_layer(Some("subagent".to_string())), Layer::Subagent);
+    }
+
+    #[test]
+    fn resolve_layer_recognizes_coder() {
+        assert_eq!(resolve_layer(Some("coder".to_string())), Layer::Coder);
+        assert_eq!(resolve_layer(Some("coding".to_string())), Layer::Coder);
+    }
+
+    #[test]
+    fn resolve_coder_tier_defaults_to_core() {
+        assert_eq!(resolve_coder_tier(None), CoderTier::Core);
+        assert_eq!(
+            resolve_coder_tier(Some("stress".to_string())),
+            CoderTier::Stress
+        );
+        assert_eq!(
+            resolve_coder_tier(Some("nope".to_string())),
+            CoderTier::Core
+        );
     }
 
     #[test]

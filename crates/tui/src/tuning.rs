@@ -16,6 +16,10 @@ pub const ACTION_CHANNEL_CAPACITY: usize = 256;
 /// Event loop poll interval. 16 ms ≈ 60 FPS cap on redraws.
 pub const POLL_INTERVAL: Duration = Duration::from_millis(16);
 
+/// How long each spinner glyph (`| / - \`) is held. Spinners are driven by wall-clock
+/// time, not redraw count, so a 60 FPS animate loop does not blur into a solid smear.
+pub const SPINNER_FRAME_MS: u64 = 120;
+
 /// Maximum idle time waiting for the next SSE chunk before declaring a timeout.
 /// Prevents the stream reader from hanging forever on a silent server.
 pub const SSE_STREAM_TIMEOUT: Duration = Duration::from_secs(60);

@@ -17,6 +17,7 @@ session tunes:
 | `Dispatcher` | `liberado_dispatcher::DEFAULT_SYSTEM_PROMPT` | `Dispatcher::dispatch` — a single classification call, no execution | n/a |
 | `Executor` | `liberado_orchestrator::DIRECT_INSTRUCTIONS` | a real (mocked) `Executor::execute` tool loop | `DIRECT_MAX_TURNS` (4) |
 | `Subagent` | `liberado_orchestrator::SUBAGENT_PREAMBLE` | same tool-loop machinery as `Executor` | `liberado_executor::DEFAULT_MAX_TURNS` (8) |
+| `Coder` | `DEFAULT_CODER_SYSTEM_PROMPT` / `prompts/coder/coder.md` | real temp git repo + `liberado-coder-agent` + coding tools | 12 turns |
 
 The dispatcher path is cheap (no execution needed — deterministic classification vs. a fixed label);
 the executor/subagent paths are materially more expensive and slower (a real, if mocked, multi-turn
@@ -35,31 +36,18 @@ unproven.
 - `scoring.rs` — dispatcher-layer scoring: `score_candidate`, `ScoredScenario`/`ScenarioTrial`,
   `CandidateFitness` (asymmetric aggregation — `unsafe_acts` is a worst-case count, never averaged
   away; `accuracy`/`safe_default_rate` are legitimate mean pass rates across (model, sample) trials).
-- `tool_scenarios.rs` — executor/subagent-layer scenario data: `ToolLoopScenario`/`ToolLoopExpect`
-  (which tools must/must-not be called, what final `Report::outcome` is expected) — hand-written,
-  same style as `liberado_eval::scenarios()` but for tool-loop correctness, not a classification label.
-- `tool_loop_scoring.rs` — executor/subagent-layer scoring: `ScriptedToolRuntime` (a mock `ToolRuntime`
-  giving each scenario's tools their own canned result, unlike test doubles elsewhere that return one
-  fixed value for every tool), `score_executor_candidate`, `ToolLoopFitness` (mirrors
-  `CandidateFitness`'s asymmetry; `outcome_match_rate` is the `safe_default_rate` analog).
-- `generation.rs` — the two meta-LLM calls that produce candidates: `cold_start`/`mutate` (dispatcher)
-  and `cold_start_executor`/`mutate_executor` (executor/subagent, reused for both — same underlying
-  job description fits either role).
-- `search.rs` — the beam-search loop and its shared `Budget` (a plain LLM-call countdown for the
-  whole session — distinct from `liberado_executor::Budget`, which is turns-per-task; same name,
-  different crates, don't conflate). `run_tuner` (dispatcher); `run_executor_tuner`/
-  `run_subagent_tuner` are both thin wrappers over a private `run_tool_loop_tuner(config, seed_prompt,
-  max_turns)`. `select_beam`/`advance_beam` (dispatcher) and `select_beam_executor`/
-  `advance_beam_executor` (executor+subagent, shared) implement **elitism**: the incumbent beam is
-  included in the same selection as each generation's new pool, so a generation can never regress the
-  beam below its best-so-far — a real bug (an independent cold start could permanently evict a much
-  better incumbent it was never compared against) was found and fixed here via a live comprehensive
-  run that regressed accuracy 0.77→0.33.
-- `rubric.rs` — `format_rubric`/`format_executor_rubric`: the human-facing proposal artifact (metric
-  deltas, named scenario regressions/fixes, per-model consistency, a full per-scenario diagnostic
-  breakdown, the tuning model's own justification for why the change should generalize).
-- `main.rs` — entry point: resolve config, run the layer-appropriate session, save every generation's
-  best candidate (not just the final winner) under `<LIBERADO_DATA_DIR>/tuner/<run-timestamp>/`.
+- `tool_scenarios.rs` / `tool_loop_scoring.rs` / `tool_loop_search.rs` — executor/subagent tool-loop
+  scenarios, mock runtime scoring, beam search.
+- **`coder_curriculum_mock.rs`** — CI mock scripts for smoke/core curriculum (no API key)
+- **`draft_proposal.rs`** — meta-loop export: eval deltas → `PROPOSAL.md` / `proposal.json` /
+  `proposed/` / `pr_factory_task.json` (Decision 14; never auto-applies prompts)
+- **`coder_scenarios.rs` / `coder_scoring.rs` / `coder_generation.rs` / `coder_search.rs`** — coder
+  layer: real temp git workspaces + `liberado-coder-agent`, diff/path expectations, meta mutate,
+  `run_coder_tuner`. Metrics: coding accuracy, nonempty-diff rate, unsafe path touches.
+- `generation.rs` / `search.rs` — dispatcher meta LLM + beam search; shared `Budget`.
+- `rubric.rs` — `format_rubric` / `format_executor_rubric` / **`format_coder_rubric`**.
+- `main.rs` — `layer` selects dispatcher | executor | subagent | **coder**; saves under
+  `<LIBERADO_DATA_DIR>/tuner/<run-timestamp>/`.
 
 ## Real findings from live use, not just design
 
@@ -76,14 +64,28 @@ Live tuning found and fixed two real bugs beyond prompt wording itself:
 
 - Depends on: `liberado-common`, `liberado-dispatcher`, `liberado-eval` (dispatcher-layer scenarios),
   `liberado-executor`/`liberado-orchestrator` (executor/subagent-layer scenarios and seed prompts),
-  `liberado-provider`/`liberado-provider-openrouter` (the concurrent, many-models-behind-one-key
-  backend that makes scoring a whole generation's candidate pool concurrently affordable).
+  `liberado-coder-agent`/`liberado-coder-core` (coder-layer workspace scoring),
+  `liberado-provider`/`liberado-provider-openai-compat` (OpenRouter-backed scoring/meta providers).
 - Depended on by: nobody — it's a standalone dev tool (binary), not a build dependency of the running
   system, same posture as `liberado-eval`.
 
 ## Tests
 
-77+ unit tests across the modules above (aggregation asymmetry, elitism, config resolution, scenario
-sanity checks, scripted mock-runtime scoring). A handful of `#[ignore]`d live tests
-(`live_end_to_end`, `live_end_to_end_executor`, `live_end_to_end_subagent`) require
-`OPENROUTER_API_KEY` and real network access — run explicitly, not part of `cargo test --workspace`.
+90+ unit tests across the modules above (aggregation asymmetry, elitism, config resolution, scenario
+sanity checks, scripted mock-runtime scoring, coder mock workspace scoring). A handful of
+`#[ignore]`d live tests (`live_end_to_end`, `live_end_to_end_executor`, `live_end_to_end_subagent`)
+require `OPENROUTER_API_KEY` and real network access — run explicitly, not part of
+`cargo test --workspace`.
+
+## Running the coder layer
+
+```bash
+# smoke: few scenarios, small budget
+export OPENROUTER_API_KEY=...
+export TUNER_LAYER=coder
+export TUNER_MAX_SCENARIOS=2
+export TUNER_CALL_BUDGET=80
+export TUNER_MAX_GENERATIONS=1
+cargo run -p liberado-heuristics-tuner
+# proposals under $LIBERADO_DATA_DIR/tuner/<timestamp>/final.txt
+```

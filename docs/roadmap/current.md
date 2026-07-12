@@ -13,27 +13,27 @@ than being built as a months-long plumbing project up front (see Decision 18, th
 event-bus mesh). The substrate work itself (config/policy, catalog, proposal loop — Decisions
 11/14/17) is largely landed; this roadmap is what's next.
 
-### Strategic pivot — Rust-native agentic coder
+### Strategic pivot — Rust-native agentic orchestration (coding first)
 
 Phase 2 proved the self-improvement moat's outer workflow: a coding task can become a draft PR behind
-a human approval gate. The current `liberado-pr-dispatch-mcp` implementation did that through
-`vtcode`, but the live diagnosis in
-[pr-dispatch-vtcode-no-write-finding.md](pr-dispatch-vtcode-no-write-finding.md) showed the coding
-harness itself is not reliable enough to be the long-term substrate. The new direction is to replace
-`vtcode` with a first-party Rust loop backend built on the existing `Provider` + `Executor` +
-`ToolRuntime` architecture, while preserving the good PR-factory pieces already built.
+a human approval gate. That workflow briefly used `vtcode` as the coding harness; the live diagnosis
+in [pr-dispatch-vtcode-no-write-finding.md](pr-dispatch-vtcode-no-write-finding.md) showed it is not
+reliable. **We are not wrapping VTCode.** The direction is a first-party, home-spun **goal-oriented
+agentic orchestration kernel** on `Provider` + `Executor` + `ToolRuntime`, with coding as the primary
+domain and PR factory as the first consumer — keeping forge/task/approval pieces, replacing the
+coding engine entirely.
 
-Master plan:
-[rust-native-agentic-coder-plan.md](rust-native-agentic-coder-plan.md). The short version:
-`vtcode` becomes a migration backend behind a `CoderBackend` seam; new `coder-core`/`coder-tools`/
-`coder-agent`/`coder-sandbox` crates provide a config-driven, sandboxed, event-streaming coding loop;
-the PR factory consumes that backend first; the TUI/CLI can later target the same session/event API
-without owning the agent loop.
+Canonical architecture: [agentic-loops.md](../architecture/agentic-loops.md).  
+Master plan: [rust-native-agentic-coder-plan.md](rust-native-agentic-coder-plan.md).  
+Mesh hygiene audit: [agentic-mesh-hygiene-audit-2026-07-10.md](agentic-mesh-hygiene-audit-2026-07-10.md).
 
-This is a fundamental architecture slice, not a cosmetic agent swap. It advances the same mesh,
-modularity, context-efficiency, and empirical-tuning goals as the rest of Liberado: small explicit
-tools, config-owned prompts/models/budgets, Docker sandbox abstraction from day one, traces promoted
-into eval fixtures, and `heuristics-tuner` integration for prompt/model/policy changes.
+Short version: Liberado **owns** the coding engine. `coder-*` implement a coding **goal session**.
+PR factory **defaults to `liberado-loop`** (`liberado-coder-run`); VTCode is legacy-only. Next:
+live smokes, then a **coder eval layer in heuristics-tuner**. Same session/event direction backs
+TUI/WebUI later; non-coding domains stay pack-shaped.
+
+This is not a cosmetic agent swap. It advances mesh modularity, context efficiency, maker≠checker
+critics, drift-resistant stop conditions, and empirical tuning (`heuristics-tuner` as the meta-loop).
 
 ### Phase 1 — The general MCP agent ✅ (done, 2026-07-02)
 

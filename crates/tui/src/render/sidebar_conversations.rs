@@ -14,7 +14,7 @@ use crate::format::{relative_time, short_id};
 use crate::ui::c;
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
-    let border_color = if app.focus == crate::app::Focus::SidebarConversations {
+    let border_color = if app.focus == crate::app::Focus::SessionBrowser {
         c(&th.sidebar_border_focused, "#00ffff")
     } else {
         c(&th.sidebar_border_unfocused, "#808080")
@@ -36,12 +36,18 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
         .iter()
         .enumerate()
         .map(|(i, node)| {
-            let display = node.header.title.as_deref().unwrap_or("(untitled)");
+            // Prefer persisted title (first-line default, agent, or /title). Fall back to short id.
             let id_short = short_id(&node.header.id);
+            let display = node
+                .header
+                .title
+                .as_deref()
+                .filter(|t| !t.trim().is_empty())
+                .unwrap_or(id_short);
             let rel = relative_time(&node.header.created_at);
             let active = app.session.as_deref() == Some(node.header.id.as_str());
             let is_selected =
-                i == app.sidebar_selection && app.focus == crate::app::Focus::SidebarConversations;
+                i == app.sidebar_selection && app.focus == crate::app::Focus::SessionBrowser;
             let is_pending = app.pending_load.as_deref() == Some(node.header.id.as_str());
 
             let (fg, bg) = if is_selected {

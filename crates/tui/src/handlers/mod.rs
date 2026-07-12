@@ -5,5 +5,6 @@
 
 pub mod chat;
 pub mod input;
+pub mod models;
 pub mod mouse;
 pub mod sidebar;

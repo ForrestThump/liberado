@@ -193,23 +193,51 @@ The server listens on `0.0.0.0:4201` (LAN-accessible). Set `LIBERADO_PORT` to ch
 |---------------------|---------|------------------------------------------------|
 | `LIBERADO_VAULT`    | —       | Path to the Obsidian vault (required)          |
 | `LIBERADO_PORT`     | `4201`  | Server listen port                             |
-| `LIBERADO_DATA_DIR` | `.liberado` | Operational data root; conversation logs live under `<LIBERADO_DATA_DIR>/conversations` |
-| `DEEPSEEK_API_KEY`  | —       | Enables dispatcher (DeepSeek)                  |
+| `LIBERADO_DATA_DIR` | `.liberado` | Operational data root: conversations, dispatch journals |
+| `LIBERADO_CONFIG_DIR` | platform `liberado/` | Daemon policy/topology/tuning TOML (optional) |
+| `DEEPSEEK_API_KEY`  | —       | Enables provider (DeepSeek); see also OpenRouter profiles |
+| `DEEPSEEK_MODEL`    | `deepseek-chat` | Boot default model (hot-swappable after start via API/TUI) |
 
-**API endpoints:**
+**API endpoints** (full contract: [`docs/reference/api.md`](../reference/api.md)):
 
 | Endpoint                    | Description                                      |
 |-----------------------------|--------------------------------------------------|
-| `GET /api/status`           | Daemon state, uptime, dispatcher/orchestrator    |
-| `GET /api/catalog`          | Live MCP capability catalog (`{"mcps":[{name,description,consequence,tool_count,tool_names}]}`) — the same shared `Arc<CapabilityCatalog>` the dispatcher routes against. |
+| `GET /api/status`           | Daemon state; `model_name` tracks hot-swap       |
+| `GET /api/models`           | Live provider model catalog + `current`          |
+| `POST /api/models/select`   | Hot-swap active model — `{"model":"…"}` (no restart) |
+| `GET /api/catalog`          | Live MCP catalog + main-agent/dispatcher visibility |
 | `GET /api/reactions?limit=N`| Recent reaction events (default 20)              |
 | `GET /api/vault`            | Vault root path and watcher info                 |
-| `POST /api/chat`            | Conversational agent — `{"message":"…","session"?:"…"}` → `{"reply":"…","session":"…"}`. Multi-turn, session-keyed and persisted (rehydrated per turn from the `ConversationStore`); omit `session` to start a new conversation. Tool-using. Needs `DEEPSEEK_API_KEY`; uses the MCPs declared in `topology.toml` (`[[mcps]]`) for tools. |
-| `GET`/`POST /api/chat/stream` | Streaming chat (`text/event-stream`) — the shared client/SSE contract (`docs/reference/api.md`). Events: `session` (first), `token`, `tool`, `tool_result`, `done`, `failed`. `POST` (JSON body, native) and `GET ?message=…&session=…` (browser `EventSource`). Closing the stream cancels the turn (persists nothing). |
-| `GET /api/conversations`    | List conversation headers (`[{id,title,created_at}]`, newest first). Needs chat enabled. |
-| `GET /api/conversations/{id}` | One conversation's full message history (`{"messages":[…]}`); `404` if absent. |
-| `PATCH /api/conversations/{id}` | Rename a conversation — `{"title":"…"}` → `200`; `404` if absent, `503` if chat is disabled. |
+| `POST /api/chat`            | Face-agent chat (delegate → mesh) when `delegation_mode` |
+| `GET`/`POST /api/chat/stream` | Streaming chat SSE contract                    |
+| `GET /api/conversations`    | List conversation headers                        |
+| `GET /api/conversations/{id}` | Full message history                           |
+| `PATCH /api/conversations/{id}` | Rename                                       |
 | `GET /`                     | Dioxus WASM frontend (served from dist/)         |
+
+**On-disk ops data** (outside vault):
+
+| Path | Contents |
+|------|----------|
+| `<LIBERADO_DATA_DIR>/conversations/*.jsonl` | Face chat sessions |
+| `<LIBERADO_DATA_DIR>/dispatches/chat-delegate-*.jsonl` | Mesh delegation journals (classify + disposition) |
+| Platform `liberado/settings.toml` | TUI theme preference (`theme = "nord"`) |
+| Platform `liberado/themes/*.toml` | Optional custom theme files |
+
+**TUI dogfood:**
+
+```cmd
+cargo build -p liberado
+.\scripts\start-dev-stack.ps1 -Restart
+cargo run -p liberado-tui
+```
+
+Slash: `/session` (session browser), `/model` (model list + Enter to hot-swap), `/theme set <name>`
+(persists). After code changes that touch the daemon, rebuild and restart the stack — a stale
+`liberado.exe` is a common source of “fixed but still broken” dogfood.
+
+**Policy tip:** grant vault tools on `component = "dispatcher"` (e.g. `ExecuteMcp = "turbovault"`),
+not on `main-agent`, when using face-agent mode.
 
 ### Building the WASM frontend
 

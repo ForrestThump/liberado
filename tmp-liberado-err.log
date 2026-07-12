@@ -1,0 +1,257 @@
+2026-07-10T23:20:43.672633Z  INFO liberado_bootstrap: provider configured model="deepseek-chat" provider=deepseek
+2026-07-10T23:20:43.674806Z  INFO turbomcp_client::client::dispatcher: Message dispatcher routing task started
+2026-07-10T23:20:43.674834Z  INFO turbomcp_http::transport: Connecting to http://127.0.0.1:3737/mcp
+2026-07-10T23:20:43.676626Z  INFO turbomcp_http::transport: Connected successfully
+2026-07-10T23:20:43.677548Z  INFO turbomcp_client::client::core: Transport connected successfully
+2026-07-10T23:20:43.680061Z  INFO turbomcp_http::transport: Connecting to https://mcp.deepwiki.com/mcp
+2026-07-10T23:20:43.680076Z  INFO turbomcp_client::client::dispatcher: Message dispatcher routing task started
+2026-07-10T23:20:43.680281Z  INFO turbomcp_http::transport: Connected successfully
+2026-07-10T23:20:43.680545Z  INFO turbomcp_client::client::core: Transport connected successfully
+2026-07-10T23:20:43.680909Z  INFO turbomcp_client::client::dispatcher: Message dispatcher routing task started
+2026-07-10T23:20:43.680914Z  INFO turbomcp_transport::child_process: Starting child process: C:/Users/Shiloh/Code/life-os/target/debug/liberado-chat-search-mcp.exe []
+2026-07-10T23:20:43.684288Z  INFO turbomcp_transport::child_process: Child process started successfully
+2026-07-10T23:20:43.684475Z  INFO turbomcp_client::client::core: Transport connected successfully
+2026-07-10T23:20:43.684758Z  INFO turbomcp_transport::child_process: Starting child process: C:\Users\Shiloh\AppData\Roaming\liberado\mcp-bin\liberado-tool-helper-mcp\bin\liberado-tool-helper-mcp.exe []
+2026-07-10T23:20:43.684765Z  INFO turbomcp_client::client::dispatcher: Message dispatcher routing task started
+2026-07-10T23:20:43.689717Z  INFO turbomcp_transport::child_process: Child process started successfully
+2026-07-10T23:20:43.689907Z  INFO turbomcp_client::client::core: Transport connected successfully
+2026-07-10T23:20:43.690189Z  INFO turbomcp_client::client::dispatcher: Message dispatcher routing task started
+2026-07-10T23:20:43.690191Z  INFO turbomcp_transport::child_process: Starting child process: C:\Users\Shiloh\AppData\Roaming\liberado\mcp-bin\liberado-pdf-mcp\bin\liberado-pdf-mcp.exe []
+2026-07-10T23:20:43.694005Z  INFO turbomcp_transport::child_process: Child process started successfully
+2026-07-10T23:20:43.694203Z  INFO turbomcp_client::client::core: Transport connected successfully
+2026-07-10T23:20:43.696162Z ERROR turbomcp_client::client::dispatcher: Error routing message: Invalid JSON-RPC message: data did not match any variant of untagged enum JsonRpcMessage
+2026-07-10T23:20:43.696353Z  INFO turbomcp_http::transport: Starting SSE connection to http://127.0.0.1:3737/mcp
+2026-07-10T23:20:43.696363Z ERROR turbomcp_client::client::dispatcher: Error routing message: Invalid JSON-RPC message: data did not match any variant of untagged enum JsonRpcMessage
+2026-07-10T23:20:43.697067Z  INFO turbomcp_http::transport: Received session ID: 18fd566a-c5d4-4fc7-91e9-db9b2d530fcb
+2026-07-10T23:20:43.697225Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:20:43.714489Z ERROR turbomcp_client::client::dispatcher: Error routing message: Invalid JSON-RPC message: data did not match any variant of untagged enum JsonRpcMessage
+2026-07-10T23:20:44.122465Z  INFO liberado_server: chat: connected MCP tools
+2026-07-10T23:20:44.123935Z  INFO liberado_server: chat: tool surface ready count=1 tools=["delegate"] delegation_mode=true
+2026-07-10T23:20:44.124260Z  INFO liberado_server: chat: runtime safety guards enabled (capability-scoped tools + RiskGatedToolRuntime) count=5
+2026-07-10T23:20:44.124410Z  INFO liberado_server: chat: face-agent mode — human interfacer + delegate tool (dispatcher mesh for work)
+2026-07-10T23:20:44.125159Z  INFO liberado_bootstrap: dispatcher capability boundary configured from policy grants=2 capabilities=13
+2026-07-10T23:20:44.125413Z  INFO liberado_bootstrap: proposal notifications enabled=false
+2026-07-10T23:20:44.125606Z  INFO liberado_bootstrap: orchestrator enabled (MCP execution)
+2026-07-10T23:20:44.125767Z  INFO liberado_server: webhook hooks resolved hooks=1
+2026-07-10T23:20:44.125966Z  INFO liberado_session::hub: registered goal session domain pack domain=life
+2026-07-10T23:20:44.126205Z  INFO liberado_session::hub: registered goal session domain pack domain=coding
+2026-07-10T23:20:44.126341Z  INFO liberado_server: goal session packs: life + coding
+2026-07-10T23:20:44.126931Z  INFO liberado_daemon::vault_source: daemon watching vault vault=C:\Users\Shiloh\Obsidian\Main debounce_ms=400
+2026-07-10T23:20:44.127134Z  INFO liberado_server: Web UI server listening on http://0.0.0.0:4201
+2026-07-10T23:20:44.127288Z  INFO liberado_server: API endpoints:
+2026-07-10T23:20:44.127448Z  INFO liberado_server:   GET /api/status  — daemon status
+2026-07-10T23:20:44.127587Z  INFO liberado_server:   GET /api/reactions?limit=20  — recent reactions
+2026-07-10T23:20:44.127719Z  INFO liberado_server:   GET /api/vault  — vault info
+2026-07-10T23:20:44.127849Z  INFO liberado_server:   GET|POST /api/goals  — list / start goal sessions (coding + life packs)
+2026-07-10T23:20:44.127981Z  INFO liberado_server:   GET /api/goals/{id}/stream  — SSE goal session events
+2026-07-10T23:20:44.128113Z  INFO liberado_server:   /  — static frontend (build with `dx build` from crates/webui/)
+2026-07-10T23:21:13.711181Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:21:13.713762Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:21:13.714412Z  INFO turbomcp_http::transport: Received session ID: 18fd566a-c5d4-4fc7-91e9-db9b2d530fcb
+2026-07-10T23:21:13.714593Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:21:38.793130Z  INFO dispatch{goal_hash=12092551977921488604 reaction_depth=0}: liberado_dispatcher: dispatch decision action=Clarify confidence=0.5
+2026-07-10T23:21:38.795369Z  INFO orchestrate{action="Clarify" source=liberado-executor trigger="chat-delegate-01KX75CBQBMAWKFJ2ZWPG8QNQ2" confidence=0.5 disposition="clarify"}: liberado_orchestrator: dispatch resulted in clarify what_blocked=Ambiguous
+2026-07-10T23:21:38.795570Z  INFO liberado_executor: turn used tools turn=1 tools=1
+2026-07-10T23:21:43.729535Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:21:43.731510Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:21:43.732543Z  INFO turbomcp_http::transport: Received session ID: 18fd566a-c5d4-4fc7-91e9-db9b2d530fcb
+2026-07-10T23:21:43.732676Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:21:55.472175Z  INFO dispatch{goal_hash=13710714069288958278 reaction_depth=0}: liberado_dispatcher: dispatch decision action=ExecuteDirect confidence=0.8999999761581421
+2026-07-10T23:21:55.481211Z  INFO orchestrate{action="ExecuteDirect" source=liberado-executor trigger="chat-delegate-01KX75CW0RCG282ZZJEJDJ686V" confidence=0.8999999761581421}: turbomcp_http::transport: Connecting to http://127.0.0.1:3737/mcp
+2026-07-10T23:21:55.481379Z  INFO orchestrate{action="ExecuteDirect" source=liberado-executor trigger="chat-delegate-01KX75CW0RCG282ZZJEJDJ686V" confidence=0.8999999761581421}: turbomcp_http::transport: Connected successfully
+2026-07-10T23:21:55.481534Z  INFO orchestrate{action="ExecuteDirect" source=liberado-executor trigger="chat-delegate-01KX75CW0RCG282ZZJEJDJ686V" confidence=0.8999999761581421}: turbomcp_client::client::core: Transport connected successfully
+2026-07-10T23:21:55.482306Z  INFO turbomcp_client::client::dispatcher: Message dispatcher routing task started
+2026-07-10T23:21:55.483468Z  INFO orchestrate{action="ExecuteDirect" source=liberado-executor trigger="chat-delegate-01KX75CW0RCG282ZZJEJDJ686V" confidence=0.8999999761581421}: turbomcp_http::transport: Starting SSE connection to http://127.0.0.1:3737/mcp
+2026-07-10T23:21:55.483992Z  INFO turbomcp_http::transport: Received session ID: 7d3dad16-c283-418c-88ce-4ab02d108d8e
+2026-07-10T23:21:55.484149Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:21:58.037398Z  INFO orchestrate{action="ExecuteDirect" source=liberado-executor trigger="chat-delegate-01KX75CW0RCG282ZZJEJDJ686V" confidence=0.8999999761581421}:execute{mode="report" goal=List all tasks for the human from the TurboVault. Use any available task/todo-related tools or search the vault for tasks.
+
+Context:
+The human expects TurboVault MCP to have a tool for listing tasks. Please find and return all tasks with their status, due dates, and any metadata. budget=4 has_seed=true}: liberado_executor: turn called tools turn=1 tool_count=2 names=["scratchpad_write", "turbovault:list_tasks"]
+2026-07-10T23:21:58.037703Z  INFO orchestrate{action="ExecuteDirect" source=liberado-executor trigger="chat-delegate-01KX75CW0RCG282ZZJEJDJ686V" confidence=0.8999999761581421}:execute{mode="report" goal=List all tasks for the human from the TurboVault. Use any available task/todo-related tools or search the vault for tasks.
+
+Context:
+The human expects TurboVault MCP to have a tool for listing tasks. Please find and return all tasks with their status, due dates, and any metadata. budget=4 has_seed=true}: liberado_executor: model's reasoning alongside the tool call(s) turn=1 content=There's a dedicated `turbovault_list_tasks` tool. Let me use it to get all tasks properly.
+2026-07-10T23:22:04.098721Z  INFO orchestrate{action="ExecuteDirect" source=liberado-executor trigger="chat-delegate-01KX75CW0RCG282ZZJEJDJ686V" confidence=0.8999999761581421}:execute{mode="report" goal=List all tasks for the human from the TurboVault. Use any available task/todo-related tools or search the vault for tasks.
+
+Context:
+The human expects TurboVault MCP to have a tool for listing tasks. Please find and return all tasks with their status, due dates, and any metadata. budget=4 has_seed=true}: liberado_executor: turn called tools turn=2 tool_count=1 names=["scratchpad_write"]
+2026-07-10T23:22:04.099148Z  INFO orchestrate{action="ExecuteDirect" source=liberado-executor trigger="chat-delegate-01KX75CW0RCG282ZZJEJDJ686V" confidence=0.8999999761581421}:execute{mode="report" goal=List all tasks for the human from the TurboVault. Use any available task/todo-related tools or search the vault for tasks.
+
+Context:
+The human expects TurboVault MCP to have a tool for listing tasks. Please find and return all tasks with their status, due dates, and any metadata. budget=4 has_seed=true}: liberado_executor: model's reasoning alongside the tool call(s) turn=2 content=The `turbovault_list_tasks` tool returned 684 tasks from across the vault. Let me now compile this into a clear report.
+2026-07-10T23:22:13.747654Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:22:13.750305Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:22:13.751423Z  INFO turbomcp_http::transport: Received session ID: 18fd566a-c5d4-4fc7-91e9-db9b2d530fcb
+2026-07-10T23:22:13.751601Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:22:17.804668Z  INFO orchestrate{action="ExecuteDirect" source=liberado-executor trigger="chat-delegate-01KX75CW0RCG282ZZJEJDJ686V" confidence=0.8999999761581421}:execute{mode="report" goal=List all tasks for the human from the TurboVault. Use any available task/todo-related tools or search the vault for tasks.
+
+Context:
+The human expects TurboVault MCP to have a tool for listing tasks. Please find and return all tasks with their status, due dates, and any metadata. budget=4 has_seed=true}: liberado_executor: turn called tools turn=3 tool_count=1 names=["submit_report"]
+2026-07-10T23:22:17.806595Z  INFO orchestrate{action="ExecuteDirect" source=liberado-executor trigger="chat-delegate-01KX75CW0RCG282ZZJEJDJ686V" confidence=0.8999999761581421}:execute{mode="report" goal=List all tasks for the human from the TurboVault. Use any available task/todo-related tools or search the vault for tasks.
+
+Context:
+The human expects TurboVault MCP to have a tool for listing tasks. Please find and return all tasks with their status, due dates, and any metadata. budget=4 has_seed=true}: liberado_executor: model's reasoning alongside the tool call(s) turn=3 content=Here's a comprehensive summary of all tasks found in the TurboVault:
+
+---
+
+## Results: All Tasks Listed
+
+Using `turbovault_list_tasks()` (no filters), I retrieved **684 total tasks** across the entire vault. Here's a structured overview:
+
+### Active (Pending/Incomplete) Tasks — Notable Items
+
+**Tasks/Main.md (Personal Task List):**
+| Task | Due Date | Tags |
+|------|----------|------|
+| Work on Liberado webui | 2026-07-12 | #task #homelab #project |
+| Set up everywall/ladder on homelab | — | #task #homelab |
+| Clean kitchen thoroughly | — | #task #house #cleaning |
+| Organize shoes and leaving-house items | — | #task #house #organization |
+| Track actual spending + categorize | — | #task #finance |
+| Implement morning/evening journal routine | — | #task #journal #routine |
+
+**Tasks/Sarah.md (Relationship Tasks):**
+| Task | Tags |
+|------|------|
+| Clean toys | #house #cleaning |
+| Clean kitchen | #house #cleaning |
+| Run off laundry | #house #laundry |
+| Plan a date night | #task #relationship #sarah #date |
+| Make a list of things I could do for Sarah | #relationship #sarah |
+| Discuss expectations clearly | #relationship #sarah #communication |
+| Review relationship notes from ALS | #task #relationship #learning |
+
+**Work/RTX/Onboarding.md (Work Pending):**
+- **Update address: bank, insurance, subscriptions** — #task #relocation *(incomplete)*
+
+**Work/RTX Skills (Learning Tasks Pending):**
+- Hierarchical schematic structure (#learning)
+- Net class assignments
+- Generating BOM / netlists
+- High-speed routing: differential pairs, length matching (#learning)
+- Plane/copper pour management
+- DRC and design validation
+- Generating fabrication outputs
+- Running a basic pre-route eye diagram simulation
+- PDN analysis workflow (#learning)
+- Hyperlynx documentation
+- Eric Bogatin's SI Academy
+- Howard Johnson "High Speed Signal Propagation" (#learning)
+
+**Journal/2026/06/23.md (Weekly Tasks - due 2026-06-27):**
+| Task | Start Date | Due Date |
+|------|-----------|----------|
+| Declutter random things | 2026-06-23 | 2026-06-27 |
+| Do dishes | 2026-06-24 | 2026-06-27 |
+| Dishwasher 2-5 pm | 2026-06-24 | 2026-06-27 |
+| Doctor appointments | 2026-06-25 | 2026-06-27 |
+| Organize kids room / playroom | 2026-06-27 | 2026-06-27 |
+| Hang pictures | 2026-06-27 | 2026-06-27 |
+| Find a doctor / psychiatrist | 2026-06-27 | 2026-06-27 |
+| Emission testing — Rav 4 | 2026-06-27 | 2026-06-27 |
+| Ask Montana DMV for permanent registration | 2026-06-27 | 2026-06-27 |
+| Call car insurance companies | 2026-06-27 | 2026-06-27 |
+
+**Move/Admin Tasks (Pending):**
+- Update auto insurance with new TX address
+- Update address on vehicle registration/title
+- Get a Texas driver's license (#car #adminSchedule)
+- Cancel/transfer gym membership, subscriptions
+- Initiate DoD Secret clearance process (also listed in Onboarding but marked incomplete in Move doc)
+
+**Homelab/Infrastructure Tasks:**
+- Add label to all Tier 2 services
+- Pin all Tier 1 services to specific versions
+- Set up a dry-run script for container updates
+- Create backup scripts for databases before Tier 1 updates
+- Verify Watchtower is running
+- Document rollback steps for each critical service
+- Load Debian onto Ace Magic PC
+- Fix NextCloud app install
+- Set up Actual + liberado-actual-MCP-server
+- Add yzfly/MCP-python-interpreter to homelab
+
+**Misc:**
+- Learn about LLMs (#task #learning)
+- Order garment tops (limit 2)
+- Check diagnostic code — O2 sensor replacement needed (journal)
+- New workout clothes (#shopping #fitness)
+
+### Completed Tasks Highlights
+Many tasks are tracked as completed (✅), with done dates recorded for significant items:
+- RTX onboarding/relocation tasks (clearance, moving, start date)
+- Various FPGA/Xpedition/SI-PI learning tasks (completed 2026-06-19)
+- USPS mail forwarding (done 2026-06-19)
+- Car maintenance items
+- Homelab infrastructure setup (Restic, AnythingLLM, Podly, vaultwarden, etc.)
+2026-07-10T23:22:17.806799Z  INFO orchestrate{action="ExecuteDirect" source=liberado-executor trigger="chat-delegate-01KX75CW0RCG282ZZJEJDJ686V" confidence=0.8999999761581421}:execute{mode="report" goal=List all tasks for the human from the TurboVault. Use any available task/todo-related tools or search the vault for tasks.
+
+Context:
+The human expects TurboVault MCP to have a tool for listing tasks. Please find and return all tasks with their status, due dates, and any metadata. budget=4 has_seed=true}: liberado_executor: subagent filed report turn=3
+2026-07-10T23:22:17.807620Z  INFO orchestrate{action="ExecuteDirect" source=liberado-executor trigger="chat-delegate-01KX75CW0RCG282ZZJEJDJ686V" confidence=0.8999999761581421}:execute{mode="report" goal=List all tasks for the human from the TurboVault. Use any available task/todo-related tools or search the vault for tasks.
+
+Context:
+The human expects TurboVault MCP to have a tool for listing tasks. Please find and return all tasks with their status, due dates, and any metadata. budget=4 has_seed=true outcome=Succeeded}: liberado_executor: execution filed report summary=Listed 684 total tasks from the TurboVault using the dedicated `turbovault_list_tasks` tool. Tasks span across Tasks/, Work/RTX/, Journal/, homelab docs, and more. Key active tasks include: Liberado webui (due 2026-07-12), house chores, Sarah relationship tasks, RTX address update, Texas DMV/emissions/admin tasks, homelab container update protocol tasks, various Xpedition/FPGA learning items, and weekly journal tasks with a batch due 2026-06-27.
+2026-07-10T23:22:17.808134Z  INFO orchestrate{action="ExecuteDirect" source=liberado-executor trigger="chat-delegate-01KX75CW0RCG282ZZJEJDJ686V" confidence=0.8999999761581421 disposition="reported"}: liberado_orchestrator: execute-direct completed outcome=Succeeded
+2026-07-10T23:22:17.808360Z  INFO liberado_executor: turn used tools turn=1 tools=1
+2026-07-10T23:22:25.493056Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:22:25.495656Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:22:25.496331Z  INFO turbomcp_http::transport: Received session ID: 7d3dad16-c283-418c-88ce-4ab02d108d8e
+2026-07-10T23:22:25.496486Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:22:43.761410Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:22:43.763987Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:22:43.765075Z  INFO turbomcp_http::transport: Received session ID: 18fd566a-c5d4-4fc7-91e9-db9b2d530fcb
+2026-07-10T23:22:43.765213Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:22:55.510360Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:22:55.512887Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:22:55.513904Z  INFO turbomcp_http::transport: Received session ID: 7d3dad16-c283-418c-88ce-4ab02d108d8e
+2026-07-10T23:22:55.514049Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:23:13.769762Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:23:13.778224Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:23:13.779330Z  INFO turbomcp_http::transport: Received session ID: 18fd566a-c5d4-4fc7-91e9-db9b2d530fcb
+2026-07-10T23:23:13.779494Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:23:25.516257Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:23:25.518833Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:23:25.519793Z  INFO turbomcp_http::transport: Received session ID: 7d3dad16-c283-418c-88ce-4ab02d108d8e
+2026-07-10T23:23:25.519936Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:23:43.781326Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:23:43.782239Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:23:43.783215Z  INFO turbomcp_http::transport: Received session ID: 18fd566a-c5d4-4fc7-91e9-db9b2d530fcb
+2026-07-10T23:23:43.783396Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:23:55.528431Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:23:55.528797Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:23:55.529839Z  INFO turbomcp_http::transport: Received session ID: 7d3dad16-c283-418c-88ce-4ab02d108d8e
+2026-07-10T23:23:55.530005Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:24:13.794844Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:24:13.803370Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:24:13.804371Z  INFO turbomcp_http::transport: Received session ID: 18fd566a-c5d4-4fc7-91e9-db9b2d530fcb
+2026-07-10T23:24:13.804551Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:24:25.542147Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:24:25.550246Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:24:25.551284Z  INFO turbomcp_http::transport: Received session ID: 7d3dad16-c283-418c-88ce-4ab02d108d8e
+2026-07-10T23:24:25.551450Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:24:43.810744Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:24:43.813272Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:24:43.814303Z  INFO turbomcp_http::transport: Received session ID: 18fd566a-c5d4-4fc7-91e9-db9b2d530fcb
+2026-07-10T23:24:43.814483Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:24:55.565453Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:24:55.574094Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:24:55.575123Z  INFO turbomcp_http::transport: Received session ID: 7d3dad16-c283-418c-88ce-4ab02d108d8e
+2026-07-10T23:24:55.575269Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:25:13.824732Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:25:13.827214Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:25:13.828246Z  INFO turbomcp_http::transport: Received session ID: 18fd566a-c5d4-4fc7-91e9-db9b2d530fcb
+2026-07-10T23:25:13.828413Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:25:25.575777Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:25:25.578382Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:25:25.579418Z  INFO turbomcp_http::transport: Received session ID: 7d3dad16-c283-418c-88ce-4ab02d108d8e
+2026-07-10T23:25:25.579592Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:25:43.841241Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:25:43.843756Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:25:43.844776Z  INFO turbomcp_http::transport: Received session ID: 18fd566a-c5d4-4fc7-91e9-db9b2d530fcb
+2026-07-10T23:25:43.844913Z  INFO turbomcp_http::transport: SSE connection established
+2026-07-10T23:25:55.594479Z ERROR turbomcp_http::transport: Error reading SSE stream: error decoding response body
+2026-07-10T23:25:55.596989Z  WARN turbomcp_http::transport: SSE stream ended
+2026-07-10T23:25:55.597973Z  INFO turbomcp_http::transport: Received session ID: 7d3dad16-c283-418c-88ce-4ab02d108d8e
+2026-07-10T23:25:55.598110Z  INFO turbomcp_http::transport: SSE connection established

@@ -118,6 +118,7 @@ impl Dispatcher {
             "dispatch",
             goal_hash,
             reaction_depth,
+            model = %self.provider.model(),
             action = tracing::field::Empty,
             confidence = tracing::field::Empty,
             downgrade = tracing::field::Empty,
@@ -132,6 +133,11 @@ impl Dispatcher {
             };
             ensure_correlation(&mut classified, goal_hash);
             enforce_narrow_direct_tools(&mut classified, self.tuning.narrow_direct_tools);
+            // Drop / normalize invented MCP names before the capability guard (e.g. bare
+            // `list_tasks` or `turbovault:list_tasks` as an "MCP name") so vault goals don't
+            // false-CapabilityGap when turbovault is actually granted (dogfood 01KX9S39).
+            sanitize_decision_mcps(&mut classified, &req.catalog);
+            log_classified_decision(&classified, &self.provider.model());
 
             let decision =
                 match guards::evaluate(&classified, req, &self.tuning, self.max_reaction_depth) {
@@ -140,6 +146,7 @@ impl Dispatcher {
                         tracing::info!(
                             classified = %classified.action,
                             confidence = classified.confidence,
+                            model = %self.provider.model(),
                             "dispatch decision downgraded by guard"
                         );
                         downgrade(classified, reason)
@@ -148,6 +155,7 @@ impl Dispatcher {
                         tracing::info!(
                             action = %classified.action,
                             confidence = classified.confidence,
+                            model = %self.provider.model(),
                             "dispatch decision"
                         );
                         classified
@@ -172,7 +180,11 @@ impl Dispatcher {
         req: &DispatchRequest,
         hits: &[GuidanceHit],
     ) -> Result<DispatchDecision, DispatchError> {
-        let span = tracing::info_span!("classify", provider = %self.provider.model());
+        let span = tracing::info_span!(
+            "classify",
+            model = %self.provider.model(),
+            provider = %self.provider.model(), // alias kept for existing greps
+        );
 
         async {
             let request = self.build_request(req, hits);
@@ -326,7 +338,7 @@ let the executor decide every step. Use this only when a few steps clearly suffi
 Bias to safety: when uncertain, or when consequences are high, prefer Clarify or DispatchSubagent \
 over ExecuteDirect. Set `confidence` honestly in [0,1].
 
-Two specific cases worth getting right:
+Three specific cases worth getting right:
 - Building or modifying an MCP tool only ever produces a draft PR for human review — that's \
 reversible and low-consequence, so route it as ExecuteDirect confidently, but only when a \
 code-dispatch (or equivalent tool-building) MCP actually appears in the catalog you were given. A \
@@ -334,9 +346,13 @@ goal that talks about building a tool while no such MCP is in your catalog is a 
 gap, not something to route around — Clarify instead of assuming one exists. Don't Clarify or \
 DispatchSubagent for a real code-dispatch goal unless the goal itself is ambiguous (e.g. which \
 existing tool to modify is unclear).
+- Simple vault/task lookups and filters (list tasks, filter by tag/area, read one note, search \
+for a known title) should be ExecuteDirect with relevant_mcps naming the vault MCP from the \
+catalog (e.g. turbovault) — not DispatchSubagent. Prefer a seed_calls opening move when the \
+tool is obvious (list_tasks, search, read_note).
 - Open-ended analysis across multiple notes or a range of entries (summarizing, finding recurring \
-themes) is complex enough to warrant a DispatchSubagent with its own context slice, even when no \
-single step is individually hard.
+themes, multi-step synthesis) is complex enough to warrant a DispatchSubagent with its own \
+context slice, even when no single step is individually hard.
 
 Return ONLY JSON of the form (use exactly these fields — nothing else):
 {\"action\":{\"ExecuteDirect\":{\"seed_calls\":[{\"tool\":\"mcp:tool\",\"args\":{}}],\"relevant_mcps\":[\"...\"]}},\"confidence\":0.9,\"rationale\":\"...\"}
@@ -349,7 +365,10 @@ case. Leave it empty if the goal doesn't clearly need any MCP, or if you're unsu
 narrows what the executor sees; it is never the sole source of truth for what's allowed).
 
 For DispatchSubagent, emit only goal, allowed_mcps (names from the catalog), and success_criteria. \
-`seed_calls` may be omitted (empty). Do not invent ids or capability objects.";
+`allowed_mcps` is the subagent's tool scope: list every catalog MCP it will need (vault/note/task \
+goals need the vault MCP name as it appears in the catalog, e.g. turbovault). Prefer a tight list; \
+empty allowed_mcps means the full dispatcher grant (broad — avoid unless truly necessary). Do not \
+invent MCP names or capability objects. `seed_calls` may be omitted (empty).";
 
 /// Loose schema for v1 — the prompt carries the shape. A precise JSON Schema (e.g. via `schemars`)
 /// is a follow-up that improves real-provider reliability.
@@ -522,6 +541,133 @@ fn ensure_correlation(decision: &mut DispatchDecision, goal_hash: u64) {
     }
 }
 
+/// Log the classifier (or guidance short-circuit) decision with MCP/tool fields for dogfood.
+fn log_classified_decision(decision: &DispatchDecision, model: &str) {
+    match &decision.action {
+        DispatchAction::ExecuteDirect {
+            seed_calls,
+            relevant_mcps,
+        } => {
+            let seeds: Vec<&str> = seed_calls.iter().map(|c| c.tool.as_str()).collect();
+            tracing::info!(
+                %model,
+                action = "ExecuteDirect",
+                confidence = decision.confidence,
+                relevant_mcps = ?relevant_mcps,
+                seed_tools = ?seeds,
+                rationale = %decision.rationale,
+                "classified decision (pre-guard)"
+            );
+        }
+        DispatchAction::DispatchSubagent {
+            allowed_mcps,
+            goal,
+            ..
+        } => {
+            tracing::info!(
+                %model,
+                action = "DispatchSubagent",
+                confidence = decision.confidence,
+                allowed_mcps = ?allowed_mcps,
+                subgoal = %goal.chars().take(120).collect::<String>(),
+                rationale = %decision.rationale,
+                "classified decision (pre-guard)"
+            );
+        }
+        DispatchAction::Clarify { what_blocked, .. } => {
+            tracing::info!(
+                %model,
+                action = "Clarify",
+                confidence = decision.confidence,
+                ?what_blocked,
+                "classified decision (pre-guard)"
+            );
+        }
+        DispatchAction::Propose { .. } => {
+            tracing::info!(
+                %model,
+                action = "Propose",
+                confidence = decision.confidence,
+                "classified decision (pre-guard)"
+            );
+        }
+    }
+}
+
+/// Map classifier MCP strings to catalog MCP names and drop unknowns.
+///
+/// The model often emits tool-shaped names (`turbovault:list_tasks`) or bare tools (`list_tasks`)
+/// in `relevant_mcps` / `allowed_mcps`, or bare seeds. Those fail `grants_mcp` (grants are MCP
+/// names only). Empty lists after sanitize mean "no further narrowing" (full grant ceiling).
+pub(crate) fn sanitize_decision_mcps(decision: &mut DispatchDecision, catalog: &[McpDescriptor]) {
+    // Empty catalog = tests / misconfigured host with no MCP list to validate against — leave
+    // the decision alone rather than stripping every name.
+    if catalog.is_empty() {
+        return;
+    }
+    let known: std::collections::HashSet<&str> =
+        catalog.iter().map(|m| m.name.as_str()).collect();
+
+    match &mut decision.action {
+        DispatchAction::ExecuteDirect {
+            seed_calls,
+            relevant_mcps,
+        } => {
+            *relevant_mcps = normalize_mcp_list(std::mem::take(relevant_mcps), &known, "relevant_mcps");
+            seed_calls.retain(|c| {
+                let mcp = mcp_of(&c.tool);
+                if known.contains(mcp) {
+                    true
+                } else {
+                    tracing::warn!(
+                        tool = %c.tool,
+                        mcp,
+                        "dropping seed_call whose MCP is not in the catalog"
+                    );
+                    false
+                }
+            });
+        }
+        DispatchAction::DispatchSubagent { allowed_mcps, .. } => {
+            *allowed_mcps = normalize_mcp_list(std::mem::take(allowed_mcps), &known, "allowed_mcps");
+        }
+        DispatchAction::Clarify { .. } | DispatchAction::Propose { .. } => {}
+    }
+}
+
+fn normalize_mcp_list(
+    raw: Vec<String>,
+    known: &std::collections::HashSet<&str>,
+    field: &str,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for entry in raw {
+        // Accept either catalog MCP names or `mcp:tool` forms.
+        let mcp = mcp_of(&entry).to_string();
+        if known.contains(mcp.as_str()) {
+            if !out.iter().any(|x| x == &mcp) {
+                if mcp != entry {
+                    tracing::debug!(
+                        field,
+                        raw = %entry,
+                        %mcp,
+                        "normalized MCP reference to catalog name"
+                    );
+                }
+                out.push(mcp);
+            }
+        } else {
+            tracing::warn!(
+                field,
+                raw = %entry,
+                mcp = %mcp,
+                "dropping unknown MCP reference (not in catalog)"
+            );
+        }
+    }
+    out
+}
+
 /// Deterministic post-classification enforcement of `DispatchTuning::narrow_direct_tools`: when
 /// off, clear whatever `relevant_mcps` the classifier produced so every downstream consumer
 /// (`Orchestrator`, `ChatSessions`) sees the same "no narrowing" signal it would if the model had
@@ -692,13 +838,20 @@ mod tests {
 
     #[tokio::test]
     async fn ungranted_mcp_is_downgraded_to_capability_gap() {
+        // email-mcp must be *in the catalog* so sanitize keeps the seed; only the grant is missing.
         let mock = scripted(&execute_direct("email-mcp:send", 0.95));
         let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
+        let mut req = request(caps("tasks-mcp"), 0);
+        req.catalog.push(McpDescriptor {
+            name: "email-mcp".into(),
+            description: "mail".into(),
+            consequence: Consequence::External,
+            provenance: None,
+            default_zone: None,
+            tool_zones: Vec::new(),
+        });
 
-        let out = dispatcher
-            .dispatch(&request(caps("tasks-mcp"), 0))
-            .await
-            .unwrap();
+        let out = dispatcher.dispatch(&req).await.unwrap();
         match out.action {
             DispatchAction::Clarify { what_blocked, .. } => {
                 assert_eq!(what_blocked, BlockReason::CapabilityGap)
@@ -1045,9 +1198,9 @@ mod tests {
 
     #[tokio::test]
     async fn guidance_short_circuit_still_passes_through_the_guard_pipeline() {
-        // A confident guidance hit naming an MCP the caller was never granted must still downgrade
-        // to CapabilityGap — the short-circuit produces a candidate decision, it never bypasses the
-        // guards. This is the core safety property distinguishing it from the removed advisor.
+        // A confident guidance hit naming an MCP that is *in the catalog* but not granted must
+        // still CapabilityGap — short-circuit never bypasses guards. (email-mcp is in catalog
+        // here so sanitize keeps it; if it were unknown it would be dropped as classifier noise.)
         let mock = Arc::new(MockProvider::new("mock"));
         let guidance = MockGuidance::with_hits(vec![GuidanceHit {
             content: "Use email-mcp for this".into(),
@@ -1056,17 +1209,105 @@ mod tests {
         }]);
         let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4).with_guidance(guidance);
 
-        // Granted capability is tasks-mcp, NOT email-mcp.
-        let out = dispatcher
-            .dispatch(&request(caps("tasks-mcp"), 0))
-            .await
-            .unwrap();
+        let mut req = request(caps("tasks-mcp"), 0);
+        req.catalog.push(McpDescriptor {
+            name: "email-mcp".into(),
+            description: "send mail".into(),
+            consequence: Consequence::External,
+            provenance: None,
+            default_zone: None,
+            tool_zones: Vec::new(),
+        });
+        let out = dispatcher.dispatch(&req).await.unwrap();
         match out.action {
             DispatchAction::Clarify { what_blocked, .. } => {
                 assert_eq!(what_blocked, BlockReason::CapabilityGap)
             }
             other => panic!("expected Clarify(CapabilityGap), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn sanitize_rewrites_tool_shaped_relevant_mcps_and_drops_bare_unknowns() {
+        let catalog = vec![McpDescriptor {
+            name: "turbovault".into(),
+            description: "vault".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: None,
+            tool_zones: Vec::new(),
+        }];
+        let mut d = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: vec![
+                    ToolCall {
+                        tool: "turbovault:list_tasks".into(),
+                        args: serde_json::json!({}),
+                    },
+                    ToolCall {
+                        tool: "list_tasks".into(), // bare — not a catalog MCP
+                        args: serde_json::json!({}),
+                    },
+                ],
+                relevant_mcps: vec![
+                    "turbovault:list_tasks".into(),
+                    "list_tasks".into(),
+                    "turbovault".into(),
+                ],
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        };
+        sanitize_decision_mcps(&mut d, &catalog);
+        match d.action {
+            DispatchAction::ExecuteDirect {
+                seed_calls,
+                relevant_mcps,
+            } => {
+                assert_eq!(relevant_mcps, vec!["turbovault".to_string()]);
+                assert_eq!(seed_calls.len(), 1);
+                assert_eq!(seed_calls[0].tool, "turbovault:list_tasks");
+            }
+            other => panic!("expected ExecuteDirect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sanitize_empty_relevant_mcps_means_full_grant_not_capability_gap() {
+        // Dogfood 01KX9S39 shape: inventing `list_tasks` as an MCP must not block when
+        // turbovault is granted — after drop, empty relevant_mcps is "no narrowing".
+        let catalog = vec![McpDescriptor {
+            name: "turbovault".into(),
+            description: "vault".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: None,
+            tool_zones: Vec::new(),
+        }];
+        let mut d = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: Vec::new(),
+                relevant_mcps: vec!["list_tasks".into()],
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        };
+        sanitize_decision_mcps(&mut d, &catalog);
+        match &d.action {
+            DispatchAction::ExecuteDirect { relevant_mcps, .. } => {
+                assert!(relevant_mcps.is_empty());
+            }
+            other => panic!("expected ExecuteDirect, got {other:?}"),
+        }
+        // Capability guard would not trip: no referenced MCPs.
+        let req = DispatchRequest {
+            goal: "list tasks".into(),
+            catalog: catalog.clone(),
+            capabilities: caps("turbovault"),
+            reaction_depth: 0,
+            zone_write_classes: Vec::new(),
+        };
+        assert!(guards::evaluate(&d, &req, &DispatchTuning::default(), 4).is_none());
     }
 
     #[tokio::test]

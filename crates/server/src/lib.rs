@@ -111,12 +111,28 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     let main_agent_capabilities = config.policy.capabilities_for("main-agent");
     let dispatcher_capabilities = config.policy.capabilities_for("dispatcher");
 
+    // Goal session hub (scratchpad F): life-ops demo always; coding when a provider is available.
+    let mut goals_hub = liberado_session::GoalSessionHub::new(liberado_session::GoalSessionStore::new());
+    goals_hub.register_pack(Arc::new(liberado_session::LifeOpsDemoRunner));
+    if let Some(p) = provider.as_ref() {
+        let work_parent = liberado_bootstrap::data_dir().join("goal-workspaces");
+        let _ = std::fs::create_dir_all(&work_parent);
+        goals_hub.register_pack(Arc::new(
+            liberado_coder_agent::CodingSessionPack::new(p.clone(), work_parent),
+        ));
+        info!("goal session packs: life + coding");
+    } else {
+        info!("goal session packs: life only (no provider — coding pack skipped)");
+    }
+    let goals = Arc::new(goals_hub);
+
     let state = Arc::new(AppState {
         start_time: Instant::now(),
         reactions: Arc::new(Mutex::new(Vec::new())),
         dispatcher_attached,
         orchestrator_attached,
         vault_path: vault_path.clone(),
+        goals,
         chat,
         chat_tools,
         chat_tool_names,
@@ -125,6 +141,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         main_agent_capabilities,
         dispatcher_capabilities,
         model_name,
+        provider: provider.clone(),
         hooks: resolved_hooks,
         hook_tx,
         hook_idempotency: Default::default(),
@@ -155,6 +172,11 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/api/status", axum::routing::get(api::status))
+        .route("/api/models", axum::routing::get(api::models))
+        .route(
+            "/api/models/select",
+            axum::routing::post(api::select_model),
+        )
         .route("/api/catalog", axum::routing::get(api::catalog))
         .route("/api/reactions", axum::routing::get(api::reactions))
         .route("/api/vault", axum::routing::get(api::vault))
@@ -179,6 +201,20 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
             "/api/hooks/{name}",
             axum::routing::post(hooks::trigger_hook),
         )
+        .route("/api/goals/domains", axum::routing::get(api::goals_domains))
+        .route(
+            "/api/goals",
+            axum::routing::get(api::goals_list).post(api::goals_start),
+        )
+        .route("/api/goals/{id}", axum::routing::get(api::goals_get))
+        .route(
+            "/api/goals/{id}/stream",
+            axum::routing::get(api::goals_stream),
+        )
+        .route(
+            "/api/goals/{id}/cancel",
+            axum::routing::post(api::goals_cancel),
+        )
         .layer(CorsLayer::permissive())
         .with_state(state)
         .fallback_service(ServeDir::new(DIST_DIR));
@@ -187,8 +223,12 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     info!("Web UI server listening on http://{}", addr);
     info!("API endpoints:");
     info!("  GET /api/status  — daemon status");
+    info!("  GET /api/models  — live provider model catalog");
+    info!("  POST /api/models/select  — hot-swap active model");
     info!("  GET /api/reactions?limit=20  — recent reactions");
     info!("  GET /api/vault  — vault info");
+    info!("  GET|POST /api/goals  — list / start goal sessions (coding + life packs)");
+    info!("  GET /api/goals/{{id}}/stream  — SSE goal session events");
     info!("  /  — static frontend (build with `dx build` from crates/webui/)");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -281,10 +321,10 @@ async fn build_chat(
         None => return (None, 0, Vec::new()),
     };
 
-    // Capabilities granted to the "main-agent" component — chat's own tool-surface ceiling, and
-    // (below) the same ceiling its owned Orchestrator scopes ExecuteDirect executions to. Computed
-    // up front since both the Orchestrator construction and ChatSessions' guards need it.
-    let capabilities = config.policy.capabilities_for("main-agent");
+    // Main-agent = chat face surface (usually thin). Dispatcher = worker ceiling for mesh tools.
+    let main_agent_caps = config.policy.capabilities_for("main-agent");
+    let dispatcher_caps = config.policy.capabilities_for("dispatcher");
+    let main_agent_cfg = &config.topology.main_agent;
 
     // Conversation logs live outside the vault (Decision 12 operational data), under
     // `<LIBERADO_DATA_DIR>/conversations`. `JsonlStore::new` creates the directory.
@@ -300,31 +340,67 @@ async fn build_chat(
     let guard = liberado_bootstrap::guard_context(&catalog, &config.policy, vault_path);
     let catalog_is_empty = guard.consequences.is_empty();
 
-    let (runtime, orchestrator) = connect_chat_runtime(&provider, mcp, &capabilities, &guard).await;
+    // Orchestrator uses **dispatcher** caps so specialist MCPs are reachable via `delegate`
+    // without granting them to the face agent.
+    let (runtime, orchestrator) =
+        connect_chat_runtime(&provider, mcp, &dispatcher_caps, &guard).await;
 
-    let tool_catalog = runtime.catalog();
-    let tool_names: Vec<String> = tool_catalog.iter().map(|t| t.name.clone()).collect();
-    let tool_count = tool_catalog.len();
+    let mut tool_names: Vec<String> = runtime.catalog().iter().map(|t| t.name.clone()).collect();
+    // Face-agent surface is usually just `delegate` (+ optional main-agent MCP grants).
+    if main_agent_cfg.delegation_mode {
+        tool_names = vec![liberado_main_agent::DELEGATE_TOOL_NAME.to_string()];
+        let granted = main_agent_caps.granted_mcps();
+        if !granted.is_empty() {
+            tool_names.extend(runtime.catalog().iter().filter_map(|t| {
+                let mcp = t.name.split_once(':').map(|(m, _)| m).unwrap_or(&t.name);
+                if granted.iter().any(|g| g == mcp) {
+                    Some(t.name.clone())
+                } else {
+                    None
+                }
+            }));
+        }
+    }
+    let tool_count = tool_names.len();
     if tool_count > 0 {
-        info!(count = tool_count, tools = ?tool_names, "chat: tool runtime ready");
+        info!(
+            count = tool_count,
+            tools = ?tool_names,
+            delegation_mode = main_agent_cfg.delegation_mode,
+            "chat: tool surface ready"
+        );
     } else {
         info!("chat: no tools available — the model can only converse, not act");
     }
 
     // ── Build the guarded ChatSessions ───────────────────────────────────────
     let consequence_count = guard.consequences.len();
+    let system_prompt = main_agent_cfg
+        .system_prompt
+        .clone()
+        .unwrap_or_else(|| {
+            if main_agent_cfg.delegation_mode {
+                liberado_main_agent::HUMAN_INTERFACE_SYSTEM_PROMPT.to_string()
+            } else {
+                liberado_main_agent::DEFAULT_SYSTEM_PROMPT.to_string()
+            }
+        });
+
     let mut sessions = ChatSessions::new(
         store,
         Executor::new(provider.clone(), Budget::default()),
         runtime,
     )
+    .with_system_prompt(system_prompt)
     .with_guards(
         guard.consequences,
-        capabilities,
+        main_agent_caps,
         guard.proposals_dir,
         guard.signer.clone(),
     )
-    .with_zone_guards(guard.zone_catalog, guard.zone_write_classes);
+    .with_zone_guards(guard.zone_catalog, guard.zone_write_classes)
+    .with_dispatcher_capabilities(dispatcher_caps)
+    .with_delegation_mode(main_agent_cfg.delegation_mode);
 
     if !catalog_is_empty {
         info!(
@@ -333,8 +409,7 @@ async fn build_chat(
         );
     }
 
-    // Dispatch routing (see `ChatSessions`' module docs): only when an orchestrator exists to
-    // execute the non-`ExecuteDirect` outcomes. Mirrors `configure_daemon`'s dispatcher wiring.
+    // Dispatch routing: required for face-agent `delegate` and for legacy pre-turn path.
     if let Some(orchestrator) = orchestrator {
         let mut dispatcher = Dispatcher::new(
             provider,
@@ -344,10 +419,20 @@ async fn build_chat(
         if let Some(g) = guidance {
             dispatcher = dispatcher.with_guidance(g);
         }
-        info!(
-            "chat: dispatch routing enabled (Clarify/Propose/DispatchSubagent handled before execution)"
-        );
+        if main_agent_cfg.delegation_mode {
+            info!(
+                "chat: face-agent mode — human interfacer + delegate tool (dispatcher mesh for work)"
+            );
+        } else {
+            info!(
+                "chat: legacy dispatch mode (pre-turn routing + main-agent MCP tools on stream path)"
+            );
+        }
         sessions = sessions.with_dispatch(dispatcher, catalog, orchestrator);
+    } else if main_agent_cfg.delegation_mode {
+        warn!(
+            "chat: delegation_mode is on but no MCP/orchestrator — face agent will have no delegate tool"
+        );
     }
 
     (Some(Arc::new(sessions)), tool_count, tool_names)

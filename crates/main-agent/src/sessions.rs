@@ -59,11 +59,42 @@ use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_executor::{AgentEvent, ExecError, Executor, RiskGatedToolRuntime, ToolRuntime};
 use liberado_mcp::ScopedRuntime;
 use liberado_orchestrator::{Disposition, Orchestrator};
-use liberado_provider::Message;
+use liberado_provider::{Message, Role};
 use thiserror::Error;
 use tokio::sync::mpsc::Sender;
 
-use crate::{Conversation, DEFAULT_SYSTEM_PROMPT};
+use crate::face::{DispatchBridge, FaceRuntime};
+use crate::{Conversation, DEFAULT_SYSTEM_PROMPT, HUMAN_INTERFACE_SYSTEM_PROMPT};
+
+/// Max display length for the cheap first-line default title (UTF-8 chars).
+const DEFAULT_TITLE_MAX_CHARS: usize = 72;
+
+/// Cheap default conversation title: first non-empty line of `user_text`, whitespace-collapsed,
+/// truncated. Does not call a model.
+///
+/// Callers only write this when the header title is still `None`. Agents, `PATCH`, and a future
+/// `/title` slash command overwrite via [`ChatSessions::set_title`] and must not be clobbered.
+pub fn default_conversation_title(user_text: &str) -> String {
+    let line = user_text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    if line.is_empty() {
+        return String::new();
+    }
+    let collapsed: String = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    let count = collapsed.chars().count();
+    if count <= DEFAULT_TITLE_MAX_CHARS {
+        return collapsed;
+    }
+    let mut out: String = collapsed
+        .chars()
+        .take(DEFAULT_TITLE_MAX_CHARS.saturating_sub(1))
+        .collect();
+    out.push('…');
+    out
+}
 
 /// What can go wrong running a persisted turn: the agent loop failed, or the store did. Both are
 /// transparent — the caller sees the underlying cause, not a wrapper.
@@ -111,14 +142,22 @@ pub struct ChatSessions {
 
     // ── Dispatch routing ─────────────────────────────────────────────────────
     /// When present, every turn is classified before execution. See the module docs.
-    dispatcher: Option<Dispatcher>,
+    dispatcher: Option<Arc<Dispatcher>>,
     /// The MCP catalog the dispatcher's classifier chooses from — the same shared, live catalog
     /// the daemon's reactive path and the server's API read, snapshotted fresh per dispatch call
     /// rather than frozen at construction.
     dispatch_catalog: Arc<CapabilityCatalog>,
     /// Executes non-`ExecuteDirect` decisions. Required alongside `dispatcher` — see
     /// [`with_dispatch`](Self::with_dispatch).
-    orchestrator: Option<Orchestrator>,
+    orchestrator: Option<Arc<Orchestrator>>,
+    /// Capability ceiling for the dispatcher/worker path (`policy` component `"dispatcher"`).
+    /// When unset, falls back to the main-agent `capabilities` (legacy).
+    dispatcher_capabilities: CapabilitySet,
+    /// Face-agent mode: main agent sees `delegate` (+ optional main-agent MCP grants), not a
+    /// pre-turn fleet of tools. Off by default in unit tests; production enables via config.
+    delegation_mode: bool,
+    /// Shared bridge for the face agent's `delegate` tool (when dispatch + delegation_mode).
+    face_bridge: Option<Arc<DispatchBridge>>,
 }
 
 impl ChatSessions {
@@ -145,12 +184,37 @@ impl ChatSessions {
             dispatcher: None,
             dispatch_catalog: Arc::new(CapabilityCatalog::new()),
             orchestrator: None,
+            dispatcher_capabilities: CapabilitySet::empty(),
+            delegation_mode: false,
+            face_bridge: None,
         }
     }
 
     /// Override the system prompt written as the root node of new conversations.
     pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.system_prompt = prompt.into();
+        self
+    }
+
+    /// Enable face-agent / human-interfacer mode (built-in `delegate` tool; no pre-turn fleet).
+    ///
+    /// When enabled and dispatch is attached, applies [`HUMAN_INTERFACE_SYSTEM_PROMPT`] unless a
+    /// custom prompt was already set via [`with_system_prompt`](Self::with_system_prompt) *after*
+    /// this call — prefer setting the prompt explicitly from config in the host.
+    pub fn with_delegation_mode(mut self, enabled: bool) -> Self {
+        self.delegation_mode = enabled;
+        if enabled && self.system_prompt == DEFAULT_SYSTEM_PROMPT {
+            self.system_prompt = HUMAN_INTERFACE_SYSTEM_PROMPT.to_string();
+        }
+        self.rebuild_face_bridge();
+        self
+    }
+
+    /// Ceiling used for dispatcher classification and worker/orchestrator execution.
+    /// Defaults to the main-agent capability set when never set.
+    pub fn with_dispatcher_capabilities(mut self, caps: CapabilitySet) -> Self {
+        self.dispatcher_capabilities = caps;
+        self.rebuild_face_bridge();
         self
     }
 
@@ -203,19 +267,60 @@ impl ChatSessions {
     /// Attach dispatch routing (see the module docs). `catalog` is the shared, live MCP catalog
     /// the dispatcher's classifier chooses from — the same object the daemon's reactive path and
     /// the server's API read, snapshotted fresh per turn rather than frozen at construction.
-    /// `orchestrator` executes the `Clarify`/`Propose`/`DispatchSubagent` outcomes (required —
-    /// those three all need it to produce a `Disposition`; `ExecuteDirect` never touches it,
-    /// staying on the streaming path).
+    /// `orchestrator` executes non-streaming / worker outcomes (required alongside a dispatcher).
+    ///
+    /// In **delegation mode** (`with_delegation_mode(true)`), the face agent calls `delegate`
+    /// instead of receiving a pre-turn auto-answer; the orchestrator must use **dispatcher**
+    /// capability ceilings so specialist MCPs are reachable without polluting chat tool lists.
     pub fn with_dispatch(
         mut self,
         dispatcher: Dispatcher,
         catalog: Arc<CapabilityCatalog>,
         orchestrator: Orchestrator,
     ) -> Self {
-        self.dispatcher = Some(dispatcher);
-        self.dispatch_catalog = catalog;
-        self.orchestrator = Some(orchestrator);
+        let dispatcher = Arc::new(dispatcher);
+        let orchestrator = Arc::new(orchestrator);
+        self.dispatcher = Some(dispatcher.clone());
+        self.dispatch_catalog = catalog.clone();
+        self.orchestrator = Some(orchestrator.clone());
+        self.refresh_face_bridge(dispatcher, catalog, orchestrator);
         self
+    }
+
+    fn rebuild_face_bridge(&mut self) {
+        let (Some(dispatcher), Some(orchestrator)) =
+            (self.dispatcher.clone(), self.orchestrator.clone())
+        else {
+            self.face_bridge = None;
+            return;
+        };
+        let catalog = self.dispatch_catalog.clone();
+        self.refresh_face_bridge(dispatcher, catalog, orchestrator);
+    }
+
+    fn refresh_face_bridge(
+        &mut self,
+        dispatcher: Arc<Dispatcher>,
+        catalog: Arc<CapabilityCatalog>,
+        orchestrator: Arc<Orchestrator>,
+    ) {
+        if !self.delegation_mode {
+            self.face_bridge = None;
+            return;
+        }
+        let dispatcher_caps = if self.dispatcher_capabilities.capabilities.is_empty() {
+            self.capabilities.clone()
+        } else {
+            self.dispatcher_capabilities.clone()
+        };
+        self.face_bridge = Some(Arc::new(DispatchBridge {
+            dispatcher,
+            orchestrator,
+            catalog,
+            dispatcher_capabilities: dispatcher_caps,
+            zone_write_classes: self.zone_write_classes.clone(),
+            proposals_dir: self.proposals_dir.clone(),
+        }));
     }
 
     /// Create a new conversation, writing the system prompt as its root node, and return its id.
@@ -251,19 +356,27 @@ impl ChatSessions {
     pub async fn turn(&self, session: Ulid, user: &str) -> SessionResult<String> {
         let lock = self.session_lock(session);
         let _guard = lock.lock().await;
+        self.maybe_seed_default_title(session, user).await?;
         let (mut convo, parent_leaf) = self.load(session).await?;
         let before = convo.len();
 
-        let reply = match self.dispatch_turn(user).await {
-            DispatchOutcome::Answered(reply) => {
-                convo.answer(user, &reply);
-                reply
-            }
-            DispatchOutcome::Proceed(relevant_mcps) => {
-                let turn_runtime = self.build_turn_runtime(user, session, &relevant_mcps);
-                convo
-                    .turn(&self.executor, turn_runtime.as_ref(), user)
-                    .await?
+        let reply = if self.uses_face_agent() {
+            let turn_runtime = self.build_face_runtime(user, session);
+            convo
+                .turn(&self.executor, turn_runtime.as_ref(), user)
+                .await?
+        } else {
+            match self.dispatch_turn(user).await {
+                DispatchOutcome::Answered(reply) => {
+                    convo.answer(user, &reply);
+                    reply
+                }
+                DispatchOutcome::Proceed(relevant_mcps) => {
+                    let turn_runtime = self.build_turn_runtime(user, session, &relevant_mcps);
+                    convo
+                        .turn(&self.executor, turn_runtime.as_ref(), user)
+                        .await?
+                }
             }
         };
         self.persist_tail(session, &convo.history()[before..], parent_leaf)
@@ -289,21 +402,29 @@ impl ChatSessions {
     ) -> SessionResult<()> {
         let lock = self.session_lock(session);
         let _guard = lock.lock().await;
+        self.maybe_seed_default_title(session, user).await?;
         let (mut convo, parent_leaf) = self.load(session).await?;
         let before = convo.len();
 
-        match self.dispatch_turn(user).await {
-            DispatchOutcome::Answered(reply) => {
-                convo.answer(user, &reply);
-                // Deliver the already-resolved reply as a single token so it renders through the
-                // existing SSE contract unchanged — no new event type needed.
-                let _ = events.send(AgentEvent::Token(reply)).await;
-            }
-            DispatchOutcome::Proceed(relevant_mcps) => {
-                let turn_runtime = self.build_turn_runtime(user, session, &relevant_mcps);
-                convo
-                    .turn_stream(&self.executor, turn_runtime.as_ref(), user, events)
-                    .await?;
+        if self.uses_face_agent() {
+            let turn_runtime = self.build_face_runtime(user, session);
+            convo
+                .turn_stream(&self.executor, turn_runtime.as_ref(), user, events)
+                .await?;
+        } else {
+            match self.dispatch_turn(user).await {
+                DispatchOutcome::Answered(reply) => {
+                    convo.answer(user, &reply);
+                    // Deliver the already-resolved reply as a single token so it renders through the
+                    // existing SSE contract unchanged — no new event type needed.
+                    let _ = events.send(AgentEvent::Token(reply)).await;
+                }
+                DispatchOutcome::Proceed(relevant_mcps) => {
+                    let turn_runtime = self.build_turn_runtime(user, session, &relevant_mcps);
+                    convo
+                        .turn_stream(&self.executor, turn_runtime.as_ref(), user, events)
+                        .await?;
+                }
             }
         }
         self.persist_tail(session, &convo.history()[before..], parent_leaf)
@@ -311,9 +432,64 @@ impl ChatSessions {
         Ok(())
     }
 
+    fn uses_face_agent(&self) -> bool {
+        self.delegation_mode && self.face_bridge.is_some()
+    }
+
+    /// Face-agent runtime: built-in `delegate` is never risk-gated by MCP name (it is core).
+    /// Optional `"main-agent"` MCP grants are scoped + risk-gated separately so operators can
+    /// thicken the surface without exposing the fleet by default.
+    fn build_face_runtime(&self, user: &str, session: Ulid) -> Box<dyn ToolRuntime> {
+        let extras = self.scoped_extras_runtime(user, session);
+        Box::new(FaceRuntime::new(
+            self.face_bridge.clone(),
+            extras,
+            Some(session.to_string()),
+        ))
+    }
+
+    /// Optional MCP tools granted to main-agent only (usually empty under the face design).
+    fn scoped_extras_runtime(&self, user: &str, session: Ulid) -> Arc<dyn ToolRuntime> {
+        let granted_mcps = self.capabilities.granted_mcps();
+        if granted_mcps.is_empty() {
+            return Arc::new(NoToolsRuntime);
+        }
+        let scoped: Arc<dyn ToolRuntime> =
+            Arc::new(ScopedRuntime::new(self.runtime.clone(), granted_mcps));
+        if self.consequences.is_empty() {
+            return scoped;
+        }
+        Arc::new(RiskGatedToolRuntime::new(
+            scoped,
+            self.capabilities.clone(),
+            self.consequences.clone(),
+            self.zone_catalog.clone(),
+            self.zone_write_classes.clone(),
+            self.proposals_dir.clone(),
+            user.to_string(),
+            session.to_string(),
+            self.signer.clone(),
+            DEFAULT_POOL,
+        ))
+    }
+
     /// Every conversation header, newest first — the sidebar listing.
+    ///
+    /// Lazy backfill: if a header still has no title but history has a user message, persist the
+    /// first-line default once so the sidebar is scannable without waiting for another turn.
     pub async fn list(&self) -> SessionResult<Vec<ConversationHeader>> {
-        Ok(self.store.list().await?)
+        let mut headers = self.store.list().await?;
+        for h in &mut headers {
+            if h.title.is_some() {
+                continue;
+            }
+            if let Some(title) = self.derive_default_title_from_history(h.id).await? {
+                // Best-effort persist; still return the derived title for this list response.
+                let _ = self.store.set_title(h.id, title.clone()).await;
+                h.title = Some(title);
+            }
+        }
+        Ok(headers)
     }
 
     /// The ordered message history of a session (system prompt first), for rendering a reopened
@@ -324,11 +500,47 @@ impl ChatSessions {
     }
 
     /// Set the title of a conversation. Idempotent — subsequent calls overwrite the same field.
+    ///
+    /// Intended writers: first-line default seed, future flash-title agent, HTTP `PATCH`,
+    /// future `/title` slash command. Always overwrites; never blocked by the default seed
+    /// (seed only runs when the current title is `None`).
     pub async fn set_title(&self, session: Ulid, title: String) -> SessionResult<()> {
         Ok(self.store.set_title(session, title).await?)
     }
 
     // ── private helpers ──────────────────────────────────────────────────────
+
+    /// If the header has no title yet, write the first-line default from `user`. Never overwrites
+    /// an agent- or user-set title.
+    async fn maybe_seed_default_title(&self, session: Ulid, user: &str) -> SessionResult<()> {
+        let header = self.store.header(session).await?;
+        if header.title.is_some() {
+            return Ok(());
+        }
+        let title = default_conversation_title(user);
+        if title.is_empty() {
+            return Ok(());
+        }
+        self.store.set_title(session, title).await?;
+        Ok(())
+    }
+
+    /// First user message → default title, or `None` if history has no usable user text.
+    async fn derive_default_title_from_history(
+        &self,
+        session: Ulid,
+    ) -> SessionResult<Option<String>> {
+        let history = self.history(session).await?;
+        let Some(user) = history.iter().find(|m| m.role == Role::User) else {
+            return Ok(None);
+        };
+        let title = default_conversation_title(&user.content);
+        if title.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(title))
+        }
+    }
 
     /// Classify `user` via the dispatcher (when attached) and resolve everything except
     /// `ExecuteDirect` — which returns [`DispatchOutcome::Proceed`] (carrying the decision's
@@ -340,10 +552,15 @@ impl ChatSessions {
             return DispatchOutcome::Proceed(Vec::new()); // no dispatcher — run exactly as before
         };
 
+        let dispatch_caps = if self.dispatcher_capabilities.capabilities.is_empty() {
+            self.capabilities.clone()
+        } else {
+            self.dispatcher_capabilities.clone()
+        };
         let req = DispatchRequest {
             goal: user.to_string(),
             catalog: self.dispatch_catalog.descriptors(),
-            capabilities: self.capabilities.clone(),
+            capabilities: dispatch_caps,
             reaction_depth: 0, // user-initiated, not a background reaction
             zone_write_classes: self.zone_write_classes.clone(),
         };

@@ -49,6 +49,8 @@ write_class = "human_only"       # a named, sensitive zone: agents may read but 
 # Capabilities: Read / Write / ReadSummary over a zone, or ExecuteMcp by name.
 # Zone form: { Vault = "<folder>" } for a vault folder, { Named = "<name>" } for an external zone.
 
+# Face agent (chat): thin — human interface + built-in `delegate`. Specialist tools go on
+# `dispatcher`. Uncomment ExecuteMcp only if you want the main agent to call those tools itself.
 [[grants]]
 component = "main-agent"
 capabilities = [
@@ -57,9 +59,8 @@ capabilities = [
     { Read = { Vault = "decisions" } },
     { Write = { Vault = "decisions" } },
     { ReadSummary = { Named = "finance" } },   # finance is human_only: read a summary, never the detail
-    { ExecuteMcp = "tasks-mcp" },              # must match a [[mcps]] name in topology.toml
-    { ExecuteMcp = "liberado-memory-mcp" },    # search/save general + procedural memory
-    # code-dispatch (self-extension) is deliberately NOT granted here — see "dispatcher" below.
+    # { ExecuteMcp = "tasks-mcp" },
+    # { ExecuteMcp = "liberado-memory-mcp" },
 ]
 
 [[grants]]

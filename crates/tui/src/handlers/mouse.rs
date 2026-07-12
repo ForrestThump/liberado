@@ -1,4 +1,4 @@
-//! Mouse event handler for click and scroll in all panes.
+//! Mouse event handler for click and scroll.
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
@@ -6,7 +6,6 @@ use ratatui::layout::Rect;
 use crate::app::{App, Effect, Focus};
 use crate::tuning::MOUSE_SCROLL_LINES;
 
-/// Returns `true` if the point at `(col, row)` lies inside rectangle `r`.
 fn point_in_rect(col: u16, row: u16, r: Rect) -> bool {
     col >= r.x
         && col < r.x.saturating_add(r.width)
@@ -16,28 +15,24 @@ fn point_in_rect(col: u16, row: u16, r: Rect) -> bool {
 
 pub(crate) fn handle(app: &mut App, event: MouseEvent) -> Vec<Effect> {
     let (col, row) = (event.column, event.row);
+
+    if app.focus == Focus::SessionBrowser {
+        return handle_session_browser(app, event);
+    }
+
     let chat = app.layout.chat;
-    let sidebar_full = app.layout.sidebar_full;
-    let sidebar = app.layout.sidebar_conversations;
     let input_rect = app.layout.input;
 
     match event.kind {
         MouseEventKind::ScrollDown => {
             if point_in_rect(col, row, chat) {
                 app.scroll_back(MOUSE_SCROLL_LINES);
-            } else if point_in_rect(col, row, sidebar_full) {
-                let visible = app.visible_conversations();
-                if app.sidebar_selection + 1 < visible.len() {
-                    app.sidebar_selection += 1;
-                }
             }
             vec![Effect::None]
         }
         MouseEventKind::ScrollUp => {
             if point_in_rect(col, row, chat) {
                 app.scroll_forward(MOUSE_SCROLL_LINES);
-            } else if point_in_rect(col, row, sidebar_full) && app.sidebar_selection > 0 {
-                app.sidebar_selection -= 1;
             }
             vec![Effect::None]
         }
@@ -50,40 +45,57 @@ pub(crate) fn handle(app: &mut App, event: MouseEvent) -> Vec<Effect> {
                 app.focus = Focus::Input;
                 return vec![Effect::None];
             }
-            if point_in_rect(col, row, sidebar) {
-                app.focus = Focus::SidebarConversations;
-                let item_row = row.saturating_sub(sidebar.y + 1);
-                let item_idx = item_row as usize;
-                let visible = app.visible_conversations();
-                if item_idx < visible.len() {
-                    let prev = app.sidebar_selection;
-                    app.sidebar_selection = item_idx;
-                    if item_idx == prev {
-                        let node = &visible[item_idx];
-                        if node.has_children {
-                            if node.collapsed {
-                                app.collapsed_nodes.remove(&node.header.id);
-                            } else {
-                                app.collapsed_nodes.insert(node.header.id.clone());
-                            }
-                            return vec![Effect::None];
-                        }
-                        let id = node.header.id.clone();
-                        app.pending_load = Some(id.clone());
-                        app.sidebar_filter.clear();
-                        return vec![Effect::LoadConversationHistory(id)];
-                    }
+            if point_in_rect(col, row, chat) {
+                app.focus = Focus::ChatMessages;
+                // Approximate row → message index from scroll offset.
+                let inner_row = row.saturating_sub(chat.y.saturating_add(1)) as usize;
+                let idx = app.scroll_offset.saturating_add(inner_row);
+                if idx < app.messages.len() {
+                    app.chat_cursor = idx;
+                } else {
+                    app.chat_cursor = app.messages.len().saturating_sub(1);
                 }
                 return vec![Effect::None];
             }
-            if point_in_rect(col, row, sidebar_full) && !point_in_rect(col, row, sidebar) {
-                app.focus = Focus::SidebarConversations;
-                return vec![Effect::None];
+            vec![Effect::None]
+        }
+        _ => vec![Effect::None],
+    }
+}
+
+fn handle_session_browser(app: &mut App, event: MouseEvent) -> Vec<Effect> {
+    let area = app.layout.session_browser;
+    match event.kind {
+        MouseEventKind::ScrollDown => {
+            let n = app.visible_conversations().len();
+            if app.sidebar_selection + 1 < n {
+                app.sidebar_selection += 1;
             }
-            if point_in_rect(col, row, chat) {
-                app.focus = Focus::ChatMessages;
-                app.chat_cursor = app.messages.len().saturating_sub(1);
-                return vec![Effect::None];
+            vec![Effect::None]
+        }
+        MouseEventKind::ScrollUp => {
+            if app.sidebar_selection > 0 {
+                app.sidebar_selection -= 1;
+            }
+            vec![Effect::None]
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            // List starts after the 3-row filter block + border.
+            let list_top = area.y.saturating_add(4);
+            if event.row >= list_top {
+                let idx = (event.row - list_top) as usize;
+                let visible = app.visible_conversations();
+                if idx < visible.len() {
+                    let prev = app.sidebar_selection;
+                    app.sidebar_selection = idx;
+                    if idx == prev {
+                        let id = visible[idx].header.id.clone();
+                        app.pending_load = Some(id.clone());
+                        app.sidebar_filter.clear();
+                        app.focus = Focus::Input;
+                        return vec![Effect::LoadConversationHistory(id)];
+                    }
+                }
             }
             vec![Effect::None]
         }

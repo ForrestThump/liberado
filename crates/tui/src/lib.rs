@@ -233,6 +233,7 @@ pub mod conversations;
 pub mod effects;
 pub mod format;
 pub mod handlers;
+pub mod md_cache;
 pub mod render;
 pub mod sse;
 pub mod terminal;

@@ -14,7 +14,8 @@ use reqwest::{Client, StatusCode};
 // Re-export the shared wire types so the rest of the crate can still import them
 // from `crate::api::*` without changing call sites.
 pub use chat_client_contract::{
-    ChatMessage, ConversationHistoryResponse, ConvHeader, DaemonStatus, ReactionEvent,
+    ChatMessage, ConversationHistoryResponse, ConvHeader, DaemonStatus, ModelsResponse,
+    ReactionEvent,
 };
 
 /// A tool-call chip rendered inline in the chat: `[tool] name(args preview)`.
@@ -97,6 +98,38 @@ pub async fn fetch_conversation_history(
     resp.error_for_status_ref()?;
     let history: ConversationHistoryResponse = resp.json().await?;
     Ok(Some(history.messages))
+}
+
+/// Fetch `GET /api/models` — live provider catalog + current model.
+pub async fn fetch_models(
+    client: &Client,
+    server: &str,
+) -> Result<ModelsResponse, reqwest::Error> {
+    let resp = client.get(format!("{server}/api/models")).send().await?;
+    if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
+        return Ok(ModelsResponse {
+            models: Vec::new(),
+            current: None,
+            error: Some("daemon unavailable".into()),
+        });
+    }
+    resp.error_for_status_ref()?;
+    resp.json().await
+}
+
+/// `POST /api/models/select` — hot-swap the daemon's active model for subsequent turns.
+pub async fn select_model(
+    client: &Client,
+    server: &str,
+    model: &str,
+) -> Result<ModelsResponse, reqwest::Error> {
+    let resp = client
+        .post(format!("{server}/api/models/select"))
+        .json(&serde_json::json!({ "model": model }))
+        .send()
+        .await?;
+    resp.error_for_status_ref()?;
+    resp.json().await
 }
 
 /// Open a streaming `POST /api/chat/stream` with `message` and optional `session`, and

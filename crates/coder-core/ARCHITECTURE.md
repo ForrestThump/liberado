@@ -1,14 +1,20 @@
 # liberado-coder-core — coding backend contracts
 
-`liberado-coder-core` is the provider-agnostic contract layer for Liberado's Rust-native coding
-backend. It deliberately owns no model loop, file mutation, sandbox lifecycle, forge API, queue, or
+`liberado-coder-core` is the **coding domain pack's** contract layer — not Liberado's agentic
+kernel. It deliberately owns no model loop, file mutation, sandbox lifecycle, forge API, queue, or
 PR creation logic.
+
+Canonical architecture:
+[`docs/architecture/agentic-loops.md`](../../docs/architecture/agentic-loops.md).
+These types specialize the logical Goal / Session / Event / Terminal vocabulary. Promote into
+`liberado-common` or a session crate when a second domain would otherwise depend on this crate for
+non-coding work (see modularity extraction trigger).
 
 It exists so several surfaces can share one vocabulary:
 
 - the PR factory (`liberado-pr-dispatch-mcp` today, likely collapsed/renamed later);
-- the planned first-party Liberado loop backend;
-- future TUI/CLI coding sessions;
+- the first-party Liberado loop backend (`coder-agent`);
+- future TUI/CLI/WebUI coding sessions;
 - sandbox implementations;
 - eval and `heuristics-tuner` scenarios;
 - migration backends such as the existing vtcode wrapper.

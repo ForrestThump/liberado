@@ -76,6 +76,10 @@ pub struct MessageNode {
 pub struct ConversationHeader {
     pub id: Ulid,
     /// A display title for the sidebar. Derived/regenerable; never the source of truth.
+    ///
+    /// **Default:** first line of the first user message (cheap, local).  
+    /// **Future writers (any may overwrite):** cold-start flash agent, `PATCH` API,
+    /// slash `/title` — all via [`set_title`](crate::ConversationStore::set_title).
     pub title: Option<String>,
     /// Set when this conversation was spawned by another (subagent dispatch, a branch promoted to
     /// its own conversation) — lets the agent tree be walked.

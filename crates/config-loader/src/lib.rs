@@ -38,6 +38,7 @@ pub use file_source::FileSource;
 pub use liberado_common::DEFAULT_POOL;
 pub use model::{
     CURRENT_SCHEMA_VERSION, CaptureTuning, CoderTuning, ConcurrencyTuning, Config, ConfigBuilder,
+    MainAgentConfig,
     ContextTuning, CronSchedule, DispatchTuning, Grant, HookConfig, MaintenanceTuning, McpConfig,
     McpTransport, Policy, PoolConfig, ProviderProfile, SubagentIsolation, TelegramApprovalsTuning,
     ToolImpact, Topology, Tuning, ZonePolicy, managed_binary_path, resolve_declared_zone,

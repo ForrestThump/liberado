@@ -68,10 +68,61 @@ impl EffectRunner {
             Effect::CancelStream => self.cancel_stream(),
             Effect::RefreshConversations => self.refresh_conversations().await,
             Effect::LoadConversationHistory(id) => self.load_conversation_history(id).await,
+            Effect::FetchModels => self.fetch_models().await,
+            Effect::SelectModel(model) => self.select_model(model).await,
             Effect::ForkConversation(parent_id) => self.fork_conversation(parent_id),
             Effect::SetWindowTitle(title) => self.set_window_title(&title),
             Effect::Quit => self.quit(),
             Effect::None => {}
+        }
+    }
+
+    async fn fetch_models(&self) {
+        let server = self.server_url();
+        let client = self.client.clone();
+        let tx = self.action_tx.clone();
+        match api::fetch_models(&client, &server).await {
+            Ok(resp) => {
+                let _ = tx
+                    .send(Action::ModelsLoaded {
+                        models: resp.models,
+                        error: resp.error,
+                    })
+                    .await;
+            }
+            Err(e) => {
+                let _ = tx
+                    .send(Action::ModelsLoaded {
+                        models: Vec::new(),
+                        error: Some(format!("failed to fetch models: {e}")),
+                    })
+                    .await;
+            }
+        }
+    }
+
+    async fn select_model(&self, model: String) {
+        let server = self.server_url();
+        let client = self.client.clone();
+        let tx = self.action_tx.clone();
+        match api::select_model(&client, &server, &model).await {
+            Ok(resp) => {
+                let chosen = resp.current.unwrap_or(model);
+                let _ = tx
+                    .send(Action::ModelSelected {
+                        model: chosen,
+                        error: resp.error,
+                    })
+                    .await;
+            }
+            Err(e) => {
+                let _ = tx
+                    .send(Action::ModelSelected {
+                        model,
+                        error: Some(e.to_string()),
+                    })
+                    .await;
+            }
         }
     }
 

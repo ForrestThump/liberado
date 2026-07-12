@@ -7,10 +7,10 @@ share everything.
 
 ```
               ┌──────────── liberado-server (HTTP + SSE) ──────────────────┐
-              │  /api/status   /api/catalog   /api/reactions   /api/vault   │
-              │  /api/chat (POST, non-streaming)                            │
-              │  /api/chat/stream (POST/GET → text/event-stream)            │
+              │  /api/status   /api/models (+ POST select)   /api/catalog   │
+              │  /api/reactions   /api/vault   /api/chat (+ stream)         │
               │  /api/conversations   /api/conversations/{id} (GET/PATCH)   │
+              │  /api/goals  /api/goals/{id}/stream  (goal sessions)        │
               └───────────────┬───────────────────────────┬────────────────┘
                               │                            │
                     fetch / EventSource            reqwest (native)
@@ -24,6 +24,24 @@ The server wraps the daemon + the conversational agent; clients are thin and sta
 state (history) lives **server-side**, persisted by the `ConversationStore` (Decision 17) and keyed
 by session id — the server rehydrates a conversation per turn from the store, so a client only sends
 the next message (plus the session id) and renders the stream back.
+
+## Goal sessions (agentic loops — surfaces as clients)
+
+Domain-neutral goal sessions (`liberado-session`) let TUI/WebUI **start / watch / cancel** goals
+without owning the loop. Packs registered at boot: **`life`** (always, second-domain demo) and
+**`coding`** (when a provider is configured).
+
+| Method | Path | Body / notes |
+|---|---|---|
+| GET | `/api/goals/domains` | `{ "domains": ["life","coding"] }` |
+| GET | `/api/goals` | List sessions (newest first) |
+| POST | `/api/goals` | JSON `GoalSpec`: `description`, `domain` (`life`\|`coding`), `success_criteria`, optional `payload` |
+| GET | `/api/goals/{id}` | Snapshot: record + event history |
+| GET | `/api/goals/{id}/stream` | SSE: catch-up then live `session_started`, `tool_*`, `session_finished`, … |
+| POST | `/api/goals/{id}/cancel` | Cooperative cancel |
+
+SSE `data` is the full `SessionEvent` JSON. Event names match kind tags (`session_started`,
+`tool_started`, `goal_error`, …). Clients must not reimplement tools/sandbox — only render.
 
 ## The chat stream contract (the spine)
 
@@ -53,9 +71,22 @@ returns one conversation's full message history (`{"messages":[…]}`; `404` if 
 `404` if it doesn't exist, `503` if chat is disabled).
 
 **`GET /api/catalog`** returns the live MCP capability catalog (`{"mcps":[{name,description,
-consequence,tool_count,tool_names}]}`) — the same `Arc<CapabilityCatalog>` the dispatcher routes
-against, not an independent snapshot. `tool_count`/`tool_names` are populated from the connected
-chat runtime's tools, grouped by MCP name.
+consequence,tool_count,tool_names,visible_to_main_agent,visible_to_dispatcher}]}`) — the same
+`Arc<CapabilityCatalog>` the dispatcher routes against, not an independent snapshot.
+`tool_count`/`tool_names` are populated from the connected chat runtime's tools, grouped by MCP
+name. Visibility flags reflect `policy.toml` grants for `"main-agent"` vs `"dispatcher"`.
+
+## Models (live catalog + hot-swap)
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/models` | Live catalog from the provider's OpenAI-compatible `GET /models`, plus `current`. Soft-fails: always **200** with optional `error` so clients can still show `current`. Shape: `{"models":["…"],"current"?:"…","error"?:"…"}`. |
+| POST | `/api/models/select` | Body `{"model":"…"}`. Hot-swaps the active model for **subsequent** completions (same base URL / API key; only the `model` field of chat-completions requests changes). No daemon restart. Response: same `ModelsResponse` shape with updated `current`. Empty model → `400`; no provider → `503`. |
+
+`GET /api/status` reports `model_name` from the live provider (so it tracks hot-swap, not only boot-time config). In-flight turns keep whatever model they already started with.
+
+TUI: `/model` opens a full-screen searchable browser over `GET /api/models`; Enter calls
+`POST /api/models/select`.
 
 Tool events are **JSON-encoded** (not bare strings) so a multi-line preview can't split across SSE
 `data:` lines, and so the fields stay typed. `args`/`preview` are truncated server-side (~200 chars)
@@ -135,9 +166,18 @@ Both native clients are landed and share code (`chat-client-contract`'s `ChatEve
   reuses it. Run it against a running server (`LIBERADO_SERVER` overrides the default
   `http://127.0.0.1:4201`).
 - **`crates/tui`** (ratatui) — a native client hitting the *same* endpoints with `reqwest`: a chat
-  pane consuming `/api/chat/stream`, a status line from `/api/status`, a reactions tail from
-  `/api/reactions`. Confirms the API is genuinely client-agnostic — everything the TUI needed was
-  expressible over HTTP/SSE, no client-specific endpoint was added.
+  pane consuming `/api/chat/stream`, a status line from `/api/status`, slash commands via
+  `liberado-commands`, full-screen `/session` browser and `/model` model picker (`GET`/`POST`
+  models APIs). Confirms the API is genuinely client-agnostic — model hot-swap and session
+  browsing are ordinary HTTP, not client-specific RPC.
+
+### Persistence paths (ops, not vault)
+
+| Path | Contents |
+|---|---|
+| `<LIBERADO_DATA_DIR>/conversations/*.jsonl` | Face chat history (Decision 17) |
+| `<LIBERADO_DATA_DIR>/dispatches/chat-delegate-*.jsonl` | Mesh delegation journals (classify + disposition; linked from `delegate` tool results) |
+| Platform config `liberado/settings.toml` | Client UI prefs (e.g. TUI theme name) — not daemon data |
 
 ## Design rules for keeping the API shared
 

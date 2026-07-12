@@ -304,6 +304,31 @@ impl ConversationStore for JsonlStore {
         Ok(headers)
     }
 
+    async fn header(&self, conversation: Ulid) -> StoreResult<ConversationHeader> {
+        let path = self.path_for(conversation);
+        let file = match tokio::fs::File::open(&path).await {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(StoreError::NotFound(format!("conversation {conversation}")));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let mut lines = tokio::io::AsyncBufReadExt::lines(tokio::io::BufReader::new(file));
+        let Some(first) = lines.next_line().await? else {
+            return Err(StoreError::Corrupt(format!(
+                "conversation log {} is empty",
+                path.display()
+            )));
+        };
+        match serde_json::from_str::<Record>(&first)? {
+            Record::Header(h) => Ok(h),
+            Record::Node(_) => Err(StoreError::Corrupt(format!(
+                "conversation log {} does not start with a header",
+                path.display()
+            ))),
+        }
+    }
+
     async fn set_title(&self, conversation: Ulid, title: String) -> StoreResult<()> {
         // Hold the same per-conversation lock `append` does: this rewrites the whole file from a
         // snapshot, so without the lock a concurrent append could land between the read and the

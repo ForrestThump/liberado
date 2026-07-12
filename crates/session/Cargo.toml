@@ -1,0 +1,23 @@
+[package]
+name = "liberado-session"
+version = "0.1.0"
+description = "Domain-neutral goal session kernel: GoalSpec, SessionEvent envelope, in-memory hub, DomainPackRunner trait. Surfaces (TUI/WebUI) are clients of this contract — not loop owners."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+chrono = { workspace = true }
+liberado-common = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+ulid = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

@@ -5,6 +5,22 @@
 //! waist between PR production, a future TUI/CLI coding surface, eval/tuning harnesses, and concrete
 //! coding engines such as the planned Liberado loop backend or the temporary vtcode migration
 //! backend.
+//!
+//! Also hosts **verifier** and **criteria-intake** DTOs (`verify`, `intake`) — domain-agnostic shapes
+//! first consumed by the coding pack; see `docs/architecture/verifiers.md`.
+
+mod intake;
+mod verify;
+
+pub use intake::{
+    FreezeAuthority, GoalContract, GoalContractDraft, IntakeOutcome, IntakeQuestion,
+    expand_verify_profile_into, intake_outcome_schema, profile_verifiers, sanitize_draft,
+    validate_draft,
+};
+pub use verify::{
+    Finding, FindingKind, NamedVerdict, PipelinePolicy, PipelineResult, Verdict, VerdictStatus,
+    VerifierSpec, resolve_verifier_specs,
+};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -232,6 +248,12 @@ pub struct CoderRunConfig {
     pub command_policy: CommandPolicy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validation_command: Option<CoderCommandConfig>,
+    /// Ordered harness checks (see `docs/architecture/verifiers.md`). When empty, a single
+    /// `validation_command` is still honored as a legacy one-entry pipeline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verifiers: Vec<VerifierSpec>,
+    #[serde(default)]
+    pub verify_policy: PipelinePolicy,
     #[serde(default)]
     pub path_policy: PathPolicy,
     #[serde(default)]
@@ -424,6 +446,8 @@ mod tests {
                 repair: None,
                 sandbox: SandboxSpec::HostLocal,
                 command_policy: CommandPolicy::default(),
+                verifiers: Vec::new(),
+                verify_policy: PipelinePolicy::default(),
                 validation_command: Some(CoderCommandConfig {
                     program: "cargo".to_string(),
                     args: vec!["test".to_string()],

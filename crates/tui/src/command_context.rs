@@ -117,6 +117,13 @@ impl CommandContext for App {
     fn set_theme(&mut self, name: &str) -> bool {
         if let Some(theme) = self.theme_registry.get(name).cloned() {
             self.theme = theme;
+            // Persist for next launch (platform config `liberado/settings.toml`).
+            if let Err(e) = liberado_theme::save_theme_preference(name) {
+                tracing::warn!(error = %e, theme = %name, "failed to persist theme preference");
+                self.push_system_message(format!(
+                    "Theme: {name} (could not save preference: {e})"
+                ));
+            }
             true
         } else {
             false

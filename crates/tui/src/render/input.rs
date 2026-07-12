@@ -32,7 +32,15 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme) {
     }
 
     let content_width = area.width.saturating_sub(2) as usize;
-    let wrapped = wrap_input(&app.input, content_width);
+    // Ghost-complete: append dim suffix of the selected slash match (Grok Build–style).
+    // Only when the cursor is at the end so mid-edit doesn't look wrong.
+    let ghost = if app.focus == Focus::Input && app.cursor == app.input.len() {
+        app.slash_ghost_suffix().unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let wrapped = wrap_input_with_ghost(&app.input, &ghost, content_width, th, input_bg);
     let (mut cursor_line, cursor_col) = visual_cursor(&app.input, app.cursor, content_width);
 
     let max_content_rows = area.height.saturating_sub(2) as usize;
@@ -42,19 +50,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme) {
 
     cursor_line = cursor_line.saturating_sub(app.input_scroll);
 
-    let input_fg = c(&th.input_text, "#ffffff");
-    let styled: Vec<Line> = visible
-        .into_iter()
-        .map(|line| {
-            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-            Line::from(Span::styled(
-                text,
-                Style::default().fg(input_fg).bg(input_bg),
-            ))
-        })
-        .collect();
-
-    let paragraph = Paragraph::new(styled)
+    let paragraph = Paragraph::new(visible)
         .block(block)
         .style(Style::default().bg(input_bg));
 
@@ -75,7 +71,7 @@ fn build_block(app: &App, th: &Theme) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .title(format!(
-            " Message{streaming} | Enter to send, Shift+Enter for newline, Esc to clear | Ctrl+C clear/quit "
+            " Message{streaming} | / commands · Enter accept/send · Tab complete · Esc clear · Ctrl+C quit "
         ))
         .border_style(Style::default().fg(border_color))
 }
@@ -122,36 +118,113 @@ fn position_cursor(
 
 // ── Wrapping ─────────────────────────────────────────────────────────
 
-/// Split `input` into display lines, wrapping each logical line at
-/// `content_width` characters so the Paragraph never needs to wrap on
-/// its own (we control height exactly).
-fn wrap_input(input: &str, content_width: usize) -> Vec<Line<'static>> {
+/// Split typed input + optional ghost suffix into styled display lines.
+/// Typed text uses normal input color; ghost uses placeholder/dim color.
+fn wrap_input_with_ghost(
+    typed: &str,
+    ghost: &str,
+    content_width: usize,
+    th: &Theme,
+    input_bg: Color,
+) -> Vec<Line<'static>> {
+    let input_fg = c(&th.input_text, "#ffffff");
+    let ghost_fg = c(&th.input_placeholder, "#404040");
+    let typed_style = Style::default().fg(input_fg).bg(input_bg);
+    let ghost_style = Style::default().fg(ghost_fg).bg(input_bg);
+
+    // Single-line slash prompts are the common case; multi-line keeps typed only on wraps.
+    let combined = if ghost.is_empty() {
+        typed.to_string()
+    } else {
+        format!("{typed}{ghost}")
+    };
+    let typed_chars = typed.chars().count();
+
     let mut out: Vec<Line> = Vec::new();
-    for logical in input.lines() {
-        push_wrapped_line(&mut out, logical, content_width);
+    let mut char_offset = 0usize;
+    for logical in combined.lines() {
+        push_wrapped_styled(
+            &mut out,
+            logical,
+            content_width,
+            char_offset,
+            typed_chars,
+            typed_style,
+            ghost_style,
+        );
+        char_offset += logical.chars().count() + 1; // +1 for newline in combined
     }
     if out.is_empty() {
-        out.push(Line::from(Span::raw("")));
+        out.push(Line::from(Span::styled(String::new(), typed_style)));
     }
     out
 }
 
-/// Push one logical line into `out`, splitting it into segments no wider
-/// than `content_width` characters.
-fn push_wrapped_line(out: &mut Vec<Line<'static>>, logical: &str, content_width: usize) {
+/// Push one logical line, splitting spans so typed vs ghost stay correctly colored across wraps.
+fn push_wrapped_styled(
+    out: &mut Vec<Line<'static>>,
+    logical: &str,
+    content_width: usize,
+    line_start_char: usize,
+    typed_chars: usize,
+    typed_style: Style,
+    ghost_style: Style,
+) {
     if content_width == 0 {
-        out.push(Line::from(Span::raw(logical.to_string())));
+        out.push(style_segment(
+            logical,
+            line_start_char,
+            typed_chars,
+            typed_style,
+            ghost_style,
+        ));
         return;
     }
     let mut remaining = logical;
+    let mut local_char = 0usize;
     loop {
         let (segment, rest) = take_width(remaining, content_width);
-        out.push(Line::from(Span::raw(segment.to_string())));
+        out.push(style_segment(
+            segment,
+            line_start_char + local_char,
+            typed_chars,
+            typed_style,
+            ghost_style,
+        ));
+        local_char += segment.chars().count();
         if rest.is_empty() {
             break;
         }
         remaining = rest;
     }
+}
+
+fn style_segment(
+    segment: &str,
+    start_char: usize,
+    typed_chars: usize,
+    typed_style: Style,
+    ghost_style: Style,
+) -> Line<'static> {
+    if segment.is_empty() {
+        return Line::from(Span::styled(String::new(), typed_style));
+    }
+    let end_char = start_char + segment.chars().count();
+    if end_char <= typed_chars {
+        return Line::from(Span::styled(segment.to_string(), typed_style));
+    }
+    if start_char >= typed_chars {
+        return Line::from(Span::styled(segment.to_string(), ghost_style));
+    }
+    // Split mid-segment: typed prefix + ghost suffix.
+    let split = typed_chars - start_char;
+    let mut chars = segment.chars();
+    let typed_part: String = chars.by_ref().take(split).collect();
+    let ghost_part: String = chars.collect();
+    Line::from(vec![
+        Span::styled(typed_part, typed_style),
+        Span::styled(ghost_part, ghost_style),
+    ])
 }
 
 /// Return the prefix of `s` containing at most `n` characters (on

@@ -444,7 +444,13 @@ mod tests {
         let mut ctx = MockContext::new();
         ctx.status = Some(status_info());
         let results = crate::dispatch::dispatch(&SlashCommand::Model, &mut ctx);
-        assert_eq!(results, vec![CommandResult::ModelInfoShown]);
+        assert_eq!(
+            results,
+            vec![
+                CommandResult::ModelInfoShown,
+                CommandResult::OpenModelBrowser,
+            ]
+        );
         assert_eq!(ctx.messages.len(), 1);
         assert!(ctx.messages[0].contains("deepseek-chat"));
     }
@@ -453,7 +459,13 @@ mod tests {
     fn dispatch_model_no_status() {
         let mut ctx = MockContext::new();
         let results = crate::dispatch::dispatch(&SlashCommand::Model, &mut ctx);
-        assert_eq!(results, vec![CommandResult::ModelInfoShown]);
+        assert_eq!(
+            results,
+            vec![
+                CommandResult::ModelInfoShown,
+                CommandResult::OpenModelBrowser,
+            ]
+        );
         assert_eq!(ctx.messages.len(), 1);
         assert!(ctx.messages[0].contains("Not connected"));
     }
@@ -571,7 +583,7 @@ mod tests {
             &mut ctx,
         );
         assert_eq!(results.len(), 1);
-        assert!(matches!(results[0], CommandResult::ShowOptions { .. }));
+        assert!(matches!(results[0], CommandResult::OpenSessionBrowser));
     }
 
     #[test]

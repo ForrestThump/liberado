@@ -9,9 +9,14 @@ New users should begin here:
 
 ## High-Level
 - [Overview & Architecture](docs/architecture/overview.md) — system pillars, loop, and safety model
+- [Agentic Loops](docs/architecture/agentic-loops.md) — mesh kernel vs domain packs; goal sessions, verifiers, subagents
+- [Verifiers & completeness gates](docs/architecture/verifiers.md) — CI-in-the-loop schema/trait sketch (domain-agnostic)
 - [Positioning](docs/architecture/positioning.md) — the thesis and how Liberado is grounded against the free alternatives
 - [Roadmap (current)](docs/roadmap/current.md) — what is committed and in-flight
+- [Agentic orchestration plan](docs/roadmap/rust-native-agentic-coder-plan.md) — implementation roadmap (coding pack first)
+- [Agentic mesh hygiene audit](docs/roadmap/agentic-mesh-hygiene-audit-2026-07-10.md) — coupling, duplication, generality
 - [Interface / API Reference](docs/reference/api.md) — only public contract (HTTP + SSE)
+- [Delegate dogfood notes](docs/roadmap/delegate_dogfood_issues.md) — face/mesh capability, journals, hot-swap lessons
 
 ## Deep Dive
 - [Architecture Components](docs/architecture/) — per-crate `ARCHITECTURE.md` pages
@@ -25,4 +30,4 @@ Everything here is meant to be **navigable by agents and humans alike**. Each pa
 
 ---
 
-**Last updated**: 2026-06-26 — added Positioning and Modularity pages; matured pillars (vault = default plugin) and the phased roadmap.
+**Last updated**: 2026-07-11 — face-agent mesh, model hot-swap, dispatch journals, TUI model/session browsers, theme persistence.

@@ -19,7 +19,9 @@ pub fn parse(input: &str) -> Option<SlashCommand> {
         "/status" => Some(SlashCommand::Status),
         "/theme" => Some(parse_theme(parts.get(1).copied(), parts.get(2).copied())),
         "/model" => Some(SlashCommand::Model),
-        "/session" => Some(parse_session(parts.get(1).copied(), parts.get(2).copied())),
+        "/session" | "/sessions" => {
+            Some(parse_session(parts.get(1).copied(), parts.get(2).copied()))
+        }
         "/fork" => Some(SlashCommand::Fork),
         _ => None,
     }

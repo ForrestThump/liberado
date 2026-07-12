@@ -1,3 +1,19 @@
+# Loop architecture — reference article (external ideas)
+
+**Role in Liberado**: design-input scrapbook, not project law. The authoritative synthesis of these
+ideas into Liberado's architecture is
+[`docs/architecture/agentic-loops.md`](../architecture/agentic-loops.md). Implementation roadmap:
+[`docs/roadmap/rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md).
+
+Captured concepts used by Liberado:
+
+- **Verifier + state + stop conditions** as the three non-negotiables of a real loop
+- **Maker ≠ checker** (sub-agents / critics) and **skills** as durable project knowledge
+- **Connectors** into the real environment (PR factory, MCP, notify)
+- **Bilevel / meta loop** — improve the search process from traces (maps to heuristics-tuner + draft PRs)
+- Honest limits: comprehension debt, cognitive surrender, when a heavy loop is the wrong tool
+
+---
 
 Most people use AI the same way they used Google in 2005
 

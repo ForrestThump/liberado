@@ -28,13 +28,13 @@ For how these pillars position Liberado against the free alternatives, see
    is sometimes unexpectedly useful, so this can be taken too far in the conservative direction.
    Empirical testing finds the balance.
 
-The next strategic slice applies these same pillars to coding. The `liberado-pr-dispatch-mcp`
-workflow proved the draft-PR approval gate, but its `vtcode` harness is being replaced by a modular
-Rust-native coder loop that reuses Liberado's own `Provider` + `Executor` + `ToolRuntime` substrate.
-See the roadmap plan:
-[`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md). The coder is a
-mesh service, not a new center of gravity: PR production is the first consumer, and a TUI/CLI coding
-surface can later target the same session/event contract.
+The next strategic slice is a **general agentic orchestration mesh** (goal sessions, verifiers,
+subagents, session/events). Coding is the **first domain pack** (PR-dispatch reliability), not the
+product identity. Architecture: [`agentic-loops.md`](agentic-loops.md). Roadmap:
+[`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md). Hygiene:
+[`agentic-mesh-hygiene-audit-2026-07-10.md`](../roadmap/agentic-mesh-hygiene-audit-2026-07-10.md).
+The coding pack is home-spun Liberado (`Provider` + `Executor` + `ToolRuntime` + `coder-*`) — not a
+VTCode wrap. Surfaces (TUI, WebUI, CLI, PR factory) are session clients; they do not own the loop.
 
 **Operational data** (the runtime trace — Decision 12; conversation history — Decision 17)
 deliberately lives *outside* the vault as append-only JSONL, so high-volume writes don't pollute the
@@ -72,8 +72,8 @@ Bottom-up (each depends roughly on those above it):
 | Types | [`common`](../../crates/common/ARCHITECTURE.md) | Shared vocabulary: provenance, capability, catalog, dispatch, event, model, config, proposal. No logic. |
 | Config | [`config`](../../crates/config/Cargo.toml) | Config-file loader/validator (Decision 14): resolves the config dir, reads the three optional TOML files, assembles + validates a `Config`. Dependency-light on purpose, so tools that only need config/paths (`mcp-forge`) don't pull in the whole assembly stack. |
 | Config | [`config-loader`](../../crates/config-loader/Cargo.toml) | The layer beneath `config`: `ConfigSource` trait + `ChainLoader` merging TOML sources in precedence order. |
-| Inference | [`provider`](../../crates/provider/ARCHITECTURE.md) | The `Provider` narrow waist + `MockProvider`. No HTTP. |
-| Inference | [`provider-openai-compat`](../../crates/provider-openai-compat) | A single, config-driven `Provider` for any OpenAI-compatible chat-completions API — replaces what used to be one hand-copied crate per backend (`provider-deepseek`/`provider-openrouter`, ~90% duplicated code, collapsed after `hygiene-audit-2026-07-04.md` flagged it). `deepseek_from_env()`/`openrouter_from_env()` are named convenience constructors; `bootstrap`'s `provider_from_config` selects between them (or a generic backend) from `topology.provider`. |
+| Inference | [`provider`](../../crates/provider/ARCHITECTURE.md) | The `Provider` narrow waist + `MockProvider`. `model()` / `set_model()` / `list_models()`. No HTTP. |
+| Inference | [`provider-openai-compat`](../../crates/provider-openai-compat) | One config-driven OpenAI-compatible backend. Model id is interior-mutable (`RwLock`) for hot-swap. Implements `GET /models` listing. |
 | Vault | [`vault`](../../crates/vault/ARCHITECTURE.md) | Turbovault adapter: provenance writes + hash-join attribution (loop-breaking). |
 | Perceive | [`cron`](../../crates/cron/Cargo.toml) | `EventSource` (from `common`) that fires on a schedule instead of a file change — cron and vault-watch are interchangeable event-sources (Decision 18 checkpoint #3). Deliberately vault-agnostic: no `liberado-vault` dependency. |
 | Decide | [`dispatcher`](../../crates/dispatcher/ARCHITECTURE.md) | classify (LLM) → guards (deterministic, downgrade-only) → `DispatchDecision`. |
@@ -82,15 +82,15 @@ Bottom-up (each depends roughly on those above it):
 | Act | [`orchestrator`](../../crates/orchestrator/ARCHITECTURE.md) | Bridges a `DispatchDecision` to an execution; chooses the provenance correlation. |
 | Notify | [`notify`](../../crates/notify/Cargo.toml) | `Notifier` trait for events a human should know about even unattended (the cron/Phase-3 case); `TelegramNotifier` is the first implementation. `notify_proposal` sends Approve/Revise/Reject buttons on channels that support them. |
 | Notify | [`telegram-approvals`](../../crates/telegram-approvals/Cargo.toml) | `ApprovalBot`: answers those buttons. Approve/Reject are pure code (no LLM) — flip `status` in `proposals/{stem}.md`, tagged `WriteProvenance::human()` so the daemon's own attribution reacts to it like an Obsidian edit. Revise is the one LLM-touching path, and it can only redraft content, never grant approval — see `current.md`'s "Before Phase 3" section. |
-| Converse | [`main-agent`](../../crates/main-agent/Cargo.toml) | Multi-turn `Conversation`: drives the executor's conversational loop, carries context across turns, streams `AgentEvent`s (tokens, tool start/result), atomic-under-cancel turns. The thing a chat client talks to. |
+| Converse | [`main-agent`](../../crates/main-agent/Cargo.toml) | Multi-turn `Conversation` + `ChatSessions`: face-agent mode (`delegate` → mesh) or legacy thick chat. Streams `AgentEvent`s; persists only on success. Dispatch journals for mesh handoffs. |
 | Store | [`conversation-store`](../../crates/conversation-store/Cargo.toml) | Decision-17 append-only JSONL store of DAG message-nodes — outside the vault, high-volume writes don't pollute the change-stream the daemon reacts to. |
 | Core | [`daemon`](../../crates/daemon/ARCHITECTURE.md) | The long-running watch→debounce→attribute→dispatch loop. |
 | Compose | [`bootstrap`](../../crates/bootstrap/Cargo.toml) | Builds provider/dispatcher/orchestrator from the environment — the shared composition logic for the `cli` and server binaries. |
 | Client | [`chat-client-contract`](../../crates/chat-client-contract/Cargo.toml) | Shared HTTP/SSE wire types + the `SseDecoder` incremental parser, so TUI/WebUI/CLI don't each hand-roll their own (a `ChatClient` trait was tried and deleted 2026-07-05 — TUI/CLI's transport needs diverged too much to share one). |
 | Client | [`liberado-commands`](../../crates/liberado-commands/Cargo.toml) | Shared slash-command parser + handlers (`/help`, `/new`, `/model`, ...) for all chat clients via a `CommandContext` trait. |
 | Client | [`markdown`](../../crates/markdown/Cargo.toml) | Lightweight, UI-agnostic Markdown parser (no external dep) — one parser shared by ratatui, Dioxus, and terminal output. |
-| Client | [`theme`](../../crates/theme/Cargo.toml) | Shared color-token `Theme`/`ThemeRegistry` — no UI dependency, discovered from `<config>/themes/*.toml`. |
-| Client | [`tui`](../../crates/tui/ARCHITECTURE.md) | ratatui TUI client: chat pane, sidebar, slash commands, SSE streaming — same chat/SSE contract as the browser web UI. |
+| Client | [`theme`](../../crates/theme/Cargo.toml) | Shared color-token `Theme`/`ThemeRegistry` + `settings.toml` UI prefs (active theme name) under the platform config dir. |
+| Client | [`tui`](../../crates/tui/ARCHITECTURE.md) | ratatui TUI: sparse chat layout, `/session` browser, `/model` hot-swap picker, slash palette, SSE streaming. |
 | Root | [`cli`](../../crates/cli/ARCHITECTURE.md) | The single `liberado` binary — client + launcher (`serve` runs the daemon, `chat` streams). |
 | Server | [`server`](../../crates/server/Cargo.toml) | The daemon process — watch loop + chat + HTTP/SSE API (`docs/reference/api.md`); run via `liberado serve`. Also hosts `POST /api/hooks/{name}` (`src/hooks.rs`) — the external-webhook event source, the push-style counterpart to `cron`'s pull-style one; injects into the daemon's reactive channel via `Daemon::event_sender()`. |
 | Web UI | [`webui`](../../crates/webui/Cargo.toml) | Dioxus WASM frontend — dashboard, reactions feed, vault panel, streaming chat. Excluded from workspace native builds; built with `dx build`. |
@@ -99,26 +99,37 @@ Bottom-up (each depends roughly on those above it):
 | Tooling | [`mcp-forge`](../../crates/mcp-forge/ARCHITECTURE.md) | Builds/installs Liberado MCP servers from git URLs (`cargo install --git`), keyed by `mcp-sources.toml`. |
 | Testing | [`test-support`](../../crates/test-support/Cargo.toml) | Dev-dependency-only: shared `ToolRuntime`/`RuntimeFactory` test doubles, consolidating what used to be duplicated across `orchestrator`/`daemon` test modules. |
 
-Rust-native coder crate family:
+Agentic mesh: shared kernel pieces are `provider`, `executor`, `orchestrator`, `common`. The **coding
+domain pack** (first pack — not the mesh center; see [`agentic-loops.md`](agentic-loops.md)):
 
 | Layer | Crate | Role |
 |---|---|---|
-| Coding | [`coder-core`](../../crates/coder-core/ARCHITECTURE.md) | Provider-agnostic coding contracts: backend trait, task/session/event/report types, sandbox specs, and trace schema. |
-| Coding | [`coder-sandbox`](../../crates/coder-sandbox/ARCHITECTURE.md) | Workspace and command-execution boundaries. Host-local exists for tests/dev; Docker is the first production backend target. |
-| Coding | [`coder-tools`](../../crates/coder-tools/ARCHITECTURE.md) | Discrete file/search/git/command/validation tools exposed as a `ToolRuntime`, with path and output policy. |
-| Coding | [`coder-agent`](../../crates/coder-agent/ARCHITECTURE.md) | Executor-backed Liberado loop backend. MVP uses the coder role and deterministic no-diff verification; planner/critic/repair, Docker, and trace emission are next. |
+| Pack contracts | [`coder-core`](../../crates/coder-core/ARCHITECTURE.md) | Coding specialization of goal/session vocabulary: backend trait, events, sandbox specs, traces. Maps to mesh `Report`/`Outcome`. |
+| Pack env | [`coder-sandbox`](../../crates/coder-sandbox/ARCHITECTURE.md) | Workspace/command isolation (host-local + Docker scaffold). |
+| Pack tools | [`coder-tools`](../../crates/coder-tools/ARCHITECTURE.md) | Coding `ToolRuntime` (discrete file/search/git/command/validate). |
+| Pack session | [`coder-agent`](../../crates/coder-agent/ARCHITECTURE.md) | Coding goal-session composition: worker/repair, progress guards, critic, deterministic gates, attempts. |
+| Pack adapter | [`coder-runner`](../../crates/coder-runner/ARCHITECTURE.md) | Process boundary for nested consumers (PR factory). |
 
 ## Cross-cutting concepts
 
 - **Provenance & loop-breaking (Decision 5)** — `WriteProvenance` (`source` + `correlation_id`) rides
   the audit log, not frontmatter. Consumers attribute by content identity (hash-join), not timing.
-- **Capability/zone containment (Decision 4)** — `CapabilitySet` is narrow-only; a subagent gets
-  `base ∩ narrowing`. This is the actual security boundary.
+- **Capability/zone containment (Decision 4)** — `CapabilitySet` is narrow-only; authority only
+  shrinks down a chain. **Subagents** get a risk-gate set of `dispatcher_ceiling ∩ allowed_mcps`
+  (classifier-scoped MCP names; empty decision `capabilities` derives from `allowed_mcps`, never
+  full inherit of every dispatcher tool). **Main chat** is thin by default (face agent +
+  `delegate`); specialist MCPs (e.g. `turbovault`) are granted on the **`dispatcher`** component in
+  `policy.toml`. See [`delegate_dogfood_issues.md`](../roadmap/delegate_dogfood_issues.md).
 - **Provider-agnostic inference (Decision 13)** — one `Provider` trait, swappable from config, with
-  role-tiered model floors. Tests inject `MockProvider` (Decision 16).
+  role-tiered model floors. The active model id is hot-swappable at runtime (`Provider::set_model`,
+  `POST /api/models/select`) without restarting the daemon. Tests inject `MockProvider` (Decision 16).
+- **Face agent + mesh** — with `topology.main_agent.delegation_mode = true` (default), chat only
+  surfaces `delegate` (plus optional main-agent MCP grants). Work runs through dispatcher →
+  orchestrator → subagent/direct execute. Delegation journals land under
+  `<LIBERADO_DATA_DIR>/dispatches/` (linked by correlation id from the face tool result).
 - **MCPs vs hooks** — MCPs are **tools** the agent *calls* (work). Hooks are **event sources** that
-  *push* into the daemon (the `Event` type serves both trigger paths). Today only the vault watcher
-  produces events.
+  *push* into the daemon (the `Event` type serves both trigger paths): vault watch, cron, and
+  `POST /api/hooks/{name}`.
 - **Daemon-first (Decision 2)** — one long-running process; the CLI/TUI attach to it.
 
 ## Co-development with Turbovault & Turbomcp
@@ -139,9 +150,11 @@ session-keyed conversations** (Decision 17) are complete, all hosted by **one `l
 pass (item 15 below) is done, Phase 3 is fully landed (cron, the external webhook hook receiver, and
 named dispatcher/executor pools, items 16-18 below, completing Decision 18 checkpoint #3), and
 Phase 4 v1 (Docker MCP transport, item 19 below) is built and unit-tested, pending only its live
-Docker-daemon smoke test. The next strategic work is the Rust-native agentic coder plan: replace
-`vtcode` as the PR-dispatch coding engine with modular Liberado loop crates, keeping PR production,
-future TUI/CLI coding sessions, sandboxing, and eval/tuning behind shared contracts. Other open work
+Docker-daemon smoke test. The next strategic work is **Rust-native agentic orchestration**: replace
+`vtcode` as the PR-dispatch coding engine with modular Liberado goal-session crates (coding domain
+first), then expose the same session/event backend to TUI/WebUI and other tool domains. See
+[`agentic-loops.md`](agentic-loops.md) and
+[`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md). Other open work
 remains valid: deepening the main agent, the TUI, the Docker smoke test, and further Phase 4 slices.
 
 **Done:**
@@ -177,6 +190,13 @@ remains valid: deepening the main agent, the TUI, the Docker smoke test, and fur
     [`human-todo.md`](../roadmap/human-todo.md#phase-4-docker-mcp-transport--needs-a-live-smoke-test--2026-07-07).
     Deferred, not built: serverless hibernation (no MCP has an idle-cost problem that justifies the
     integration cost yet). Full design: [`phase-4-docker-transport.md`](../roadmap/phase-4-docker-transport.md).
+20. ✅ **Face-agent chat + mesh dogfood (2026-07-10/11)** — default main agent is a thin human
+    interfacer (`delegate` only); vault/MCP work runs on the dispatcher ceiling. Subagent risk-gate
+    derives `ceiling ∩ allowed_mcps` when decision capabilities are empty. Classifier MCP names are
+    sanitized against the catalog (bare `list_tasks` no longer false-CapabilityGaps). Model catalog
+    + hot-swap (`GET/POST /api/models*`). TUI: sparse layout, `/session` browser, `/model` picker,
+    theme preference in platform `settings.toml`. Delegation journals under
+    `<LIBERADO_DATA_DIR>/dispatches/`. Writeup: [`delegate_dogfood_issues.md`](../roadmap/delegate_dogfood_issues.md).
 
 **Not yet built (next slice):**
 - Rust-native agentic coder crates and PR-factory integration; see

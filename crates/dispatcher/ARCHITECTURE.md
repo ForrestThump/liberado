@@ -18,15 +18,20 @@ DispatchRequest ──► classify ──► guards.evaluate ──► downgrade
 
 1. **classify** (`lib.rs`) — one structured-output inference at temperature 0 turns the goal + MCP
    catalog into a candidate decision via `complete_json`. A decode/empty failure falls back to a
-   safe `Clarify`, never an action.
-2. **guards** (`guards.rs`) — deterministic checks that run **after** the model and can only
+   safe `Clarify`, never an action. High-confidence **procedural-memory guidance** may short-circuit
+   to `ExecuteDirect` with `relevant_mcps` from the hit (still fully guarded afterward).
+2. **sanitize MCP names** — after classify, rewrite tool-shaped names (`turbovault:list_tasks` →
+   `turbovault`) and drop bare unknowns (`list_tasks`) that aren't catalog MCP names. Empty
+   `relevant_mcps` / `allowed_mcps` after sanitize means "no further narrowing" (full grant ceiling),
+   not CapabilityGap. Prevents false gaps when the model confuses tools with MCP servers.
+3. **guards** (`guards.rs`) — deterministic checks that run **after** the model and can only
    *downgrade* autonomy. Priority: capability gap → consequence gate → zone-write-class gate →
    magnitude gate → reaction-depth limit → confidence floor. A capability gap, depth limit, or
    low-confidence hit downgrades to `Clarify`; a consequence or zone-write-class hit on a
    *concrete* action (a non-empty `ExecuteDirect` or any `DispatchSubagent`) downgrades to
    `Propose` instead (Decision 11) — both are "needs human approval before running," just gated on
    different axes (general riskiness vs. the specific target zone). Guards never upgrade or invent
-   an action.
+   an action. Capability-gap logs include the missing MCP name.
 
    The zone-write-class gate is pre-flight only, checking `ExecuteDirect`'s seed calls against
    per-tool zone declarations (`McpDescriptor.default_zone`/`tool_zones`, human-authored in

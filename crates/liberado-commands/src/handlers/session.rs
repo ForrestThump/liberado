@@ -11,7 +11,7 @@ pub fn handle(cmd: &SessionCmd, ctx: &mut dyn CommandContext) -> Vec<CommandResu
             ctx.set_active_session(None);
             if let Some(ref id) = id {
                 ctx.push_system_message(format!(
-                    "Closed session {id}. Messages preserved locally.\nUse /session switch <id> or sidebar to resume."
+                    "Closed session {id}. Messages preserved on the server.\nUse /session to browse and resume."
                 ));
                 vec![CommandResult::SessionClosed {
                     id: Some(id.clone()),
@@ -24,7 +24,7 @@ pub fn handle(cmd: &SessionCmd, ctx: &mut dyn CommandContext) -> Vec<CommandResu
         SessionCmd::Switch(id) => {
             if id.is_empty() {
                 ctx.push_system_message(
-                    "Usage: /session switch <session-id>\nThe id can be the full id or the first few characters seen in the sidebar.".into(),
+                    "Usage: /session switch <session-id>\nOr run /session to open the searchable browser.".into(),
                 );
                 vec![CommandResult::None]
             } else {
@@ -35,16 +35,8 @@ pub fn handle(cmd: &SessionCmd, ctx: &mut dyn CommandContext) -> Vec<CommandResu
             }
         }
         SessionCmd::List => {
-            let convs = ctx.conversation_list();
-            if convs.is_empty() {
-                ctx.push_system_message("No conversations in list.".into());
-                vec![CommandResult::SessionListed]
-            } else {
-                vec![CommandResult::ShowOptions {
-                    title: "Conversations".into(),
-                    options: convs,
-                }]
-            }
+            // Surfaces open a full-screen browser; no chat dump.
+            vec![CommandResult::OpenSessionBrowser]
         }
         SessionCmd::Info => {
             if let Some(ref id) = ctx.active_session_id().map(String::from) {
@@ -62,14 +54,14 @@ pub fn handle(cmd: &SessionCmd, ctx: &mut dyn CommandContext) -> Vec<CommandResu
                 vec![CommandResult::SessionInfoShown]
             } else {
                 ctx.push_system_message(
-                    "No active session.\nUse /session switch <id> or select a conversation in the sidebar.".into(),
+                    "No active session.\nUse /session to browse prior conversations, or just chat to start one.".into(),
                 );
                 vec![CommandResult::None]
             }
         }
         SessionCmd::Unknown(sub) => {
             ctx.push_system_message(format!(
-                "Unknown session command: {sub}\nTry: /session info | list | switch <id> | close"
+                "Unknown session command: {sub}\nTry: /session | list | info | switch <id> | close"
             ));
             vec![CommandResult::None]
         }

@@ -16,19 +16,27 @@ use crate::types::{CompletionRequest, CompletionResponse};
 /// A test double for [`Provider`]. Hand it a script of responses; it pops one per `complete`
 /// call and remembers the requests.
 pub struct MockProvider {
-    model: String,
+    model: Mutex<String>,
     scripted: Mutex<VecDeque<CompletionResponse>>,
     received: Mutex<Vec<CompletionRequest>>,
+    /// Optional scripted catalog for [`Provider::list_models`] (tests / offline UI).
+    models: Mutex<Vec<String>>,
 }
 
 impl MockProvider {
     /// A mock that will return `MockExhausted` until responses are [`push`](Self::push)ed.
     pub fn new(model: impl Into<String>) -> Self {
         Self {
-            model: model.into(),
+            model: Mutex::new(model.into()),
             scripted: Mutex::new(VecDeque::new()),
             received: Mutex::new(Vec::new()),
+            models: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Set the model ids returned by [`Provider::list_models`].
+    pub fn set_models(&self, models: impl IntoIterator<Item = impl Into<String>>) {
+        *self.models.lock().unwrap() = models.into_iter().map(Into::into).collect();
     }
 
     /// A mock pre-loaded with a script of responses, returned in order.
@@ -66,8 +74,15 @@ impl MockProvider {
 
 #[async_trait]
 impl Provider for MockProvider {
-    fn model(&self) -> &str {
-        &self.model
+    fn model(&self) -> String {
+        self.model.lock().unwrap().clone()
+    }
+
+    fn set_model(&self, model: String) {
+        let model = model.trim();
+        if !model.is_empty() {
+            *self.model.lock().unwrap() = model.to_string();
+        }
     }
 
     async fn complete(&self, request: CompletionRequest) -> ProviderResult<CompletionResponse> {
@@ -77,6 +92,10 @@ impl Provider for MockProvider {
             .unwrap()
             .pop_front()
             .ok_or(ProviderError::MockExhausted)
+    }
+
+    async fn list_models(&self) -> ProviderResult<Vec<String>> {
+        Ok(self.models.lock().unwrap().clone())
     }
 }
 

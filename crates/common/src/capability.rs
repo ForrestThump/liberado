@@ -104,12 +104,31 @@ pub enum Magnitude {
 
 /// Verbs that destroy or overwrite data. Liberado owns this classification because MCP tools don't
 /// declare their own risk — we read the intent from the goal (and from a tool's name/description).
+///
+/// `clear` is **not** here: the bare adjective in "a clear list" / "clear consolidated summary"
+/// was matching via prefix and, combined with sweeping words like `any`, false-positive gated
+/// read-only goals (delegate dogfood D1, session `01KX7AGD`). Clear-as-verb is handled in
+/// [`mentions_destructive`] with a follower-token check.
 const DESTRUCTIVE_STEMS: &[&str] = &[
-    "delet", "remov", "wipe", "purge", "clear", "eras", "destroy", "drop", "truncat", "overwrit",
+    "delet", "remov", "wipe", "purge", "eras", "destroy", "drop", "truncat", "overwrit",
+];
+
+/// Whole-word forms of "clear" treated as potentially destructive.
+const CLEAR_VERB_FORMS: &[&str] = &["clear", "clears", "cleared", "clearing"];
+
+/// Tokens that, immediately after a clear-verb form, make "clear …" read as a destructive verb
+/// ("clear the inbox", "clear all notes") rather than an adjective ("a clear list").
+const CLEAR_VERB_FOLLOWERS: &[&str] = &[
+    "all", "every", "everything", "entire", "each", "any", "the", "my", "your", "our", "his",
+    "her", "their", "its", "this", "that", "these", "those", "out", "away", "off", "up",
 ];
 
 /// Whole-word quantifiers that make an action sweeping.
-const SWEEPING_WORDS: &[&str] = &["all", "every", "everything", "entire", "each", "any"];
+///
+/// `any` / `each` are intentionally omitted: they appear constantly in benign English
+/// ("any details", "each field") and, combined with false-positive destructive stems, over-gated
+/// read goals. Strong quantifiers (`all` / `every` / `entire` / `everything`) remain.
+const SWEEPING_WORDS: &[&str] = &["all", "every", "everything", "entire"];
 
 fn words(text: &str) -> impl Iterator<Item = String> + '_ {
     text.split(|c: char| !c.is_alphanumeric())
@@ -119,7 +138,22 @@ fn words(text: &str) -> impl Iterator<Item = String> + '_ {
 
 /// Whether `text` (a goal, or a tool name + description) expresses a destructive operation.
 pub fn mentions_destructive(text: &str) -> bool {
-    words(text).any(|w| DESTRUCTIVE_STEMS.iter().any(|stem| w.starts_with(stem)))
+    let tokens: Vec<String> = words(text).collect();
+    if tokens
+        .iter()
+        .any(|w| DESTRUCTIVE_STEMS.iter().any(|stem| w.starts_with(stem)))
+    {
+        return true;
+    }
+    // "clear" only when used as a verb: clear + determiner/quantifier/particle.
+    for window in tokens.windows(2) {
+        if CLEAR_VERB_FORMS.contains(&window[0].as_str())
+            && CLEAR_VERB_FOLLOWERS.contains(&window[1].as_str())
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Classify how far-reaching `text` is. `Sweeping` when a universal quantifier is present as a whole
@@ -250,6 +284,7 @@ mod tests {
         assert!(is_sweeping_destructive("Delete all of my notes."));
         assert!(is_sweeping_destructive("wipe every task"));
         assert!(is_sweeping_destructive("Clear the entire inbox"));
+        assert!(is_sweeping_destructive("clear all tasks"));
 
         // Bounded destructive — a single scoped change is not gated by magnitude.
         assert!(!is_sweeping_destructive("delete the note tmp.md"));
@@ -259,6 +294,26 @@ mod tests {
         assert!(!is_sweeping_destructive("install all the packages")); // not destructive anyway
         assert_eq!(assess_magnitude("install the app"), Magnitude::Bounded);
         assert_eq!(assess_magnitude("delete every file"), Magnitude::Sweeping);
+    }
+
+    #[test]
+    fn clear_adjective_and_any_do_not_false_positive_read_goals() {
+        // Dogfood D1 (01KX7AGD): face context "Provide a clear consolidated list" + "any tags"
+        // must not look like "clear any …" destructive sweeping.
+        let dogfood = "Read the Sarah Task List note and any other relationship task notes \
+            from TurboVault. Filter to only items with #task. Return a clean list of tasks \
+            with their status (pending/complete), content, and any tags.\n\nContext:\n\
+            User wants to see relationship tasks. Previous attempt found a file at \
+            Tasks/Sarah.md and Life/Relationships/ notes, but results were cut off. \
+            Provide a clear consolidated list.";
+        assert!(!mentions_destructive(dogfood));
+        assert!(!is_sweeping_destructive(dogfood));
+        assert!(!is_sweeping_destructive(
+            "Return a clear list of all pending tasks with any tags"
+        ));
+        // Verb usage still counts.
+        assert!(mentions_destructive("clear the inbox"));
+        assert!(mentions_destructive("clear all notes"));
     }
 
     #[test]

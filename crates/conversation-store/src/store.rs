@@ -40,6 +40,11 @@ pub trait ConversationStore: Send + Sync {
     /// All conversation headers, newest first (by id).
     async fn list(&self) -> StoreResult<Vec<ConversationHeader>>;
 
+    /// Read one conversation's header (line 0 of its log). `NotFound` if absent.
+    async fn header(&self, conversation: Ulid) -> StoreResult<ConversationHeader>;
+
     /// Overwrite the title of an existing conversation. Idempotent across calls.
+    /// Used by: first-message default, future flash-title agent, `PATCH /api/conversations/{id}`,
+    /// and a future `/title` slash command. Titles are display-only and always overwritable.
     async fn set_title(&self, conversation: Ulid, title: String) -> StoreResult<()>;
 }

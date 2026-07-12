@@ -55,6 +55,11 @@ pub(crate) fn evaluate(
     // invoke must be granted in the active capability set.
     for mcp in referenced_mcps(&decision.action) {
         if !req.capabilities.grants_mcp(mcp) {
+            tracing::warn!(
+                mcp,
+                action = %decision.action,
+                "capability gap: action references MCP not in the dispatcher grant"
+            );
             return Some(BlockReason::CapabilityGap);
         }
     }

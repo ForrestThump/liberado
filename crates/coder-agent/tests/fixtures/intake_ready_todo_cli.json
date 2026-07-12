@@ -1,0 +1,33 @@
+{
+  "status": "ready_for_freeze",
+  "draft": {
+    "description": "Build a minimal todo CLI with add/list and a file store.",
+    "success_criteria": [
+      "Cargo.toml and src/main.rs exist",
+      "src/main.rs defines fn main",
+      "workspace has a real git diff"
+    ],
+    "verifiers": [
+      {
+        "type": "paths_exist",
+        "id": "required_paths",
+        "paths": ["Cargo.toml", "src/main.rs"]
+      },
+      {
+        "type": "content_contains",
+        "id": "main_fn",
+        "path": "src/main.rs",
+        "must_include": ["fn main"]
+      },
+      {
+        "type": "git_nonempty_diff",
+        "id": "has_diff"
+      }
+    ],
+    "out_of_scope": ["network access", "GUI", "database server"],
+    "assumed_defaults": ["Rust binary crate", "local file store"],
+    "domain_hint": "coding",
+    "verify_profile": null
+  },
+  "rationale": "Fixture draft: structural gates only so mock e2e needs no cargo/network."
+}

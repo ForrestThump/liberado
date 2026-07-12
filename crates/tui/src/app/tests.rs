@@ -1,4 +1,4 @@
-use super::*;
+﻿use super::*;
 use crate::format::relative_time;
 use crossterm::event::{MouseButton, MouseEventKind};
 
@@ -47,11 +47,10 @@ fn scroll_down(col: u16, row: u16) -> MouseEvent {
         modifiers: KeyModifiers::empty(),
     }
 }
-fn set_layout(app: &mut App, chat: Rect, input: Rect, sidebar_conv: Rect) {
+fn set_layout(app: &mut App, chat: Rect, input: Rect, session_browser: Rect) {
     app.layout.chat = chat;
-    app.layout.sidebar_full = sidebar_conv;
     app.layout.input = input;
-    app.layout.sidebar_conversations = sidebar_conv;
+    app.layout.session_browser = session_browser;
 }
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::empty())
@@ -121,23 +120,23 @@ fn esc_clears_input() {
     assert_eq!(app.cursor, 0);
 }
 #[test]
-fn tab_switches_focus_to_sidebar() {
+fn tab_switches_focus_to_chat() {
     let mut app = test_app();
     assert_eq!(app.focus, Focus::Input);
-    app.handle_key(key(KeyCode::Tab));
-    assert_eq!(app.focus, Focus::SidebarConversations);
-}
-#[test]
-fn tab_from_sidebar_goes_to_chat() {
-    let mut app = test_app();
-    app.focus = Focus::SidebarConversations;
     app.handle_key(key(KeyCode::Tab));
     assert_eq!(app.focus, Focus::ChatMessages);
 }
 #[test]
+fn tab_from_chat_returns_via_esc() {
+    let mut app = test_app();
+    app.focus = Focus::ChatMessages;
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.focus, Focus::Input);
+}
+#[test]
 fn esc_from_sidebar_returns_to_input() {
     let mut app = test_app();
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     app.handle_key(key(KeyCode::Esc));
     assert_eq!(app.focus, Focus::Input);
 }
@@ -145,7 +144,7 @@ fn esc_from_sidebar_returns_to_input() {
 fn sidebar_jk_navigation() {
     let mut app = test_app();
     app.conversations = vec![conv("1", "a"), conv("2", "b")];
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     app.handle_key(key(KeyCode::Char('j')));
     assert_eq!(app.sidebar_selection, 1);
     app.handle_key(key(KeyCode::Char('j')));
@@ -423,7 +422,7 @@ fn esc_without_streaming_empty_input_noop() {
 fn pending_load_set_on_sidebar_enter() {
     let mut app = test_app();
     app.conversations = vec![conv("c1", "test")];
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     let effects = app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.pending_load, Some("c1".into()));
     assert!(
@@ -486,7 +485,7 @@ fn sidebar_filter_empty_returns_all() {
 #[test]
 fn typing_in_sidebar_appends_to_filter() {
     let mut app = test_app();
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     app.handle_key(key(KeyCode::Char('s')));
     app.handle_key(key(KeyCode::Char('e')));
     assert_eq!(app.sidebar_filter, "se");
@@ -494,7 +493,7 @@ fn typing_in_sidebar_appends_to_filter() {
 #[test]
 fn backspace_in_sidebar_removes_filter_char() {
     let mut app = test_app();
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     app.sidebar_filter = "ab".into();
     app.handle_key(key(KeyCode::Backspace));
     assert_eq!(app.sidebar_filter, "a");
@@ -502,25 +501,25 @@ fn backspace_in_sidebar_removes_filter_char() {
 #[test]
 fn esc_clears_sidebar_filter_then_returns_to_input() {
     let mut app = test_app();
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     app.sidebar_filter = "search".into();
     app.handle_key(key(KeyCode::Esc));
     assert!(app.sidebar_filter.is_empty());
     assert_eq!(app.focus, Focus::Input);
 }
 #[test]
-fn tab_clears_filter_and_goes_to_chat() {
+fn esc_from_session_browser_clears_filter() {
     let mut app = test_app();
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     app.sidebar_filter = "search".into();
-    app.handle_key(key(KeyCode::Tab));
+    app.handle_key(key(KeyCode::Esc));
     assert!(app.sidebar_filter.is_empty());
-    assert_eq!(app.focus, Focus::ChatMessages);
+    assert_eq!(app.focus, Focus::Input);
 }
 #[test]
 fn n_with_filter_appends_not_new_conversation() {
     let mut app = test_app();
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     app.sidebar_filter = "pytho".into();
     app.session = Some("old".into());
     app.handle_key(key(KeyCode::Char('n')));
@@ -559,12 +558,52 @@ fn slash_theme_unknown() {
     assert!(matches!(last, Message::System(m) if m.contains("Usage")));
 }
 #[test]
-fn slash_model_informational() {
+fn slash_model_opens_browser() {
     let mut app = test_app();
     app.input = "/model".into();
-    app.handle_key(key(KeyCode::Enter));
+    let effects = app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.focus, Focus::ModelBrowser);
+    assert!(app.models_loading);
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::FetchModels)),
+        "expected FetchModels effect"
+    );
     let last = app.messages.last().unwrap();
-    assert!(matches!(last, Message::System(m) if m.contains("server-side")));
+    assert!(matches!(last, Message::System(m) if m.contains("model") || m.contains("Not connected")));
+}
+
+#[test]
+fn model_browser_filter_and_selection() {
+    let mut app = test_app();
+    app.models = vec![
+        "deepseek-chat".into(),
+        "deepseek-reasoner".into(),
+        "gpt-4o".into(),
+    ];
+    app.open_model_browser();
+    app.models_loading = false;
+    app.sidebar_filter = "deep".into();
+    let filtered = app.filtered_models();
+    assert_eq!(filtered.len(), 2);
+    assert!(filtered.iter().all(|m| m.contains("deepseek")));
+    app.clamp_model_selection();
+    assert_eq!(app.sidebar_selection, 0);
+}
+
+#[test]
+fn models_loaded_action_fills_catalog() {
+    let mut app = test_app();
+    app.open_model_browser();
+    assert!(app.models_loading);
+    app.update(Action::ModelsLoaded {
+        models: vec!["a".into(), "b".into()],
+        error: None,
+    });
+    assert!(!app.models_loading);
+    assert_eq!(app.models, vec!["a".to_string(), "b".to_string()]);
+    assert!(app.models_error.is_none());
 }
 #[test]
 fn slash_session_close() {
@@ -601,10 +640,8 @@ fn slash_session_list() {
     app.conversations = vec![conv("c1", "alpha"), conv("c2", "beta")];
     app.input = "/session list".into();
     app.handle_key(key(KeyCode::Enter));
-    let last = app.messages.last().unwrap();
-    assert!(
-        matches!(last, Message::System(m) if m.contains("Conversations") && m.contains("alpha") && m.contains("beta"))
-    );
+    assert_eq!(app.focus, Focus::SessionBrowser);
+    assert!(app.input.is_empty());
 }
 #[test]
 fn connection_status_flips_connected() {
@@ -646,7 +683,7 @@ fn connection_status_no_spurious_messages() {
     assert_eq!(app.messages.len(), before);
 }
 
-// ── Tree tests ──
+// â”€â”€ Tree tests â”€â”€
 
 #[test]
 fn visible_tree_flat_roots() {
@@ -695,21 +732,20 @@ fn visible_tree_expand_shows_children() {
 }
 
 #[test]
-fn sidebar_space_toggles_collapse() {
+fn sidebar_space_appends_to_filter() {
     let mut app = test_app();
     app.conversations = vec![conv("1", "parent"), child_conv("2", "child", "1")];
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     app.handle_key(key(KeyCode::Char(' ')));
-    assert!(app.collapsed_nodes.contains("1"));
-    app.handle_key(key(KeyCode::Char(' ')));
-    assert!(!app.collapsed_nodes.contains("1"));
+    assert_eq!(app.sidebar_filter, " ");
+    assert!(app.collapsed_nodes.is_empty());
 }
 
 #[test]
 fn sidebar_enter_on_leaf_loads_conversation() {
     let mut app = test_app();
     app.conversations = vec![conv("c1", "leaf")];
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     let effects = app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.pending_load, Some("c1".into()));
     assert!(
@@ -720,14 +756,19 @@ fn sidebar_enter_on_leaf_loads_conversation() {
 }
 
 #[test]
-fn sidebar_enter_on_parent_toggles_collapse() {
+fn sidebar_enter_on_parent_opens_it() {
     let mut app = test_app();
     app.conversations = vec![conv("1", "parent"), child_conv("2", "child", "1")];
-    app.focus = Focus::SidebarConversations;
-    app.handle_key(key(KeyCode::Enter));
-    assert!(app.collapsed_nodes.contains("1"));
-    app.handle_key(key(KeyCode::Enter));
-    assert!(!app.collapsed_nodes.contains("1"));
+    app.focus = Focus::SessionBrowser;
+    app.sidebar_selection = 0;
+    let effects = app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.pending_load, Some("1".into()));
+    assert_eq!(app.focus, Focus::Input);
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadConversationHistory(_)))
+    );
 }
 
 #[test]
@@ -777,18 +818,18 @@ fn slash_fork_no_session() {
     assert!(matches!(last, Message::System(m) if m.contains("No active session")));
 }
 
-// ── Mouse tests ──
+// â”€â”€ Mouse tests â”€â”€
 
 #[test]
 fn mouse_click_chat_focuses_chat() {
     let mut app = test_app();
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::Input;
     app.messages.push(Message::System("hi".into()));
     set_layout(
         &mut app,
-        Rect::new(0, 0, 60, 20),
-        Rect::new(0, 21, 60, 3),
-        Rect::new(61, 0, 20, 20),
+        Rect::new(0, 1, 80, 20),
+        Rect::new(0, 21, 80, 3),
+        Rect::default(),
     );
     app.handle_mouse(left_click(5, 5));
     assert_eq!(app.focus, Focus::ChatMessages);
@@ -797,46 +838,49 @@ fn mouse_click_chat_focuses_chat() {
 #[test]
 fn mouse_click_input_focuses_input() {
     let mut app = test_app();
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::ChatMessages;
     app.input = "hello".to_string();
     set_layout(
         &mut app,
-        Rect::new(0, 0, 60, 20),
-        Rect::new(0, 21, 60, 3),
-        Rect::new(61, 0, 20, 20),
+        Rect::new(0, 1, 80, 20),
+        Rect::new(0, 21, 80, 3),
+        Rect::default(),
     );
     app.handle_mouse(left_click(2, 22));
     assert_eq!(app.focus, Focus::Input);
 }
 
 #[test]
-fn mouse_click_sidebar_selects_item() {
+fn mouse_click_session_browser_selects_item() {
     let mut app = test_app();
     app.conversations = vec![conv("c1", "test"), conv("c2", "other")];
+    app.focus = Focus::SessionBrowser;
+    // Full-screen browser: list starts at y=4 (3-row filter + 1).
     set_layout(
         &mut app,
-        Rect::new(0, 0, 60, 20),
-        Rect::new(0, 21, 60, 3),
-        Rect::new(61, 0, 20, 20),
+        Rect::default(),
+        Rect::default(),
+        Rect::new(0, 0, 80, 30),
     );
-    app.handle_mouse(left_click(62, 2));
-    assert_eq!(app.focus, Focus::SidebarConversations);
-    assert_eq!(app.sidebar_selection, 1);
+    app.handle_mouse(left_click(2, 5)); // first list row
+    assert_eq!(app.focus, Focus::SessionBrowser);
+    assert_eq!(app.sidebar_selection, 1); // second item at y=5
 }
 
 #[test]
-fn mouse_click_sidebar_leaf_loads() {
+fn mouse_click_session_browser_double_opens() {
     let mut app = test_app();
     app.conversations = vec![conv("c1", "test")];
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     app.sidebar_selection = 0;
     set_layout(
         &mut app,
-        Rect::new(0, 0, 60, 20),
-        Rect::new(0, 21, 60, 3),
-        Rect::new(61, 0, 20, 20),
+        Rect::default(),
+        Rect::default(),
+        Rect::new(0, 0, 80, 30),
     );
-    let effects = app.handle_mouse(left_click(62, 1));
+    // First click on same selection opens (idx == prev).
+    let effects = app.handle_mouse(left_click(2, 4));
     assert_eq!(app.pending_load, Some("c1".into()));
     assert!(
         effects
@@ -846,21 +890,19 @@ fn mouse_click_sidebar_leaf_loads() {
 }
 
 #[test]
-fn mouse_click_sidebar_parent_toggles() {
+fn mouse_click_session_browser_second_item() {
     let mut app = test_app();
-    app.conversations = vec![conv("1", "parent"), child_conv("2", "child", "1")];
-    app.focus = Focus::SidebarConversations;
+    app.conversations = vec![conv("1", "parent"), conv("2", "other")];
+    app.focus = Focus::SessionBrowser;
     app.sidebar_selection = 0;
     set_layout(
         &mut app,
-        Rect::new(0, 0, 60, 20),
-        Rect::new(0, 21, 60, 3),
-        Rect::new(61, 0, 20, 20),
+        Rect::default(),
+        Rect::default(),
+        Rect::new(0, 0, 80, 30),
     );
-    app.handle_mouse(left_click(62, 1));
-    assert!(app.collapsed_nodes.contains("1"));
-    app.handle_mouse(left_click(62, 1));
-    assert!(!app.collapsed_nodes.contains("1"));
+    app.handle_mouse(left_click(2, 5));
+    assert_eq!(app.sidebar_selection, 1);
 }
 
 #[test]
@@ -883,7 +925,7 @@ fn mouse_scroll_chat() {
 fn mouse_scroll_sidebar() {
     let mut app = test_app();
     app.conversations = vec![conv("c1", "a"), conv("c2", "b"), conv("c3", "c")];
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     app.sidebar_selection = 1;
     set_layout(
         &mut app,
@@ -901,7 +943,7 @@ fn mouse_scroll_sidebar() {
 fn sidebar_enter_empty_conversations_does_not_panic() {
     let mut app = test_app();
     app.conversations = vec![];
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     let effects = app.handle_key(key(KeyCode::Enter));
     assert!(effects.iter().all(|e| matches!(e, Effect::None)));
 }
@@ -937,7 +979,7 @@ fn sidebar_selection_clamped_after_filter_cleared() {
     app.conversations = vec![conv("c1", "alpha"), conv("c2", "beta"), conv("c3", "gamma")];
     app.sidebar_selection = 2;
     app.sidebar_filter = "gamma".into();
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     app.handle_key(key(KeyCode::Esc));
     assert!(app.sidebar_filter.is_empty());
     assert!(app.sidebar_selection < app.visible_conversations().len());
@@ -953,7 +995,7 @@ fn new_conversation_clears_pending_load() {
     assert!(app.pending_load.is_none());
 }
 
-// ── Cursor movement keys ──
+// â”€â”€ Cursor movement keys â”€â”€
 
 #[test]
 fn delete_removes_char_after_cursor() {
@@ -1021,7 +1063,7 @@ fn end_jumps_to_end() {
     assert_eq!(app.cursor, 3);
 }
 
-// ── Shift+Enter and sidebar edge cases ──
+// â”€â”€ Shift+Enter and sidebar edge cases â”€â”€
 
 #[test]
 fn shift_enter_inserts_newline() {
@@ -1038,7 +1080,7 @@ fn shift_enter_inserts_newline() {
 fn space_on_leaf_node_appends_to_filter() {
     let mut app = test_app();
     app.conversations = vec![conv("c1", "leaf")];
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     app.handle_key(key(KeyCode::Char(' ')));
     assert_eq!(app.sidebar_filter, " ");
     assert_eq!(app.sidebar_selection, 0);
@@ -1046,7 +1088,7 @@ fn space_on_leaf_node_appends_to_filter() {
 #[test]
 fn ctrl_s_from_sidebar_stops_streaming() {
     let mut app = test_app();
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     app.streaming = true;
     app.assistant_buf = "partial".into();
     app.handle_key(ctrl_key(KeyCode::Char('s')));
@@ -1063,7 +1105,7 @@ fn ctrl_s_with_empty_buf_still_sends_stopped() {
     assert!(matches!(app.messages.last(), Some(Message::System(m)) if m.contains("stopped")));
 }
 
-// ── Slash command edge cases ──
+// â”€â”€ Slash command edge cases â”€â”€
 
 #[test]
 fn slash_status_full() {
@@ -1120,7 +1162,7 @@ fn slash_session_switch_non_matching_id() {
     app.conversations = vec![conv("abc123", "test")];
     app.input = "/session switch xyz".into();
     let effects = app.handle_key(key(KeyCode::Enter));
-    // No conversation's id starts with "xyz" — falls back to using it verbatim (matches the
+    // No conversation's id starts with "xyz" â€” falls back to using it verbatim (matches the
     // sidebar behavior: an unrecognized id still attempts a load rather than erroring).
     assert!(effects.iter().any(|e| matches!(e, Effect::LoadConversationHistory(id) if id == "xyz")));
     assert_eq!(app.pending_load, Some("xyz".to_string()));
@@ -1149,7 +1191,7 @@ fn cmd_new_without_streaming_no_cancel() {
     );
 }
 
-// ── State machine edge cases ──
+// â”€â”€ State machine edge cases â”€â”€
 
 #[test]
 fn conversations_update_clamps_selection() {
@@ -1203,7 +1245,7 @@ fn scroll_forward_saturating() {
     assert_eq!(app.scroll_offset, 0);
 }
 
-// ── Tree: depth 2+ nesting ──
+// â”€â”€ Tree: depth 2+ nesting â”€â”€
 
 #[test]
 fn visible_tree_depth_three() {
@@ -1221,8 +1263,8 @@ fn visible_tree_depth_three() {
     assert_eq!(visible[2].ancestors_last.len(), 2);
 }
 
-// ── Utility functions ──
-// format_uptime itself is tested in liberado-commands (the crate that now owns it) — see
+// â”€â”€ Utility functions â”€â”€
+// format_uptime itself is tested in liberado-commands (the crate that now owns it) â€” see
 // its format_uptime_hours_and_minutes/format_uptime_minutes_only/format_uptime_zero.
 
 #[test]
@@ -1241,7 +1283,7 @@ fn truncate_for_display_small_max() {
 fn mouse_scroll_sidebar_at_boundaries() {
     let mut app = test_app();
     app.conversations = vec![conv("c1", "a"), conv("c2", "b")];
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     set_layout(
         &mut app,
         Rect::new(0, 0, 60, 20),
@@ -1270,19 +1312,19 @@ fn mouse_click_input_sets_cursor_position() {
     assert_eq!(app.cursor, 3);
 }
 #[test]
-fn non_alphanumeric_sidebar_typing_ignored() {
+fn session_browser_accepts_punctuation_in_filter() {
     let mut app = test_app();
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     app.sidebar_filter.clear();
     app.handle_key(key(KeyCode::Char('.')));
     app.handle_key(key(KeyCode::Char('@')));
-    assert!(app.sidebar_filter.is_empty());
+    assert_eq!(app.sidebar_filter, ".@");
 }
 #[test]
 fn sidebar_up_at_zero_does_nothing() {
     let mut app = test_app();
     app.conversations = vec![conv("c1", "a")];
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     app.sidebar_selection = 0;
     app.handle_key(key(KeyCode::Up));
     assert_eq!(app.sidebar_selection, 0);
@@ -1295,18 +1337,25 @@ fn visible_tree_empty_input() {
     assert!(visible.is_empty());
 }
 
-// ── Chat focus tests ──
+// â”€â”€ Chat focus tests â”€â”€
 
 #[test]
-fn tab_cycles_input_sidebar_chat() {
+fn tab_cycles_input_and_chat() {
     let mut app = test_app();
     assert_eq!(app.focus, Focus::Input);
     app.handle_key(key(KeyCode::Tab));
-    assert_eq!(app.focus, Focus::SidebarConversations);
-    app.handle_key(key(KeyCode::Tab));
     assert_eq!(app.focus, Focus::ChatMessages);
-    app.handle_key(key(KeyCode::Tab));
+    app.handle_key(key(KeyCode::Esc));
     assert_eq!(app.focus, Focus::Input);
+}
+
+#[test]
+fn slash_session_opens_browser() {
+    let mut app = test_app();
+    app.conversations = vec![conv("c1", "alpha")];
+    app.input = "/session".into();
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.focus, Focus::SessionBrowser);
 }
 
 #[test]
@@ -1363,7 +1412,7 @@ fn chat_enter_out_of_bounds_noop() {
     assert!(app.expanded_messages.is_empty());
 }
 
-// ── Word navigation ──
+// â”€â”€ Word navigation â”€â”€
 
 #[test]
 fn prev_word_boundary_from_middle() {
@@ -1449,7 +1498,7 @@ fn ctrl_backspace_at_start_does_nothing() {
     assert_eq!(app.input, "hello");
 }
 
-// ── Coverage gap tests ──
+// â”€â”€ Coverage gap tests â”€â”€
 
 #[test]
 fn short_id_empty() {
@@ -1473,6 +1522,132 @@ fn action_tick_is_noop() {
     let mut app = test_app();
     let effects = app.update(Action::Tick);
     assert!(effects.iter().all(|e| matches!(e, Effect::None)));
+}
+
+#[test]
+fn new_app_is_dirty_for_first_paint() {
+    let app = test_app();
+    assert!(app.is_dirty());
+    assert!(app.should_draw());
+}
+
+#[test]
+fn clear_dirty_skips_draw_when_idle_and_connected() {
+    let mut app = test_app();
+    app.daemon_connected = true;
+    app.clear_dirty();
+    assert!(!app.is_dirty());
+    assert!(!app.needs_animation());
+    assert!(!app.should_draw());
+}
+
+#[test]
+fn tick_does_not_mark_dirty() {
+    let mut app = test_app();
+    app.daemon_connected = true;
+    app.clear_dirty();
+    app.update(Action::Tick);
+    assert!(!app.is_dirty());
+}
+
+#[test]
+fn identical_status_update_does_not_dirty() {
+    let mut app = test_app();
+    app.daemon_connected = true;
+    let status = DaemonStatus {
+        running: true,
+        vault_path: "/v".into(),
+        uptime_seconds: 10,
+        watcher_active: false,
+        dispatcher_attached: false,
+        orchestrator_attached: false,
+        reactions_seen: 0,
+        model_name: None,
+        token_usage_total: None,
+        context_window: None,
+        chat_tools: 0,
+        chat_tool_names: vec![],
+    };
+    app.update(Action::StatusUpdate(status.clone()));
+    app.clear_dirty();
+    app.update(Action::StatusUpdate(status));
+    assert!(!app.is_dirty());
+}
+
+#[test]
+fn sse_token_marks_dirty() {
+    let mut app = test_app();
+    app.daemon_connected = true;
+    app.clear_dirty();
+    app.update(Action::SseToken("hi".into()));
+    assert!(app.is_dirty());
+    assert!(app.should_draw());
+}
+
+#[test]
+fn streaming_forces_animation_draw_even_if_clean() {
+    let mut app = test_app();
+    app.daemon_connected = true;
+    app.streaming = true;
+    app.clear_dirty();
+    assert!(app.needs_animation());
+    assert!(app.should_draw());
+}
+
+#[test]
+fn slash_palette_opens_on_slash() {
+    let mut app = test_app();
+    app.handle_key(key(KeyCode::Char('/')));
+    assert!(!app.slash_matches().is_empty());
+}
+
+#[test]
+fn slash_palette_narrows_and_tab_completes() {
+    let mut app = test_app();
+    for c in "/hel".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    assert_eq!(app.slash_matches().len(), 1);
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.input, "/help");
+}
+
+#[test]
+fn slash_ghost_suffix_shows_remainder() {
+    let mut app = test_app();
+    for c in "/hel".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    assert_eq!(app.slash_ghost_suffix().as_deref(), Some("p"));
+}
+
+#[test]
+fn slash_enter_accepts_ghost_without_tab() {
+    let mut app = test_app();
+    for c in "/hel".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    // Enter runs selected match (/help) without Tab materializing it first.
+    app.handle_key(key(KeyCode::Enter));
+    let has_help = app.messages.iter().any(|m| {
+        matches!(m, Message::System(text) if text.contains("Slash commands"))
+    });
+    assert!(has_help, "expected /help catalog output, messages={:?}", app.messages);
+    // Input cleared by the help handler after accept.
+    assert!(app.input.is_empty());
+}
+
+#[test]
+fn slash_palette_up_down_selects() {
+    let mut app = test_app();
+    app.handle_key(key(KeyCode::Char('/')));
+    let n = app.slash_matches().len();
+    assert!(n > 2);
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Down));
+    assert_eq!(app.slash_palette_index, 2);
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!(app.slash_palette_index, 1);
 }
 
 #[test]
@@ -1540,13 +1715,16 @@ fn push_tool_history_empty_array() {
 #[test]
 fn sidebar_n_without_filter_creates_new() {
     let mut app = test_app();
-    app.focus = Focus::SidebarConversations;
+    app.focus = Focus::SessionBrowser;
     app.sidebar_filter.clear();
     app.session = Some("old".into());
     app.messages.push(Message::User("hi".into()));
     app.handle_key(key(KeyCode::Char('n')));
     assert!(app.session.is_none());
-    assert!(app.messages.is_empty());
+    assert_eq!(app.focus, Focus::Input);
+    // System notice about new conversation.
+    assert!(app.messages.iter().any(|m| matches!(m, Message::System(_))));
+    assert!(!app.messages.iter().any(|m| matches!(m, Message::User(_))));
 }
 
 #[test]
@@ -1635,12 +1813,11 @@ fn slash_theme_set_named() {
 }
 
 #[test]
-fn slash_session_bare_is_list() {
+fn slash_session_bare_opens_browser() {
     let mut app = test_app();
     app.input = "/session".into();
     app.handle_key(key(KeyCode::Enter));
-    let last = app.messages.last().unwrap();
-    assert!(matches!(last, Message::System(m) if m.contains("No conversations in list")));
+    assert_eq!(app.focus, Focus::SessionBrowser);
 }
 
 #[test]
@@ -1658,7 +1835,7 @@ fn slash_session_switch_success() {
     app.conversations = vec![conv("abc123xx", "test")];
     app.input = "/session switch abc".into();
     let effects = app.handle_key(key(KeyCode::Enter));
-    // "abc" is a prefix of "abc123xx" — resolves to the full id, matching the sidebar's
+    // "abc" is a prefix of "abc123xx" â€” resolves to the full id, matching the sidebar's
     // "type the first few characters" convention.
     assert!(effects.iter().any(|e| matches!(e, Effect::LoadConversationHistory(id) if id == "abc123xx")));
     assert_eq!(app.pending_load, Some("abc123xx".to_string()));

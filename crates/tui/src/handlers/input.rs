@@ -52,7 +52,17 @@ fn handle_shift_enter(app: &mut App) -> Vec<Effect> {
 }
 
 fn send_message(app: &mut App) -> Vec<Effect> {
-    let message = app.input.trim().to_string();
+    // Ghost-complete: Enter accepts the selected palette match (no Tab required).
+    let message = if liberado_commands::is_slash_prefix(&app.input)
+        && !app.slash_matches().is_empty()
+    {
+        liberado_commands::accept_completion(&app.input, app.slash_palette_index)
+            .unwrap_or_else(|| app.input.clone())
+            .trim()
+            .to_string()
+    } else {
+        app.input.trim().to_string()
+    };
     if message.is_empty() {
         return vec![Effect::None];
     }
@@ -79,6 +89,7 @@ fn handle_char(app: &mut App, c: char) -> Vec<Effect> {
     app.input.insert(app.cursor, c);
     app.cursor += 1;
     auto_wrap_if_needed(app);
+    app.clamp_slash_palette();
     vec![Effect::None]
 }
 
@@ -113,6 +124,7 @@ fn handle_backspace(app: &mut App, mods: KeyModifiers) -> Vec<Effect> {
         app.cursor -= 1;
         app.input.remove(app.cursor);
     }
+    app.clamp_slash_palette();
     vec![Effect::None]
 }
 
@@ -164,6 +176,13 @@ fn handle_end(app: &mut App) -> Vec<Effect> {
 }
 
 fn handle_up(app: &mut App) -> Vec<Effect> {
+    let matches = app.slash_matches();
+    if !matches.is_empty() {
+        if app.slash_palette_index > 0 {
+            app.slash_palette_index -= 1;
+        }
+        return vec![Effect::None];
+    }
     let line = app.cursor_visual_line();
     if line == 0 {
         return vec![Effect::None];
@@ -174,6 +193,13 @@ fn handle_up(app: &mut App) -> Vec<Effect> {
 }
 
 fn handle_down(app: &mut App) -> Vec<Effect> {
+    let matches = app.slash_matches();
+    if !matches.is_empty() {
+        if app.slash_palette_index + 1 < matches.len() {
+            app.slash_palette_index += 1;
+        }
+        return vec![Effect::None];
+    }
     let total = app.input_visual_lines();
     let line = app.cursor_visual_line();
     if line + 1 >= total {
@@ -197,7 +223,20 @@ fn handle_esc(app: &mut App) -> Vec<Effect> {
 }
 
 fn handle_tab(app: &mut App) -> Vec<Effect> {
-    app.focus = Focus::SidebarConversations;
+    // Progressive slash completion takes Tab when a palette is open.
+    if let Some(completed) =
+        liberado_commands::complete_commands(&app.input, app.slash_palette_index)
+    {
+        app.input = completed;
+        app.cursor = app.input.len();
+        app.clamp_slash_palette();
+        return vec![Effect::None];
+    }
+    // Input ↔ chat history (no always-on conversation sidebar).
+    app.focus = Focus::ChatMessages;
+    if app.chat_cursor >= app.messages.len() {
+        app.chat_cursor = app.messages.len().saturating_sub(1);
+    }
     vec![Effect::None]
 }
 

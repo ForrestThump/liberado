@@ -1,7 +1,7 @@
 [package]
 name = "liberado-heuristics-tuner"
 version = "0.1.0"
-description = "Automates the dispatcher prompt-tuning loop (docs/roadmap/heuristics-tuning-engine-plan.md): generates and scores candidate system prompts against the existing eval scenario set via a beam-search-with-restarts loop, and proposes the best as a diff + rubric for human review. Never auto-applies a prompt change."
+description = "Automates prompt-tuning for dispatcher, executor/subagent tool loops, and Liberado coder-role system prompts via beam search; proposes diffs + rubrics for human review. Never auto-applies prompt changes."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -15,6 +15,8 @@ path = "src/main.rs"
 [dependencies]
 async-trait = { workspace = true }
 chrono = { workspace = true }
+liberado-coder-agent = { workspace = true }
+liberado-coder-core = { workspace = true }
 liberado-common = { workspace = true }
 liberado-config = { workspace = true }
 liberado-dispatcher = { workspace = true }
@@ -25,6 +27,7 @@ liberado-provider = { workspace = true }
 liberado-provider-openai-compat = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }

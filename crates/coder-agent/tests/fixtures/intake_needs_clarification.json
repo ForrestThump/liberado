@@ -1,0 +1,25 @@
+{
+  "status": "needs_clarification",
+  "questions": [
+    {
+      "id": "stack",
+      "prompt": "Which stack should the todo CLI use?",
+      "options": ["Rust", "Node"],
+      "affects": "verify_profile and package layout"
+    },
+    {
+      "id": "store",
+      "prompt": "Where should todos persist?",
+      "options": ["local JSON file", "SQLite", "in-memory only"],
+      "affects": "required paths and out_of_scope"
+    }
+  ],
+  "partial_draft": {
+    "description": "Build a todo CLI (stack TBD).",
+    "success_criteria": ["can add and list todos"],
+    "verifiers": [],
+    "out_of_scope": [],
+    "assumed_defaults": [],
+    "domain_hint": "coding"
+  }
+}

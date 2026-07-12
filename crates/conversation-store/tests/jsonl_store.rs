@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use liberado_conversation_store::{
-    Author, ConversationStore, JsonlStore, NewConversation, NewNode, StoreError,
+    Author, ConversationStore, JsonlStore, NewConversation, NewNode, StoreError, Ulid,
 };
 use liberado_provider::{Message, ToolInvocation};
 use tempfile::tempdir;
@@ -297,6 +297,27 @@ async fn concurrent_appends_to_one_conversation_are_serialized() {
         file_ids.windows(2).all(|w| w[0] < w[1]),
         "ids must be strictly increasing in file order"
     );
+}
+
+#[tokio::test]
+async fn header_reads_line_zero_without_loading_nodes() {
+    let dir = tempdir().unwrap();
+    let store = JsonlStore::new(dir.path());
+    let convo = store.create(new_convo("sidebar title")).await.unwrap();
+    store.append(convo.id, user_node(None, "body")).await.unwrap();
+
+    let h = store.header(convo.id).await.unwrap();
+    assert_eq!(h.id, convo.id);
+    assert_eq!(h.title.as_deref(), Some("sidebar title"));
+}
+
+#[tokio::test]
+async fn header_missing_conversation_is_not_found() {
+    let dir = tempdir().unwrap();
+    let store = JsonlStore::new(dir.path());
+    let missing = Ulid::new();
+    let err = store.header(missing).await.unwrap_err();
+    assert!(matches!(err, StoreError::NotFound(_)));
 }
 
 #[tokio::test]

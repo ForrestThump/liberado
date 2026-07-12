@@ -8,6 +8,7 @@ use parking_lot::Mutex;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use crossterm::event::{self, Event as CEvent, KeyEventKind};
 use ratatui::Terminal;
@@ -87,7 +88,9 @@ async fn run_loop(
     action_rx: &mut mpsc::Receiver<Action>,
     _action_tx: &mpsc::Sender<Action>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut spinner_tick: u8 = 0;
+    // Spinner phase is wall-clock based so reconnect/stream glyphs advance at a fixed
+    // human-readable rate (~SPINNER_FRAME_MS each), not once per ~16 ms redraw.
+    let spinner_origin = Instant::now();
     loop {
         if runner.should_quit.load(Ordering::Relaxed) {
             break;
@@ -115,7 +118,10 @@ async fn run_loop(
                         runner.run(effect).await;
                     }
                 }
-                CEvent::Resize(_, _) => {} // Ratatui handles resize via frame.area(); layout recalculated each draw.
+                CEvent::Resize(_, _) => {
+                    // Layout is recomputed from frame.area() on the next draw.
+                    runner.app.lock().mark_dirty();
+                }
                 _ => {}
             }
         }
@@ -134,11 +140,17 @@ async fn run_loop(
             }
         }
 
-        spinner_tick = spinner_tick.wrapping_add(1);
-        terminal.draw(|frame| {
-            let mut app_guard = runner.app.lock();
-            ui::draw(frame, &mut app_guard, spinner_tick);
-        })?;
+        // T1.3: skip full redraw when state is unchanged and nothing is animating.
+        let should_draw = runner.app.lock().should_draw();
+        if should_draw {
+            let spinner_tick = (spinner_origin.elapsed().as_millis() / u128::from(SPINNER_FRAME_MS))
+                as u8;
+            terminal.draw(|frame| {
+                let mut app_guard = runner.app.lock();
+                ui::draw(frame, &mut app_guard, spinner_tick);
+                app_guard.clear_dirty();
+            })?;
+        }
     }
 
     Ok(())
@@ -184,17 +196,8 @@ fn spawn_poller(tx: mpsc::Sender<Action>, server: String, client: reqwest::Clien
                 }
             }
 
-            match api::fetch_reactions(&client, &server, REACTIONS_FETCH_LIMIT).await {
-                Ok(reactions) => {
-                    if tx.try_send(Action::ReactionsUpdate(reactions)).is_err() {
-                        tracing::warn!("action channel full, dropping ReactionsUpdate");
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "reactions poll failed");
-                }
-            }
-
+            // Reactions feed is intentionally not shown in the sparse layout.
+            // Conversations still poll so /session browser stays fresh.
             match api::fetch_conversations(&client, &server).await {
                 Ok(convs) => {
                     if tx.try_send(Action::ConversationsUpdate(convs)).is_err() {

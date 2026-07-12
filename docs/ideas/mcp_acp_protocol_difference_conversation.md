@@ -70,9 +70,3 @@ That actually strengthens the case for the separate-crate plan rather than compl
 
 Practically, two small things worth doing before you start the new crate, given your stated bandwidth: submit the two ready TurboMCP branches first. Starting a new protocol crate while two finished PRs sit unsubmitted is exactly the kind of thing that creates the multi-project sprawl you were just worried about in the abstract — easy to let turbo-a2a become a third thing competing for attention with Liberado's dispatcher and the unsubmitted PRs. If you want, I can help you think through what the a2a-types dependency boundary should look like once you're actually ready to scaffold it.
 
-
-
-
-
-
-Claude is AI and can make mistakes. Please double-check responses.

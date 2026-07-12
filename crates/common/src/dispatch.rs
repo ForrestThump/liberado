@@ -49,11 +49,13 @@ pub enum DispatchAction {
         /// default so a terse model reply still decodes (and routes) instead of degrading to a
         /// spurious `Clarify`.
         goal: String,
-        /// `base ∩ narrowing` — never widened (Decision 4 invariant). Not produced by the model;
-        /// the executor narrows from the request's ceiling + `allowed_mcps`.
+        /// Optional explicit capability narrowing (`base ∩ this` — Decision 4). Not produced by
+        /// the model (defaults empty). When empty, the orchestrator derives the risk-gate set from
+        /// the dispatch ceiling ∩ `allowed_mcps` so the gate matches the scoped tool catalog.
         #[serde(default)]
         capabilities: CapabilitySet,
-        /// Filtered MCP catalog the subagent may see. Empty = all in-scope MCPs.
+        /// Filtered MCP catalog the subagent may see (and, when `capabilities` is empty, the MCP
+        /// names used to derive the risk-gate set). Empty = all in-scope MCPs under the ceiling.
         #[serde(default)]
         allowed_mcps: Vec<String>,
         /// How the subagent knows it is done.

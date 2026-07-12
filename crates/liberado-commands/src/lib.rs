@@ -30,6 +30,7 @@
 //! 4. Add the route in [`dispatch()`].
 //! 5. Add a variant to [`CommandResult`] if the command produces UI-side effects.
 
+pub mod catalog;
 pub mod commands;
 pub mod constants;
 pub mod context;
@@ -38,6 +39,10 @@ pub mod format;
 pub mod handlers;
 pub mod result;
 
+pub use catalog::{
+    COMMAND_CATALOG, CommandSpec, accept_completion, complete_commands, filter_commands,
+    ghost_suffix, is_slash_prefix,
+};
 pub use commands::{SessionCmd, SlashCommand, ThemeCmd};
 pub use constants::CTX_PCT_DISPLAY_CAP;
 pub use context::{CommandContext, StatusInfo};

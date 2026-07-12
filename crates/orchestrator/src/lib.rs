@@ -22,9 +22,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use liberado_common::{
-    BlockReason, CapabilitySet, Consequence, DispatchAction, DispatchDecision, McpDescriptor,
-    Outcome, Proposal, ProposalSigner, ProposedAction, Report, SignedProposal, ToolCall,
-    WriteClass, WriteProvenance, mcp_of,
+    BlockReason, Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision,
+    McpDescriptor, Outcome, Proposal, ProposalSigner, ProposedAction, Report, SignedProposal,
+    ToolCall, WriteClass, WriteProvenance, mcp_of,
 };
 use liberado_executor::{
     Budget, ExecError, Executor, RiskGatedToolRuntime, RuntimeFactory, RuntimeSetupError, Task,
@@ -56,7 +56,9 @@ ask the user anything; if you cannot proceed, submit a report explaining why.";
 /// `DIRECT_INSTRUCTIONS` above — a seed baseline for subagent-layer prompt tuning.
 pub const SUBAGENT_PREAMBLE: &str = "\
 You are a narrowly-scoped Liberado subagent. Use only the tools you have been given to accomplish \
-the goal, then call `submit_report` with the result. Do not exceed your goal.";
+the goal, then call `submit_report` with the result. Do not exceed your goal. Prefer the smallest \
+tool sequence that answers the goal (e.g. list_tasks or search, then report) — avoid long \
+scratchpad loops or re-reading the same notes when you already have enough to report.";
 
 /// What an orchestrated decision resolved to.
 #[derive(Debug, Clone, PartialEq)]
@@ -352,10 +354,14 @@ impl Orchestrator {
                 } => {
                     let provenance = WriteProvenance::agent(self.source.clone(), &correlation_id);
                     let runtime = self.factory.runtime_for(&allowed_mcps, provenance).await?;
-                    // Gate with the ceiling narrowed by the decision's own capabilities (Decision 4:
-                    // authority can only shrink down a delegation chain) — belt and suspenders, same
-                    // as `ExecuteDirect` re-intersecting `relevant_mcps` against its granted ceiling.
-                    let gate_capabilities = self.capabilities.narrow(&capabilities);
+                    // Decision 4: authority only shrinks. Classifier never emits `capabilities`
+                    // (empty default); derive the gate from ceiling ∩ allowed_mcps so the risk
+                    // gate matches the scoped tool catalog — not an empty set that blocks every MCP.
+                    let gate_capabilities = subagent_gate_capabilities(
+                        &self.capabilities,
+                        &capabilities,
+                        &allowed_mcps,
+                    );
                     let runtime = self.gate(
                         runtime,
                         gate_capabilities,
@@ -550,7 +556,8 @@ impl Orchestrator {
     ) -> Result<Report, OrchestratorError> {
         let provenance = WriteProvenance::agent(self.source.clone(), &proposal.correlation_id);
         let runtime = self.factory.runtime_for(allowed_mcps, provenance).await?;
-        let gate_capabilities = self.capabilities.narrow(capabilities);
+        let gate_capabilities =
+            subagent_gate_capabilities(&self.capabilities, capabilities, allowed_mcps);
         let runtime = self.gate(
             runtime,
             gate_capabilities,
@@ -589,11 +596,16 @@ impl Orchestrator {
                 .factory
                 .runtime_for(&sub.allowed_mcps, provenance)
                 .await?;
-            // No per-sub-dispatch CapabilitySet exists on `SubDispatch` today (only `allowed_mcps`),
-            // so gate with the orchestrator-level ceiling — the same one `ExecuteDirect` uses.
+            // No explicit CapabilitySet on `SubDispatch` — derive from allowed_mcps against the
+            // ceiling (same rules as `DispatchSubagent` with empty decision capabilities).
+            let gate_capabilities = subagent_gate_capabilities(
+                &self.capabilities,
+                &CapabilitySet::empty(),
+                &sub.allowed_mcps,
+            );
             let runtime = self.gate(
                 runtime,
-                self.capabilities.clone(),
+                gate_capabilities,
                 sub.goal.as_str(),
                 sub.correlation_id.as_str(),
             );
@@ -724,6 +736,33 @@ impl ToolRuntime for NoMcpRuntime {
     }
 }
 
+/// Derive the capability set used to risk-gate a subagent (Decision 4: never widen).
+///
+/// - Non-empty `decision_capabilities` (tests / future explicit grants):
+///   `ceiling ∩ decision_capabilities`.
+/// - Empty (normal classifier output — the model is told not to emit capability objects):
+///   synthesize `ExecuteMcp` entries from `allowed_mcps`, then intersect with the ceiling.
+///   Empty `allowed_mcps` means no MCP narrowing (same sense as empty `relevant_mcps` on
+///   `ExecuteDirect`), so the gate is the full ceiling; the runtime still only exposes
+///   registered servers.
+fn subagent_gate_capabilities(
+    ceiling: &CapabilitySet,
+    decision_capabilities: &CapabilitySet,
+    allowed_mcps: &[String],
+) -> CapabilitySet {
+    if !decision_capabilities.capabilities.is_empty() {
+        return ceiling.narrow(decision_capabilities);
+    }
+    if allowed_mcps.is_empty() {
+        return ceiling.clone();
+    }
+    let requested: CapabilitySet = allowed_mcps
+        .iter()
+        .map(|name| Capability::ExecuteMcp(name.clone()))
+        .collect();
+    ceiling.narrow(&requested)
+}
+
 /// Build the subagent system prompt, appending its success criteria when present.
 fn subagent_instructions(success_criteria: &[String]) -> String {
     if success_criteria.is_empty() {
@@ -757,6 +796,45 @@ mod tests {
     fn subagent_instructions_empty_returns_preamble() {
         let result = subagent_instructions(&[]);
         assert_eq!(result, SUBAGENT_PREAMBLE);
+    }
+
+    #[test]
+    fn subagent_gate_derives_from_allowed_mcps_when_capabilities_empty() {
+        let ceiling = CapabilitySet::from_iter([
+            Capability::ExecuteMcp("turbovault".into()),
+            Capability::ExecuteMcp("weather".into()),
+        ]);
+        let gate = subagent_gate_capabilities(
+            &ceiling,
+            &CapabilitySet::empty(),
+            &["turbovault".into()],
+        );
+        assert!(gate.grants_mcp("turbovault"));
+        assert!(!gate.grants_mcp("weather"));
+    }
+
+    #[test]
+    fn subagent_gate_empty_allowed_mcps_uses_full_ceiling() {
+        let ceiling = CapabilitySet::from_iter([
+            Capability::ExecuteMcp("turbovault".into()),
+            Capability::ExecuteMcp("weather".into()),
+        ]);
+        let gate = subagent_gate_capabilities(&ceiling, &CapabilitySet::empty(), &[]);
+        assert!(gate.grants_mcp("turbovault"));
+        assert!(gate.grants_mcp("weather"));
+    }
+
+    #[test]
+    fn subagent_gate_explicit_capabilities_intersect_ceiling() {
+        let ceiling = CapabilitySet::from_iter([
+            Capability::ExecuteMcp("a".into()),
+            Capability::ExecuteMcp("b".into()),
+        ]);
+        let explicit = CapabilitySet::from_iter([Capability::ExecuteMcp("a".into())]);
+        // allowed_mcps ignored when explicit capabilities are present
+        let gate = subagent_gate_capabilities(&ceiling, &explicit, &["b".into()]);
+        assert!(gate.grants_mcp("a"));
+        assert!(!gate.grants_mcp("b"));
     }
 
     #[test]

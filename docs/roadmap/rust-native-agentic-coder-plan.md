@@ -1,184 +1,251 @@
-# Rust-Native Agentic Coder Plan
+# Rust-Native Agentic Orchestration Plan
 
-**Status**: implementation in progress, 2026-07-09. This supersedes the long-term reliance on
-`vtcode` inside `liberado-pr-dispatch-mcp`, while preserving the good PR-factory pieces already built
-there: repo cloning, forge abstraction, task DB, validation, revision loop, Telegram approval, and
-draft-PR-only human review.
+> **Filename note:** path still says `coder` for link stability. The plan is for a **general agentic
+> mesh**; coding is the first **domain pack**, not the product identity.
 
-Current checkpoints:
+**Status**: implementation in progress, 2026-07-10  
+**Architecture**: [`docs/architecture/agentic-loops.md`](../architecture/agentic-loops.md)  
+**Hygiene audit**: [`agentic-mesh-hygiene-audit-2026-07-10.md`](agentic-mesh-hygiene-audit-2026-07-10.md)  
+**Modularity**: [`docs/architecture/modularity.md`](../architecture/modularity.md)  
+**Design inputs**:
+[`loop_architecture_reference_article.md`](../ideas/loop_architecture_reference_article.md),
+[`doomloop_research.md`](../ideas/doomloop_research.md),
+Claude Code / Codex / OpenCode / Grok Build / KiloCode harness patterns.
+
+**We are not wrapping VTCode.** VTCode does not work reliably as a coding harness. The product is a
+home-spun Liberado system built on our own `Provider` + `Executor` + `ToolRuntime` + goal-session
+stack. Any remaining `vtcode` wiring in `liberado-pr-dispatch-mcp` is **legacy exit scaffolding**
+only — a temporary switch so PR dispatch can keep running while `liberado-loop` becomes the default
+and then the only path. It is not the architecture, not a long-term backend, and not something to
+invest in.
+
+What we *do* keep from the PR factory (not from VTCode): repo cloning, forge abstraction, task DB,
+validation, revision loop, Telegram approval, and draft-PR-only human review.
+
+It is **not only a coding-agent swap**. The product is an open-source **Rust agentic orchestration
+mesh** that:
+
+1. Runs **goal-oriented loops** until success, blocker, or budget exhaustion — without drift.
+2. Separates **maker from checker** (deterministic verifiers + model critics).
+3. Delegates **subagents** with capability narrowing and isolated state.
+4. Exposes a **session/event backend** that TUI, WebUI, CLI, and headless workers share.
+5. Uses **domain packs** for tools/verifiers/env — coding first, MCP life-ops and others next —
+   without forking the kernel.
+
+**Kernel vs coding pack** (non-negotiable framing):
+
+| Kernel (general) | Coding pack (first implementation) |
+|---|---|
+| Goal session, budgets, terminals, attempts | `coder-agent` composition today |
+| `Provider`, `Executor`, `ToolRuntime` | `coder-tools` + `coder-sandbox` |
+| Session/event API for all surfaces | `CoderEvent` specialization → mesh later |
+| Subagent + capability ∩ | worktree isolation when needed |
+| Meta-loop (tuner / draft PRs) | coding eval scenarios |
+
+If a design only works for git/diff/cargo, it stays in the pack. If a second domain would need it,
+it is kernel (or must become kernel). See the hygiene audit for coupling and extraction triggers.
+
+If you only read one architecture page first, read
+[`agentic-loops.md`](../architecture/agentic-loops.md). This file is the implementation roadmap and
+checkpoint log, **proving the mesh through the coding pack** that unblocks PR dispatch.
+
+---
+
+## Why this exists
+
+### The vtcode failure mode
+
+The PR-dispatch system proved the draft-PR gate and forge workflow, but the coding harness was the
+weak link. The diagnosis in
+[`pr-dispatch-vtcode-no-write-finding.md`](pr-dispatch-vtcode-no-write-finding.md) shows that
+`vtcode` can report success while doing read-only exploration and producing no real diff, while an
+OpenCode A/B with the same model and task writes the expected code. Ten confirmed interventions did
+not move the core symptom. More patching around `vtcode` has low expected return.
+
+VTCode is currently the main open-source **Rust** agentic coding TUI in the wild — and it is not a
+reliable substrate. We studied it as a cautionary reference (unified mega-tools, false success with
+no diff). We do **not** build on it, fork it as the engine, or treat a VTCode wrapper as the product.
+Liberado owns the orchestration kernel.
+
+### The real lesson
+
+The important architectural lesson is not "use OpenCode" or "use Claude Code." It is that a reliable
+agentic system needs:
+
+| Requirement | Liberado answer |
+|---|---|
+| Explicit loop | Perceive → plan (optional) → act → verify → decide → checkpoint |
+| Small tools | Discrete `ToolRuntime` catalogs, not multi-action mega-tools |
+| Hard stops | Named terminal states + budgets + progress guards |
+| Verifiers | Deterministic gates the model cannot rewrite; critic second |
+| Durable state | Traces, attempt logs, prior_feedback, resume |
+| Subagents | Capability-narrowed child goals + structured `Report` |
+| Surfaces as clients | TUI/WebUI/PR factory consume events; never own the loop |
+| Config-owned knobs | Prompts, models, budgets, policy, validation commands |
+| Empiricism | Evals + `heuristics-tuner` meta-loop |
+
+Liberado already has most of the **inner-loop** substrate in
+[`liberado-executor`](../../crates/executor/ARCHITECTURE.md): report-mode termination, scratchpad,
+budget limits, doom-loop/cycle detection, and `ToolRuntime`. This plan builds the **goal session**,
+**domain tools** (coding first), and **surface contracts** around that core — not a new framework
+import.
+
+---
+
+## North-star product shape
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Surfaces (clients)                                              │
+│  liberado TUI · WebUI · CLI · PR-factory MCP · cron/hooks · ACP? │
+└───────────────────────────────┬──────────────────────────────────┘
+                                │ session + event stream
+┌───────────────────────────────▼──────────────────────────────────┐
+│  Goal session / multi-role orchestration                         │
+│  Goal · criteria · roles · subagents · verifiers · terminals     │
+└───────────────────────────────┬──────────────────────────────────┘
+                                │ N bounded Executor runs
+┌───────────────────────────────▼──────────────────────────────────┐
+│  liberado-executor  (inner tool loop)                            │
+└───────────────┬───────────────────────┬──────────────────────────┘
+                │                       │
+        CodingToolRuntime        TurbomcpRuntime / other domains
+        coder-tools+sandbox      life-ops, research, custom MCP
+                │
+                ▼
+        PR factory (commit/push/draft PR) — consumer, not loop owner
+```
+
+**Coding is first** because PR-dispatch is the self-improvement engine and the reliability gap is
+there. **Generality is not deferred indefinitely**: contracts, events, budgets, terminal states, and
+`ToolRuntime` stay domain-agnostic so a non-coding goal with different MCPs can reuse the same
+session machinery.
+
+Comparable systems we intentionally rip off for harness patterns (not code):
+
+- **Claude Code** — model/tool/result loop, permissions, hooks, subagents, session storage, UI client
+- **OpenAI Codex** — automations / goal-until-done, harness stop conditions
+- **OpenCode** — discrete tools, sessions/events, provider abstraction, safeguards
+- **Grok Build / KiloCode-class TUIs** — live event render, goal mode, subagents, cancel
+- **Karpathy / bilevel loops** — objective verifier; outer loop improves process from traces
+
+---
+
+## Current checkpoints (2026-07-09)
 
 - `liberado-pr-dispatch-mcp` has a `CoderBackend` seam around modify-task coding, JSON correction,
   validation self-correction, revisions, greenfield initial coding, and greenfield cargo-test repair.
-  It can now select either the migration `VtcodeBackend` or a `LiberadoLoopProcessBackend` that
-  spawns `liberado-coder-run` through the same `ExecResult`-shaped worker contract.
-- `crates/coder-core` defines provider-agnostic run/config/event/result contracts.
+  **Production direction is `LiberadoLoopProcessBackend`** (`liberado-coder-run`). A legacy
+  `VtcodeBackend` may still exist as a temporary config switch for comparison/rollback during cutover;
+  it is not the target system and should be deleted once Liberado loop is default and proven.
+- `crates/coder-core` defines provider-agnostic run/config/event/result contracts for the **coding
+  domain** (specialization of the goal-session vocabulary in `agentic-loops.md`).
 - `crates/coder-sandbox` defines the workspace/command boundary and a host-local implementation.
   It also has a first Docker command-runner scaffold that builds/runs `docker run --rm -i` commands
   from `DockerSandboxSpec`, with argv tests that do not require a live Docker daemon.
 - `crates/coder-tools` exposes the first discrete coding `ToolRuntime` over file/search/git/command
   and validation tools, including an atomic multi-edit `apply_patch` tool that validates all edits
-  before writing. Runtime construction now honors `SandboxSpec`, so command execution can route
-  through host-local or Docker workspaces.
-- `crates/coder-agent` has an Executor-backed MVP that runs the coder role through `CodingToolRuntime`,
-  loads the coder prompt from inline config or `prompt_path`, verifies real workspace changes with
-  `git status --porcelain`, rejects false success reports, runs a configured validation command as a
-  deterministic post-loop gate, and writes coarse `CoderTrace` JSON artifacts when `trace_dir` is
-  configured. It now selects model providers through a role-provider factory seam, though only the
-  coder role is executed so far.
+  before writing. Runtime construction honors `SandboxSpec` (host-local or Docker).
+- `crates/coder-agent` runs a coding **goal session**: worker role (`coder`, or `repair` on retries)
+  through `CodingToolRuntime`, config prompts, post-loop `git status` + validation gates, optional
+  **critic** on real `git diff` when critic prompt is set, **in-loop progress guards** (read-only
+  stall, same-tool churn, validation churn), outer **max_attempts** retry with `prior_feedback`, and
+  `CoderTrace` artifacts. Planner role still not executed.
 - `crates/coder-runner` exposes the same backend through `liberado-coder-run`, a JSON
-  `CoderRunRequest` -> `CoderRunResult` subprocess boundary. This is the intended low-friction bridge
-  for nested/process callers such as `liberado-pr-dispatch-mcp` while the in-process loop crates stay
-  reusable for a future TUI/API.
+  `CoderRunRequest` → `CoderRunResult` subprocess boundary — low-friction bridge for nested callers
+  while in-process crates stay reusable for TUI/API.
 - `liberado-config-loader` exposes `tuning.coder`/`[coder]` in `tuning.toml` as the first
   config-owned surface for backend selection, role prompts/models/budgets, sandbox/policy, validation
   command, and progress thresholds. It converts directly to `CoderRunConfig`.
 - Workspace verification currently expects the nested `turbovault/` checkout to be on
   `feature/vector-db`, because root `Cargo.toml` pins `turbovault-vector` from that branch.
-- Process checkpoint: after meaningful coder slices, run a fresh debt audit for anti-patterns,
-  coupling, duplication, doc drift, and missing tests. The first audit caught and fixed a status-gate
-  coupling bug where backend `git status` verification could be blocked by the model-facing command
-  policy.
-- Local loop-architecture source: [`loop_architecture_reference_article.md`](../ideas/loop_architecture_reference_article.md)
-  reinforces the non-negotiables for this project: automated verifier gates, durable state,
-  explicit stop conditions, real tools, separated maker/checker roles, connectors into the actual
-  environment, and a future outer loop that improves the inner loop using traces/evals rather than
-  vibes.
+- Process checkpoint: after meaningful coder slices, run a debt audit for anti-patterns, coupling,
+  duplication, doc drift, and missing tests. First audit fixed a status-gate coupling bug where
+  backend `git status` verification could be blocked by the model-facing command policy.
 
-**Goal**: replace `vtcode` with Liberado's own loop-based coding system, written in Rust, using the
-existing `Provider` + `Executor` + `ToolRuntime` architecture as the core. The result should be a
-modular backend that can power autonomous PR production first, and later a Claude-Code-like TUI/CLI
-coding surface without rewriting the agent engine.
+**Honest MVP gap vs north star**: worker + repair retry + critic + progress guards is a real goal
+session slice, still short of full multi-role planning and TUI streaming. Still missing: planner
+role, model-turn events, full Docker lifecycle, streaming session API for TUI/WebUI. Missing for
+generality: domain-neutral `Goal`/`Session` types (extract when a second domain needs them).
 
-## Why This Pivot
+---
 
-The current PR-dispatch system proved the draft-PR gate and forge workflow, but the coding harness is
-the weak link. The diagnosis in
-[`pr-dispatch-vtcode-no-write-finding.md`](pr-dispatch-vtcode-no-write-finding.md) shows that
-`vtcode` can report success while doing read-only exploration and producing no real diff, while an
-opencode A/B with the same model and task writes the expected code. Ten confirmed interventions did
-not move the core symptom. More patching around `vtcode` now has low expected return.
+## Design principles
 
-The important architectural lesson is not "use opencode." It is that a reliable coding agent needs:
+1. **General agent mesh first, coding as a domain pack.** `coder-*` crates are a pack, not Liberado's
+   new center. Same provider, config, capability, proposal, and eval patterns. Kernel must stay
+   usable with MCP tools alone (second-domain reusability test).
+2. **Backend before frontend.** PR dispatch and tests drive headlessly first. TUI/WebUI target a
+   stable session/event API later; they never own the loop.
+3. **Verifier before vibes.** Automated gates (diff, validation, path policy, report consistency)
+   decide success. Model critics review evidence; they do not replace gates.
+4. **State compounds; stops are product behavior.** Named terminals only. Every attempt leaves resume
+   state. Silent endless retry is a bug.
+5. **Config owns knobs.** Prompts, models, roles, budgets, tool/sandbox policy, validation commands,
+   progress thresholds — validated config, not recompiles.
+6. **Small tools beat clever tools.** Prefer OpenCode-shaped discrete tools over vtcode-shaped
+   unified multi-action tools.
+7. **Safety is code.** Path containment, command policy, sandboxing, deletion guards, draft-PR-only
+   publication, capability narrowing — not prompt requests.
+8. **Context is budgeted and staged.** Catalogs and large files are on-demand. Compaction is core
+   architecture, even with large context windows.
+9. **Maker ≠ checker; subagents isolate.** Planner/worker/critic/repair roles and child goals get
+   separate prompts/models and capability intersections.
+10. **Empiricism is part of the product.** Fixture tests, live smokes, eval scenarios, and
+    `heuristics-tuner` integration from the start of each reliability slice.
+11. **Meta-loop proposes; humans dispose.** Outer improvement of prompts/policy is draft PR /
+    proposal only. Never silently widen authority (Decision 14).
 
-- a simple explicit loop: perceive, reason, plan when useful, act, observe, repeat;
-- small, single-purpose tools instead of a large multi-action file tool;
-- hard stopping conditions, progress detection, budgets, and traces;
-- an eval/tuning harness that exercises the actual loop, not only a prompt;
-- config-owned prompts, models, budgets, tool policy, sandbox policy, and role assignment.
+---
 
-Liberado already has most of the generic loop substrate in
-[`liberado-executor`](../../crates/executor/ARCHITECTURE.md), including report-mode termination,
-scratchpad, budget limits, doom-loop/cycle detection, and a `ToolRuntime` abstraction. This plan
-builds the coding-specific runtime around that existing core instead of importing another full agent
-framework.
+## Target architecture
 
-## Design Principles
+### Layers (not just crates)
 
-1. **General agent mesh first, coding second.** The coder is one service in the mesh, not the new
-   center of Liberado. It should use the same provider, config, trace, capability, proposal, and
-   eval patterns as the rest of the system.
-2. **Backend before frontend.** The TUI should target a stable session/event API later. The first
-   deliverable is a rock-solid backend that PR dispatch and tests can drive headlessly.
-3. **Config owns knobs.** System prompts, model choices, role definitions, turn budgets, tool policy,
-   validation commands, sandbox image/runtime, retry thresholds, and tuning settings belong in config
-   files with validated defaults. The binary should not need a recompile to change role behavior.
-4. **Small tools beat clever tools.** Prefer opencode-shaped discrete tools (`read_file`, `edit_file`,
-   `write_file`, `search`, `run_command`) over vtcode-shaped `unified_file` tools. Simpler schemas
-   reduce model ambiguity and make loop progress easier to measure.
-5. **Safety is code.** File path containment, command policy, sandboxing, dirty-worktree protection,
-   deletion guards, PR-only publication, and proposal/approval boundaries are deterministic code, not
-   prompt requests.
-6. **Context is budgeted and staged.** The planner sees summaries and catalog-like affordances first;
-   large file contents are pulled only when a tool or helper service determines they are relevant.
-   The existing tool-helper/context-partitioning direction stays central.
-7. **Empiricism is part of the product.** The coder must ship with fixture tests, live smoke tests,
-   eval scenarios, and `heuristics-tuner` integration from the beginning, not after dogfooding finds
-   regressions.
+| Layer | Responsibility | Status |
+|---|---|---|
+| **Surfaces** | TUI / WebUI / CLI / PR MCP render events, send goals, approvals | Chat clients exist; goal-session API not yet |
+| **Goal session** | Multi-role outer loop, verifiers, subagents, terminals, durable state | MVP inside `coder-agent` (single role + post gates) |
+| **Inner loop** | `liberado-executor` tool turns | Production |
+| **Domain tools** | Coding tools, MCP tools, future domains | Coding + MCP both real |
+| **Sandbox / env** | Workspace isolation for coding; capability zones for mesh | Host + Docker scaffold |
+| **Meta-loop** | Evals + heuristics-tuner + draft PRs | Tuner exists; coder evals pending |
 
-## Proven Harness Patterns To Steal
+### Coding crate shape (landed / in progress)
 
-The design should shamelessly reuse good ideas from the strongest existing coding harnesses while
-keeping Liberado's Rust/modular/config-first constraints.
-
-Research inputs:
-
-- DeepWiki comparison of `sst/opencode` and `langchain-ai/langgraph` for loop state, tool execution,
-  sessions/events, checkpointing, provider abstraction, and loop safeguards:
-  <https://deepwiki.com/search/what-architecture-patterns-in_ad6db9d1-5ec2-4da3-a409-05ffa20c3191>
-- Claude Code Agent SDK docs on the core autonomous loop, tools, permissions, cost limits, hooks,
-  and output control:
-  <https://code.claude.com/docs/en/agent-sdk/agent-loop>
-- Claude Code architecture analysis paper identifying the simple model/tool/result loop plus the
-  surrounding systems that make it work: permission modes, context compaction, extensibility,
-  subagent/worktree isolation, and append-oriented session storage:
-  <https://arxiv.org/abs/2604.14228>
-- Local loop-architecture note captured from the user's reference article:
-  [`loop_architecture_reference_article.md`](../ideas/loop_architecture_reference_article.md)
-
-Implementation lessons:
-
-- **Session first.** Treat a coding run as a durable session with append-only messages/events, not
-  just a function call. `CoderTrace` should become replayable enough for debugging, eval promotion,
-  and future TUI rendering.
-- **Verifier first.** A loop without an automated verifier is only repetition. Success has to pass
-  deterministic gates: real diff, path policy, validation, deletion guard, report/diff consistency,
-  and critic review where configured.
-- **State compounds.** Every attempt should leave enough state that the next attempt can resume from
-  what was tried, what failed, what changed, and why. This belongs in trace/session artifacts, not
-  transient model memory.
-- **Stop conditions are product behavior.** Every autonomous run must terminate as one of a small
-  number of named states: success, no changes, validation failed, budget exhausted, blocked, policy
-  denied, needs human review. Silent endless retry is a bug.
-- **State checkpoints after meaningful steps.** LangGraph-style checkpointing suggests persisting
-  state after tool/action supersteps, not only at the final report. This matters for long PR tasks,
-  crashes, and self-improvement loops.
-- **Explicit continuation decisions.** The loop should have named terminal states and deterministic
-  `should_continue` gates: success, no changes, validation failed, needs human review, budget
-  exhausted, policy denied, or blocked.
-- **Tool runtime as a hard boundary.** Like opencode/Claude Code, tool names and arguments must be
-  validated against a registered catalog before execution; tool failures return in-band where the
-  model can adapt, while infrastructure failures abort.
-- **Events are product surface.** Tool called/succeeded/failed, file changed, validation result,
-  loop guard, model turn, and report events should be first-class API, not log scraping.
-- **Permissions and sandboxing are layered.** Combine command/path policy, Docker isolation,
-  deletion guards, capability scoping, and human draft-PR approval. No single prompt or permission
-  mode is the safety boundary.
-- **Context compaction is core architecture.** Large context windows are useful, but the harness
-  should still summarize, stage retrieval, and keep raw tool output out of main context unless it is
-  needed.
-- **Subagents should isolate work.** Planner/coder/critic/repair roles need configurable prompts and
-  models, but they also need isolated state/workspace assumptions so one role's churn does not pollute
-  the others.
-- **Outer-loop improvement is separate authority.** The eventual bilevel loop should read traces,
-  evals, and heuristic-tuner output to propose prompt/config/tool-policy changes, but those changes
-  remain draft artifacts or PRs unless explicitly approved.
-
-## Target Architecture
-
-### Crate Shape
-
-Start with four small crates, then merge only if actual duplication or friction proves they are too
-fine-grained:
+Start with four small crates; merge only if friction proves they are too fine-grained:
 
 | Crate | Purpose |
 |---|---|
-| `coder-core` | Provider-agnostic contracts: `CoderTask`, `CoderBackend`, `CoderSession`, `CoderEvent`, `CoderReport`, `WorkspaceRef`, `SandboxSpec`, role/config structs, and serialized trace schema. No filesystem mutation. |
-| `coder-tools` | The concrete coding `ToolRuntime`: file read/search/write/edit/patch, git status/diff, command execution, validation, and path containment. Depends on sandbox/workspace traits, not PR-dispatch. |
-| `coder-agent` | Wires `liberado-executor` to `coder-core` and `coder-tools`: builds role prompts from config, creates the tool catalog, runs the loop, emits events/traces, enforces progress gates. |
-| `coder-sandbox` | Workspace/sandbox backends: host-local implementation for tests/dev, Docker implementation first for real runs, later remote runners. This crate owns sandbox lifecycle, volume mounts, command adapters, and cleanup. |
+| `coder-core` | Coding contracts: `CoderTask`, `CoderBackend`, `CoderEvent`, `CoderReport`/`CoderRunResult`, `WorkspaceRef`, `SandboxSpec`, role/config structs, trace schema. No filesystem mutation. |
+| `coder-tools` | Coding `ToolRuntime`: file/search/git/command/validation, path containment. |
+| `coder-agent` | Goal-session **for coding**: wires executor + tools + multi-role graph + gates + traces. |
+| `coder-sandbox` | Host-local and Docker workspace/command backends. |
+| `coder-runner` | Process boundary (`liberado-coder-run`) for nested callers. |
 
-`liberado-pr-dispatch-mcp` should become a consumer of those crates. It can be collapsed into the main
-workspace or renamed once the backend boundary exists. The likely destination is a core PR-factory
-crate plus an MCP/server adapter:
+### Future extraction (when a second domain needs it)
 
-| Future crate/surface | Purpose |
+Do **not** extract early for purity. When life-ops or another domain wants the same multi-role goal
+session without coding types:
+
+| Possible crate / home | Purpose |
 |---|---|
-| `pr-factory-core` | Task DB, forge abstraction, clone/branch/commit/push/PR lifecycle, revision loop, deletion guard, validation result handling. |
-| `pr-factory-mcp` or `code-dispatch-mcp` | MCP/HTTP transport exposing submit/status/approve/revise/query tools. Thin adapter over `pr-factory-core`. |
+| `agent-session` or types in `liberado-common` | Domain-neutral `Goal`, terminal states, session events, attempt log |
+| existing `orchestrator` / `main-agent` | Human chat and dispatch stay; goal-mode attaches rather than forks |
 
-### Backend Trait
+Until then, `coder-core` events and `Report`/`Outcome` conversion are the practical boundary.
 
-The migration seam should be a backend trait around "make code changes in this prepared workspace":
+### PR factory destination
+
+| Future surface | Purpose |
+|---|---|
+| `pr-factory-core` | Task DB, forge, clone/branch/commit/push/PR, revision loop, deletion guard |
+| `pr-factory-mcp` / `code-dispatch-mcp` | Thin MCP/HTTP adapter |
+
+`liberado-pr-dispatch-mcp` becomes a consumer of `CoderBackend` only; it must not re-own the coding
+loop.
+
+### Backend trait (coding domain)
 
 ```rust
 #[async_trait]
@@ -187,138 +254,124 @@ pub trait CoderBackend: Send + Sync {
 }
 ```
 
-`VtcodeBackend` wraps the existing client during migration. `LiberadoLoopBackend` uses
-`coder-agent`. `pr-factory-core` should only know the trait, not which implementation is active.
+**Target:** `LiberadoLoopBackend` / process backend (`coder-agent` / `liberado-coder-run`).  
+**Legacy only:** `VtcodeBackend` may remain briefly so cutover is reversible; delete it when
+Liberado loop is the sole coding path. PR factory knows only the trait — never VTCode APIs.
 
-### Coding Tool Surface
-
-The v1 tool catalog should be intentionally boring:
+### Coding tool surface (v1)
 
 | Tool | Notes |
 |---|---|
-| `list_files` | Glob-aware, capped output, respects ignores and workspace root. |
-| `search_text` | `rg`-style lexical search; output capped and structured. |
-| `read_file` | Requires path and optional range; hard byte/line caps. |
-| `write_file` | Full-file write for new/small files; gated by path policy. |
-| `edit_file` | Exact old/new replacement; returns failure with context if old text is absent or ambiguous. |
-| `apply_patch` | Atomic multi-file exact replacements; deterministic validation before any mutation. |
-| `git_status` | Porcelain plus ignored/scratch filtering. |
-| `git_diff` | Name-only/stat/patch modes with caps. |
-| `run_command` | Policy-checked command execution inside sandbox. |
-| `validate` | Runs configured validation commands and returns structured pass/fail output. |
-| `submit_report` | Existing executor finish tool, backed by `Report`/`CoderReport`. |
-| `scratchpad` | Existing in-process scratchpad, not a real workspace tool and not loop-detected as a repeated action. |
+| `list_files` | Glob-aware, capped, respects ignores and workspace root |
+| `search_text` | `rg`-style lexical search; capped structured output |
+| `read_file` | Path + optional range; hard byte/line caps |
+| `write_file` | Full-file write; path policy gated |
+| `edit_file` | Exact old/new; fail with context if absent/ambiguous |
+| `apply_patch` | Atomic multi-file exact replacements; validate before mutate |
+| `git_status` | Porcelain + ignore/scratch filtering |
+| `git_diff` | Name-only/stat/patch modes with caps |
+| `run_command` | Policy-checked sandbox execution |
+| `validate` | Configured validation command → structured pass/fail |
+| `submit_report` | Executor finish tool (`Report`) |
+| `scratchpad` | In-process working memory; not doom-looped as a workspace tool |
 
-The engine should treat `scratchpad` and reporting tools specially, exactly as
-`liberado-executor` does today.
+### Role model
 
-### Role Model
-
-Roles are config-defined. The binary can provide typed role slots and defaults, but the actual prompts
-and model choices come from config:
+Roles are config-defined. Defaults are suggestions only — no hard-coded model strings in logic.
 
 | Role | Default intent |
 |---|---|
-| `planner` | DeepSeek V4 Pro by default. Reads task/repo context, proposes plan and expected files. May be skipped for simple tasks. |
-| `coder` | DeepSeek V4 Pro or configured coding model. Executes edits in the workspace loop. |
-| `critic` | DeepSeek V4 Flash by default. Reviews actual `git diff` against task requirements. |
-| `repair` | Usually same as coder or Flash for cheap validation-failure repair, config-selected. |
-| `summarizer` | Condenses traces, file reads, and task state to reduce context pollution. |
-| `tool_advisor` | Optional: delegates tool/file-selection reasoning away from the main helper model, aligned with the tool-helper MCP direction. |
+| `planner` | Propose plan, likely files, success criteria; skippable for simple tasks |
+| `coder` (worker) | Execute edits in the workspace loop |
+| `critic` | Review **actual** `git diff` against task requirements (separate model/prompt) |
+| `repair` | Cheap targeted fix for a known validation failure signature |
+| `summarizer` | Condense traces / large tool output |
+| `tool_advisor` | Optional: narrow tools/files (tool-helper / dispatcher direction) |
 
-Config must support per-role provider/model, temperature, max tokens, prompt path or inline prompt,
-turn budget, tool visibility, and stop/progress thresholds. The defaults should prefer
-`deepseek/deepseek-v4-pro` for planner/coder and `deepseek/deepseek-v4-flash` for cheaper helper
-roles, but no code should assume those strings.
+Per-role: provider/model, temperature, max tokens, prompt path or inline prompt, turn budget, tool
+visibility, stop/progress thresholds.
 
-### Sandbox Model
+### Sandbox model
 
-Design for sandboxing on day one even if host-local remains useful for tests.
+- `WorkspaceBackend`: prepare, snapshot, diff, cleanup
+- `CommandRunner`: policy-checked commands
+- `SandboxBackend`: host-local (tests/dev), Docker (first production), later remote
+- `PathPolicy` / `CommandPolicy`: containment, deny globs, timeouts, output caps
 
-Required abstractions:
+Docker first for real runs; same config style as
+[`phase-4-docker-transport.md`](phase-4-docker-transport.md) but a different isolation layer.
 
-- `WorkspaceBackend`: prepare, snapshot, diff, cleanup.
-- `CommandRunner`: execute policy-checked commands in the workspace.
-- `SandboxBackend`: host-local, Docker, later remote/Firecracker/CI runner.
-- `PathPolicy`: root containment, denied globs, allowed write roots, generated scratch paths.
-- `CommandPolicy`: allowlist/denylist, network policy, timeout, output cap, environment allowlist.
+### Event and session API
 
-Docker should be the first concrete production sandbox. It should support configured images, volumes,
-network mode, env allowlist, user id, workdir, and cleanup. The existing Docker MCP transport in
-[`phase-4-docker-transport.md`](phase-4-docker-transport.md) proves the repo already accepts Docker as
-an isolation primitive; coder sandboxing is a different layer, but should use the same config style.
+Stable vocabulary (coding today as `CoderEvent`; general form in `agentic-loops.md`):
 
-### Event and Session API
-
-Do not build a bespoke coding TUI now. Build an event stream good enough for one later.
-
-`coder-core` should define a stable event vocabulary:
-
-- `session_started`
+- `session_started` / `session_finished`
 - `role_started` / `role_finished`
 - `model_turn_started` / `model_turn_finished`
 - `tool_started` / `tool_finished`
-- `file_changed`
-- `command_started` / `command_finished`
+- `file_changed` / `progress_checkpoint`
 - `validation_started` / `validation_finished`
-- `progress_checkpoint`
 - `loop_guard_triggered`
 - `critic_verdict`
+- `subagent_started` / `subagent_finished` (when multi-agent lands)
 - `report_filed`
-- `session_finished`
 
-PR dispatch consumes these for logs and diagnostics. A future TUI/CLI can render them as a live coding
-session, like Claude Code CLI, without owning the loop.
+PR dispatch consumes these for logs. Future TUI/CLI/WebUI render the same stream as a live session.
 
-## Loop Shape
+---
 
-The production loop should be explicit and traceable:
+## Loop shape (coding goal session)
 
-1. **Perceive**: task, repo metadata, branch, existing diff, config, policy, previous attempts,
-   validation history, relevant repo docs.
-2. **Plan**: optional planner pass for complex tasks. Produces plan, likely files, commands, and
-   success criteria. Can be bypassed by config or classifier for narrow tasks.
-3. **Act**: coder loop uses the small coding tool catalog to inspect, edit, run commands, and validate.
-4. **Observe**: tool results, diff state, validation result, progress metrics, loop guards.
-5. **Repair/replan**: validation failures, no-diff outcomes, critic findings, or progress stalls produce
-   specific next instructions, not blind retries.
-6. **Report**: final structured report is accepted only if deterministic gates agree with it.
-7. **PR factory**: commit, deletion guard, push, draft PR, notify, revise/approve loop.
+Production coding loop:
 
-Important: the model's `submit_report` cannot be trusted by itself for success. The engine must check:
+1. **Perceive** — task, repo metadata, branch, existing diff, config, policy, previous attempts,
+   validation history, relevant repo docs / skills.
+2. **Plan** — optional planner pass → plan, likely files, commands, success criteria.
+3. **Act** — coder (worker) inner loop with the coding tool catalog.
+4. **Observe** — tool results, diff state, validation, progress metrics, loop guards.
+5. **Verify** — deterministic gates **before** trusting `submit_report`:
+   - non-empty real diff (or explicit no-op policy)
+   - path policy / deletion guard
+   - configured validation pass (or accepted failure state)
+   - report file list ≈ `git diff --name-only`
+6. **Critic** — separate role reviews actual diff vs criteria; issues attach to draft PR or force repair.
+7. **Repair / replan** — failure-signature specific next instructions, not blind retries.
+8. **Report** — terminal state + summary + artifacts + trace path.
+9. **PR factory** — commit, push, draft PR, notify, human revise/approve (outside the coding backend).
 
-- Is there a non-empty real diff?
-- Did edits touch allowed paths only?
-- Did deletion guard pass?
-- Did configured validation pass or produce an accepted failure state?
-- Did the critic accept, or are critic concerns attached to the draft PR?
-- Did the final report's file list match `git diff --name-only` closely enough?
+### Progress and loop guards
 
-## Progress and Loop Guards
+Generic doom-loop detection lives in `liberado-executor`. Coding domain adds:
 
-Generic doom-loop detection already exists in `liberado-executor`; coding adds domain-specific gates:
+- **Read-only stall** — N turns / M tools with no diff → nudge → replan / `NoChanges`
+- **Same-file churn** — repeated reads/edits without metric movement
+- **Search churn** — equivalent searches, no new files selected
+- **Validation churn** — same failure after repair attempt
+- **Diff regression** — large unrelated deletion/expansion after repair
+- **Report mismatch** — success claim vs git/validation contradiction
 
-- **Read-only stall**: after N model turns or M tool calls with no diff, inject a targeted nudge; after
-  another threshold, replan or fail with `NoChanges`.
-- **Same-file churn**: repeated reads/edits of the same file without changing diff status.
-- **Search churn**: repeated equivalent searches with no new files selected.
-- **Validation churn**: same validation failure repeated after an attempted repair.
-- **Diff regression**: large deletion or unrelated-file expansion after a repair pass.
-- **Report mismatch**: model claims success while `git status`/validation contradicts it.
+All thresholds config-owned and logged.
 
-Every threshold is config-owned and logged. No magic numbers should be introduced directly into the
-loop implementation without a config type and a documented default.
+### Drift control (mandatory)
 
-## Config Surface
+- Re-inject goal + criteria + last verifier failure each outer iteration
+- Progress metrics owned by code (diff identity, validation result)
+- Attempt log / `prior_feedback` for resume
+- Budget exhaustion → partial report with named resource, never hang
 
-Add a `[coder]` section in `tuning.toml` for the existing config stack. Ownership is now clear:
-`liberado-config-loader::CoderTuning` validates and converts to `CoderRunConfig`.
+See [`agentic-loops.md`](../architecture/agentic-loops.md) for the full drift-control list.
 
-Likely sections:
+---
+
+## Config surface
+
+`[coder]` in `tuning.toml` via `liberado-config-loader::CoderTuning` → `CoderRunConfig`.
+
+Illustrative (not final schema):
 
 ```toml
 [coder]
-backend = "liberado-loop" # or "vtcode" during migration
+backend = "liberado-loop" # target; "vtcode" is legacy-only if still present
 trace_dir = "coder-traces"
 
 [coder.planner]
@@ -355,179 +408,191 @@ allow = ["cargo test", "cargo check", "cargo fmt", "cargo clippy", "npm test"]
 deny = ["git push", "git commit", "rm -rf /"]
 ```
 
-The example above is illustrative, not final. The implementation should validate all referenced
-prompt paths, model roles, sandbox backends, command policies, and unknown fields before serving.
+Validate prompt paths, models, sandbox backends, command policies, and unknown fields before serving.
+Keep examples in `config.example/`, not source constants.
 
-## Migration Plan
+Later: a domain-neutral `[goal_session]` / role-graph config may appear when a second domain shares
+the multi-role machinery. Until then, coding config is enough.
 
-### Phase 0: Documentation and Boundary
+---
 
-- Write this plan and link it from architecture/roadmap/handoff docs.
-- Record that `vtcode` is now a migration backend, not the strategic endpoint.
-- In `liberado-pr-dispatch-mcp`, introduce a `CoderBackend` seam around the existing `VTCodeClient`
-  execution path without changing behavior.
-- Add an adapter result type that carries summary, files changed, diagnostics, trace path, and engine
-  name.
+## Migration and phase plan
 
-### Phase 1: Core Contracts
+### Phase 0: Documentation and boundary ✅
 
-- Add `coder-core`.
-- Define `CoderTask`, `CoderRunRequest`, `CoderRunResult`, `CoderBackend`, `CoderEvent`,
-  `CoderTrace`, `SandboxSpec`, `CoderCommandConfig`, `CommandPolicy`, and config structs.
-- Add serialization tests and examples.
-- Add architecture doc for the crate.
-- Expose coder settings through the main config stack. **Started with `CoderTuning` in
-  `liberado-config-loader`, re-exported by `liberado-config`, plus `config.example/tuning.toml`.**
+- Plan + architecture docs; home-spun Liberado loop is the system; VTCode is legacy exit only.
+- `CoderBackend` seam in PR dispatch so the factory calls a trait, not a harness brand.
+- Adapter result type: summary, files changed, diagnostics, trace path, engine name.
 
-### Phase 2: Tool Runtime and Host Sandbox
+### Phase 1: Core contracts ✅ / ongoing
 
-- Add `coder-tools` and host-local `coder-sandbox` implementation for tests/dev. **Started.**
-- Implement discrete file/git/search/command/validation tools behind `ToolRuntime`. **Started with
-  `list_files`, `search_text`, `read_file`, `write_file`, `edit_file`, `git_status`, `git_diff`,
-  `apply_patch`, `run_command`, and `validate`.**
-- Enforce root path containment and output caps. **Started.**
-- Honor configured sandbox backend in the tool runtime. **Started with host-local and Docker
-  workspace selection via `CodingToolRuntime::from_sandbox`; live Docker task smoke remains.**
-- Add unit tests for path escapes, ambiguous edits, patch failures, command denial, and output caps.
-  **Path escapes, command denial, ambiguous edit, atomic patch failure, basic read/write/search, and
-  read output caps are covered.**
+- `coder-core` contracts, serialization tests, architecture docs.
+- Coder settings through main config stack (`CoderTuning`).
 
-### Phase 3: Liberado Loop Backend MVP
+### Phase 2: Tool runtime and host sandbox ✅ / ongoing
 
-- Add `coder-agent`. **Started.**
-- Wire `liberado-executor::Executor` to the coding tools with config-loaded prompts. **Started for
-  inline `config.coder.prompt` and resolved `config.coder.prompt_path`.**
-- Implement no-diff progress detection and report verification. **Started with deterministic
-  post-loop `git status --porcelain` and configured validation-command gating; in-loop progress
-  guards remain.**
-- Produce structured `CoderEvent` traces. **Started with session/role/report/tool-start/tool-finish/
-  file-change/validation/guard/finish events persisted as `CoderTrace`; model-turn events remain.**
-- Add a process boundary for callers that cannot or should not link the loop stack directly.
-  **Started with `liberado-coder-run`, which accepts `CoderRunRequest` JSON and emits
-  `CoderRunResult` JSON.**
-- Add per-role provider selection so planner/coder/critic/repair can use different configured
-  models. **Started with `CoderProviderFactory`; only the coder role consumes it today.**
-- Run against a mocked provider first, then a small live smoke task. **Mocked provider tests are
-  covered; an ignored OpenRouter/DeepSeek live smoke exists for manual runs.**
+- Discrete tools, path containment, output caps, host + Docker selection.
+- Unit tests for escapes, ambiguous edits, patch failures, command denial, caps.
 
-### Phase 4: PR Factory Integration
+### Phase 3: Liberado loop backend MVP 🔄
 
-- Collapse or restructure `liberado-pr-dispatch-mcp` as needed.
-- Let config select `vtcode` or `liberado-loop`. **Started with `CODING_BACKEND`; `liberado-loop`
-  spawns `liberado-coder-run` and maps `CoderRunResult` back into the existing worker contract.
-  `LIBERADO_CODER_RUN_CONFIG_PATH` can now point PR dispatch at a full `CoderRunConfig` JSON file so
-  sandbox/tool/progress/prompt knobs do not have to be duplicated in the nested crate.**
-- Keep PR lifecycle behavior unchanged: draft PR only, human approval, revision loop.
-- Preserve useful existing modules: forge client, DB, branch validation, GIT_ASKPASS, deletion guard,
-  validation/self-correction, repo-context injection, critic loop.
-- Add an e2e test where the mocked Liberado loop backend edits files and opens a draft PR.
+- `coder-agent` + executor wiring + no-diff + validation gates + traces + `liberado-coder-run`.
+- Role-provider factory; **coder + optional critic + repair-on-retry** land; planner still pending.
+- In-loop progress guards: read-only stall, same-tool churn, validation churn (config thresholds).
+- Outer `max_attempts` with `prior_feedback` on NoChanges / validation / critic revision.
+- Mocked tests cover happy path, guards, critic accept/reject, repair retry.
+- Planner role (optional, config-skippable) + failure-signature repair routing landed (2026-07-10).
+- **Next inside Phase 3**:
+  - model-turn event emission (may need executor streaming hooks)
+  - further repair routing polish from live eval traces
 
-### Phase 5: Docker Sandbox
+### Phase 4: PR factory integration 🔄
 
-- Implement Docker `SandboxBackend`. **Started with `DockerWorkspace`, policy-checked Docker argv
-  construction, configured workspace bind mount, volumes, network mode, user, env allowlist, and
-  command execution. Long-lived lifecycle/image management is not built yet.**
-- Add config validation and examples. **Config validation exists for blank Docker image in the main
-  config model; coder-specific Docker examples still need to be added once the agent selects sandbox
-  backends from `CoderRunConfig`.**
-- Run a live end-to-end smoke test in a container.
-- Ensure no host filesystem access outside mounted workspace and configured cache dirs.
+- Default and document **`liberado-loop`** as the coding backend (`CODING_BACKEND` / process backend
+  started). Treat any remaining `vtcode` selection as deprecated rollback, then remove it.
+- `LIBERADO_CODER_RUN_CONFIG_PATH` for full `CoderRunConfig` without knobs duplication.
+- Keep draft PR only, human approval, revision loop.
+- Preserve forge, DB, branch validation, GIT_ASKPASS, deletion guard, validation/self-correction,
+  repo-context injection, critic loop — these are **ours**, not VTCode.
+- E2E: Liberado backend (mock then live) edits files → draft PR.
+- Delete `VtcodeBackend` / VTCode client dependency when Liberado loop is sole path.
 
-### Phase 6: Empirical Evaluation
+### Phase 5: Docker sandbox 🔄
 
-- Add `coder-eval` scenarios or extend `heuristics-tuner` with a `Coder` layer.
-- Scenario classes:
-  - narrow one-file edit;
-  - multi-file feature;
-  - test failure repair;
-  - no-op/ambiguous task should clarify or fail cleanly;
-  - deletion guard task;
-  - repeated read-only model must be redirected or fail;
-  - revision task against an existing branch.
-- Metrics:
-  - success rate;
-  - non-empty diff rate;
-  - validation pass rate;
-  - unrelated-file touch rate;
-  - retry count;
-  - token and wall-clock cost;
-  - unsafe/disallowed command attempts;
-  - no-progress loop detections.
-- Feed results into `liberado-heuristics-tuner` so prompt/model/policy changes are proposed with
-  evidence, not intuition.
+- `DockerWorkspace` argv + policy + mounts started; long-lived lifecycle still open.
+- Live end-to-end smoke in a container.
+- No host FS access outside mounts and configured caches.
 
-### Phase 7: TUI/CLI Readiness
+### Phase 6: Multi-role goal session + subagents
 
-- Expose `CoderSession` event stream over the existing daemon/server style API.
-- Teach the TUI to render coder sessions as a client only. It should not own planning, tool execution,
-  sandbox lifecycle, or PR state.
-- Add session replay from trace files so failures can be inspected without rerunning the model.
+- Implement the outer loop graph in `coder-agent` (planner/critic/repair).
+- Subagent tool or orchestrator path: child goal, narrowed tools/paths, worktree isolation option,
+  structured Report return, max depth/concurrency config.
+- Failure-signature repair routing (validation message → repair role with tight context).
+- Ensure terminal states cover success / blocked / budget / policy / needs-human / no-changes.
 
-### Phase 8: Self-Improvement Loop
+### Phase 7: Empirical evaluation
 
-- Let the coder operate on Liberado itself through the PR factory.
-- Heuristics tuner generates candidate prompt/config changes as draft PRs or proposal artifacts.
-- Failed/interesting live traces can be promoted into eval fixtures.
-- Architecture-critique mode writes idea docs, not code, unless separately dispatched through the PR
-  factory and draft-PR gate.
-- The system never silently widens its own authority. Config changes remain human-owned unless a future
-  explicit proposal/approval mechanism is designed for them.
+- `coder-eval` scenarios or `heuristics-tuner` `Coder` layer.
+- Scenario classes: one-file edit; multi-file feature; test failure repair; ambiguous/no-op clean
+  fail; deletion guard; read-only model redirected/fail; revision against existing branch.
+- Metrics: success rate; non-empty diff rate; validation pass rate; unrelated-file touch rate;
+  retries; token/wall-clock cost; disallowed command attempts; no-progress detections.
+- Feed results into `heuristics-tuner` (evidence-backed prompt/model/policy proposals).
 
-## Reuse From PR Dispatch
+### Phase 8: Session API for TUI / WebUI
 
-Keep:
+- Expose goal/coder sessions over daemon/server (HTTP/SSE style aligned with chat API).
+- TUI and WebUI render sessions as **clients only**.
+- Session replay from trace files without rerunning the model.
+- Optional: chat turn can escalate into goal mode ("pursue until done") without a separate product.
 
-- `forge-client` abstraction and clone credentials hygiene.
-- SQLite task lifecycle and dependency handling.
-- branch validation before queueing work.
-- draft PR creation and publish/revise/reject flow.
-- Telegram/webhook notification behavior.
-- repo-context injection from `AGENT_CONTEXT_PATHS`.
-- validation command and self-correction loop, generalized away from `VTCodeClient`.
-- critic loop reviewing actual `git diff`.
-- no-changes detection and vtcode diagnostic lessons.
+### Phase 9: Domain generality (non-coding goals) — pigeonhole detector
 
-Replace:
+- Prove the same **kernel** on a non-coding goal (e.g. multi-MCP vault task with automated success
+  criteria and turn budget) **without** depending on `coder-tools` / git / sandbox.
+- Extract domain-neutral Goal/Session/event types into `common` or a session crate when this work
+  would otherwise copy `coder-core` or import coding crates for non-coding reasons (see modularity
+  extraction trigger).
+- Document domain packs: config + tool limb + verifiers + prompts = a pack; coding is pack #1.
+- Converge chat `AgentEvent` and coding `CoderEvent` toward one surface vocabulary.
 
-- direct dependence on `VTCodeClient` as the only coding engine;
-- vtcode-specific config/session assumptions;
-- vtcode event parsing as the canonical trace schema;
-- prompts that mention vtcode/unified tools once the Liberado loop backend is active.
+### Phase 10: Self-improvement / meta-loop
 
-## Documentation Work Required
+- Coder operates on Liberado itself through PR factory.
+- Heuristics tuner generates candidate prompt/config changes as draft PRs.
+- Promote interesting traces into eval fixtures.
+- Architecture-critique mode writes idea docs, not code, unless separately PR-dispatched.
+- System never silently widens authority.
 
-- Add `ARCHITECTURE.md` for each new crate as it lands.
-- Update [`docs/architecture/overview.md`](../architecture/overview.md) when the crate map changes.
-- Keep [`docs/roadmap/current.md`](current.md) as the high-level state pointer.
-- Update `liberado-pr-dispatch-mcp/ARCHITECTURE.md` or its replacement when the backend boundary lands.
-- Keep prompt/config examples in `config.example/`, not in source constants.
-- Add "how to run coder evals" to the relevant contributing doc once the evaluator exists.
+---
 
-## Open Design Questions
+## Reuse from PR dispatch
 
-- Should `coder-core` live in the main workspace before or after `liberado-pr-dispatch-mcp` is
-  collapsed into it?
-- Does `coder-agent` use `Report` directly, or a richer `CoderReport` that converts into `Report` at
-  mesh boundaries?
-- Should planner output be a typed JSON plan consumed by code, or an advisory artifact visible to the
-  coder role? Lean typed but non-binding: deterministic code validates, the coder can deviate with
-  traceable rationale.
-- How much command allowlisting should be global vs repo-specific? Lean repo-specific overlay on top
-  of global defaults.
-- Should Docker sandbox images be per-language, per-repo, or a general image with caches mounted?
-  Lean general image first, repo override later.
-- How should large-context models be used without encouraging context dumping? Lean staged retrieval
-  plus summaries, even with 1M context available.
+**Keep:**
 
-## First Concrete Slice
+- forge-client + clone credential hygiene
+- SQLite task lifecycle and dependencies
+- branch validation before queueing
+- draft PR + publish/revise/reject
+- Telegram/webhook notification
+- repo-context injection (`AGENT_CONTEXT_PATHS`)
+- validation + self-correction (generalized off `VTCodeClient`)
+- critic loop on real `git diff`
+- no-changes detection and vtcode diagnostic lessons
 
-The first implementation slice should be deliberately small:
+**Remove (do not wrap as product):**
 
-1. Add `CoderBackend` to PR dispatch and wrap current vtcode behavior.
-2. Add `coder-core` with contracts and config structs.
-3. Add a fake/mock `LiberadoLoopBackend` test implementation that produces a diff through the same PR
-   pipeline.
-4. Commit docs and tests.
+- `VTCodeClient` / `VtcodeBackend` as any long-term coding engine
+- vtcode-specific config/session assumptions
+- vtcode event parsing as canonical trace schema
+- prompts that mention vtcode/unified tools
+- any design that treats "shell out to vtcode" as the Liberado coding architecture
 
-Only then add real file tools and model calls. This keeps the migration reversible and proves the PR
-factory can stop caring which coding engine produced the workspace diff.
+---
+
+## Documentation work
+
+| Doc | Role |
+|---|---|
+| [`agentic-loops.md`](../architecture/agentic-loops.md) | Canonical loop architecture |
+| This plan | Implementation roadmap + checkpoints |
+| [`overview.md`](../architecture/overview.md) | Crate map + status pointer |
+| [`current.md`](current.md) | High-level roadmap pointer |
+| Per-crate `ARCHITECTURE.md` | Zoomed contracts |
+| `config.example/` | Knobs and prompts, not source constants |
+| Contributing docs | "How to run coder evals" once evaluator exists |
+
+---
+
+## Open design questions
+
+Resolved leanings in parentheses; revisit with evidence.
+
+- Extract domain-neutral session types now or when a second domain needs them?
+  (**When second domain needs them.**)
+- Planner output: typed JSON plan vs advisory prose?
+  (**Typed but non-binding**: code validates shape; worker may deviate with traceable rationale.)
+- Command allowlists: global vs repo-specific?
+  (**Repo overlay on global defaults.**)
+- Docker images: per-language vs general?
+  (**General image first, repo override later.**)
+- Large context windows vs dumping?
+  (**Staged retrieval + summaries always.**)
+- Should goal mode share `main-agent` conversation store or a parallel session store?
+  (**Parallel goal/session store first; link IDs to chat session for UX.**)
+- Subagent protocol: new tools vs reuse `DispatchSubagent`?
+  (**Reuse Report/correlation model; add isolation knobs where coding needs worktrees.**)
+- Does `coder-agent` keep using `Report` only, or richer `CoderReport`?
+  (**Richer coding result that converts to `Report` at mesh boundaries — already the pattern.**)
+
+---
+
+## Near-term execution order
+
+Do not expand scope mid-slice. Recommended sequence from **current** state:
+
+1. ~~**PR-dispatch cutover to Liberado loop default**~~ — done 2026-07-10 (`CODING_BACKEND`
+   defaults to `liberado-loop`, built-in prompt, binary resolve, `VALIDATE_CMD` → validation gate).
+2. **Live smokes** on real models (one-file edit → repair → full draft PR). Use
+   `scripts/smoke-liberado-coder.ps1` and PR-dispatch tasks.
+3. ~~**Coder layer in `liberado-heuristics-tuner`**~~ — landed: `TUNER_LAYER=coder` scores real
+   temp workspaces via `liberado-coder-agent`, beam-searches system prompts, writes proposal
+   rubrics only. Expand scenarios and run live with `OPENROUTER_API_KEY` as the meta-loop.
+4. Delete VTCode legacy path when Liberado is sole backend in all envs.
+5. **Docker live smoke** for coding sandbox; update pr-dispatch image to ship `liberado-coder-run`.
+6. Planner role (optional); streaming session events; non-coding domain proof (Phase 9).
+
+Only after headless **Liberado** coding is reliable on real tasks should frontend work become the
+bottleneck. Mesh generality is enforced by Phase 9, not by renaming crates early.
+
+---
+
+## First concrete slice (historical — largely done)
+
+1. Add `CoderBackend` trait so PR dispatch does not hard-depend on one harness.
+2. Add `coder-core` contracts and config structs.
+3. Drive PR pipeline with Liberado (mock, then real loop).
+4. Real file tools and model calls in Liberado crates.
+
+PR factory cares only about "workspace diff + report + terminal state" — produced by **our** loop.

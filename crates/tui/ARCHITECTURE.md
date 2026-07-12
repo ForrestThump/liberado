@@ -12,50 +12,40 @@ its needs through the existing API, that's a gap in the contract, not the TUI. R
 alongside the web UI against the same daemon is the proof that Liberado is genuinely
 daemon-first (Decision 2).
 
+**Loose coupling for WebUI reuse:** HTTP/SSE clients, session view-models, and pure
+Action→state reducers must live in **shared crates** (`chat-client-contract` and/or a future
+`liberado-client-core`). This crate owns **ratatui paint + terminal I/O only**. Do not grow
+goal/chat business logic only in `tui` — WebUI must import the same brain. See
+[`docs/roadmap/tui-maturity-roadmap.md`](../../docs/roadmap/tui-maturity-roadmap.md) §1.1.
+
 ## Views
 
-The terminal has a fixed layout; the user's focus shifts between areas, not pages:
+Default layout is **sparse** (no permanent sidebar). Full-screen overlays for session/model pickers.
 
 ```
-┌─ Chat ────────────────────────────┬─ Sidebar ─────────────┐
-│                                   │  Daemon: ● running    │
-│  > What's on my calendar today?   │  Uptime: 3h 12m       │
-│                                   │  Vault: /notes        │
-│  You have two events:             │                       │
-│   • 10:00 — Standup               │  Recent reactions:    │
-│   • 14:00 — Dentist               │  → observed inbox/x   │
-│                                   │  → decided:clarify    │
-│                                   │  → acted:reported     │
-│                                   │                       │
-├───────────────────────────────────┤  [1] conv-1 about...  │
-│  > _                              │  [2] conv-2 review... │
-└───────────────────────────────────┴───────────────────────┘
+┌─ status ──────────────────────────────────────────────────┐
+│  ● running · model · vault path                           │
+├─ chat ────────────────────────────────────────────────────┤
+│  user / assistant / tool chips                            │
+├─ input ───────────────────────────────────────────────────┤
+│  > _   (/ opens slash palette + ghost complete)           │
+└───────────────────────────────────────────────────────────┘
 ```
 
-### Chat pane (left, 70%)
-- Renders the live SSE stream: `token` deltas build the assistant message inline;
-  `tool` / `tool_result` pairs appear as inline status chips.
-- Scrollback history for the current conversation, loaded on resume.
-- Markdown rendering (code blocks, lists, links).
+| Overlay | Opened by | Behavior |
+|---------|-----------|----------|
+| Session browser | `/session` | Type-to-filter conversations; Enter reopens history |
+| Model browser | `/model` | `GET /api/models`; Enter → `POST /api/models/select` |
 
-### Status bar (top of sidebar)
-- Daemon liveness (`/api/status`): running/stopped, uptime, watcher active,
-  dispatcher/orchestrator attached.
-- Vault path + note count (`/api/vault`).
+### Chat pane
+- SSE: `token` / `tool` / `tool_result`; markdown for assistant text.
 
-### Reactions feed (sidebar, below status)
-- Tail of recent `ReactionEvent`s from `/api/reactions?limit=N`.
-- One line per reaction: icon by outcome (observed/decided/acted), path, correlation id.
+### Status bar
+- `/api/status` (connection, **live** model name after hot-swap, vault path).
 
-### Conversation list (sidebar bottom)
-- `GET /api/conversations` — list of conversation headers, newest first.
-- Navigate with arrow keys; Enter to resume; `n` to start a new conversation.
-- Resume rehydrates the conversation from the store and renders prior messages
-  before accepting input.
-
-### Input line (bottom, full width)
-- Multi-line composer (Enter sends, Shift+Enter for newline, Esc to cancel).
-- Session id is carried in the SSE stream — the user never sees it.
+### Input
+- Slash catalog (`liberado-commands`). `/theme set <name>` persists to platform
+  `liberado/settings.toml` (via `liberado-theme`).
 
 ## How data flows
 
@@ -65,12 +55,9 @@ liberado-tui ──HTTP──▶ liberado-server (:4201)
      │  POST /api/chat/stream │ (SSE: session → token* → [tool → tool_result]* → done|failed)
      │◀──────────────────────◁│
      │
-     │  GET /api/status ──────▶ { running, uptime, dispatcher_attached, ... }
-     │◀────────────────────────
-     │
-     │  GET /api/reactions?limit=20 ▶ [ { event_type, timestamp, path, outcome }, ... ]
-     │◀────────────────────────────────
-     │
+     │  GET /api/status ──────▶ { running, model_name, ... }
+     │  GET /api/models ──────▶ { models, current }
+     │  POST /api/models/select ▶ hot-swap
      │  GET /api/conversations ──────▶ [ { id, title, created_at }, ... ]
      │◀───────────────────────────────
 ```
@@ -159,18 +146,25 @@ per pane/input-mode rather than one monolithic `ui.rs`/input-handling function.
 - `liberado_markdown` — the shared Markdown-to-terminal-lines parser.
 - `liberado_theme` — the shared color-token `Theme`/`ThemeRegistry`.
 
-## Done since this doc's first pass (previously listed here as deferred)
+## Maturity status (2026-07-10)
 
-- **Markdown-to-terminal rendering** — `render/chat.rs` calls `liberado_markdown::markdown_to_lines()`
-  on every assistant message; the parser itself lives in the shared `liberado-markdown` crate (used by
-  ratatui, Dioxus, and terminal output alike), not a TUI-local one.
-- **Color themes** — `liberado-theme`'s `ThemeRegistry` is a dependency; themes are discovered from
-  `<config>/themes/*.toml` and selectable via `command_context.rs`'s `/theme` command support.
+This TUI is a **strong chat + daemon client**, not yet peer-class with Claude Code / Grok Build /
+OpenCode for **agent/goal UX**. Backend goal sessions exist (`POST /api/goals`, SSE); the TUI does
+not consume them yet.
 
-## What's still deferred
+**Living roadmap:** [`docs/roadmap/tui-maturity-roadmap.md`](../../docs/roadmap/tui-maturity-roadmap.md)
 
-- Conversation branching / DAG views — the session sidebar lists linear conversations
-  only.
-- A "stop" keybinding that closes the SSE stream mid-turn (Esc already does this
-  implicitly by dropping the reqwest response; the backend cancel-on-disconnect
-  primitive is already built).
+### Landed (engineering)
+
+- Markdown via `liberado-markdown`; themes via `liberado-theme`
+- Esc cancel + Ctrl+S stop streaming; mouse focus/scroll
+- Conversation list/filter/tree stubs; slash commands; status + reactions sidebar
+- Production hardening (timeouts, backpressure, message cap, SIGTERM)
+
+### Critical gaps (product)
+
+- **Goal session mode** (start/stream/cancel life + coding packs)
+- **Intake / freeze / verifier** visibility
+- **Coding density** (diff, file list, budget/turn HUD, collapsible tool timeline)
+- **Performance** (cache markdown lines; dirty redraw; virtualize chat)
+- **Command palette** and multi-session agent HUD

@@ -89,6 +89,35 @@ pub struct Topology {
     /// pools need an entry so `CronSchedule.pool`/`HookConfig.pool` have something to validate
     /// against.
     pub pools: Vec<PoolConfig>,
+    /// How the conversational main agent presents itself and which tools it sees.
+    /// Default: human-interfacer + built-in `delegate` tool (specialist MCPs stay on the dispatcher).
+    pub main_agent: MainAgentConfig,
+}
+
+/// Chat main-agent surface: human interface first, optional extra MCP tools via `policy.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MainAgentConfig {
+    /// When `true` (default), the main agent is a **human interfacer**: it gets the built-in
+    /// `delegate` tool (dispatcher/orchestrator behind the scenes) instead of a pre-turn dispatch
+    /// that injects the full MCP fleet into chat context. Specialist tools should be granted to
+    /// the `"dispatcher"` component in `policy.toml`, not `"main-agent"`.
+    ///
+    /// When `false`, legacy behavior: pre-turn dispatch + all `"main-agent"` ExecuteMcp tools
+    /// surfaced on the streaming path.
+    pub delegation_mode: bool,
+    /// Optional full override of the main-agent system prompt. When unset, uses the built-in
+    /// human-interfacer prompt (if `delegation_mode`) or the short legacy prompt otherwise.
+    pub system_prompt: Option<String>,
+}
+
+impl Default for MainAgentConfig {
+    fn default() -> Self {
+        Self {
+            delegation_mode: true,
+            system_prompt: None,
+        }
+    }
 }
 
 impl Default for Topology {
@@ -104,6 +133,7 @@ impl Default for Topology {
             hooks: Vec::new(),
             schedules: Vec::new(),
             pools: Vec::new(),
+            main_agent: MainAgentConfig::default(),
         }
     }
 }
@@ -744,6 +774,12 @@ pub struct CoderTuning {
     pub command_policy: CommandPolicy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validation_command: Option<CoderCommandConfig>,
+    /// Ordered harness checks (`docs/architecture/verifiers.md`). Empty + `validation_command`
+    /// still works via legacy single-command resolution.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verifiers: Vec<liberado_coder_core::VerifierSpec>,
+    #[serde(default)]
+    pub verify_policy: liberado_coder_core::PipelinePolicy,
     pub path_policy: PathPolicy,
     pub progress: ProgressPolicy,
 }
@@ -760,6 +796,8 @@ impl CoderTuning {
             sandbox: self.sandbox.clone(),
             command_policy: self.command_policy.clone(),
             validation_command: self.validation_command.clone(),
+            verifiers: self.verifiers.clone(),
+            verify_policy: self.verify_policy.clone(),
             path_policy: self.path_policy.clone(),
             progress: self.progress.clone(),
         }
@@ -830,6 +868,8 @@ impl Default for CoderTuning {
             sandbox: SandboxSpec::HostLocal,
             command_policy: CommandPolicy::default(),
             validation_command: None,
+            verifiers: Vec::new(),
+            verify_policy: liberado_coder_core::PipelinePolicy::default(),
             path_policy: PathPolicy::default(),
             progress: ProgressPolicy::default(),
         }

@@ -9,9 +9,14 @@ Turns a dispatcher `DispatchDecision` into an actual execution. It is the seam b
 |---|---|---|
 | `Clarify` | returns `Disposition::Clarify` — **nothing executes** | — |
 | `ExecuteDirect` | builds a `Task` (tight `Budget(4)`) seeded with the opening calls, runs the executor loop → `Reported(Report)` | the **triggering** event's correlation (it acts in the reaction's name) |
-| `DispatchSubagent` | narrows the runtime to `allowed_mcps`, builds instructions from `success_criteria`, larger budget → `Reported(Report)` | the action's **own** `correlation_id` |
+| `DispatchSubagent` | scopes runtime to `allowed_mcps`; risk-gates with `ceiling ∩ allowed_mcps` when decision `capabilities` is empty (classifier never emits capability objects); larger budget → `Reported(Report)` | the action's **own** `correlation_id` |
+| `Propose` | builds a signed proposal in memory (caller persists) | — |
 
-`Disposition` = `Reported(Report)` \| `Clarify { questions, what_blocked }`.
+`Disposition` = `Reported(Report)` \| `Clarify { questions, what_blocked }` \| `Propose(SignedProposal)`.
+
+**Not** full inherit of every dispatcher tool: subagent authority is always a narrow intersection
+with the pool/dispatcher ceiling (Decision 4). Empty `allowed_mcps` means all MCPs under the ceiling
+for runtime factory + gate (same sense as empty `relevant_mcps` on direct).
 
 ## The key decoupling: `RuntimeFactory`
 

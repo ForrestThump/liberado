@@ -8,6 +8,7 @@ use std::fmt::Write as _;
 use liberado_dispatcher::DEFAULT_SYSTEM_PROMPT;
 
 use crate::candidate::{Candidate, CandidateOrigin};
+use crate::coder_scoring::CoderFitness;
 use crate::scoring::CandidateFitness;
 use crate::tool_loop_scoring::ToolLoopFitness;
 
@@ -133,6 +134,105 @@ pub fn format_rubric(
 /// auto-merge" posture, but for a [`ToolLoopFitness`] instead of a dispatcher [`CandidateFitness`].
 /// Takes `baseline_prompt` explicitly (rather than importing a specific const) so this one function
 /// serves both `DIRECT_INSTRUCTIONS` (executor) and `SUBAGENT_PREAMBLE` (subagent) tuning sessions.
+/// Coding-layer rubric (workspace diffs / path hygiene), parallel to [`format_executor_rubric`].
+pub fn format_coder_rubric(
+    winner: &Candidate,
+    winner_fitness: &CoderFitness,
+    baseline_fitness: &CoderFitness,
+    baseline_prompt: &str,
+    justification: Option<&str>,
+) -> String {
+    let mut out = String::new();
+
+    let _ = writeln!(out, "=== Heuristics Tuner Proposal (coder layer) ===\n");
+    let _ = writeln!(
+        out,
+        "Layer: Liberado coding worker system prompt (PR-dispatch / liberado-coder-agent).\n\
+         Never auto-applied — hand-copy a winner into prompts/coder/coder.md or LIBERADO_CODER_PROMPT.\n"
+    );
+
+    match &winner.origin {
+        CandidateOrigin::ColdStart => {
+            let _ = writeln!(out, "Winner origin: cold start (independent of the current best)");
+        }
+        CandidateOrigin::MutatedFrom {
+            parent_index,
+            parent_accuracy,
+        } => {
+            let _ = writeln!(
+                out,
+                "Winner origin: mutated from beam candidate #{parent_index} (accuracy {parent_accuracy:.2})"
+            );
+        }
+    }
+
+    let _ = writeln!(out, "\n-- Metric deltas (baseline -> candidate) --");
+    let _ = writeln!(
+        out,
+        "coding accuracy     : {:.2} -> {:.2}",
+        baseline_fitness.accuracy, winner_fitness.accuracy
+    );
+    let _ = writeln!(
+        out,
+        "outcome-match rate  : {:.2} -> {:.2}",
+        baseline_fitness.outcome_match_rate, winner_fitness.outcome_match_rate
+    );
+    let _ = writeln!(
+        out,
+        "nonempty-diff rate  : {:.2} -> {:.2}",
+        baseline_fitness.nonempty_diff_rate, winner_fitness.nonempty_diff_rate
+    );
+    let _ = writeln!(
+        out,
+        "unsafe path touches : {} -> {}   (must stay 0 — a nonzero winner is never selected)",
+        baseline_fitness.unsafe_acts, winner_fitness.unsafe_acts
+    );
+
+    let _ = writeln!(out, "\n-- Full scenario breakdown --");
+    for s in &winner_fitness.scenarios {
+        let _ = writeln!(
+            out,
+            "- {}: pass_rate={:.2} — {}",
+            s.name,
+            s.pass_rate(),
+            s.diagnostic_breakdown()
+        );
+        let _ = writeln!(out, "  note: {}", s.note);
+    }
+
+    // Regressions / fixes vs baseline by name.
+    let _ = writeln!(out, "\n-- Scenario changes vs baseline --");
+    for w in &winner_fitness.scenarios {
+        if let Some(b) = baseline_fitness
+            .scenarios
+            .iter()
+            .find(|b| b.name == w.name)
+        {
+            let wp = w.pass_rate();
+            let bp = b.pass_rate();
+            if (wp - bp).abs() < 0.01 {
+                continue;
+            }
+            let label = if wp > bp { "IMPROVED" } else { "REGRESSION" };
+            let _ = writeln!(out, "- {} {label}: {:.2} -> {:.2}", w.name, bp, wp);
+        }
+    }
+
+    let _ = writeln!(out, "\n-- Baseline prompt --\n```\n{baseline_prompt}\n```");
+    let _ = writeln!(out, "\n-- Proposed coder system prompt --\n```\n{}\n```", winner.prompt);
+
+    match justification {
+        Some(j) if !j.trim().is_empty() => {
+            let _ = writeln!(out, "\n-- Meta-model justification --\n{j}");
+        }
+        _ => {
+            let _ = writeln!(out, "\n-- Meta-model justification --\nunavailable");
+        }
+    }
+
+    out
+}
+
 pub fn format_executor_rubric(
     winner: &Candidate,
     winner_fitness: &ToolLoopFitness,

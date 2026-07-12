@@ -537,6 +537,123 @@ async fn dispatch_subagent_gates_with_the_narrowed_capability_set() {
 }
 
 #[tokio::test]
+async fn dispatch_subagent_empty_capabilities_derives_gate_from_allowed_mcps() {
+    // Classifier default: capabilities empty, allowed_mcps names the scoped MCP. The risk gate
+    // must allow that MCP (ceiling ∩ allowed_mcps), not block everything with an empty set.
+    let script = vec![
+        CompletionResponse::tool_calls(vec![ToolInvocation::new(
+            "c1",
+            "turbovault:list_tasks",
+            serde_json::json!({}),
+        )]),
+        submit_report_response(),
+    ];
+    let provider = Arc::new(MockProvider::with_script("mock", script));
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let ceiling = CapabilitySet::from_iter([
+        Capability::ExecuteMcp("turbovault".into()),
+        Capability::ExecuteMcp("other-mcp".into()),
+    ]);
+    let orch = Orchestrator::new(
+        provider,
+        InvocationRecordingFactory { runtime },
+        ceiling,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    );
+
+    let decision = DispatchDecision {
+        action: DispatchAction::DispatchSubagent {
+            goal: "list vault tasks".into(),
+            capabilities: CapabilitySet::empty(),
+            allowed_mcps: vec!["turbovault".into()],
+            success_criteria: vec![],
+            artifact_target: None,
+            model: None,
+            correlation_id: "sub-vault-1".into(),
+        },
+        confidence: 0.85,
+        rationale: "vault work".into(),
+    };
+
+    let disposition = orch
+        .run(decision, "outer goal ignored", "trigger-1")
+        .await
+        .expect("run");
+
+    assert!(matches!(disposition, Disposition::Reported(_)));
+    let names: Vec<String> = invoked
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|c| c.name.clone())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["turbovault:list_tasks".to_string()],
+        "empty decision.capabilities must still permit allowed_mcps that the ceiling grants"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_subagent_empty_capabilities_still_cannot_widen_past_ceiling() {
+    // allowed_mcps names an MCP the ceiling does not grant — derivation must not invent authority.
+    let script = vec![
+        CompletionResponse::tool_calls(vec![ToolInvocation::new(
+            "c1",
+            "ungranted-mcp:secret",
+            serde_json::json!({}),
+        )]),
+        submit_report_response(),
+    ];
+    let provider = Arc::new(MockProvider::with_script("mock", script));
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let ceiling = CapabilitySet::from_iter([Capability::ExecuteMcp("turbovault".into())]);
+    let orch = Orchestrator::new(
+        provider,
+        InvocationRecordingFactory { runtime },
+        ceiling,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    );
+
+    let decision = DispatchDecision {
+        action: DispatchAction::DispatchSubagent {
+            goal: "should not run ungranted tools".into(),
+            capabilities: CapabilitySet::empty(),
+            allowed_mcps: vec!["ungranted-mcp".into()],
+            success_criteria: vec![],
+            artifact_target: None,
+            model: None,
+            correlation_id: "sub-no-widen".into(),
+        },
+        confidence: 0.8,
+        rationale: "test".into(),
+    };
+
+    let disposition = orch
+        .run(decision, "outer goal ignored", "trigger-1")
+        .await
+        .expect("run");
+
+    assert!(matches!(disposition, Disposition::Reported(_)));
+    assert!(
+        invoked.lock().unwrap().is_empty(),
+        "allowed_mcps outside the ceiling must not pass the risk gate"
+    );
+}
+
+#[tokio::test]
 async fn dispatch_parallel_gates_each_sub_dispatch() {
     let script = vec![
         CompletionResponse::tool_calls(vec![ToolInvocation::new(

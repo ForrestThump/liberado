@@ -32,10 +32,11 @@ The system is:
   transport (`McpTransport::Docker`) is built and unit-tested, with its live Docker-daemon smoke test
   still the one open item (see `human-todo.md`).
 - **Strategic pivot, 2026-07-09**: the draft-PR self-improvement workflow stays, but `vtcode` is no
-  longer the long-term coding engine. The plan is to build a Rust-native agentic coder loop using
-  Liberado's existing `Provider` + `Executor` + `ToolRuntime` infrastructure, with modular
-  `coder-core`/`coder-tools`/`coder-agent`/`coder-sandbox` crates, Docker sandbox abstraction from day
-  one, config-owned prompts/models/budgets, event traces, and `heuristics-tuner` integration. Read
+  longer the long-term coding engine. The direction is a Rust-native **agentic orchestration** kernel
+  (goal loops, verifiers, critics, subagents, session/events for TUI/WebUI) on `Provider` +
+  `Executor` + `ToolRuntime`, with coding as the first domain. Crates:
+  `coder-core`/`coder-tools`/`coder-agent`/`coder-sandbox`/`coder-runner`. Read
+  [`docs/architecture/agentic-loops.md`](../architecture/agentic-loops.md) and
   [`docs/roadmap/rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md)
   before doing new PR-dispatch or coding-agent work.
 - **`liberado-pr-dispatch-mcp` proven end-to-end on Windows this session, with a real upstream bug

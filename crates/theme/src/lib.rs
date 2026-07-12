@@ -40,6 +40,9 @@ pub struct Theme {
     pub chat_user_prefix: Option<String>,
     #[serde(default)]
     pub chat_user_text: Option<String>,
+    /// Subtle background behind user turns so they read apart from agent output.
+    #[serde(default)]
+    pub chat_user_bg: Option<String>,
     #[serde(default)]
     pub chat_assistant_text: Option<String>,
     #[serde(default)]
@@ -150,6 +153,8 @@ impl Theme {
             name: "dark".into(),
             chat_user_prefix: Some("#00ffff".into()),
             chat_user_text: Some("#ffffff".into()),
+            // Slightly lifted from app_bg — readable strip without high contrast.
+            chat_user_bg: Some("#16162a".into()),
             chat_assistant_text: Some("#c0c0c0".into()),
             chat_system_text: Some("#808080".into()),
             chat_streaming_cursor: Some("#00ffff".into()),
@@ -199,6 +204,8 @@ impl Theme {
             name: "light".into(),
             chat_user_prefix: Some("#008080".into()),
             chat_user_text: Some("#1a1a1a".into()),
+            // Soft cool wash on white — separates user turns without glare.
+            chat_user_bg: Some("#eef6f6".into()),
             chat_assistant_text: Some("#404040".into()),
             chat_system_text: Some("#808080".into()),
             chat_streaming_cursor: Some("#008080".into()),
@@ -242,6 +249,83 @@ impl Theme {
         }
     }
 
+    /// Built-in [Nord](https://www.nordtheme.com/) polar-night theme.
+    ///
+    /// Colors from the official palettes
+    /// ([docs](https://www.nordtheme.com/docs/colors-and-palettes)):
+    /// polar night `nord0`–`nord3`, snow storm `nord4`–`nord6`, frost `nord7`–`nord10`,
+    /// aurora `nord11`–`nord15`.
+    pub fn default_nord() -> Self {
+        // Polar Night
+        const N0: &str = "#2e3440";
+        const N1: &str = "#3b4252";
+        const N2: &str = "#434c5e";
+        const N3: &str = "#4c566a";
+        // Snow Storm
+        const N4: &str = "#d8dee9";
+        const N5: &str = "#e5e9f0";
+        const N6: &str = "#eceff4";
+        // Frost
+        const N7: &str = "#8fbcbb";
+        const N8: &str = "#88c0d0";
+        const N9: &str = "#81a1c1";
+        const N10: &str = "#5e81ac";
+        // Aurora
+        const N11: &str = "#bf616a";
+        const N12: &str = "#d08770";
+        const N13: &str = "#ebcb8b";
+        const N14: &str = "#a3be8c";
+        const N15: &str = "#b48ead";
+
+        Self {
+            name: "nord".into(),
+            chat_user_prefix: Some(N8.into()),
+            chat_user_text: Some(N6.into()),
+            // nord1 elevated panel — one step up from polar-night app_bg (nord0).
+            chat_user_bg: Some(N1.into()),
+            chat_assistant_text: Some(N4.into()),
+            chat_system_text: Some(N3.into()),
+            chat_streaming_cursor: Some(N8.into()),
+            tool_label: Some(N13.into()),
+            tool_name: Some(N12.into()),
+            tool_args: Some(N3.into()),
+            tool_ok: Some(N14.into()),
+            tool_err: Some(N11.into()),
+            code_block_header: Some(N10.into()),
+            code_block_bg: Some(N1.into()),
+            code_block_fg: Some(N4.into()),
+            input_border_focused: Some(N8.into()),
+            input_border_unfocused: Some(N3.into()),
+            input_placeholder: Some(N3.into()),
+            input_text: Some(N6.into()),
+            input_bg: Some(N1.into()),
+            status_bar_text: Some(N3.into()),
+            status_dot_online: Some(N14.into()),
+            status_dot_offline: Some(N11.into()),
+            status_dot_connecting: Some(N13.into()),
+            reaction_observed: Some(N8.into()),
+            reaction_dispatched: Some(N13.into()),
+            reaction_acted: Some(N14.into()),
+            reaction_unknown: Some(N15.into()),
+            sidebar_selected_bg: Some(N2.into()),
+            sidebar_selected_fg: Some(N6.into()),
+            sidebar_text: Some(N4.into()),
+            sidebar_border_focused: Some(N8.into()),
+            sidebar_border_unfocused: Some(N3.into()),
+            sidebar_item_bg: Some(N0.into()),
+            md_bold: Some(N6.into()),
+            md_italic: Some(N5.into()),
+            md_code: Some(N13.into()),
+            md_link: Some(N9.into()),
+            md_bullet: Some(N8.into()),
+            md_heading: Some(N7.into()),
+            md_rule: Some(N3.into()),
+            accent: Some(N8.into()),
+            border: Some(N3.into()),
+            app_bg: Some(N0.into()),
+        }
+    }
+
     /// Resolve a color token: return the override if `Some`, otherwise the `fallback` hex
     /// string.
     pub fn resolve(&self, value: &Option<String>, fallback: &str) -> String {
@@ -257,6 +341,7 @@ impl Theme {
             name: self.name.clone(),
             chat_user_prefix: inherit_string(&self.chat_user_prefix, &base.chat_user_prefix),
             chat_user_text: inherit_string(&self.chat_user_text, &base.chat_user_text),
+            chat_user_bg: inherit_string(&self.chat_user_bg, &base.chat_user_bg),
             chat_assistant_text: inherit_string(
                 &self.chat_assistant_text,
                 &base.chat_assistant_text,
@@ -349,6 +434,61 @@ pub fn user_themes_dir() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("liberado").join("themes"))
 }
 
+/// Platform config dir for Liberado client prefs (same root as themes, one level up).
+/// e.g. `~/.config/liberado/` / `%APPDATA%\liberado\`.
+pub fn user_config_dir() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("liberado"))
+}
+
+/// Path to the client UI settings file (`settings.toml` next to `themes/`).
+pub fn user_settings_path() -> Option<PathBuf> {
+    user_config_dir().map(|d| d.join("settings.toml"))
+}
+
+/// Persistent client UI preferences (TUI today; WebUI can share later).
+///
+/// Lives under the platform config dir — not the daemon vault or `.liberado` data dir —
+/// so theme choice is a machine-local UI preference, not a vault artifact.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UiSettings {
+    /// Preferred theme name (must exist in the registry when applied).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+}
+
+/// Load UI settings from disk. Missing file → empty defaults (caller picks built-in theme).
+pub fn load_ui_settings() -> UiSettings {
+    let Some(path) = user_settings_path() else {
+        return UiSettings::default();
+    };
+    load_ui_settings_from(&path)
+}
+
+/// Pure path-based load (tests).
+pub fn load_ui_settings_from(path: &Path) -> UiSettings {
+    match fs::read_to_string(path) {
+        Ok(contents) => toml::from_str(&contents).unwrap_or_default(),
+        Err(_) => UiSettings::default(),
+    }
+}
+
+/// Persist the active theme name into `settings.toml`, preserving other fields.
+pub fn save_theme_preference(theme_name: &str) -> Result<(), String> {
+    let path = user_settings_path().ok_or_else(|| "could not resolve config dir".to_string())?;
+    save_theme_preference_to(&path, theme_name)
+}
+
+/// Pure path-based save (tests).
+pub fn save_theme_preference_to(path: &Path, theme_name: &str) -> Result<(), String> {
+    let mut settings = load_ui_settings_from(path);
+    settings.theme = Some(theme_name.trim().to_string());
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create config dir: {e}"))?;
+    }
+    let body = toml::to_string_pretty(&settings).map_err(|e| format!("serialize settings: {e}"))?;
+    fs::write(path, body).map_err(|e| format!("write settings: {e}"))
+}
+
 /// A collection of themes keyed by name. Built-in themes (dark, light) are always
 /// present. User themes loaded from `<config>/liberado/themes/*.toml` can extend or
 /// override built-in themes. A user theme that shares a name with a built-in replaces
@@ -359,13 +499,16 @@ pub struct ThemeRegistry {
 }
 
 impl ThemeRegistry {
-    /// Create a registry populated with the built-in dark and light themes.
+    /// Create a registry populated with the built-in dark, light, and nord themes.
     pub fn new() -> Self {
         let mut themes = HashMap::new();
-        let dark = Theme::default_dark();
-        let light = Theme::default_light();
-        themes.insert(dark.name.clone(), dark);
-        themes.insert(light.name.clone(), light);
+        for theme in [
+            Theme::default_dark(),
+            Theme::default_light(),
+            Theme::default_nord(),
+        ] {
+            themes.insert(theme.name.clone(), theme);
+        }
         Self { themes }
     }
 
@@ -416,10 +559,13 @@ impl ThemeRegistry {
 
     /// Reload user themes from disk, restoring built-ins to factory defaults first.
     pub fn reload(&mut self, dir: &Path) -> Vec<LoadError> {
-        let dark = Theme::default_dark();
-        let light = Theme::default_light();
-        self.themes.insert("dark".into(), dark);
-        self.themes.insert("light".into(), light);
+        for theme in [
+            Theme::default_dark(),
+            Theme::default_light(),
+            Theme::default_nord(),
+        ] {
+            self.themes.insert(theme.name.clone(), theme);
+        }
         self.load_user_themes(dir)
     }
 
@@ -633,6 +779,16 @@ mod tests {
         assert_eq!(Theme::default_light().name, "light");
     }
 
+    #[test]
+    fn default_nord_has_name_and_polar_night_bg() {
+        let t = Theme::default_nord();
+        assert_eq!(t.name, "nord");
+        assert_eq!(t.app_bg.as_deref(), Some("#2e3440")); // nord0
+        assert_eq!(t.accent.as_deref(), Some("#88c0d0")); // nord8 frost ice
+        assert_eq!(t.tool_err.as_deref(), Some("#bf616a")); // nord11 aurora red
+        assert_eq!(t.tool_ok.as_deref(), Some("#a3be8c")); // nord14 aurora green
+    }
+
     // ── Registry tests ──
 
     #[test]
@@ -640,14 +796,15 @@ mod tests {
         let reg = ThemeRegistry::new();
         assert!(reg.get("dark").is_some());
         assert!(reg.get("light").is_some());
-        assert_eq!(reg.len(), 2);
+        assert!(reg.get("nord").is_some());
+        assert_eq!(reg.len(), 3);
     }
 
     #[test]
     fn registry_names_sorted() {
         let reg = ThemeRegistry::new();
         let names = reg.names();
-        assert_eq!(names, vec!["dark", "light"]);
+        assert_eq!(names, vec!["dark", "light", "nord"]);
     }
 
     #[test]
@@ -661,7 +818,7 @@ mod tests {
 
         let mut reg = ThemeRegistry::new();
         reg.load_user_themes(dir.path());
-        assert_eq!(reg.len(), 3);
+        assert_eq!(reg.len(), 4); // 3 builtins + mocha
         assert!(reg.get("mocha").is_some());
         assert_eq!(
             reg.get("mocha").unwrap().chat_user_text,
@@ -727,7 +884,7 @@ mod tests {
         let mut reg = ThemeRegistry::new();
         let errors = reg.load_user_themes(dir.path());
         assert!(errors.is_empty());
-        assert_eq!(reg.len(), 2);
+        assert_eq!(reg.len(), 3); // builtins only
     }
 
     #[test]
@@ -746,5 +903,22 @@ mod tests {
         assert_eq!(layered.chat_user_text, Some("#abcdef".into()));
         assert_eq!(layered.chat_user_prefix, base.chat_user_prefix);
         assert_eq!(layered.tool_ok, base.tool_ok);
+    }
+
+    #[test]
+    fn ui_settings_round_trip_theme_preference() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        assert!(load_ui_settings_from(&path).theme.is_none());
+        save_theme_preference_to(&path, "nord").unwrap();
+        assert_eq!(load_ui_settings_from(&path).theme.as_deref(), Some("nord"));
+        save_theme_preference_to(&path, "light").unwrap();
+        assert_eq!(
+            load_ui_settings_from(&path).theme.as_deref(),
+            Some("light")
+        );
+        let body = fs::read_to_string(&path).unwrap();
+        assert!(body.contains("theme"));
+        assert!(body.contains("light"));
     }
 }

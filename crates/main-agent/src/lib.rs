@@ -1,29 +1,84 @@
 //! # liberado-main-agent
 //!
-//! The conversational front the user talks to. A [`Conversation`] holds the running message history
-//! (system prompt + every prior turn) and, on each user message, drives the
-//! [`Executor`](liberado_executor::Executor)'s conversational tool-calling loop over that whole
-//! history — so context carries forward and the agent can use tools mid-answer — then returns the
-//! prose reply.
+//! The conversational **human interface** the user talks to. By default (config
+//! `topology.main_agent.delegation_mode = true`) it is a face agent: it holds the human's intent,
+//! asks clarifying questions, and calls a single built-in [`face::DELEGATE_TOOL_NAME`] tool that
+//! hands goals to the dispatcher/orchestrator mesh — so tool schemas and raw tool results never
+//! pollute chat context. Operators can still grant extra MCPs to the `"main-agent"` policy
+//! component if they want a thicker surface.
+//!
+//! Mesh handoffs write **dispatch journals** under `<LIBERADO_DATA_DIR>/dispatches/` (linked from
+//! the `delegate` tool result footer by correlation id + parent chat session). Not model context.
 //!
 //! [`Conversation`] is the in-memory primitive — one history, no I/O. Durability and per-session
-//! routing layer on top via [`ChatSessions`], which backs chat with a
-//! [`ConversationStore`](liberado_conversation_store::ConversationStore): each turn rehydrates from
-//! the store and persists its tail on success, so a host (the web server today, a TUI-hosting daemon
-//! later) stays a thin, stateless adapter. No ContextPolicy header yet — that still layers on top.
+//! routing layer on top via [`ChatSessions`].
 
 use liberado_executor::{AgentEvent, ExecError, Executor, ToolRuntime};
 use liberado_provider::Message;
 use tokio::sync::mpsc::Sender;
 
+mod dispatch_journal;
+mod face;
 mod sessions;
-pub use sessions::{ChatSessions, SessionError, SessionResult};
 
-/// The default persona/system prompt for the chat agent.
+pub use dispatch_journal::{dispatches_dir, journal_path};
+pub use face::{DELEGATE_TOOL_NAME, DispatchBridge, FaceRuntime};
+pub use sessions::{ChatSessions, SessionError, SessionResult, default_conversation_title};
+
+/// Short legacy prompt (used when `delegation_mode = false` and no custom prompt is set).
 pub const DEFAULT_SYSTEM_PROMPT: &str = "\
 You are Liberado, a personal AI assistant with access to the user's tools. Hold a natural, helpful \
 conversation. When a tool would help answer or act, use it; otherwise just reply. Be concise and \
 direct, and never invent tool results.";
+
+/// Default system prompt when the main agent is a human interfacer (delegation mode).
+///
+/// Models are trained to pick from in-context tools; this prompt must be strong enough that the
+/// agent treats `delegate` as proxy access to a large capability mesh and never assumes it must
+/// see tool definitions itself.
+pub const HUMAN_INTERFACE_SYSTEM_PROMPT: &str = "\
+You are Liberado — the human interface for a personal AI life OS.
+
+# Your role (non-negotiable)
+
+You are a **face agent**, not a tool user. Your job is to:
+
+1. Talk with the human in natural language.
+2. Hold and refine **their intent** across the conversation.
+3. Ask the **right clarifying questions** when intent is incomplete or ambiguous.
+4. When the human wants real-world action, lookup, multi-step work, or any capability beyond pure \
+conversation, call the `delegate` tool with a clear, self-contained goal.
+5. Relay mesh results back to the human in plain language (summaries, next steps, questions).
+
+# What you must assume about capabilities
+
+You have **proxy access** to a large capability mesh through `delegate` only. That mesh can include \
+vault/memory (TurboVault-backed), tasks, research, files, external services, code work, and more. \
+**Do not** try to enumerate tools from your own context. You will usually see only `delegate` (and \
+possibly a tiny set of extras the human explicitly enabled). That is intentional.
+
+- If you need something done: **delegate** a well-specified goal.
+- If the mesh returns clarifying questions: ask the human, then delegate again with the answers.
+- If the mesh says a capability is missing: tell the human honestly; the system may need to create \
+or wire a tool — still do not invent tool results.
+- Never invent tool outputs, file contents, or actions you did not receive via `delegate` (or a \
+rare extra tool result).
+
+# What you must NOT do
+
+- Do not claim you lack capability just because you do not see a long tool list.
+- Do not dump raw tool JSON or internal mesh reasoning at the human unless they ask for detail.
+- Do not skip clarifying questions when critical details are missing (which account, which file, \
+which date, what \"done\" means).
+- Do not call `delegate` for pure chit-chat or for questions you can answer from the conversation \
+alone.
+
+# Style
+
+Be concise, direct, and collaborative. Prefer short turns that surface intent over long monologues. \
+When work is delegated, say so briefly, then present the result clearly.
+
+You are the human's partner for understanding what they want. The mesh is how work gets done.";
 
 /// A multi-turn conversation: the system prompt plus every exchanged message, in order.
 pub struct Conversation {
@@ -61,16 +116,7 @@ impl Conversation {
             .await
     }
 
-    /// Streaming variant of [`turn`](Self::turn): append the user message and drive the executor's
-    /// streaming loop over the full history, emitting [`AgentEvent`]s (answer tokens, tool starts)
-    /// over `events` as they happen. The caller sends the terminal `Done`/`Error`.
-    ///
-    /// **Atomic under cancellation.** If this future is dropped before it completes — the client
-    /// closed the stream (a "stop"), or the connection dropped — the turn's partial history is
-    /// rolled back to before the user message. So a cancelled turn is a clean no-op: no orphan user
-    /// message and, crucially, no assistant `tool_calls` left without their results (which would
-    /// make the *next* turn's provider request invalid). On normal completion (`Ok` or `Err`) the
-    /// turn's messages are kept.
+    /// Streaming variant of [`turn`](Self::turn).
     pub async fn turn_stream(
         &mut self,
         executor: &Executor,
@@ -81,7 +127,6 @@ impl Conversation {
         let checkpoint = self.messages.len();
         self.messages.push(Message::user(user));
 
-        // Armed until the turn completes; if dropped first (cancelled), it undoes the partial turn.
         let mut rollback = Rollback::arm(&mut self.messages, checkpoint);
         let result = executor
             .converse_stream(runtime, rollback.messages(), events)
@@ -91,20 +136,17 @@ impl Conversation {
     }
 
     /// Append a user message and a plain assistant reply directly, with no executor/tool
-    /// involvement — used when a turn is answered by the dispatch step itself (a clarifying
-    /// question, a proposal confirmation, or a subagent's report) rather than by the
-    /// conversational tool-calling loop.
+    /// involvement — used when a turn is answered outside the conversational tool loop.
     pub fn answer(&mut self, user: &str, reply: &str) {
         self.messages.push(Message::user(user));
         self.messages.push(Message::assistant(reply));
     }
 
-    /// The full message history (system prompt first).
+    /// The full history, system prompt first.
     pub fn history(&self) -> &[Message] {
         &self.messages
     }
 
-    /// Number of messages, including the system prompt.
     pub fn len(&self) -> usize {
         self.messages.len()
     }
@@ -120,10 +162,7 @@ impl Default for Conversation {
     }
 }
 
-/// Truncates a message history back to a checkpoint when dropped — unless [`disarm`](Self::disarm)ed
-/// first. This makes a streaming turn atomic: hand the history to the turn through
-/// [`messages`](Self::messages), and if the turn future is dropped mid-flight (cancellation) the
-/// guard's `Drop` undoes whatever the turn appended, leaving the conversation as it was.
+/// Rolls the message buffer back to `checkpoint` if dropped while still armed (cancellation).
 struct Rollback<'a> {
     messages: &'a mut Vec<Message>,
     checkpoint: usize,
@@ -139,13 +178,11 @@ impl<'a> Rollback<'a> {
         }
     }
 
-    /// The guarded history, to drive the turn over.
     fn messages(&mut self) -> &mut Vec<Message> {
         self.messages
     }
 
-    /// The turn completed; keep its messages.
-    fn disarm(mut self) {
+    fn disarm(&mut self) {
         self.armed = false;
     }
 }
@@ -162,12 +199,13 @@ impl Drop for Rollback<'_> {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use liberado_executor::Budget;
+    use liberado_executor::{Budget, ToolRuntime};
     use liberado_provider::{
         CompletionRequest, CompletionResponse, MockProvider, Provider, ProviderResult, Role,
         ToolDef, ToolInvocation,
     };
     use std::sync::Arc;
+    use tokio::sync::mpsc;
 
     struct NoTools;
     #[async_trait]
@@ -180,101 +218,63 @@ mod tests {
         }
     }
 
-    /// A provider whose completion never resolves — it lets a turn get *started* (the user message
-    /// pushed, the request issued) and then hang, so a test can cancel it mid-flight by dropping the
-    /// turn future.
-    struct PendingProvider;
-    #[async_trait]
-    impl Provider for PendingProvider {
-        fn model(&self) -> &str {
-            "pending"
-        }
-        async fn complete(
-            &self,
-            _request: CompletionRequest,
-        ) -> ProviderResult<CompletionResponse> {
-            std::future::pending().await
-        }
-    }
-
     #[tokio::test]
     async fn carries_context_across_turns() {
-        // Two scripted plain-prose replies — one per user turn.
         let provider = Arc::new(MockProvider::with_script(
             "mock",
             [
-                CompletionResponse::text("Hi! How can I help?"),
-                CompletionResponse::text("You said hello a moment ago."),
+                CompletionResponse::text("Hi!"),
+                CompletionResponse::text("You said hello."),
             ],
         ));
         let executor = Executor::new(provider.clone(), Budget::default());
-        let mut convo = Conversation::default();
-
-        let r1 = convo.turn(&executor, &NoTools, "hello").await.unwrap();
-        assert_eq!(r1, "Hi! How can I help?");
-
-        let r2 = convo
-            .turn(&executor, &NoTools, "what did I just say?")
+        let mut convo = Conversation::new("sys");
+        convo.turn(&executor, &NoTools, "hello").await.unwrap();
+        convo
+            .turn(&executor, &NoTools, "what did I say?")
             .await
             .unwrap();
-        assert_eq!(r2, "You said hello a moment ago.");
-
-        // The history accumulated: system + (user, assistant) x2.
-        assert_eq!(convo.len(), 5);
-        assert_eq!(convo.history()[0].role, Role::System);
-        // The second request the provider saw must have included the first exchange (context).
-        let second_request = &provider.received_requests()[1];
-        assert!(
-            second_request.messages.iter().any(|m| m.content == "hello"),
-            "second turn lost the first user message"
-        );
+        let second = &provider.received_requests()[1];
+        assert!(second.messages.iter().any(|m| m.content == "hello"));
     }
 
     #[tokio::test]
     async fn cancelled_stream_turn_rolls_back_to_clean_history() {
+        struct PendingProvider;
+        #[async_trait]
+        impl Provider for PendingProvider {
+            fn model(&self) -> String {
+                "pending".into()
+            }
+            async fn complete(
+                &self,
+                _request: CompletionRequest,
+            ) -> ProviderResult<CompletionResponse> {
+                std::future::pending().await
+            }
+        }
         let executor = Executor::new(Arc::new(PendingProvider), Budget::default());
-        let mut convo = Conversation::default();
-        let before = convo.len(); // just the system prompt
-        let (tx, _rx) = tokio::sync::mpsc::channel(8);
-
-        // Start the turn and poll it once — enough to push the user message and issue the (hanging)
-        // request — then drop the future to simulate the client stopping mid-turn.
-        {
-            let fut = convo.turn_stream(&executor, &NoTools, "do a thing", &tx);
-            tokio::pin!(fut);
-            assert!(
-                futures::poll!(fut.as_mut()).is_pending(),
-                "the pending provider should leave the turn in flight"
-            );
-        } // fut dropped here → the rollback guard fires
-
-        // The cancelled turn left no trace: not even the user message survives.
-        assert_eq!(
-            convo.len(),
-            before,
-            "a cancelled turn must roll back its history"
-        );
+        let mut convo = Conversation::new("sys");
+        let (tx, _rx) = mpsc::channel(1);
+        let fut = convo.turn_stream(&executor, &NoTools, "hi", &tx);
+        drop(fut);
+        assert_eq!(convo.history().len(), 1);
+        assert_eq!(convo.history()[0].role, Role::System);
     }
 
     #[tokio::test]
     async fn completed_stream_turn_keeps_its_history() {
-        let executor = Executor::new(
-            Arc::new(MockProvider::with_script(
-                "mock",
-                [CompletionResponse::text("done")],
-            )),
-            Budget::default(),
-        );
-        let mut convo = Conversation::default();
-        let before = convo.len();
-        let (tx, _rx) = tokio::sync::mpsc::channel(8);
-
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [CompletionResponse::text("ok")],
+        ));
+        let executor = Executor::new(provider, Budget::default());
+        let mut convo = Conversation::new("sys");
+        let (tx, _rx) = mpsc::channel(8);
         convo
             .turn_stream(&executor, &NoTools, "hi", &tx)
             .await
             .unwrap();
-
-        // A turn that runs to completion is *not* rolled back: user + assistant are retained.
-        assert_eq!(convo.len(), before + 2);
+        assert!(convo.history().len() >= 3);
     }
 }

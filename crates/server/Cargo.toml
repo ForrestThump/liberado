@@ -25,10 +25,13 @@ liberado-provider = { workspace = true }
 liberado-telegram-approvals = { workspace = true }
 liberado-memory-store = { workspace = true }
 liberado-vault = { workspace = true }
+liberado-session = { workspace = true }
+liberado-coder-agent = { workspace = true }
 turbovault-vector = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 futures = { workspace = true }
+async-stream = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }

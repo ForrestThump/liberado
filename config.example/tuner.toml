@@ -19,7 +19,18 @@
 #     scenarios/scoring machinery — both roles run through the same Executor::execute), but with the
 #     subagent's own looser turn budget (liberado_executor::DEFAULT_MAX_TURNS, 8 vs. the executor's
 #     4 — mirrors Orchestrator's own subagent_budget default).
+#   "coder" — tunes the Liberado coding-worker system prompt (PR dispatch / liberado-coder-agent)
+#     by running real temp git workspaces + discrete coding tools per scenario. More expensive than
+#     executor scoring (filesystem + multi-turn coding). Winners are proposals only — hand-copy into
+#     prompts/coder/coder.md or LIBERADO_CODER_PROMPT.
 # An unrecognized value falls back to "dispatcher" with a warning rather than failing the session.
+
+# coder_tier = "core"
+# Progressive coding curriculum (only when layer = "coder"). Higher includes lower:
+#   "smoke"  — 2 scenarios: one-file create + edit (wiring / false-success)
+#   "core"   — + multi-file, secrets hygiene, honest no-op fail   (default)
+#   "stress" — + rename, surgical TOML/MD, repair bug, new module re-export
+# Env: TUNER_CODER_TIER. Pair with max_scenarios to further cap after the tier filter.
 
 # scoring_models = ["deepseek/deepseek-v4-flash"]
 # Plays "the real dispatcher" during scoring. List more than one to check whether a candidate

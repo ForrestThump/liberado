@@ -66,3 +66,24 @@
 # validation_repeat_limit = 2
 # max_attempts = 3
 # event_preview_max_chars = 500
+
+# Harness gates (docs/architecture/verifiers.md). Prefer a frozen GoalContract from intake /
+# PR-dispatch freeze in product flows; these are static defaults for a project / eval run.
+# Legacy single command still works:
+# validation_command = { program = "cargo", args = ["test"] }
+#
+# PR-dispatch production profiles live in dispatch.yaml `verify:` (and env LIBERADO_VERIFY_PROFILE /
+# VALIDATE_CMD). They freeze into GoalContract at submit so liberado-loop runs CI-in-the-loop.
+#
+# [[coder.verifiers]]
+# type = "paths_exist"
+# id = "paths"
+# paths = ["src/main.rs", "Cargo.toml"]
+#
+# [[coder.verifiers]]
+# type = "command"
+# id = "cargo-check"
+# program = "cargo"
+# args = ["check"]
+# timeout_secs = 300
+# network = false

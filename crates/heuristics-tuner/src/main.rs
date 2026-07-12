@@ -5,7 +5,11 @@
 //! same machine-local state sink the conversation store and proposal signing key already use).
 //! Nothing here (or anywhere in this crate) ever writes to a real prompt const.
 
-use liberado_heuristics_tuner::{ExecutorTunerResult, Layer, TunerConfig, run_executor_tuner, run_subagent_tuner, run_tuner};
+use liberado_heuristics_tuner::{
+    CoderTunerResult, DEFAULT_CODER_PROMPT_PATH, DEFAULT_CODER_SYSTEM_PROMPT, ExecutorTunerResult,
+    Layer, TunerConfig, build_coder_draft_proposal, run_coder_tuner, run_executor_tuner,
+    run_subagent_tuner, run_tuner, write_coder_draft_proposal,
+};
 use std::path::Path;
 
 /// Shared by the executor and subagent branches below — both produce an `ExecutorTunerResult` via
@@ -27,6 +31,45 @@ async fn save_tool_loop_result(
             path.display()
         );
     }
+    Ok(result.rubric)
+}
+
+async fn save_coder_result(
+    result: CoderTunerResult,
+    out_dir: &Path,
+) -> Result<String, Box<dyn std::error::Error>> {
+    for record in &result.generations {
+        let path = out_dir.join(format!("generation-{}.txt", record.generation));
+        tokio::fs::write(&path, &record.rubric).await?;
+        println!(
+            "Generation {} — coding accuracy {:.2}, nonempty-diff {:.2}, unsafe {} -> {}",
+            record.generation,
+            record.fitness.accuracy,
+            record.fitness.nonempty_diff_rate,
+            record.fitness.unsafe_acts,
+            path.display()
+        );
+    }
+
+    // Meta-loop seed (Decision 14): draft proposal artifacts only — never write prompts/ live.
+    let proposal = build_coder_draft_proposal(
+        &result.winner,
+        &result.winner_fitness,
+        &result.baseline_fitness,
+        DEFAULT_CODER_SYSTEM_PROMPT,
+        DEFAULT_CODER_PROMPT_PATH,
+    );
+    let written = write_coder_draft_proposal(out_dir, &proposal).await?;
+    println!(
+        "Draft proposal recommended={} reason={} files={}",
+        proposal.recommended,
+        proposal.reason,
+        written.len()
+    );
+    for path in &written {
+        println!("  proposal artifact: {}", path.display());
+    }
+
     Ok(result.rubric)
 }
 
@@ -60,6 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Layer::Executor => save_tool_loop_result(run_executor_tuner(config).await, &out_dir).await?,
         Layer::Subagent => save_tool_loop_result(run_subagent_tuner(config).await, &out_dir).await?,
+        Layer::Coder => save_coder_result(run_coder_tuner(config).await, &out_dir).await?,
     };
 
     // A stable, obvious filename for "the answer" — the same content as the last generation's

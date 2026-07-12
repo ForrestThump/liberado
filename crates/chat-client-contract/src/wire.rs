@@ -147,6 +147,21 @@ pub struct DaemonStatus {
     pub chat_tool_names: Vec<String>,
 }
 
+/// Response shape from `GET /api/models` — live catalog from the provider's
+/// OpenAI-compatible `GET /models`, plus the model currently configured for chat.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelsResponse {
+    /// Model ids from the provider (may be empty if unsupported or failed).
+    #[serde(default)]
+    pub models: Vec<String>,
+    /// Active model id from daemon config (`Provider::model()`), when a provider is attached.
+    #[serde(default)]
+    pub current: Option<String>,
+    /// Soft error when the provider list could not be fetched (UI still shows `current`).
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 // ──────────────────────────────────────────────────────────────
 // Reactions
 // ──────────────────────────────────────────────────────────────

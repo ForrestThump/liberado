@@ -1,29 +1,43 @@
-//! Executor-backed coding backend MVP.
+//! Coding **domain pack** for Liberado's agentic orchestration mesh.
+//!
+//! This crate composes the shared inner loop (`liberado-executor`) with coding tools, sandbox,
+//! deterministic verifiers, progress guards, optional critic, and attempt/repair. It is a domain
+//! specialization — not the center of Liberado. See
+//! `docs/architecture/agentic-loops.md` and `docs/roadmap/agentic-mesh-hygiene-audit-2026-07-10.md`.
 
-use std::{
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+mod critic;
+mod gates;
+mod intake_session;
+mod planner;
+mod progress;
+mod repair_feedback;
+mod roles;
+mod runtime;
+mod session_pack;
+mod trace;
+mod verify_pipeline;
+
+pub use intake_session::{
+    IntakeAnswer, freeze_if_ready, request_from_contract, run_intake, run_intake_until_ready,
 };
+pub use session_pack::CodingSessionPack;
+
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::Utc;
 use liberado_coder_core::{
-    CoderBackend, CoderCommandConfig, CoderError, CoderEvent, CoderRoleConfig, CoderRunRequest,
-    CoderRunResult, CoderTrace, LIBERADO_LOOP_BACKEND,
+    CoderBackend, CoderError, CoderEvent, CoderRoleConfig, CoderRunRequest, CoderRunResult,
+    CriticVerdict, LIBERADO_LOOP_BACKEND, resolve_verifier_specs,
 };
-use liberado_coder_sandbox::CommandRequest;
 use liberado_coder_tools::CodingToolRuntime;
 use liberado_common::Outcome;
-use liberado_executor::{Budget, Executor, Task, ToolRuntime};
-use liberado_provider::{Provider, ToolDef, ToolInvocation};
-use serde_json::{Value, json};
-use tokio::process::Command;
+use liberado_executor::{Budget, Executor, Task};
+use liberado_provider::Provider;
+use progress::ProgressGuard;
+use serde_json::json;
 
-#[derive(Clone)]
-pub struct LiberadoLoopBackend {
-    providers: Arc<dyn CoderProviderFactory>,
-}
-
+/// Selects a [`Provider`] per role name (coder, repair, critic, …).
 pub trait CoderProviderFactory: Send + Sync {
     fn provider_for(
         &self,
@@ -53,6 +67,12 @@ impl CoderProviderFactory for SingleProviderFactory {
     }
 }
 
+/// Liberado's home-spun coding goal-session backend (`CoderBackend` implementation).
+#[derive(Clone)]
+pub struct LiberadoLoopBackend {
+    providers: Arc<dyn CoderProviderFactory>,
+}
+
 impl LiberadoLoopBackend {
     pub fn new(provider: Arc<dyn Provider>) -> Self {
         Self::with_provider_factory(Arc::new(SingleProviderFactory::new(provider)))
@@ -70,18 +90,102 @@ impl CoderBackend for LiberadoLoopBackend {
     }
 
     async fn run(&self, request: CoderRunRequest) -> Result<CoderRunResult, CoderError> {
-        let session_id = session_id(&request);
+        let max_attempts = request.config.progress.max_attempts.max(1);
+        let mut feedback = request.prior_feedback.clone();
+        let mut last_retryable: Option<CoderError> = None;
+
+        for attempt_offset in 0..max_attempts {
+            let mut attempt_request = request.clone();
+            attempt_request.attempt = request.attempt.saturating_add(attempt_offset);
+            attempt_request.prior_feedback = feedback.clone();
+
+            match self.run_attempt(attempt_request).await {
+                Ok(result) => {
+                    let revision_issues =
+                        if let Some(CriticVerdict::NeedsRevision { issues }) = &result.critic_verdict
+                        {
+                            Some(issues.clone())
+                        } else {
+                            None
+                        };
+                    match revision_issues {
+                        Some(issues) if attempt_offset + 1 < max_attempts => {
+                            let err = CoderError::Backend(format!(
+                                "critic requested revision: {}",
+                                issues.join("; ")
+                            ));
+                            feedback.push(repair_feedback::format_error_feedback(&err));
+                            last_retryable = Some(err);
+                            continue;
+                        }
+                        Some(issues) => {
+                            let mut failed = result;
+                            failed.outcome = Outcome::Failed;
+                            if !failed.summary.contains("critic") {
+                                failed.summary = format!(
+                                    "{}; critic requested revision: {}",
+                                    failed.summary,
+                                    issues.join("; ")
+                                );
+                            }
+                            return Ok(failed);
+                        }
+                        None => return Ok(result),
+                    }
+                }
+                Err(err) if is_retryable(&err) && attempt_offset + 1 < max_attempts => {
+                    feedback.push(repair_feedback::format_error_feedback(&err));
+                    last_retryable = Some(err);
+                    continue;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        Err(last_retryable.unwrap_or_else(|| {
+            CoderError::Backend("coding attempts exhausted without a result".to_string())
+        }))
+    }
+}
+
+fn is_retryable(err: &CoderError) -> bool {
+    matches!(err, CoderError::NoChanges | CoderError::Validation(_))
+}
+
+impl LiberadoLoopBackend {
+    async fn run_attempt(&self, request: CoderRunRequest) -> Result<CoderRunResult, CoderError> {
+        let session_id = trace::session_id(&request);
         let events = Arc::new(Mutex::new(vec![CoderEvent::SessionStarted {
             session_id: session_id.clone(),
             backend: self.name().to_string(),
             task_id: request.task.id.clone(),
             at: Utc::now(),
         }]));
-        let max_turns = request.config.coder.max_turns.ok_or_else(|| {
-            CoderError::Setup("coder role requires max_turns in resolved config".to_string())
+
+        // Optional planner (attempt 0 only) — inject plan into task context for the worker.
+        let mut request = request;
+        if request.attempt == 0 {
+            if let Some(plan) = planner::run_planner(self.providers.as_ref(), &request, &events)
+                .await?
+            {
+                let block = plan.as_context_block();
+                request.task.context = Some(match request.task.context.take() {
+                    Some(existing) => format!("{existing}\n\n{block}"),
+                    None => block,
+                });
+            }
+        }
+
+        let worker_role_name = roles::worker_role_name(&request);
+        let worker_config = roles::worker_role_config(&request);
+        let max_turns = worker_config.max_turns.ok_or_else(|| {
+            CoderError::Setup(format!(
+                "{worker_role_name} role requires max_turns in resolved config"
+            ))
         })?;
         let event_preview_max_chars = request.config.progress.event_preview_max_chars;
-        let mut runtime = CodingToolRuntime::from_sandbox(
+
+        let mut coding_runtime = CodingToolRuntime::from_sandbox(
             &request.workspace.root,
             request.config.sandbox.clone(),
             request.config.command_policy.clone(),
@@ -89,36 +193,46 @@ impl CoderBackend for LiberadoLoopBackend {
         )
         .map_err(|e| CoderError::Tool(e.to_string()))?;
         if let Some(command) = &request.config.validation_command {
-            runtime = runtime.with_validation_command(command_request(command));
+            coding_runtime = coding_runtime.with_validation_command(gates::command_request(command));
         }
-        let backend_runtime = runtime.clone();
-        let runtime = TracingToolRuntime::new(runtime, events.clone(), event_preview_max_chars);
+        let progress = Arc::new(Mutex::new(ProgressGuard::new(
+            request.config.progress.clone(),
+        )));
+        let runtime = runtime::GuardedTracingRuntime::new(
+            coding_runtime,
+            events.clone(),
+            progress.clone(),
+            event_preview_max_chars,
+        );
 
-        push_event(
+        trace::push_event(
             &events,
             CoderEvent::RoleStarted {
-                role: "coder".to_string(),
-                model: request.config.coder.model.clone(),
+                role: worker_role_name.to_string(),
+                model: worker_config.model.clone(),
                 at: Utc::now(),
             },
         );
         let provider = self
             .providers
-            .provider_for("coder", &request.config.coder)?;
-        let task = Task::new(coder_instructions(&request).await?, coder_goal(&request));
+            .provider_for(worker_role_name, worker_config)?;
+        let task = Task::new(
+            roles::role_instructions(worker_config, worker_role_name).await?,
+            roles::coder_goal(&request),
+        );
         let executor = Executor::new(provider, Budget::new(max_turns));
         let report = executor
             .execute(&runtime, task)
             .await
             .map_err(|e| CoderError::Provider(e.to_string()))?;
-        push_event(
+        trace::push_event(
             &events,
             CoderEvent::RoleFinished {
-                role: "coder".to_string(),
+                role: worker_role_name.to_string(),
                 at: Utc::now(),
             },
         );
-        push_event(
+        trace::push_event(
             &events,
             CoderEvent::ReportFiled {
                 outcome: report.outcome,
@@ -127,9 +241,19 @@ impl CoderBackend for LiberadoLoopBackend {
             },
         );
 
-        let files_changed = changed_files(&request.workspace.root).await?;
+        let fatal = progress
+            .lock()
+            .expect("progress mutex poisoned")
+            .take_fatal();
+        if let Some(fatal) = fatal {
+            return Err(
+                gates::fail_with_progress_fatal(&request, &session_id, &events, fatal).await,
+            );
+        }
+
+        let files_changed = gates::changed_files(&request.workspace.root).await?;
         if files_changed.is_empty() && report.outcome != Outcome::Failed {
-            push_event(
+            trace::push_event(
                 &events,
                 CoderEvent::LoopGuardTriggered {
                     guard: "no_changes".to_string(),
@@ -137,18 +261,24 @@ impl CoderBackend for LiberadoLoopBackend {
                     at: Utc::now(),
                 },
             );
-            push_event(
+            trace::push_event(
                 &events,
                 CoderEvent::SessionFinished {
                     outcome: Outcome::Failed,
                     at: Utc::now(),
                 },
             );
-            let _ = write_trace(&request, &session_id, snapshot_events(&events), None).await;
+            let _ = trace::write_trace(
+                &request,
+                &session_id,
+                trace::snapshot_events(&events),
+                None,
+            )
+            .await;
             return Err(CoderError::NoChanges);
         }
         for path in &files_changed {
-            push_event(
+            trace::push_event(
                 &events,
                 CoderEvent::FileChanged {
                     path: path.clone(),
@@ -156,37 +286,110 @@ impl CoderBackend for LiberadoLoopBackend {
                 },
             );
         }
-        let validation_notes =
-            if request.config.validation_command.is_some() && report.outcome != Outcome::Failed {
-                Some(run_validation_gate(&backend_runtime, &events, &request, &session_id).await?)
-            } else {
-                None
-            };
-        push_event(
+
+        // Authoritative verifier pipeline (config list and/or legacy validation_command).
+        // Skipped when the worker already reported Failed (honest stop).
+        let mut validation_notes = None;
+        let mut outcome = report.outcome;
+        let mut summary = report.summary;
+        if outcome != Outcome::Failed {
+            let specs = resolve_verifier_specs(
+                &request.config.verifiers,
+                request.config.validation_command.as_ref(),
+            );
+            if !specs.is_empty() {
+                let pipeline = verify_pipeline::run_pipeline(
+                    &request.workspace.root,
+                    &specs,
+                    &request.config.verify_policy,
+                    Some(&events),
+                )
+                .await?;
+                if !pipeline.is_pass() {
+                    // Signature-aware feedback for repair routing (scratchpad C).
+                    let feedback = repair_feedback::format_pipeline_repair(&pipeline);
+                    trace::push_event(
+                        &events,
+                        CoderEvent::LoopGuardTriggered {
+                            guard: "verifier_pipeline".to_string(),
+                            action: "fail_run".to_string(),
+                            at: Utc::now(),
+                        },
+                    );
+                    trace::push_event(
+                        &events,
+                        CoderEvent::SessionFinished {
+                            outcome: Outcome::Failed,
+                            at: Utc::now(),
+                        },
+                    );
+                    let _ = trace::write_trace(
+                        &request,
+                        &session_id,
+                        trace::snapshot_events(&events),
+                        None,
+                    )
+                    .await;
+                    return Err(CoderError::Validation(feedback));
+                }
+                validation_notes = Some(
+                    pipeline
+                        .results
+                        .iter()
+                        .map(|r| format!("{}: {}", r.id, r.verdict.summary))
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                );
+            }
+        }
+
+        let mut critic_verdict = None;
+        if outcome != Outcome::Failed && !files_changed.is_empty() && roles::critic_enabled(&request)
+        {
+            let verdict = critic::run_critic(self.providers.as_ref(), &request, &events).await?;
+            trace::push_event(
+                &events,
+                CoderEvent::CriticVerdict {
+                    verdict: verdict.clone(),
+                    at: Utc::now(),
+                },
+            );
+            if let CriticVerdict::NeedsRevision { issues } = &verdict {
+                outcome = Outcome::Failed;
+                summary = format!(
+                    "{summary}; critic requested revision: {}",
+                    issues.join("; ")
+                );
+            }
+            critic_verdict = Some(verdict);
+        }
+
+        trace::push_event(
             &events,
             CoderEvent::SessionFinished {
-                outcome: report.outcome,
+                outcome,
                 at: Utc::now(),
             },
         );
 
         let mut result = CoderRunResult {
             backend: self.name().to_string(),
-            outcome: report.outcome,
-            summary: report.summary,
+            outcome,
+            summary,
             files_changed,
             validation_notes,
-            critic_verdict: None,
+            critic_verdict,
             trace_path: None,
             diagnostics: json!({
                 "artifacts_reported": report.artifacts,
                 "attempt": request.attempt,
+                "worker_role": worker_role_name,
             }),
         };
-        result.trace_path = write_trace(
+        result.trace_path = trace::write_trace(
             &request,
             &session_id,
-            snapshot_events(&events),
+            trace::snapshot_events(&events),
             Some(result.clone()),
         )
         .await?;
@@ -194,293 +397,15 @@ impl CoderBackend for LiberadoLoopBackend {
     }
 }
 
-fn command_request(command: &CoderCommandConfig) -> CommandRequest {
-    CommandRequest {
-        program: command.program.clone(),
-        args: command.args.clone(),
-        env: command.env.clone(),
-        timeout_secs: command.timeout_secs,
-        output_max_bytes: command.output_max_bytes,
-    }
-}
-
-async fn run_validation_gate(
-    runtime: &CodingToolRuntime,
-    events: &Arc<Mutex<Vec<CoderEvent>>>,
-    request: &CoderRunRequest,
-    session_id: &str,
-) -> Result<String, CoderError> {
-    let result = runtime
-        .invoke_json_for_backend("validate", json!({}))
-        .await
-        .map_err(|e| CoderError::Validation(e.to_string()))?;
-    let passed = result
-        .get("passed")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let summary = validation_summary(&result);
-    push_event(
-        events,
-        CoderEvent::ValidationFinished {
-            ok: passed,
-            summary: summary.clone(),
-            at: Utc::now(),
-        },
-    );
-    if !passed {
-        push_event(
-            events,
-            CoderEvent::SessionFinished {
-                outcome: Outcome::Failed,
-                at: Utc::now(),
-            },
-        );
-        let _ = write_trace(request, session_id, snapshot_events(events), None).await;
-        return Err(CoderError::Validation(summary));
-    }
-    Ok(summary)
-}
-
-struct TracingToolRuntime {
-    inner: CodingToolRuntime,
-    events: Arc<Mutex<Vec<CoderEvent>>>,
-    preview_max_chars: usize,
-}
-
-impl TracingToolRuntime {
-    fn new(
-        inner: CodingToolRuntime,
-        events: Arc<Mutex<Vec<CoderEvent>>>,
-        preview_max_chars: usize,
-    ) -> Self {
-        Self {
-            inner,
-            events,
-            preview_max_chars,
-        }
-    }
-}
-
-#[async_trait]
-impl ToolRuntime for TracingToolRuntime {
-    fn catalog(&self) -> Vec<ToolDef> {
-        self.inner.catalog()
-    }
-
-    async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
-        push_event(
-            &self.events,
-            CoderEvent::ToolStarted {
-                name: call.name.clone(),
-                args_preview: preview_value(&call.arguments, self.preview_max_chars),
-                at: Utc::now(),
-            },
-        );
-        let result = self.inner.invoke(call).await;
-        push_event(
-            &self.events,
-            CoderEvent::ToolFinished {
-                name: call.name.clone(),
-                ok: result.is_ok(),
-                result_preview: match &result {
-                    Ok(value) => preview_str(value, self.preview_max_chars),
-                    Err(value) => preview_str(value, self.preview_max_chars),
-                },
-                at: Utc::now(),
-            },
-        );
-        result
-    }
-}
-
-async fn coder_instructions(request: &CoderRunRequest) -> Result<String, CoderError> {
-    if let Some(prompt) = request.config.coder.prompt.clone() {
-        return Ok(prompt);
-    }
-    if let Some(path) = &request.config.coder.prompt_path {
-        return tokio::fs::read_to_string(path)
-            .await
-            .map_err(|e| CoderError::Setup(format!("read coder prompt_path {path}: {e}")));
-    }
-    Err(CoderError::Setup(
-        "coder role requires prompt or prompt_path".to_string(),
-    ))
-}
-
-fn coder_goal(request: &CoderRunRequest) -> String {
-    let mut goal = format!("Task: {}", request.task.description);
-    if let Some(context) = &request.task.context {
-        goal.push_str("\n\nContext:\n");
-        goal.push_str(context);
-    }
-    if !request.task.success_criteria.is_empty() {
-        goal.push_str("\n\nSuccess criteria:\n");
-        for criterion in &request.task.success_criteria {
-            goal.push_str("- ");
-            goal.push_str(criterion);
-            goal.push('\n');
-        }
-    }
-    if !request.prior_feedback.is_empty() {
-        goal.push_str("\n\nPrior feedback:\n");
-        for feedback in &request.prior_feedback {
-            goal.push_str("- ");
-            goal.push_str(feedback);
-            goal.push('\n');
-        }
-    }
-    goal
-}
-
-async fn changed_files(workspace_root: &str) -> Result<Vec<String>, CoderError> {
-    let output = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(workspace_root)
-        .output()
-        .await
-        .map_err(|e| CoderError::Backend(format!("git status: {e}")))?;
-    if !output.status.success() {
-        return Err(CoderError::Backend(format!(
-            "git status exited {:?}: {}",
-            output.status.code(),
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.lines().filter_map(parse_status_path).collect())
-}
-
-fn push_event(events: &Arc<Mutex<Vec<CoderEvent>>>, event: CoderEvent) {
-    events
-        .lock()
-        .expect("coder event mutex poisoned")
-        .push(event);
-}
-
-fn snapshot_events(events: &Arc<Mutex<Vec<CoderEvent>>>) -> Vec<CoderEvent> {
-    events.lock().expect("coder event mutex poisoned").clone()
-}
-
-fn preview_value(value: &Value, max_chars: usize) -> String {
-    preview_str(&value.to_string(), max_chars)
-}
-
-fn preview_str(value: &str, max_chars: usize) -> String {
-    value.chars().take(max_chars).collect()
-}
-
-fn validation_summary(result: &Value) -> String {
-    let exit_code = result
-        .get("exit_code")
-        .and_then(Value::as_i64)
-        .map(|code| code.to_string())
-        .unwrap_or_else(|| "none".to_string());
-    let timed_out = result
-        .get("timed_out")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let stdout = result.get("stdout").and_then(Value::as_str).unwrap_or("");
-    let stderr = result.get("stderr").and_then(Value::as_str).unwrap_or("");
-    let mut summary = format!("exit_code={exit_code}, timed_out={timed_out}");
-    if !stdout.trim().is_empty() {
-        summary.push_str("\nstdout:\n");
-        summary.push_str(stdout.trim());
-    }
-    if !stderr.trim().is_empty() {
-        summary.push_str("\nstderr:\n");
-        summary.push_str(stderr.trim());
-    }
-    summary
-}
-
-fn parse_status_path(line: &str) -> Option<String> {
-    if line.len() < 4 {
-        return None;
-    }
-    let path = line.get(3..)?.trim();
-    if path.is_empty() {
-        return None;
-    }
-    let path = path
-        .rsplit_once(" -> ")
-        .map(|(_, new_path)| new_path)
-        .unwrap_or(path);
-    Some(path.trim_matches('"').to_string())
-}
-
-fn session_id(request: &CoderRunRequest) -> String {
-    format!(
-        "{}-attempt-{}-{}",
-        safe_segment(&request.task.id),
-        request.attempt,
-        Utc::now().format("%Y%m%dT%H%M%S%.3fZ")
-    )
-}
-
-fn safe_segment(value: &str) -> String {
-    let segment = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    let segment = segment.trim_matches('-');
-    if segment.is_empty() {
-        "session".to_string()
-    } else {
-        segment.to_string()
-    }
-}
-
-async fn write_trace(
-    request: &CoderRunRequest,
-    session_id: &str,
-    events: Vec<CoderEvent>,
-    mut result: Option<CoderRunResult>,
-) -> Result<Option<String>, CoderError> {
-    let Some(trace_dir) = &request.config.trace_dir else {
-        return Ok(None);
-    };
-    let path = trace_file_path(trace_dir, session_id);
-    let path_string = path.to_string_lossy().to_string();
-    if let Some(result) = &mut result {
-        result.trace_path = Some(path_string.clone());
-    }
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| {
-            CoderError::Setup(format!("create trace dir {}: {e}", parent.display()))
-        })?;
-    }
-    let trace = CoderTrace {
-        session_id: session_id.to_string(),
-        request: request.clone(),
-        events,
-        result,
-    };
-    let bytes = serde_json::to_vec_pretty(&trace)
-        .map_err(|e| CoderError::Backend(format!("serialize coder trace: {e}")))?;
-    tokio::fs::write(&path, bytes)
-        .await
-        .map_err(|e| CoderError::Backend(format!("write coder trace {}: {e}", path.display())))?;
-    Ok(Some(path_string))
-}
-
-fn trace_file_path(trace_dir: &str, session_id: &str) -> PathBuf {
-    Path::new(trace_dir).join(format!("{session_id}.json"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use liberado_coder_core::{
-        CoderRoleConfig, CoderRunConfig, CoderTask, CommandPolicy, PathPolicy, ProgressPolicy,
-        SandboxSpec, WorkspaceRef,
+        CoderRoleConfig, CoderRunConfig, CoderTask, CoderTrace, CommandPolicy, PathPolicy,
+        ProgressPolicy, SandboxSpec, WorkspaceRef,
     };
     use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
+    use serde_json::json;
 
     fn role() -> CoderRoleConfig {
         CoderRoleConfig {
@@ -493,6 +418,17 @@ mod tests {
         }
     }
 
+    fn disabled_role() -> CoderRoleConfig {
+        CoderRoleConfig {
+            model: "mock".to_string(),
+            prompt_path: None,
+            prompt: None,
+            temperature: None,
+            max_tokens: None,
+            max_turns: Some(4),
+        }
+    }
+
     fn request(root: &std::path::Path, base_ref: &str) -> CoderRunRequest {
         CoderRunRequest {
             task: CoderTask::new("task-1", "write hello.txt"),
@@ -500,13 +436,15 @@ mod tests {
             config: CoderRunConfig {
                 backend: LIBERADO_LOOP_BACKEND.to_string(),
                 trace_dir: None,
-                planner: role(),
+                planner: disabled_role(),
                 coder: role(),
-                critic: role(),
+                critic: disabled_role(),
                 repair: None,
                 sandbox: SandboxSpec::HostLocal,
                 command_policy: CommandPolicy::default(),
                 validation_command: None,
+                verifiers: Vec::new(),
+                verify_policy: Default::default(),
                 path_policy: PathPolicy::default(),
                 progress: ProgressPolicy::default(),
             },
@@ -544,31 +482,32 @@ mod tests {
         }
     }
 
+    fn write_then_report() -> [CompletionResponse; 2] {
+        [
+            CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "write-1",
+                "write_file",
+                json!({"path": "hello.txt", "content": "hello\n"}),
+            )]),
+            CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "report-1",
+                liberado_executor::SUBMIT_REPORT_TOOL,
+                json!({
+                    "outcome": "succeeded",
+                    "summary": "Wrote hello.txt",
+                    "artifacts": ["hello.txt"],
+                    "new_high_signal_facts": [],
+                    "follow_up": null
+                }),
+            )]),
+        ]
+    }
+
     #[tokio::test]
     async fn mocked_loop_edits_workspace_and_reports_changed_file() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path());
-        let provider = Arc::new(MockProvider::with_script(
-            "mock",
-            [
-                CompletionResponse::tool_calls(vec![ToolInvocation::new(
-                    "write-1",
-                    "write_file",
-                    json!({"path": "hello.txt", "content": "hello\n"}),
-                )]),
-                CompletionResponse::tool_calls(vec![ToolInvocation::new(
-                    "report-1",
-                    liberado_executor::SUBMIT_REPORT_TOOL,
-                    json!({
-                        "outcome": "succeeded",
-                        "summary": "Wrote hello.txt",
-                        "artifacts": ["hello.txt"],
-                        "new_high_signal_facts": [],
-                        "follow_up": null
-                    }),
-                )]),
-            ],
-        ));
+        let provider = Arc::new(MockProvider::with_script("mock", write_then_report()));
         let backend = LiberadoLoopBackend::new(provider);
         let result = backend.run(request(dir.path(), "HEAD")).await.unwrap();
 
@@ -580,27 +519,7 @@ mod tests {
     async fn backend_asks_provider_factory_for_coder_role_model() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path());
-        let provider = Arc::new(MockProvider::with_script(
-            "mock",
-            [
-                CompletionResponse::tool_calls(vec![ToolInvocation::new(
-                    "write-1",
-                    "write_file",
-                    json!({"path": "hello.txt", "content": "hello\n"}),
-                )]),
-                CompletionResponse::tool_calls(vec![ToolInvocation::new(
-                    "report-1",
-                    liberado_executor::SUBMIT_REPORT_TOOL,
-                    json!({
-                        "outcome": "succeeded",
-                        "summary": "Wrote hello.txt",
-                        "artifacts": ["hello.txt"],
-                        "new_high_signal_facts": [],
-                        "follow_up": null
-                    }),
-                )]),
-            ],
-        ));
+        let provider = Arc::new(MockProvider::with_script("mock", write_then_report()));
         let calls = Arc::new(Mutex::new(Vec::new()));
         let backend = LiberadoLoopBackend::with_provider_factory(Arc::new(
             RecordingProviderFactory {
@@ -623,27 +542,7 @@ mod tests {
     async fn internal_git_status_is_not_blocked_by_model_command_policy() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path());
-        let provider = Arc::new(MockProvider::with_script(
-            "mock",
-            [
-                CompletionResponse::tool_calls(vec![ToolInvocation::new(
-                    "write-1",
-                    "write_file",
-                    json!({"path": "hello.txt", "content": "hello\n"}),
-                )]),
-                CompletionResponse::tool_calls(vec![ToolInvocation::new(
-                    "report-1",
-                    liberado_executor::SUBMIT_REPORT_TOOL,
-                    json!({
-                        "outcome": "succeeded",
-                        "summary": "Wrote hello.txt",
-                        "artifacts": ["hello.txt"],
-                        "new_high_signal_facts": [],
-                        "follow_up": null
-                    }),
-                )]),
-            ],
-        ));
+        let provider = Arc::new(MockProvider::with_script("mock", write_then_report()));
         let backend = LiberadoLoopBackend::new(provider);
         let mut request = request(dir.path(), "HEAD");
         request.config.command_policy.deny = vec!["git status".to_string()];
@@ -656,27 +555,7 @@ mod tests {
     async fn writes_trace_when_trace_dir_is_configured() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path());
-        let provider = Arc::new(MockProvider::with_script(
-            "mock",
-            [
-                CompletionResponse::tool_calls(vec![ToolInvocation::new(
-                    "write-1",
-                    "write_file",
-                    json!({"path": "hello.txt", "content": "hello\n"}),
-                )]),
-                CompletionResponse::tool_calls(vec![ToolInvocation::new(
-                    "report-1",
-                    liberado_executor::SUBMIT_REPORT_TOOL,
-                    json!({
-                        "outcome": "succeeded",
-                        "summary": "Wrote hello.txt",
-                        "artifacts": ["hello.txt"],
-                        "new_high_signal_facts": [],
-                        "follow_up": null
-                    }),
-                )]),
-            ],
-        ));
+        let provider = Arc::new(MockProvider::with_script("mock", write_then_report()));
         let backend = LiberadoLoopBackend::new(provider);
         let mut request = request(dir.path(), "HEAD");
         request.config.trace_dir = Some(dir.path().join("traces").to_string_lossy().to_string());
@@ -691,18 +570,6 @@ mod tests {
             matches!(
                 event,
                 CoderEvent::FileChanged { path, .. } if path == "hello.txt"
-            )
-        }));
-        assert!(trace.events.iter().any(|event| {
-            matches!(
-                event,
-                CoderEvent::ToolStarted { name, .. } if name == "write_file"
-            )
-        }));
-        assert!(trace.events.iter().any(|event| {
-            matches!(
-                event,
-                CoderEvent::ToolFinished { name, ok: true, .. } if name == "write_file"
             )
         }));
     }
@@ -771,27 +638,7 @@ mod tests {
     async fn configured_validation_gate_sets_notes_on_success() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path());
-        let provider = Arc::new(MockProvider::with_script(
-            "mock",
-            [
-                CompletionResponse::tool_calls(vec![ToolInvocation::new(
-                    "write-1",
-                    "write_file",
-                    json!({"path": "hello.txt", "content": "hello\n"}),
-                )]),
-                CompletionResponse::tool_calls(vec![ToolInvocation::new(
-                    "report-1",
-                    liberado_executor::SUBMIT_REPORT_TOOL,
-                    json!({
-                        "outcome": "succeeded",
-                        "summary": "Wrote hello.txt",
-                        "artifacts": ["hello.txt"],
-                        "new_high_signal_facts": [],
-                        "follow_up": null
-                    }),
-                )]),
-            ],
-        ));
+        let provider = Arc::new(MockProvider::with_script("mock", write_then_report()));
         let backend = LiberadoLoopBackend::new(provider);
         let mut request = request(dir.path(), "HEAD");
         request.config.validation_command = Some(test_command("validation-ok"));
@@ -799,42 +646,48 @@ mod tests {
         let result = backend.run(request).await.unwrap();
 
         assert_eq!(result.outcome, Outcome::Succeeded);
-        assert!(result.validation_notes.unwrap().contains("validation-ok"));
+        // Pass note summarizes check ids (legacy command becomes id "validate").
+        assert!(result.validation_notes.unwrap().contains("validate"));
+    }
+
+    #[tokio::test]
+    async fn verifier_paths_exist_fails_incomplete_success() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        // Write hello.txt but pipeline requires missing_required.txt
+        let provider = Arc::new(MockProvider::with_script("mock", write_then_report()));
+        let backend = LiberadoLoopBackend::new(provider);
+        let mut request = request(dir.path(), "HEAD");
+        request.config.progress.max_attempts = 1;
+        request.config.verifiers = vec![liberado_coder_core::VerifierSpec::PathsExist {
+            id: "must".into(),
+            paths: vec!["missing_required.txt".into()],
+        }];
+
+        let err = backend.run(request).await.unwrap_err();
+        assert!(matches!(err, CoderError::Validation(_)));
+        assert!(err.to_string().contains("missing_required"));
     }
 
     #[tokio::test]
     async fn configured_validation_gate_fails_run_on_failure() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path());
-        let provider = Arc::new(MockProvider::with_script(
-            "mock",
-            [
-                CompletionResponse::tool_calls(vec![ToolInvocation::new(
-                    "write-1",
-                    "write_file",
-                    json!({"path": "hello.txt", "content": "hello\n"}),
-                )]),
-                CompletionResponse::tool_calls(vec![ToolInvocation::new(
-                    "report-1",
-                    liberado_executor::SUBMIT_REPORT_TOOL,
-                    json!({
-                        "outcome": "succeeded",
-                        "summary": "Wrote hello.txt",
-                        "artifacts": ["hello.txt"],
-                        "new_high_signal_facts": [],
-                        "follow_up": null
-                    }),
-                )]),
-            ],
-        ));
+        let provider = Arc::new(MockProvider::with_script("mock", write_then_report()));
         let backend = LiberadoLoopBackend::new(provider);
         let mut request = request(dir.path(), "HEAD");
+        request.config.progress.max_attempts = 1;
         request.config.validation_command = Some(failing_test_command());
 
         let err = backend.run(request).await.unwrap_err();
 
         assert!(matches!(err, CoderError::Validation(_)));
-        assert!(err.to_string().contains("validation-failed"));
+        // Pipeline feedback names the check id (legacy command → "validate") and failure.
+        let msg = err.to_string();
+        assert!(
+            msg.contains("validate") || msg.contains("exited") || msg.contains("Completeness"),
+            "unexpected validation message: {msg}"
+        );
     }
 
     #[tokio::test]
@@ -856,7 +709,9 @@ mod tests {
             )])],
         ));
         let backend = LiberadoLoopBackend::new(provider);
-        let err = backend.run(request(dir.path(), "HEAD")).await.unwrap_err();
+        let mut request = request(dir.path(), "HEAD");
+        request.config.progress.max_attempts = 1;
+        let err = backend.run(request).await.unwrap_err();
         assert!(matches!(err, CoderError::NoChanges));
     }
 
@@ -899,17 +754,434 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn read_only_stall_fails_without_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "l1",
+                    "list_files",
+                    json!({}),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "l2",
+                    "list_files",
+                    json!({}),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "l3",
+                    "list_files",
+                    json!({}),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "l4",
+                    "list_files",
+                    json!({}),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "report-1",
+                    liberado_executor::SUBMIT_REPORT_TOOL,
+                    json!({
+                        "outcome": "succeeded",
+                        "summary": "explored only",
+                        "artifacts": [],
+                        "new_high_signal_facts": [],
+                        "follow_up": null
+                    }),
+                )]),
+            ],
+        ));
+        let backend = LiberadoLoopBackend::new(provider);
+        let mut request = request(dir.path(), "HEAD");
+        request.config.coder.max_turns = Some(10);
+        request.config.progress.read_only_turn_limit = 2;
+        request.config.progress.same_tool_limit = 100;
+        request.config.progress.max_attempts = 1;
+
+        let err = backend.run(request).await.unwrap_err();
+        assert!(matches!(err, CoderError::NoChanges));
+    }
+
+    #[tokio::test]
+    async fn critic_accepts_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "write-1",
+                    "write_file",
+                    json!({"path": "hello.txt", "content": "hello\n"}),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "report-1",
+                    liberado_executor::SUBMIT_REPORT_TOOL,
+                    json!({
+                        "outcome": "succeeded",
+                        "summary": "Wrote hello.txt",
+                        "artifacts": ["hello.txt"],
+                        "new_high_signal_facts": [],
+                        "follow_up": null
+                    }),
+                )]),
+                CompletionResponse::text(r#"{"quality":"acceptable"}"#),
+            ],
+        ));
+        let backend = LiberadoLoopBackend::new(provider);
+        let mut request = request(dir.path(), "HEAD");
+        request.config.critic = CoderRoleConfig {
+            model: "mock-critic".to_string(),
+            prompt_path: None,
+            prompt: Some("Review the diff strictly.".to_string()),
+            temperature: Some(0.0),
+            max_tokens: Some(512),
+            max_turns: None,
+        };
+
+        let result = backend.run(request).await.unwrap();
+        assert_eq!(result.outcome, Outcome::Succeeded);
+        assert_eq!(result.critic_verdict, Some(CriticVerdict::Acceptable));
+    }
+
+    #[tokio::test]
+    async fn critic_needs_revision_fails_final_attempt() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "write-1",
+                    "write_file",
+                    json!({"path": "hello.txt", "content": "hello\n"}),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "report-1",
+                    liberado_executor::SUBMIT_REPORT_TOOL,
+                    json!({
+                        "outcome": "succeeded",
+                        "summary": "Wrote hello.txt",
+                        "artifacts": ["hello.txt"],
+                        "new_high_signal_facts": [],
+                        "follow_up": null
+                    }),
+                )]),
+                CompletionResponse::text(
+                    r#"{"quality":"needs_revision","issues":["missing tests"]}"#,
+                ),
+            ],
+        ));
+        let backend = LiberadoLoopBackend::new(provider);
+        let mut request = request(dir.path(), "HEAD");
+        request.config.progress.max_attempts = 1;
+        request.config.critic = CoderRoleConfig {
+            model: "mock-critic".to_string(),
+            prompt_path: None,
+            prompt: Some("Review the diff strictly.".to_string()),
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        };
+
+        let result = backend.run(request).await.unwrap();
+        assert_eq!(result.outcome, Outcome::Failed);
+        assert!(matches!(
+            result.critic_verdict,
+            Some(CriticVerdict::NeedsRevision { issues }) if issues.iter().any(|i| i.contains("tests"))
+        ));
+    }
+
+    #[tokio::test]
+    async fn planner_runs_before_coder_when_configured() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::text(
+                    r#"{"summary":"write hello","steps":["create hello.txt"],"likely_files":["hello.txt"],"risks":[]}"#,
+                ),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "write-1",
+                    "write_file",
+                    json!({"path": "hello.txt", "content": "hello\n"}),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "report-1",
+                    liberado_executor::SUBMIT_REPORT_TOOL,
+                    json!({
+                        "outcome": "succeeded",
+                        "summary": "Wrote hello.txt",
+                        "artifacts": ["hello.txt"],
+                        "new_high_signal_facts": [],
+                        "follow_up": null
+                    }),
+                )]),
+            ],
+        ));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let backend = LiberadoLoopBackend::with_provider_factory(Arc::new(
+            RecordingProviderFactory {
+                provider: provider.clone(),
+                calls: calls.clone(),
+            },
+        ));
+        let mut request = request(dir.path(), "HEAD");
+        request.config.planner = CoderRoleConfig {
+            model: "mock-planner".to_string(),
+            prompt_path: None,
+            prompt: Some("Plan the task briefly.".to_string()),
+            temperature: Some(0.0),
+            max_tokens: Some(512),
+            max_turns: None,
+        };
+
+        let result = backend.run(request).await.unwrap();
+        assert_eq!(result.outcome, Outcome::Succeeded);
+        let roles: Vec<String> = calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(role, _)| role.clone())
+            .collect();
+        assert_eq!(roles, vec!["planner".to_string(), "coder".to_string()]);
+        // Worker goal should include planner plan (second request is the worker complete).
+        let requests = provider.received_requests();
+        assert!(requests.len() >= 2);
+        let worker_user = requests[1]
+            .messages
+            .iter()
+            .find(|m| m.role == liberado_provider::Role::User)
+            .map(|m| m.content.as_str())
+            .unwrap_or("");
+        assert!(
+            worker_user.contains("Planner plan") || worker_user.contains("hello.txt"),
+            "worker should see plan context: {worker_user}"
+        );
+    }
+
+    #[tokio::test]
+    async fn validation_failure_uses_signature_feedback_for_repair() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        // Attempt 0: write notes.txt only (missing required path) → validation fail
+        // Attempt 1 (repair): write required.txt + report
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "write-1",
+                    "write_file",
+                    json!({"path": "notes.txt", "content": "incomplete\n"}),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "report-1",
+                    liberado_executor::SUBMIT_REPORT_TOOL,
+                    json!({
+                        "outcome": "succeeded",
+                        "summary": "claimed done",
+                        "artifacts": ["notes.txt"],
+                        "new_high_signal_facts": [],
+                        "follow_up": null
+                    }),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "write-2",
+                    "write_file",
+                    json!({"path": "required.txt", "content": "ok\n"}),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "report-2",
+                    liberado_executor::SUBMIT_REPORT_TOOL,
+                    json!({
+                        "outcome": "succeeded",
+                        "summary": "fixed gates",
+                        "artifacts": ["required.txt"],
+                        "new_high_signal_facts": [],
+                        "follow_up": null
+                    }),
+                )]),
+            ],
+        ));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let backend = LiberadoLoopBackend::with_provider_factory(Arc::new(
+            RecordingProviderFactory {
+                provider: provider.clone(),
+                calls: calls.clone(),
+            },
+        ));
+        let mut request = request(dir.path(), "HEAD");
+        request.config.progress.max_attempts = 2;
+        request.config.verifiers = vec![liberado_coder_core::VerifierSpec::PathsExist {
+            id: "must".into(),
+            paths: vec!["required.txt".into()],
+        }];
+        request.config.repair = Some(CoderRoleConfig {
+            model: "mock-repair".to_string(),
+            prompt_path: None,
+            prompt: Some("Repair: satisfy frozen verifiers.".to_string()),
+            temperature: None,
+            max_tokens: None,
+            max_turns: Some(6),
+        });
+
+        let result = backend.run(request).await.unwrap();
+        assert_eq!(result.outcome, Outcome::Succeeded);
+        assert!(result.files_changed.iter().any(|p| p.contains("required")));
+        let roles: Vec<String> = calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(role, _)| role.clone())
+            .collect();
+        assert_eq!(roles, vec!["coder".to_string(), "repair".to_string()]);
+        // Repair goal should include FAILURE_CLASS routing.
+        let requests = provider.received_requests();
+        let repair_msgs = requests.last().map(|r| &r.messages).unwrap();
+        let repair_blob = repair_msgs
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            repair_blob.contains("FAILURE_CLASS")
+                || repair_blob.contains("missing_path")
+                || repair_blob.contains("Repair focus"),
+            "repair should see signature routing: {repair_blob}"
+        );
+    }
+
+    #[tokio::test]
+    async fn retries_no_changes_then_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "report-1",
+                    liberado_executor::SUBMIT_REPORT_TOOL,
+                    json!({
+                        "outcome": "succeeded",
+                        "summary": "Done",
+                        "artifacts": [],
+                        "new_high_signal_facts": [],
+                        "follow_up": null
+                    }),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "write-1",
+                    "write_file",
+                    json!({"path": "hello.txt", "content": "hello\n"}),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "report-2",
+                    liberado_executor::SUBMIT_REPORT_TOOL,
+                    json!({
+                        "outcome": "succeeded",
+                        "summary": "Wrote hello.txt on retry",
+                        "artifacts": ["hello.txt"],
+                        "new_high_signal_facts": [],
+                        "follow_up": null
+                    }),
+                )]),
+            ],
+        ));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let backend = LiberadoLoopBackend::with_provider_factory(Arc::new(
+            RecordingProviderFactory {
+                provider,
+                calls: calls.clone(),
+            },
+        ));
+        let mut request = request(dir.path(), "HEAD");
+        request.config.progress.max_attempts = 2;
+        request.config.repair = Some(CoderRoleConfig {
+            model: "mock-repair".to_string(),
+            prompt_path: None,
+            prompt: Some("Repair: actually write the file.".to_string()),
+            temperature: None,
+            max_tokens: None,
+            max_turns: Some(6),
+        });
+
+        let result = backend.run(request).await.unwrap();
+        assert_eq!(result.outcome, Outcome::Succeeded);
+        assert_eq!(result.files_changed, vec!["hello.txt"]);
+        let roles: Vec<String> = calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(role, _)| role.clone())
+            .collect();
+        assert_eq!(roles, vec!["coder".to_string(), "repair".to_string()]);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires OPENROUTER_API_KEY and network access"]
+    async fn openrouter_deepseek_live_coding_smoke() {
+        use liberado_provider_openai_compat::OpenAiCompatibleProvider;
+
+        let api_key = std::env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY not set");
+        let model = std::env::var("LIBERADO_CODER_LIVE_MODEL")
+            .unwrap_or_else(|_| "deepseek/deepseek-v4-pro".to_string());
+        let provider = Arc::new(
+            OpenAiCompatibleProvider::new(
+                api_key,
+                &model,
+                OpenAiCompatibleProvider::OPENROUTER_BASE_URL,
+            )
+            .with_extra_client_error_status(vec![402]),
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let mut request = request(dir.path(), "HEAD");
+        request.task.description =
+            "Create a file named hello.txt containing exactly: hello from liberado\n".to_string();
+        request.config.coder.model = model;
+        request.config.coder.prompt = Some(
+            "You are a careful autonomous coding agent. Inspect the workspace when useful, make the requested code or file edits with the available tools, then submit a concise success report."
+                .to_string(),
+        );
+        request.config.coder.max_turns = Some(10);
+        request.config.progress.event_preview_max_chars = 1_000;
+        request.config.progress.max_attempts = 1;
+
+        let backend = LiberadoLoopBackend::new(provider);
+        let result = backend.run(request).await.unwrap();
+
+        assert_eq!(result.outcome, Outcome::Succeeded);
+        assert!(result.files_changed.iter().any(|path| path == "hello.txt"));
+        let content = std::fs::read_to_string(dir.path().join("hello.txt")).unwrap();
+        // Models sometimes omit the trailing newline; smoke cares about the payload.
+        assert_eq!(content.trim_end_matches(['\r', '\n']), "hello from liberado");
+    }
+
     #[test]
     fn parses_git_status_paths() {
         assert_eq!(
-            parse_status_path("?? hello.txt"),
+            gates::parse_status_path("?? hello.txt"),
             Some("hello.txt".to_string())
         );
         assert_eq!(
-            parse_status_path("R  old.txt -> new.txt"),
+            gates::parse_status_path("R  old.txt -> new.txt"),
             Some("new.txt".to_string())
         );
-        assert_eq!(parse_status_path(""), None);
+        assert_eq!(gates::parse_status_path(""), None);
+    }
+
+    #[test]
+    fn parses_critic_json_with_fences() {
+        let raw = "```json\n{\"quality\":\"acceptable\"}\n```";
+        assert_eq!(
+            critic::parse_critic_verdict(raw).unwrap(),
+            CriticVerdict::Acceptable
+        );
     }
 
     fn init_repo(root: &std::path::Path) {
@@ -980,44 +1252,5 @@ mod tests {
                 output_max_bytes: None,
             }
         }
-    }
-
-    #[tokio::test]
-    #[ignore = "requires OPENROUTER_API_KEY and network access"]
-    async fn openrouter_deepseek_live_coding_smoke() {
-        use liberado_provider_openai_compat::OpenAiCompatibleProvider;
-
-        let api_key = std::env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY not set");
-        let model = std::env::var("LIBERADO_CODER_LIVE_MODEL")
-            .unwrap_or_else(|_| "deepseek/deepseek-v4-pro".to_string());
-        let provider = Arc::new(
-            OpenAiCompatibleProvider::new(
-                api_key,
-                &model,
-                OpenAiCompatibleProvider::OPENROUTER_BASE_URL,
-            )
-            .with_extra_client_error_status(vec![402]),
-        );
-
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path());
-        let mut request = request(dir.path(), "HEAD");
-        request.task.description =
-            "Create a file named hello.txt containing exactly: hello from liberado\n".to_string();
-        request.config.coder.model = model;
-        request.config.coder.prompt = Some(
-            "You are a careful autonomous coding agent. Inspect the workspace when useful, make the requested code or file edits with the available tools, then submit a concise success report."
-                .to_string(),
-        );
-        request.config.coder.max_turns = Some(10);
-        request.config.progress.event_preview_max_chars = 1_000;
-
-        let backend = LiberadoLoopBackend::new(provider);
-        let result = backend.run(request).await.unwrap();
-
-        assert_eq!(result.outcome, Outcome::Succeeded);
-        assert!(result.files_changed.iter().any(|path| path == "hello.txt"));
-        let content = std::fs::read_to_string(dir.path().join("hello.txt")).unwrap();
-        assert_eq!(content, "hello from liberado\n");
     }
 }

@@ -13,15 +13,18 @@ use std::collections::HashSet;
 use crate::api::{
     ChatMessage, ConvHeader, DaemonStatus, ReactionEvent, ToolCallChip, ToolResultChip,
 };
+use crate::md_cache::MarkdownParseCache;
 use crate::tuning::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     /// The text input area at the bottom.
     Input,
-    /// The conversation list in the right sidebar.
-    SidebarConversations,
-    /// Scrollable message history in the chat pane.
+    /// Full-screen searchable prior sessions (`/session`).
+    SessionBrowser,
+    /// Full-screen searchable model browser (`/model`).
+    ModelBrowser,
+    /// Scrollable message history in the chat pane (j/k, Enter expand tools).
     ChatMessages,
 }
 
@@ -75,15 +78,29 @@ pub struct App {
     pub input_max_height: u16,
     pub input_scroll: usize,
     pub layout: LayoutRects,
+    /// Content-keyed parse cache for assistant markdown (T1.1 — avoid reparse every frame).
+    pub md_cache: MarkdownParseCache,
+    /// T1.3: when false, the main loop skips `terminal.draw` (idle CPU near zero).
+    /// Set by input handlers and state-changing actions; cleared after a successful paint.
+    dirty: bool,
+    /// Selected row in the slash-command palette (when input starts with `/`).
+    pub slash_palette_index: usize,
+    /// Live model ids from `GET /api/models` (shown in ModelBrowser).
+    pub models: Vec<String>,
+    /// Soft error from last models fetch.
+    pub models_error: Option<String>,
+    /// True while a models fetch is in flight.
+    pub models_loading: bool,
 }
 
 /// Layout rectangles populated by the draw pass for mouse hit-testing.
 #[derive(Debug, Clone, Default)]
 pub struct LayoutRects {
+    pub status_bar: Rect,
     pub chat: Rect,
-    pub sidebar_full: Rect,
-    pub sidebar_conversations: Rect,
     pub input: Rect,
+    /// Full-screen area used while the session browser is open.
+    pub session_browser: Rect,
     /// The available character-width inside the input box (area width minus borders).
     pub input_content_width: usize,
 }
@@ -115,9 +132,14 @@ pub struct StatusSummary {
 
 impl App {
     pub fn new(server: String, registry: ThemeRegistry) -> Self {
-        let theme = registry
-            .get("dark")
-            .cloned()
+        // Preferred theme from `settings.toml` (platform config dir); fall back to built-in dark.
+        let preferred = liberado_theme::load_ui_settings()
+            .theme
+            .filter(|n| registry.get(n).is_some());
+        let theme = preferred
+            .as_deref()
+            .and_then(|n| registry.get(n).cloned())
+            .or_else(|| registry.get("dark").cloned())
             .unwrap_or_else(Theme::default_dark);
         Self {
             server,
@@ -144,7 +166,117 @@ impl App {
             input_max_height: INPUT_MAX_HEIGHT,
             input_scroll: 0,
             layout: LayoutRects::default(),
+            md_cache: MarkdownParseCache::new(),
+            dirty: true, // first paint
+            slash_palette_index: 0,
+            models: Vec::new(),
+            models_error: None,
+            models_loading: false,
         }
+    }
+
+    /// Progressive slash matches for the current input (shared catalog).
+    pub fn slash_matches(&self) -> Vec<&'static liberado_commands::CommandSpec> {
+        liberado_commands::filter_commands(&self.input)
+    }
+
+    /// Dim ghost remainder of the selected slash match (inline after typed text).
+    pub fn slash_ghost_suffix(&self) -> Option<String> {
+        liberado_commands::ghost_suffix(&self.input, self.slash_palette_index)
+    }
+
+    /// Clamp palette cursor after the filter set changes.
+    pub fn clamp_slash_palette(&mut self) {
+        let n = self.slash_matches().len();
+        if n == 0 {
+            self.slash_palette_index = 0;
+        } else {
+            self.slash_palette_index = self.slash_palette_index.min(n - 1);
+        }
+    }
+
+    /// Enter full-screen searchable session browser (`/session`).
+    pub fn open_session_browser(&mut self) {
+        self.focus = Focus::SessionBrowser;
+        self.sidebar_filter.clear();
+        self.sidebar_selection = 0;
+        self.input.clear();
+        self.cursor = 0;
+        self.input_scroll = 0;
+        self.mark_dirty();
+    }
+
+    /// Leave session browser and return to the chat input.
+    pub fn close_session_browser(&mut self) {
+        self.focus = Focus::Input;
+        self.sidebar_filter.clear();
+        self.sidebar_selection = 0;
+        self.mark_dirty();
+    }
+
+    /// Enter full-screen searchable model browser (`/model`).
+    pub fn open_model_browser(&mut self) {
+        self.focus = Focus::ModelBrowser;
+        self.sidebar_filter.clear();
+        self.sidebar_selection = 0;
+        self.input.clear();
+        self.cursor = 0;
+        self.input_scroll = 0;
+        self.models_loading = true;
+        self.models_error = None;
+        self.mark_dirty();
+    }
+
+    /// Leave model browser and return to the chat input.
+    pub fn close_model_browser(&mut self) {
+        self.focus = Focus::Input;
+        self.sidebar_filter.clear();
+        self.sidebar_selection = 0;
+        self.models_loading = false;
+        self.mark_dirty();
+    }
+
+    /// Models matching the current filter (case-insensitive substring).
+    pub fn filtered_models(&self) -> Vec<&String> {
+        let q = self.sidebar_filter.to_ascii_lowercase();
+        self.models
+            .iter()
+            .filter(|m| q.is_empty() || m.to_ascii_lowercase().contains(&q))
+            .collect()
+    }
+
+    pub fn clamp_model_selection(&mut self) {
+        let n = self.filtered_models().len();
+        if n == 0 {
+            self.sidebar_selection = 0;
+        } else {
+            self.sidebar_selection = self.sidebar_selection.min(n - 1);
+        }
+    }
+
+    /// Mark the UI as needing a redraw (input, resize, meaningful state change).
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// True when spinners / streaming buffers should animate (redraw every poll tick).
+    pub fn needs_animation(&self) -> bool {
+        self.streaming || self.pending_load.is_some() || !self.daemon_connected
+    }
+
+    /// Whether the main loop should call `terminal.draw` this iteration.
+    pub fn should_draw(&self) -> bool {
+        self.dirty || self.needs_animation()
+    }
+
+    /// Clear the dirty flag after a successful paint.
+    pub fn clear_dirty(&mut self) {
+        self.dirty = false;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.dirty
     }
 
     pub fn status_summary(&self) -> StatusSummary {
@@ -258,6 +390,7 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Vec<Effect> {
+        self.mark_dirty();
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             // Clear the input box if it has content, otherwise quit.
             // This makes double-tap Ctrl+C a reliable exit path.
@@ -276,12 +409,14 @@ impl App {
         }
         match self.focus {
             Focus::Input => crate::handlers::input::handle(self, key),
-            Focus::SidebarConversations => crate::handlers::sidebar::handle(self, key),
+            Focus::SessionBrowser => crate::handlers::sidebar::handle(self, key),
+            Focus::ModelBrowser => crate::handlers::models::handle(self, key),
             Focus::ChatMessages => crate::handlers::chat::handle(self, key),
         }
     }
 
     pub fn handle_mouse(&mut self, event: MouseEvent) -> Vec<Effect> {
+        self.mark_dirty();
         crate::handlers::mouse::handle(self, event)
     }
 
@@ -312,7 +447,17 @@ impl App {
                 }
                 liberado_commands::CommandResult::SessionSwitched { id } => {
                     self.pending_load = Some(id.clone());
+                    self.focus = Focus::Input;
                     effects.push(Effect::LoadConversationHistory(id.clone()));
+                }
+                liberado_commands::CommandResult::OpenSessionBrowser
+                | liberado_commands::CommandResult::SessionListed => {
+                    self.open_session_browser();
+                    effects.push(Effect::RefreshConversations);
+                }
+                liberado_commands::CommandResult::OpenModelBrowser => {
+                    self.open_model_browser();
+                    effects.push(Effect::FetchModels);
                 }
                 liberado_commands::CommandResult::ForkRequested { parent_id } => {
                     effects.push(Effect::ForkConversation(parent_id.clone()));
@@ -335,18 +480,17 @@ impl App {
             self.messages.push(Message::System(
                 "\
 Keybindings:
-  Enter       send message (Shift+Enter for newline)
+  Enter       send / accept slash ghost · expand tool in chat
   Ctrl+C      clear input, or quit when empty (press twice to exit)
   Ctrl+S      stop streaming (keep partial response)
-  Tab         switch focus between input and sidebar
-  Esc         clear input / cancel stream / return focus
+  Tab         input ↔ chat history (or slash complete)
+  Esc         clear input / cancel stream / leave session browser
+  /session    full-screen searchable prior sessions
+  /model      full-screen searchable model browser
+  j / k       navigate chat or session/model browser
   PgUp/PgDn   scroll chat
-  j / k       navigate sidebar conversations
-  Space       toggle tree fold (on sidebar parent nodes)
-  n           new conversation (when sidebar focused)
   ← →         move cursor in input
-  Home / End  jump to start/end of input
-  Del         delete character after cursor"
+  Home / End  jump to start/end of input"
                     .into(),
             ));
         }
@@ -431,6 +575,16 @@ pub enum Action {
     ReactionsUpdate(Vec<ReactionEvent>),
     /// Conversation list from `GET /api/conversations`.
     ConversationsUpdate(Vec<ConvHeader>),
+    /// Model catalog from `GET /api/models`.
+    ModelsLoaded {
+        models: Vec<String>,
+        error: Option<String>,
+    },
+    /// Result of `POST /api/models/select`.
+    ModelSelected {
+        model: String,
+        error: Option<String>,
+    },
     /// Full message history loaded for a conversation.
     HistoryLoaded {
         id: String,
@@ -470,6 +624,10 @@ pub enum Effect {
     },
     RefreshConversations,
     LoadConversationHistory(String),
+    /// Fetch `GET /api/models` for the model browser.
+    FetchModels,
+    /// Hot-swap the daemon's active model (`POST /api/models/select`).
+    SelectModel(String),
     CancelStream,
     ForkConversation(String),
     SetWindowTitle(String),
@@ -481,18 +639,53 @@ impl App {
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         match action {
             Action::StatusUpdate(status) => {
-                self.status = Some(status);
+                if self.status.as_ref() != Some(&status) {
+                    self.status = Some(status);
+                    self.mark_dirty();
+                }
                 vec![Effect::None]
             }
             Action::ReactionsUpdate(reactions) => {
-                self.reactions = reactions;
+                if self.reactions != reactions {
+                    self.reactions = reactions;
+                    self.mark_dirty();
+                }
                 vec![Effect::None]
             }
             Action::ConversationsUpdate(convs) => {
-                self.conversations = convs;
-                if self.sidebar_selection >= self.conversations.len().saturating_sub(1) {
-                    self.sidebar_selection = self.conversations.len().saturating_sub(1);
+                if self.conversations != convs {
+                    self.conversations = convs;
+                    if self.sidebar_selection >= self.conversations.len().saturating_sub(1) {
+                        self.sidebar_selection = self.conversations.len().saturating_sub(1);
+                    }
+                    self.mark_dirty();
                 }
+                vec![Effect::None]
+            }
+            Action::ModelsLoaded { models, error } => {
+                self.models = models;
+                self.models_error = error;
+                self.models_loading = false;
+                self.clamp_model_selection();
+                self.mark_dirty();
+                vec![Effect::None]
+            }
+            Action::ModelSelected { model, error } => {
+                if let Some(err) = error {
+                    self.messages
+                        .push(Message::System(format!("Failed to switch model: {err}")));
+                } else {
+                    if let Some(st) = self.status.as_mut() {
+                        st.model_name = Some(model.clone());
+                    }
+                    self.messages.push(Message::System(format!(
+                        "Active model switched to `{model}` — next chat turns use it \
+                         (no daemon restart)."
+                    )));
+                    self.close_model_browser();
+                }
+                self.scroll_offset = 0;
+                self.mark_dirty();
                 vec![Effect::None]
             }
             Action::HistoryLoaded { id, messages } => {
@@ -532,26 +725,31 @@ impl App {
                 }
                 self.scroll_offset = 0;
                 self.focus = Focus::Input;
+                self.mark_dirty();
                 vec![Effect::None]
             }
             Action::SseSession(id) => {
                 if self.session.is_none() {
                     self.session = Some(id);
+                    self.mark_dirty();
                 }
                 vec![Effect::None]
             }
             Action::SseToken(token) => {
                 self.assistant_buf.push_str(&token);
+                self.mark_dirty();
                 vec![Effect::None]
             }
             Action::SseTool { name, args } => {
                 self.messages
                     .push(Message::ToolCall(ToolCallChip { name, args }));
+                self.mark_dirty();
                 vec![Effect::None]
             }
             Action::SseToolResult { name, ok, preview } => {
                 self.messages
                     .push(Message::ToolResult(ToolResultChip { name, ok, preview }));
+                self.mark_dirty();
                 vec![Effect::None]
             }
             Action::SseDone => {
@@ -561,6 +759,7 @@ impl App {
                 }
                 self.streaming = false;
                 self.scroll_offset = 0;
+                self.mark_dirty();
                 vec![Effect::RefreshConversations]
             }
             Action::SseFailed(err) => {
@@ -569,6 +768,7 @@ impl App {
                 self.messages
                     .push(Message::System(format!("[error] {err}")));
                 self.streaming = false;
+                self.mark_dirty();
                 vec![Effect::RefreshConversations]
             }
             Action::ConnectionStatus(connected) => {
@@ -578,13 +778,16 @@ impl App {
                     self.pending_load = None;
                 }
                 if was && !connected {
+                    self.mark_dirty();
                     self.system_msg("Connection to daemon lost — reconnecting…", Effect::None)
                 } else if !was && connected {
+                    self.mark_dirty();
                     self.system_msg("Reconnected to daemon.", Effect::None)
                 } else {
                     vec![Effect::None]
                 }
             }
+            // Heartbeat only; animation frames are driven by `needs_animation` in the draw loop.
             Action::Tick => vec![Effect::None],
         }
     }

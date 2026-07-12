@@ -456,6 +456,7 @@ impl Executor {
         let span = tracing::info_span!(
             "execute",
             mode = "report",
+            model = %self.provider.model(),
             goal = %task.goal,
             budget = self.budget.max_turns,
             has_seed = !task.seed_calls.is_empty(),
@@ -499,6 +500,7 @@ impl Executor {
         let span = tracing::info_span!(
             "converse",
             mode = "conversational",
+            model = %self.provider.model(),
             goal = %task.goal,
             budget = self.budget.max_turns,
             outcome = tracing::field::Empty,
@@ -561,17 +563,28 @@ impl Executor {
         runtime: &dyn ToolRuntime,
         messages: &mut Vec<Message>,
     ) -> Result<String, ExecError> {
-        let mut tools = runtime.catalog();
-        // Conversational mode gets no scratchpad this pass (see liberado-scratchpad's module
-        // docs) — the call site is ready for it, just not enabled yet.
-        let mut scratchpad: Option<Scratchpad> = None;
-        match self
-            .run_loop(runtime, messages, &mut tools, Mode::Conversational, &mut scratchpad)
-            .await?
-        {
-            Terminal::Spoke(text) => Ok(text),
-            Terminal::Filed(_) => Err(ExecError::Internal("conversational mode filed a report")),
+        let span = tracing::info_span!(
+            "converse_messages",
+            model = %self.provider.model(),
+            budget = self.budget.max_turns,
+        );
+        async {
+            let mut tools = runtime.catalog();
+            // Conversational mode gets no scratchpad this pass (see liberado-scratchpad's module
+            // docs) — the call site is ready for it, just not enabled yet.
+            let mut scratchpad: Option<Scratchpad> = None;
+            match self
+                .run_loop(runtime, messages, &mut tools, Mode::Conversational, &mut scratchpad)
+                .await?
+            {
+                Terminal::Spoke(text) => Ok(text),
+                Terminal::Filed(_) => {
+                    Err(ExecError::Internal("conversational mode filed a report"))
+                }
+            }
         }
+        .instrument(span)
+        .await
     }
 
     /// Streaming multi-turn chat: like [`converse_messages`](Self::converse_messages), but emits
@@ -586,6 +599,13 @@ impl Executor {
         messages: &mut Vec<Message>,
         events: &Sender<AgentEvent>,
     ) -> Result<(), ExecError> {
+        let span = tracing::info_span!(
+            "converse_stream",
+            model = %self.provider.model(),
+            budget = self.budget.max_turns,
+        );
+        let _enter = span.enter();
+        tracing::debug!(model = %self.provider.model(), "starting conversational stream turn");
         let tools = runtime.catalog();
         for turn in 1..=self.budget.max_turns {
             let request = CompletionRequest::new(messages.clone()).with_tools(tools.clone());
@@ -748,12 +768,26 @@ impl Executor {
                 }
             }
 
+            // Process every tool call in this turn *before* doom/cycle escalations that jump to
+            // the next provider call. OpenAI-compat providers require one tool-result message per
+            // `tool_call_id` after an assistant tool_calls message (dogfood D3, 01KX7AGD).
+            let mut submitted_report: Option<Report> = None;
+            let mut doom_hit: Option<String> = None;
+            let mut cycle_hit: Option<Vec<String>> = None;
             for call in &response.tool_calls {
                 if call.name == SUBMIT_REPORT_TOOL {
                     tracing::info!(turn, "subagent filed report");
-                    let report = serde_json::from_value::<Report>(call.arguments.clone())
-                        .map_err(|e| ExecError::Decode(e.to_string()))?;
-                    return Ok(Terminal::Filed(report));
+                    // Still emit a tool result so the transcript is well-formed if we ever
+                    // re-use `messages` after this; then stop after the batch.
+                    messages.push(Message::tool_result(
+                        &call.id,
+                        "report accepted".to_string(),
+                    ));
+                    match serde_json::from_value::<Report>(call.arguments.clone()) {
+                        Ok(report) => submitted_report = Some(report),
+                        Err(e) => return Err(ExecError::Decode(e.to_string())),
+                    }
+                    continue;
                 }
                 // Engine-injected, like `submit_report` above: handled in-process, never reaches
                 // `ToolRuntime`, and — deliberately, before `call_history.push` below — never
@@ -774,75 +808,89 @@ impl Executor {
                 call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
                 messages.push(Message::tool_result(&call.id, result));
 
-                if is_doom_loop(&call_history) {
-                    match doom_guard.strike() {
-                        Escalation::Nudge => {
-                            tracing::warn!(turn, tool = %call.name, "doom loop detected; nudging once");
-                            messages.push(Message::user(DOOM_LOOP_NUDGE));
-                            continue 'turn_loop;
-                        }
-                        Escalation::Remove => {
-                            let removed = call.name.clone();
-                            tools.retain(|t| t.name != removed);
-                            tracing::warn!(
-                                turn,
-                                tool = %removed,
-                                "doom loop persisted after nudge; removing the tool"
-                            );
-                            messages.push(Message::user(tool_removed_nudge(&removed)));
-                            if !bonus_granted {
-                                bonus_granted = true;
-                                max_turns += DOOM_LOOP_RECOVERY_BONUS_TURNS;
-                                tracing::info!(
-                                    max_turns,
-                                    "granted a one-time recovery top-up after tool removal"
-                                );
-                            }
-                            continue 'turn_loop;
-                        }
-                        Escalation::GiveUp => {
-                            tracing::warn!(
-                                turn,
-                                tool = %call.name,
-                                "doom loop persisted after tool removal; aborting"
-                            );
-                            return Ok(Terminal::Filed(doom_loop_failed_report(&call.name)));
-                        }
+                if doom_hit.is_none() && is_doom_loop(&call_history) {
+                    doom_hit = Some(call.name.clone());
+                }
+                if cycle_hit.is_none() {
+                    if let Some(cycling) = detect_short_cycle(&call_history) {
+                        cycle_hit = Some(cycling);
                     }
                 }
-                if let Some(cycling) = detect_short_cycle(&call_history) {
-                    match cycle_guard.strike() {
-                        Escalation::Nudge => {
-                            tracing::warn!(turn, ?cycling, "tool cycle detected; nudging once");
-                            messages.push(Message::user(CYCLE_NUDGE));
-                            continue 'turn_loop;
-                        }
-                        Escalation::Remove => {
-                            tools.retain(|t| !cycling.contains(&t.name));
-                            tracing::warn!(
-                                turn,
-                                ?cycling,
-                                "tool cycle persisted after nudge; removing the cycling tools"
+            }
+
+            if let Some(report) = submitted_report {
+                return Ok(Terminal::Filed(report));
+            }
+
+            // Escalations only after every tool_call_id has a result message.
+            if let Some(tool_name) = doom_hit {
+                match doom_guard.strike() {
+                    Escalation::Nudge => {
+                        tracing::warn!(turn, tool = %tool_name, "doom loop detected; nudging once");
+                        messages.push(Message::user(DOOM_LOOP_NUDGE));
+                        continue 'turn_loop;
+                    }
+                    Escalation::Remove => {
+                        let removed = tool_name;
+                        tools.retain(|t| t.name != removed);
+                        tracing::warn!(
+                            turn,
+                            tool = %removed,
+                            "doom loop persisted after nudge; removing the tool"
+                        );
+                        messages.push(Message::user(tool_removed_nudge(&removed)));
+                        if !bonus_granted {
+                            bonus_granted = true;
+                            max_turns += DOOM_LOOP_RECOVERY_BONUS_TURNS;
+                            tracing::info!(
+                                max_turns,
+                                "granted a one-time recovery top-up after tool removal"
                             );
-                            messages.push(Message::user(tools_removed_nudge(&cycling)));
-                            if !bonus_granted {
-                                bonus_granted = true;
-                                max_turns += DOOM_LOOP_RECOVERY_BONUS_TURNS;
-                                tracing::info!(
-                                    max_turns,
-                                    "granted a one-time recovery top-up after tool removal"
-                                );
-                            }
-                            continue 'turn_loop;
                         }
-                        Escalation::GiveUp => {
-                            tracing::warn!(
-                                turn,
-                                ?cycling,
-                                "tool cycle persisted after tool removal; aborting"
+                        continue 'turn_loop;
+                    }
+                    Escalation::GiveUp => {
+                        tracing::warn!(
+                            turn,
+                            tool = %tool_name,
+                            "doom loop persisted after tool removal; aborting"
+                        );
+                        return Ok(Terminal::Filed(doom_loop_failed_report(&tool_name)));
+                    }
+                }
+            }
+            if let Some(cycling) = cycle_hit {
+                match cycle_guard.strike() {
+                    Escalation::Nudge => {
+                        tracing::warn!(turn, ?cycling, "tool cycle detected; nudging once");
+                        messages.push(Message::user(CYCLE_NUDGE));
+                        continue 'turn_loop;
+                    }
+                    Escalation::Remove => {
+                        tools.retain(|t| !cycling.contains(&t.name));
+                        tracing::warn!(
+                            turn,
+                            ?cycling,
+                            "tool cycle persisted after nudge; removing the cycling tools"
+                        );
+                        messages.push(Message::user(tools_removed_nudge(&cycling)));
+                        if !bonus_granted {
+                            bonus_granted = true;
+                            max_turns += DOOM_LOOP_RECOVERY_BONUS_TURNS;
+                            tracing::info!(
+                                max_turns,
+                                "granted a one-time recovery top-up after tool removal"
                             );
-                            return Ok(Terminal::Filed(cycle_failed_report()));
                         }
+                        continue 'turn_loop;
+                    }
+                    Escalation::GiveUp => {
+                        tracing::warn!(
+                            turn,
+                            ?cycling,
+                            "tool cycle persisted after tool removal; aborting"
+                        );
+                        return Ok(Terminal::Filed(cycle_failed_report()));
                     }
                 }
             }
@@ -1088,6 +1136,11 @@ fn is_doom_loop(history: &[(String, serde_json::Value, String)]) -> bool {
 /// [`CYCLE_NUDGE`]'s doc comment for why that's an acceptable, deliberately simpler bar than
 /// `is_doom_loop`'s. Returns the distinct tool names participating in the cycle (so the caller can
 /// remove exactly those, not the whole catalog) rather than a bare bool.
+///
+/// A mono-tool streak (`read_note`×4 in one parallel batch) is **not** a cycle — period-2 would
+/// match `AAAA` as two copies of `AA`, which is a false positive that used to mid-batch-nudge and
+/// leave unanswered `tool_call_id`s (dogfood session `01KX7BWV`). Same-tool thrash is
+/// [`is_doom_loop`]'s job (args-aware).
 fn detect_short_cycle(history: &[(String, serde_json::Value, String)]) -> Option<Vec<String>> {
     let names: Vec<&str> = history.iter().map(|(name, ..)| name.as_str()).collect();
     for period in 2..=3 {
@@ -1097,15 +1150,26 @@ fn detect_short_cycle(history: &[(String, serde_json::Value, String)]) -> Option
         }
         let tail = &names[names.len() - window..];
         let (first_half, second_half) = tail.split_at(period);
-        if first_half == second_half {
-            let mut distinct: Vec<String> = first_half.iter().map(|s| s.to_string()).collect();
-            distinct.sort_unstable();
-            distinct.dedup();
-            return Some(distinct);
+        if first_half != second_half {
+            continue;
         }
+        let mut distinct: Vec<String> = first_half.iter().map(|s| s.to_string()).collect();
+        distinct.sort_unstable();
+        distinct.dedup();
+        // Require a real multi-tool pattern, not "the same tool N times in a row".
+        if distinct.len() < 2 {
+            continue;
+        }
+        return Some(distinct);
     }
     None
 }
+
+/// Object keys whose string values name a distinct resource. If both calls set the same key to
+/// *different* strings, the calls are not near-duplicates — bag-of-words alone would still score
+/// `{"path":"Tasks/A.md"}` vs `{"path":"Tasks/B.md"}` high (shared `path` / `tasks` / `md` tokens)
+/// and false-positive doom-loop on legitimate parallel multi-file reads (dogfood `01KX7BWV`).
+const IDENTITY_ARG_KEYS: &[&str] = &["path", "file", "filepath", "note", "uri", "id"];
 
 /// Cosine similarity between two tool calls' arguments, weighted so a term shared by both calls
 /// (boilerplate, or the topic every rephrasing shares) counts for less than a term unique to one
@@ -1114,7 +1178,13 @@ fn detect_short_cycle(history: &[(String, serde_json::Value, String)]) -> Option
 /// text to compare, equality of the raw value is the only signal left. Deterministic, local,
 /// no network/model call — a small bag-of-words IDF over just the two documents being compared,
 /// not a learned embedding.
+///
+/// Before TF-IDF: if both args carry an [`IDENTITY_ARG_KEYS`] field and the values differ, return
+/// `0.0` immediately (distinct resources ⇒ not a doom loop).
 fn args_similarity(a: &serde_json::Value, b: &serde_json::Value) -> f32 {
+    if identity_args_conflict(a, b) {
+        return 0.0;
+    }
     let tokens_a = tokenize(a);
     let tokens_b = tokenize(b);
     if tokens_a.is_empty() && tokens_b.is_empty() {
@@ -1122,6 +1192,20 @@ fn args_similarity(a: &serde_json::Value, b: &serde_json::Value) -> f32 {
     }
     let vectors = tf_idf_vectors(&[tokens_a, tokens_b]);
     cosine(&vectors[0], &vectors[1])
+}
+
+/// True when both objects set the same identity key to different string values.
+fn identity_args_conflict(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    for key in IDENTITY_ARG_KEYS {
+        match (
+            a.get(*key).and_then(|v| v.as_str()),
+            b.get(*key).and_then(|v| v.as_str()),
+        ) {
+            (Some(x), Some(y)) if x != y => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Lowercased alphanumeric runs from a JSON value's textual form — deliberately crude (no
@@ -1833,6 +1917,318 @@ mod tests {
                 .iter()
                 .any(|r| r.messages.iter().any(|m| m.content == CYCLE_NUDGE)),
             "expected the cycle nudge to have been sent"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Loop-guard pure unit tests (hard-coded call histories).
+    // Short cycle = multi-tool name thrash. Doom loop = same tool + similar args.
+    // ------------------------------------------------------------------
+
+    fn hist(
+        calls: &[(&str, serde_json::Value)],
+    ) -> Vec<(String, serde_json::Value, String)> {
+        calls
+            .iter()
+            .map(|(name, args)| ((*name).into(), args.clone(), "ok".into()))
+            .collect()
+    }
+
+    #[test]
+    fn mono_tool_parallel_batch_is_not_a_short_cycle() {
+        // Dogfood 01KX7BWV: five parallel read_note calls must not match period-2 as AAAA.
+        let h = hist(&[
+            ("turbovault:read_note", serde_json::json!({"path": "Tasks/a.md"})),
+            ("turbovault:read_note", serde_json::json!({"path": "Tasks/b.md"})),
+            ("turbovault:read_note", serde_json::json!({"path": "Tasks/c.md"})),
+            ("turbovault:read_note", serde_json::json!({"path": "Tasks/d.md"})),
+            ("turbovault:read_note", serde_json::json!({"path": "Tasks/e.md"})),
+        ]);
+        assert!(
+            detect_short_cycle(&h).is_none(),
+            "same tool repeated is doom-loop territory, not short-cycle"
+        );
+    }
+
+    #[test]
+    fn different_path_read_notes_are_not_a_doom_loop() {
+        // Legitimate multi-file read: same tool, different path args — not thrash.
+        let h = hist(&[
+            ("turbovault:read_note", serde_json::json!({"path": "Tasks/Sarah.md"})),
+            (
+                "turbovault:read_note",
+                serde_json::json!({"path": "Life/Relationships/Weekly.md"}),
+            ),
+            (
+                "turbovault:read_note",
+                serde_json::json!({"path": "Work/RTX Onboarding.md"}),
+            ),
+            (
+                "turbovault:read_note",
+                serde_json::json!({"path": "House/Chores.md"}),
+            ),
+            (
+                "turbovault:read_note",
+                serde_json::json!({"path": "Projects/Homelab.md"}),
+            ),
+        ]);
+        assert!(
+            !is_doom_loop(&h),
+            "distinct paths must not look like near-duplicate args"
+        );
+        assert!(detect_short_cycle(&h).is_none());
+        // Pairwise similarity should sit below the doom threshold (calibration guardrail).
+        for window in h.windows(2) {
+            let sim = args_similarity(&window[0].1, &window[1].1);
+            assert!(
+                sim < ARG_SIMILARITY_THRESHOLD,
+                "path pair sim {sim} should be < {ARG_SIMILARITY_THRESHOLD}: {:?} vs {:?}",
+                window[0].1,
+                window[1].1
+            );
+        }
+    }
+
+    #[test]
+    fn same_path_read_note_three_times_is_a_doom_loop() {
+        // Mono-tool thrash: same tool + same args — doom-loop's job, not short-cycle.
+        let path = serde_json::json!({"path": "Tasks/Sarah.md"});
+        let h = hist(&[
+            ("turbovault:read_note", path.clone()),
+            ("turbovault:read_note", path.clone()),
+            ("turbovault:read_note", path),
+        ]);
+        assert!(is_doom_loop(&h), "identical path ×3 must trip doom-loop");
+        assert!(
+            detect_short_cycle(&h).is_none(),
+            "mono-tool must not also be classified as short-cycle"
+        );
+    }
+
+    #[test]
+    fn empty_args_same_tool_three_times_is_a_doom_loop() {
+        let empty = serde_json::json!({});
+        let h = hist(&[
+            ("search", empty.clone()),
+            ("search", empty.clone()),
+            ("search", empty),
+        ]);
+        assert!(is_doom_loop(&h));
+        assert!(detect_short_cycle(&h).is_none());
+    }
+
+    #[test]
+    fn abab_pattern_is_still_a_short_cycle() {
+        let h = hist(&[
+            ("tool-a", serde_json::json!({})),
+            ("tool-b", serde_json::json!({})),
+            ("tool-a", serde_json::json!({})),
+            ("tool-b", serde_json::json!({})),
+        ]);
+        let cycling = detect_short_cycle(&h).expect("A,B,A,B should cycle");
+        assert_eq!(cycling, vec!["tool-a".to_string(), "tool-b".to_string()]);
+        // Multi-tool name thrash is not a mono-tool doom loop.
+        assert!(!is_doom_loop(&h));
+    }
+
+    #[test]
+    fn abcabc_period_three_is_a_short_cycle() {
+        let h = hist(&[
+            ("a", serde_json::json!({})),
+            ("b", serde_json::json!({})),
+            ("c", serde_json::json!({})),
+            ("a", serde_json::json!({})),
+            ("b", serde_json::json!({})),
+            ("c", serde_json::json!({})),
+        ]);
+        let cycling = detect_short_cycle(&h).expect("A,B,C,A,B,C should cycle");
+        assert_eq!(
+            cycling,
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+    }
+
+    #[test]
+    fn two_identical_calls_are_not_yet_a_doom_loop() {
+        // Threshold is 3 — two repeats is allowed (batch of two different intents might
+        // still share a tool; wait for the third near-duplicate).
+        let path = serde_json::json!({"path": "Tasks/Sarah.md"});
+        let h = hist(&[
+            ("turbovault:read_note", path.clone()),
+            ("turbovault:read_note", path),
+        ]);
+        assert!(!is_doom_loop(&h));
+    }
+
+    #[test]
+    fn rephrased_deepwiki_queries_still_count_as_near_duplicates() {
+        // Keep the live-calibration cluster that justified ARG_SIMILARITY_THRESHOLD.
+        let h = hist(&[
+            (
+                "deepwiki",
+                serde_json::json!({ "query": "turbomcp transport layer" }),
+            ),
+            (
+                "deepwiki",
+                serde_json::json!({
+                    "query": "turbo-mcp transport layer implementation Provider trait stdio HTTP"
+                }),
+            ),
+            (
+                "deepwiki",
+                serde_json::json!({
+                    "query": "turbomcp transport Provider trait stdio HTTP JSON-RPC MCP protocol"
+                }),
+            ),
+        ]);
+        assert!(
+            is_doom_loop(&h),
+            "rephrased same question must still trip doom-loop"
+        );
+    }
+
+    #[test]
+    fn identity_path_mismatch_forces_zero_similarity() {
+        let a = serde_json::json!({"path": "Tasks/A.md"});
+        let b = serde_json::json!({"path": "Tasks/B.md"});
+        assert_eq!(args_similarity(&a, &b), 0.0);
+        assert_eq!(args_similarity(&a, &a), 1.0);
+    }
+
+    #[tokio::test]
+    async fn parallel_tool_batch_always_answers_every_tool_call_id_before_cycle_nudge() {
+        // Dogfood D3: a turn with multiple tool_calls must produce one tool-result per id
+        // before any cycle nudge / next provider call, or OpenAI-compat returns HTTP 400.
+        let parallel = CompletionResponse::tool_calls(vec![
+            ToolInvocation::new("c1", "tool-a", serde_json::json!({})),
+            ToolInvocation::new("c2", "tool-b", serde_json::json!({})),
+            ToolInvocation::new("c3", "tool-a", serde_json::json!({})),
+            ToolInvocation::new("c4", "tool-b", serde_json::json!({})),
+        ]);
+        let (provider, exec) = executor(
+            vec![parallel, submit(valid_report_args())],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["tool-a", "tool-b"], Ok("result".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        assert_eq!(runtime.invoked().len(), 4);
+        // The request that follows the parallel batch must have tool results for c1..c4.
+        let requests = provider.received_requests();
+        assert!(requests.len() >= 2, "expected at least batch + follow-up");
+        let follow_up = &requests[1];
+        let tool_ids: Vec<_> = follow_up
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .collect();
+        for id in ["c1", "c2", "c3", "c4"] {
+            assert!(
+                tool_ids.contains(&id),
+                "missing tool result for {id} in follow-up messages; got {tool_ids:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn parallel_different_path_reads_do_not_trip_cycle_or_doom() {
+        // Dogfood 01KX7BWV shape: one turn with several read_note calls to *different* files.
+        // Must complete all tools, then continue without cycle/doom nudges.
+        let parallel = CompletionResponse::tool_calls(vec![
+            ToolInvocation::new(
+                "r1",
+                "turbovault:read_note",
+                serde_json::json!({"path": "Tasks/Sarah.md"}),
+            ),
+            ToolInvocation::new(
+                "r2",
+                "turbovault:read_note",
+                serde_json::json!({"path": "Life/Relationships/Weekly.md"}),
+            ),
+            ToolInvocation::new(
+                "r3",
+                "turbovault:read_note",
+                serde_json::json!({"path": "Work/RTX Onboarding.md"}),
+            ),
+            ToolInvocation::new(
+                "r4",
+                "turbovault:read_note",
+                serde_json::json!({"path": "House/Chores.md"}),
+            ),
+            ToolInvocation::new(
+                "r5",
+                "turbovault:read_note",
+                serde_json::json!({"path": "Projects/Homelab.md"}),
+            ),
+        ]);
+        let (provider, exec) = executor(
+            vec![parallel, submit(valid_report_args())],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["turbovault:read_note"], Ok("note body".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "read several notes"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        assert_eq!(runtime.invoked().len(), 5);
+        assert!(
+            !any_message_contains(&provider, CYCLE_NUDGE),
+            "parallel multi-file reads must not trip short-cycle"
+        );
+        assert!(
+            !any_message_contains(&provider, DOOM_LOOP_NUDGE),
+            "distinct paths must not trip doom-loop"
+        );
+        // All five tool results present before the submit_report turn.
+        let follow_up = &provider.received_requests()[1];
+        for id in ["r1", "r2", "r3", "r4", "r5"] {
+            assert!(
+                follow_up
+                    .messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some(id)),
+                "missing tool result for {id}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn same_path_read_three_times_trips_doom_not_cycle() {
+        // Mono-tool thrash with identical args → doom-loop nudge, never short-cycle.
+        let path = serde_json::json!({"path": "Tasks/Sarah.md"});
+        let (provider, exec) = executor(
+            vec![
+                call_tool_with_args("turbovault:read_note", path.clone()),
+                call_tool_with_args("turbovault:read_note", path.clone()),
+                call_tool_with_args("turbovault:read_note", path),
+                submit(valid_report_args()),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["turbovault:read_note"], Ok("note body".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "read one note"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        assert!(
+            any_message_contains(&provider, DOOM_LOOP_NUDGE),
+            "same path ×3 must trip doom-loop"
+        );
+        assert!(
+            !any_message_contains(&provider, CYCLE_NUDGE),
+            "mono-tool thrash must not be reported as short-cycle"
         );
     }
 

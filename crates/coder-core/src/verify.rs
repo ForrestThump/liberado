@@ -1,0 +1,337 @@
+//! Domain-agnostic verifier DTOs (coding pack is the first consumer).
+//!
+//! See `docs/architecture/verifiers.md`. Types intentionally avoid git/cargo so they can graduate
+//! to `liberado-common` when a second domain needs them.
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+
+use crate::CoderCommandConfig;
+
+/// One configured check in a goal contract / run config.
+///
+/// Live intake models often omit `id` or emit a single string where we want a list — fields below
+/// default generously so freeze validation (not JSON parse) is the hard gate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum VerifierSpec {
+    PathsExist {
+        #[serde(default = "default_id_paths_exist")]
+        id: String,
+        #[serde(default, deserialize_with = "crate::intake::deserialize_string_or_vec")]
+        paths: Vec<String>,
+    },
+    PathsAbsent {
+        #[serde(default = "default_id_paths_absent")]
+        id: String,
+        #[serde(default, deserialize_with = "crate::intake::deserialize_string_or_vec")]
+        paths: Vec<String>,
+    },
+    ContentContains {
+        #[serde(default = "default_id_content_contains")]
+        id: String,
+        #[serde(default)]
+        path: String,
+        #[serde(default, deserialize_with = "crate::intake::deserialize_string_or_vec")]
+        must_include: Vec<String>,
+    },
+    Command {
+        #[serde(default = "default_id_command")]
+        id: String,
+        /// Default empty so incomplete live-model JSON still deserializes; sanitize drops empties.
+        #[serde(default)]
+        program: String,
+        #[serde(default, deserialize_with = "crate::intake::deserialize_string_or_vec")]
+        args: Vec<String>,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_secs: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output_max_bytes: Option<usize>,
+        /// When true, sandbox/network policy may allow outbound network.
+        #[serde(default)]
+        network: bool,
+    },
+    /// Coding-pack convenience: require non-empty `git status --porcelain`.
+    GitNonemptyDiff {
+        #[serde(default = "default_id_git_diff")]
+        id: String,
+    },
+}
+
+fn default_id_paths_exist() -> String {
+    "paths_exist".into()
+}
+fn default_id_paths_absent() -> String {
+    "paths_absent".into()
+}
+fn default_id_content_contains() -> String {
+    "content_contains".into()
+}
+fn default_id_command() -> String {
+    "command".into()
+}
+fn default_id_git_diff() -> String {
+    "has_diff".into()
+}
+
+impl VerifierSpec {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::PathsExist { id, .. }
+            | Self::PathsAbsent { id, .. }
+            | Self::ContentContains { id, .. }
+            | Self::Command { id, .. }
+            | Self::GitNonemptyDiff { id, .. } => id,
+        }
+    }
+
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::PathsExist { .. } => "paths_exist",
+            Self::PathsAbsent { .. } => "paths_absent",
+            Self::ContentContains { .. } => "content_contains",
+            Self::Command { .. } => "command",
+            Self::GitNonemptyDiff { .. } => "git_nonempty_diff",
+        }
+    }
+
+    /// Build a command verifier from the legacy single validation_command field.
+    pub fn from_command_config(id: impl Into<String>, cmd: &CoderCommandConfig) -> Self {
+        Self::Command {
+            id: id.into(),
+            program: cmd.program.clone(),
+            args: cmd.args.clone(),
+            env: cmd.env.clone(),
+            timeout_secs: cmd.timeout_secs,
+            output_max_bytes: cmd.output_max_bytes,
+            network: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerdictStatus {
+    Pass,
+    Fail,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingKind {
+    MissingPath,
+    ContentMismatch,
+    CommandFailed,
+    CommandTimeout,
+    PolicyDenied,
+    UnexpectedChange,
+    EmptyDiff,
+    Custom,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Finding {
+    pub check_id: String,
+    pub kind: FindingKind,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Verdict {
+    pub status: VerdictStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    pub summary: String,
+    #[serde(default)]
+    pub findings: Vec<Finding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_excerpt: Option<String>,
+}
+
+impl Verdict {
+    pub fn pass(summary: impl Into<String>) -> Self {
+        Self {
+            status: VerdictStatus::Pass,
+            signature: None,
+            summary: summary.into(),
+            findings: Vec::new(),
+            log_excerpt: None,
+        }
+    }
+
+    pub fn fail(
+        summary: impl Into<String>,
+        findings: Vec<Finding>,
+        log_excerpt: Option<String>,
+    ) -> Self {
+        let signature = Some(signature_for(&findings, log_excerpt.as_deref()));
+        Self {
+            status: VerdictStatus::Fail,
+            signature,
+            summary: summary.into(),
+            findings,
+            log_excerpt,
+        }
+    }
+
+    pub fn error(summary: impl Into<String>) -> Self {
+        let summary = summary.into();
+        Self {
+            status: VerdictStatus::Error,
+            signature: Some(format!("error:{summary}")),
+            summary,
+            findings: Vec::new(),
+            log_excerpt: None,
+        }
+    }
+
+    pub fn is_pass(&self) -> bool {
+        self.status == VerdictStatus::Pass
+    }
+}
+
+fn signature_for(findings: &[Finding], log: Option<&str>) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    for f in findings {
+        f.check_id.hash(&mut h);
+        format!("{:?}", f.kind).hash(&mut h);
+        f.message.hash(&mut h);
+    }
+    if let Some(log) = log {
+        log.chars().take(200).collect::<String>().hash(&mut h);
+    }
+    format!("{:x}", h.finish())
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PipelineResult {
+    pub overall: VerdictStatus,
+    pub results: Vec<NamedVerdict>,
+    pub combined_findings: Vec<Finding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combined_signature: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NamedVerdict {
+    pub id: String,
+    pub kind: String,
+    pub verdict: Verdict,
+}
+
+impl PipelineResult {
+    pub fn is_pass(&self) -> bool {
+        self.overall == VerdictStatus::Pass
+    }
+
+    /// Agent-facing repair feedback (also works as prior_feedback lines).
+    pub fn repair_feedback(&self) -> String {
+        let mut lines = vec!["Completeness/validation failed:".to_string()];
+        if self.combined_findings.is_empty() {
+            for r in &self.results {
+                if !r.verdict.is_pass() {
+                    lines.push(format!("- {}: {}", r.id, r.verdict.summary));
+                }
+            }
+        } else {
+            for f in &self.combined_findings {
+                lines.push(format!("- {}: {}", f.check_id, f.message));
+            }
+        }
+        lines.push("Fix these before claiming success.".to_string());
+        lines.join("\n")
+    }
+}
+
+/// Pipeline execution policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PipelinePolicy {
+    #[serde(default = "default_true")]
+    pub fail_fast: bool,
+    #[serde(default = "default_true")]
+    pub errors_are_failures: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for PipelinePolicy {
+    fn default() -> Self {
+        Self {
+            fail_fast: true,
+            errors_are_failures: true,
+        }
+    }
+}
+
+/// Resolve the effective verifier list: explicit `verifiers`, else legacy single command.
+pub fn resolve_verifier_specs(
+    verifiers: &[VerifierSpec],
+    validation_command: Option<&CoderCommandConfig>,
+) -> Vec<VerifierSpec> {
+    if !verifiers.is_empty() {
+        return verifiers.to_vec();
+    }
+    if let Some(cmd) = validation_command {
+        return vec![VerifierSpec::from_command_config("validate", cmd)];
+    }
+    Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verifier_defaults_missing_id_and_string_paths() {
+        let raw = r#"{
+            "type": "paths_exist",
+            "paths": "src/main.rs"
+        }"#;
+        let v: VerifierSpec = serde_json::from_str(raw).unwrap();
+        assert_eq!(v.id(), "paths_exist");
+        match v {
+            VerifierSpec::PathsExist { paths, .. } => {
+                assert_eq!(paths, vec!["src/main.rs".to_string()]);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_falls_back_to_validation_command() {
+        let mut cmd = CoderCommandConfig::new("cargo");
+        cmd.args = vec!["test".into()];
+        let specs = resolve_verifier_specs(&[], Some(&cmd));
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].id(), "validate");
+        assert_eq!(specs[0].kind(), "command");
+    }
+
+    #[test]
+    fn repair_feedback_lists_findings() {
+        let pipeline = PipelineResult {
+            overall: VerdictStatus::Fail,
+            results: Vec::new(),
+            combined_findings: vec![Finding {
+                check_id: "paths".into(),
+                kind: FindingKind::MissingPath,
+                message: "missing src/main.rs".into(),
+                detail: None,
+            }],
+            combined_signature: Some("abc".into()),
+        };
+        let fb = pipeline.repair_feedback();
+        assert!(fb.contains("src/main.rs"));
+        assert!(fb.contains("Fix these"));
+    }
+}

@@ -327,6 +327,15 @@ pub struct ReactionsQuery {
     limit: Option<usize>,
 }
 
+/// Active model id: prefer live provider state (hot-swappable) over boot-time snapshot.
+fn active_model(state: &AppState) -> Option<String> {
+    state
+        .provider
+        .as_ref()
+        .map(|p| p.model())
+        .or_else(|| state.model_name.clone())
+}
+
 pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let reactions_len = state.reactions.lock().await.len();
 
@@ -338,12 +347,109 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         dispatcher_attached: state.dispatcher_attached,
         orchestrator_attached: state.orchestrator_attached,
         reactions_seen: reactions_len as u64,
-        model_name: state.model_name.clone(),
+        model_name: active_model(&state),
         token_usage_total: None,
         context_window: None,
         chat_tools: state.chat_tools,
         chat_tool_names: state.chat_tool_names.clone(),
     })
+}
+
+/// `GET /api/models` — live model catalog from the provider (`GET /models` upstream) plus the
+/// currently configured model. Soft-fails: always 200 with `error` set when the provider list
+/// cannot be fetched so the TUI can still show `current`.
+pub async fn models(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    use chat_client_contract::ModelsResponse;
+
+    let current = active_model(&state);
+    let Some(provider) = state.provider.as_ref() else {
+        return Json(ModelsResponse {
+            models: Vec::new(),
+            current,
+            error: Some("no inference provider configured".into()),
+        });
+    };
+
+    match provider.list_models().await {
+        Ok(mut models) => {
+            // Ensure the active model appears even if the catalog omitted it.
+            if let Some(cur) = current.as_ref() {
+                if !models.iter().any(|m| m == cur) {
+                    models.insert(0, cur.clone());
+                }
+            }
+            models.sort();
+            models.dedup();
+            Json(ModelsResponse {
+                models,
+                current,
+                error: None,
+            })
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "GET /api/models: provider list_models failed");
+            let mut models = Vec::new();
+            if let Some(cur) = current.as_ref() {
+                models.push(cur.clone());
+            }
+            Json(ModelsResponse {
+                models,
+                current,
+                error: Some(e.to_string()),
+            })
+        }
+    }
+}
+
+/// `POST /api/models/select` — hot-swap the active model for subsequent completions without
+/// restarting the daemon. Body: `{"model":"…"}`. Same base URL / credentials; only the model
+/// field of the next chat-completions request changes.
+pub async fn select_model(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SelectModelRequest>,
+) -> impl IntoResponse {
+    use chat_client_contract::ModelsResponse;
+
+    let model = body.model.trim().to_string();
+    if model.is_empty() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(ModelsResponse {
+                models: Vec::new(),
+                current: active_model(&state),
+                error: Some("model must be a non-empty string".into()),
+            }),
+        );
+    }
+
+    let Some(provider) = state.provider.as_ref() else {
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(ModelsResponse {
+                models: Vec::new(),
+                current: None,
+                error: Some("no inference provider configured".into()),
+            }),
+        );
+    };
+
+    let previous = provider.model();
+    provider.set_model(model.clone());
+    tracing::info!(%previous, current = %model, "hot-swapped active model");
+
+    (
+        axum::http::StatusCode::OK,
+        Json(ModelsResponse {
+            models: Vec::new(),
+            current: Some(provider.model()),
+            error: None,
+        }),
+    )
+}
+
+#[derive(Deserialize)]
+pub struct SelectModelRequest {
+    model: String,
 }
 
 pub async fn catalog(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -495,4 +601,128 @@ pub async fn vault(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         note_count: 0,
         watcher_active: true,
     })
+}
+
+// ── Goal sessions (scratchpad F) — surfaces are clients; packs own the loop ──
+
+/// `GET /api/goals/domains` — which domain packs are registered (coding, life, …).
+pub async fn goals_domains(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(serde_json::json!({
+        "domains": state.goals.registered_domains(),
+    }))
+}
+
+/// `GET /api/goals` — list goal sessions, newest first.
+pub async fn goals_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(state.goals.list().await)
+}
+
+/// `POST /api/goals` — start a goal session. Body: [`liberado_session::GoalSpec`].
+pub async fn goals_start(
+    State(state): State<Arc<AppState>>,
+    Json(goal): Json<liberado_session::GoalSpec>,
+) -> impl IntoResponse {
+    match state.goals.start(goal).await {
+        Ok(id) => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({ "session_id": id, "status": "running" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError { error: e }),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/goals/{id}` — session record + event history so far.
+pub async fn goals_get(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.goals.snapshot(&id).await {
+        Some(snap) => Json(snap).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: format!("goal session '{id}' not found"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/goals/{id}/cancel` — cooperative cancel of a running goal session.
+pub async fn goals_cancel(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.goals.cancel(&id).await {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiError { error: e }),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/goals/{id}/stream` — SSE: catch-up history then live events.
+/// Events use `event:` names matching [`liberado_session::SessionEventKind`] type tags
+/// (`session_started`, `tool_started`, `session_finished`, …); `data` is full JSON.
+pub async fn goals_stream(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let Some((history, mut rx)) = state.goals.store().subscribe(&id).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: format!("goal session '{id}' not found"),
+            }),
+        )
+            .into_response();
+    };
+
+    let stream = async_stream::stream! {
+        for ev in history {
+            yield Ok::<Event, Infallible>(session_event_to_sse(&ev));
+        }
+        loop {
+            match rx.recv().await {
+                Ok(ev) => {
+                    let terminal = matches!(
+                        ev.kind,
+                        liberado_session::SessionEventKind::SessionFinished { .. }
+                    );
+                    yield Ok(session_event_to_sse(&ev));
+                    if terminal {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+
+    Sse::new(Box::pin(stream) as SseBody).into_response()
+}
+
+fn session_event_to_sse(ev: &liberado_session::SessionEvent) -> Event {
+    let name = match &ev.kind {
+        liberado_session::SessionEventKind::SessionStarted { .. } => "session_started",
+        liberado_session::SessionEventKind::RoleStarted { .. } => "role_started",
+        liberado_session::SessionEventKind::RoleFinished { .. } => "role_finished",
+        liberado_session::SessionEventKind::ToolStarted { .. } => "tool_started",
+        liberado_session::SessionEventKind::ToolFinished { .. } => "tool_finished",
+        liberado_session::SessionEventKind::Progress { .. } => "progress",
+        liberado_session::SessionEventKind::ValidationFinished { .. } => "validation_finished",
+        liberado_session::SessionEventKind::LoopGuard { .. } => "loop_guard",
+        liberado_session::SessionEventKind::SessionFinished { .. } => "session_finished",
+        liberado_session::SessionEventKind::Error { .. } => "goal_error",
+    };
+    let data = serde_json::to_string(ev).unwrap_or_else(|_| "{}".into());
+    Event::default().event(name).data(data)
 }
