@@ -9,6 +9,12 @@ pub enum SlashCommand {
     Theme(ThemeCmd),
     Model,
     Session(SessionCmd),
+    /// Open the unified session switcher (primary chat + goal sessions in one list).
+    Sessions,
+    /// Join a goal session by id (or id prefix), moving input focus onto it.
+    Join(String),
+    /// Return input focus to the primary chat.
+    Back,
     Fork,
 }
 
@@ -51,6 +57,9 @@ impl std::fmt::Display for SlashCommand {
                 SessionCmd::Close => write!(f, "/session close"),
                 SessionCmd::Unknown(sub) => write!(f, "/session {sub}"),
             },
+            SlashCommand::Sessions => write!(f, "/sessions"),
+            SlashCommand::Join(id) => write!(f, "/join {id}"),
+            SlashCommand::Back => write!(f, "/back"),
             SlashCommand::Fork => write!(f, "/fork"),
         }
     }

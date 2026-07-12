@@ -68,6 +68,26 @@ fn send_message(app: &mut App) -> Vec<Effect> {
     if message.starts_with('/') {
         return app.handle_slash_command(&message);
     }
+
+    // Routed input (unified-Session model): when focused on a live goal session, the message is a
+    // human reply delivered via `POST /api/goals/{id}/message`. We don't echo a local `User`
+    // message — the session's stream echoes it back as `human_input`, keeping the transcript the
+    // single source of truth (correct on rejoin too).
+    if let Some(id) = app.input_target_session() {
+        if let Some(j) = app.joined.as_mut() {
+            j.awaiting = None; // optimistic: the prompt is answered
+        }
+        app.input.clear();
+        app.cursor = 0;
+        app.input_scroll = 0;
+        app.scroll_offset = 0;
+        return vec![Effect::SendGoalMessage { id, text: message }];
+    }
+
+    // Not routed to a session. If a *finished* session view is still showing, sending a chat
+    // message auto-returns to the primary chat (the plan's auto-return-on-next-message).
+    app.joined = None;
+
     if app.streaming {
         return vec![Effect::None];
     }
@@ -231,7 +251,11 @@ fn handle_tab(app: &mut App) -> Vec<Effect> {
         app.clamp_slash_palette();
         return vec![Effect::None];
     }
-    // Input ↔ chat history (no always-on conversation sidebar).
+    // Input ↔ chat history (no always-on conversation sidebar). Disabled while joined to a goal
+    // session — that view is a read-only transcript, not the navigable conversation history.
+    if app.joined.is_some() {
+        return vec![Effect::None];
+    }
     app.focus = Focus::ChatMessages;
     if app.chat_cursor >= app.messages.len() {
         app.chat_cursor = app.messages.len().saturating_sub(1);

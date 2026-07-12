@@ -8,3 +8,4 @@ pub mod input;
 pub mod models;
 pub mod mouse;
 pub mod sidebar;
+pub mod switcher;

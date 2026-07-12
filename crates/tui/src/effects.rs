@@ -20,10 +20,13 @@ use crate::api;
 use crate::app::{Action, App, Effect};
 use crate::sse::{SseDecoder, ToAction};
 
-/// Holds the `AbortHandle` for an in-flight SSE streaming task.
-/// Cleared on completion, error, or `CancelStream`.
+/// Holds the `AbortHandle`s for in-flight SSE streaming tasks. `handle` is the chat turn stream;
+/// `goal_handle` is a joined goal session's stream (independent — you can be joined to a session
+/// while the chat is idle). Each is cleared on its own completion, error, or cancel.
+#[derive(Default)]
 pub struct StreamState {
     pub handle: Option<AbortHandle>,
+    pub goal_handle: Option<AbortHandle>,
 }
 
 /// Executes [`Effect`] commands by spawning tokio tasks (SSE streaming, HTTP fetches)
@@ -72,8 +75,131 @@ impl EffectRunner {
             Effect::SelectModel(model) => self.select_model(model).await,
             Effect::ForkConversation(parent_id) => self.fork_conversation(parent_id),
             Effect::SetWindowTitle(title) => self.set_window_title(&title),
+            Effect::RefreshGoalSessions => self.refresh_goal_sessions().await,
+            Effect::JoinGoalSession(id) => self.join_goal_session(id).await,
+            Effect::SendGoalMessage { id, text } => self.send_goal_message(id, text).await,
+            Effect::LeaveGoalSession => self.leave_goal_session(),
             Effect::Quit => self.quit(),
             Effect::None => {}
+        }
+    }
+
+    /// `GET /api/goals` → populate the session switcher.
+    async fn refresh_goal_sessions(&self) {
+        let client = self.client.clone();
+        let tx = self.action_tx.clone();
+        let server = self.server_url();
+        tokio::spawn(async move {
+            match api::fetch_goal_sessions(&client, &server).await {
+                Ok(sessions) => {
+                    if tx.try_send(Action::GoalSessionsUpdate(sessions)).is_err() {
+                        tracing::warn!("action channel full, dropping GoalSessionsUpdate");
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "fetch goal sessions failed"),
+            }
+        });
+    }
+
+    /// Abort any prior goal stream and open a fresh SSE subscription to `GET /api/goals/{id}/stream`,
+    /// mapping each frame to a [`Action::GoalStreamEvent`]. Catch-up history arrives first, then live
+    /// events (the server replays the transcript before tailing).
+    async fn join_goal_session(&self, id: String) {
+        // Replace any existing subscription (re-`/join` or switching sessions).
+        if let Some(prev) = self.stream_state.lock().goal_handle.take() {
+            prev.abort();
+        }
+        let client = self.client.clone();
+        let tx = self.action_tx.clone();
+        let server = self.server_url();
+        let state = self.stream_state.clone();
+
+        let handle = tokio::spawn(async move {
+            let response = match api::open_goal_stream(&client, &server, &id).await {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx
+                        .try_send(Action::GoalStreamClosed(Some(format!(
+                            "could not reach daemon: {e}"
+                        ))));
+                    state.lock().goal_handle = None;
+                    return;
+                }
+            };
+            if !response.status().is_success() {
+                let status = response.status();
+                let _ = tx.try_send(Action::GoalStreamClosed(Some(format!(
+                    "server returned {status}"
+                ))));
+                state.lock().goal_handle = None;
+                return;
+            }
+
+            let mut decoder = SseDecoder::default();
+            let mut stream = response.bytes_stream();
+            loop {
+                match tokio::time::timeout(crate::tuning::SSE_STREAM_TIMEOUT, stream.next()).await {
+                    Ok(Some(Ok(chunk))) => {
+                        let text = String::from_utf8_lossy(&chunk);
+                        for event in decoder.push(&text) {
+                            match crate::sse::to_goal_event(&event) {
+                                Ok(Some(ui)) => {
+                                    let terminal =
+                                        matches!(ui, crate::app::GoalUiEvent::Finished { .. });
+                                    if tx.try_send(Action::GoalStreamEvent(ui)).is_err() {
+                                        tracing::warn!("action channel full, dropping goal event");
+                                    }
+                                    if terminal {
+                                        state.lock().goal_handle = None;
+                                        return;
+                                    }
+                                }
+                                Ok(None) => {}
+                                Err(e) => tracing::warn!(error = %e, "goal stream decode error"),
+                            }
+                        }
+                    }
+                    Ok(Some(Err(e))) => {
+                        let _ = tx.try_send(Action::GoalStreamClosed(Some(format!(
+                            "stream error: {e}"
+                        ))));
+                        state.lock().goal_handle = None;
+                        return;
+                    }
+                    Ok(None) => break, // stream ended (server closed after a terminal event)
+                    Err(_elapsed) => {
+                        let _ = tx.try_send(Action::GoalStreamClosed(Some(
+                            "stream timeout — no data for 60s".into(),
+                        )));
+                        state.lock().goal_handle = None;
+                        return;
+                    }
+                }
+            }
+            let _ = tx.try_send(Action::GoalStreamClosed(None));
+            state.lock().goal_handle = None;
+        });
+
+        self.stream_state.lock().goal_handle = Some(handle.abort_handle());
+    }
+
+    /// `POST /api/goals/{id}/message` — deliver a human reply; report the outcome so 404/409 surface.
+    async fn send_goal_message(&self, id: String, text: String) {
+        let client = self.client.clone();
+        let tx = self.action_tx.clone();
+        let server = self.server_url();
+        tokio::spawn(async move {
+            let outcome = api::post_goal_message(&client, &server, &id, &text).await;
+            if tx.try_send(Action::GoalMessageOutcome(outcome)).is_err() {
+                tracing::warn!("action channel full, dropping GoalMessageOutcome");
+            }
+        });
+    }
+
+    /// Abort the joined session's SSE stream (on `/back`).
+    fn leave_goal_session(&self) {
+        if let Some(handle) = self.stream_state.lock().goal_handle.take() {
+            handle.abort();
         }
     }
 
@@ -317,7 +443,7 @@ mod tests {
             should_quit: Arc::new(AtomicBool::new(false)),
             action_tx,
             client: reqwest::Client::new(),
-            stream_state: Arc::new(Mutex::new(StreamState { handle: None })),
+            stream_state: Arc::new(Mutex::new(StreamState::default())),
         }
     }
 
@@ -448,7 +574,7 @@ mod tests {
     async fn cancel_stream() {
         let app = make_app("http://localhost:0");
         let (action_tx, _action_rx) = mpsc::channel(256);
-        let stream_state = Arc::new(Mutex::new(StreamState { handle: None }));
+        let stream_state = Arc::new(Mutex::new(StreamState::default()));
         let runner = EffectRunner {
             app,
             should_quit: Arc::new(AtomicBool::new(false)),
@@ -491,7 +617,7 @@ mod tests {
             should_quit: should_quit.clone(),
             action_tx,
             client: reqwest::Client::new(),
-            stream_state: Arc::new(Mutex::new(StreamState { handle: None })),
+            stream_state: Arc::new(Mutex::new(StreamState::default())),
         };
 
         runner.run(Effect::Quit).await;

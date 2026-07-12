@@ -33,6 +33,15 @@ pub enum CommandResult {
     /// Open the client's full-screen session browser (searchable list). TUI/WebUI map this
     /// to their own UI; CLI may print the list instead.
     OpenSessionBrowser,
+    /// Open the unified session switcher (primary chat + goal sessions in one list). TUI maps this
+    /// to a full-screen picker over `GET /api/goals`.
+    OpenGoalSwitcher,
+    /// Move input focus onto a goal session (by id or id prefix), subscribing to its event stream.
+    JoinGoalSession {
+        id: String,
+    },
+    /// Return input focus to the primary chat, leaving any joined goal session.
+    BackToPrimary,
     ForkRequested {
         parent_id: String,
     },

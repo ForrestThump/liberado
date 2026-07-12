@@ -2,18 +2,38 @@ use liberado_theme::Theme;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::Style,
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
 
 use crate::app::App;
 use crate::format::short_id;
+use crate::render::kind_color;
 use crate::tuning::*;
 use crate::ui::c;
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, spinner_tick: u8, th: &Theme) {
     let summary = app.status_summary();
+
+    // At-a-glance session identity: a colored kind chip. When joined to a goal session it shows
+    // that session's kind + short id + live status; otherwise the primary chat.
+    let kind = app.current_kind();
+    let chip = Span::styled(
+        format!(" {} ", kind.tag()),
+        Style::default()
+            .fg(c(&th.app_bg, "#0d0d1a"))
+            .bg(kind_color(kind, th))
+            .add_modifier(Modifier::BOLD),
+    );
+    let kind_label = match app.joined.as_ref() {
+        Some(j) if !j.finished => format!(" {} {} · {} ", kind.label(), short_id(&j.id), j.status),
+        _ => format!(" {} ", kind.label()),
+    };
+    let kind_label_span = Span::styled(
+        kind_label,
+        Style::default().fg(kind_color(kind, th)).add_modifier(Modifier::BOLD),
+    );
 
     let spinner = if summary.streaming {
         SPINNER_FRAMES[(spinner_tick as usize) % SPINNER_FRAMES.len()]
@@ -64,6 +84,8 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, spinner_tick: u8, t
 
     let mut spans = vec![
         Span::styled(dot, dot_style),
+        chip,
+        kind_label_span,
         Span::styled(bar_text, Style::default().fg(bar_color)),
     ];
 

@@ -67,15 +67,27 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
         name: "/theme reload",
         description: "reload user themes from disk",
     },
+    // `/session` (singular) precedes `/sessions` so the ambiguous `/session` prefix ghost-completes
+    // to the conversation browser; typing the full `/sessions` filters uniquely to the switcher.
     CommandSpec {
         insert: "/session",
         name: "/session",
-        description: "open searchable session browser",
+        description: "conversation browser (prior chats)",
     },
     CommandSpec {
         insert: "/sessions",
         name: "/sessions",
-        description: "alias for /session (browser)",
+        description: "switch sessions (primary chat + goal sessions)",
+    },
+    CommandSpec {
+        insert: "/join ",
+        name: "/join",
+        description: "join a goal session by id (focus its input)",
+    },
+    CommandSpec {
+        insert: "/back",
+        name: "/back",
+        description: "return focus to the primary chat",
     },
     CommandSpec {
         insert: "/session ",

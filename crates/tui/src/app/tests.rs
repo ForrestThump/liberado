@@ -2055,3 +2055,140 @@ fn handle_up_roundtrip() {
     app.handle_key(key(KeyCode::Down));
     assert_eq!(app.cursor_visual_col(), original_col);
 }
+
+// ── Unified session switcher + goal-session focus (session-focus S3) ──────────
+
+use chat_client_contract::{DomainWire, GoalHeaderSpec, GoalSessionHeader, SessionKind};
+
+fn goal_header(id: &str, domain: DomainWire, desc: &str, status: &str, awaiting: bool) -> GoalSessionHeader {
+    GoalSessionHeader {
+        id: id.into(),
+        goal: Some(GoalHeaderSpec {
+            description: desc.into(),
+            domain,
+        }),
+        status: status.into(),
+        created_at: String::new(),
+        awaiting_input: awaiting,
+        result: None,
+    }
+}
+
+#[test]
+fn goal_sessions_update_populates_and_clamps_switcher() {
+    let mut app = test_app();
+    app.open_session_switcher();
+    assert_eq!(app.focus, Focus::SessionSwitcher);
+    app.update(Action::GoalSessionsUpdate(vec![
+        goal_header("g1", DomainWire::Coding, "build a CLI", "running", false),
+        goal_header("g2", DomainWire::Life, "note it", "awaiting", true),
+    ]));
+    // Row 0 is the primary chat; the two goal sessions follow.
+    assert_eq!(app.switcher_row_count(), 3);
+    assert_eq!(app.goal_sessions.len(), 2);
+}
+
+#[test]
+fn joining_focuses_the_session_and_routes_input_there() {
+    let mut app = test_app();
+    app.update(Action::GoalSessionsUpdate(vec![goal_header(
+        "g1",
+        DomainWire::Coding,
+        "build a CLI",
+        "running",
+        false,
+    )]));
+    app.join_session("g1".to_string());
+    let j = app.joined.as_ref().expect("should be joined");
+    assert_eq!(j.id, "g1");
+    assert_eq!(j.kind, SessionKind::Coding);
+    assert_eq!(app.current_kind(), SessionKind::Coding);
+    assert_eq!(app.input_target_session().as_deref(), Some("g1"));
+}
+
+#[test]
+fn awaiting_then_human_input_updates_the_joined_transcript() {
+    let mut app = test_app();
+    app.join_session("g1".to_string());
+    app.update(Action::GoalStreamEvent(GoalUiEvent::Awaiting {
+        prompt: "What should I title the note?".into(),
+        options: vec![],
+    }));
+    {
+        let j = app.joined.as_ref().unwrap();
+        assert!(j.awaiting.is_some());
+        assert_eq!(j.status, "awaiting");
+    }
+    // The stream echoes the answer back as a human_input event.
+    app.update(Action::GoalStreamEvent(GoalUiEvent::Human("Weekly Review".into())));
+    let j = app.joined.as_ref().unwrap();
+    assert!(j.awaiting.is_none());
+    assert!(j.messages.iter().any(|m| matches!(m, Message::User(t) if t == "Weekly Review")));
+}
+
+#[test]
+fn sending_while_joined_posts_a_goal_message_and_does_not_echo_locally() {
+    let mut app = test_app();
+    app.join_session("g1".to_string());
+    app.update(Action::GoalStreamEvent(GoalUiEvent::Awaiting {
+        prompt: "title?".into(),
+        options: vec![],
+    }));
+    app.input = "Weekly Review".to_string();
+    app.cursor = app.input.len();
+    let effects = app.handle_key(key(KeyCode::Enter));
+    // Routes to the session, not a chat stream.
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::SendGoalMessage { id, text }] if id == "g1" && text == "Weekly Review"
+    ));
+    let j = app.joined.as_ref().unwrap();
+    // No local echo — the transcript stays the single source of truth (the stream echoes it).
+    assert!(!j.messages.iter().any(|m| matches!(m, Message::User(_))));
+    // The prompt is optimistically cleared.
+    assert!(j.awaiting.is_none());
+    assert!(!app.streaming, "must not start a chat stream while joined");
+}
+
+#[test]
+fn finished_reverts_input_to_primary_but_keeps_the_view() {
+    let mut app = test_app();
+    app.join_session("g1".to_string());
+    app.update(Action::GoalStreamEvent(GoalUiEvent::Finished {
+        status: "succeeded".into(),
+        summary: "wrote note".into(),
+    }));
+    let j = app.joined.as_ref().unwrap();
+    assert!(j.finished);
+    // Input no longer targets the session (routes back to the primary chat).
+    assert!(app.input_target_session().is_none());
+    assert_eq!(app.current_kind(), SessionKind::Primary);
+    // The terminal summary is in the joined transcript.
+    assert!(j.messages.iter().any(|m| matches!(m, Message::System(t) if t.contains("wrote note"))));
+}
+
+#[test]
+fn back_leaves_the_session() {
+    let mut app = test_app();
+    app.join_session("g1".to_string());
+    assert!(app.joined.is_some());
+    let effects = app.handle_slash_command("/back");
+    assert!(app.joined.is_none());
+    assert!(effects.iter().any(|e| matches!(e, Effect::LeaveGoalSession)));
+}
+
+#[test]
+fn sending_a_chat_message_after_finish_auto_leaves_the_session() {
+    let mut app = test_app();
+    app.join_session("g1".to_string());
+    app.update(Action::GoalStreamEvent(GoalUiEvent::Finished {
+        status: "succeeded".into(),
+        summary: "done".into(),
+    }));
+    app.input = "thanks, what's next?".to_string();
+    app.cursor = app.input.len();
+    let effects = app.handle_key(key(KeyCode::Enter));
+    // Auto-return: the finished session view is dropped and the message goes to the primary chat.
+    assert!(app.joined.is_none());
+    assert!(matches!(effects.as_slice(), [Effect::StartChatStream { .. }]));
+}

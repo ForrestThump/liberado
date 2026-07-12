@@ -1,4 +1,5 @@
 pub mod clear;
+pub mod focus;
 pub mod fork;
 pub mod help;
 pub mod model;

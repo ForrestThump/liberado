@@ -14,8 +14,8 @@ use reqwest::{Client, StatusCode};
 // Re-export the shared wire types so the rest of the crate can still import them
 // from `crate::api::*` without changing call sites.
 pub use chat_client_contract::{
-    ChatMessage, ConvHeader, ConversationHistoryResponse, DaemonStatus, ModelsResponse,
-    ReactionEvent,
+    ChatMessage, ConvHeader, ConversationHistoryResponse, DaemonStatus, GoalSessionHeader,
+    ModelsResponse, ReactionEvent, SessionKind,
 };
 
 /// A tool-call chip rendered inline in the chat: `[tool] name(args preview)`.
@@ -127,6 +127,71 @@ pub async fn select_model(
         .await?;
     resp.error_for_status_ref()?;
     resp.json().await
+}
+
+/// Fetch `GET /api/goals` — every goal session (newest first), as read-only headers for the
+/// unified session switcher. Empty when the daemon is unavailable.
+pub async fn fetch_goal_sessions(
+    client: &Client,
+    server: &str,
+) -> Result<Vec<GoalSessionHeader>, reqwest::Error> {
+    let resp = client.get(format!("{server}/api/goals")).send().await?;
+    if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
+        return Ok(Vec::new());
+    }
+    resp.error_for_status_ref()?;
+    resp.json().await
+}
+
+/// Outcome of `POST /api/goals/{id}/message` — mirrors the endpoint's status codes so the UI can
+/// react (202 delivered, 404 gone, 409 already finished) instead of guessing from a body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GoalMessageOutcome {
+    /// 202 — the message was delivered to the running session.
+    Accepted,
+    /// 404 — no such session.
+    NotFound,
+    /// 409 — the session has already finished (or is closing) and accepts no input.
+    Finished,
+    /// Transport/other error.
+    Error(String),
+}
+
+/// `POST /api/goals/{id}/message` `{"text": "..."}` — deliver a human reply into a running
+/// interactive session. Maps the status code to a [`GoalMessageOutcome`].
+pub async fn post_goal_message(
+    client: &Client,
+    server: &str,
+    id: &str,
+    text: &str,
+) -> GoalMessageOutcome {
+    let result = client
+        .post(format!("{server}/api/goals/{id}/message"))
+        .json(&serde_json::json!({ "text": text }))
+        .send()
+        .await;
+    match result {
+        Ok(resp) => match resp.status() {
+            StatusCode::ACCEPTED | StatusCode::OK => GoalMessageOutcome::Accepted,
+            StatusCode::NOT_FOUND => GoalMessageOutcome::NotFound,
+            StatusCode::CONFLICT => GoalMessageOutcome::Finished,
+            other => GoalMessageOutcome::Error(format!("server returned {other}")),
+        },
+        Err(e) => GoalMessageOutcome::Error(e.to_string()),
+    }
+}
+
+/// Open `GET /api/goals/{id}/stream` (SSE: catch-up history then live events) and return the byte
+/// stream for the shared SSE decoder — the goal-session analogue of [`post_chat_stream`].
+pub async fn open_goal_stream(
+    client: &Client,
+    server: &str,
+    id: &str,
+) -> Result<reqwest::Response, reqwest::Error> {
+    client
+        .get(format!("{server}/api/goals/{id}/stream"))
+        .send()
+        .await
 }
 
 /// Open a streaming `POST /api/chat/stream` with `message` and optional `session`, and

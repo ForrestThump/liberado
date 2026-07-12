@@ -10,24 +10,46 @@ use ratatui::{
 
 use crate::app::{App, Focus, Message};
 use crate::format::{short_id, truncate_for_display};
+use crate::render::kind_color;
 use crate::tuning::*;
 use crate::ui::c;
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spinner_tick: u8) {
-    let title = if let Some(ref id) = app.session {
+    // Unified-Session view: when joined to a goal session, the chat pane renders *that* session's
+    // (separate-but-linked) transcript and identity; otherwise the primary conversation.
+    let joined = app.joined.as_ref();
+
+    let title = if let Some(j) = joined {
+        let desc = if j.description.is_empty() {
+            short_id(&j.id).to_string()
+        } else {
+            truncate_for_display(&j.description, 48)
+        };
+        let awaiting = if j.awaiting.is_some() {
+            "  ⏳ awaiting your reply"
+        } else {
+            ""
+        };
+        format!(" {} — {} [{}]{awaiting}", j.kind.label(), desc, j.status)
+    } else if let Some(ref id) = app.session {
         format!(" Chat — {}", short_id(id))
     } else {
         " Chat — new conversation".to_string()
     };
 
-    let focus_hint = if app.focus == Focus::ChatMessages {
+    // History-navigation hint only applies to the primary conversation view.
+    let focus_hint = if joined.is_some() {
+        " [/back to leave]"
+    } else if app.focus == Focus::ChatMessages {
         " [j/k · Enter expand tools · Esc back]"
     } else {
         " [Tab focus history]"
     };
     let title = format!("{title}{focus_hint}");
 
-    let border_color = if app.focus == Focus::ChatMessages {
+    let border_color = if let Some(j) = joined {
+        kind_color(j.kind, th)
+    } else if app.focus == Focus::ChatMessages {
         c(&th.sidebar_border_focused, "#00ffff")
     } else {
         c(&th.border, "#808080")
@@ -37,8 +59,24 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spi
         .title(title)
         .style(Style::default().fg(border_color));
 
+    // Snapshot the joined view up front (owned clones) so the render loop can still borrow
+    // `app.md_cache` mutably below. The primary-chat path stays zero-copy (borrows `app.messages`);
+    // only the cold joined path clones, and a specialist transcript is small.
+    let joined_active = app.joined.is_some();
+    let joined_finished = app.joined.as_ref().map(|j| j.finished).unwrap_or(false);
+    let messages_owned: Option<Vec<Message>> = app.joined.as_ref().map(|j| j.messages.clone());
+    let joined_stream_buf: String = app
+        .joined
+        .as_ref()
+        .map(|j| j.stream_buf.clone())
+        .unwrap_or_default();
+    let awaiting: Option<(String, Vec<String>)> = app
+        .joined
+        .as_ref()
+        .and_then(|j| j.awaiting.as_ref().map(|a| (a.prompt.clone(), a.options.clone())));
+
     // If a conversation is being loaded and we have no messages yet, show a spinner.
-    if app.pending_load.is_some() && app.messages.is_empty() {
+    if !joined_active && app.pending_load.is_some() && app.messages.is_empty() {
         let spinner = SPINNER_FRAMES[(spinner_tick as usize) % SPINNER_FRAMES.len()];
         let loading_text = format!(" Loading conversation {spinner}");
         let loading = Paragraph::new(loading_text)
@@ -55,8 +93,16 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spi
     let pane_bg = c(&th.app_bg, "#0d0d1a");
     let chip_body_bg = c(&th.code_block_bg, "#303030");
 
-    for (i, msg) in app.messages.iter().enumerate() {
-        let is_selected = app.focus == Focus::ChatMessages && i == app.chat_cursor;
+    let messages: &[Message] = match &messages_owned {
+        Some(m) => m,
+        None => &app.messages,
+    };
+
+    for (i, msg) in messages.iter().enumerate() {
+        // Selection/expansion only applies to the primary conversation view (chat-history focus
+        // navigates `app.messages`); the joined transcript renders read-only.
+        let is_selected =
+            !joined_active && app.focus == Focus::ChatMessages && i == app.chat_cursor;
         let is_expanded = app.expanded_messages.contains(&i);
         let sel_bg = if is_selected {
             c(&th.sidebar_selected_bg, "#00ffff")
@@ -384,7 +430,47 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spi
         }
     }
 
-    if app.streaming || !app.assistant_buf.is_empty() {
+    if joined_active {
+        // Joined session: render any buffered stream tokens, then the "awaiting your reply" prompt
+        // as a highlighted banner so it's unmistakable that the input box is now feeding this session.
+        if !joined_stream_buf.is_empty() {
+            lines.push(Line::from(Span::styled(
+                joined_stream_buf.clone(),
+                Style::default()
+                    .fg(c(&th.chat_assistant_text, "#c0c0c0"))
+                    .add_modifier(Modifier::ITALIC),
+            )));
+        }
+        if let Some((prompt, options)) = &awaiting {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!("❓ {prompt}"),
+                Style::default()
+                    .fg(c(&th.accent, "#00ffff"))
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for (n, opt) in options.iter().enumerate() {
+                lines.push(Line::from(Span::styled(
+                    format!("   {}. {opt}", n + 1),
+                    Style::default().fg(c(&th.md_bullet, "#00ffff")),
+                )));
+            }
+            lines.push(Line::from(Span::styled(
+                "   › type your answer below and press Enter",
+                Style::default()
+                    .fg(c(&th.chat_system_text, "#808080"))
+                    .add_modifier(Modifier::ITALIC),
+            )));
+        } else if joined_finished {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "— session finished · /back to return to the primary chat —",
+                Style::default()
+                    .fg(c(&th.chat_system_text, "#808080"))
+                    .add_modifier(Modifier::ITALIC),
+            )));
+        }
+    } else if app.streaming || !app.assistant_buf.is_empty() {
         if !app.assistant_buf.is_empty() {
             lines.push(Line::from(Span::styled(
                 app.assistant_buf.clone(),

@@ -19,9 +19,12 @@ pub fn parse(input: &str) -> Option<SlashCommand> {
         "/status" => Some(SlashCommand::Status),
         "/theme" => Some(parse_theme(parts.get(1).copied(), parts.get(2).copied())),
         "/model" => Some(SlashCommand::Model),
-        "/session" | "/sessions" => {
-            Some(parse_session(parts.get(1).copied(), parts.get(2).copied()))
-        }
+        // `/session` (singular) = conversation subcommands; `/sessions` (plural) = the unified
+        // session switcher (primary chat + goal sessions).
+        "/session" => Some(parse_session(parts.get(1).copied(), parts.get(2).copied())),
+        "/sessions" => Some(SlashCommand::Sessions),
+        "/join" => Some(SlashCommand::Join(parts.get(1).copied().unwrap_or("").to_string())),
+        "/back" => Some(SlashCommand::Back),
         "/fork" => Some(SlashCommand::Fork),
         _ => None,
     }
@@ -56,6 +59,9 @@ pub fn dispatch(cmd: &SlashCommand, ctx: &mut dyn CommandContext) -> Vec<Command
         SlashCommand::Theme(cmd) => handlers::theme::handle(cmd, ctx),
         SlashCommand::Model => handlers::model::handle(ctx),
         SlashCommand::Session(cmd) => handlers::session::handle(cmd, ctx),
+        SlashCommand::Sessions => handlers::focus::open_switcher(ctx),
+        SlashCommand::Join(id) => handlers::focus::join(id, ctx),
+        SlashCommand::Back => handlers::focus::back(ctx),
         SlashCommand::Fork => handlers::fork::handle(ctx),
     }
 }

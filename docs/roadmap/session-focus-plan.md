@@ -53,6 +53,20 @@ HTTP/SSE contract — the UI stays single-homed forever.
 | D4 | Authority is unchanged by joining | The session runs under dispatcher-derived capabilities (`ceiling ∩ allowed`); a human typing into it never widens anything; proposals still gate high-consequence acts |
 | D5 | Additive wire changes only | The converged `SessionEventKind` vocabulary (2026-07-11) is the substrate; this plan adds variants, renames nothing |
 | D6 | Hats are config, not code | A "hat" = domain pack + role/prompt/model overrides + capability component — a topology entry, like MCPs and pools |
+| D7 | **Everything is one `Session`** (2026-07-12) | "Conversation" and "goal session" are the same concept; the differences are **attributes, not subtypes**: `goal: Option<Goal>` (presence ⇒ run-to-terminal; **terminality = `goal.is_some()`**), `origin` (human / offer / cron / delegate), `visibility` (foreground vs background — subagents are just `delegate`+background), `runner`/`domain` (the "type" chip: Primary/Coding/Life/…). The converged wire vocabulary already committed to this; only identity+storage stay split for now. **Staged**: adopt the model + the unified `/sessions` surface now (S3); converge the two stores into one durable `Session` store as its own slice (S5′, below). See `memory/project_unified_session_model.md`. |
+
+### The unified `Session` model (D7) — how it lands per slice
+
+- **S3 (now)**: the `/sessions` switcher is **one session list** — the primary chat is the goal-less
+  `Session` at the top; goal sessions are rows beneath it, each with a **kind chip** (`SessionKind`:
+  Primary/Coding/Life/…, derived from `domain`) and a goal-status column. The two stores
+  (`conversation-store`, `GoalSessionHub`) stay separate behind a thin surface adapter; the UI
+  already embodies "everything is a Session."
+- **S5′ (its own later slice — store convergence)**: merge `conversation-store` + `GoalSessionHub`
+  into one `Session` store — `goal: Option<Goal>`, durable node-graph JSONL transcripts (the S5
+  durability work, done under the unified name), `origin` links, and cron/hook/subagent runs folded
+  in as background sessions. This is where the "no duplication of responsibility" payoff actually
+  lands; S3's adapter is the seam it replaces.
 
 ## 3. What already exists (this plan is mostly composition)
 
@@ -180,14 +194,16 @@ watch, nothing inbound. Needed in `liberado-session`:
 |---|---|---|
 | ✅ S1 | Kernel input channel + `AwaitingInput`/`HumanInput` + idle budget (`liberado-session`; trait change ripples to both packs) — **done 2026-07-12** | Unit tests (green): interactive `LifeOpsDemoRunner` asks → awaits → echoes; idle-budget → `BudgetExhausted`; `send_input` to finished session errors |
 | ✅ S2 | `POST /api/goals/{id}/message` + `api.md` (wire variants landed in S1) — **done 2026-07-12** | HTTP integration tests (green) against a real router (the hooks-test pattern): 202 + echo + drives to success; 404 unknown; 409 finished |
-| S3 | TUI focus MVP: `/join <id>` + `/back` + session-kind renderers (no offer yet) | Live smoke: full Q&A with the life demo through the TUI |
+| S3 | TUI focus MVP: **unified `/sessions` switcher** (one list — primary + goal sessions, kind chips + goal-status) · `/join <id>` · `/back` · session-kind renderers | Live smoke: full Q&A with the life demo through the TUI |
 | S4 | The offer + return handoff: interactive flag on dispatch, `SessionOffered`, summary folded into parent conversation, journal cross-links | Live smoke: "build a hello CLI" → offer → join → watch → `/back` → summary in main chat |
 | S5 | Durable session transcripts (JSONL) + rehydrate on boot | Restart daemon, rejoin a finished session from the browser |
+| S5′ | **Store convergence (D7)**: one `Session` store — `goal: Option`, durable node-graph transcripts, `origin` links, cron/hook/subagent folded in as background sessions; replaces S3's surface adapter | Both a chat and a goal session load from the same store; a subagent run shows as a background session linked to its parent |
 | S6 | Hat profiles in topology + "new session as <hat>" | Config-driven second hat (e.g. `research` on the life pack) with a narrower component grant |
 | S7 | Intake-first coding sessions (clarify → freeze UI in the TUI) | The §3.4 worked example (todo CLI) end-to-end from chat |
 
 S1–S3 are the spine and are useful alone (manual `/join` of any goal session). S4 is the "call
-transfer" feel. S5–S7 harden and generalize.
+transfer" feel. S5/S5′ harden the storage (S5′ is where the unified-Session model becomes real under
+the hood); S6–S7 generalize.
 
 ## 6. Open questions (decide during S1/S4, none block starting)
 

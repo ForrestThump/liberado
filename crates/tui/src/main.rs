@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (_guard, mut terminal) = TerminalGuard::enter()?;
 
     let client = reqwest::Client::new();
-    let stream_state = Arc::new(Mutex::new(StreamState { handle: None }));
+    let stream_state = Arc::new(Mutex::new(StreamState::default()));
 
     let mut theme_registry = ThemeRegistry::new();
     if let Some(dir) = liberado_theme::user_themes_dir() {

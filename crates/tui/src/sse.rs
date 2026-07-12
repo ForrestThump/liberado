@@ -9,7 +9,7 @@ pub use chat_client_contract::native::{SseDecoder, SseEvent};
 
 use chat_client_contract::{SessionEvent, SessionEventKind};
 
-use crate::app::Action;
+use crate::app::{Action, GoalUiEvent};
 
 /// Convert a decoded [`SseEvent`] into the corresponding [`Action`] variant for
 /// [`App::update()`](crate::app::App::update).
@@ -64,6 +64,64 @@ impl ToAction for SseEvent {
             Err(e) => Err(format!("malformed SSE data ({e}): {}", self.data)),
         }
     }
+}
+
+/// Decode one **goal-session** stream frame into a [`GoalUiEvent`] for the joined view. Unlike
+/// [`ToAction`] (the chat path, which collapses session-only kinds to no-ops), this keeps the full
+/// session vocabulary — roles, progress, validation, guards, and the `AwaitingInput`/`HumanInput`
+/// pair the interactive focus model is built on.
+///
+/// - `Ok(Some(ev))` — a frame the joined view renders.
+/// - `Ok(None)` — a benign frame with nothing to show (`RoleFinished`, a stray chat `Session`
+///   head, or an unknown/future kind).
+/// - `Err(desc)` — malformed JSON for a known structured event.
+pub fn to_goal_event(event: &SseEvent) -> Result<Option<GoalUiEvent>, String> {
+    let parsed = SessionEvent::from_sse_data(&event.event, &event.data)
+        .map_err(|e| format!("malformed session SSE data ({e}): {}", event.data))?;
+    Ok(match parsed.kind {
+        SessionEventKind::SessionStarted { description, .. } => {
+            Some(GoalUiEvent::Started { description })
+        }
+        SessionEventKind::Token { text } => Some(GoalUiEvent::Token(text)),
+        SessionEventKind::ToolStarted { name, args_preview } => Some(GoalUiEvent::ToolStarted {
+            name,
+            args: args_preview,
+        }),
+        SessionEventKind::ToolFinished {
+            name,
+            ok,
+            result_preview,
+        } => Some(GoalUiEvent::ToolFinished {
+            name,
+            ok,
+            preview: result_preview,
+        }),
+        SessionEventKind::RoleStarted { role, model } => Some(GoalUiEvent::Role {
+            role,
+            model: Some(model),
+        }),
+        SessionEventKind::Progress { message } => Some(GoalUiEvent::Progress(message)),
+        SessionEventKind::ValidationFinished { ok, summary } => {
+            Some(GoalUiEvent::Validation { ok, summary })
+        }
+        SessionEventKind::LoopGuard { guard, action } => {
+            Some(GoalUiEvent::LoopGuard(format!("{guard} → {action}")))
+        }
+        SessionEventKind::AwaitingInput { prompt, options } => {
+            Some(GoalUiEvent::Awaiting { prompt, options })
+        }
+        SessionEventKind::HumanInput { text } => Some(GoalUiEvent::Human(text)),
+        SessionEventKind::SessionFinished { status, summary } => {
+            Some(GoalUiEvent::Finished { status, summary })
+        }
+        // A hard failure is terminal — render it as a finished session with a failed status.
+        SessionEventKind::Failed { message } => Some(GoalUiEvent::Finished {
+            status: "failed".into(),
+            summary: message,
+        }),
+        // Nothing to render: role end, the chat-only session head, unknown/future kinds.
+        SessionEventKind::RoleFinished { .. } | SessionEventKind::Session { .. } => None,
+    })
 }
 
 #[cfg(test)]
@@ -130,5 +188,44 @@ mod tests {
         };
         let result = event.to_action();
         assert!(result.is_err(), "expected Err for malformed JSON");
+    }
+
+    // ── goal-session stream mapping (to_goal_event) ──────────────────────────
+
+    #[test]
+    fn goal_awaiting_input_maps_to_awaiting() {
+        let mut decoder = SseDecoder::default();
+        let events = decoder.push(
+            "event: awaiting_input\ndata: {\"prompt\":\"title?\",\"options\":[\"a\",\"b\"]}\n\n",
+        );
+        let ev = to_goal_event(&events[0]).unwrap().unwrap();
+        assert!(matches!(
+            ev,
+            GoalUiEvent::Awaiting { prompt, options } if prompt == "title?" && options.len() == 2
+        ));
+    }
+
+    #[test]
+    fn goal_human_input_maps_to_human() {
+        let mut decoder = SseDecoder::default();
+        let events = decoder.push("event: human_input\ndata: {\"text\":\"Weekly Review\"}\n\n");
+        let ev = to_goal_event(&events[0]).unwrap().unwrap();
+        assert!(matches!(ev, GoalUiEvent::Human(t) if t == "Weekly Review"));
+    }
+
+    #[test]
+    fn goal_session_finished_maps_to_finished() {
+        let mut decoder = SseDecoder::default();
+        let events = decoder
+            .push("event: session_finished\ndata: {\"status\":\"succeeded\",\"summary\":\"done\"}\n\n");
+        let ev = to_goal_event(&events[0]).unwrap().unwrap();
+        assert!(matches!(ev, GoalUiEvent::Finished { status, .. } if status == "succeeded"));
+    }
+
+    #[test]
+    fn goal_role_finished_is_benign_none() {
+        let mut decoder = SseDecoder::default();
+        let events = decoder.push("event: role_finished\ndata: {\"role\":\"worker\"}\n\n");
+        assert!(to_goal_event(&events[0]).unwrap().is_none());
     }
 }

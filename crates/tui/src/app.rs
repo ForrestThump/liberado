@@ -11,7 +11,8 @@ use ratatui::layout::Rect;
 use std::collections::HashSet;
 
 use crate::api::{
-    ChatMessage, ConvHeader, DaemonStatus, ReactionEvent, ToolCallChip, ToolResultChip,
+    ChatMessage, ConvHeader, DaemonStatus, GoalMessageOutcome, GoalSessionHeader, ReactionEvent,
+    SessionKind, ToolCallChip, ToolResultChip,
 };
 use crate::md_cache::MarkdownParseCache;
 use crate::tuning::*;
@@ -20,12 +21,60 @@ use crate::tuning::*;
 pub enum Focus {
     /// The text input area at the bottom.
     Input,
-    /// Full-screen searchable prior sessions (`/session`).
+    /// Full-screen searchable prior conversations (`/session`).
     SessionBrowser,
+    /// Full-screen unified session switcher (`/sessions`) — primary chat + goal sessions.
+    SessionSwitcher,
     /// Full-screen searchable model browser (`/model`).
     ModelBrowser,
     /// Scrollable message history in the chat pane (j/k, Enter expand tools).
     ChatMessages,
+}
+
+/// A goal session the UI has moved input focus onto (`/join`). Its transcript is **separate but
+/// linked** — a distinct message buffer, fed by the session's own event stream, not mixed into the
+/// primary conversation (session-focus D2). When `finished`, the view stays visible (showing the
+/// terminal summary) but input routes back to the primary chat; `/back` or the next chat message
+/// closes it.
+#[derive(Debug, Clone)]
+pub struct JoinedSession {
+    pub id: String,
+    pub kind: SessionKind,
+    pub description: String,
+    /// Lifecycle tag mirrored from the stream (`"running"`, `"awaiting"`, `"succeeded"`, …).
+    pub status: String,
+    pub messages: Vec<Message>,
+    /// Token accumulator for packs that stream tokens; flushed to an `Assistant` message at the
+    /// next structured event or on finish.
+    pub stream_buf: String,
+    /// Set while the pack is blocked on human input; the input box goes "hot" and shows the prompt.
+    pub awaiting: Option<AwaitingPrompt>,
+    /// True once a terminal event arrived — input reverts to the primary chat.
+    pub finished: bool,
+}
+
+/// The prompt an interactive session is blocked on (`AwaitingInput`).
+#[derive(Debug, Clone)]
+pub struct AwaitingPrompt {
+    pub prompt: String,
+    pub options: Vec<String>,
+}
+
+/// A goal-session stream frame mapped to what the joined view needs to render — a purpose-built
+/// projection of `SessionEventKind` (mapping lives in [`crate::sse`], close to the decoder).
+#[derive(Debug, Clone)]
+pub enum GoalUiEvent {
+    Started { description: String },
+    Token(String),
+    ToolStarted { name: String, args: String },
+    ToolFinished { name: String, ok: bool, preview: String },
+    Role { role: String, model: Option<String> },
+    Progress(String),
+    Validation { ok: bool, summary: String },
+    LoopGuard(String),
+    Awaiting { prompt: String, options: Vec<String> },
+    Human(String),
+    Finished { status: String, summary: String },
 }
 
 /// A single chat message in the scrollback buffer.
@@ -91,6 +140,10 @@ pub struct App {
     pub models_error: Option<String>,
     /// True while a models fetch is in flight.
     pub models_loading: bool,
+    /// Goal sessions from `GET /api/goals` — the goal rows of the unified session switcher.
+    pub goal_sessions: Vec<GoalSessionHeader>,
+    /// The goal session input focus is currently on (`/join`), if any. `None` = the primary chat.
+    pub joined: Option<JoinedSession>,
 }
 
 /// Layout rectangles populated by the draw pass for mouse hit-testing.
@@ -172,6 +225,8 @@ impl App {
             models: Vec::new(),
             models_error: None,
             models_loading: false,
+            goal_sessions: Vec::new(),
+            joined: None,
         }
     }
 
@@ -252,6 +307,184 @@ impl App {
         } else {
             self.sidebar_selection = self.sidebar_selection.min(n - 1);
         }
+    }
+
+    // ── Unified session switcher + goal-session focus (`/sessions`, `/join`, `/back`) ──
+
+    /// Enter the full-screen unified session switcher (`/sessions`).
+    pub fn open_session_switcher(&mut self) {
+        self.focus = Focus::SessionSwitcher;
+        self.sidebar_filter.clear();
+        self.sidebar_selection = 0;
+        self.input.clear();
+        self.cursor = 0;
+        self.input_scroll = 0;
+        self.mark_dirty();
+    }
+
+    /// Leave the switcher, back to the input.
+    pub fn close_session_switcher(&mut self) {
+        self.focus = Focus::Input;
+        self.sidebar_filter.clear();
+        self.sidebar_selection = 0;
+        self.mark_dirty();
+    }
+
+    /// Goal sessions matching the switcher filter (case-insensitive on description + kind label).
+    pub fn filtered_goal_sessions(&self) -> Vec<&GoalSessionHeader> {
+        let q = self.sidebar_filter.to_ascii_lowercase();
+        self.goal_sessions
+            .iter()
+            .filter(|h| {
+                q.is_empty()
+                    || h.description().to_ascii_lowercase().contains(&q)
+                    || h.kind().label().to_ascii_lowercase().contains(&q)
+                    || h.id.to_ascii_lowercase().contains(&q)
+            })
+            .collect()
+    }
+
+    /// Total rows in the switcher: row 0 is always the primary chat, then the filtered goal
+    /// sessions. (The primary row isn't filtered out — it's the "return to chat" affordance.)
+    pub fn switcher_row_count(&self) -> usize {
+        1 + self.filtered_goal_sessions().len()
+    }
+
+    pub fn clamp_switcher_selection(&mut self) {
+        let n = self.switcher_row_count();
+        if self.sidebar_selection >= n {
+            self.sidebar_selection = n.saturating_sub(1);
+        }
+    }
+
+    /// The kind of the session input is currently focused on — Primary unless joined to a live goal
+    /// session (a finished joined session has already handed input back to the chat).
+    pub fn current_kind(&self) -> SessionKind {
+        match &self.joined {
+            Some(j) if !j.finished => j.kind,
+            _ => SessionKind::Primary,
+        }
+    }
+
+    /// The id of the live goal session input should route to, or `None` for the primary chat.
+    pub fn input_target_session(&self) -> Option<String> {
+        match &self.joined {
+            Some(j) if !j.finished => Some(j.id.clone()),
+            _ => None,
+        }
+    }
+
+    /// Begin focusing a goal session: seed a [`JoinedSession`] (kind/description from the switcher
+    /// list when known; the stream fills in the rest) and return to the input. The caller pairs
+    /// this with an [`Effect::JoinGoalSession`] that opens the SSE stream.
+    pub fn join_session(&mut self, id: String) {
+        let header = self.goal_sessions.iter().find(|h| h.id == id);
+        let (kind, description, status) = match header {
+            Some(h) => (h.kind(), h.description().to_string(), h.status.clone()),
+            None => (SessionKind::Custom, String::new(), "running".to_string()),
+        };
+        self.joined = Some(JoinedSession {
+            id,
+            kind,
+            description,
+            status,
+            messages: Vec::new(),
+            stream_buf: String::new(),
+            awaiting: None,
+            finished: false,
+        });
+        self.focus = Focus::Input;
+        self.scroll_offset = 0;
+        self.mark_dirty();
+    }
+
+    /// Leave the joined session (`/back`), returning input focus to the primary chat.
+    pub fn leave_session(&mut self) {
+        self.joined = None;
+        self.focus = Focus::Input;
+        self.scroll_offset = 0;
+        self.mark_dirty();
+    }
+
+    /// Flush any buffered stream tokens into an assistant message on the joined transcript.
+    fn flush_joined_buf(j: &mut JoinedSession) {
+        if !j.stream_buf.is_empty() {
+            j.messages
+                .push(Message::Assistant(std::mem::take(&mut j.stream_buf)));
+        }
+    }
+
+    /// Apply one goal-session stream frame to the joined view. A no-op if not joined (stray events
+    /// after `/back`) or for a different session id.
+    fn apply_goal_event(&mut self, ev: GoalUiEvent) {
+        let Some(j) = self.joined.as_mut() else {
+            return;
+        };
+        match ev {
+            GoalUiEvent::Started { description } => {
+                if !description.is_empty() {
+                    j.description = description;
+                }
+            }
+            GoalUiEvent::Token(t) => j.stream_buf.push_str(&t),
+            GoalUiEvent::ToolStarted { name, args } => {
+                Self::flush_joined_buf(j);
+                j.messages.push(Message::ToolCall(ToolCallChip { name, args }));
+            }
+            GoalUiEvent::ToolFinished { name, ok, preview } => {
+                j.messages
+                    .push(Message::ToolResult(ToolResultChip { name, ok, preview }));
+            }
+            GoalUiEvent::Role { role, model } => {
+                Self::flush_joined_buf(j);
+                let line = match model {
+                    Some(m) => format!("▸ {role} · {m}"),
+                    None => format!("▸ {role}"),
+                };
+                j.messages.push(Message::System(line));
+            }
+            GoalUiEvent::Progress(m) => {
+                Self::flush_joined_buf(j);
+                j.messages.push(Message::System(format!("… {m}")));
+            }
+            GoalUiEvent::Validation { ok, summary } => {
+                Self::flush_joined_buf(j);
+                let mark = if ok { "✓" } else { "✗" };
+                j.messages
+                    .push(Message::System(format!("{mark} {summary}")));
+            }
+            GoalUiEvent::LoopGuard(m) => {
+                Self::flush_joined_buf(j);
+                j.messages.push(Message::System(format!("loop-guard: {m}")));
+            }
+            GoalUiEvent::Awaiting { prompt, options } => {
+                Self::flush_joined_buf(j);
+                j.status = "awaiting".into();
+                j.awaiting = Some(AwaitingPrompt {
+                    prompt: prompt.clone(),
+                    options,
+                });
+            }
+            GoalUiEvent::Human(text) => {
+                Self::flush_joined_buf(j);
+                j.awaiting = None;
+                if j.status == "awaiting" {
+                    j.status = "running".into();
+                }
+                j.messages.push(Message::User(text));
+            }
+            GoalUiEvent::Finished { status, summary } => {
+                Self::flush_joined_buf(j);
+                j.awaiting = None;
+                j.finished = true;
+                j.status = status.clone();
+                j.messages.push(Message::System(format!(
+                    "[session {status}] {summary}  —  /back to return to chat"
+                )));
+            }
+        }
+        self.scroll_offset = 0;
+        self.mark_dirty();
     }
 
     /// Mark the UI as needing a redraw (input, resize, meaningful state change).
@@ -415,6 +648,7 @@ impl App {
         match self.focus {
             Focus::Input => crate::handlers::input::handle(self, key),
             Focus::SessionBrowser => crate::handlers::sidebar::handle(self, key),
+            Focus::SessionSwitcher => crate::handlers::switcher::handle(self, key),
             Focus::ModelBrowser => crate::handlers::models::handle(self, key),
             Focus::ChatMessages => crate::handlers::chat::handle(self, key),
         }
@@ -464,6 +698,31 @@ impl App {
                     self.open_model_browser();
                     effects.push(Effect::FetchModels);
                 }
+                liberado_commands::CommandResult::OpenGoalSwitcher => {
+                    self.open_session_switcher();
+                    effects.push(Effect::RefreshGoalSessions);
+                }
+                liberado_commands::CommandResult::JoinGoalSession { id } => {
+                    // Resolve an id prefix against the known goal sessions (full id wins).
+                    let resolved = self
+                        .goal_sessions
+                        .iter()
+                        .find(|h| h.id == *id)
+                        .or_else(|| self.goal_sessions.iter().find(|h| h.id.starts_with(id)))
+                        .map(|h| h.id.clone())
+                        .unwrap_or_else(|| id.clone());
+                    self.join_session(resolved.clone());
+                    effects.push(Effect::JoinGoalSession(resolved));
+                }
+                liberado_commands::CommandResult::BackToPrimary => {
+                    if self.joined.is_some() {
+                        self.leave_session();
+                        effects.push(Effect::LeaveGoalSession);
+                    } else {
+                        self.messages
+                            .push(Message::System("Already in the primary chat.".into()));
+                    }
+                }
                 liberado_commands::CommandResult::ForkRequested { parent_id } => {
                     effects.push(Effect::ForkConversation(parent_id.clone()));
                 }
@@ -489,10 +748,12 @@ Keybindings:
   Ctrl+C      clear input, or quit when empty (press twice to exit)
   Ctrl+S      stop streaming (keep partial response)
   Tab         input ↔ chat history (or slash complete)
-  Esc         clear input / cancel stream / leave session browser
-  /session    full-screen searchable prior sessions
+  Esc         clear input / cancel stream / leave a browser
+  /sessions   switch sessions (primary chat + goal sessions)
+  /join <id>  focus a goal session · /back returns to the primary chat
+  /session    full-screen searchable prior conversations
   /model      full-screen searchable model browser
-  j / k       navigate chat or session/model browser
+  j / k       navigate chat or a browser
   PgUp/PgDn   scroll chat
   ← →         move cursor in input
   Home / End  jump to start/end of input"
@@ -611,6 +872,14 @@ pub enum Action {
     SseDone,
     /// SSE stream or HTTP call failed.
     SseFailed(String),
+    /// Goal sessions from `GET /api/goals` — the goal rows of the session switcher.
+    GoalSessionsUpdate(Vec<GoalSessionHeader>),
+    /// One decoded frame of a joined goal session's event stream.
+    GoalStreamEvent(GoalUiEvent),
+    /// The joined session's SSE stream ended or errored (connection-level, not a session finish).
+    GoalStreamClosed(Option<String>),
+    /// Result of `POST /api/goals/{id}/message` — so a 404/409 surfaces in the joined view.
+    GoalMessageOutcome(GoalMessageOutcome),
     /// Daemon connectivity transition (true = connected, false = lost).
     ConnectionStatus(bool),
     /// Periodic heartbeat from the poller (currently a no-op in `update()`).
@@ -636,6 +905,14 @@ pub enum Effect {
     CancelStream,
     ForkConversation(String),
     SetWindowTitle(String),
+    /// Fetch `GET /api/goals` to populate the session switcher.
+    RefreshGoalSessions,
+    /// Open the joined goal session's SSE stream (`GET /api/goals/{id}/stream`).
+    JoinGoalSession(String),
+    /// Deliver a human message into the joined session (`POST /api/goals/{id}/message`).
+    SendGoalMessage { id: String, text: String },
+    /// Abort the joined session's SSE stream (on `/back`).
+    LeaveGoalSession,
     Quit,
     None,
 }
@@ -775,6 +1052,54 @@ impl App {
                 self.streaming = false;
                 self.mark_dirty();
                 vec![Effect::RefreshConversations]
+            }
+            Action::GoalSessionsUpdate(sessions) => {
+                self.goal_sessions = sessions;
+                self.clamp_switcher_selection();
+                self.mark_dirty();
+                vec![Effect::None]
+            }
+            Action::GoalStreamEvent(ev) => {
+                self.apply_goal_event(ev);
+                vec![Effect::None]
+            }
+            Action::GoalStreamClosed(err) => {
+                if let Some(j) = self.joined.as_mut()
+                    && !j.finished
+                {
+                    // A connection-level end without a session-finish event: note it, but keep the
+                    // transcript. The session may still be running server-side; `/join` re-subscribes.
+                    let note = match err {
+                        Some(e) => format!("[stream closed: {e}] — /join to resubscribe"),
+                        None => "[stream closed] — /join to resubscribe".into(),
+                    };
+                    j.messages.push(Message::System(note));
+                    self.mark_dirty();
+                }
+                vec![Effect::None]
+            }
+            Action::GoalMessageOutcome(outcome) => {
+                use crate::api::GoalMessageOutcome as O;
+                match outcome {
+                    O::Accepted => {} // the echo arrives via the stream as a `human_input` event
+                    O::NotFound | O::Finished | O::Error(_) => {
+                        let msg = match outcome {
+                            O::NotFound => "[this session is gone — /back to return to chat]".into(),
+                            O::Finished => {
+                                "[this session has finished — /back to return to chat]".into()
+                            }
+                            O::Error(e) => format!("[could not deliver message: {e}]"),
+                            O::Accepted => unreachable!(),
+                        };
+                        if let Some(j) = self.joined.as_mut() {
+                            j.messages.push(Message::System(msg));
+                        } else {
+                            self.messages.push(Message::System(msg));
+                        }
+                        self.mark_dirty();
+                    }
+                }
+                vec![Effect::None]
             }
             Action::ConnectionStatus(connected) => {
                 let was = self.daemon_connected;

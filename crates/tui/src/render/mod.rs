@@ -13,6 +13,7 @@ pub mod models;
 pub mod sessions;
 pub mod slash_palette;
 pub mod status_bar;
+pub mod switcher;
 
 // Kept for reference / possible reuse; not drawn in the default layout.
 #[allow(dead_code)]
@@ -45,6 +46,16 @@ pub fn draw(frame: &mut Frame, app: &mut App, spinner_tick: u8) {
         return;
     }
 
+    if app.focus == Focus::SessionSwitcher {
+        let area = frame.area();
+        app.layout.session_browser = area;
+        app.layout.status_bar = ratatui::layout::Rect::default();
+        app.layout.chat = ratatui::layout::Rect::default();
+        app.layout.input = ratatui::layout::Rect::default();
+        switcher::draw(frame, area, app, &th);
+        return;
+    }
+
     if app.focus == Focus::ModelBrowser {
         let area = frame.area();
         app.layout.session_browser = area; // reuse full-screen rect for mouse
@@ -62,6 +73,21 @@ pub fn draw(frame: &mut Frame, app: &mut App, spinner_tick: u8) {
     chat::draw(frame, layout.chat, app, &th, spinner_tick);
     input::draw(frame, layout.input, app, &th);
     slash_palette::draw(frame, layout.input, app, &th);
+}
+
+/// Distinct color per [`SessionKind`] for the at-a-glance chip — theme-driven, so it tracks
+/// `/theme` changes. Shared by the status bar, the switcher, and the joined view.
+pub(crate) fn kind_color(
+    kind: chat_client_contract::SessionKind,
+    th: &liberado_theme::Theme,
+) -> ratatui::style::Color {
+    use chat_client_contract::SessionKind as K;
+    match kind {
+        K::Primary => c(&th.accent, "#00ffff"),
+        K::Coding => c(&th.tool_ok, "#00ff00"),
+        K::Life => c(&th.md_link, "#8080ff"),
+        K::Custom => c(&th.tool_name, "#ffff00"),
+    }
 }
 
 fn fill_background(frame: &mut Frame, th: &liberado_theme::Theme) {

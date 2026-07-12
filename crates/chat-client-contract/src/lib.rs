@@ -21,10 +21,14 @@
 //! The top-level `pub use wire::*` makes all wire types available at the crate root,
 //! matching the old flat layout for existing import paths.
 
+pub mod session_kind;
 pub mod wire;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
 
 // Re-export all wire types at the crate root for backward-compatible import paths.
+pub use session_kind::{
+    DomainWire, GoalHeaderResult, GoalHeaderSpec, GoalSessionHeader, SessionKind,
+};
 pub use wire::*;
