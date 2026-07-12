@@ -50,11 +50,14 @@ impl ToAction for SseEvent {
                 },
                 SessionEventKind::SessionFinished { .. } => Action::SseDone,
                 SessionEventKind::Failed { message } => Action::SseFailed(message),
-                // Goal-session-only kinds — not rendered in the chat view (yet).
+                // Goal-session-only kinds — not rendered in the chat view (yet; session-focus S3
+                // adds the session panel that renders these, incl. AwaitingInput prompts).
                 SessionEventKind::SessionStarted { .. }
                 | SessionEventKind::RoleStarted { .. }
                 | SessionEventKind::RoleFinished { .. }
                 | SessionEventKind::Progress { .. }
+                | SessionEventKind::AwaitingInput { .. }
+                | SessionEventKind::HumanInput { .. }
                 | SessionEventKind::ValidationFinished { .. }
                 | SessionEventKind::LoopGuard { .. } => Action::SseToken(String::new()),
             }),

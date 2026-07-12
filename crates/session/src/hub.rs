@@ -2,14 +2,19 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
 use crate::event::{SessionEvent, SessionEventKind};
 use crate::goal::{GoalResult, GoalSessionRecord, GoalSpec, SessionStatus, TerminalKind};
-use crate::runner::{DomainPackRunner, PackError};
+use crate::runner::{DomainPackRunner, HumanInput, InputChannel, PackError};
 use crate::store::GoalSessionStore;
+
+/// Bound on how many un-consumed human inputs a session buffers before back-pressure. Interactive
+/// sessions consume one per await point, so a small buffer is plenty.
+const INPUT_CHANNEL_CAPACITY: usize = 16;
 
 /// Snapshot returned to HTTP clients.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -23,6 +28,9 @@ pub struct GoalSessionHub {
     store: GoalSessionStore,
     packs: HashMap<String, Arc<dyn DomainPackRunner>>,
     cancels: tokio::sync::Mutex<HashMap<String, watch::Sender<bool>>>,
+    /// Live sessions' inbound-input senders, keyed by id. Present only while a session runs;
+    /// removed at teardown (like `cancels`), so `send_input` to a finished session fails cleanly.
+    inputs: tokio::sync::Mutex<HashMap<String, mpsc::Sender<HumanInput>>>,
 }
 
 impl GoalSessionHub {
@@ -31,6 +39,7 @@ impl GoalSessionHub {
             store,
             packs: HashMap::new(),
             cancels: tokio::sync::Mutex::new(HashMap::new()),
+            inputs: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -69,12 +78,18 @@ impl GoalSessionHub {
         let (cancel_tx, cancel_rx) = watch::channel(false);
         self.cancels.lock().await.insert(id.clone(), cancel_tx);
 
+        let (input_tx, input_rx) = mpsc::channel::<HumanInput>(INPUT_CHANNEL_CAPACITY);
+        self.inputs.lock().await.insert(id.clone(), input_tx);
+        let idle_budget = goal.max_idle_secs.map(Duration::from_secs);
+        let inputs = InputChannel::new(input_rx, idle_budget);
+
         let hub = Arc::clone(self);
         let session_id = id.clone();
         let pack = self.packs.get(&domain).expect("checked above").clone();
 
         tokio::spawn(async move {
-            hub.run_session(session_id, goal, pack, cancel_rx).await;
+            hub.run_session(session_id, goal, pack, inputs, cancel_rx)
+                .await;
         });
 
         Ok(id)
@@ -86,6 +101,29 @@ impl GoalSessionHub {
             .get(id)
             .ok_or_else(|| format!("session '{id}' not found or already finished"))?;
         let _ = tx.send(true);
+        Ok(())
+    }
+
+    /// Deliver a human message into a running interactive session. Errors if the session is
+    /// unknown or finished (its input sender was removed at teardown). The accepted input is
+    /// **echoed into the transcript** as a [`SessionEventKind::HumanInput`] event here — so the
+    /// history is complete regardless of what the pack does with it.
+    pub async fn send_input(&self, id: &str, text: impl Into<String>) -> Result<(), String> {
+        let text = text.into();
+        // Clone the sender out before awaiting the send, so the lock isn't held across `.await`.
+        let sender = {
+            let map = self.inputs.lock().await;
+            map.get(id).cloned().ok_or_else(|| {
+                format!("session '{id}' is not accepting input (unknown or already finished)")
+            })?
+        };
+        sender
+            .send(HumanInput::new(text.clone()))
+            .await
+            .map_err(|_| format!("session '{id}' input channel is closed"))?;
+        self.store
+            .push_event(SessionEvent::new(id, SessionEventKind::HumanInput { text }))
+            .await;
         Ok(())
     }
 
@@ -104,6 +142,7 @@ impl GoalSessionHub {
         session_id: String,
         goal: GoalSpec,
         pack: Arc<dyn DomainPackRunner>,
+        inputs: InputChannel,
         cancel: watch::Receiver<bool>,
     ) {
         self.store
@@ -130,7 +169,9 @@ impl GoalSessionHub {
         );
         let _ = tx.send(start).await;
 
-        let result = pack.run(&session_id, &goal, tx.clone(), cancel).await;
+        let result = pack
+            .run(&session_id, &goal, tx.clone(), inputs, cancel)
+            .await;
 
         let (status, goal_result) = match result {
             Ok(r) => {
@@ -178,5 +219,7 @@ impl GoalSessionHub {
 
         self.store.finish(&session_id, status, goal_result).await;
         self.cancels.lock().await.remove(&session_id);
+        // Drop the input sender so any late `send_input` fails cleanly instead of blocking.
+        self.inputs.lock().await.remove(&session_id);
     }
 }

@@ -12,10 +12,80 @@ use tokio::sync::mpsc::Sender;
 use crate::LIFE_OPS_DOMAIN;
 use crate::event::{SessionEvent, SessionEventKind};
 use crate::goal::{GoalResult, GoalSpec, TerminalKind};
-use crate::runner::{DomainPackRunner, PackError};
+use crate::runner::{DomainPackRunner, InputChannel, InputOutcome, PackError};
 
 /// Demo life-ops pack — vault/task flavored events, no coding dependencies.
 pub struct LifeOpsDemoRunner;
+
+impl LifeOpsDemoRunner {
+    /// Interactive demo (`payload.interactive = true`): ask one question, await the human's answer
+    /// through the [`InputChannel`], echo it, and succeed. Exercises the session-focus S1 kernel
+    /// primitive (input channel + `AwaitingInput` + idle budget) without any coding dependency.
+    async fn run_interactive(
+        &self,
+        session_id: &str,
+        events: Sender<SessionEvent>,
+        mut inputs: InputChannel,
+        mut cancel: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<GoalResult, PackError> {
+        let _ = events
+            .send(SessionEvent::new(
+                session_id,
+                SessionEventKind::AwaitingInput {
+                    prompt: "What should I title the note?".into(),
+                    options: Vec::new(),
+                },
+            ))
+            .await;
+
+        let outcome = tokio::select! {
+            outcome = inputs.recv() => outcome,
+            _ = cancel.changed() => InputOutcome::Closed,
+        };
+        if *cancel.borrow() {
+            return Err(PackError::Cancelled);
+        }
+
+        match outcome {
+            InputOutcome::Received(input) => {
+                let title = input.text.trim().to_string();
+                let path = format!("vault/tasks/{}.md", slugify(&title));
+                let _ = events
+                    .send(SessionEvent::new(
+                        session_id,
+                        SessionEventKind::ToolStarted {
+                            name: "vault_write_note".into(),
+                            args_preview: format!("{path}: {title}"),
+                        },
+                    ))
+                    .await;
+                let _ = events
+                    .send(SessionEvent::new(
+                        session_id,
+                        SessionEventKind::ToolFinished {
+                            name: "vault_write_note".into(),
+                            ok: true,
+                            result_preview: "written".into(),
+                        },
+                    ))
+                    .await;
+                Ok(GoalResult {
+                    terminal: TerminalKind::Succeeded,
+                    summary: format!("wrote note titled '{title}'"),
+                    artifacts: vec![path],
+                    diagnostics: serde_json::json!({ "domain": LIFE_OPS_DOMAIN, "interactive": true }),
+                })
+            }
+            InputOutcome::IdleExpired(d) => Ok(GoalResult {
+                terminal: TerminalKind::BudgetExhausted,
+                summary: format!("no answer after {}s idle", d.as_secs()),
+                artifacts: vec![],
+                diagnostics: serde_json::json!({ "domain": LIFE_OPS_DOMAIN, "idle_timeout": true }),
+            }),
+            InputOutcome::Closed => Err(PackError::Cancelled),
+        }
+    }
+}
 
 #[async_trait]
 impl DomainPackRunner for LifeOpsDemoRunner {
@@ -28,8 +98,20 @@ impl DomainPackRunner for LifeOpsDemoRunner {
         session_id: &str,
         goal: &GoalSpec,
         events: Sender<SessionEvent>,
+        inputs: InputChannel,
         mut cancel: tokio::sync::watch::Receiver<bool>,
     ) -> Result<GoalResult, PackError> {
+        if goal
+            .payload
+            .get("interactive")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return self
+                .run_interactive(session_id, events, inputs, cancel)
+                .await;
+        }
+
         let _ = events
             .send(SessionEvent::new(
                 session_id,
@@ -180,6 +262,23 @@ impl DomainPackRunner for LifeOpsDemoRunner {
     }
 }
 
+/// Lowercase, non-alphanumerics to `-`, collapsed — enough for a demo note path.
+fn slugify(s: &str) -> String {
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for ch in s.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    let slug = out.trim_matches('-').to_string();
+    if slug.is_empty() { "note".into() } else { slug }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +287,129 @@ mod tests {
     use crate::store::GoalSessionStore;
     use std::sync::Arc;
     use std::time::Duration;
+
+    /// Spin until the session reaches a terminal state (or panic after ~1s).
+    async fn await_terminal(hub: &Arc<GoalSessionHub>, id: &str) -> crate::SessionSnapshot {
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let snap = hub.snapshot(id).await.unwrap();
+            if snap.session.status.is_terminal() {
+                return snap;
+            }
+        }
+        panic!("session {id} did not finish");
+    }
+
+    #[tokio::test]
+    async fn interactive_session_asks_awaits_and_echoes_the_answer() {
+        let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+        hub.register_pack(Arc::new(LifeOpsDemoRunner));
+        let hub = Arc::new(hub);
+
+        let id = hub
+            .start(GoalSpec {
+                id: None,
+                description: "capture a note interactively".into(),
+                success_criteria: vec![],
+                domain: DomainHint::Life,
+                max_turns: 0,
+                max_idle_secs: None,
+                payload: serde_json::json!({ "interactive": true }),
+            })
+            .await
+            .unwrap();
+
+        // The pack should reach AwaitingInput and mark the record.
+        let mut asked = false;
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let snap = hub.snapshot(&id).await.unwrap();
+            if snap.session.awaiting_input
+                && snap
+                    .events
+                    .iter()
+                    .any(|e| matches!(e.kind, SessionEventKind::AwaitingInput { .. }))
+            {
+                asked = true;
+                break;
+            }
+        }
+        assert!(asked, "pack never reached AwaitingInput");
+
+        // Answer it.
+        hub.send_input(&id, "Weekly Review").await.unwrap();
+
+        let snap = await_terminal(&hub, &id).await;
+        assert_eq!(snap.session.status, crate::goal::SessionStatus::Succeeded);
+        assert!(!snap.session.awaiting_input, "should clear after answer");
+        // The human input is echoed into the transcript.
+        assert!(snap.events.iter().any(|e| matches!(
+            &e.kind, SessionEventKind::HumanInput { text } if text == "Weekly Review"
+        )));
+        // And the answer drove the outcome.
+        assert!(
+            snap.session
+                .result
+                .as_ref()
+                .unwrap()
+                .summary
+                .contains("Weekly Review")
+        );
+        assert!(snap.session.result.as_ref().unwrap().artifacts[0].contains("weekly-review"));
+    }
+
+    #[tokio::test]
+    async fn interactive_session_idle_budget_terminates_budget_exhausted() {
+        let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+        hub.register_pack(Arc::new(LifeOpsDemoRunner));
+        let hub = Arc::new(hub);
+
+        let id = hub
+            .start(GoalSpec {
+                id: None,
+                description: "abandoned interactive note".into(),
+                success_criteria: vec![],
+                domain: DomainHint::Life,
+                max_turns: 0,
+                max_idle_secs: Some(0), // expires immediately with no answer
+                payload: serde_json::json!({ "interactive": true }),
+            })
+            .await
+            .unwrap();
+
+        let snap = await_terminal(&hub, &id).await;
+        assert_eq!(
+            snap.session.status,
+            crate::goal::SessionStatus::BudgetExhausted
+        );
+        // Never answered → no input echo.
+        assert!(!snap.session.awaiting_input);
+    }
+
+    #[tokio::test]
+    async fn send_input_to_finished_session_errors() {
+        let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+        hub.register_pack(Arc::new(LifeOpsDemoRunner));
+        let hub = Arc::new(hub);
+
+        // Non-interactive session finishes on its own; its input sender is then removed.
+        let id = hub
+            .start(GoalSpec {
+                id: None,
+                description: "quick non-interactive goal".into(),
+                success_criteria: vec!["done".into()],
+                domain: DomainHint::Life,
+                max_turns: 0,
+                max_idle_secs: None,
+                payload: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        let _ = await_terminal(&hub, &id).await;
+
+        let err = hub.send_input(&id, "too late").await.unwrap_err();
+        assert!(err.contains("not accepting input"));
+    }
 
     #[tokio::test]
     async fn life_domain_session_succeeds_without_coding_pack() {
@@ -203,6 +425,7 @@ mod tests {
                 success_criteria: vec!["note written".into(), "task marked done".into()],
                 domain: DomainHint::Life,
                 max_turns: 4,
+                max_idle_secs: None,
                 payload: serde_json::json!({}),
             })
             .await
@@ -238,6 +461,7 @@ mod tests {
                 success_criteria: vec![],
                 domain: DomainHint::Coding,
                 max_turns: 1,
+                max_idle_secs: None,
                 payload: serde_json::json!({}),
             })
             .await

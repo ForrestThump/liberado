@@ -19,7 +19,7 @@ pub use event::{SessionEvent, SessionEventKind};
 pub use goal::{DomainHint, GoalResult, GoalSpec, SessionStatus, TerminalKind};
 pub use hub::{GoalSessionHub, SessionSnapshot};
 pub use life_demo::LifeOpsDemoRunner;
-pub use runner::{DomainPackRunner, PackError};
+pub use runner::{DomainPackRunner, HumanInput, InputChannel, InputOutcome, PackError};
 pub use store::GoalSessionStore;
 
 /// Stable domain id for the life-ops demo pack (second-domain pigeonhole proof).

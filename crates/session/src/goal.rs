@@ -40,6 +40,12 @@ pub struct GoalSpec {
     /// Soft turn budget for the pack (0 = pack default).
     #[serde(default)]
     pub max_turns: u32,
+    /// Kernel idle budget for **interactive** sessions: if the pack blocks on human input this
+    /// long with no answer, the session terminates `BudgetExhausted` (an abandoned session must
+    /// still die). `None` = wait indefinitely. Non-interactive packs ignore it. This is a kernel
+    /// budget, not a pack knob — enforced by [`InputChannel`](crate::InputChannel).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_idle_secs: Option<u64>,
     /// Opaque pack payload (workspace root, vault path, contract JSON, …).
     #[serde(default)]
     pub payload: serde_json::Value,
@@ -100,6 +106,11 @@ pub struct GoalSessionRecord {
     pub result: Option<GoalResult>,
     #[serde(default)]
     pub event_count: usize,
+    /// True while the pack is blocked awaiting human input (interactive sessions). Derived by the
+    /// store from `AwaitingInput` / `HumanInput` events, so list/snapshot views can badge sessions
+    /// that need a human without scanning the event log.
+    #[serde(default)]
+    pub awaiting_input: bool,
 }
 
 impl GoalSessionRecord {
@@ -117,6 +128,7 @@ impl GoalSessionRecord {
             finished_at: None,
             result: None,
             event_count: 0,
+            awaiting_input: false,
         }
     }
 }

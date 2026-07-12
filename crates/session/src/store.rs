@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use tokio::sync::{Mutex, broadcast};
 
-use crate::event::SessionEvent;
+use crate::event::{SessionEvent, SessionEventKind};
 use crate::goal::{GoalResult, GoalSessionRecord, SessionStatus};
 
 const EVENT_CHANNEL_CAPACITY: usize = 256;
@@ -75,6 +75,11 @@ impl GoalSessionStore {
     pub async fn push_event(&self, event: SessionEvent) {
         let mut map = self.inner.lock().await;
         if let Some(s) = map.get_mut(&event.session_id) {
+            match &event.kind {
+                SessionEventKind::AwaitingInput { .. } => s.record.awaiting_input = true,
+                SessionEventKind::HumanInput { .. } => s.record.awaiting_input = false,
+                _ => {}
+            }
             s.events.push(event.clone());
             s.record.event_count = s.events.len();
             let _ = s.bus.send(event);
@@ -97,6 +102,9 @@ impl GoalSessionStore {
             s.record.status = status;
             s.record.result = Some(result);
             s.record.finished_at = Some(chrono::Utc::now());
+            // A terminal session cannot be awaiting input, even if it died mid-prompt
+            // (e.g. idle-budget BudgetExhausted after an AwaitingInput with no answer).
+            s.record.awaiting_input = false;
         }
     }
 }

@@ -58,6 +58,15 @@ pub enum SessionEventKind {
     },
     /// Free-form progress note.
     Progress { message: String },
+    /// The pack is blocked waiting for human input (interactive sessions). Surfaces render the
+    /// prompt and route the input box here; `options` = multiple-choice answers (empty = free text).
+    AwaitingInput {
+        prompt: String,
+        #[serde(default)]
+        options: Vec<String>,
+    },
+    /// A human input was accepted into the session (echoed into history).
+    HumanInput { text: String },
     /// A verifier/validation pass finished.
     ValidationFinished { ok: bool, summary: String },
     /// A harness guard fired (doom-loop, no-progress, …).
@@ -100,6 +109,8 @@ impl SessionEvent {
             | "tool_started"
             | "tool_finished"
             | "progress"
+            | "awaiting_input"
+            | "human_input"
             | "validation_finished"
             | "loop_guard"
             | "session_finished"

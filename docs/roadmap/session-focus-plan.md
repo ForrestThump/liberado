@@ -70,7 +70,16 @@ HTTP/SSE contract — the UI stays single-homed forever.
 
 ## 4. Gap analysis
 
-### G1 — Kernel: inbound human input (the one genuinely new primitive)
+### G1 — Kernel: inbound human input (the one genuinely new primitive) — ✅ done (S1, 2026-07-12)
+
+Landed in `liberado-session`: `HumanInput`, `InputChannel` (bundles the receiver + kernel idle
+budget, `recv()` → `InputOutcome::{Received,IdleExpired,Closed}`), the `DomainPackRunner::run`
+signature gained `inputs: InputChannel` (coder pack ignores it; `LifeOpsDemoRunner` grew an
+interactive branch), `GoalSpec.max_idle_secs`, `GoalSessionRecord.awaiting_input` (store-derived,
+and cleared on terminal — a finished session is never awaiting), `GoalSessionHub::send_input`
+(echoes `HumanInput` into the transcript, fails cleanly on unknown/finished). Wire mirror +
+server SSE + client match arms updated in lockstep. **Deferred to S4**: the `origin` link field
+(it's linkage, not the input primitive). Original design notes retained below.
 
 `DomainPackRunner::run` today is fire-and-run-to-terminal: it gets an event `Sender` and a cancel
 watch, nothing inbound. Needed in `liberado-session`:
@@ -164,7 +173,7 @@ watch, nothing inbound. Needed in `liberado-session`:
 
 | # | Slice | Proves it with |
 |---|---|---|
-| S1 | Kernel input channel + `AwaitingInput`/`HumanInput` + idle budget (`liberado-session`; trait change ripples to both packs) | Unit tests: a `LifeOpsDemoRunner` variant that asks a question and echoes the answer |
+| ✅ S1 | Kernel input channel + `AwaitingInput`/`HumanInput` + idle budget (`liberado-session`; trait change ripples to both packs) — **done 2026-07-12** | Unit tests (green): interactive `LifeOpsDemoRunner` asks → awaits → echoes; idle-budget → `BudgetExhausted`; `send_input` to finished session errors |
 | S2 | `POST /api/goals/{id}/message` + wire variants + `api.md` | HTTP integration tests against a real router (the hooks-test pattern) |
 | S3 | TUI focus MVP: `/join <id>` + `/back` + session-kind renderers (no offer yet) | Live smoke: full Q&A with the life demo through the TUI |
 | S4 | The offer + return handoff: interactive flag on dispatch, `SessionOffered`, summary folded into parent conversation, journal cross-links | Live smoke: "build a hello CLI" → offer → join → watch → `/back` → summary in main chat |
@@ -177,7 +186,9 @@ transfer" feel. S5–S7 harden and generalize.
 
 ## 6. Open questions (decide during S1/S4, none block starting)
 
-1. **Queue depth for mid-turn input** — unbounded vs small cap with a "hold on" notice event.
+1. ~~**Queue depth for mid-turn input**~~ — settled in S1: bounded buffer (16), input delivered at
+   the next await point (the one-writer rule; never interleaved into an in-flight turn). Revisit
+   only if a real workload overflows it.
 2. **Multiple live interactive sessions** — allowed by the model (focus is per-UI); does the
    session browser need an "awaiting input" badge sort order? (Probably yes, cheap.)
 3. **WebUI parity** — after the TUI proof (S3/S4); the wire work carries over unchanged.

@@ -50,6 +50,19 @@ pub enum SessionEventKind {
     Progress {
         message: String,
     },
+    /// The pack is blocked waiting for human input (interactive sessions). Surfaces render the
+    /// prompt and route the input box to this session. `options` carries multiple-choice answers
+    /// (e.g. intake clarifiers); empty = free text.
+    AwaitingInput {
+        prompt: String,
+        #[serde(default)]
+        options: Vec<String>,
+    },
+    /// A human input was accepted into the session — echoed into history by the hub so the
+    /// transcript is complete and replayable regardless of pack behavior.
+    HumanInput {
+        text: String,
+    },
     ValidationFinished {
         ok: bool,
         summary: String,

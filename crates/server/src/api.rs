@@ -732,6 +732,8 @@ fn session_event_to_sse(ev: &liberado_session::SessionEvent) -> Event {
         K::ToolStarted { .. } => "tool_started",
         K::ToolFinished { .. } => "tool_finished",
         K::Progress { .. } => "progress",
+        K::AwaitingInput { .. } => "awaiting_input",
+        K::HumanInput { .. } => "human_input",
         K::ValidationFinished { .. } => "validation_finished",
         K::LoopGuard { .. } => "loop_guard",
         K::SessionFinished { .. } => "session_finished",

@@ -155,6 +155,8 @@ fn dispatch(event: &SseEvent, session: &mut Option<String>) -> bool {
         | SessionEventKind::RoleStarted { .. }
         | SessionEventKind::RoleFinished { .. }
         | SessionEventKind::Progress { .. }
+        | SessionEventKind::AwaitingInput { .. }
+        | SessionEventKind::HumanInput { .. }
         | SessionEventKind::ValidationFinished { .. }
         | SessionEventKind::LoopGuard { .. } => false,
     }
