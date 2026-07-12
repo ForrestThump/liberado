@@ -408,7 +408,15 @@ mod tests {
         let _ = await_terminal(&hub, &id).await;
 
         let err = hub.send_input(&id, "too late").await.unwrap_err();
-        assert!(err.contains("not accepting input"));
+        assert_eq!(err, crate::SendInputError::Terminal);
+    }
+
+    #[tokio::test]
+    async fn send_input_to_unknown_session_is_distinct_from_terminal() {
+        let hub = Arc::new(GoalSessionHub::new(GoalSessionStore::new()));
+        // Never-existed id: Unknown, not Terminal — so the HTTP layer answers 404, not 409.
+        let err = hub.send_input("nope", "hello").await.unwrap_err();
+        assert_eq!(err, crate::SendInputError::Unknown);
     }
 
     #[tokio::test]

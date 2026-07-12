@@ -100,14 +100,19 @@ watch, nothing inbound. Needed in `liberado-session`:
 - `GoalSessionRecord` gains `awaiting_input: bool` (derived, for list/snapshot views) and an
   `origin: Option<SessionOrigin { conversation_id, correlation_id }>` link field (D2).
 
-### G2 — Server + wire: the input endpoint
+### G2 — Server + wire: the input endpoint — ✅ done (S2, 2026-07-12)
 
-- `POST /api/goals/{id}/message` `{"text": "..."}` → `hub.send_input`. Errors: 404 unknown, 409
-  terminal session. (Cancel already exists.)
-- Wire mirror (`chat-client-contract`): additive `AwaitingInput`, `HumanInput`, and
-  `SessionOffered` (G3) variants. Old clients treat unknown kinds as no-ops by design — additive
-  is safe.
-- `api.md`: new endpoint row + event rows.
+- ✅ `POST /api/goals/{id}/message` `{"text": "..."}` → `hub.send_input`. `send_input` now returns
+  a typed `SendInputError` (`Unknown` / `Terminal` / `Closed`) so the handler maps cleanly to
+  **404 unknown**, **409 terminal** (`Closed` — a teardown race — also 409), **202 accepted**.
+  (Cancel already exists.)
+- ✅ Wire mirror (`chat-client-contract`): `AwaitingInput` / `HumanInput` landed additively in S1.
+  `SessionOffered` (G3) is still pending. Old clients treat unknown kinds as no-ops by design —
+  additive is safe.
+- ✅ `api.md`: endpoint row + interactive-session event note added.
+- HTTP integration tests (hooks-test pattern, against a real `axum::Router` + life pack): message
+  delivered → 202 + `human_input` echoed + session drives to `Succeeded`; unknown → 404; finished
+  → 409.
 
 ### G3 — The offer: how a chat turn hands the human a session
 
@@ -174,7 +179,7 @@ watch, nothing inbound. Needed in `liberado-session`:
 | # | Slice | Proves it with |
 |---|---|---|
 | ✅ S1 | Kernel input channel + `AwaitingInput`/`HumanInput` + idle budget (`liberado-session`; trait change ripples to both packs) — **done 2026-07-12** | Unit tests (green): interactive `LifeOpsDemoRunner` asks → awaits → echoes; idle-budget → `BudgetExhausted`; `send_input` to finished session errors |
-| S2 | `POST /api/goals/{id}/message` + wire variants + `api.md` | HTTP integration tests against a real router (the hooks-test pattern) |
+| ✅ S2 | `POST /api/goals/{id}/message` + `api.md` (wire variants landed in S1) — **done 2026-07-12** | HTTP integration tests (green) against a real router (the hooks-test pattern): 202 + echo + drives to success; 404 unknown; 409 finished |
 | S3 | TUI focus MVP: `/join <id>` + `/back` + session-kind renderers (no offer yet) | Live smoke: full Q&A with the life demo through the TUI |
 | S4 | The offer + return handoff: interactive flag on dispatch, `SessionOffered`, summary folded into parent conversation, journal cross-links | Live smoke: "build a hello CLI" → offer → join → watch → `/back` → summary in main chat |
 | S5 | Durable session transcripts (JSONL) + rehydrate on boot | Restart daemon, rejoin a finished session from the browser |

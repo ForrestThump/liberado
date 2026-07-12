@@ -673,6 +673,34 @@ pub async fn goals_cancel(
     }
 }
 
+/// Body for [`goals_message`]: the human's reply to an interactive session's `AwaitingInput`.
+#[derive(Deserialize)]
+pub struct GoalMessageRequest {
+    pub text: String,
+}
+
+/// `POST /api/goals/{id}/message` — deliver a human message into a running interactive goal
+/// session (the reply to an `awaiting_input` prompt). A thin wrapper over
+/// [`liberado_session::GoalSessionHub::send_input`], which echoes the message into the transcript
+/// as a `human_input` event. `202 Accepted` on delivery; `404` when the session is unknown; `409`
+/// when it has already finished (a terminal session accepts no input).
+pub async fn goals_message(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<GoalMessageRequest>,
+) -> impl IntoResponse {
+    use liberado_session::SendInputError;
+    match state.goals.send_input(&id, req.text).await {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(e @ SendInputError::Unknown) => {
+            (StatusCode::NOT_FOUND, Json(ApiError { error: e.to_string() })).into_response()
+        }
+        Err(e @ (SendInputError::Terminal | SendInputError::Closed)) => {
+            (StatusCode::CONFLICT, Json(ApiError { error: e.to_string() })).into_response()
+        }
+    }
+}
+
 /// `GET /api/goals/{id}/stream` — SSE: catch-up history then live events.
 /// Events use `event:` names matching [`liberado_session::SessionEventKind`] type tags
 /// (`session_started`, `tool_started`, `session_finished`, …); `data` is full JSON.
@@ -741,4 +769,180 @@ fn session_event_to_sse(ev: &liberado_session::SessionEvent) -> Event {
     };
     let data = serde_json::to_string(ev).unwrap_or_else(|_| "{}".into());
     Event::default().event(name).data(data)
+}
+
+#[cfg(test)]
+mod goal_message_tests {
+    //! HTTP-level integration tests for `POST /api/goals/{id}/message`, against a real `axum::Router`
+    //! wired to a `GoalSessionHub` with the life-ops demo pack (the same pattern as `hooks.rs`).
+
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::Request;
+    use liberado_session::{
+        DomainHint, GoalSessionHub, GoalSessionStore, GoalSpec, LifeOpsDemoRunner, SessionSnapshot,
+    };
+    use tower::ServiceExt;
+
+    /// Build a router exposing just the goal-session routes under test, plus a handle to the hub so
+    /// a test can poll session state directly (start a session, wait for `awaiting_input`, …).
+    fn goals_app() -> (Router, Arc<GoalSessionHub>) {
+        let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+        hub.register_pack(Arc::new(LifeOpsDemoRunner));
+        let goals = Arc::new(hub);
+
+        let (hook_tx, _hook_rx) = tokio::sync::mpsc::unbounded_channel();
+        let state = Arc::new(AppState {
+            start_time: Instant::now(),
+            reactions: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            dispatcher_attached: false,
+            orchestrator_attached: false,
+            vault_path: "/tmp/vault".to_string(),
+            goals: goals.clone(),
+            chat: None,
+            chat_tools: 0,
+            chat_tool_names: Vec::new(),
+            catalog: Arc::new(liberado_common::CapabilityCatalog::new()),
+            conversations_root: std::path::PathBuf::from("/tmp/vault/conversations"),
+            main_agent_capabilities: liberado_common::CapabilitySet::empty(),
+            dispatcher_capabilities: liberado_common::CapabilitySet::empty(),
+            model_name: None,
+            provider: None,
+            hooks: std::collections::HashMap::new(),
+            hook_tx,
+            hook_idempotency: crate::hooks::IdempotencyCache::default(),
+        });
+
+        let app = Router::new()
+            .route(
+                "/api/goals/{id}/message",
+                axum::routing::post(goals_message),
+            )
+            .with_state(state);
+        (app, goals)
+    }
+
+    fn post_json(uri: &str, body: &str) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    async fn start_interactive(goals: &Arc<GoalSessionHub>) -> String {
+        goals
+            .start(GoalSpec {
+                id: None,
+                description: "capture a note interactively".into(),
+                success_criteria: vec![],
+                domain: DomainHint::Life,
+                max_turns: 0,
+                max_idle_secs: None,
+                payload: serde_json::json!({ "interactive": true }),
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn wait_awaiting(goals: &Arc<GoalSessionHub>, id: &str) {
+        for _ in 0..200 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            if let Some(snap) = goals.snapshot(id).await
+                && snap.session.awaiting_input
+            {
+                return;
+            }
+        }
+        panic!("session {id} never reached awaiting_input");
+    }
+
+    async fn wait_terminal(goals: &Arc<GoalSessionHub>, id: &str) -> SessionSnapshot {
+        for _ in 0..200 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            let snap = goals.snapshot(id).await.unwrap();
+            if snap.session.status.is_terminal() {
+                return snap;
+            }
+        }
+        panic!("session {id} did not finish");
+    }
+
+    #[tokio::test]
+    async fn message_delivers_the_answer_echoes_it_and_returns_202() {
+        let (app, goals) = goals_app();
+        let id = start_interactive(&goals).await;
+        wait_awaiting(&goals, &id).await;
+
+        let response = app
+            .oneshot(post_json(
+                &format!("/api/goals/{id}/message"),
+                r#"{"text": "Weekly Review"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let snap = wait_terminal(&goals, &id).await;
+        assert_eq!(snap.session.status, liberado_session::SessionStatus::Succeeded);
+        // The endpoint's `send_input` echoed the message into the transcript as `human_input`.
+        assert!(snap.events.iter().any(|e| matches!(
+            &e.kind,
+            liberado_session::SessionEventKind::HumanInput { text } if text == "Weekly Review"
+        )));
+        // And the answer drove the session outcome.
+        assert!(
+            snap.session
+                .result
+                .as_ref()
+                .unwrap()
+                .summary
+                .contains("Weekly Review")
+        );
+    }
+
+    #[tokio::test]
+    async fn message_to_unknown_session_is_404() {
+        let (app, _goals) = goals_app();
+        let response = app
+            .oneshot(post_json(
+                "/api/goals/does-not-exist/message",
+                r#"{"text": "hello"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn message_to_finished_session_is_409() {
+        let (app, goals) = goals_app();
+        // A non-interactive life goal finishes on its own; its input sender is then removed.
+        let id = goals
+            .start(GoalSpec {
+                id: None,
+                description: "quick non-interactive goal".into(),
+                success_criteria: vec!["done".into()],
+                domain: DomainHint::Life,
+                max_turns: 0,
+                max_idle_secs: None,
+                payload: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        let _ = wait_terminal(&goals, &id).await;
+
+        let response = app
+            .oneshot(post_json(
+                &format!("/api/goals/{id}/message"),
+                r#"{"text": "too late"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
 }

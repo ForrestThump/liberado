@@ -23,6 +23,34 @@ pub struct SessionSnapshot {
     pub events: Vec<SessionEvent>,
 }
 
+/// Why a [`GoalSessionHub::send_input`] delivery could not happen. Typed (not a `String`) so the
+/// HTTP layer can map it to a status code — 404 for [`Unknown`](Self::Unknown), 409 for
+/// [`Terminal`](Self::Terminal) — rather than string-matching a message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SendInputError {
+    /// No goal session with this id exists (or ever did).
+    Unknown,
+    /// The session exists but has already reached a terminal state, so it accepts no more input.
+    Terminal,
+    /// The session's input channel closed underneath us — a rare teardown race between the lookup
+    /// and the send.
+    Closed,
+}
+
+impl std::fmt::Display for SendInputError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unknown => write!(f, "no such goal session"),
+            Self::Terminal => {
+                write!(f, "goal session has already finished — not accepting input")
+            }
+            Self::Closed => write!(f, "goal session input channel is closed"),
+        }
+    }
+}
+
+impl std::error::Error for SendInputError {}
+
 /// In-process goal session orchestrator (not the coding loop itself).
 pub struct GoalSessionHub {
     store: GoalSessionStore,
@@ -105,22 +133,37 @@ impl GoalSessionHub {
     }
 
     /// Deliver a human message into a running interactive session. Errors if the session is
-    /// unknown or finished (its input sender was removed at teardown). The accepted input is
-    /// **echoed into the transcript** as a [`SessionEventKind::HumanInput`] event here — so the
-    /// history is complete regardless of what the pack does with it.
-    pub async fn send_input(&self, id: &str, text: impl Into<String>) -> Result<(), String> {
+    /// unknown or finished (its input sender was removed at teardown) — distinguished as
+    /// [`SendInputError::Unknown`] vs [`SendInputError::Terminal`] so the HTTP layer can answer 404
+    /// vs 409. The accepted input is **echoed into the transcript** as a
+    /// [`SessionEventKind::HumanInput`] event here — so the history is complete regardless of what
+    /// the pack does with it.
+    pub async fn send_input(
+        &self,
+        id: &str,
+        text: impl Into<String>,
+    ) -> Result<(), SendInputError> {
         let text = text.into();
         // Clone the sender out before awaiting the send, so the lock isn't held across `.await`.
         let sender = {
             let map = self.inputs.lock().await;
-            map.get(id).cloned().ok_or_else(|| {
-                format!("session '{id}' is not accepting input (unknown or already finished)")
-            })?
+            map.get(id).cloned()
+        };
+        let sender = match sender {
+            Some(s) => s,
+            // No live input sender. Disambiguate a finished session (its record still lives in the
+            // store) from one that never existed, so the caller can answer 409 vs 404.
+            None => {
+                return Err(match self.store.get(id).await {
+                    Some(_) => SendInputError::Terminal,
+                    None => SendInputError::Unknown,
+                });
+            }
         };
         sender
             .send(HumanInput::new(text.clone()))
             .await
-            .map_err(|_| format!("session '{id}' input channel is closed"))?;
+            .map_err(|_| SendInputError::Closed)?;
         self.store
             .push_event(SessionEvent::new(id, SessionEventKind::HumanInput { text }))
             .await;

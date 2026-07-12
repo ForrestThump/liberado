@@ -214,6 +214,10 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
             "/api/goals/{id}/cancel",
             axum::routing::post(api::goals_cancel),
         )
+        .route(
+            "/api/goals/{id}/message",
+            axum::routing::post(api::goals_message),
+        )
         .layer(CorsLayer::permissive())
         .with_state(state)
         .fallback_service(ServeDir::new(DIST_DIR));

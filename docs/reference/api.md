@@ -28,23 +28,32 @@ the next message (plus the session id) and renders the stream back.
 ## Goal sessions (agentic loops — surfaces as clients)
 
 Domain-neutral goal sessions (`liberado-session`) let TUI/WebUI **start / watch / cancel** goals
-without owning the loop. Packs registered at boot: **`life`** (always, second-domain demo) and
-**`coding`** (when a provider is configured).
+without owning the loop, and — for *interactive* sessions — **answer** a session that has paused for
+human input. Packs registered at boot: **`life`** (always, second-domain demo) and **`coding`**
+(when a provider is configured).
 
 | Method | Path | Body / notes |
 |---|---|---|
 | GET | `/api/goals/domains` | `{ "domains": ["life","coding"] }` |
 | GET | `/api/goals` | List sessions (newest first) |
-| POST | `/api/goals` | JSON `GoalSpec`: `description`, `domain` (`life`\|`coding`), `success_criteria`, optional `payload` |
-| GET | `/api/goals/{id}` | Snapshot: record + event history |
-| GET | `/api/goals/{id}/stream` | SSE: catch-up then live `session_started`, `tool_*`, `session_finished`, … |
+| POST | `/api/goals` | JSON `GoalSpec`: `description`, `domain` (`life`\|`coding`), `success_criteria`, optional `max_idle_secs`, optional `payload` |
+| GET | `/api/goals/{id}` | Snapshot: record (incl. `awaiting_input`) + event history |
+| GET | `/api/goals/{id}/stream` | SSE: catch-up then live `session_started`, `tool_*`, `awaiting_input`, `session_finished`, … |
 | POST | `/api/goals/{id}/cancel` | Cooperative cancel |
+| POST | `/api/goals/{id}/message` | JSON `{"text":"…"}` — deliver a human reply to an `awaiting_input` prompt. `202` accepted; `404` unknown session; `409` already-finished session |
 
 SSE `data` is the full `SessionEvent` JSON (envelope `session_id`/`at` + kind fields). Event names
 match kind tags (`session_started`, `tool_started`, `failed`, …) — the **same converged vocabulary
 the chat stream uses** (below), so one client decoder
 (`chat_client_contract::SessionEvent::from_sse_data`) serves both streams. Clients must not
 reimplement tools/sandbox — only render.
+
+**Interactive sessions.** A pack may emit `awaiting_input` (`{"prompt","options"}`) to pause for a
+human answer; the record's `awaiting_input` flag flips true so a listing can badge it. The client
+answers with `POST /api/goals/{id}/message`, which delivers the text into the session **and** echoes
+it back into the transcript as a `human_input` (`{"text"}`) event, so the history is complete for any
+later subscriber. `GoalSpec.max_idle_secs`, when set, bounds how long a session waits at such a
+prompt before terminating `budget_exhausted`.
 
 ## The chat stream contract (the spine)
 
