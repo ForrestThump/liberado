@@ -78,12 +78,13 @@ impl CronEventSource {
             if !seen.insert(s.name.clone()) {
                 return Err(CronError::DuplicateName(s.name));
             }
-            let expr =
-                cron::Schedule::from_str(&s.cron_expr).map_err(|source| CronError::InvalidExpression {
+            let expr = cron::Schedule::from_str(&s.cron_expr).map_err(|source| {
+                CronError::InvalidExpression {
                     name: s.name.clone(),
                     expr: s.cron_expr.clone(),
                     source,
-                })?;
+                }
+            })?;
             parsed.push(ParsedSchedule {
                 name: s.name,
                 goal: s.goal,

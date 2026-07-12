@@ -41,9 +41,7 @@ pub fn handle(ctx: &mut dyn CommandContext) -> Vec<CommandResult> {
         );
         ctx.push_system_message(info);
     } else {
-        ctx.push_system_message(
-            "Not connected to daemon — waiting for status poll...".into(),
-        );
+        ctx.push_system_message("Not connected to daemon — waiting for status poll...".into());
     }
     vec![CommandResult::StatusShown]
 }

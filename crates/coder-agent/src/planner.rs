@@ -8,9 +8,9 @@ use liberado_coder_core::{CoderError, CoderEvent, CoderRunRequest};
 use liberado_provider::{CompletionRequest, Message};
 use serde_json::json;
 
+use crate::CoderProviderFactory;
 use crate::roles::{planner_enabled, role_instructions, truncate_chars};
 use crate::trace::{self, EventLog};
-use crate::CoderProviderFactory;
 
 const DEFAULT_PLANNER_SYSTEM: &str = "\
 You are Liberado's coding planner. Given a task, produce a concise implementation plan. \
@@ -28,7 +28,8 @@ pub struct PlanOutput {
 impl PlanOutput {
     /// Render plan as context text for the worker / repair goal.
     pub fn as_context_block(&self) -> String {
-        let mut out = String::from("## Planner plan (do not invent new gates; follow frozen verifiers)\n");
+        let mut out =
+            String::from("## Planner plan (do not invent new gates; follow frozen verifiers)\n");
         if !self.summary.trim().is_empty() {
             out.push_str("Summary: ");
             out.push_str(self.summary.trim());
@@ -100,7 +101,9 @@ pub async fn run_planner(
         }
     }
     if !request.config.verifiers.is_empty() {
-        user.push_str("\nFrozen verifier check ids (harness owns these; plan how to satisfy them):\n");
+        user.push_str(
+            "\nFrozen verifier check ids (harness owns these; plan how to satisfy them):\n",
+        );
         for v in &request.config.verifiers {
             user.push_str("- ");
             user.push_str(v.id());
@@ -112,10 +115,8 @@ pub async fn run_planner(
     user.push_str("\nProduce the Plan JSON now.");
 
     let provider = providers.provider_for("planner", role)?;
-    let mut completion = CompletionRequest::new(vec![
-        Message::system(instructions),
-        Message::user(user),
-    ]);
+    let mut completion =
+        CompletionRequest::new(vec![Message::system(instructions), Message::user(user)]);
     if let Some(temperature) = role.temperature {
         completion = completion.with_temperature(temperature);
     } else {
@@ -175,7 +176,9 @@ pub async fn run_planner(
 fn parse_plan(raw: &str) -> Result<PlanOutput, String> {
     let trimmed = raw.trim();
     let json_str = if let Some(start) = trimmed.find('{') {
-        let end = trimmed.rfind('}').ok_or("no closing brace in planner JSON")?;
+        let end = trimmed
+            .rfind('}')
+            .ok_or("no closing brace in planner JSON")?;
         &trimmed[start..=end]
     } else {
         trimmed

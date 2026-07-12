@@ -35,24 +35,27 @@ pub mod tool_loop_search;
 pub mod tool_scenarios;
 
 pub use candidate::{Candidate, CandidateOrigin};
+pub use coder_curriculum_mock::{
+    mock_script_for, mockable_scenarios, run_mock_curriculum, score_mock_scenario,
+};
 pub use coder_scenarios::{
     CoderExpect, CoderScenario, CoderTier, DEFAULT_CODER_SYSTEM_PROMPT, coder_scenarios,
     coder_scenarios_for, greenfield_scenario_names,
-};
-pub use coder_curriculum_mock::{
-    mock_script_for, mockable_scenarios, run_mock_curriculum, score_mock_scenario,
 };
 pub use coder_scoring::{CoderFitness, CoderScoredScenario, CoderTrial, score_coder_candidate};
 pub use coder_search::{CoderGenerationRecord, CoderTunerResult, run_coder_tuner};
 pub use config::{ConfigError, Layer, TunerConfig};
 pub use draft_proposal::{
-    CoderDraftProposal, DEFAULT_CODER_PROMPT_PATH, PrFactoryTaskPayload, build_coder_draft_proposal,
-    build_pr_factory_task, format_proposal_markdown, write_coder_draft_proposal,
+    CoderDraftProposal, DEFAULT_CODER_PROMPT_PATH, PrFactoryTaskPayload,
+    build_coder_draft_proposal, build_pr_factory_task, format_proposal_markdown,
+    write_coder_draft_proposal,
 };
 pub use generation::GenerationError;
 pub use scoring::{CandidateFitness, ScenarioTrial, ScoredScenario};
 pub use search::{Budget, GenerationRecord, TunerResult, run_tuner};
-pub use tool_loop_scoring::{ToolLoopFitness, ToolLoopScoredScenario, ToolLoopTrial, score_executor_candidate};
+pub use tool_loop_scoring::{
+    ToolLoopFitness, ToolLoopScoredScenario, ToolLoopTrial, score_executor_candidate,
+};
 pub use tool_loop_search::{
     ExecutorGenerationRecord, ExecutorTunerResult, run_executor_tuner, run_subagent_tuner,
 };

@@ -99,7 +99,9 @@ impl MemoryServer {
         to_json(serde_json::json!({ "id": id }))
     }
 
-    #[tool(description = "Delete a specific memory by its ID (general or procedural). Use only when a memory is wrong or outdated.")]
+    #[tool(
+        description = "Delete a specific memory by its ID (general or procedural). Use only when a memory is wrong or outdated."
+    )]
     async fn delete_memory(&self, memory_id: String) -> McpResult<String> {
         let provenance = Self::provenance();
         let deleted = if self

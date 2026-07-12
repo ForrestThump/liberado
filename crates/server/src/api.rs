@@ -373,10 +373,10 @@ pub async fn models(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match provider.list_models().await {
         Ok(mut models) => {
             // Ensure the active model appears even if the catalog omitted it.
-            if let Some(cur) = current.as_ref() {
-                if !models.iter().any(|m| m == cur) {
-                    models.insert(0, cur.clone());
-                }
+            if let Some(cur) = current.as_ref()
+                && !models.iter().any(|m| m == cur)
+            {
+                models.insert(0, cur.clone());
             }
             models.sort();
             models.dedup();
@@ -474,7 +474,7 @@ pub async fn catalog(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             // Convert the Consequence enum to its snake_case string representation.
             // We avoid depending on liberado-common in the contract crate, so we serialize
             // through serde_json here on the server side.
-            let consequence = serde_json::to_value(&d.consequence)
+            let consequence = serde_json::to_value(d.consequence)
                 .ok()
                 .and_then(|v| v.as_str().map(String::from))
                 .unwrap_or_default();
@@ -628,11 +628,7 @@ pub async fn goals_start(
             Json(serde_json::json!({ "session_id": id, "status": "running" })),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiError { error: e }),
-        )
-            .into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError { error: e })).into_response(),
     }
 }
 
@@ -660,11 +656,7 @@ pub async fn goals_cancel(
 ) -> impl IntoResponse {
     match state.goals.cancel(&id).await {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
-        Err(e) => (
-            StatusCode::NOT_FOUND,
-            Json(ApiError { error: e }),
-        )
-            .into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, Json(ApiError { error: e })).into_response(),
     }
 }
 

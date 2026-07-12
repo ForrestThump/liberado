@@ -53,7 +53,9 @@ pub use dispatch::{
 };
 pub use error::{Error, Result};
 pub use event::{DEFAULT_POOL, Event, EventPayload, EventSource, event_source};
-pub use frontmatter::{FRONTMATTER_FENCE, body_after_frontmatter, extract_frontmatter, render_note};
+pub use frontmatter::{
+    FRONTMATTER_FENCE, body_after_frontmatter, extract_frontmatter, render_note,
+};
 pub use guidance::{GuidanceHit, ToolGuidanceSource};
 pub use model::{ModelChoice, ModelProfile, ModelRole, ModelTier, RequiredCaps};
 pub use proposal::{

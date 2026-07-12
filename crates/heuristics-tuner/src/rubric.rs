@@ -26,7 +26,10 @@ pub fn format_rubric(
 
     match &winner.origin {
         CandidateOrigin::ColdStart => {
-            let _ = writeln!(out, "Winner origin: cold start (independent of the current best)");
+            let _ = writeln!(
+                out,
+                "Winner origin: cold start (independent of the current best)"
+            );
         }
         CandidateOrigin::MutatedFrom {
             parent_index,
@@ -71,8 +74,14 @@ pub fn format_rubric(
         .map(|s| s.name)
         .collect();
 
-    let now_passing: Vec<&str> = baseline_failing.difference(&winner_failing).copied().collect();
-    let now_failing: Vec<&str> = winner_failing.difference(&baseline_failing).copied().collect();
+    let now_passing: Vec<&str> = baseline_failing
+        .difference(&winner_failing)
+        .copied()
+        .collect();
+    let now_failing: Vec<&str> = winner_failing
+        .difference(&baseline_failing)
+        .copied()
+        .collect();
 
     let _ = writeln!(out, "\n-- Scenario changes --");
     if now_passing.is_empty() {
@@ -105,7 +114,10 @@ pub fn format_rubric(
         .collect();
     let _ = writeln!(out, "\n-- Per-model consistency (mixed results only) --");
     if mixed.is_empty() {
-        let _ = writeln!(out, "none — every scenario agreed across all models/samples");
+        let _ = writeln!(
+            out,
+            "none — every scenario agreed across all models/samples"
+        );
     } else {
         for s in &mixed {
             let _ = writeln!(out, "{}: {}", s.name, s.trial_breakdown());
@@ -121,7 +133,11 @@ pub fn format_rubric(
         );
     }
 
-    let _ = writeln!(out, "\n-- Candidate prompt --\n--- BEGIN ---\n{}\n--- END ---", winner.prompt);
+    let _ = writeln!(
+        out,
+        "\n-- Candidate prompt --\n--- BEGIN ---\n{}\n--- END ---",
+        winner.prompt
+    );
     let _ = writeln!(
         out,
         "\n-- Baseline prompt (DEFAULT_SYSTEM_PROMPT) --\n--- BEGIN ---\n{DEFAULT_SYSTEM_PROMPT}\n--- END ---"
@@ -153,7 +169,10 @@ pub fn format_coder_rubric(
 
     match &winner.origin {
         CandidateOrigin::ColdStart => {
-            let _ = writeln!(out, "Winner origin: cold start (independent of the current best)");
+            let _ = writeln!(
+                out,
+                "Winner origin: cold start (independent of the current best)"
+            );
         }
         CandidateOrigin::MutatedFrom {
             parent_index,
@@ -203,11 +222,7 @@ pub fn format_coder_rubric(
     // Regressions / fixes vs baseline by name.
     let _ = writeln!(out, "\n-- Scenario changes vs baseline --");
     for w in &winner_fitness.scenarios {
-        if let Some(b) = baseline_fitness
-            .scenarios
-            .iter()
-            .find(|b| b.name == w.name)
-        {
+        if let Some(b) = baseline_fitness.scenarios.iter().find(|b| b.name == w.name) {
             let wp = w.pass_rate();
             let bp = b.pass_rate();
             if (wp - bp).abs() < 0.01 {
@@ -219,7 +234,11 @@ pub fn format_coder_rubric(
     }
 
     let _ = writeln!(out, "\n-- Baseline prompt --\n```\n{baseline_prompt}\n```");
-    let _ = writeln!(out, "\n-- Proposed coder system prompt --\n```\n{}\n```", winner.prompt);
+    let _ = writeln!(
+        out,
+        "\n-- Proposed coder system prompt --\n```\n{}\n```",
+        winner.prompt
+    );
 
     match justification {
         Some(j) if !j.trim().is_empty() => {
@@ -246,7 +265,10 @@ pub fn format_executor_rubric(
 
     match &winner.origin {
         CandidateOrigin::ColdStart => {
-            let _ = writeln!(out, "Winner origin: cold start (independent of the current best)");
+            let _ = writeln!(
+                out,
+                "Winner origin: cold start (independent of the current best)"
+            );
         }
         CandidateOrigin::MutatedFrom {
             parent_index,
@@ -289,8 +311,14 @@ pub fn format_executor_rubric(
         .map(|s| s.name)
         .collect();
 
-    let now_passing: Vec<&str> = baseline_failing.difference(&winner_failing).copied().collect();
-    let now_failing: Vec<&str> = winner_failing.difference(&baseline_failing).copied().collect();
+    let now_passing: Vec<&str> = baseline_failing
+        .difference(&winner_failing)
+        .copied()
+        .collect();
+    let now_failing: Vec<&str> = winner_failing
+        .difference(&baseline_failing)
+        .copied()
+        .collect();
 
     let _ = writeln!(out, "\n-- Scenario changes --");
     if now_passing.is_empty() {
@@ -315,7 +343,13 @@ pub fn format_executor_rubric(
     // exactly which scenario is behind a given accuracy number and why, even on a single-sample run.
     let _ = writeln!(out, "\n-- Full scenario breakdown (winner) --");
     for s in &winner_fitness.scenarios {
-        let _ = writeln!(out, "{}: pass_rate={:.2} — {}", s.name, s.pass_rate(), s.diagnostic_breakdown());
+        let _ = writeln!(
+            out,
+            "{}: pass_rate={:.2} — {}",
+            s.name,
+            s.pass_rate(),
+            s.diagnostic_breakdown()
+        );
     }
 
     let mixed: Vec<&crate::tool_loop_scoring::ToolLoopScoredScenario> = winner_fitness
@@ -328,7 +362,10 @@ pub fn format_executor_rubric(
         .collect();
     let _ = writeln!(out, "\n-- Per-model consistency (mixed results only) --");
     if mixed.is_empty() {
-        let _ = writeln!(out, "none — every scenario agreed across all models/samples");
+        let _ = writeln!(
+            out,
+            "none — every scenario agreed across all models/samples"
+        );
     } else {
         for s in &mixed {
             let _ = writeln!(out, "{}: {}", s.name, s.trial_breakdown());
@@ -344,7 +381,11 @@ pub fn format_executor_rubric(
         );
     }
 
-    let _ = writeln!(out, "\n-- Candidate prompt --\n--- BEGIN ---\n{}\n--- END ---", winner.prompt);
+    let _ = writeln!(
+        out,
+        "\n-- Candidate prompt --\n--- BEGIN ---\n{}\n--- END ---",
+        winner.prompt
+    );
     let _ = writeln!(
         out,
         "\n-- Baseline prompt --\n--- BEGIN ---\n{baseline_prompt}\n--- END ---"
@@ -356,8 +397,8 @@ pub fn format_executor_rubric(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liberado_eval::ScenarioOutcome;
     use crate::scoring::{ScenarioTrial, ScoredScenario};
+    use liberado_eval::ScenarioOutcome;
 
     fn scored(name: &'static str, routed_correctly: bool) -> ScoredScenario {
         ScoredScenario {
@@ -376,7 +417,12 @@ mod tests {
         }
     }
 
-    fn fitness(accuracy: f32, safe_default_rate: f32, unsafe_acts: usize, scenarios: Vec<ScoredScenario>) -> CandidateFitness {
+    fn fitness(
+        accuracy: f32,
+        safe_default_rate: f32,
+        unsafe_acts: usize,
+        scenarios: Vec<ScoredScenario>,
+    ) -> CandidateFitness {
         CandidateFitness {
             accuracy,
             safe_default_rate,
@@ -410,7 +456,12 @@ mod tests {
                 parent_accuracy: 0.75,
             },
         };
-        let text = format_rubric(&winner, &fitness(0.9, 1.0, 0, vec![]), &fitness(0.8, 1.0, 0, vec![]), None);
+        let text = format_rubric(
+            &winner,
+            &fitness(0.9, 1.0, 0, vec![]),
+            &fitness(0.8, 1.0, 0, vec![]),
+            None,
+        );
         assert!(text.contains("beam candidate #1"));
         assert!(text.contains("0.75"));
     }
@@ -421,13 +472,19 @@ mod tests {
             0.5,
             1.0,
             0,
-            vec![scored("fixed_by_winner", false), scored("stays_passing", true)],
+            vec![
+                scored("fixed_by_winner", false),
+                scored("stays_passing", true),
+            ],
         );
         let winner_fit = fitness(
             0.5,
             1.0,
             0,
-            vec![scored("fixed_by_winner", true), scored("stays_passing", false)],
+            vec![
+                scored("fixed_by_winner", true),
+                scored("stays_passing", false),
+            ],
         );
         let winner = Candidate {
             prompt: "p".into(),
@@ -460,7 +517,12 @@ mod tests {
             prompt: "p".into(),
             origin: CandidateOrigin::ColdStart,
         };
-        let text = format_rubric(&winner, &fitness(0.9, 1.0, 0, vec![]), &fitness(0.8, 1.0, 0, vec![]), None);
+        let text = format_rubric(
+            &winner,
+            &fitness(0.9, 1.0, 0, vec![]),
+            &fitness(0.8, 1.0, 0, vec![]),
+            None,
+        );
         assert!(text.contains("unavailable"));
     }
 
@@ -470,7 +532,12 @@ mod tests {
             prompt: "THE WINNING PROMPT TEXT".into(),
             origin: CandidateOrigin::ColdStart,
         };
-        let text = format_rubric(&winner, &fitness(0.9, 1.0, 0, vec![]), &fitness(0.8, 1.0, 0, vec![]), None);
+        let text = format_rubric(
+            &winner,
+            &fitness(0.9, 1.0, 0, vec![]),
+            &fitness(0.8, 1.0, 0, vec![]),
+            None,
+        );
         assert!(text.contains("THE WINNING PROMPT TEXT"));
         assert!(text.contains(DEFAULT_SYSTEM_PROMPT));
     }
@@ -485,17 +552,28 @@ mod tests {
             trials: vec![
                 ScenarioTrial {
                     model: "deepseek".to_string(),
-                    outcome: ScenarioOutcome { routed_correctly: true, safe_default_hit: None, unsafe_act: false },
+                    outcome: ScenarioOutcome {
+                        routed_correctly: true,
+                        safe_default_hit: None,
+                        unsafe_act: false,
+                    },
                 },
                 ScenarioTrial {
                     model: "claude-haiku".to_string(),
-                    outcome: ScenarioOutcome { routed_correctly: false, safe_default_hit: None, unsafe_act: false },
+                    outcome: ScenarioOutcome {
+                        routed_correctly: false,
+                        safe_default_hit: None,
+                        unsafe_act: false,
+                    },
                 },
             ],
         };
         let consistent = scored("consistent-scenario", true);
 
-        let winner = Candidate { prompt: "p".into(), origin: CandidateOrigin::ColdStart };
+        let winner = Candidate {
+            prompt: "p".into(),
+            origin: CandidateOrigin::ColdStart,
+        };
         let winner_fit = fitness(0.75, 1.0, 0, vec![mixed, consistent]);
         let text = format_rubric(&winner, &winner_fit, &fitness(0.5, 1.0, 0, vec![]), None);
 
@@ -503,7 +581,12 @@ mod tests {
         assert!(!text.contains("consistent-scenario:"));
     }
 
-    fn tool_loop_trial(model: &str, calls_matched: bool, unsafe_call: bool, outcome_matched: bool) -> crate::tool_loop_scoring::ToolLoopTrial {
+    fn tool_loop_trial(
+        model: &str,
+        calls_matched: bool,
+        unsafe_call: bool,
+        outcome_matched: bool,
+    ) -> crate::tool_loop_scoring::ToolLoopTrial {
         crate::tool_loop_scoring::ToolLoopTrial {
             model: model.to_string(),
             outcome: crate::tool_loop_scoring::ToolLoopOutcome {
@@ -514,7 +597,10 @@ mod tests {
         }
     }
 
-    fn tool_loop_scored(name: &'static str, calls_matched: bool) -> crate::tool_loop_scoring::ToolLoopScoredScenario {
+    fn tool_loop_scored(
+        name: &'static str,
+        calls_matched: bool,
+    ) -> crate::tool_loop_scoring::ToolLoopScoredScenario {
         crate::tool_loop_scoring::ToolLoopScoredScenario {
             name,
             goal: "goal",
@@ -568,7 +654,10 @@ mod tests {
         // breakdown must still show exactly which scenario is behind a given accuracy number.
         let passing = tool_loop_scored("single-lookup", true);
         let failing = tool_loop_scored("multi-step-research", false);
-        let winner = Candidate { prompt: "p".into(), origin: CandidateOrigin::ColdStart };
+        let winner = Candidate {
+            prompt: "p".into(),
+            origin: CandidateOrigin::ColdStart,
+        };
         let winner_fit = tool_loop_fitness(0.5, 1.0, 0, vec![passing, failing]);
         let text = format_executor_rubric(&winner, &winner_fit, &winner_fit, "baseline", None);
         assert!(text.contains("single-lookup: pass_rate=1.00"));
@@ -578,9 +667,22 @@ mod tests {
 
     #[test]
     fn executor_rubric_names_regressions() {
-        let baseline = tool_loop_fitness(0.5, 1.0, 0, vec![tool_loop_scored("a", false), tool_loop_scored("b", true)]);
-        let winner_fit = tool_loop_fitness(0.5, 1.0, 0, vec![tool_loop_scored("a", true), tool_loop_scored("b", false)]);
-        let winner = Candidate { prompt: "p".into(), origin: CandidateOrigin::ColdStart };
+        let baseline = tool_loop_fitness(
+            0.5,
+            1.0,
+            0,
+            vec![tool_loop_scored("a", false), tool_loop_scored("b", true)],
+        );
+        let winner_fit = tool_loop_fitness(
+            0.5,
+            1.0,
+            0,
+            vec![tool_loop_scored("a", true), tool_loop_scored("b", false)],
+        );
+        let winner = Candidate {
+            prompt: "p".into(),
+            origin: CandidateOrigin::ColdStart,
+        };
         let text = format_executor_rubric(&winner, &winner_fit, &baseline, "baseline", None);
         assert!(text.contains("- a"));
         assert!(text.contains("REGRESSION"));
@@ -604,9 +706,18 @@ mod tests {
             ],
         };
         let consistent = tool_loop_scored("consistent-scenario", true);
-        let winner = Candidate { prompt: "p".into(), origin: CandidateOrigin::ColdStart };
+        let winner = Candidate {
+            prompt: "p".into(),
+            origin: CandidateOrigin::ColdStart,
+        };
         let winner_fit = tool_loop_fitness(0.75, 1.0, 0, vec![mixed, consistent]);
-        let text = format_executor_rubric(&winner, &winner_fit, &tool_loop_fitness(0.5, 1.0, 0, vec![]), "baseline", None);
+        let text = format_executor_rubric(
+            &winner,
+            &winner_fit,
+            &tool_loop_fitness(0.5, 1.0, 0, vec![]),
+            "baseline",
+            None,
+        );
         assert!(text.contains("mixed-scenario: deepseek: 1/1 correct, claude-haiku: 0/1 correct"));
         // The full-scenario-breakdown section (added separately, unconditional) legitimately
         // mentions every scenario by name, so scope this assertion to the per-model-consistency

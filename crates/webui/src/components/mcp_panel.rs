@@ -89,9 +89,17 @@ fn McpServerItem(mcp: McpInfo) -> Element {
     let badge = consequence_badge_class(&mcp.consequence);
 
     let tool_count = if mcp.tool_count > 0 {
-        format!("{} tool{}", mcp.tool_count, if mcp.tool_count == 1 { "" } else { "s" })
+        format!(
+            "{} tool{}",
+            mcp.tool_count,
+            if mcp.tool_count == 1 { "" } else { "s" }
+        )
     } else if !mcp.tool_names.is_empty() {
-        format!("{} tool{}", mcp.tool_names.len(), if mcp.tool_names.len() == 1 { "" } else { "s" })
+        format!(
+            "{} tool{}",
+            mcp.tool_names.len(),
+            if mcp.tool_names.len() == 1 { "" } else { "s" }
+        )
     } else {
         String::new()
     };

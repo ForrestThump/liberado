@@ -175,7 +175,10 @@ mod tests {
         let mut names: Vec<&str> = catalog.iter().map(|t| t.name.as_str()).collect();
         names.sort();
 
-        assert_eq!(names, vec!["tasks:create", "tasks:list", "wiki:get_page", "wiki:search"]);
+        assert_eq!(
+            names,
+            vec!["tasks:create", "tasks:list", "wiki:get_page", "wiki:search"]
+        );
     }
 
     #[tokio::test]
@@ -186,7 +189,10 @@ mod tests {
 
         let call = ToolInvocation::new("c3", "unknown:foo", serde_json::json!({}));
         let err = multi.invoke(&call).await.unwrap_err();
-        assert!(err.contains("unknown"), "error should mention the unknown server: {err}");
+        assert!(
+            err.contains("unknown"),
+            "error should mention the unknown server: {err}"
+        );
     }
 
     #[tokio::test]
@@ -200,9 +206,7 @@ mod tests {
     #[tokio::test]
     async fn names_returns_registered_keys() {
         let rt = MockRuntime::new(&["a"], Ok("ok".into()));
-        let multi = MultiMcpRuntime::new(vec![
-            ("alpha".into(), Box::new(rt)),
-        ]);
+        let multi = MultiMcpRuntime::new(vec![("alpha".into(), Box::new(rt))]);
         assert_eq!(multi.names(), vec!["alpha"]);
     }
 }

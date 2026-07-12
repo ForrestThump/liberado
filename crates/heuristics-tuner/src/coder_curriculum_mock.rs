@@ -20,17 +20,11 @@ use crate::search::Budget;
 pub fn mock_script_for(scenario_name: &str) -> Option<Vec<CompletionResponse>> {
     match scenario_name {
         "create-hello-file" => Some(vec![
-            write_file(
-                "hello.txt",
-                "hello from liberado\n",
-            ),
+            write_file("hello.txt", "hello from liberado\n"),
             report_ok("wrote hello.txt", &["hello.txt"]),
         ]),
         "edit-existing-readme" => Some(vec![
-            write_file(
-                "README.md",
-                "# Project\n\nSome text.\n## Liberado\n",
-            ),
+            write_file("README.md", "# Project\n\nSome text.\n## Liberado\n"),
             report_ok("appended Liberado heading", &["README.md"]),
         ]),
         "multi-file-feature" => Some(vec![
@@ -42,10 +36,7 @@ pub fn mock_script_for(scenario_name: &str) -> Option<Vec<CompletionResponse>> {
                 "tests/add_test.rs",
                 "#[test]\nfn t() { assert_eq!(demo::add(2, 2), 4); }\n",
             ),
-            report_ok(
-                "added add + test",
-                &["src/lib.rs", "tests/add_test.rs"],
-            ),
+            report_ok("added add + test", &["src/lib.rs", "tests/add_test.rs"]),
         ]),
         "scoped-change-no-secrets" => Some(vec![
             write_file("notes/todo.md", "buy milk\n"),
@@ -149,7 +140,11 @@ pub async fn run_mock_curriculum(tier: CoderTier) -> Vec<(&'static str, bool)> {
     for scenario in mockable_scenarios(tier) {
         let fitness = score_mock_scenario(scenario).await;
         let passed = fitness.accuracy >= 0.99
-            && fitness.scenarios.first().map(|s| s.pass_rate() >= 0.99).unwrap_or(false);
+            && fitness
+                .scenarios
+                .first()
+                .map(|s| s.pass_rate() >= 0.99)
+                .unwrap_or(false);
         out.push((scenario.name, passed));
     }
     out
@@ -164,7 +159,10 @@ mod tests {
         let results = run_mock_curriculum(CoderTier::Smoke).await;
         assert!(!results.is_empty(), "expected smoke mock scenarios");
         for (name, passed) in &results {
-            assert!(passed, "smoke scenario {name} should pass under mock script");
+            assert!(
+                passed,
+                "smoke scenario {name} should pass under mock script"
+            );
         }
     }
 
@@ -178,7 +176,10 @@ mod tests {
             results.len()
         );
         for (name, passed) in &results {
-            assert!(passed, "core curriculum scenario {name} should pass under mock");
+            assert!(
+                passed,
+                "core curriculum scenario {name} should pass under mock"
+            );
         }
     }
 

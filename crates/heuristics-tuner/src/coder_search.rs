@@ -62,7 +62,10 @@ fn advance_beam_coder(
     if survivors.is_empty() {
         beam.to_vec()
     } else {
-        survivors.into_iter().map(|idx| scored[idx].clone()).collect()
+        survivors
+            .into_iter()
+            .map(|idx| scored[idx].clone())
+            .collect()
     }
 }
 
@@ -208,7 +211,13 @@ pub async fn run_coder_tuner(config: TunerConfig) -> CoderTunerResult {
         .last()
         .map(|g| g.rubric.clone())
         .unwrap_or_else(|| {
-            format_coder_rubric(&winner, &winner_fitness, &baseline_fitness, seed_prompt, None)
+            format_coder_rubric(
+                &winner,
+                &winner_fitness,
+                &baseline_fitness,
+                seed_prompt,
+                None,
+            )
         });
 
     CoderTunerResult {

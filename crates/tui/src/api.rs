@@ -14,7 +14,7 @@ use reqwest::{Client, StatusCode};
 // Re-export the shared wire types so the rest of the crate can still import them
 // from `crate::api::*` without changing call sites.
 pub use chat_client_contract::{
-    ChatMessage, ConversationHistoryResponse, ConvHeader, DaemonStatus, ModelsResponse,
+    ChatMessage, ConvHeader, ConversationHistoryResponse, DaemonStatus, ModelsResponse,
     ReactionEvent,
 };
 
@@ -101,10 +101,7 @@ pub async fn fetch_conversation_history(
 }
 
 /// Fetch `GET /api/models` — live provider catalog + current model.
-pub async fn fetch_models(
-    client: &Client,
-    server: &str,
-) -> Result<ModelsResponse, reqwest::Error> {
+pub async fn fetch_models(client: &Client, server: &str) -> Result<ModelsResponse, reqwest::Error> {
     let resp = client.get(format!("{server}/api/models")).send().await?;
     if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
         return Ok(ModelsResponse {

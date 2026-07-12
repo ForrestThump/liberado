@@ -43,11 +43,7 @@ impl GoalSessionStore {
     }
 
     pub async fn get(&self, id: &str) -> Option<GoalSessionRecord> {
-        self.inner
-            .lock()
-            .await
-            .get(id)
-            .map(|s| s.record.clone())
+        self.inner.lock().await.get(id).map(|s| s.record.clone())
     }
 
     pub async fn list(&self) -> Vec<GoalSessionRecord> {
@@ -63,11 +59,7 @@ impl GoalSessionStore {
     }
 
     pub async fn events(&self, id: &str) -> Option<Vec<SessionEvent>> {
-        self.inner
-            .lock()
-            .await
-            .get(id)
-            .map(|s| s.events.clone())
+        self.inner.lock().await.get(id).map(|s| s.events.clone())
     }
 
     /// Subscribe to live events. Also returns a snapshot of events so far (for catch-up).

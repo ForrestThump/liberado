@@ -318,7 +318,7 @@ impl App {
                 return visual_line;
             }
             let chars = logical.chars().count();
-            visual_line += if chars == 0 { 1 } else { (chars + cw - 1) / cw };
+            visual_line += if chars == 0 { 1 } else { chars.div_ceil(cw) };
             byte_pos = (line_end + 1).min(self.input.len());
         }
         visual_line
@@ -340,8 +340,11 @@ impl App {
         for logical in self.input.lines() {
             let line_end = byte_pos + logical.len();
             let chars_in_logical = logical.chars().count();
-            let visual_lines_in_logical =
-                if chars_in_logical == 0 { 1 } else { (chars_in_logical + cw - 1) / cw };
+            let visual_lines_in_logical = if chars_in_logical == 0 {
+                1
+            } else {
+                chars_in_logical.div_ceil(cw)
+            };
             if target_line < visual_line + visual_lines_in_logical {
                 let local_line = target_line.saturating_sub(visual_line);
                 let start_char = local_line * cw;
@@ -368,7 +371,7 @@ impl App {
             .lines()
             .map(|line| {
                 let chars = line.chars().count();
-                if chars == 0 { 1 } else { (chars + cw - 1) / cw }
+                if chars == 0 { 1 } else { chars.div_ceil(cw) }
             })
             .sum::<usize>()
             .max(1)
@@ -386,7 +389,9 @@ impl App {
         } else if cursor_line >= self.input_scroll + max_visible {
             self.input_scroll = cursor_line.saturating_sub(max_visible - 1);
         }
-        self.input_scroll = self.input_scroll.min(total_lines.saturating_sub(max_visible));
+        self.input_scroll = self
+            .input_scroll
+            .min(total_lines.saturating_sub(max_visible));
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Vec<Effect> {

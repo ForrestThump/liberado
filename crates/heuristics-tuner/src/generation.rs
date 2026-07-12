@@ -262,5 +262,4 @@ mod tests {
             .expect("live call failed");
         assert!(!prompt.is_empty(), "expected non-empty prompt text");
     }
-
 }

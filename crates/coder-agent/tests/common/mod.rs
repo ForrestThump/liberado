@@ -10,8 +10,8 @@ use std::sync::Arc;
 use liberado_coder_agent::LiberadoLoopBackend;
 use liberado_coder_core::{
     CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask, CommandPolicy, FreezeAuthority,
-    GoalContract, GoalContractDraft, IntakeOutcome, PathPolicy, ProgressPolicy, SandboxSpec,
-    VerifierSpec, WorkspaceRef, LIBERADO_LOOP_BACKEND,
+    GoalContract, GoalContractDraft, IntakeOutcome, LIBERADO_LOOP_BACKEND, PathPolicy,
+    ProgressPolicy, SandboxSpec, VerifierSpec, WorkspaceRef,
 };
 use liberado_provider::{CompletionResponse, MockProvider, Provider, ToolInvocation};
 use serde_json::json;
@@ -109,7 +109,10 @@ pub fn base_request(root: &Path) -> CoderRunRequest {
             backend: LIBERADO_LOOP_BACKEND.into(),
             trace_dir: None,
             planner: disabled_role(),
-            coder: role("Implement the frozen contract. Use tools, then submit a report.", 8),
+            coder: role(
+                "Implement the frozen contract. Use tools, then submit a report.",
+                8,
+            ),
             critic: disabled_role(),
             repair: None,
             sandbox: SandboxSpec::HostLocal,
@@ -177,9 +180,7 @@ edition = "2021"
                 }
             }
             VerifierSpec::ContentContains {
-                path,
-                must_include,
-                ..
+                path, must_include, ..
             } => {
                 let entry = path_content.entry(path.clone()).or_insert_with(|| {
                     if path.ends_with(".rs") {
@@ -289,13 +290,13 @@ pub fn write_incomplete_then_report() -> Vec<CompletionResponse> {
     ]
 }
 
-pub fn mock_backend(responses: impl IntoIterator<Item = CompletionResponse>) -> LiberadoLoopBackend {
+pub fn mock_backend(
+    responses: impl IntoIterator<Item = CompletionResponse>,
+) -> LiberadoLoopBackend {
     LiberadoLoopBackend::new(Arc::new(MockProvider::with_script("mock", responses)))
 }
 
-pub fn mock_provider(
-    responses: impl IntoIterator<Item = CompletionResponse>,
-) -> Arc<MockProvider> {
+pub fn mock_provider(responses: impl IntoIterator<Item = CompletionResponse>) -> Arc<MockProvider> {
     Arc::new(MockProvider::with_script("mock", responses))
 }
 
@@ -323,12 +324,9 @@ pub fn live_model() -> String {
 /// Drop command verifiers (and cargo profiles) so a mock worker can satisfy a live intake draft.
 pub fn structural_only(draft: &mut GoalContractDraft) {
     draft.verify_profile = None;
-    draft.verifiers.retain(|v| {
-        !matches!(
-            v,
-            VerifierSpec::Command { .. }
-        )
-    });
+    draft
+        .verifiers
+        .retain(|v| !matches!(v, VerifierSpec::Command { .. }));
     // Ensure at least a nonempty-diff gate so "success with no work" still fails.
     if !draft
         .verifiers

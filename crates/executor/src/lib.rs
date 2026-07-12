@@ -466,7 +466,7 @@ impl Executor {
             match self.drive(runtime, task, Mode::Report).await {
                 Ok(Terminal::Filed(report)) => {
                     tracing::Span::current()
-                        .record("outcome", &format_args!("{:?}", report.outcome));
+                        .record("outcome", format_args!("{:?}", report.outcome));
                     tracing::info!(summary = %report.summary, "execution filed report");
                     Ok(report)
                 }
@@ -574,7 +574,13 @@ impl Executor {
             // docs) — the call site is ready for it, just not enabled yet.
             let mut scratchpad: Option<Scratchpad> = None;
             match self
-                .run_loop(runtime, messages, &mut tools, Mode::Conversational, &mut scratchpad)
+                .run_loop(
+                    runtime,
+                    messages,
+                    &mut tools,
+                    Mode::Conversational,
+                    &mut scratchpad,
+                )
                 .await?
             {
                 Terminal::Spoke(text) => Ok(text),
@@ -761,10 +767,10 @@ impl Executor {
                     .map(|c| c.name.as_str())
                     .collect();
                 tracing::info!(turn, tool_count, ?names, "turn called tools");
-                if let Some(content) = &response.content {
-                    if !content.is_empty() {
-                        tracing::info!(turn, %content, "model's reasoning alongside the tool call(s)");
-                    }
+                if let Some(content) = &response.content
+                    && !content.is_empty()
+                {
+                    tracing::info!(turn, %content, "model's reasoning alongside the tool call(s)");
                 }
             }
 
@@ -811,10 +817,10 @@ impl Executor {
                 if doom_hit.is_none() && is_doom_loop(&call_history) {
                     doom_hit = Some(call.name.clone());
                 }
-                if cycle_hit.is_none() {
-                    if let Some(cycling) = detect_short_cycle(&call_history) {
-                        cycle_hit = Some(cycling);
-                    }
+                if cycle_hit.is_none()
+                    && let Some(cycling) = detect_short_cycle(&call_history)
+                {
+                    cycle_hit = Some(cycling);
                 }
             }
 
@@ -1925,9 +1931,7 @@ mod tests {
     // Short cycle = multi-tool name thrash. Doom loop = same tool + similar args.
     // ------------------------------------------------------------------
 
-    fn hist(
-        calls: &[(&str, serde_json::Value)],
-    ) -> Vec<(String, serde_json::Value, String)> {
+    fn hist(calls: &[(&str, serde_json::Value)]) -> Vec<(String, serde_json::Value, String)> {
         calls
             .iter()
             .map(|(name, args)| ((*name).into(), args.clone(), "ok".into()))
@@ -1938,11 +1942,26 @@ mod tests {
     fn mono_tool_parallel_batch_is_not_a_short_cycle() {
         // Dogfood 01KX7BWV: five parallel read_note calls must not match period-2 as AAAA.
         let h = hist(&[
-            ("turbovault:read_note", serde_json::json!({"path": "Tasks/a.md"})),
-            ("turbovault:read_note", serde_json::json!({"path": "Tasks/b.md"})),
-            ("turbovault:read_note", serde_json::json!({"path": "Tasks/c.md"})),
-            ("turbovault:read_note", serde_json::json!({"path": "Tasks/d.md"})),
-            ("turbovault:read_note", serde_json::json!({"path": "Tasks/e.md"})),
+            (
+                "turbovault:read_note",
+                serde_json::json!({"path": "Tasks/a.md"}),
+            ),
+            (
+                "turbovault:read_note",
+                serde_json::json!({"path": "Tasks/b.md"}),
+            ),
+            (
+                "turbovault:read_note",
+                serde_json::json!({"path": "Tasks/c.md"}),
+            ),
+            (
+                "turbovault:read_note",
+                serde_json::json!({"path": "Tasks/d.md"}),
+            ),
+            (
+                "turbovault:read_note",
+                serde_json::json!({"path": "Tasks/e.md"}),
+            ),
         ]);
         assert!(
             detect_short_cycle(&h).is_none(),
@@ -1954,7 +1973,10 @@ mod tests {
     fn different_path_read_notes_are_not_a_doom_loop() {
         // Legitimate multi-file read: same tool, different path args — not thrash.
         let h = hist(&[
-            ("turbovault:read_note", serde_json::json!({"path": "Tasks/Sarah.md"})),
+            (
+                "turbovault:read_note",
+                serde_json::json!({"path": "Tasks/Sarah.md"}),
+            ),
             (
                 "turbovault:read_note",
                 serde_json::json!({"path": "Life/Relationships/Weekly.md"}),
@@ -2421,11 +2443,10 @@ mod tests {
     /// Whether any message sent to the provider across the whole run contains `needle` — used to
     /// prove a nudge (doom-loop/cycle) never fired, without depending on internal escalation state.
     fn any_message_contains(provider: &MockProvider, needle: &str) -> bool {
-        provider.received_requests().iter().any(|req| {
-            req.messages
-                .iter()
-                .any(|m| m.content.contains(needle))
-        })
+        provider
+            .received_requests()
+            .iter()
+            .any(|req| req.messages.iter().any(|m| m.content.contains(needle)))
     }
 
     #[tokio::test]
@@ -2494,7 +2515,11 @@ mod tests {
             .iter()
             .find(|m| m.tool_call_id.as_deref() == Some("sp-1"))
             .expect("expected a tool-result message for the scratchpad call");
-        assert!(tool_result.content.contains("in_progress"), "{}", tool_result.content);
+        assert!(
+            tool_result.content.contains("in_progress"),
+            "{}",
+            tool_result.content
+        );
     }
 
     #[tokio::test]
@@ -2562,6 +2587,10 @@ mod tests {
 
         assert_eq!(report.outcome, Outcome::Succeeded);
         assert!(!any_message_contains(&provider, CYCLE_NUDGE));
-        assert_eq!(runtime.invoked().len(), 2, "both real search calls should have run");
+        assert_eq!(
+            runtime.invoked().len(),
+            2,
+            "both real search calls should have run"
+        );
     }
 }

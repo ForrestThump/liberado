@@ -26,11 +26,26 @@ pub fn theme_css_vars(t: &Theme) -> String {
     let accent = r(&t.accent, d.accent.as_deref().unwrap_or("#00ffff"));
     let border = r(&t.border, d.border.as_deref().unwrap_or("#808080"));
 
-    let chat_user_text = r(&t.chat_user_text, d.chat_user_text.as_deref().unwrap_or("#ffffff"));
-    let chat_user_prefix = r(&t.chat_user_prefix, d.chat_user_prefix.as_deref().unwrap_or("#00ffff"));
-    let chat_assistant_text = r(&t.chat_assistant_text, d.chat_assistant_text.as_deref().unwrap_or("#c0c0c0"));
-    let chat_system_text = r(&t.chat_system_text, d.chat_system_text.as_deref().unwrap_or("#808080"));
-    let chat_streaming_cursor = r(&t.chat_streaming_cursor, d.chat_streaming_cursor.as_deref().unwrap_or("#00ffff"));
+    let chat_user_text = r(
+        &t.chat_user_text,
+        d.chat_user_text.as_deref().unwrap_or("#ffffff"),
+    );
+    let chat_user_prefix = r(
+        &t.chat_user_prefix,
+        d.chat_user_prefix.as_deref().unwrap_or("#00ffff"),
+    );
+    let chat_assistant_text = r(
+        &t.chat_assistant_text,
+        d.chat_assistant_text.as_deref().unwrap_or("#c0c0c0"),
+    );
+    let chat_system_text = r(
+        &t.chat_system_text,
+        d.chat_system_text.as_deref().unwrap_or("#808080"),
+    );
+    let chat_streaming_cursor = r(
+        &t.chat_streaming_cursor,
+        d.chat_streaming_cursor.as_deref().unwrap_or("#00ffff"),
+    );
 
     let tool_label = r(&t.tool_label, d.tool_label.as_deref().unwrap_or("#ffff00"));
     let tool_name = r(&t.tool_name, d.tool_name.as_deref().unwrap_or("#ffff00"));
@@ -38,32 +53,92 @@ pub fn theme_css_vars(t: &Theme) -> String {
     let tool_ok = r(&t.tool_ok, d.tool_ok.as_deref().unwrap_or("#00ff00"));
     let tool_err = r(&t.tool_err, d.tool_err.as_deref().unwrap_or("#ff0000"));
 
-    let code_block_header = r(&t.code_block_header, d.code_block_header.as_deref().unwrap_or("#808000"));
-    let code_block_bg = r(&t.code_block_bg, d.code_block_bg.as_deref().unwrap_or("#303030"));
-    let code_block_fg = r(&t.code_block_fg, d.code_block_fg.as_deref().unwrap_or("#c0c0c0"));
+    let code_block_header = r(
+        &t.code_block_header,
+        d.code_block_header.as_deref().unwrap_or("#808000"),
+    );
+    let code_block_bg = r(
+        &t.code_block_bg,
+        d.code_block_bg.as_deref().unwrap_or("#303030"),
+    );
+    let code_block_fg = r(
+        &t.code_block_fg,
+        d.code_block_fg.as_deref().unwrap_or("#c0c0c0"),
+    );
 
     let input_bg = r(&t.input_bg, d.input_bg.as_deref().unwrap_or("#1a1a2e"));
     let input_text = r(&t.input_text, d.input_text.as_deref().unwrap_or("#ffffff"));
-    let input_placeholder = r(&t.input_placeholder, d.input_placeholder.as_deref().unwrap_or("#404040"));
-    let input_border_focused = r(&t.input_border_focused, d.input_border_focused.as_deref().unwrap_or("#00ffff"));
-    let input_border_unfocused = r(&t.input_border_unfocused, d.input_border_unfocused.as_deref().unwrap_or("#404040"));
+    let input_placeholder = r(
+        &t.input_placeholder,
+        d.input_placeholder.as_deref().unwrap_or("#404040"),
+    );
+    let input_border_focused = r(
+        &t.input_border_focused,
+        d.input_border_focused.as_deref().unwrap_or("#00ffff"),
+    );
+    let input_border_unfocused = r(
+        &t.input_border_unfocused,
+        d.input_border_unfocused.as_deref().unwrap_or("#404040"),
+    );
 
-    let status_bar_text = r(&t.status_bar_text, d.status_bar_text.as_deref().unwrap_or("#808080"));
-    let status_dot_online = r(&t.status_dot_online, d.status_dot_online.as_deref().unwrap_or("#00ff00"));
-    let status_dot_offline = r(&t.status_dot_offline, d.status_dot_offline.as_deref().unwrap_or("#ff0000"));
-    let status_dot_connecting = r(&t.status_dot_connecting, d.status_dot_connecting.as_deref().unwrap_or("#ffff00"));
+    let status_bar_text = r(
+        &t.status_bar_text,
+        d.status_bar_text.as_deref().unwrap_or("#808080"),
+    );
+    let status_dot_online = r(
+        &t.status_dot_online,
+        d.status_dot_online.as_deref().unwrap_or("#00ff00"),
+    );
+    let status_dot_offline = r(
+        &t.status_dot_offline,
+        d.status_dot_offline.as_deref().unwrap_or("#ff0000"),
+    );
+    let status_dot_connecting = r(
+        &t.status_dot_connecting,
+        d.status_dot_connecting.as_deref().unwrap_or("#ffff00"),
+    );
 
-    let reaction_observed = r(&t.reaction_observed, d.reaction_observed.as_deref().unwrap_or("#00ffff"));
-    let reaction_dispatched = r(&t.reaction_dispatched, d.reaction_dispatched.as_deref().unwrap_or("#ffff00"));
-    let reaction_acted = r(&t.reaction_acted, d.reaction_acted.as_deref().unwrap_or("#00ff00"));
-    let reaction_unknown = r(&t.reaction_unknown, d.reaction_unknown.as_deref().unwrap_or("#808080"));
+    let reaction_observed = r(
+        &t.reaction_observed,
+        d.reaction_observed.as_deref().unwrap_or("#00ffff"),
+    );
+    let reaction_dispatched = r(
+        &t.reaction_dispatched,
+        d.reaction_dispatched.as_deref().unwrap_or("#ffff00"),
+    );
+    let reaction_acted = r(
+        &t.reaction_acted,
+        d.reaction_acted.as_deref().unwrap_or("#00ff00"),
+    );
+    let reaction_unknown = r(
+        &t.reaction_unknown,
+        d.reaction_unknown.as_deref().unwrap_or("#808080"),
+    );
 
-    let sidebar_selected_bg = r(&t.sidebar_selected_bg, d.sidebar_selected_bg.as_deref().unwrap_or("#00ffff"));
-    let sidebar_selected_fg = r(&t.sidebar_selected_fg, d.sidebar_selected_fg.as_deref().unwrap_or("#000000"));
-    let sidebar_text = r(&t.sidebar_text, d.sidebar_text.as_deref().unwrap_or("#c0c0c0"));
-    let sidebar_border_focused = r(&t.sidebar_border_focused, d.sidebar_border_focused.as_deref().unwrap_or("#00ffff"));
-    let sidebar_border_unfocused = r(&t.sidebar_border_unfocused, d.sidebar_border_unfocused.as_deref().unwrap_or("#808080"));
-    let sidebar_item_bg = r(&t.sidebar_item_bg, d.sidebar_item_bg.as_deref().unwrap_or("#101010"));
+    let sidebar_selected_bg = r(
+        &t.sidebar_selected_bg,
+        d.sidebar_selected_bg.as_deref().unwrap_or("#00ffff"),
+    );
+    let sidebar_selected_fg = r(
+        &t.sidebar_selected_fg,
+        d.sidebar_selected_fg.as_deref().unwrap_or("#000000"),
+    );
+    let sidebar_text = r(
+        &t.sidebar_text,
+        d.sidebar_text.as_deref().unwrap_or("#c0c0c0"),
+    );
+    let sidebar_border_focused = r(
+        &t.sidebar_border_focused,
+        d.sidebar_border_focused.as_deref().unwrap_or("#00ffff"),
+    );
+    let sidebar_border_unfocused = r(
+        &t.sidebar_border_unfocused,
+        d.sidebar_border_unfocused.as_deref().unwrap_or("#808080"),
+    );
+    let sidebar_item_bg = r(
+        &t.sidebar_item_bg,
+        d.sidebar_item_bg.as_deref().unwrap_or("#101010"),
+    );
 
     let md_bold = r(&t.md_bold, d.md_bold.as_deref().unwrap_or("#ffffff"));
     let md_italic = r(&t.md_italic, d.md_italic.as_deref().unwrap_or("#c0c0c0"));

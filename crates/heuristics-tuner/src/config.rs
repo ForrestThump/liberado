@@ -261,11 +261,7 @@ fn resolve_scenario_filter(file_value: Option<String>) -> Option<Vec<String>> {
         .filter(|s| !s.is_empty())
         .map(String::from)
         .collect();
-    if list.is_empty() {
-        None
-    } else {
-        Some(list)
-    }
+    if list.is_empty() { None } else { Some(list) }
 }
 
 /// Resolve a list-valued tunable (scoring models): the env var (comma-separated) wins if it parses
@@ -282,10 +278,10 @@ fn resolve_model_list(var: &str, file_value: Option<Vec<String>>, default: &str)
             return list;
         }
     }
-    if let Some(list) = file_value {
-        if !list.is_empty() {
-            return list;
-        }
+    if let Some(list) = file_value
+        && !list.is_empty()
+    {
+        return list;
     }
     vec![default.to_string()]
 }

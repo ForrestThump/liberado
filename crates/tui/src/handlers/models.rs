@@ -72,9 +72,8 @@ fn select_model(app: &mut App) -> Vec<Effect> {
         .unwrap_or_else(|| "(unknown)".into());
     if name == current {
         app.close_model_browser();
-        app.messages.push(Message::System(format!(
-            "Model: {name}  (already active)"
-        )));
+        app.messages
+            .push(Message::System(format!("Model: {name}  (already active)")));
         app.scroll_offset = 0;
         return vec![Effect::None];
     }

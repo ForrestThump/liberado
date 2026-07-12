@@ -15,10 +15,10 @@ pub fn worker_role_name(request: &CoderRunRequest) -> &'static str {
 }
 
 pub fn worker_role_config(request: &CoderRunRequest) -> &CoderRoleConfig {
-    if request.attempt > 0 {
-        if let Some(repair) = &request.config.repair {
-            return repair;
-        }
+    if request.attempt > 0
+        && let Some(repair) = &request.config.repair
+    {
+        return repair;
     }
     &request.config.coder
 }

@@ -145,7 +145,10 @@ path = "../liberado-deliberate-mcp"
         let sources = load_sources(&path).expect("valid path source parses");
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].git, None);
-        assert_eq!(sources[0].path.as_deref(), Some("../liberado-deliberate-mcp"));
+        assert_eq!(
+            sources[0].path.as_deref(),
+            Some("../liberado-deliberate-mcp")
+        );
     }
 
     #[test]

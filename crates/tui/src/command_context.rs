@@ -38,7 +38,11 @@ impl CommandContext for App {
     }
 
     fn theme_names(&self) -> Vec<String> {
-        self.theme_registry.names().into_iter().map(String::from).collect()
+        self.theme_registry
+            .names()
+            .into_iter()
+            .map(String::from)
+            .collect()
     }
 
     fn current_theme_name(&self) -> &str {
@@ -120,9 +124,7 @@ impl CommandContext for App {
             // Persist for next launch (platform config `liberado/settings.toml`).
             if let Err(e) = liberado_theme::save_theme_preference(name) {
                 tracing::warn!(error = %e, theme = %name, "failed to persist theme preference");
-                self.push_system_message(format!(
-                    "Theme: {name} (could not save preference: {e})"
-                ));
+                self.push_system_message(format!("Theme: {name} (could not save preference: {e})"));
             }
             true
         } else {

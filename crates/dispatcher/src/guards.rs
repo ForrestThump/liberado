@@ -472,7 +472,9 @@ mod tests {
     /// A `vault` MCP request whose seed call targets `write_review` (declared to write to the
     /// `reviews` zone), granted and `Reversible` (so the consequence gate alone would pass it) —
     /// isolating the zone-write-class guard from the consequence gate it sits next to.
-    fn vault_request(zone_write_classes: Vec<(&str, liberado_common::WriteClass)>) -> DispatchRequest {
+    fn vault_request(
+        zone_write_classes: Vec<(&str, liberado_common::WriteClass)>,
+    ) -> DispatchRequest {
         DispatchRequest {
             goal: "write a review note".into(),
             catalog: vec![McpDescriptor {

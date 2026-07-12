@@ -19,7 +19,10 @@ use crate::tool_loop_scoring::{ToolLoopFitness, score_executor_candidate};
 
 /// The executor-layer analog of [`crate::search::select_beam`] — same disqualify-then-rank logic,
 /// but reading [`ToolLoopFitness`]'s fields instead of the dispatcher's.
-pub fn select_beam_executor(scored: &[(Candidate, ToolLoopFitness)], beam_width: usize) -> Vec<usize> {
+pub fn select_beam_executor(
+    scored: &[(Candidate, ToolLoopFitness)],
+    beam_width: usize,
+) -> Vec<usize> {
     let mut qualified: Vec<usize> = scored
         .iter()
         .enumerate()
@@ -58,7 +61,10 @@ fn advance_beam_executor(
     if survivors.is_empty() {
         beam.to_vec()
     } else {
-        survivors.into_iter().map(|idx| scored[idx].clone()).collect()
+        survivors
+            .into_iter()
+            .map(|idx| scored[idx].clone())
+            .collect()
     }
 }
 
@@ -94,12 +100,21 @@ pub async fn run_executor_tuner(config: TunerConfig) -> ExecutorTunerResult {
 /// (`liberado_executor::DEFAULT_MAX_TURNS` — mirrors `Orchestrator`'s `subagent_budget` default,
 /// distinct from the executor's tighter `DIRECT_MAX_TURNS`).
 pub async fn run_subagent_tuner(config: TunerConfig) -> ExecutorTunerResult {
-    run_tool_loop_tuner(config, SUBAGENT_PREAMBLE, liberado_executor::DEFAULT_MAX_TURNS).await
+    run_tool_loop_tuner(
+        config,
+        SUBAGENT_PREAMBLE,
+        liberado_executor::DEFAULT_MAX_TURNS,
+    )
+    .await
 }
 
 /// Shared beam-search loop for any role that runs through `Executor::execute` (today: executor and
 /// subagent) — the two public entry points above differ only in seed prompt and turn budget.
-async fn run_tool_loop_tuner(config: TunerConfig, seed_prompt: &str, max_turns: u32) -> ExecutorTunerResult {
+async fn run_tool_loop_tuner(
+    config: TunerConfig,
+    seed_prompt: &str,
+    max_turns: u32,
+) -> ExecutorTunerResult {
     let budget = Budget::new(config.call_budget);
 
     let baseline_fitness = score_executor_candidate(
@@ -132,7 +147,14 @@ async fn run_tool_loop_tuner(config: TunerConfig, seed_prompt: &str, max_turns: 
                     break;
                 }
                 let failing = parent_fitness.failing();
-                match mutate_executor(config.meta_provider.as_ref(), &parent.prompt, &failing, &budget).await {
+                match mutate_executor(
+                    config.meta_provider.as_ref(),
+                    &parent.prompt,
+                    &failing,
+                    &budget,
+                )
+                .await
+                {
                     Ok(prompt) => pool.push(Candidate {
                         prompt,
                         origin: CandidateOrigin::MutatedFrom {
@@ -203,7 +225,15 @@ async fn run_tool_loop_tuner(config: TunerConfig, seed_prompt: &str, max_turns: 
     let rubric = generations
         .last()
         .map(|g| g.rubric.clone())
-        .unwrap_or_else(|| format_executor_rubric(&winner, &winner_fitness, &baseline_fitness, seed_prompt, None));
+        .unwrap_or_else(|| {
+            format_executor_rubric(
+                &winner,
+                &winner_fitness,
+                &baseline_fitness,
+                seed_prompt,
+                None,
+            )
+        });
 
     ExecutorTunerResult {
         winner,
@@ -226,7 +256,11 @@ mod tests {
         }
     }
 
-    fn tool_loop_fitness(accuracy: f32, outcome_match_rate: f32, unsafe_acts: usize) -> ToolLoopFitness {
+    fn tool_loop_fitness(
+        accuracy: f32,
+        outcome_match_rate: f32,
+        unsafe_acts: usize,
+    ) -> ToolLoopFitness {
         ToolLoopFitness {
             accuracy,
             outcome_match_rate,
@@ -238,8 +272,14 @@ mod tests {
     #[test]
     fn select_beam_executor_excludes_unsafe_candidates_even_at_top_accuracy() {
         let scored = vec![
-            (candidate("unsafe-but-accurate"), tool_loop_fitness(0.95, 1.0, 1)),
-            (candidate("safe-but-less-accurate"), tool_loop_fitness(0.80, 1.0, 0)),
+            (
+                candidate("unsafe-but-accurate"),
+                tool_loop_fitness(0.95, 1.0, 1),
+            ),
+            (
+                candidate("safe-but-less-accurate"),
+                tool_loop_fitness(0.80, 1.0, 0),
+            ),
         ];
         assert_eq!(select_beam_executor(&scored, 2), vec![1]);
     }
@@ -257,7 +297,10 @@ mod tests {
     #[test]
     fn advance_beam_executor_never_regresses_below_a_safe_incumbent() {
         let beam = vec![(candidate("incumbent"), tool_loop_fitness(0.77, 1.0, 0))];
-        let pool = vec![(candidate("regressive-cold-start"), tool_loop_fitness(0.33, 1.0, 0))];
+        let pool = vec![(
+            candidate("regressive-cold-start"),
+            tool_loop_fitness(0.33, 1.0, 0),
+        )];
         let next = advance_beam_executor(&beam, pool, 1);
         assert_eq!(next.len(), 1);
         assert_eq!(next[0].0.prompt, "incumbent");
@@ -266,7 +309,10 @@ mod tests {
     #[test]
     fn advance_beam_executor_adopts_a_genuinely_better_new_candidate() {
         let beam = vec![(candidate("incumbent"), tool_loop_fitness(0.77, 1.0, 0))];
-        let pool = vec![(candidate("improved-mutation"), tool_loop_fitness(0.90, 1.0, 0))];
+        let pool = vec![(
+            candidate("improved-mutation"),
+            tool_loop_fitness(0.90, 1.0, 0),
+        )];
         let next = advance_beam_executor(&beam, pool, 1);
         assert_eq!(next.len(), 1);
         assert_eq!(next[0].0.prompt, "improved-mutation");
@@ -274,7 +320,10 @@ mod tests {
 
     #[test]
     fn advance_beam_executor_falls_back_to_incumbent_when_everything_is_disqualified() {
-        let beam = vec![(candidate("unsafe-incumbent"), tool_loop_fitness(0.9, 1.0, 1))];
+        let beam = vec![(
+            candidate("unsafe-incumbent"),
+            tool_loop_fitness(0.9, 1.0, 1),
+        )];
         let pool = vec![(candidate("also-unsafe"), tool_loop_fitness(0.5, 1.0, 2))];
         let next = advance_beam_executor(&beam, pool, 1);
         assert_eq!(next.len(), 1);

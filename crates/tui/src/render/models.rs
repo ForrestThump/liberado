@@ -113,7 +113,10 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
             let mark = if is_current { "*" } else { " " };
             let label = format!(" {mark} {name}");
             let style = if selected {
-                Style::default().fg(sel_fg).bg(sel_bg).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(sel_fg)
+                    .bg(sel_bg)
+                    .add_modifier(Modifier::BOLD)
             } else if is_current {
                 Style::default().fg(accent)
             } else {

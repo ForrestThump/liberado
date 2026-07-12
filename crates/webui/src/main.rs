@@ -59,8 +59,16 @@ fn App() -> Element {
         }
     });
 
-    let chat_cls = if view() == "chat" { "nav-btn active" } else { "nav-btn" };
-    let status_cls = if view() == "status" { "nav-btn active" } else { "nav-btn" };
+    let chat_cls = if view() == "chat" {
+        "nav-btn active"
+    } else {
+        "nav-btn"
+    };
+    let status_cls = if view() == "status" {
+        "nav-btn active"
+    } else {
+        "nav-btn"
+    };
 
     rsx! {
         style { {crate::theme::theme_css_vars(&liberado_theme::Theme::default_dark())} }

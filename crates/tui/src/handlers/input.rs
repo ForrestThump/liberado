@@ -53,16 +53,15 @@ fn handle_shift_enter(app: &mut App) -> Vec<Effect> {
 
 fn send_message(app: &mut App) -> Vec<Effect> {
     // Ghost-complete: Enter accepts the selected palette match (no Tab required).
-    let message = if liberado_commands::is_slash_prefix(&app.input)
-        && !app.slash_matches().is_empty()
-    {
-        liberado_commands::accept_completion(&app.input, app.slash_palette_index)
-            .unwrap_or_else(|| app.input.clone())
-            .trim()
-            .to_string()
-    } else {
-        app.input.trim().to_string()
-    };
+    let message =
+        if liberado_commands::is_slash_prefix(&app.input) && !app.slash_matches().is_empty() {
+            liberado_commands::accept_completion(&app.input, app.slash_palette_index)
+                .unwrap_or_else(|| app.input.clone())
+                .trim()
+                .to_string()
+        } else {
+            app.input.trim().to_string()
+        };
     if message.is_empty() {
         return vec![Effect::None];
     }

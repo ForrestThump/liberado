@@ -190,7 +190,11 @@ mod tests {
     #[test]
     fn every_scenario_has_at_least_one_tool() {
         for scenario in tool_loop_scenarios() {
-            assert!(!scenario.tools.is_empty(), "scenario '{}' has no tools", scenario.name);
+            assert!(
+                !scenario.tools.is_empty(),
+                "scenario '{}' has no tools",
+                scenario.name
+            );
         }
     }
 }

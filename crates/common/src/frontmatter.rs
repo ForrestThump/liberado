@@ -66,7 +66,10 @@ mod tests {
 
     #[test]
     fn round_trips_frontmatter_and_body() {
-        let meta = Meta { id: "x1".into(), n: 7 };
+        let meta = Meta {
+            id: "x1".into(),
+            n: 7,
+        };
         let note = render_note(&meta, "Hello, body.\n");
 
         let fm = extract_frontmatter(&note).unwrap();

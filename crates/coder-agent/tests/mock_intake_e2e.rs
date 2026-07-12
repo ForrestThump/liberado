@@ -14,7 +14,7 @@ use common::{
     mock_backend, mock_provider, write_incomplete_then_report, write_todo_scaffold_then_report,
 };
 use liberado_coder_agent::{
-    freeze_if_ready, request_from_contract, run_intake, run_intake_until_ready, IntakeAnswer,
+    IntakeAnswer, freeze_if_ready, request_from_contract, run_intake, run_intake_until_ready,
 };
 use liberado_coder_core::{CoderBackend, CoderError, FreezeAuthority, IntakeOutcome};
 use liberado_common::Outcome;
@@ -55,7 +55,9 @@ async fn fixture_ready_freezes_applies_and_pipeline_passes() {
     assert_eq!(result.outcome, Outcome::Succeeded);
     assert!(result.files_changed.iter().any(|p| p.contains("main.rs")));
     let notes = result.validation_notes.expect("pipeline notes");
-    assert!(notes.contains("required_paths") || notes.contains("main_fn") || notes.contains("has_diff"));
+    assert!(
+        notes.contains("required_paths") || notes.contains("main_fn") || notes.contains("has_diff")
+    );
     assert!(dir.path().join("src/main.rs").is_file());
     let main = std::fs::read_to_string(dir.path().join("src/main.rs")).unwrap();
     assert!(main.contains("fn main"));

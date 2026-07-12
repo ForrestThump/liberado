@@ -230,13 +230,11 @@ fn style_segment(
 /// Return the prefix of `s` containing at most `n` characters (on
 /// grapheme boundaries), plus the remainder.
 fn take_width(s: &str, n: usize) -> (&str, &str) {
-    let mut count = 0usize;
     let mut byte = 0usize;
-    for (i, c) in s.char_indices() {
+    for (count, (i, c)) in s.char_indices().enumerate() {
         if count >= n {
             return (&s[..byte], &s[byte..]);
         }
-        count += 1;
         byte = i + c.len_utf8();
     }
     // Entire string fits.
@@ -268,11 +266,9 @@ fn visual_cursor(input: &str, cursor: usize, content_width: usize) -> (usize, us
 
 /// How many display lines `char_count` characters occupy at `content_width`.
 fn visual_lines_for_offset(chars: usize, content_width: usize) -> usize {
-    if content_width == 0 {
-        1
-    } else if chars == 0 {
+    if content_width == 0 || chars == 0 {
         1
     } else {
-        (chars + content_width - 1) / content_width
+        chars.div_ceil(content_width)
     }
 }

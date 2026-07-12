@@ -3,8 +3,8 @@
 
 use core::future::Future;
 use liberado_common::WriteProvenance;
-use liberado_mcp::{McpConnector, McpRegistry, TurbomcpRuntime};
 use liberado_executor::{RuntimeFactory, RuntimeSetupError};
+use liberado_mcp::{McpConnector, McpRegistry, TurbomcpRuntime};
 use liberado_provider::ToolInvocation;
 use serde_json::Value;
 use turbomcp_client::Client;
@@ -209,7 +209,10 @@ async fn best_effort_connects_the_healthy_ones_and_reports_the_failed() {
     let names: Vec<String> = runtime.catalog().iter().map(|t| t.name.clone()).collect();
     assert!(names.contains(&"tasks:add".to_string()), "{names:?}");
     assert!(names.contains(&"memory:store".to_string()), "{names:?}");
-    assert!(!names.iter().any(|n| n.starts_with("weather:")), "{names:?}");
+    assert!(
+        !names.iter().any(|n| n.starts_with("weather:")),
+        "{names:?}"
+    );
     assert_eq!(runtime.invoke(&call("tasks:add")).await.unwrap(), "added");
 }
 
@@ -235,7 +238,10 @@ async fn best_effort_with_every_connector_healthy_matches_runtime_for() {
     assert!(failed.is_empty());
     let mut names: Vec<String> = runtime.catalog().iter().map(|t| t.name.clone()).collect();
     names.sort();
-    assert_eq!(names, vec!["memory:store".to_string(), "tasks:add".to_string()]);
+    assert_eq!(
+        names,
+        vec!["memory:store".to_string(), "tasks:add".to_string()]
+    );
 }
 
 #[tokio::test]
@@ -248,21 +254,30 @@ async fn best_effort_connects_concurrently_not_sequentially() {
         .register(
             "a",
             SlowConnector {
-                server: EchoServer { tool: "t", reply: "r" },
+                server: EchoServer {
+                    tool: "t",
+                    reply: "r",
+                },
                 delay,
             },
         )
         .register(
             "b",
             SlowConnector {
-                server: EchoServer { tool: "t", reply: "r" },
+                server: EchoServer {
+                    tool: "t",
+                    reply: "r",
+                },
                 delay,
             },
         )
         .register(
             "c",
             SlowConnector {
-                server: EchoServer { tool: "t", reply: "r" },
+                server: EchoServer {
+                    tool: "t",
+                    reply: "r",
+                },
                 delay,
             },
         );

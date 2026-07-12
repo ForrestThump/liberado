@@ -30,7 +30,7 @@ use common::{
     structural_only, write_contract_paths_then_report,
 };
 use liberado_coder_agent::{
-    freeze_if_ready, request_from_contract, run_intake, run_intake_until_ready, IntakeAnswer,
+    IntakeAnswer, freeze_if_ready, request_from_contract, run_intake, run_intake_until_ready,
 };
 use liberado_coder_core::{CoderBackend, FreezeAuthority, IntakeOutcome, validate_draft};
 use liberado_common::Outcome;
@@ -53,7 +53,10 @@ Keep scope minimal: no network, no GUI.";
         .expect("live intake complete_json");
 
     match outcome {
-        IntakeOutcome::NeedsClarification { questions, partial_draft } => {
+        IntakeOutcome::NeedsClarification {
+            questions,
+            partial_draft,
+        } => {
             assert!(
                 !questions.is_empty(),
                 "clarification path must include at least one question"
@@ -71,7 +74,10 @@ Keep scope minimal: no network, no GUI.";
                 questions.len()
             );
         }
-        IntakeOutcome::ReadyForFreeze { mut draft, rationale } => {
+        IntakeOutcome::ReadyForFreeze {
+            mut draft,
+            rationale,
+        } => {
             eprintln!("live intake ready; rationale: {rationale}");
             // Expand profiles for validation the same way freeze does.
             liberado_coder_core::expand_verify_profile_into(&mut draft);
@@ -142,10 +148,16 @@ No network. Prefer structural acceptance checks (paths/content) over cargo test 
     };
 
     // Human freeze stand-in: strip command gates for mock worker safety.
-    let IntakeOutcome::ReadyForFreeze { mut draft, rationale } = outcome else {
+    let IntakeOutcome::ReadyForFreeze {
+        mut draft,
+        rationale,
+    } = outcome
+    else {
         unreachable!();
     };
-    eprintln!("freezing live draft (rationale={rationale}); stripping command verifiers for mock worker");
+    eprintln!(
+        "freezing live draft (rationale={rationale}); stripping command verifiers for mock worker"
+    );
     structural_only(&mut draft);
 
     // If the live model produced no structural paths, inject the known scaffold gates so the
@@ -158,12 +170,9 @@ No network. Prefer structural acceptance checks (paths/content) over cargo test 
         draft.verifiers.extend(common::structural_todo_verifiers());
     }
 
-    let contract = liberado_coder_core::GoalContract::freeze(
-        "live-hybrid-1",
-        draft,
-        FreezeAuthority::Human,
-    )
-    .expect("freeze hybrid contract");
+    let contract =
+        liberado_coder_core::GoalContract::freeze("live-hybrid-1", draft, FreezeAuthority::Human)
+            .expect("freeze hybrid contract");
 
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
@@ -171,7 +180,10 @@ No network. Prefer structural acceptance checks (paths/content) over cargo test 
 
     // Mock worker writes whatever structural paths the live freeze required.
     let backend = mock_backend(write_contract_paths_then_report(&contract));
-    let result = backend.run(request).await.expect("mock worker after live freeze");
+    let result = backend
+        .run(request)
+        .await
+        .expect("mock worker after live freeze");
 
     assert_eq!(result.outcome, Outcome::Succeeded);
     assert!(

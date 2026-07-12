@@ -17,10 +17,7 @@ pub fn handle(cmd: &ThemeCmd, ctx: &mut dyn CommandContext) -> Vec<CommandResult
                 for e in &errors {
                     ctx.push_system_message(format!("theme error: {e}"));
                 }
-                vec![CommandResult::ThemesReloaded {
-                    count: 0,
-                    errors,
-                }]
+                vec![CommandResult::ThemesReloaded { count: 0, errors }]
             }
         },
         ThemeCmd::List => {
@@ -50,9 +47,7 @@ pub fn handle(cmd: &ThemeCmd, ctx: &mut dyn CommandContext) -> Vec<CommandResult
                 vec![CommandResult::None]
             } else if ctx.set_theme(name) {
                 ctx.push_system_message(format!("Theme: {name}"));
-                vec![CommandResult::ThemeChanged {
-                    name: name.clone(),
-                }]
+                vec![CommandResult::ThemeChanged { name: name.clone() }]
             } else {
                 let names = ctx.theme_names();
                 ctx.push_system_message(format!(

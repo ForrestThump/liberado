@@ -196,18 +196,12 @@ pub fn coder_scenarios() -> Vec<CoderScenario> {
             tier: CoderTier::Core,
             task: "Add src/lib.rs with a public fn add(a: i32, b: i32) -> i32 { a + b } and \
                    tests/add_test.rs that asserts add(2, 2) == 4. Create directories as needed.",
-            success_criteria: &[
-                "src/lib.rs defines add",
-                "tests/add_test.rs exercises add",
-            ],
+            success_criteria: &["src/lib.rs defines add", "tests/add_test.rs exercises add"],
             seed_files: &[("Cargo.toml", CARGO_TOML_DEMO)],
             expect: CoderExpect {
                 must_change: &["src/lib.rs", "tests/add_test.rs"],
                 must_not_change: &[],
-                content_contains: &[
-                    ("src/lib.rs", "fn add"),
-                    ("tests/add_test.rs", "add(2, 2)"),
-                ],
+                content_contains: &[("src/lib.rs", "fn add"), ("tests/add_test.rs", "add(2, 2)")],
                 require_nonempty_diff: true,
                 expected_outcome: Outcome::Succeeded,
             },
@@ -280,10 +274,7 @@ pub fn coder_scenarios() -> Vec<CoderScenario> {
             task: "In config.toml only: set app.port to 9090 and features.metrics to true. \
                    Do not change app.name, app.debug, or any other keys. Do not touch README.md.",
             success_criteria: &["config.toml port=9090 and metrics=true"],
-            seed_files: &[
-                ("config.toml", CONFIG_TOML),
-                ("README.md", README_PROJECT),
-            ],
+            seed_files: &[("config.toml", CONFIG_TOML), ("README.md", README_PROJECT)],
             expect: CoderExpect {
                 must_change: &["config.toml"],
                 must_not_change: &["README.md"],
@@ -325,7 +316,10 @@ pub fn coder_scenarios() -> Vec<CoderScenario> {
             task: "tests/double_test.rs fails because src/lib.rs::double is wrong. Fix double so \
                    the test's expectation (double(2) == 4) is correct. Do not delete the test. \
                    Do not change Cargo.toml.",
-            success_criteria: &["double(2) returns 4", "test file still asserts double(2)==4"],
+            success_criteria: &[
+                "double(2) returns 4",
+                "test file still asserts double(2)==4",
+            ],
             seed_files: &[
                 ("Cargo.toml", CARGO_TOML_DEMO),
                 ("src/lib.rs", BROKEN_LIB),
@@ -409,10 +403,7 @@ pub fn coder_scenarios() -> Vec<CoderScenario> {
                      get(&self, k: &str) -> Option<&String>\n\
                    - tests/store_test.rs: test that set then get returns the value\n\
                    Keep it in-memory only (HashMap is fine). No CLI. Do not commit.",
-            success_criteria: &[
-                "Store with set/get",
-                "integration test covers set/get",
-            ],
+            success_criteria: &["Store with set/get", "integration test covers set/get"],
             seed_files: &[("PLACEHOLDER", "delete-or-ignore\n")],
             expect: CoderExpect {
                 must_change: &["Cargo.toml", "src/lib.rs", "tests/store_test.rs"],
@@ -485,10 +476,10 @@ pub fn coder_scenarios_for(
         .into_iter()
         .filter(|s| s.tier <= tier)
         .collect();
-    if let Some(names) = name_filter {
-        if !names.is_empty() {
-            filtered.retain(|s| names.iter().any(|n| n == s.name));
-        }
+    if let Some(names) = name_filter
+        && !names.is_empty()
+    {
+        filtered.retain(|s| names.iter().any(|n| n == s.name));
     }
     match max_scenarios {
         Some(n) => filtered.into_iter().take(n).collect(),

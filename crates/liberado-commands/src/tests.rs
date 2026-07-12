@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(clippy::module_inception)] // file is already `mod tests`; the inner wrapper is historical
 mod tests {
     use crate::commands::*;
     use crate::context::{CommandContext, StatusInfo};
@@ -174,10 +175,7 @@ mod tests {
 
     #[test]
     fn parse_theme_list() {
-        assert_eq!(
-            parse("/theme"),
-            Some(SlashCommand::Theme(ThemeCmd::List))
-        );
+        assert_eq!(parse("/theme"), Some(SlashCommand::Theme(ThemeCmd::List)));
         assert_eq!(
             parse("/theme list"),
             Some(SlashCommand::Theme(ThemeCmd::List))
@@ -400,10 +398,8 @@ mod tests {
     #[test]
     fn dispatch_theme_set_empty() {
         let mut ctx = MockContext::new();
-        let results = crate::dispatch::dispatch(
-            &SlashCommand::Theme(ThemeCmd::Set("".into())),
-            &mut ctx,
-        );
+        let results =
+            crate::dispatch::dispatch(&SlashCommand::Theme(ThemeCmd::Set("".into())), &mut ctx);
         assert_eq!(results, vec![CommandResult::None]);
         assert_eq!(ctx.messages.len(), 1);
         assert!(ctx.messages[0].contains("Usage"));
@@ -412,10 +408,7 @@ mod tests {
     #[test]
     fn dispatch_theme_list() {
         let mut ctx = MockContext::new();
-        let results = crate::dispatch::dispatch(
-            &SlashCommand::Theme(ThemeCmd::List),
-            &mut ctx,
-        );
+        let results = crate::dispatch::dispatch(&SlashCommand::Theme(ThemeCmd::List), &mut ctx);
         assert!(matches!(results[0], CommandResult::ShowOptions { .. }));
         if let CommandResult::ShowOptions { title, options } = &results[0] {
             assert_eq!(title, "Available themes");
@@ -426,10 +419,7 @@ mod tests {
     #[test]
     fn dispatch_theme_reload() {
         let mut ctx = MockContext::new();
-        let results = crate::dispatch::dispatch(
-            &SlashCommand::Theme(ThemeCmd::Reload),
-            &mut ctx,
-        );
+        let results = crate::dispatch::dispatch(&SlashCommand::Theme(ThemeCmd::Reload), &mut ctx);
         assert_eq!(
             results,
             vec![CommandResult::ThemesReloaded {
@@ -474,10 +464,8 @@ mod tests {
     fn dispatch_session_close() {
         let mut ctx = MockContext::new();
         ctx.session = Some("sess-1".into());
-        let results = crate::dispatch::dispatch(
-            &SlashCommand::Session(SessionCmd::Close),
-            &mut ctx,
-        );
+        let results =
+            crate::dispatch::dispatch(&SlashCommand::Session(SessionCmd::Close), &mut ctx);
         assert_eq!(
             results,
             vec![CommandResult::SessionClosed {
@@ -490,14 +478,9 @@ mod tests {
     #[test]
     fn dispatch_session_close_no_session() {
         let mut ctx = MockContext::new();
-        let results = crate::dispatch::dispatch(
-            &SlashCommand::Session(SessionCmd::Close),
-            &mut ctx,
-        );
-        assert_eq!(
-            results,
-            vec![CommandResult::SessionClosed { id: None }]
-        );
+        let results =
+            crate::dispatch::dispatch(&SlashCommand::Session(SessionCmd::Close), &mut ctx);
+        assert_eq!(results, vec![CommandResult::SessionClosed { id: None }]);
         assert_eq!(ctx.messages.len(), 1);
         assert!(ctx.messages[0].contains("No active session"));
     }
@@ -539,9 +522,7 @@ mod tests {
         );
         assert_eq!(
             results,
-            vec![CommandResult::SessionSwitched {
-                id: "xyz".into()
-            }]
+            vec![CommandResult::SessionSwitched { id: "xyz".into() }]
         );
     }
 
@@ -551,10 +532,7 @@ mod tests {
         ctx.session = Some("c1".into());
         ctx.conversations
             .push(("c1".into(), "test conv".into(), None));
-        let results = crate::dispatch::dispatch(
-            &SlashCommand::Session(SessionCmd::Info),
-            &mut ctx,
-        );
+        let results = crate::dispatch::dispatch(&SlashCommand::Session(SessionCmd::Info), &mut ctx);
         assert_eq!(results, vec![CommandResult::SessionInfoShown]);
         assert!(ctx.messages[0].contains("c1"));
         assert!(ctx.messages[0].contains("test conv"));
@@ -563,10 +541,7 @@ mod tests {
     #[test]
     fn dispatch_session_info_no_session() {
         let mut ctx = MockContext::new();
-        let results = crate::dispatch::dispatch(
-            &SlashCommand::Session(SessionCmd::Info),
-            &mut ctx,
-        );
+        let results = crate::dispatch::dispatch(&SlashCommand::Session(SessionCmd::Info), &mut ctx);
         assert_eq!(results, vec![CommandResult::None]);
         assert!(ctx.messages[0].contains("No active session"));
     }
@@ -574,14 +549,9 @@ mod tests {
     #[test]
     fn dispatch_session_list() {
         let mut ctx = MockContext::new();
-        ctx.conversations
-            .push(("c1".into(), "a".into(), None));
-        ctx.conversations
-            .push(("c2".into(), "b".into(), None));
-        let results = crate::dispatch::dispatch(
-            &SlashCommand::Session(SessionCmd::List),
-            &mut ctx,
-        );
+        ctx.conversations.push(("c1".into(), "a".into(), None));
+        ctx.conversations.push(("c2".into(), "b".into(), None));
+        let results = crate::dispatch::dispatch(&SlashCommand::Session(SessionCmd::List), &mut ctx);
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0], CommandResult::OpenSessionBrowser));
     }

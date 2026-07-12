@@ -81,7 +81,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let layer = config.layer;
 
     let run_timestamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%SZ").to_string();
-    let out_dir = liberado_config::data_dir().join("tuner").join(&run_timestamp);
+    let out_dir = liberado_config::data_dir()
+        .join("tuner")
+        .join(&run_timestamp);
     tokio::fs::create_dir_all(&out_dir).await?;
 
     let final_rubric = match layer {
@@ -101,8 +103,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             result.rubric
         }
-        Layer::Executor => save_tool_loop_result(run_executor_tuner(config).await, &out_dir).await?,
-        Layer::Subagent => save_tool_loop_result(run_subagent_tuner(config).await, &out_dir).await?,
+        Layer::Executor => {
+            save_tool_loop_result(run_executor_tuner(config).await, &out_dir).await?
+        }
+        Layer::Subagent => {
+            save_tool_loop_result(run_subagent_tuner(config).await, &out_dir).await?
+        }
         Layer::Coder => save_coder_result(run_coder_tuner(config).await, &out_dir).await?,
     };
 

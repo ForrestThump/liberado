@@ -149,4 +149,3 @@ fn validation_summary(result: &Value) -> String {
     }
     summary
 }
-

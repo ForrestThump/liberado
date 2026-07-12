@@ -64,7 +64,14 @@ pub fn visible_tree(
     }
     let lower = filter.to_lowercase();
     out.into_iter()
-        .filter(|n| n.header.title.as_deref().unwrap_or("").to_lowercase().contains(&lower))
+        .filter(|n| {
+            n.header
+                .title
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains(&lower)
+        })
         .collect()
 }
 
@@ -75,6 +82,12 @@ pub fn filtered_list<'a>(convs: &'a [ConvHeader], filter: &str) -> Vec<&'a ConvH
     let lower = filter.to_lowercase();
     convs
         .iter()
-        .filter(|c| c.title.as_deref().unwrap_or("").to_lowercase().contains(&lower))
+        .filter(|c| {
+            c.title
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains(&lower)
+        })
         .collect()
 }

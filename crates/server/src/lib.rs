@@ -112,14 +112,16 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     let dispatcher_capabilities = config.policy.capabilities_for("dispatcher");
 
     // Goal session hub (scratchpad F): life-ops demo always; coding when a provider is available.
-    let mut goals_hub = liberado_session::GoalSessionHub::new(liberado_session::GoalSessionStore::new());
+    let mut goals_hub =
+        liberado_session::GoalSessionHub::new(liberado_session::GoalSessionStore::new());
     goals_hub.register_pack(Arc::new(liberado_session::LifeOpsDemoRunner));
     if let Some(p) = provider.as_ref() {
         let work_parent = liberado_bootstrap::data_dir().join("goal-workspaces");
         let _ = std::fs::create_dir_all(&work_parent);
-        goals_hub.register_pack(Arc::new(
-            liberado_coder_agent::CodingSessionPack::new(p.clone(), work_parent),
-        ));
+        goals_hub.register_pack(Arc::new(liberado_coder_agent::CodingSessionPack::new(
+            p.clone(),
+            work_parent,
+        )));
         info!("goal session packs: life + coding");
     } else {
         info!("goal session packs: life only (no provider — coding pack skipped)");
@@ -154,15 +156,15 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // itself uses). Cloning the vault/signer here, before `daemon` moves into its own spawn below,
     // gives the bot its own handle onto the exact same underlying vault (`Vault` is cheap to
     // clone — see `liberado_vault::Vault`'s doc comment).
-    if let Some(p) = provider.as_ref() {
-        if let Some(bot) = liberado_telegram_approvals::ApprovalBot::from_env(
+    if let Some(p) = provider.as_ref()
+        && let Some(bot) = liberado_telegram_approvals::ApprovalBot::from_env(
             daemon.vault().clone(),
             daemon.signer().clone(),
             p.clone(),
             config.tuning.telegram_approvals.clone(),
-        ) {
-            tokio::spawn(bot.run());
-        }
+        )
+    {
+        tokio::spawn(bot.run());
     }
 
     let reaction_tx = state.reaction_tx();
@@ -173,10 +175,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/api/status", axum::routing::get(api::status))
         .route("/api/models", axum::routing::get(api::models))
-        .route(
-            "/api/models/select",
-            axum::routing::post(api::select_model),
-        )
+        .route("/api/models/select", axum::routing::post(api::select_model))
         .route("/api/catalog", axum::routing::get(api::catalog))
         .route("/api/reactions", axum::routing::get(api::reactions))
         .route("/api/vault", axum::routing::get(api::vault))
@@ -375,16 +374,13 @@ async fn build_chat(
 
     // ── Build the guarded ChatSessions ───────────────────────────────────────
     let consequence_count = guard.consequences.len();
-    let system_prompt = main_agent_cfg
-        .system_prompt
-        .clone()
-        .unwrap_or_else(|| {
-            if main_agent_cfg.delegation_mode {
-                liberado_main_agent::HUMAN_INTERFACE_SYSTEM_PROMPT.to_string()
-            } else {
-                liberado_main_agent::DEFAULT_SYSTEM_PROMPT.to_string()
-            }
-        });
+    let system_prompt = main_agent_cfg.system_prompt.clone().unwrap_or_else(|| {
+        if main_agent_cfg.delegation_mode {
+            liberado_main_agent::HUMAN_INTERFACE_SYSTEM_PROMPT.to_string()
+        } else {
+            liberado_main_agent::DEFAULT_SYSTEM_PROMPT.to_string()
+        }
+    });
 
     let mut sessions = ChatSessions::new(
         store,

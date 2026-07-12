@@ -3,8 +3,6 @@ use dioxus::prelude::*;
 use chat_client_contract::ChatMessage;
 
 use crate::components::markdown::MarkdownText;
-use crate::components::slash_commands::handle_slash_command;
-use liberado_commands::CommandResult;
 
 // ── Data types ──────────────────────────────────────────────────────────────
 
@@ -29,15 +27,27 @@ pub struct ChatMsg {
 
 impl ChatMsg {
     fn new_user(content: String) -> Self {
-        ChatMsg { role: "user", content, thinking_steps: Vec::new() }
+        ChatMsg {
+            role: "user",
+            content,
+            thinking_steps: Vec::new(),
+        }
     }
 
     fn new_assistant(content: String) -> Self {
-        ChatMsg { role: "assistant", content, thinking_steps: Vec::new() }
+        ChatMsg {
+            role: "assistant",
+            content,
+            thinking_steps: Vec::new(),
+        }
     }
 
     fn new_error(content: String) -> Self {
-        ChatMsg { role: "error", content, thinking_steps: Vec::new() }
+        ChatMsg {
+            role: "error",
+            content,
+            thinking_steps: Vec::new(),
+        }
     }
 
     fn from_wire(msg: &ChatMessage) -> Self {
@@ -57,10 +67,7 @@ impl ChatMsg {
 
 // ── History loading ─────────────────────────────────────────────────────────
 
-async fn fetch_conversation(
-    api_base: &str,
-    conv_id: &str,
-) -> Result<Vec<ChatMsg>, String> {
+async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<Vec<ChatMsg>, String> {
     let url = format!("{api_base}/api/conversations/{conv_id}");
     let resp = reqwest::get(&url)
         .await
@@ -79,7 +86,7 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
     let mut messages = use_signal(Vec::new);
     let mut input = use_signal(String::new);
     let mut sending = use_signal(|| false);
-    let mut session = use_signal(|| None::<String>);
+    let session = use_signal(|| None::<String>);
     let mut should_set_title = use_signal(|| false);
 
     let base_for_effect = api_base.clone();
@@ -175,7 +182,13 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
             });
             #[cfg(not(target_arch = "wasm32"))]
             {
-                let _ = (base, text_owned, session_snapshot, sending_snapshot, message_count);
+                let _ = (
+                    base,
+                    text_owned,
+                    session_snapshot,
+                    sending_snapshot,
+                    message_count,
+                );
             }
 
             input.set(String::new());
@@ -193,7 +206,16 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
         }
 
         #[cfg(target_arch = "wasm32")]
-        open_stream(&base_for_submit, &text, messages, sending, session, active_conv_id, should_set_title, &base_for_title);
+        open_stream(
+            &base_for_submit,
+            &text,
+            messages,
+            sending,
+            session,
+            active_conv_id,
+            should_set_title,
+            &base_for_title,
+        );
         #[cfg(not(target_arch = "wasm32"))]
         {
             let _ = &base_for_submit;
@@ -322,11 +344,15 @@ fn ThinkingGroup(steps: Vec<ThinkingStep>) -> Element {
 
     let header_arrow = if expanded() { "\u{25BC}" } else { "\u{25B8}" };
     let header_label = if has_pending {
-        format!("Thinking ({count} step{plural}): {summary_text} \u{2026}",
-            plural = if count == 1 { "" } else { "s" })
+        format!(
+            "Thinking ({count} step{plural}): {summary_text} \u{2026}",
+            plural = if count == 1 { "" } else { "s" }
+        )
     } else {
-        format!("Thinking ({count} step{plural}): {summary_text}",
-            plural = if count == 1 { "" } else { "s" })
+        format!(
+            "Thinking ({count} step{plural}): {summary_text}",
+            plural = if count == 1 { "" } else { "s" }
+        )
     };
 
     rsx! {
@@ -358,14 +384,12 @@ fn ThinkingStepRow(step: ThinkingStep) -> Element {
         Some(false) => "thinking-step err",
     };
 
-    let args_display = if step.tool_args.is_empty()
-        || step.tool_args == "{}"
-        || step.tool_args == "null"
-    {
-        String::new()
-    } else {
-        format!("({})", step.tool_args)
-    };
+    let args_display =
+        if step.tool_args.is_empty() || step.tool_args == "{}" || step.tool_args == "null" {
+            String::new()
+        } else {
+            format!("({})", step.tool_args)
+        };
 
     let mark = match step.ok {
         None => "\u{23F3}",
@@ -486,8 +510,7 @@ fn open_stream(
                 });
             }
         });
-        let _ =
-            source.add_event_listener_with_callback("token", on_token.as_ref().unchecked_ref());
+        let _ = source.add_event_listener_with_callback("token", on_token.as_ref().unchecked_ref());
         on_token.forget();
     }
 
@@ -527,8 +550,7 @@ fn open_stream(
                 }
             }
         });
-        let _ =
-            source.add_event_listener_with_callback("tool", on_tool.as_ref().unchecked_ref());
+        let _ = source.add_event_listener_with_callback("tool", on_tool.as_ref().unchecked_ref());
         on_tool.forget();
     }
 
@@ -577,28 +599,26 @@ fn open_stream(
 
             if should_set_title() {
                 should_set_title.set(false);
-                let title_opt = messages
-                    .read()
-                    .iter()
-                    .find(|m| m.role == "user")
-                    .map(|m| {
-                        let t = m.content.trim();
-                        if t.len() > 60 {
-                            // Byte-length slicing panics if 57 lands mid-codepoint (any curly
-                            // quote, em-dash, etc.) — walk back to the nearest char boundary.
-                            let mut cut = 57;
-                            while cut > 0 && !t.is_char_boundary(cut) {
-                                cut -= 1;
-                            }
-                            format!("{}…", &t[..cut])
-                        } else {
-                            t.to_string()
+                let title_opt = messages.read().iter().find(|m| m.role == "user").map(|m| {
+                    let t = m.content.trim();
+                    if t.len() > 60 {
+                        // Byte-length slicing panics if 57 lands mid-codepoint (any curly
+                        // quote, em-dash, etc.) — walk back to the nearest char boundary.
+                        let mut cut = 57;
+                        while cut > 0 && !t.is_char_boundary(cut) {
+                            cut -= 1;
                         }
-                    });
+                        format!("{}…", &t[..cut])
+                    } else {
+                        t.to_string()
+                    }
+                });
                 let conv_id_opt = session.read().clone();
                 if let (Some(title), Some(conv_id)) = (title_opt, conv_id_opt) {
                     let base = title_base.clone();
-                    web_sys::console::log_1(&format!("[title] setting title for {}: {}", conv_id, title).into());
+                    web_sys::console::log_1(
+                        &format!("[title] setting title for {}: {}", conv_id, title).into(),
+                    );
                     wasm_bindgen_futures::spawn_local(async move {
                         let url = format!("{base}/api/conversations/{conv_id}");
                         let body = serde_json::json!({ "title": title });
@@ -606,21 +626,31 @@ fn open_stream(
                         match client.patch(&url).json(&body).send().await {
                             Ok(resp) => {
                                 if !resp.status().is_success() {
-                                    web_sys::console::log_1(&format!("[title] PATCH failed: {} - {}", resp.status(), resp.text().await.unwrap_or_default()).into());
+                                    web_sys::console::log_1(
+                                        &format!(
+                                            "[title] PATCH failed: {} - {}",
+                                            resp.status(),
+                                            resp.text().await.unwrap_or_default()
+                                        )
+                                        .into(),
+                                    );
                                 }
                             }
                             Err(e) => {
-                                web_sys::console::log_1(&format!("[title] PATCH error: {}", e).into());
+                                web_sys::console::log_1(
+                                    &format!("[title] PATCH error: {}", e).into(),
+                                );
                             }
                         }
                     });
                 } else {
-                    web_sys::console::log_1(&"[title] should_set_title was true but no user message or session".into());
+                    web_sys::console::log_1(
+                        &"[title] should_set_title was true but no user message or session".into(),
+                    );
                 }
             }
         });
-        let _ =
-            source.add_event_listener_with_callback("done", on_done.as_ref().unchecked_ref());
+        let _ = source.add_event_listener_with_callback("done", on_done.as_ref().unchecked_ref());
         on_done.forget();
     }
 
@@ -632,15 +662,12 @@ fn open_stream(
                 .data()
                 .as_string()
                 .unwrap_or_else(|| "stream error".into());
-            messages.with_mut(|m| {
-                m.push(ChatMsg::new_error(msg))
-            });
+            messages.with_mut(|m| m.push(ChatMsg::new_error(msg)));
             source_fail.close();
             sending.set(false);
             CURRENT_SOURCE.with(|cell| *cell.borrow_mut() = None);
         });
-        let _ =
-            source.add_event_listener_with_callback("failed", on_fail.as_ref().unchecked_ref());
+        let _ = source.add_event_listener_with_callback("failed", on_fail.as_ref().unchecked_ref());
         on_fail.forget();
     }
 

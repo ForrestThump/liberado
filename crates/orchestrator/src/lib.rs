@@ -804,11 +804,8 @@ mod tests {
             Capability::ExecuteMcp("turbovault".into()),
             Capability::ExecuteMcp("weather".into()),
         ]);
-        let gate = subagent_gate_capabilities(
-            &ceiling,
-            &CapabilitySet::empty(),
-            &["turbovault".into()],
-        );
+        let gate =
+            subagent_gate_capabilities(&ceiling, &CapabilitySet::empty(), &["turbovault".into()]);
         assert!(gate.grants_mcp("turbovault"));
         assert!(!gate.grants_mcp("weather"));
     }

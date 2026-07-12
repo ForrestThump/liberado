@@ -24,11 +24,11 @@ pub fn journal_path(correlation_id: &str) -> PathBuf {
 /// Best-effort append of one JSON object line. Failures are logged and ignored.
 pub async fn append(correlation_id: &str, record: Value) {
     let path = journal_path(correlation_id);
-    if let Some(parent) = path.parent() {
-        if let Err(e) = tokio::fs::create_dir_all(parent).await {
-            tracing::warn!(error = %e, path = %parent.display(), "dispatch journal mkdir failed");
-            return;
-        }
+    if let Some(parent) = path.parent()
+        && let Err(e) = tokio::fs::create_dir_all(parent).await
+    {
+        tracing::warn!(error = %e, path = %parent.display(), "dispatch journal mkdir failed");
+        return;
     }
     let mut line = record.to_string();
     line.push('\n');

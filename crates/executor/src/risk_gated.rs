@@ -171,7 +171,11 @@ impl ToolRuntime for RiskGatedToolRuntime {
             // Fails open to ReadOnly (matching the dispatcher pre-flight guard's own documented
             // "undescribed contributes nothing" stance — see guards.rs's max_consequence), but
             // logs so a catalog typo isn't a silent risk downgrade.
-            let consequence = match self.consequence_catalog.iter().find(|(name, _)| name == &mcp_name) {
+            let consequence = match self
+                .consequence_catalog
+                .iter()
+                .find(|(name, _)| name == &mcp_name)
+            {
                 Some((_, c)) => *c,
                 None => {
                     tracing::warn!(

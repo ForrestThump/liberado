@@ -913,10 +913,7 @@ mod tests {
         save_theme_preference_to(&path, "nord").unwrap();
         assert_eq!(load_ui_settings_from(&path).theme.as_deref(), Some("nord"));
         save_theme_preference_to(&path, "light").unwrap();
-        assert_eq!(
-            load_ui_settings_from(&path).theme.as_deref(),
-            Some("light")
-        );
+        assert_eq!(load_ui_settings_from(&path).theme.as_deref(), Some("light"));
         let body = fs::read_to_string(&path).unwrap();
         assert!(body.contains("theme"));
         assert!(body.contains("light"));

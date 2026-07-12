@@ -208,7 +208,11 @@ impl MemoryStore {
 
     /// Delete a memory by id. Returns `false` if no such memory exists (not an error — deleting
     /// something already gone is idempotent).
-    pub async fn delete(&self, id: &str, provenance: &WriteProvenance) -> Result<bool, MemoryError> {
+    pub async fn delete(
+        &self,
+        id: &str,
+        provenance: &WriteProvenance,
+    ) -> Result<bool, MemoryError> {
         validate_id(id)?;
         let rel_path = self.dir.join(format!("{id}.md"));
         if self.vault.read(&rel_path).await.is_err() {
@@ -236,7 +240,9 @@ impl MemoryStore {
         let abs_path = self.vault.root().join(rel_path);
         let notes_root = self.vault.root().join(&self.dir);
         let mut index = self.index.write().await;
-        self.builder.update_file(&abs_path, &notes_root, &mut index).await?;
+        self.builder
+            .update_file(&abs_path, &notes_root, &mut index)
+            .await?;
         Ok(())
     }
 
@@ -299,7 +305,8 @@ impl ToolGuidanceSource for MemoryStore {
         task_type: Option<String>,
         tools_used: Vec<String>,
     ) {
-        let provenance = WriteProvenance::agent("liberado-dispatcher", ulid::Ulid::new().to_string());
+        let provenance =
+            WriteProvenance::agent("liberado-dispatcher", ulid::Ulid::new().to_string());
         if let Err(e) = self
             .add_guidance(directive, task_type, Some(tools_used), vec![], &provenance)
             .await
@@ -392,7 +399,10 @@ mod tests {
         let store = test_store(&tmp).await;
         let provenance = WriteProvenance::agent("test", "corr-1");
 
-        let id = store.add("Some memory.", vec![], &provenance).await.unwrap();
+        let id = store
+            .add("Some memory.", vec![], &provenance)
+            .await
+            .unwrap();
         let deleted = store.delete(&id, &provenance).await.unwrap();
         assert!(deleted);
 

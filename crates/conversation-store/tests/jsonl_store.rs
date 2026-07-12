@@ -304,7 +304,10 @@ async fn header_reads_line_zero_without_loading_nodes() {
     let dir = tempdir().unwrap();
     let store = JsonlStore::new(dir.path());
     let convo = store.create(new_convo("sidebar title")).await.unwrap();
-    store.append(convo.id, user_node(None, "body")).await.unwrap();
+    store
+        .append(convo.id, user_node(None, "body"))
+        .await
+        .unwrap();
 
     let h = store.header(convo.id).await.unwrap();
     assert_eq!(h.id, convo.id);

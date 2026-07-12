@@ -48,10 +48,7 @@ impl ProgressFatal {
                  and either make the required edits or submit_report with outcome=failed and why \
                  you are blocked."
             ),
-            Self::ValidationChurn {
-                signature,
-                repeats,
-            } => format!(
+            Self::ValidationChurn { signature, repeats } => format!(
                 "PROGRESS GUARD (fatal): validate failed {repeats} times with the same signature. \
                  Do not re-run the same broken fix. Change approach or submit_report failed.\n\
                  Signature:\n{signature}"
@@ -111,18 +108,9 @@ impl ProgressGuard {
     }
 
     /// Observe a completed tool invocation and decide whether to nudge or fail hard.
-    pub fn observe(
-        &mut self,
-        tool_name: &str,
-        ok: bool,
-        result_preview: &str,
-    ) -> ProgressAction {
+    pub fn observe(&mut self, tool_name: &str, ok: bool, result_preview: &str) -> ProgressAction {
         if self.fatal.is_some() {
-            return ProgressAction::Fatal(
-                self.fatal
-                    .clone()
-                    .expect("fatal checked as Some"),
-            );
+            return ProgressAction::Fatal(self.fatal.clone().expect("fatal checked as Some"));
         }
 
         if tool_name == liberado_executor::SUBMIT_REPORT_TOOL {
@@ -140,18 +128,16 @@ impl ProgressGuard {
                 self.consecutive_same_tool = 0;
                 self.same_tool_nudged = false;
             } else {
-                self.consecutive_non_mutating =
-                    self.consecutive_non_mutating.saturating_add(1);
+                self.consecutive_non_mutating = self.consecutive_non_mutating.saturating_add(1);
             }
         } else if is_inspect(tool_name) || tool_name == "validate" {
-            self.consecutive_non_mutating =
-                self.consecutive_non_mutating.saturating_add(1);
+            self.consecutive_non_mutating = self.consecutive_non_mutating.saturating_add(1);
         }
 
-        if tool_name == "validate" {
-            if let Some(action) = self.observe_validation(ok, result_preview) {
-                return action;
-            }
+        if tool_name == "validate"
+            && let Some(action) = self.observe_validation(ok, result_preview)
+        {
+            return action;
         }
 
         if let Some(action) = self.check_same_tool_limit(tool_name) {
@@ -321,7 +307,10 @@ mod tests {
             ProgressAction::Continue { nudge: None }
         ));
         let second = guard.observe("read_file", true, "{}");
-        assert!(matches!(second, ProgressAction::Continue { nudge: Some(_) }));
+        assert!(matches!(
+            second,
+            ProgressAction::Continue { nudge: Some(_) }
+        ));
         assert!(matches!(
             guard.observe("git_status", true, "{}"),
             ProgressAction::Continue { nudge: None }
@@ -387,7 +376,10 @@ mod tests {
             ProgressAction::Continue { nudge: None }
         ));
         let second = guard.observe("read_file", true, "{}");
-        assert!(matches!(second, ProgressAction::Continue { nudge: Some(_) }));
+        assert!(matches!(
+            second,
+            ProgressAction::Continue { nudge: Some(_) }
+        ));
         guard.observe("read_file", true, "{}");
         let fourth = guard.observe("read_file", true, "{}");
         assert!(matches!(

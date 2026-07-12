@@ -7,9 +7,9 @@ use liberado_provider::{CompletionRequest, Message};
 use serde_json::json;
 use tokio::process::Command;
 
+use crate::CoderProviderFactory;
 use crate::roles::{role_instructions, truncate_chars};
 use crate::trace::{self, EventLog};
-use crate::CoderProviderFactory;
 
 pub async fn run_critic(
     providers: &dyn CoderProviderFactory,
@@ -51,10 +51,8 @@ pub async fn run_critic(
         user.push_str(context);
     }
 
-    let mut completion = CompletionRequest::new(vec![
-        Message::system(instructions),
-        Message::user(user),
-    ]);
+    let mut completion =
+        CompletionRequest::new(vec![Message::system(instructions), Message::user(user)]);
     if let Some(temperature) = request.config.critic.temperature {
         completion = completion.with_temperature(temperature);
     }

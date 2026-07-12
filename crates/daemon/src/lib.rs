@@ -255,10 +255,10 @@ impl Daemon {
         zone_write_classes: Vec<(String, WriteClass)>,
     ) -> Self {
         let mut daemon = self.with_pool_dispatcher(DEFAULT_POOL, dispatcher, catalog, capabilities);
-        if let Some(pool) = daemon.pools.get_mut(DEFAULT_POOL) {
-            if let Some(ctx) = &mut pool.dispatcher {
-                ctx.zone_write_classes = zone_write_classes;
-            }
+        if let Some(pool) = daemon.pools.get_mut(DEFAULT_POOL)
+            && let Some(ctx) = &mut pool.dispatcher
+        {
+            ctx.zone_write_classes = zone_write_classes;
         }
         daemon
     }
@@ -1487,7 +1487,7 @@ mod tests {
         );
         let mut proposal = signer.sign(proposal);
         proposal.set_status(ProposalStatus::Approved);
-        std::fs::write(proposals_dir.join("approved.md"), &proposal.to_note()).unwrap();
+        std::fs::write(proposals_dir.join("approved.md"), proposal.to_note()).unwrap();
 
         // Wait for the daemon to react to the proposal change.
         let _reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
@@ -1560,7 +1560,7 @@ mod tests {
             }]),
             "a pending proposal",
         );
-        std::fs::write(proposals_dir.join("pending-test.md"), &proposal.to_note()).unwrap();
+        std::fs::write(proposals_dir.join("pending-test.md"), proposal.to_note()).unwrap();
 
         // Wait for the daemon to process the change (reaction should arrive quickly).
         let _reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
@@ -1641,7 +1641,7 @@ mod tests {
         );
         let mut proposal = forging_signer.sign(proposal);
         proposal.set_status(ProposalStatus::Approved);
-        std::fs::write(proposals_dir.join("forged.md"), &proposal.to_note()).unwrap();
+        std::fs::write(proposals_dir.join("forged.md"), proposal.to_note()).unwrap();
 
         let _reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
             .await

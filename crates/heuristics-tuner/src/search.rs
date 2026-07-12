@@ -137,7 +137,10 @@ fn advance_beam(
     if survivors.is_empty() {
         beam.to_vec()
     } else {
-        survivors.into_iter().map(|idx| scored[idx].clone()).collect()
+        survivors
+            .into_iter()
+            .map(|idx| scored[idx].clone())
+            .collect()
     }
 }
 
@@ -177,7 +180,14 @@ pub async fn run_tuner(config: TunerConfig) -> TunerResult {
                     break;
                 }
                 let failing = parent_fitness.failing();
-                match mutate(config.meta_provider.as_ref(), &parent.prompt, &failing, &budget).await {
+                match mutate(
+                    config.meta_provider.as_ref(),
+                    &parent.prompt,
+                    &failing,
+                    &budget,
+                )
+                .await
+                {
                     Ok(prompt) => pool.push(Candidate {
                         prompt,
                         origin: CandidateOrigin::MutatedFrom {
@@ -272,7 +282,9 @@ pub(crate) async fn request_justification_if_budget_allows(
     if budget.exhausted() {
         return None;
     }
-    request_justification(meta_provider, prompt, budget).await.ok()
+    request_justification(meta_provider, prompt, budget)
+        .await
+        .ok()
 }
 
 #[cfg(test)]

@@ -127,15 +127,15 @@ pub fn build_coder_draft_proposal(
 fn scenario_improvements(baseline: &CoderFitness, winner: &CoderFitness) -> Vec<String> {
     let mut out = Vec::new();
     for w in &winner.scenarios {
-        if let Some(b) = baseline.scenarios.iter().find(|b| b.name == w.name) {
-            if w.pass_rate() > b.pass_rate() + 0.01 {
-                out.push(format!(
-                    "{} ({:.2} -> {:.2})",
-                    w.name,
-                    b.pass_rate(),
-                    w.pass_rate()
-                ));
-            }
+        if let Some(b) = baseline.scenarios.iter().find(|b| b.name == w.name)
+            && w.pass_rate() > b.pass_rate() + 0.01
+        {
+            out.push(format!(
+                "{} ({:.2} -> {:.2})",
+                w.name,
+                b.pass_rate(),
+                w.pass_rate()
+            ));
         }
     }
     out
@@ -144,15 +144,15 @@ fn scenario_improvements(baseline: &CoderFitness, winner: &CoderFitness) -> Vec<
 fn scenario_regressions(baseline: &CoderFitness, winner: &CoderFitness) -> Vec<String> {
     let mut out = Vec::new();
     for w in &winner.scenarios {
-        if let Some(b) = baseline.scenarios.iter().find(|b| b.name == w.name) {
-            if w.pass_rate() + 0.01 < b.pass_rate() {
-                out.push(format!(
-                    "{} ({:.2} -> {:.2})",
-                    w.name,
-                    b.pass_rate(),
-                    w.pass_rate()
-                ));
-            }
+        if let Some(b) = baseline.scenarios.iter().find(|b| b.name == w.name)
+            && w.pass_rate() + 0.01 < b.pass_rate()
+        {
+            out.push(format!(
+                "{} ({:.2} -> {:.2})",
+                w.name,
+                b.pass_rate(),
+                w.pass_rate()
+            ));
         }
     }
     out
@@ -162,7 +162,10 @@ fn scenario_regressions(baseline: &CoderFitness, winner: &CoderFitness) -> Vec<S
 pub fn format_proposal_markdown(p: &CoderDraftProposal) -> String {
     let mut out = String::new();
     out.push_str("# Heuristics tuner draft proposal (coder layer)\n\n");
-    out.push_str(&format!("**Recommended for adoption:** {}\n\n", p.recommended));
+    out.push_str(&format!(
+        "**Recommended for adoption:** {}\n\n",
+        p.recommended
+    ));
     out.push_str(&format!("**Reason:** {}\n\n", p.reason));
     out.push_str(&format!("**Policy:** {}\n\n", p.policy));
     out.push_str("## Metrics\n\n");
@@ -192,10 +195,7 @@ pub fn format_proposal_markdown(p: &CoderDraftProposal) -> String {
             out.push_str(&format!("  - {s}\n"));
         }
     }
-    out.push_str(&format!(
-        "\n## Target file\n\n`{}`\n\n",
-        p.target_path
-    ));
+    out.push_str(&format!("\n## Target file\n\n`{}`\n\n", p.target_path));
     out.push_str("## How to adopt\n\n");
     out.push_str("1. Review `proposed/` content vs baseline.\n");
     out.push_str("2. If recommended, copy into the repo path by hand **or** submit `pr_factory_task.json` via PR-dispatch as a human-approved draft PR task.\n");
@@ -240,7 +240,10 @@ pub fn build_pr_factory_task(p: &CoderDraftProposal) -> PrFactoryTaskPayload {
             "high".into()
         },
         success_criteria: vec![
-            format!("{} updated to the proposed coder system prompt", p.target_path),
+            format!(
+                "{} updated to the proposed coder system prompt",
+                p.target_path
+            ),
             "no unrelated files modified".into(),
         ],
         verifiers: vec![
@@ -388,7 +391,11 @@ mod tests {
             DEFAULT_CODER_PROMPT_PATH,
         );
         assert!(p.recommended);
-        assert!(p.improved_scenarios.iter().any(|s| s.contains("create-hello-file")));
+        assert!(
+            p.improved_scenarios
+                .iter()
+                .any(|s| s.contains("create-hello-file"))
+        );
         assert!(p.regressed_scenarios.is_empty());
     }
 
@@ -464,12 +471,10 @@ mod tests {
         assert!(written.len() >= 4);
         assert!(dir.path().join("PROPOSAL.md").is_file());
         assert!(dir.path().join("proposal.json").is_file());
-        assert!(dir
-            .path()
-            .join("proposed/prompts/coder/coder.md")
-            .is_file());
+        assert!(dir.path().join("proposed/prompts/coder/coder.md").is_file());
         assert!(dir.path().join("pr_factory_task.json").is_file());
-        let body = std::fs::read_to_string(dir.path().join("proposed/prompts/coder/coder.md")).unwrap();
+        let body =
+            std::fs::read_to_string(dir.path().join("proposed/prompts/coder/coder.md")).unwrap();
         assert_eq!(body, "proposed body\n");
     }
 }

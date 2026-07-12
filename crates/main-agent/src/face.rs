@@ -96,8 +96,7 @@ impl DispatchBridge {
             .await
             .map_err(|e| format!("orchestration failed: {e}"))?;
 
-        let mut summary =
-            format_disposition(&disposition, &self.proposals_dir).await;
+        let mut summary = format_disposition(&disposition, &self.proposals_dir).await;
         let journal = crate::dispatch_journal::journal_display_path(&correlation_id);
         summary.push_str(&format!(
             "\n\n[dispatch journal: {journal} | id: {correlation_id}"
@@ -231,11 +230,7 @@ async fn format_disposition(d: &Disposition, proposals_dir: &Path) -> String {
             out
         }
         Disposition::Reported(report) => {
-            format!(
-                "RESULT ({:?}):\n{}",
-                report.outcome,
-                report.summary.trim()
-            )
+            format!("RESULT ({:?}):\n{}", report.outcome, report.summary.trim())
         }
         Disposition::Propose(proposal) => format_propose(proposal, proposals_dir).await,
     }
@@ -282,9 +277,7 @@ async fn write_face_proposal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liberado_common::{
-        BlockReason, Outcome, Proposal, ProposalSigner, ProposedAction, Report,
-    };
+    use liberado_common::{BlockReason, Outcome, Proposal, ProposalSigner, ProposedAction, Report};
 
     #[tokio::test]
     async fn format_clarify_lists_questions() {
@@ -342,9 +335,7 @@ mod tests {
         assert!(s.contains("PROPOSAL:"), "{s}");
         assert!(s.contains("Draft saved at:"), "{s}");
         assert!(s.contains("face-prop-1"), "{s}");
-        let note = proposals_root
-            .join(PROPOSALS_DIR)
-            .join("face-prop-1.md");
+        let note = proposals_root.join(PROPOSALS_DIR).join("face-prop-1.md");
         assert!(note.is_file(), "expected proposal at {}", note.display());
     }
 }

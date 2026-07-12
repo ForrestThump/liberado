@@ -127,7 +127,13 @@ pub fn mcp_registry_from_config(config: &Config) -> Option<McpRegistry> {
                 let bin = managed_binary_path(&mcp_install_dir(), &m.name);
                 registry.register(&m.name, StdioConnector::new(bin.to_string_lossy(), vec![]))
             }
-            McpTransport::Docker { image, command, args, volumes, env } => {
+            McpTransport::Docker {
+                image,
+                command,
+                args,
+                volumes,
+                env,
+            } => {
                 let argv = docker_argv(image, command.as_deref(), args, volumes, env);
                 registry.register(&m.name, StdioConnector::new("docker", argv))
             }
@@ -481,7 +487,15 @@ mod tests {
         let args = vec!["-y".to_string(), "@scope/tasks".to_string()];
         assert_eq!(
             docker_argv("node:22-slim", Some("npx"), &args, &[], &[]),
-            vec!["run", "-i", "--rm", "node:22-slim", "npx", "-y", "@scope/tasks"]
+            vec![
+                "run",
+                "-i",
+                "--rm",
+                "node:22-slim",
+                "npx",
+                "-y",
+                "@scope/tasks"
+            ]
         );
     }
 
@@ -490,7 +504,14 @@ mod tests {
         let volumes = vec!["/home/shiloh/vault:/vault:ro".to_string()];
         assert_eq!(
             docker_argv("image", None, &[], &volumes, &[]),
-            vec!["run", "-i", "--rm", "--volume", "/home/shiloh/vault:/vault:ro", "image"]
+            vec![
+                "run",
+                "-i",
+                "--rm",
+                "--volume",
+                "/home/shiloh/vault:/vault:ro",
+                "image"
+            ]
         );
     }
 
@@ -499,7 +520,16 @@ mod tests {
         let env = vec!["API_KEY".to_string(), "MODE=prod".to_string()];
         assert_eq!(
             docker_argv("image", None, &[], &[], &env),
-            vec!["run", "-i", "--rm", "--env", "API_KEY", "--env", "MODE=prod", "image"]
+            vec![
+                "run",
+                "-i",
+                "--rm",
+                "--env",
+                "API_KEY",
+                "--env",
+                "MODE=prod",
+                "image"
+            ]
         );
     }
 
@@ -511,8 +541,16 @@ mod tests {
         assert_eq!(
             docker_argv("my-mcp:latest", Some("my-mcp"), &args, &volumes, &env),
             vec![
-                "run", "-i", "--rm", "--volume", "/host:/container", "--env", "API_KEY",
-                "my-mcp:latest", "my-mcp", "serve"
+                "run",
+                "-i",
+                "--rm",
+                "--volume",
+                "/host:/container",
+                "--env",
+                "API_KEY",
+                "my-mcp:latest",
+                "my-mcp",
+                "serve"
             ]
         );
     }

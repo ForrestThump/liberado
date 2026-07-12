@@ -58,8 +58,7 @@ impl ToolRuntime for ScopedRuntime {
             if !self.allowed_mcps.iter().any(|allowed| allowed == mcp) {
                 return Err(format!(
                     "MCP '{}' is not in scope for this turn (tool '{}')",
-                    mcp,
-                    call.name
+                    mcp, call.name
                 ));
             }
         }
@@ -110,7 +109,12 @@ mod tests {
     #[tokio::test]
     async fn filters_catalog_to_allowed_mcps() {
         let inner = Arc::new(MockInner::new(
-            &["tasks-mcp:add", "tasks-mcp:list", "email-mcp:send", "memory-mcp:recall"],
+            &[
+                "tasks-mcp:add",
+                "tasks-mcp:list",
+                "email-mcp:send",
+                "memory-mcp:recall",
+            ],
             Ok("ok".into()),
         ));
         let scoped = ScopedRuntime::new(inner, vec!["tasks-mcp".into(), "memory-mcp".into()]);
@@ -157,10 +161,7 @@ mod tests {
 
     #[tokio::test]
     async fn allowed_invoke_passes_through() {
-        let inner = Arc::new(MockInner::new(
-            &["tasks-mcp:add"],
-            Ok("added".into()),
-        ));
+        let inner = Arc::new(MockInner::new(&["tasks-mcp:add"], Ok("added".into())));
         let scoped = ScopedRuntime::new(inner, vec!["tasks-mcp".into()]);
 
         let call = ToolInvocation::new("c1", "tasks-mcp:add", serde_json::json!({"title": "milk"}));

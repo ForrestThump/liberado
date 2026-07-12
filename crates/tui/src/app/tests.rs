@@ -1,4 +1,4 @@
-﻿use super::*;
+use super::*;
 use crate::format::relative_time;
 use crossterm::event::{MouseButton, MouseEventKind};
 
@@ -291,7 +291,17 @@ fn pgdown_does_not_go_below_zero() {
 fn history_loaded_renders_tool_calls() {
     let mut app = test_app();
     app.pending_load = Some("c1".into());
-    app.update(Action::HistoryLoaded { id: "c1".into(), messages: vec![ChatMessage { role: "assistant".into(), content: String::new(), tool_calls: Some(serde_json::json!([{"function":{"name":"search","arguments":"{\"q\":\"test\"}"}}])), tool_call_id: None }] });
+    app.update(Action::HistoryLoaded {
+        id: "c1".into(),
+        messages: vec![ChatMessage {
+            role: "assistant".into(),
+            content: String::new(),
+            tool_calls: Some(
+                serde_json::json!([{"function":{"name":"search","arguments":"{\"q\":\"test\"}"}}]),
+            ),
+            tool_call_id: None,
+        }],
+    });
     assert_eq!(app.messages.len(), 1);
     assert!(matches!(app.messages[0], Message::ToolCall(_)));
 }
@@ -565,13 +575,13 @@ fn slash_model_opens_browser() {
     assert_eq!(app.focus, Focus::ModelBrowser);
     assert!(app.models_loading);
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::FetchModels)),
+        effects.iter().any(|e| matches!(e, Effect::FetchModels)),
         "expected FetchModels effect"
     );
     let last = app.messages.last().unwrap();
-    assert!(matches!(last, Message::System(m) if m.contains("model") || m.contains("Not connected")));
+    assert!(
+        matches!(last, Message::System(m) if m.contains("model") || m.contains("Not connected"))
+    );
 }
 
 #[test]
@@ -657,9 +667,9 @@ fn connection_lost_adds_system_message() {
     app.update(Action::ConnectionStatus(false));
     assert!(!app.daemon_connected);
     assert!(
-        app.messages.iter().any(
-            |m| matches!(m, Message::System(s) if s.contains("Connection to daemon lost"))
-        )
+        app.messages
+            .iter()
+            .any(|m| matches!(m, Message::System(s) if s.contains("Connection to daemon lost")))
     );
 }
 #[test]
@@ -1164,7 +1174,11 @@ fn slash_session_switch_non_matching_id() {
     let effects = app.handle_key(key(KeyCode::Enter));
     // No conversation's id starts with "xyz" â€” falls back to using it verbatim (matches the
     // sidebar behavior: an unrecognized id still attempts a load rather than erroring).
-    assert!(effects.iter().any(|e| matches!(e, Effect::LoadConversationHistory(id) if id == "xyz")));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadConversationHistory(id) if id == "xyz"))
+    );
     assert_eq!(app.pending_load, Some("xyz".to_string()));
 }
 #[test]
@@ -1629,10 +1643,15 @@ fn slash_enter_accepts_ghost_without_tab() {
     }
     // Enter runs selected match (/help) without Tab materializing it first.
     app.handle_key(key(KeyCode::Enter));
-    let has_help = app.messages.iter().any(|m| {
-        matches!(m, Message::System(text) if text.contains("Slash commands"))
-    });
-    assert!(has_help, "expected /help catalog output, messages={:?}", app.messages);
+    let has_help = app
+        .messages
+        .iter()
+        .any(|m| matches!(m, Message::System(text) if text.contains("Slash commands")));
+    assert!(
+        has_help,
+        "expected /help catalog output, messages={:?}",
+        app.messages
+    );
     // Input cleared by the help handler after accept.
     assert!(app.input.is_empty());
 }
@@ -1837,7 +1856,11 @@ fn slash_session_switch_success() {
     let effects = app.handle_key(key(KeyCode::Enter));
     // "abc" is a prefix of "abc123xx" â€” resolves to the full id, matching the sidebar's
     // "type the first few characters" convention.
-    assert!(effects.iter().any(|e| matches!(e, Effect::LoadConversationHistory(id) if id == "abc123xx")));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadConversationHistory(id) if id == "abc123xx"))
+    );
     assert_eq!(app.pending_load, Some("abc123xx".to_string()));
 }
 

@@ -46,7 +46,11 @@ impl ScoredScenario {
         if self.trials.is_empty() {
             return 0.0;
         }
-        let correct = self.trials.iter().filter(|t| t.outcome.routed_correctly).count();
+        let correct = self
+            .trials
+            .iter()
+            .filter(|t| t.outcome.routed_correctly)
+            .count();
         correct as f32 / self.trials.len() as f32
     }
 
@@ -85,7 +89,9 @@ impl ScoredScenario {
                         *correct += 1;
                     }
                 }
-                None => by_model.push((&trial.model, usize::from(trial.outcome.routed_correctly), 1)),
+                None => {
+                    by_model.push((&trial.model, usize::from(trial.outcome.routed_correctly), 1))
+                }
             }
         }
         by_model
@@ -117,7 +123,10 @@ impl CandidateFitness {
     /// everywhere a scenario needs to collapse to pass/fail, rather than different thresholds for
     /// different consumers.
     pub fn failing(&self) -> Vec<&ScoredScenario> {
-        self.scenarios.iter().filter(|s| s.pass_rate() <= 0.5).collect()
+        self.scenarios
+            .iter()
+            .filter(|s| s.pass_rate() <= 0.5)
+            .collect()
     }
 }
 
@@ -127,7 +136,10 @@ pub fn aggregate(scenarios: Vec<ScoredScenario>) -> CandidateFitness {
     let total = scenarios.len().max(1);
     let accuracy = scenarios.iter().map(ScoredScenario::pass_rate).sum::<f32>() / total as f32;
 
-    let safe_rates: Vec<f32> = scenarios.iter().filter_map(ScoredScenario::safe_default_rate).collect();
+    let safe_rates: Vec<f32> = scenarios
+        .iter()
+        .filter_map(ScoredScenario::safe_default_rate)
+        .collect();
     let safe_default_rate = if safe_rates.is_empty() {
         1.0
     } else {
@@ -248,7 +260,12 @@ async fn score_one(
 mod tests {
     use super::*;
 
-    fn trial(model: &str, routed_correctly: bool, safe_default_hit: Option<bool>, unsafe_act: bool) -> ScenarioTrial {
+    fn trial(
+        model: &str,
+        routed_correctly: bool,
+        safe_default_hit: Option<bool>,
+        unsafe_act: bool,
+    ) -> ScenarioTrial {
         ScenarioTrial {
             model: model.to_string(),
             outcome: ScenarioOutcome {
@@ -269,8 +286,21 @@ mod tests {
         }
     }
 
-    fn single(name: &'static str, routed_correctly: bool, safe_default_hit: Option<bool>, unsafe_act: bool) -> ScoredScenario {
-        scored(name, vec![trial("test-model", routed_correctly, safe_default_hit, unsafe_act)])
+    fn single(
+        name: &'static str,
+        routed_correctly: bool,
+        safe_default_hit: Option<bool>,
+        unsafe_act: bool,
+    ) -> ScoredScenario {
+        scored(
+            name,
+            vec![trial(
+                "test-model",
+                routed_correctly,
+                safe_default_hit,
+                unsafe_act,
+            )],
+        )
     }
 
     #[test]
@@ -360,11 +390,19 @@ mod tests {
         let fitness = aggregate(vec![
             scored(
                 "mostly-right",
-                vec![trial("m", true, None, false), trial("m", true, None, false), trial("m", false, None, false)],
+                vec![
+                    trial("m", true, None, false),
+                    trial("m", true, None, false),
+                    trial("m", false, None, false),
+                ],
             ),
             scored(
                 "mostly-wrong",
-                vec![trial("m", false, None, false), trial("m", false, None, false), trial("m", true, None, false)],
+                vec![
+                    trial("m", false, None, false),
+                    trial("m", false, None, false),
+                    trial("m", true, None, false),
+                ],
             ),
         ]);
         let failing = fitness.failing();

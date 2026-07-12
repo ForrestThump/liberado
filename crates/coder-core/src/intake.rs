@@ -303,9 +303,7 @@ pub fn sanitize_draft(draft: &mut GoalContractDraft) {
             !paths.is_empty()
         }
         VerifierSpec::ContentContains {
-            path,
-            must_include,
-            ..
+            path, must_include, ..
         } => !path.trim().is_empty() && !must_include.is_empty(),
         VerifierSpec::GitNonemptyDiff { .. } => true,
     });
@@ -439,7 +437,10 @@ mod tests {
         let outcome: IntakeOutcome = serde_json::from_str(raw).unwrap();
         match outcome {
             IntakeOutcome::ReadyForFreeze { draft, .. } => {
-                assert_eq!(draft.success_criteria, vec!["add and list work".to_string()]);
+                assert_eq!(
+                    draft.success_criteria,
+                    vec!["add and list work".to_string()]
+                );
                 assert_eq!(draft.out_of_scope, vec!["no network".to_string()]);
                 assert_eq!(draft.assumed_defaults, vec!["Rust".to_string()]);
             }

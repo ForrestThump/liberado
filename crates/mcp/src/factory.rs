@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use liberado_common::WriteProvenance;
 use liberado_executor::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
 
-use crate::connector::McpConnector;
 use crate::MultiMcpRuntime;
+use crate::connector::McpConnector;
 
 /// A named set of MCP servers. Implements `RuntimeFactory`: each `runtime_for`
 /// connects (v1: a fresh connection per execution — no pooling) to the selected servers and unions

@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use liberado_conversation_store::JsonlStore;
 use liberado_executor::Budget;
 use liberado_provider::{
-    CompletionRequest, CompletionResponse, MockProvider, Provider, ProviderResult, Role,
-    ToolDef, ToolInvocation,
+    CompletionRequest, CompletionResponse, MockProvider, Provider, ProviderResult, Role, ToolDef,
+    ToolInvocation,
 };
 
 struct NoTools;
@@ -26,10 +26,7 @@ impl Provider for PendingProvider {
     fn model(&self) -> String {
         "pending".into()
     }
-    async fn complete(
-        &self,
-        _request: CompletionRequest,
-    ) -> ProviderResult<CompletionResponse> {
+    async fn complete(&self, _request: CompletionRequest) -> ProviderResult<CompletionResponse> {
         std::future::pending().await
     }
 }
@@ -166,10 +163,7 @@ fn default_title_collapses_whitespace_and_truncates() {
 #[tokio::test]
 async fn turn_seeds_title_from_first_user_line() {
     let dir = tempfile::tempdir().unwrap();
-    let sessions = sessions_at(
-        dir.path(),
-        vec![CompletionResponse::text("ok")],
-    );
+    let sessions = sessions_at(dir.path(), vec![CompletionResponse::text("ok")]);
     let id = sessions.create(None).await.unwrap();
     sessions
         .turn(id, "Plan a trip to Lisbon\nwith details")
@@ -183,12 +177,12 @@ async fn turn_seeds_title_from_first_user_line() {
 #[tokio::test]
 async fn seed_does_not_overwrite_explicit_title() {
     let dir = tempfile::tempdir().unwrap();
-    let sessions = sessions_at(
-        dir.path(),
-        vec![CompletionResponse::text("ok")],
-    );
+    let sessions = sessions_at(dir.path(), vec![CompletionResponse::text("ok")]);
     let id = sessions.create(Some("Pinned name".into())).await.unwrap();
-    sessions.turn(id, "this should not become the title").await.unwrap();
+    sessions
+        .turn(id, "this should not become the title")
+        .await
+        .unwrap();
     let header = sessions.list().await.unwrap();
     let h = header.iter().find(|h| h.id == id).unwrap();
     assert_eq!(h.title.as_deref(), Some("Pinned name"));
@@ -230,7 +224,12 @@ async fn list_backfills_title_from_existing_user_message() {
     // Second list is a no-op overwrite of the same default (title already Some).
     let headers2 = sessions.list().await.unwrap();
     assert_eq!(
-        headers2.iter().find(|h| h.id == header.id).unwrap().title.as_deref(),
+        headers2
+            .iter()
+            .find(|h| h.id == header.id)
+            .unwrap()
+            .title
+            .as_deref(),
         Some("Buy milk and eggs")
     );
 }
@@ -419,7 +418,9 @@ async fn face_agent_surfaces_only_delegate_by_default() {
     // Face agent: model replies in prose without calling tools (just verify catalog).
     let chat_provider = Arc::new(MockProvider::with_script(
         "chat",
-        [CompletionResponse::text("Happy to help — what do you need?")],
+        [CompletionResponse::text(
+            "Happy to help — what do you need?",
+        )],
     ));
     let store = Arc::new(JsonlStore::new(dir.path()));
     let dispatch_provider = Arc::new(MockProvider::with_script(

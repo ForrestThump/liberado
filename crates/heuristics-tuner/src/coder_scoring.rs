@@ -11,7 +11,7 @@ use std::sync::Arc;
 use liberado_coder_agent::LiberadoLoopBackend;
 use liberado_coder_core::{
     CoderBackend, CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask, CommandPolicy,
-    PathPolicy, ProgressPolicy, SandboxSpec, WorkspaceRef, LIBERADO_LOOP_BACKEND,
+    LIBERADO_LOOP_BACKEND, PathPolicy, ProgressPolicy, SandboxSpec, WorkspaceRef,
 };
 use liberado_common::Outcome;
 use liberado_provider::Provider;
@@ -78,7 +78,11 @@ impl CoderScoredScenario {
         if self.trials.is_empty() {
             return 0.0;
         }
-        let hits = self.trials.iter().filter(|t| t.outcome.nonempty_diff).count();
+        let hits = self
+            .trials
+            .iter()
+            .filter(|t| t.outcome.nonempty_diff)
+            .count();
         hits as f32 / self.trials.len() as f32
     }
 
@@ -92,11 +96,7 @@ impl CoderScoredScenario {
                         *correct += 1;
                     }
                 }
-                None => by_model.push((
-                    &trial.model,
-                    usize::from(trial.outcome.passed),
-                    1,
-                )),
+                None => by_model.push((&trial.model, usize::from(trial.outcome.passed), 1)),
             }
         }
         by_model
@@ -113,13 +113,21 @@ impl CoderScoredScenario {
                 .to_string();
         }
         let passed = self.trials.iter().filter(|t| t.outcome.passed).count();
-        let unsafe_n = self.trials.iter().filter(|t| t.outcome.unsafe_touch).count();
+        let unsafe_n = self
+            .trials
+            .iter()
+            .filter(|t| t.outcome.unsafe_touch)
+            .count();
         let outcome_ok = self
             .trials
             .iter()
             .filter(|t| t.outcome.outcome_matched)
             .count();
-        let diffs = self.trials.iter().filter(|t| t.outcome.nonempty_diff).count();
+        let diffs = self
+            .trials
+            .iter()
+            .filter(|t| t.outcome.nonempty_diff)
+            .count();
         format!(
             "{total} trial(s) — passed: {passed}/{total}, unsafe touches: {unsafe_n}/{total}, \
              outcome matched: {outcome_ok}/{total}, nonempty diff: {diffs}/{total}"
@@ -140,13 +148,20 @@ pub struct CoderFitness {
 
 impl CoderFitness {
     pub fn failing(&self) -> Vec<&CoderScoredScenario> {
-        self.scenarios.iter().filter(|s| s.pass_rate() <= 0.5).collect()
+        self.scenarios
+            .iter()
+            .filter(|s| s.pass_rate() <= 0.5)
+            .collect()
     }
 }
 
 pub fn aggregate(scenarios: Vec<CoderScoredScenario>) -> CoderFitness {
     let total = scenarios.len().max(1);
-    let accuracy = scenarios.iter().map(CoderScoredScenario::pass_rate).sum::<f32>() / total as f32;
+    let accuracy = scenarios
+        .iter()
+        .map(CoderScoredScenario::pass_rate)
+        .sum::<f32>()
+        / total as f32;
     let outcome_match_rate = scenarios
         .iter()
         .map(CoderScoredScenario::outcome_match_rate)
@@ -194,9 +209,9 @@ pub async fn score_coder_candidate(
                 let provider = provider.clone();
                 let model = model.clone();
                 let prompt = prompt.clone();
-                set.spawn(async move {
-                    score_one(provider, scenario, &prompt, model, max_turns).await
-                });
+                set.spawn(
+                    async move { score_one(provider, scenario, &prompt, model, max_turns).await },
+                );
             }
         }
     }

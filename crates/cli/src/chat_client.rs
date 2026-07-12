@@ -173,4 +173,3 @@ fn truncate(text: &str, max: usize) -> String {
     let head: String = text.chars().take(max).collect();
     format!("{head}...")
 }
-

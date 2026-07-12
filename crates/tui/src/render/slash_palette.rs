@@ -29,7 +29,7 @@ pub(super) fn draw(frame: &mut Frame, input_area: Rect, app: &App, th: &Theme) {
         return;
     }
 
-    let width = input_area.width.min(72).max(24);
+    let width = input_area.width.clamp(24, 72);
     let x = input_area.x;
     let y = input_area.y.saturating_sub(height);
     let area = Rect {
@@ -64,7 +64,10 @@ pub(super) fn draw(frame: &mut Frame, input_area: Rect, app: &App, th: &Theme) {
             let selected = idx == sel;
             let label = format!(" {:18} {}", spec.name, spec.description);
             let style = if selected {
-                Style::default().fg(sel_fg).bg(sel_bg).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(sel_fg)
+                    .bg(sel_bg)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(text_fg).bg(bg)
             };

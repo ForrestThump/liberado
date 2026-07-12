@@ -142,8 +142,12 @@ impl Notifier for TelegramNotifier {
             return self.notify(message).await;
         }
 
-        self.send(approval_buttons_payload(&self.chat_id, message, proposal_id))
-            .await
+        self.send(approval_buttons_payload(
+            &self.chat_id,
+            message,
+            proposal_id,
+        ))
+        .await
     }
 }
 
@@ -162,12 +166,16 @@ mod tests {
     #[test]
     fn a_short_proposal_id_fits_in_callback_data() {
         assert!(fits_in_callback_data("prop-sub-1"));
-        assert!(fits_in_callback_data(&"a".repeat(MAX_CALLBACK_PROPOSAL_ID_LEN)));
+        assert!(fits_in_callback_data(
+            &"a".repeat(MAX_CALLBACK_PROPOSAL_ID_LEN)
+        ));
     }
 
     #[test]
     fn an_overlong_proposal_id_does_not_fit_in_callback_data() {
-        assert!(!fits_in_callback_data(&"a".repeat(MAX_CALLBACK_PROPOSAL_ID_LEN + 1)));
+        assert!(!fits_in_callback_data(
+            &"a".repeat(MAX_CALLBACK_PROPOSAL_ID_LEN + 1)
+        ));
     }
 
     #[test]

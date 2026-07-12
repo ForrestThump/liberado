@@ -143,8 +143,8 @@ async fn run_loop(
         // T1.3: skip full redraw when state is unchanged and nothing is animating.
         let should_draw = runner.app.lock().should_draw();
         if should_draw {
-            let spinner_tick = (spinner_origin.elapsed().as_millis() / u128::from(SPINNER_FRAME_MS))
-                as u8;
+            let spinner_tick =
+                (spinner_origin.elapsed().as_millis() / u128::from(SPINNER_FRAME_MS)) as u8;
             terminal.draw(|frame| {
                 let mut app_guard = runner.app.lock();
                 ui::draw(frame, &mut app_guard, spinner_tick);

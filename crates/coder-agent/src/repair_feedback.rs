@@ -51,7 +51,9 @@ impl FailureClass {
             Self::CommandTimeout => {
                 "Speed up or simplify the failing command; avoid infinite loops in scripts."
             }
-            Self::EmptyDiff => "Ensure files are written under the workspace and show in git status.",
+            Self::EmptyDiff => {
+                "Ensure files are written under the workspace and show in git status."
+            }
             Self::CriticRevision => {
                 "Address each critic issue on the actual diff; do not re-argue in prose only."
             }
@@ -83,10 +85,7 @@ pub fn format_pipeline_repair(pipeline: &PipelineResult) -> String {
         }
     } else {
         for f in &pipeline.combined_findings {
-            lines.push(format!(
-                "- [{:?}] {}: {}",
-                f.kind, f.check_id, f.message
-            ));
+            lines.push(format!("- [{:?}] {}: {}", f.kind, f.check_id, f.message));
         }
     }
     lines.push("Fix these before claiming success. Prefer a different approach if this signature already failed.".into());
@@ -101,9 +100,7 @@ pub fn classify_pipeline(pipeline: &PipelineResult) -> FailureClass {
             FindingKind::CommandTimeout => return FailureClass::CommandTimeout,
             FindingKind::CommandFailed => return FailureClass::CommandFailed,
             FindingKind::EmptyDiff => return FailureClass::EmptyDiff,
-            FindingKind::PolicyDenied
-            | FindingKind::UnexpectedChange
-            | FindingKind::Custom => {}
+            FindingKind::PolicyDenied | FindingKind::UnexpectedChange | FindingKind::Custom => {}
         }
     }
     for r in &pipeline.results {
@@ -234,7 +231,11 @@ pub fn repair_focus_block(prior_feedback: &[String]) -> Option<String> {
     out.push('\n');
     if prior_feedback.len() > 1 {
         out.push_str("\nEarlier attempts (avoid repeating failed approaches):\n");
-        for (i, fb) in prior_feedback.iter().enumerate().take(prior_feedback.len() - 1) {
+        for (i, fb) in prior_feedback
+            .iter()
+            .enumerate()
+            .take(prior_feedback.len() - 1)
+        {
             out.push_str(&format!("- attempt {}: {}\n", i + 1, first_line(fb)));
         }
     }

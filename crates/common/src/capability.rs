@@ -119,8 +119,28 @@ const CLEAR_VERB_FORMS: &[&str] = &["clear", "clears", "cleared", "clearing"];
 /// Tokens that, immediately after a clear-verb form, make "clear …" read as a destructive verb
 /// ("clear the inbox", "clear all notes") rather than an adjective ("a clear list").
 const CLEAR_VERB_FOLLOWERS: &[&str] = &[
-    "all", "every", "everything", "entire", "each", "any", "the", "my", "your", "our", "his",
-    "her", "their", "its", "this", "that", "these", "those", "out", "away", "off", "up",
+    "all",
+    "every",
+    "everything",
+    "entire",
+    "each",
+    "any",
+    "the",
+    "my",
+    "your",
+    "our",
+    "his",
+    "her",
+    "their",
+    "its",
+    "this",
+    "that",
+    "these",
+    "those",
+    "out",
+    "away",
+    "off",
+    "up",
 ];
 
 /// Whole-word quantifiers that make an action sweeping.

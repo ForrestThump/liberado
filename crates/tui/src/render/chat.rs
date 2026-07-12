@@ -112,14 +112,13 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spi
                         lines.push(Line::from(vec![
                             Span::styled(
                                 lead,
-                                Style::default()
-                                    .fg(prefix_fg)
-                                    .bg(user_bg)
-                                    .add_modifier(if lead == "> " {
+                                Style::default().fg(prefix_fg).bg(user_bg).add_modifier(
+                                    if lead == "> " {
                                         Modifier::BOLD
                                     } else {
                                         Modifier::empty()
-                                    }),
+                                    },
+                                ),
                             ),
                             Span::styled(
                                 line.to_string(),

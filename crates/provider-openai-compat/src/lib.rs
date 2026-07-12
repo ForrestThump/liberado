@@ -171,10 +171,7 @@ impl OpenAiCompatibleProvider {
 #[async_trait]
 impl Provider for OpenAiCompatibleProvider {
     fn model(&self) -> String {
-        self.model
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.model.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     fn set_model(&self, model: String) {

@@ -59,12 +59,9 @@ pub async fn run_intake(
     }
     user.push_str("\nProduce the next IntakeOutcome JSON now.");
 
-    let request = CompletionRequest::new(vec![
-        Message::system(INTAKE_SYSTEM),
-        Message::user(user),
-    ])
-    .with_temperature(0.2)
-    .with_max_tokens(4096);
+    let request = CompletionRequest::new(vec![Message::system(INTAKE_SYSTEM), Message::user(user)])
+        .with_temperature(0.2)
+        .with_max_tokens(4096);
 
     let outcome: IntakeOutcome = complete_json(provider, request, intake_outcome_schema())
         .await
@@ -72,12 +69,14 @@ pub async fn run_intake(
 
     // Sanitize + soft-validate ready drafts so bad model output fails here, not at freeze.
     let outcome = match outcome {
-        IntakeOutcome::ReadyForFreeze { mut draft, rationale } => {
+        IntakeOutcome::ReadyForFreeze {
+            mut draft,
+            rationale,
+        } => {
             liberado_coder_core::sanitize_draft(&mut draft);
             liberado_coder_core::expand_verify_profile_into(&mut draft);
-            validate_draft(&draft).map_err(|e| {
-                CoderError::Setup(format!("intake draft failed validation: {e}"))
-            })?;
+            validate_draft(&draft)
+                .map_err(|e| CoderError::Setup(format!("intake draft failed validation: {e}")))?;
             IntakeOutcome::ReadyForFreeze { draft, rationale }
         }
         IntakeOutcome::NeedsClarification {
@@ -104,12 +103,9 @@ pub fn freeze_if_ready(
     authority: FreezeAuthority,
 ) -> Result<GoalContract, CoderError> {
     match outcome {
-        IntakeOutcome::ReadyForFreeze { draft, .. } => GoalContract::freeze(
-            contract_id,
-            draft,
-            authority,
-        )
-        .map_err(CoderError::Setup),
+        IntakeOutcome::ReadyForFreeze { draft, .. } => {
+            GoalContract::freeze(contract_id, draft, authority).map_err(CoderError::Setup)
+        }
         IntakeOutcome::NeedsClarification { questions, .. } => Err(CoderError::Setup(format!(
             "intake still needs clarification ({} question(s)); cannot freeze",
             questions.len()
@@ -161,8 +157,8 @@ mod tests {
     use super::*;
     use liberado_coder_core::{
         CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask, CommandPolicy,
-        GoalContractDraft, PathPolicy, ProgressPolicy, SandboxSpec, VerifierSpec, WorkspaceRef,
-        LIBERADO_LOOP_BACKEND,
+        GoalContractDraft, LIBERADO_LOOP_BACKEND, PathPolicy, ProgressPolicy, SandboxSpec,
+        VerifierSpec, WorkspaceRef,
     };
     use liberado_provider::{CompletionResponse, MockProvider};
 
@@ -265,9 +261,7 @@ mod tests {
         let draft = GoalContractDraft {
             description: "desc".into(),
             success_criteria: vec!["c1".into()],
-            verifiers: vec![VerifierSpec::GitNonemptyDiff {
-                id: "diff".into(),
-            }],
+            verifiers: vec![VerifierSpec::GitNonemptyDiff { id: "diff".into() }],
             out_of_scope: vec![],
             assumed_defaults: vec![],
             domain_hint: None,

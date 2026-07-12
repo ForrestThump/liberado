@@ -101,13 +101,13 @@ impl CoderBackend for LiberadoLoopBackend {
 
             match self.run_attempt(attempt_request).await {
                 Ok(result) => {
-                    let revision_issues =
-                        if let Some(CriticVerdict::NeedsRevision { issues }) = &result.critic_verdict
-                        {
-                            Some(issues.clone())
-                        } else {
-                            None
-                        };
+                    let revision_issues = if let Some(CriticVerdict::NeedsRevision { issues }) =
+                        &result.critic_verdict
+                    {
+                        Some(issues.clone())
+                    } else {
+                        None
+                    };
                     match revision_issues {
                         Some(issues) if attempt_offset + 1 < max_attempts => {
                             let err = CoderError::Backend(format!(
@@ -164,16 +164,15 @@ impl LiberadoLoopBackend {
 
         // Optional planner (attempt 0 only) — inject plan into task context for the worker.
         let mut request = request;
-        if request.attempt == 0 {
-            if let Some(plan) = planner::run_planner(self.providers.as_ref(), &request, &events)
-                .await?
-            {
-                let block = plan.as_context_block();
-                request.task.context = Some(match request.task.context.take() {
-                    Some(existing) => format!("{existing}\n\n{block}"),
-                    None => block,
-                });
-            }
+        if request.attempt == 0
+            && let Some(plan) =
+                planner::run_planner(self.providers.as_ref(), &request, &events).await?
+        {
+            let block = plan.as_context_block();
+            request.task.context = Some(match request.task.context.take() {
+                Some(existing) => format!("{existing}\n\n{block}"),
+                None => block,
+            });
         }
 
         let worker_role_name = roles::worker_role_name(&request);
@@ -193,7 +192,8 @@ impl LiberadoLoopBackend {
         )
         .map_err(|e| CoderError::Tool(e.to_string()))?;
         if let Some(command) = &request.config.validation_command {
-            coding_runtime = coding_runtime.with_validation_command(gates::command_request(command));
+            coding_runtime =
+                coding_runtime.with_validation_command(gates::command_request(command));
         }
         let progress = Arc::new(Mutex::new(ProgressGuard::new(
             request.config.progress.clone(),
@@ -268,13 +268,9 @@ impl LiberadoLoopBackend {
                     at: Utc::now(),
                 },
             );
-            let _ = trace::write_trace(
-                &request,
-                &session_id,
-                trace::snapshot_events(&events),
-                None,
-            )
-            .await;
+            let _ =
+                trace::write_trace(&request, &session_id, trace::snapshot_events(&events), None)
+                    .await;
             return Err(CoderError::NoChanges);
         }
         for path in &files_changed {
@@ -344,7 +340,9 @@ impl LiberadoLoopBackend {
         }
 
         let mut critic_verdict = None;
-        if outcome != Outcome::Failed && !files_changed.is_empty() && roles::critic_enabled(&request)
+        if outcome != Outcome::Failed
+            && !files_changed.is_empty()
+            && roles::critic_enabled(&request)
         {
             let verdict = critic::run_critic(self.providers.as_ref(), &request, &events).await?;
             trace::push_event(
@@ -521,12 +519,11 @@ mod tests {
         init_repo(dir.path());
         let provider = Arc::new(MockProvider::with_script("mock", write_then_report()));
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let backend = LiberadoLoopBackend::with_provider_factory(Arc::new(
-            RecordingProviderFactory {
+        let backend =
+            LiberadoLoopBackend::with_provider_factory(Arc::new(RecordingProviderFactory {
                 provider,
                 calls: calls.clone(),
-            },
-        ));
+            }));
         let mut request = request(dir.path(), "HEAD");
         request.config.coder.model = "deepseek/deepseek-v4-pro".to_string();
 
@@ -924,12 +921,11 @@ mod tests {
             ],
         ));
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let backend = LiberadoLoopBackend::with_provider_factory(Arc::new(
-            RecordingProviderFactory {
+        let backend =
+            LiberadoLoopBackend::with_provider_factory(Arc::new(RecordingProviderFactory {
                 provider: provider.clone(),
                 calls: calls.clone(),
-            },
-        ));
+            }));
         let mut request = request(dir.path(), "HEAD");
         request.config.planner = CoderRoleConfig {
             model: "mock-planner".to_string(),
@@ -1008,12 +1004,11 @@ mod tests {
             ],
         ));
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let backend = LiberadoLoopBackend::with_provider_factory(Arc::new(
-            RecordingProviderFactory {
+        let backend =
+            LiberadoLoopBackend::with_provider_factory(Arc::new(RecordingProviderFactory {
                 provider: provider.clone(),
                 calls: calls.clone(),
-            },
-        ));
+            }));
         let mut request = request(dir.path(), "HEAD");
         request.config.progress.max_attempts = 2;
         request.config.verifiers = vec![liberado_coder_core::VerifierSpec::PathsExist {
@@ -1092,12 +1087,11 @@ mod tests {
             ],
         ));
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let backend = LiberadoLoopBackend::with_provider_factory(Arc::new(
-            RecordingProviderFactory {
+        let backend =
+            LiberadoLoopBackend::with_provider_factory(Arc::new(RecordingProviderFactory {
                 provider,
                 calls: calls.clone(),
-            },
-        ));
+            }));
         let mut request = request(dir.path(), "HEAD");
         request.config.progress.max_attempts = 2;
         request.config.repair = Some(CoderRoleConfig {
@@ -1159,7 +1153,10 @@ mod tests {
         assert!(result.files_changed.iter().any(|path| path == "hello.txt"));
         let content = std::fs::read_to_string(dir.path().join("hello.txt")).unwrap();
         // Models sometimes omit the trailing newline; smoke cares about the payload.
-        assert_eq!(content.trim_end_matches(['\r', '\n']), "hello from liberado");
+        assert_eq!(
+            content.trim_end_matches(['\r', '\n']),
+            "hello from liberado"
+        );
     }
 
     #[test]

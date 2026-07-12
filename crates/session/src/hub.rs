@@ -71,11 +71,7 @@ impl GoalSessionHub {
 
         let hub = Arc::clone(self);
         let session_id = id.clone();
-        let pack = self
-            .packs
-            .get(&domain)
-            .expect("checked above")
-            .clone();
+        let pack = self.packs.get(&domain).expect("checked above").clone();
 
         tokio::spawn(async move {
             hub.run_session(session_id, goal, pack, cancel_rx).await;
@@ -134,9 +130,7 @@ impl GoalSessionHub {
         );
         let _ = tx.send(start).await;
 
-        let result = pack
-            .run(&session_id, &goal, tx.clone(), cancel)
-            .await;
+        let result = pack.run(&session_id, &goal, tx.clone(), cancel).await;
 
         let (status, goal_result) = match result {
             Ok(r) => {
@@ -182,11 +176,7 @@ impl GoalSessionHub {
         drop(tx);
         let _ = pump.await;
 
-        self.store
-            .finish(&session_id, status, goal_result)
-            .await;
+        self.store.finish(&session_id, status, goal_result).await;
         self.cancels.lock().await.remove(&session_id);
     }
 }
-
-

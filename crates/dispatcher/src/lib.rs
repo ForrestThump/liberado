@@ -142,7 +142,7 @@ impl Dispatcher {
             let decision =
                 match guards::evaluate(&classified, req, &self.tuning, self.max_reaction_depth) {
                     Some(reason) => {
-                        tracing::Span::current().record("downgrade", &format_args!("{reason:?}"));
+                        tracing::Span::current().record("downgrade", format_args!("{reason:?}"));
                         tracing::info!(
                             classified = %classified.action,
                             confidence = classified.confidence,
@@ -162,8 +162,8 @@ impl Dispatcher {
                     }
                 };
 
-            tracing::Span::current().record("action", &format_args!("{}", decision.action.label()));
-            tracing::Span::current().record("confidence", &decision.confidence);
+            tracing::Span::current().record("action", format_args!("{}", decision.action.label()));
+            tracing::Span::current().record("confidence", decision.confidence);
 
             Ok(decision)
         }
@@ -318,7 +318,9 @@ impl Dispatcher {
             _ => return,
         };
         let directive = format!("For tasks like \"{goal}\", use: {}", tools_used.join(", "));
-        source.save_tool_guidance(&directive, task_type, tools_used).await;
+        source
+            .save_tool_guidance(&directive, task_type, tools_used)
+            .await;
     }
 }
 
@@ -411,7 +413,10 @@ fn clarify_fallback() -> DispatchDecision {
 fn downgrade(classified: DispatchDecision, reason: BlockReason) -> DispatchDecision {
     let confidence = classified.confidence;
     let rationale = classified.rationale;
-    if matches!(reason, BlockReason::HighConsequence | BlockReason::ZoneRestricted) {
+    if matches!(
+        reason,
+        BlockReason::HighConsequence | BlockReason::ZoneRestricted
+    ) {
         match classified.action {
             DispatchAction::ExecuteDirect { seed_calls, .. } if !seed_calls.is_empty() => {
                 return downgrade_to_propose_tool_calls(seed_calls, confidence, rationale);
@@ -560,9 +565,7 @@ fn log_classified_decision(decision: &DispatchDecision, model: &str) {
             );
         }
         DispatchAction::DispatchSubagent {
-            allowed_mcps,
-            goal,
-            ..
+            allowed_mcps, goal, ..
         } => {
             tracing::info!(
                 %model,
@@ -605,15 +608,15 @@ pub(crate) fn sanitize_decision_mcps(decision: &mut DispatchDecision, catalog: &
     if catalog.is_empty() {
         return;
     }
-    let known: std::collections::HashSet<&str> =
-        catalog.iter().map(|m| m.name.as_str()).collect();
+    let known: std::collections::HashSet<&str> = catalog.iter().map(|m| m.name.as_str()).collect();
 
     match &mut decision.action {
         DispatchAction::ExecuteDirect {
             seed_calls,
             relevant_mcps,
         } => {
-            *relevant_mcps = normalize_mcp_list(std::mem::take(relevant_mcps), &known, "relevant_mcps");
+            *relevant_mcps =
+                normalize_mcp_list(std::mem::take(relevant_mcps), &known, "relevant_mcps");
             seed_calls.retain(|c| {
                 let mcp = mcp_of(&c.tool);
                 if known.contains(mcp) {
@@ -629,7 +632,8 @@ pub(crate) fn sanitize_decision_mcps(decision: &mut DispatchDecision, catalog: &
             });
         }
         DispatchAction::DispatchSubagent { allowed_mcps, .. } => {
-            *allowed_mcps = normalize_mcp_list(std::mem::take(allowed_mcps), &known, "allowed_mcps");
+            *allowed_mcps =
+                normalize_mcp_list(std::mem::take(allowed_mcps), &known, "allowed_mcps");
         }
         DispatchAction::Clarify { .. } | DispatchAction::Propose { .. } => {}
     }
@@ -996,7 +1000,10 @@ mod tests {
             } => {
                 assert_eq!(goal, "summarize this week's reviews and email the boss");
                 assert_eq!(allowed_mcps, vec!["email".to_string()]);
-                assert_eq!(success_criteria, vec!["the boss received the summary".to_string()]);
+                assert_eq!(
+                    success_criteria,
+                    vec!["the boss received the summary".to_string()]
+                );
             }
             other => panic!("expected Propose(Subagent), got {other:?}"),
         }
@@ -1131,7 +1138,8 @@ mod tests {
             tools_used: vec!["tasks-mcp".into()],
             score: 0.95,
         }]);
-        let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4).with_guidance(guidance);
+        let dispatcher =
+            Dispatcher::new(mock, DispatchTuning::default(), 4).with_guidance(guidance);
 
         let out = dispatcher
             .dispatch(&request(caps("tasks-mcp"), 0))
@@ -1172,7 +1180,10 @@ mod tests {
         // catalog it saw was the full, untouched one from `request()`.
         let sent = mock.last_request().unwrap();
         let user_message = &sent.messages[1].content;
-        assert!(user_message.contains("tasks-mcp"), "catalog must not be narrowed");
+        assert!(
+            user_message.contains("tasks-mcp"),
+            "catalog must not be narrowed"
+        );
     }
 
     #[tokio::test]
@@ -1193,7 +1204,10 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(out.action, DispatchAction::ExecuteDirect { .. }));
-        assert!(mock.last_request().is_some(), "classifier must have been called");
+        assert!(
+            mock.last_request().is_some(),
+            "classifier must have been called"
+        );
     }
 
     #[tokio::test]
@@ -1207,7 +1221,8 @@ mod tests {
             tools_used: vec!["email-mcp".into()],
             score: 0.99,
         }]);
-        let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4).with_guidance(guidance);
+        let dispatcher =
+            Dispatcher::new(mock, DispatchTuning::default(), 4).with_guidance(guidance);
 
         let mut req = request(caps("tasks-mcp"), 0);
         req.catalog.push(McpDescriptor {
@@ -1318,7 +1333,9 @@ mod tests {
             Dispatcher::new(mock, DispatchTuning::default(), 4).with_guidance(guidance.clone());
 
         let decision = execute_direct("tasks-mcp:add", 0.9);
-        dispatcher.record_outcome("add milk to the list", &decision).await;
+        dispatcher
+            .record_outcome("add milk to the list", &decision)
+            .await;
 
         let recorded = guidance.recorded.lock().unwrap();
         assert_eq!(recorded.len(), 1);

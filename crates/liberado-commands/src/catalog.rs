@@ -186,11 +186,7 @@ pub fn ghost_suffix(input: &str, selected_index: usize) -> Option<String> {
     }
     // Slice by char count so multi-byte and case folds stay aligned on ASCII slash cmds.
     let rest: String = insert.chars().skip(query.chars().count()).collect();
-    if rest.is_empty() {
-        None
-    } else {
-        Some(rest)
-    }
+    if rest.is_empty() { None } else { Some(rest) }
 }
 
 /// Full command text Enter should use when a palette match is selected:
@@ -247,7 +243,10 @@ mod tests {
     #[test]
     fn progressive_narrows_theme() {
         let m = filter_commands("/th");
-        assert!(m.iter().all(|s| s.name.starts_with("/th") || s.insert.starts_with("/th")));
+        assert!(
+            m.iter()
+                .all(|s| s.name.starts_with("/th") || s.insert.starts_with("/th"))
+        );
         assert!(m.iter().any(|s| s.name == "/theme"));
         let m2 = filter_commands("/theme s");
         assert!(m2.iter().any(|s| s.name == "/theme set"));
@@ -262,17 +261,17 @@ mod tests {
 
     #[test]
     fn complete_single_match() {
-        assert_eq!(
-            complete_commands("/hel", 0).as_deref(),
-            Some("/help")
-        );
+        assert_eq!(complete_commands("/hel", 0).as_deref(), Some("/help"));
     }
 
     #[test]
     fn complete_selected_index() {
         let matches = filter_commands("/session");
         assert!(matches.len() > 1);
-        let idx = matches.iter().position(|s| s.name == "/session list").unwrap();
+        let idx = matches
+            .iter()
+            .position(|s| s.name == "/session list")
+            .unwrap();
         assert_eq!(
             complete_commands("/session", idx).as_deref(),
             Some("/session list")
@@ -288,11 +287,11 @@ mod tests {
     #[test]
     fn ghost_suffix_follows_selection() {
         let matches = filter_commands("/session");
-        let idx = matches.iter().position(|s| s.name == "/session list").unwrap();
-        assert_eq!(
-            ghost_suffix("/session", idx).as_deref(),
-            Some(" list")
-        );
+        let idx = matches
+            .iter()
+            .position(|s| s.name == "/session list")
+            .unwrap();
+        assert_eq!(ghost_suffix("/session", idx).as_deref(), Some(" list"));
     }
 
     #[test]

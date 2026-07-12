@@ -9,10 +9,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::mpsc::Sender;
 
+use crate::LIFE_OPS_DOMAIN;
 use crate::event::{SessionEvent, SessionEventKind};
 use crate::goal::{GoalResult, GoalSpec, TerminalKind};
 use crate::runner::{DomainPackRunner, PackError};
-use crate::LIFE_OPS_DOMAIN;
 
 /// Demo life-ops pack — vault/task flavored events, no coding dependencies.
 pub struct LifeOpsDemoRunner;
@@ -200,10 +200,7 @@ mod tests {
             .start(GoalSpec {
                 id: None,
                 description: "file vault note and mark task done".into(),
-                success_criteria: vec![
-                    "note written".into(),
-                    "task marked done".into(),
-                ],
+                success_criteria: vec!["note written".into(), "task marked done".into()],
                 domain: DomainHint::Life,
                 max_turns: 4,
                 payload: serde_json::json!({}),
@@ -218,12 +215,10 @@ mod tests {
             if snap.session.status.is_terminal() {
                 assert_eq!(snap.session.status, crate::goal::SessionStatus::Succeeded);
                 assert!(!snap.events.is_empty());
-                assert!(
-                    snap.events.iter().any(|e| matches!(
-                        e.kind,
-                        SessionEventKind::ToolStarted { ref name, .. } if name == "vault_write_note"
-                    ))
-                );
+                assert!(snap.events.iter().any(|e| matches!(
+                    e.kind,
+                    SessionEventKind::ToolStarted { ref name, .. } if name == "vault_write_note"
+                )));
                 // No coding domain required — only life is registered.
                 assert!(hub.registered_domains().iter().any(|d| d == "life"));
                 assert!(!hub.registered_domains().iter().any(|d| d == "coding"));

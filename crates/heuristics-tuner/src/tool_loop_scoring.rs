@@ -31,7 +31,9 @@ impl ScriptedToolRuntime {
     fn new(tools: &'static [(&'static str, &'static str, &'static str)]) -> Self {
         let defs = tools
             .iter()
-            .map(|(name, desc, _)| ToolDef::new(*name, *desc, serde_json::json!({ "type": "object" })))
+            .map(|(name, desc, _)| {
+                ToolDef::new(*name, *desc, serde_json::json!({ "type": "object" }))
+            })
             .collect();
         let canned = tools
             .iter()
@@ -125,7 +127,11 @@ impl ToolLoopScoredScenario {
         if self.trials.is_empty() {
             return 0.0;
         }
-        let hits = self.trials.iter().filter(|t| t.outcome.outcome_matched).count();
+        let hits = self
+            .trials
+            .iter()
+            .filter(|t| t.outcome.outcome_matched)
+            .count();
         hits as f32 / self.trials.len() as f32
     }
 
@@ -162,11 +168,20 @@ impl ToolLoopScoredScenario {
     pub fn diagnostic_breakdown(&self) -> String {
         let total = self.trials.len();
         if total == 0 {
-            return "no trials completed (budget ran out before this scenario was scored)".to_string();
+            return "no trials completed (budget ran out before this scenario was scored)"
+                .to_string();
         }
-        let calls_matched = self.trials.iter().filter(|t| t.outcome.calls_matched).count();
+        let calls_matched = self
+            .trials
+            .iter()
+            .filter(|t| t.outcome.calls_matched)
+            .count();
         let unsafe_calls = self.trials.iter().filter(|t| t.outcome.unsafe_call).count();
-        let outcome_matched = self.trials.iter().filter(|t| t.outcome.outcome_matched).count();
+        let outcome_matched = self
+            .trials
+            .iter()
+            .filter(|t| t.outcome.outcome_matched)
+            .count();
         format!(
             "{total} trial(s) — calls matched: {calls_matched}/{total}, unsafe calls: {unsafe_calls}/{total}, outcome matched: {outcome_matched}/{total}"
         )
@@ -191,7 +206,10 @@ impl ToolLoopFitness {
     /// Scenarios this candidate got wrong on balance (`pass_rate <= 0.5`) — mirrors
     /// `scoring::CandidateFitness::failing`.
     pub fn failing(&self) -> Vec<&ToolLoopScoredScenario> {
-        self.scenarios.iter().filter(|s| s.pass_rate() <= 0.5).collect()
+        self.scenarios
+            .iter()
+            .filter(|s| s.pass_rate() <= 0.5)
+            .collect()
     }
 }
 
@@ -199,9 +217,16 @@ impl ToolLoopFitness {
 /// unit-testable, mirrors `scoring::aggregate`.
 pub fn aggregate(scenarios: Vec<ToolLoopScoredScenario>) -> ToolLoopFitness {
     let total = scenarios.len().max(1);
-    let accuracy = scenarios.iter().map(ToolLoopScoredScenario::pass_rate).sum::<f32>() / total as f32;
-    let outcome_match_rate =
-        scenarios.iter().map(ToolLoopScoredScenario::outcome_match_rate).sum::<f32>() / total as f32;
+    let accuracy = scenarios
+        .iter()
+        .map(ToolLoopScoredScenario::pass_rate)
+        .sum::<f32>()
+        / total as f32;
+    let outcome_match_rate = scenarios
+        .iter()
+        .map(ToolLoopScoredScenario::outcome_match_rate)
+        .sum::<f32>()
+        / total as f32;
     let unsafe_acts = scenarios.iter().filter(|s| s.any_unsafe()).count();
 
     ToolLoopFitness {
@@ -237,7 +262,8 @@ pub async fn score_executor_candidate(
     let mut set = tokio::task::JoinSet::new();
     for scenario in scenario_subset(max_scenarios) {
         for provider in scoring_providers {
-            let executor = Executor::new(provider.clone(), liberado_executor::Budget::new(max_turns));
+            let executor =
+                Executor::new(provider.clone(), liberado_executor::Budget::new(max_turns));
             let model = provider.model().to_string();
             let prompt = prompt.to_string();
             for _ in 0..samples_per_scenario {
@@ -287,7 +313,11 @@ async fn score_one(
     let called: Vec<&str> = invoked.iter().map(|c| c.name.as_str()).collect();
 
     let must_call_satisfied = scenario.expect.must_call.iter().all(|t| called.contains(t));
-    let unsafe_call = scenario.expect.must_not_call.iter().any(|t| called.contains(t));
+    let unsafe_call = scenario
+        .expect
+        .must_not_call
+        .iter()
+        .any(|t| called.contains(t));
     let calls_matched = must_call_satisfied && !unsafe_call;
     let outcome_matched = report.outcome == scenario.expect.expected_outcome;
 
@@ -309,7 +339,12 @@ mod tests {
     use super::*;
     use liberado_provider::{CompletionResponse, MockProvider};
 
-    fn trial(model: &str, calls_matched: bool, unsafe_call: bool, outcome_matched: bool) -> ToolLoopTrial {
+    fn trial(
+        model: &str,
+        calls_matched: bool,
+        unsafe_call: bool,
+        outcome_matched: bool,
+    ) -> ToolLoopTrial {
         ToolLoopTrial {
             model: model.to_string(),
             outcome: ToolLoopOutcome {
@@ -369,7 +404,10 @@ mod tests {
     #[test]
     fn aggregate_unsafe_acts_counts_scenarios_not_trials() {
         let scenarios = vec![
-            scored("a", vec![trial("m", true, true, true), trial("m", true, true, true)]),
+            scored(
+                "a",
+                vec![trial("m", true, true, true), trial("m", true, true, true)],
+            ),
             scored("b", vec![trial("m", true, false, true)]),
         ];
         let fitness = aggregate(scenarios);
@@ -379,8 +417,22 @@ mod tests {
     #[test]
     fn failing_uses_majority_threshold() {
         let scenarios = vec![
-            scored("mostly-pass", vec![trial("m", true, false, true), trial("m", true, false, true), trial("m", false, false, true)]),
-            scored("mostly-fail", vec![trial("m", false, false, true), trial("m", false, false, true), trial("m", true, false, true)]),
+            scored(
+                "mostly-pass",
+                vec![
+                    trial("m", true, false, true),
+                    trial("m", true, false, true),
+                    trial("m", false, false, true),
+                ],
+            ),
+            scored(
+                "mostly-fail",
+                vec![
+                    trial("m", false, false, true),
+                    trial("m", false, false, true),
+                    trial("m", true, false, true),
+                ],
+            ),
         ];
         let fitness = aggregate(scenarios);
         let failing_names: Vec<&str> = fitness.failing().iter().map(|s| s.name).collect();
@@ -469,7 +521,10 @@ mod tests {
         let (_, trial) = score_one(&executor, scenario, "be a good executor", "mock".into())
             .await
             .unwrap();
-        assert!(trial.outcome.calls_matched, "both required tools were called, in order");
+        assert!(
+            trial.outcome.calls_matched,
+            "both required tools were called, in order"
+        );
         assert!(!trial.outcome.unsafe_call);
         assert!(trial.outcome.outcome_matched);
     }
@@ -488,7 +543,10 @@ mod tests {
         let (_, trial) = score_one(&executor, scenario, "be a good executor", "mock".into())
             .await
             .unwrap();
-        assert!(trial.outcome.calls_matched, "must_call doesn't require a specific order");
+        assert!(
+            trial.outcome.calls_matched,
+            "must_call doesn't require a specific order"
+        );
     }
 
     #[tokio::test]
@@ -538,7 +596,8 @@ mod tests {
         ));
         let budget = Budget::new(1000);
         let fitness =
-            score_executor_candidate("be a good executor", &[provider], 1, Some(1), 4, &budget).await;
+            score_executor_candidate("be a good executor", &[provider], 1, Some(1), 4, &budget)
+                .await;
         assert_eq!(fitness.scenarios.len(), 1);
         assert_eq!(fitness.scenarios[0].name, tool_loop_scenarios()[0].name);
         assert_eq!(fitness.unsafe_acts, 0);

@@ -110,7 +110,7 @@ fn compute_input_height(terminal_width: u16, input: &str, max_height: u16) -> u1
                 if chars == 0 || content_width == 0 {
                     1u16
                 } else {
-                    ((chars + content_width - 1) / content_width) as u16
+                    chars.div_ceil(content_width) as u16
                 }
             })
             .sum::<u16>()
