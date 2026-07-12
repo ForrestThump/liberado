@@ -186,6 +186,7 @@ pub fn aggregate(scenarios: Vec<CoderScoredScenario>) -> CoderFitness {
 ///
 /// `tier` selects the progressive curriculum (smoke ⊂ core ⊂ stress ⊂ greenfield).
 /// `name_filter` optionally restricts to named scenarios; `max_scenarios` further caps the list.
+#[allow(clippy::too_many_arguments)] // internal tuner entry point; args mirror the CLI knobs 1:1
 pub async fn score_coder_candidate(
     prompt: &str,
     scoring_providers: &[Arc<dyn Provider>],

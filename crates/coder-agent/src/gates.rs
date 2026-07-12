@@ -7,9 +7,7 @@
 use chrono::Utc;
 use liberado_coder_core::{CoderCommandConfig, CoderError, CoderEvent, CoderRunRequest};
 use liberado_coder_sandbox::CommandRequest;
-use liberado_coder_tools::CodingToolRuntime;
 use liberado_common::Outcome;
-use serde_json::{Value, json};
 use tokio::process::Command;
 
 use crate::progress::ProgressFatal;
@@ -55,42 +53,9 @@ pub async fn fail_with_progress_fatal(
     }
 }
 
-pub async fn run_validation_gate(
-    runtime: &CodingToolRuntime,
-    events: &EventLog,
-    request: &CoderRunRequest,
-    session_id: &str,
-) -> Result<String, CoderError> {
-    let result = runtime
-        .invoke_json_for_backend("validate", json!({}))
-        .await
-        .map_err(|e| CoderError::Validation(e.to_string()))?;
-    let passed = result
-        .get("passed")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let summary = validation_summary(&result);
-    trace::push_event(
-        events,
-        CoderEvent::ValidationFinished {
-            ok: passed,
-            summary: summary.clone(),
-            at: Utc::now(),
-        },
-    );
-    if !passed {
-        trace::push_event(
-            events,
-            CoderEvent::SessionFinished {
-                outcome: Outcome::Failed,
-                at: Utc::now(),
-            },
-        );
-        let _ = trace::write_trace(request, session_id, trace::snapshot_events(events), None).await;
-        return Err(CoderError::Validation(summary));
-    }
-    Ok(summary)
-}
+// (The legacy single-command `run_validation_gate`/`validation_summary` pair lived here until
+// 2026-07-11 — superseded by `verify_pipeline`, which synthesizes a one-element pipeline from a
+// bare `validation_command` (verifiers.md §5.3) — deleted once nothing referenced them.)
 
 pub async fn changed_files(workspace_root: &str) -> Result<Vec<String>, CoderError> {
     // `-uall` lists files inside new untracked dirs (`src/main.rs`) instead of only `src/`.
@@ -124,28 +89,4 @@ pub fn parse_status_path(line: &str) -> Option<String> {
         .map(|(_, new_path)| new_path)
         .unwrap_or(path);
     Some(path.trim_matches('"').to_string())
-}
-
-fn validation_summary(result: &Value) -> String {
-    let exit_code = result
-        .get("exit_code")
-        .and_then(Value::as_i64)
-        .map(|code| code.to_string())
-        .unwrap_or_else(|| "none".to_string());
-    let timed_out = result
-        .get("timed_out")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let stdout = result.get("stdout").and_then(Value::as_str).unwrap_or("");
-    let stderr = result.get("stderr").and_then(Value::as_str).unwrap_or("");
-    let mut summary = format!("exit_code={exit_code}, timed_out={timed_out}");
-    if !stdout.trim().is_empty() {
-        summary.push_str("\nstdout:\n");
-        summary.push_str(stdout.trim());
-    }
-    if !stderr.trim().is_empty() {
-        summary.push_str("\nstderr:\n");
-        summary.push_str(stderr.trim());
-    }
-    summary
 }

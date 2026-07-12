@@ -30,11 +30,14 @@ impl ToolRuntime for NoopRuntime {
     }
 }
 
+/// One recorded `runtime_for` call: the `allowed_mcps` scope and the provenance it carried.
+pub type RecordedRuntimeCall = (Vec<String>, WriteProvenance);
+
 /// Records every `runtime_for` call's `(allowed_mcps, provenance)` so a test can assert what scope
 /// the orchestrator derived from a decision. Always hands out a [`NoopRuntime`].
 #[derive(Clone, Default)]
 pub struct CallRecordingFactory {
-    pub calls: Arc<Mutex<Vec<(Vec<String>, WriteProvenance)>>>,
+    pub calls: Arc<Mutex<Vec<RecordedRuntimeCall>>>,
 }
 
 #[async_trait]

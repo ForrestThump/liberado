@@ -244,30 +244,32 @@ mod tests {
             std::env::set_var("HOOKS_RS_TEST_SECRET", "shh");
         }
 
-        let mut topology = Topology::default();
-        topology.hooks = vec![
-            HookConfig {
-                name: "enabled-with-secret".into(),
-                enabled: true,
-                secret_ref: "HOOKS_RS_TEST_SECRET".into(),
-                goal: "goal a".into(),
-                pool: None,
-            },
-            HookConfig {
-                name: "disabled".into(),
-                enabled: false,
-                secret_ref: "HOOKS_RS_TEST_SECRET".into(),
-                goal: "goal b".into(),
-                pool: None,
-            },
-            HookConfig {
-                name: "enabled-missing-secret".into(),
-                enabled: true,
-                secret_ref: "HOOKS_RS_TEST_DEFINITELY_UNSET".into(),
-                goal: "goal c".into(),
-                pool: None,
-            },
-        ];
+        let topology = Topology {
+            hooks: vec![
+                HookConfig {
+                    name: "enabled-with-secret".into(),
+                    enabled: true,
+                    secret_ref: "HOOKS_RS_TEST_SECRET".into(),
+                    goal: "goal a".into(),
+                    pool: None,
+                },
+                HookConfig {
+                    name: "disabled".into(),
+                    enabled: false,
+                    secret_ref: "HOOKS_RS_TEST_SECRET".into(),
+                    goal: "goal b".into(),
+                    pool: None,
+                },
+                HookConfig {
+                    name: "enabled-missing-secret".into(),
+                    enabled: true,
+                    secret_ref: "HOOKS_RS_TEST_DEFINITELY_UNSET".into(),
+                    goal: "goal c".into(),
+                    pool: None,
+                },
+            ],
+            ..Topology::default()
+        };
 
         let resolved = resolve_hooks(&topology);
         assert_eq!(resolved.len(), 1);

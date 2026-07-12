@@ -692,9 +692,12 @@ mod tests {
     use liberado_provider::{CompletionResponse, MockProvider, ResponseFormat};
     use std::sync::Mutex;
 
+    /// One recorded `record_tool_selection` call: (goal, chosen MCP, offered MCP names).
+    type RecordedSelection = (String, Option<String>, Vec<String>);
+
     struct MockGuidance {
         hits: Vec<GuidanceHit>,
-        recorded: Mutex<Vec<(String, Option<String>, Vec<String>)>>,
+        recorded: Mutex<Vec<RecordedSelection>>,
     }
 
     impl MockGuidance {
