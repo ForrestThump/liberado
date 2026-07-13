@@ -443,12 +443,20 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spi
         }
         if let Some((prompt, options)) = &awaiting {
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                format!("❓ {prompt}"),
-                Style::default()
-                    .fg(c(&th.accent, "#00ffff"))
-                    .add_modifier(Modifier::BOLD),
-            )));
+            // One `Line` per source line: a ratatui `Line` does not break on `\n`, and prompts are
+            // not always one-liners — an intake draft contract (S7) is a whole block of criteria and
+            // verifiers. Cramming it into a single Line would run it all together.
+            let accent = Style::default()
+                .fg(c(&th.accent, "#00ffff"))
+                .add_modifier(Modifier::BOLD);
+            for (n, raw) in prompt.lines().enumerate() {
+                let text = if n == 0 {
+                    format!("❓ {raw}")
+                } else {
+                    format!("   {raw}")
+                };
+                lines.push(Line::from(Span::styled(text, accent)));
+            }
             for (n, opt) in options.iter().enumerate() {
                 lines.push(Line::from(Span::styled(
                     format!("   {}. {opt}", n + 1),

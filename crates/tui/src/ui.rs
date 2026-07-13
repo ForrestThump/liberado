@@ -203,6 +203,37 @@ mod tests {
     }
 
     #[test]
+    fn a_multi_line_intake_contract_renders_line_by_line() {
+        // S7's freeze UI: the draft contract is a block, not a one-liner. A ratatui `Line` does not
+        // break on `\n`, so without splitting, the criteria and verifiers would run together into
+        // one unreadable smear — and the human would be accepting gates they never actually saw.
+        let mut app = smoke_app();
+        app.join_session("g1".to_string());
+        app.update(Action::GoalStreamEvent(GoalUiEvent::Awaiting {
+            prompt: "Draft contract — review before I build anything.\n\nGoal: Build a todo CLI\n\n\
+                     Success criteria:\n  - add and list work\n\nVerifiers (the machine gates this \
+                     will be judged against):\n  - paths: these paths must exist — src/main.rs"
+                .into(),
+            options: vec!["accept".into(), "reject".into()],
+        }));
+        let out = render_to_string(&mut app, 100, 24);
+
+        // Each block must land on its own row, not be concatenated into one.
+        for needle in [
+            "Draft contract",
+            "Goal: Build a todo CLI",
+            "add and list work",
+            "src/main.rs",
+        ] {
+            assert!(
+                out.lines().any(|l| l.contains(needle)),
+                "'{needle}' should occupy its own rendered line:\n{out}"
+            );
+        }
+        assert!(out.contains("accept") && out.contains("reject"), "missing verdict options:\n{out}");
+    }
+
+    #[test]
     fn status_bar_shows_primary_kind_chip_by_default() {
         let mut app = smoke_app();
         let out = render_to_string(&mut app, 100, 20);

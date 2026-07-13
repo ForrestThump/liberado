@@ -218,11 +218,36 @@ watch, nothing inbound. Needed in `liberado-session`:
 | ✅ S5 | Durable session transcripts (append-only JSONL per session) + rehydrate on boot — **done 2026-07-12** | Store unit tests (green): reopen rehydrates a finished session's record + events; a non-terminal session coerces to `Failed`; in-memory store persists nothing. Live: restart daemon → `rehydrated sessions=1` → `GET /api/goals` shows the finished session + full transcript |
 | S5′ | **Store convergence (D7)**: one `Session` store — `goal: Option`, durable node-graph transcripts, `origin` links, cron/hook/subagent folded in as background sessions; replaces S3's surface adapter | Both a chat and a goal session load from the same store; a subagent run shows as a background session linked to its parent |
 | ✅ S6 | **Session profiles** in topology + `/spawn <profile>` — **done 2026-07-12**. Naming settled (open question #5): **"profile"** everywhere (config `[[session_profiles]]`, `SessionProfile`, UX) — "hat" stays informal prose only. `[[session_profiles]]` = `name` · `domain` (pack) · `component` (grant key, defaults to `name` — the pool rule) · opaque pack-parsed `overrides`. **Goal sessions now have an authority boundary at all**, which they previously did not: `SessionGrant { capabilities, profile, overrides }` is resolved by the *server* from config (the kernel never reads config), recorded on the session, and never widened. **`Capability::AskHuman` closes the S4 leftover and makes Decision A enforceable**: a grant without it gets a *closed* input channel, so the pack cannot block on a human — and `POST /message` answers **403** (never allowed), distinct from 409 (too late). Packs check capabilities at the point of the act (`ctx.can(&Capability::Write(zone))`). | Tests (green, 88 suites): profile→pack+narrower-grant resolution; unknown profile falls back without inventing authority; no grant ⇒ zero authority; dup/typo'd component fail validation; **G8 non-widening** (`send_input` never widens a grant); AskHuman-less session never awaits *despite* `interactive: true`; 403≠409; write refused at the act. **Live** (real daemon): `/spawn research` → resolves to the **life pack** with read-only caps → succeeds **without ever awaiting**, and `POST /message` → 403. |
-| S7 | Intake-first coding sessions (clarify → freeze UI in the TUI) | The §3.4 worked example (todo CLI) end-to-end from chat |
+| ✅ S7 | **Intake-first coding sessions** — **done 2026-07-13**. `CodingSessionPack` now runs `verifiers.md` §3.4 before writing a line: `run_intake` → clarifying questions through the S1 human-input channel → **draft contract rendered for review** (criteria + the machine gates it will be judged against) → `accept` / `reject` / *any other text = a revision fed back to intake* → `GoalContract::freeze(…, FreezeAuthority::Human)`. Bounded by `max_clarify_rounds` (§3.4 step 5 → `NeedsReview` with the partial draft). Gated on `AskHuman` (S6): an unattended session skips intake and builds directly, rather than blocking on a human who isn't there. Knobs come from the S6 opaque `overrides` (`[session_profiles.overrides] intake.*`), with `payload` winning. **The payoff: the frozen contract supplies the `verifiers`** — this pack previously ran with `verifiers: []`, i.e. grading its own homework. | Tests (green): clarify→answer→draft→accept freezes a contract *carrying gates*; reject builds nothing; **free text is a revision, not an accept** (`"add a test…"` must not prefix-match `accept`); round budget → `NeedsReview`; payload beats profile overrides; multi-line contract renders line-by-line in the TUI. **Live** (deepseek, real daemon): `/api/goals` coding + interactive → intake drafted a real contract (expanded `rust-strict` into `cargo test`/`clippy -D warnings`/`fmt --check`) → `accept` → **"contract frozen (4 verifiers)"** → coder ran and **all 4 gates actually executed**. |
 
 S1–S3 are the spine and are useful alone (manual `/join` of any goal session). S4 is the "call
 transfer" feel. S5/S5′ harden the storage (S5′ is where the unified-Session model becomes real under
 the hood); S6–S7 generalize.
+
+### Remaining order (decided 2026-07-13): ~~S7~~ → **S5′** → **forking**
+
+S7 was deliberately taken **before** S5′, and forking after both:
+
+- **S7 before S5′** — S5′ is a *schema commitment*, and S7 was the last slice that changed what a
+  session *is* (intake rounds, a draft contract, a freeze step). Converging the store before its most
+  complex consumer existed would have meant designing the unified `Session` schema blind. It is now
+  known.
+- **Forking after S5′** — the conversation store is *already a DAG* (`MessageNode.parent_id`,
+  `ConversationHeader.{parent_conversation, spawned_by}`, and `leaf_path(conv, Some(leaf))` which
+  reconstructs the context prior to any split point). Both features the human wants — branch
+  mid-conversation, and fork a session while keeping the original — are **additions to that schema,
+  not migrations**. Two things block them: every caller passes `leaf_path(conv, None)` (always the
+  newest leaf, so the DAG is a straight line in practice), and `/fork` reaches a **stub**
+  (`Effect::ForkConversation` logs and returns; see the `fork_conversation_is_noop` test).
+  **Goal sessions cannot branch at all** — their transcript is a *flat* event log with no
+  `parent_id`. Giving them node-graph transcripts is exactly S5′, which is why forking waits: the
+  valuable version is forking a *coding* session at its freeze point (contract A vs contract B).
+- **Fork semantics: COPY, not reference.** A forked conversation copies the prefix nodes rather than
+  stitching across `parent_conversation` at read time. This preserves the store's core invariant —
+  one conversation is one self-contained, greppable log with its header on line 0 — and gives
+  *snapshot* semantics, so continuing the original later cannot mutate the fork. Lineage fields keep
+  the relationship visible for the tree view. Forks are rare and transcripts are small; the
+  duplication is worth the invariant.
 
 ## 6. Open questions (decide during S1/S4, none block starting)
 
