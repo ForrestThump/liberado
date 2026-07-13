@@ -1,7 +1,12 @@
 [package]
 name = "liberado-session-store"
 version = "0.1.0"
-edition = "2024"
+description = "The converged Session store (D7): one append-only JSONL log per session holding both message nodes (the DAG) and pack events. Two typed lenses — ConversationStore and SessionRecordStore — over one engine."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
 [package.metadata.liberado]

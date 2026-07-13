@@ -560,7 +560,7 @@ pub async fn search_conversations(
     };
 
     let limit = query.limit.clamp(1, 200);
-    match liberado_chat_search::search(&state.conversations_root, &parsed, limit).await {
+    match liberado_chat_search::search(&state.sessions_root, &parsed, limit).await {
         Ok(sr) => {
             let total_found = sr.total_found;
             let results = sr
@@ -1048,7 +1048,7 @@ mod goal_message_tests {
             chat_tools: 0,
             chat_tool_names: Vec::new(),
             catalog: Arc::new(liberado_common::CapabilityCatalog::new()),
-            conversations_root: std::path::PathBuf::from("/tmp/vault/conversations"),
+            sessions_root: std::path::PathBuf::from("/tmp/liberado/sessions"),
             main_agent_capabilities: liberado_common::CapabilitySet::empty(),
             dispatcher_capabilities: liberado_common::CapabilitySet::empty(),
             config: Arc::new(test_config_with_life_grants()),
@@ -1112,7 +1112,7 @@ mod goal_message_tests {
             chat_tools: 0,
             chat_tool_names: Vec::new(),
             catalog: Arc::new(liberado_common::CapabilityCatalog::new()),
-            conversations_root: root,
+            sessions_root: root,
             main_agent_capabilities: liberado_common::CapabilitySet::empty(),
             dispatcher_capabilities: liberado_common::CapabilitySet::empty(),
             config: Arc::new(test_config_with_life_grants()),
@@ -1491,7 +1491,7 @@ mod goal_message_tests {
             chat_tools: 0,
             chat_tool_names: Vec::new(),
             catalog: Arc::new(liberado_common::CapabilityCatalog::new()),
-            conversations_root: std::path::PathBuf::from("/tmp/vault/conversations"),
+            sessions_root: std::path::PathBuf::from("/tmp/liberado/sessions"),
             main_agent_capabilities: liberado_common::CapabilitySet::empty(),
             dispatcher_capabilities: liberado_common::CapabilitySet::empty(),
             config: Arc::new(test_config_with_life_grants()),

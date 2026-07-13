@@ -1,7 +1,7 @@
 [package]
 name = "liberado-session"
 version = "0.1.0"
-description = "Domain-neutral goal session kernel: GoalSpec, SessionEvent envelope, in-memory hub, DomainPackRunner trait. Surfaces (TUI/WebUI) are clients of this contract — not loop owners."
+description = "The session kernel (D7): GoalSpec, SessionGrant, Visibility, the SessionEvent envelope, the GoalSessionHub, the DomainPackRunner trait, and the SessionRecordStore seam the converged store implements. Surfaces are clients of this contract — not loop owners."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

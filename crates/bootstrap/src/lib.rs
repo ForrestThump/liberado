@@ -18,6 +18,7 @@
 pub use liberado_config::{
     Config, ConfigError, ConfigProvenance, GuardContext, capability_catalog_from_config,
     catalog_from_config, config_dir, data_dir, guard_context, load_config, mcp_install_dir,
+    sessions_dir,
 };
 
 use std::path::Path;

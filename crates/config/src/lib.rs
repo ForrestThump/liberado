@@ -319,6 +319,22 @@ pub fn data_dir() -> PathBuf {
     PathBuf::from(std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into()))
 }
 
+/// The **converged session store** (S5′/D7): every session — chat, goal session, and background run
+/// alike — is one append-only JSONL log in here.
+///
+/// A function rather than a `.join("sessions")` at each call site, because it had been exactly that,
+/// and the two call sites drifted: when chat moved off the old `conversations/` directory, the
+/// server's search endpoint followed it and the standalone `chat-search` MCP binary did not — so the
+/// agent's own history-search tool went on quietly searching a directory nothing had written to
+/// since, finding a frozen archive and none of what the human had actually said. One name, one
+/// place, and the next store move can't half-happen.
+///
+/// The pre-convergence `conversations/` and `goal-sessions/` directories are deliberately left on
+/// disk (nothing is destroyed) but are no longer read by anything.
+pub fn sessions_dir() -> PathBuf {
+    data_dir().join("sessions")
+}
+
 /// The ingredients for `RiskGatedToolRuntime`-style guarding — chat's own runtime gate and the
 /// `Orchestrator`'s runtime-level gate for adaptive tool calls both need the same consequence
 /// catalog, the same proposals directory, and the same proposal-integrity signer. Shared by both
@@ -754,5 +770,16 @@ transport = { kind = "stdio", command = "tasks-mcp", args = [] }
     #[test]
     fn everything_none_resolves_to_none() {
         assert_eq!(resolve_config_dir(None, None, None), None);
+    }
+
+    #[test]
+    fn the_session_store_directory_has_exactly_one_definition() {
+        // Regression: this was a `.join("sessions")` at each call site, and the sites drifted. When
+        // chat moved onto the converged store, `liberado-server`'s search endpoint followed and the
+        // standalone `chat-search` MCP binary did not — it went on searching `conversations/`, a
+        // directory nothing had written to since, so the agent's own history search quietly returned
+        // a frozen archive and nothing the human had said since. Every reader of the session logs
+        // must come through this one function.
+        assert_eq!(sessions_dir(), data_dir().join("sessions"));
     }
 }

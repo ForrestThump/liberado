@@ -1,7 +1,7 @@
 [package]
 name = "liberado-chat-search"
 version = "0.1.0"
-description = "Full-text and regex search over Liberado conversation history (the JSONL conversation store). Query parsing, per-file scanning, snippet extraction — shared by liberado-server's REST endpoint and the chat-search MCP tool so search logic exists exactly once."
+description = "Full-text and regex search over Liberado session history — it scans the converged session store's JSONL logs directly. Query parsing, per-file scanning, snippet extraction, shared by liberado-server's REST endpoint and the chat-search MCP tool so search logic exists exactly once."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

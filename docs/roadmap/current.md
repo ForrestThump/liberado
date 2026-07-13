@@ -4,6 +4,35 @@ Forward-looking work, beyond what [`docs/architecture/overview.md`](../architect
 marks as built. Ordered loosely by priority within each section. This is a living doc — promote
 items up as they're picked, and record *why* something is deferred so the reasoning isn't lost.
 
+## Just landed — the unified Session model (2026-07-13)
+
+`docs/architecture/sessions.md` is now the authoritative description; the slice-by-slice history is
+in [session-focus-plan.md](session-focus-plan.md). In short: **everything is a `Session`** (D7), one
+converged store, one list. Session profiles + `Capability::AskHuman`; intake-first coding sessions;
+cron/hook/subagent runs recorded as **background sessions**; conversation **forking** (copy
+semantics), including forking from any message in history.
+
+### Known debt this opened — in priority order
+
+1. **Two execution engines.** D7 unified how sessions are *stored and displayed*, not how they are
+   *run*: the `GoalSessionHub` + `DomainPackRunner` packs run `/spawn`ed goal sessions, while the
+   dispatcher + orchestrator run daemon reactions and `delegate`. That is why a background session's
+   `domain` is recorded as `dispatch` and why joining one is **read-only** — no pack is hosting it.
+   Routing unattended triggers through the hub as real packs is the convergence that closes this.
+   *This is the largest structural debt in the system right now, and it was taken deliberately: the
+   visibility was worth having before the convergence was.*
+2. **Chat's tests don't run on the store chat actually uses.** `main-agent`'s `ChatSessions` tests
+   are built over `liberado-conversation-store::JsonlStore`, which **production no longer uses at
+   all** — production runs on `liberado-session-store::SessionStore`. Two implementations of one
+   trait, and the tests exercise the dead one. This is not theoretical: the monotonic-ULID bug fixed
+   on 2026-07-13 existed *because* `SessionStore` re-implemented what `JsonlStore` already did
+   correctly, and no `main-agent` test could have caught it. Either point those tests at
+   `SessionStore` or delete `JsonlStore`.
+3. **Packs record events, not turns.** A coding session's intake Q&A are conversational turns, but
+   packs emit them as `SessionEvent`s rather than message nodes — so they are not searchable, and a
+   goal session cannot be forked (400: "records events, not turns"). Forking a *coding* session at
+   its freeze point (contract A vs contract B) is the valuable version and it needs this.
+
 ## The phased roadmap
 
 The matured vision (see [Positioning](../architecture/positioning.md) and

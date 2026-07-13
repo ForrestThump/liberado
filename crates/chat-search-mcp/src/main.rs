@@ -40,7 +40,11 @@ impl ChatSearchServer {
         regex: bool,
         limit: i32,
     ) -> McpResult<String> {
-        let root = liberado_config::data_dir().join("conversations");
+        // The **converged** session store (S5′/D7) — the same directory `liberado-server`'s own
+        // `/api/conversations/search` reads. This binary used to `.join("conversations")` itself,
+        // and kept doing so after chat moved: it searched a directory nothing had written to since
+        // convergence, quietly returning a frozen archive and none of what the human had said since.
+        let root = liberado_config::sessions_dir();
 
         let parsed = if regex {
             ParsedQuery::parse_regex(&query)

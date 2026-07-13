@@ -1,7 +1,7 @@
 [package]
 name = "liberado-conversation-store"
 version = "0.1.0"
-description = "The Decision-17 conversation-history store: an append-only log of message nodes (a DAG; linear chat is the degenerate case), persisted as JSONL outside the vault with time-sortable ids minted at append. The v1 JsonlStore behind the ConversationStore trait."
+description = "The Decision-17 conversation contract: the ConversationStore trait plus the message-node DAG types (id, parent_id, Author) every session transcript is made of. Production storage now lives in liberado-session-store, which implements this trait; the JsonlStore here is the original single-purpose implementation."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

@@ -13,7 +13,26 @@ deferred. The only thing this spec asks the *first* line of storage code to hono
 schema** (§3) — everything else (engines, indexes, projections) is swappable behind the trait (§5)
 with no schema change; the v1 impl honors it.
 
-**Last Updated**: June 24, 2026
+**Last Updated**: July 13, 2026
+
+> ### ⚠️ Superseded in part (2026-07-13) — read [`../architecture/sessions.md`](../architecture/sessions.md) first
+>
+> **The node schema (§3) is intact and still honored** — that is the part this spec asked the first
+> line of storage code to get right, and the bet paid: branching and **forking landed as additions,
+> not a rewrite**, exactly as §5 predicted.
+>
+> What changed is *who implements it*. Under **D7** a conversation and a goal session were recognized
+> as one thing — a **`Session`**, distinguished only by `goal: Option` — so the store converged:
+>
+> - Production storage is now **`liberado-session-store::SessionStore`**, one JSONL log per *session*
+>   holding both message nodes **and** pack events, under `<LIBERADO_DATA_DIR>/sessions`.
+> - `liberado-conversation-store` remains the **contract** (the `ConversationStore` trait + the node
+>   types). Its own `JsonlStore` is the pre-convergence implementation and is now **test-only**.
+> - Ids are minted **monotonically** (`ulid::Generator`). This spec's "file-order == id-order"
+>   promise was load-bearing and `Ulid::new()` does not keep it within a millisecond.
+> - `<LIBERADO_DATA_DIR>/conversations` is no longer written or read. It is left on disk.
+>
+> Where this spec says "conversation", read "a session, through the chat lens".
 
 ---
 

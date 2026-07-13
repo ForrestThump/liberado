@@ -38,11 +38,13 @@ pub struct AppState {
     /// and consequence. Populated at boot from `config.topology.mcps` and updated at runtime
     /// as MCPs come and go. Exposed via `GET /api/catalog`.
     pub catalog: Arc<CapabilityCatalog>,
-    /// Root directory of the conversation JSONL store (`<data_dir>/conversations`) — used by
-    /// `GET /api/conversations/search` for direct read-only file access, independent of
-    /// `ChatSessions`'s own `JsonlStore` instance (which stays private to `build_chat` and holds
-    /// write-serialization locks search has no need for).
-    pub conversations_root: PathBuf,
+    /// Root directory of the converged session store (`liberado_config::sessions_dir()`) — used by
+    /// `GET /api/conversations/search`, which scans the JSONL logs directly rather than going
+    /// through the store (read-only, and it wants no part of the store's write locks).
+    ///
+    /// It was `conversations_root`, pointing at `<data_dir>/conversations`. The name outlived the
+    /// thing: there is one directory now, holding every session.
+    pub sessions_root: PathBuf,
     /// The `"main-agent"` component's capability grant (`policy.toml`) — which MCPs chat's own
     /// tool surface may call directly. `GET /api/catalog` uses this (via `.grants_mcp`) to label
     /// each MCP's `visible_to_main_agent` flag, independently of `dispatcher_capabilities` below.

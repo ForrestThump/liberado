@@ -86,7 +86,10 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     //
     // The previous `<data_dir>/conversations/` and `<data_dir>/goal-sessions/` directories are left
     // untouched but no longer read (deliberate: fresh start, nothing destroyed).
-    let sessions_root = liberado_bootstrap::data_dir().join("sessions");
+    //
+    // One `sessions_dir()`, not a `.join("sessions")` here and another in the `chat-search` MCP —
+    // that is precisely how the MCP got left behind pointing at the dead `conversations/` directory.
+    let sessions_root = liberado_bootstrap::sessions_dir();
     let sessions = Arc::new(liberado_session_store::SessionStore::open(&sessions_root).await);
 
     let (chat, chat_tools, chat_tool_names) = build_chat(
@@ -161,7 +164,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         // a chat-only directory. In practice it still only *finds* chat turns: search matches
         // message nodes, and packs currently record their transcripts as events. A pack that wrote
         // its turns as nodes would become searchable for free — no change here.
-        conversations_root: sessions_root.clone(),
+        sessions_root: sessions_root.clone(),
         main_agent_capabilities,
         dispatcher_capabilities,
         config: Arc::new(config.clone()),

@@ -30,7 +30,8 @@ Layer vocabulary used below (and in every crate's `[package.metadata.liberado] r
 | [`ToolRuntime`](#toolruntime--runtimefactory) | trait | `liberado-executor` | acting: what tools exist and how they run |
 | [`EventSource`](#eventsource) | trait | `liberado-common` | perceiving: what wakes the daemon |
 | [`DomainPackRunner`](#domainpackrunner) | trait | `liberado-session` | goal sessions: how a domain plugs into the kernel |
-| [`ConversationStore`](#conversationstore) | trait | `liberado-conversation-store` | chat persistence |
+| [`ConversationStore`](#conversationstore) | trait | `liberado-conversation-store` | the chat lens onto a session (see [`sessions.md`](sessions.md)) |
+| [`SessionRecordStore`](#conversationstore) | trait | `liberado-session` | the kernel lens onto a session |
 | [`ConfigSource`](#configsource--opaque-pack-sections) | trait | `liberado-config-loader` | layered config loading |
 | [`Notifier`](#notifier) | trait | `liberado-notify` | human-facing notification channels |
 | [HTTP/SSE wire contract](#the-httpsse-wire-contract) | DTOs + endpoints | `chat-client-contract` + `docs/reference/api.md` | every surface ↔ the daemon |
@@ -87,16 +88,30 @@ Pack-level contracts (same discipline, scoped to one domain): `CoderBackend` and
   now also the chat stream's wire language (converged 2026-07-11), so variant changes reach every
   surface — additive only.
 
-## ConversationStore
+## ConversationStore + SessionRecordStore
 
-- **Defined**: `liberado-conversation-store` (trait + `JsonlStore`: append-only JSONL of DAG
-  message-nodes, ULIDs minted under a per-conversation lock, outside the vault — Decision 17).
+**Two traits, one implementation** — `liberado-session-store::SessionStore` implements both. This is
+not an accident of history; it is a layer rule doing its job. See [`sessions.md`](sessions.md).
+
+- **Defined**: `ConversationStore` in `liberado-conversation-store` (the trait + the message-node DAG
+  types — Decision 17). `SessionRecordStore` in `liberado-session` (records + events, kernel types
+  only).
+- **Why two**: the session kernel may not depend on `liberado-provider`, so it **cannot know what a
+  `Message` is**. A store that must hold both provider messages and pack events therefore lives
+  *above* the kernel (`liberado-session-store`, role `store`) and reaches *down* to the kernel's
+  trait. One engine, one id space, two typed views.
+- **Implemented by**: `liberado-session-store::SessionStore` (production).
+  `liberado-conversation-store::JsonlStore` is the pre-convergence implementation, now **test-only** —
+  which is itself a hazard worth knowing about: `main-agent`'s chat tests run against `JsonlStore`
+  while production runs on `SessionStore`.
 - **Consumed by**: `main-agent` (`ChatSessions` rehydrates per turn, persists only on success),
-  server API, `chat-search`.
-- **Promise**: cancelled turn = clean on-disk no-op; file order == id order; the message body type
-  is reused from `liberado-provider` so content has a single definition.
-- **Blast radius**: chat persistence + search + any exporter. Storage backend is swappable behind
-  the trait; the JSONL format itself is effectively a second, on-disk contract.
+  `GoalSessionHub`, the server API, `chat-search`.
+- **Promise**: cancelled turn = clean on-disk no-op; **monotonic ids**, so file order == id order and
+  `leaf_path` never walks from the wrong leaf; the message body type is reused from
+  `liberado-provider` so content has a single definition; a session's log is **self-contained**
+  (which is what makes fork-by-copy the right call).
+- **Blast radius**: all session persistence + search + forking + any exporter. The JSONL format is
+  effectively a second, on-disk contract.
 
 ## ConfigSource + opaque pack sections
 
