@@ -22,12 +22,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use liberado_conversation_store::{
-    ConversationHeader, ConversationStore, MessageNode, NewConversation, NewNode, StoreError,
-    StoreResult,
+    Author, ConversationHeader, ConversationStore, MessageNode, NewConversation, NewNode,
+    StoreError, StoreResult,
 };
+use liberado_provider::Message;
 use liberado_session::{
     GoalResult, GoalSessionRecord, SessionEvent, SessionEventKind, SessionRecordStore,
-    SessionStatus,
+    SessionStatus, TurnAuthor,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, broadcast};
@@ -310,9 +311,11 @@ impl SessionStore {
         // always reconstruct the prefix before any node; nothing ever *asked* it to.
         let prefix = self.leaf_path(source, at).await?;
         if prefix.is_empty() {
+            // Reachable, but no longer the ordinary case for a goal session: packs record their
+            // dialogue as turns now (`append_turn`), so a coding session's intake Q&A *is* a node
+            // prefix and forking it works. What lands here is a session that genuinely said nothing.
             return Err(StoreError::NotFound(format!(
-                "session {source} has no message transcript to fork \
-                 (goal sessions record events, not turns)"
+                "session {source} has no transcript to fork — nothing was said in it"
             )));
         }
         let fork_point = prefix.last().expect("non-empty").id;
@@ -688,6 +691,51 @@ impl SessionRecordStore for SessionStore {
         };
         if persist {
             self.append_line(ulid, &Record::Event(event));
+        }
+    }
+
+    /// A pack's turn becomes a **real node in the message DAG** — the same kind of node a chat turn
+    /// is. That is the whole point: it makes a pack's dialogue searchable (`chat-search` matches
+    /// message nodes) and makes a goal session forkable (forking copies a node prefix, and a flat
+    /// event log has nothing to branch from).
+    ///
+    /// This is where the kernel's provider-agnostic `TurnAuthor` + text becomes a provider
+    /// `Message`. The kernel does not know how to build one; the store does. Parenting onto the
+    /// current leaf happens here too, so a pack never has to track its own leaf.
+    async fn append_turn(&self, session_id: &str, author: TurnAuthor, content: String) {
+        let Ok(ulid) = session_id.parse::<Ulid>() else {
+            return;
+        };
+        let (author, message) = match author {
+            TurnAuthor::System => (Author::System, Message::system(content)),
+            TurnAuthor::User => (Author::User, Message::user(content)),
+            TurnAuthor::Assistant => (Author::Assistant, Message::assistant(content)),
+            // A pack's tool *output* recorded as a turn is content, not a provider tool-result (which
+            // would need a `tool_call_id` the pack has no notion of). Keep the identity, and let the
+            // body be an ordinary message so the transcript still replays to a model cleanly.
+            TurnAuthor::Tool => (Author::Tool, Message::assistant(content)),
+            TurnAuthor::Named(name) => (Author::Named(name), Message::assistant(content)),
+        };
+
+        // The newest node, so a pack's transcript is a straight line without the pack tracking it.
+        let parent_id = {
+            let map = self.inner.lock().await;
+            map.get(&ulid)
+                .and_then(|l| l.nodes.iter().max_by_key(|n| n.id).map(|n| n.id))
+        };
+
+        if let Err(e) = self
+            .append(
+                ulid,
+                NewNode {
+                    parent_id,
+                    author,
+                    message,
+                },
+            )
+            .await
+        {
+            warn!(error = %e, session = %session_id, "session store: append_turn failed");
         }
     }
 

@@ -34,7 +34,7 @@ use liberado_common::{Capability, Outcome};
 use liberado_provider::Provider;
 use liberado_session::{
     CODING_DOMAIN, DomainPackRunner, GoalResult, GoalSpec, InputChannel, InputOutcome, PackContext,
-    PackError, SessionEvent, SessionEventKind, TerminalKind,
+    PackError, SessionEvent, SessionEventKind, TerminalKind, TurnAuthor,
 };
 use tokio::sync::mpsc::Sender;
 
@@ -128,10 +128,12 @@ impl CodingSessionPack {
     /// Bounded on purpose — this is a contract negotiation, not an open-ended therapist loop. It
     /// gives up after `max_clarify_rounds` and hands back the last partial draft rather than
     /// grinding on a goal it cannot pin down.
+    #[allow(clippy::too_many_arguments)]
     async fn run_intake_phase(
         &self,
         session_id: &str,
         goal: &GoalSpec,
+        ctx: &PackContext<'_>,
         settings: &IntakeSettings,
         events: &Sender<SessionEvent>,
         inputs: &mut InputChannel,
@@ -164,7 +166,7 @@ impl CodingSessionPack {
             match outcome {
                 IntakeOutcome::ReadyForFreeze { draft, rationale } => {
                     match self
-                        .confirm_freeze(session_id, &draft, &rationale, events, inputs, cancel)
+                        .confirm_freeze(session_id, ctx, &draft, &rationale, events, inputs, cancel)
                         .await?
                     {
                         FreezeReply::Accept => {
@@ -215,6 +217,7 @@ impl CodingSessionPack {
                         match self
                             .ask(
                                 session_id,
+                                ctx,
                                 events,
                                 inputs,
                                 cancel,
@@ -242,9 +245,11 @@ impl CodingSessionPack {
     }
 
     /// Show the draft contract and get the human's verdict (§3.4 step 3b, §3.7 item 3).
+    #[allow(clippy::too_many_arguments)]
     async fn confirm_freeze(
         &self,
         session_id: &str,
+        ctx: &PackContext<'_>,
         draft: &GoalContractDraft,
         rationale: &str,
         events: &Sender<SessionEvent>,
@@ -254,7 +259,7 @@ impl CodingSessionPack {
         let prompt = render_draft(draft, rationale);
         let options = vec!["accept".to_string(), "reject".to_string()];
         match self
-            .ask(session_id, events, inputs, cancel, prompt, options)
+            .ask(session_id, ctx, events, inputs, cancel, prompt, options)
             .await?
         {
             None => Ok(FreezeReply::IdleExpired(Duration::default())),
@@ -270,15 +275,24 @@ impl CodingSessionPack {
     }
 
     /// Emit `AwaitingInput` and block for the answer. `None` = the idle budget expired.
+    ///
+    /// Every question this pack asks a human goes through here — the clarify rounds *and* the freeze
+    /// prompt — which is why the **turn** is recorded here and not at each call site. One choke
+    /// point, so no future question can be added that quietly fails to make it into the transcript.
+    /// (The human's answer is recorded by the hub, for the same reason.)
+    #[allow(clippy::too_many_arguments)]
     async fn ask(
         &self,
         session_id: &str,
+        ctx: &PackContext<'_>,
         events: &Sender<SessionEvent>,
         inputs: &mut InputChannel,
         cancel: &mut tokio::sync::watch::Receiver<bool>,
         prompt: String,
         options: Vec<String>,
     ) -> Result<Option<String>, PackError> {
+        ctx.record_turn(TurnAuthor::Assistant, prompt.clone()).await;
+
         let _ = events
             .send(SessionEvent::new(
                 session_id,
@@ -427,6 +441,7 @@ impl DomainPackRunner for CodingSessionPack {
                 .run_intake_phase(
                     session_id,
                     goal,
+                    ctx,
                     &settings,
                     &events,
                     &mut inputs,
@@ -777,6 +792,37 @@ mod tests {
         }
     }
 
+    /// A real (in-memory) store with session `s1` open, plus the grant a `PackContext` borrows.
+    /// Turns the pack records actually land here, so a test can assert the transcript — which is the
+    /// whole point of S7's dialogue becoming turns rather than events.
+    struct Transcript {
+        store: Arc<liberado_session::GoalSessionStore>,
+        grant: liberado_session::SessionGrant,
+    }
+
+    impl Transcript {
+        async fn open() -> Self {
+            let store = Arc::new(liberado_session::GoalSessionStore::new());
+            // The session must be open under the SAME id the pack records against, or every turn is
+            // dropped on the floor — which is exactly what a store does with a turn for a session it
+            // has never heard of.
+            let mut spec = goal("make a todo cli");
+            spec.id = Some("s1".into());
+            liberado_session::SessionRecordStore::insert(
+                store.as_ref(),
+                liberado_session::GoalSessionRecord::new(spec),
+            )
+            .await;
+            Self {
+                store,
+                grant: liberado_session::SessionGrant::default(),
+            }
+        }
+        fn ctx(&self) -> PackContext<'_> {
+            PackContext::new(&self.grant, self.store.clone(), "s1")
+        }
+    }
+
     fn prompts(rx: &mut mpsc::Receiver<SessionEvent>) -> Vec<String> {
         let mut out = Vec::new();
         while let Ok(ev) = rx.try_recv() {
@@ -796,10 +842,13 @@ mod tests {
             vec!["Rust", "accept"],
         );
 
+        let tr = Transcript::open().await;
+        let ctx = tr.ctx();
         let phase = pack
             .run_intake_phase(
                 "s1",
                 &goal("make a todo cli"),
+                &ctx,
                 &settings(3),
                 &ev_tx,
                 &mut inputs,
@@ -820,6 +869,26 @@ mod tests {
         );
         assert!(!contract.content_hash.is_empty());
 
+        // ...and the negotiation that produced it is a **conversation**, recorded as turns.
+        //
+        // This used to be events only, which meant the intake Q&A was invisible to `chat-search`
+        // (it matches message nodes) and the session could not be forked (forking copies a node
+        // prefix, and an event log has no `parent_id`). Every question the pack asked is here.
+        let turns = tr.store.turns("s1").await;
+        assert!(
+            turns
+                .iter()
+                .any(|(who, what)| *who == TurnAuthor::Assistant && what.contains("Rust or Node?")),
+            "the clarifying question must be in the transcript, not just on the event bus: {turns:#?}"
+        );
+        assert!(
+            turns
+                .iter()
+                .any(|(who, what)| *who == TurnAuthor::Assistant
+                    && what.contains("Build a todo CLI")),
+            "so must the draft contract the human was asked to accept: {turns:#?}"
+        );
+
         // The human saw the question (with its `affects`), then the draft for review.
         let seen = prompts(&mut ev_rx);
         assert_eq!(seen.len(), 2, "one clarify prompt + one freeze prompt");
@@ -832,10 +901,13 @@ mod tests {
         let (pack, ev_tx, _ev_rx, mut inputs, mut cancel, _cancel_tx) =
             harness(vec![&ready_json("Build a todo CLI")], vec!["reject"]);
 
+        let tr = Transcript::open().await;
+        let ctx = tr.ctx();
         let phase = pack
             .run_intake_phase(
                 "s1",
                 &goal("make a todo cli"),
+                &ctx,
                 &settings(3),
                 &ev_tx,
                 &mut inputs,
@@ -856,10 +928,13 @@ mod tests {
             vec!["add a test for the parser", "accept"],
         );
 
+        let tr = Transcript::open().await;
+        let ctx = tr.ctx();
         let phase = pack
             .run_intake_phase(
                 "s1",
                 &goal("make a todo cli"),
+                &ctx,
                 &settings(3),
                 &ev_tx,
                 &mut inputs,
@@ -889,10 +964,13 @@ mod tests {
         let (pack, ev_tx, _ev_rx, mut inputs, mut cancel, _cancel_tx) =
             harness(vec![CLARIFY_JSON, CLARIFY_JSON], vec!["Rust"]);
 
+        let tr = Transcript::open().await;
+        let ctx = tr.ctx();
         let phase = pack
             .run_intake_phase(
                 "s1",
                 &goal("something vague"),
+                &ctx,
                 &settings(1),
                 &ev_tx,
                 &mut inputs,

@@ -13,6 +13,7 @@ use tokio::sync::mpsc::Sender;
 use crate::LIFE_OPS_DOMAIN;
 use crate::event::{SessionEvent, SessionEventKind};
 use crate::goal::{GoalResult, GoalSpec, TerminalKind};
+use crate::record_store::TurnAuthor;
 use crate::runner::{DomainPackRunner, InputChannel, InputOutcome, PackContext, PackError};
 
 /// The vault zone this pack writes notes into. A session's grant must carry
@@ -37,11 +38,19 @@ impl LifeOpsDemoRunner {
         mut inputs: InputChannel,
         mut cancel: tokio::sync::watch::Receiver<bool>,
     ) -> Result<GoalResult, PackError> {
+        const QUESTION: &str = "What should I title the note?";
+
+        // Asking is a *turn* — it is the pack talking to a human. The `AwaitingInput` event below is
+        // the same fact seen by a live subscriber (it is what raises the "needs you" badge), but an
+        // event is not dialogue: it is not searchable and it has no place in the message DAG. The
+        // human's reply is recorded as a turn by the hub, so both halves of the exchange survive.
+        ctx.record_turn(TurnAuthor::Assistant, QUESTION).await;
+
         let _ = events
             .send(SessionEvent::new(
                 session_id,
                 SessionEventKind::AwaitingInput {
-                    prompt: "What should I title the note?".into(),
+                    prompt: QUESTION.into(),
                     options: Vec::new(),
                 },
             ))

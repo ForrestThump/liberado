@@ -11,7 +11,7 @@ use crate::event::{SessionEvent, SessionEventKind};
 use crate::goal::{
     GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionStatus, TerminalKind,
 };
-use crate::record_store::SessionRecordStore;
+use crate::record_store::{SessionRecordStore, TurnAuthor};
 use crate::runner::{DomainPackRunner, HumanInput, InputChannel, PackContext, PackError};
 
 /// Bound on how many un-consumed human inputs a session buffers before back-pressure. Interactive
@@ -218,6 +218,18 @@ impl GoalSessionHub {
             .send(HumanInput::new(text.clone()))
             .await
             .map_err(|_| SendInputError::Closed)?;
+
+        // Recorded **twice, on purpose**, because these are two different things:
+        //
+        // * the event is what a live subscriber sees (it is what clears the `awaiting_input` badge);
+        // * the turn is what the human *said* — it belongs in the message DAG, so it is searchable
+        //   and so a fork taken later carries it.
+        //
+        // The pack does not have to remember to do this: whatever a human says into a session is
+        // dialogue by definition, so the kernel records it and no pack can forget to.
+        self.store
+            .append_turn(id, TurnAuthor::User, text.clone())
+            .await;
         self.store
             .push_event(SessionEvent::new(id, SessionEventKind::HumanInput { text }))
             .await;
@@ -275,7 +287,15 @@ impl GoalSessionHub {
             .await
             .map(|r| r.grant)
             .unwrap_or_default();
-        let ctx = PackContext { grant: &grant };
+        let ctx = PackContext::new(&grant, self.store.clone(), &session_id);
+
+        // The goal opens the transcript, as the human's first turn — because it *is* one: it is the
+        // thing the human said that started all this. Recording it here rather than in each pack
+        // means every session's transcript begins with what it was actually for, and a fork taken at
+        // any later point inherits it.
+        self.store
+            .append_turn(&session_id, TurnAuthor::User, goal.description.clone())
+            .await;
 
         let result = pack
             .run(&session_id, &goal, &ctx, tx.clone(), inputs, cancel)
@@ -313,6 +333,17 @@ impl GoalSessionHub {
                 )
             }
         };
+
+        // The outcome closes the transcript, as the session's last turn. A transcript that opens with
+        // what was asked for and ends with what came of it reads as a conversation — which is what it
+        // is — and a fork taken from the end inherits the answer rather than trailing off mid-thought.
+        self.store
+            .append_turn(
+                &session_id,
+                TurnAuthor::Assistant,
+                goal_result.summary.clone(),
+            )
+            .await;
 
         let fin = SessionEvent::new(
             &session_id,

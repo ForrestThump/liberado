@@ -1,5 +1,6 @@
 //! Domain pack runner port + the inbound human-input channel for interactive sessions.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -8,6 +9,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::event::SessionEvent;
 use crate::goal::{GoalResult, GoalSpec, SessionGrant};
+use crate::record_store::{SessionRecordStore, TurnAuthor};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PackError {
@@ -91,9 +93,42 @@ impl InputChannel {
 ///   never interprets it; only this pack does.
 pub struct PackContext<'a> {
     pub grant: &'a SessionGrant,
+    /// Where [`record_turn`](Self::record_turn) writes. The hub supplies this; a pack never sees the
+    /// store itself, only the one thing it is allowed to do with it.
+    store: Arc<dyn SessionRecordStore>,
+    session_id: String,
+}
+
+impl<'a> PackContext<'a> {
+    pub fn new(
+        grant: &'a SessionGrant,
+        store: Arc<dyn SessionRecordStore>,
+        session_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            grant,
+            store,
+            session_id: session_id.into(),
+        }
+    }
 }
 
 impl PackContext<'_> {
+    /// Record a **turn** — something said — in this session's transcript.
+    ///
+    /// The distinction a pack has to get right is *observation* versus *conversation*. A tool call is
+    /// an observation: emit it on `events` (`SessionEventKind::ToolStarted`). A clarifying question,
+    /// the human's answer, a drafted contract — those are **turns**. They are the dialogue, and they
+    /// belong in the message DAG, which is what makes them searchable and the session forkable.
+    ///
+    /// The store parents each turn onto the session's newest node, so a pack's transcript is a
+    /// straight line and the pack never tracks a leaf itself.
+    pub async fn record_turn(&self, author: TurnAuthor, content: impl Into<String>) {
+        self.store
+            .append_turn(&self.session_id, author, content.into())
+            .await;
+    }
+
     /// Whether this session holds `cap`. The one call a pack should make before a consequential act.
     pub fn can(&self, cap: &Capability) -> bool {
         self.grant.capabilities.contains(cap)

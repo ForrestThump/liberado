@@ -25,7 +25,7 @@ pub use goal::{
 };
 pub use hub::{GoalSessionHub, SendInputError, SessionSnapshot};
 pub use life_demo::LifeOpsDemoRunner;
-pub use record_store::SessionRecordStore;
+pub use record_store::{SessionRecordStore, TurnAuthor};
 pub use runner::{
     DomainPackRunner, HumanInput, InputChannel, InputOutcome, PackContext, PackError,
 };

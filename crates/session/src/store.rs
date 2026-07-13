@@ -1,7 +1,16 @@
-//! Goal session store + per-session event buffers.
+//! The kernel's own [`SessionRecordStore`] — an **in-memory double**, not the production store.
 //!
-//! In-memory by default (tests, ephemeral use). When [`opened`](GoalSessionStore::open) with a
-//! directory it is also **durable**: each session is an append-only JSONL log
+//! Production runs on `liberado-session-store::SessionStore` (the converged store, D7). This exists
+//! so the kernel's own tests — the hub, the life pack, background runs — can exercise a store
+//! without depending on the `store` tier that sits above them. It is deliberately simple: it holds
+//! turns as `(author, text)` rather than as a real message DAG, because the DAG is the *store's*
+//! job and is tested there (`crates/session-store/tests/conversation_lens.rs`).
+//!
+//! Keep it that way. The lesson of 2026-07-13 (see `crates/conversation-store/src/lib.rs`) is that a
+//! second *implementation* of a store, tested as if it were the real one, hides bugs in the real
+//! one. A double that is obviously a double does not.
+//!
+//! When [`opened`](GoalSessionStore::open) with a directory it is also **durable**: each session is an append-only JSONL log
 //! (`<dir>/<id>.jsonl`) — one `start` line (the initial record), one `event` line per session
 //! event, and `status`/`finish` lines as the lifecycle advances. On boot, [`open`] replays every
 //! log to rehydrate the list/snapshot views (session-focus S5). This mirrors the conversation
@@ -19,6 +28,7 @@ use tracing::warn;
 
 use crate::event::{SessionEvent, SessionEventKind};
 use crate::goal::{GoalResult, GoalSessionRecord, SessionStatus, TerminalKind};
+use crate::record_store::TurnAuthor;
 
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
@@ -26,6 +36,10 @@ const EVENT_CHANNEL_CAPACITY: usize = 256;
 struct SessionInner {
     record: GoalSessionRecord,
     events: Vec<SessionEvent>,
+    /// Conversational turns, flat. The real store makes these message-DAG nodes; this double keeps
+    /// them as `(who, what)` so kernel tests can assert *that a turn was recorded* without this
+    /// crate having to know what a provider `Message` is.
+    turns: Vec<(TurnAuthor, String)>,
     bus: broadcast::Sender<SessionEvent>,
 }
 
@@ -153,6 +167,7 @@ impl GoalSessionStore {
             SessionInner {
                 record,
                 events: Vec::new(),
+                turns: Vec::new(),
                 bus,
             },
         );
@@ -186,6 +201,22 @@ impl GoalSessionStore {
         let map = self.inner.lock().await;
         let s = map.get(id)?;
         Some((s.events.clone(), s.bus.subscribe()))
+    }
+
+    /// The turns recorded for `id`, in order — what a pack (or the hub) said and was told.
+    pub async fn turns(&self, id: &str) -> Vec<(TurnAuthor, String)> {
+        self.inner
+            .lock()
+            .await
+            .get(id)
+            .map(|s| s.turns.clone())
+            .unwrap_or_default()
+    }
+
+    pub async fn append_turn(&self, session_id: &str, author: TurnAuthor, content: String) {
+        if let Some(s) = self.inner.lock().await.get_mut(session_id) {
+            s.turns.push((author, content));
+        }
     }
 
     pub async fn push_event(&self, event: SessionEvent) {
@@ -338,6 +369,8 @@ fn replay_file(path: &Path) -> Option<SessionInner> {
     Some(SessionInner {
         record,
         events,
+        // This double does not persist turns — the production store does, as message-DAG nodes.
+        turns: Vec::new(),
         bus,
     })
 }
@@ -380,6 +413,9 @@ impl crate::record_store::SessionRecordStore for GoalSessionStore {
     }
     async fn push_event(&self, event: SessionEvent) {
         GoalSessionStore::push_event(self, event).await
+    }
+    async fn append_turn(&self, session_id: &str, author: TurnAuthor, content: String) {
+        GoalSessionStore::append_turn(self, session_id, author, content).await
     }
     async fn set_status(&self, id: &str, status: SessionStatus) {
         GoalSessionStore::set_status(self, id, status).await

@@ -43,9 +43,32 @@ line 0   header   the SessionHeader (rewritten on title change; replay takes the
          status / finish        — lifecycle transitions, for goal-bearing sessions
 ```
 
-A chat's log is all `node` lines. A goal session's is mostly `event` lines. **An interactive coding
-session (S7) emits both** — its intake Q&A are turns, its tool calls are observations — and that is
-the case which proves these were never two different things.
+A chat's log is all `node` lines. A goal session emits **both** — and that is the case which proves
+these were never two different things.
+
+### Turns vs events — the distinction a pack has to get right
+
+* An **event** ([`SessionEvent`]) is an *observation*: a tool started, a role finished, the pack is
+  awaiting input. Something happened. It is what a live subscriber watches.
+* A **turn** (`PackContext::record_turn`, `SessionRecordStore::append_turn`) is *dialogue*: a
+  clarifying question, the human's answer, a drafted contract, the final summary. Something was
+  **said**. It becomes a node in the message DAG.
+
+Packs recorded only events until 2026-07-13, and it cost two things that looked like separate
+features until you notice they are the same gap: a coding session's intake Q&A was **not searchable**
+(`chat-search` matches message nodes, and there were none), and a goal session **could not be forked**
+(forking copies a node prefix, and a flat event log has no `parent_id`).
+
+The kernel records the turns no pack should be able to forget — the goal opens the transcript as the
+human's first turn, whatever a human sends in is a turn by definition, and the outcome closes it. A
+pack adds its own dialogue on top. A goal session now reads as what it is:
+
+```
+user       capture a note about pack turns      ← the goal
+assistant  What should I title the note?        ← the pack asked
+user       Turn Recording Works                 ← you answered
+assistant  wrote note titled 'Turn Recording Works'   ← the outcome
+```
 
 It implements **both** store traits:
 
@@ -144,8 +167,11 @@ speaks node ids. That is not a shortcut: a *live-streamed* message never receive
 SSE stream, so if the branch point had to be a node, every message not reloaded from the server would
 be unforkable. Turn counting works identically for live and rehydrated messages.
 
-A goal session records **events, not turns**, so forking one is refused (400) rather than handing back
-an empty conversation that looks like it worked.
+A goal session **can** be forked — its dialogue is turns now (see above), so it has a node prefix to
+branch from. Forking a coding session at its freeze point (contract A vs contract B) is the valuable
+version of forking, and this is what makes it representable. A fork is always a *chat*: it inherits
+the transcript, not the goal, because a goal session that no pack is running is not honestly
+"running toward" anything. A session in which nothing was said is still refused (400).
 
 ## The API surface
 

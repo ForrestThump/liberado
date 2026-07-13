@@ -31,10 +31,14 @@ semantics), including forking from any message in history.
    session*. It also caught a test that had never tested what it claimed: the concurrency test used
    `#[tokio::test]` (single-threaded) + `join_all` (one task), so its 50 "concurrent" appends had
    always run strictly one at a time.
-3. **Packs record events, not turns.** A coding session's intake Q&A are conversational turns, but
-   packs emit them as `SessionEvent`s rather than message nodes — so they are not searchable, and a
-   goal session cannot be forked (400: "records events, not turns"). Forking a *coding* session at
-   its freeze point (contract A vs contract B) is the valuable version and it needs this.
+3. ~~**Packs record events, not turns.**~~ **Fixed 2026-07-13.** Packs now record dialogue as
+   **turns** (`PackContext::record_turn` → `SessionRecordStore::append_turn` → a real node in the
+   message DAG), keeping *events* for observations (a tool started, awaiting input). The kernel
+   records the turns no pack should be able to forget: the goal opens the transcript, any human input
+   is a turn by definition, and the outcome closes it. Both payoffs are live — a pack's Q&A is
+   **searchable**, and a goal session is **forkable** (previously a 400). The coding pack records
+   every question through one choke point (`ask`), so a new question cannot be added that silently
+   fails to reach the transcript.
 
 ## The phased roadmap
 

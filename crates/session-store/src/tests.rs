@@ -4,7 +4,7 @@ use liberado_conversation_store::{Author, ConversationStore, NewNode};
 use liberado_provider::Message;
 use liberado_session::{
     DomainHint, GoalResult, GoalSessionRecord, GoalSpec, SessionEvent, SessionEventKind,
-    SessionOrigin, SessionRecordStore, SessionStatus, TerminalKind,
+    SessionOrigin, SessionRecordStore, SessionStatus, TerminalKind, TurnAuthor,
 };
 
 use crate::{NewSession, SessionStore, Visibility};
@@ -619,8 +619,9 @@ async fn a_fork_does_not_inherit_the_goal_it_was_forked_from() {
 
 #[tokio::test]
 async fn forking_a_session_with_no_transcript_is_refused_rather_than_producing_an_empty_chat() {
-    // A goal session records *events*, not message nodes, so there is nothing to fork. Silently
-    // handing back an empty conversation would look like it worked.
+    // A session in which *nothing was said*. Since packs record their dialogue as turns (#3), this
+    // is no longer the ordinary state of a goal session — it is a session that genuinely has no
+    // transcript. Handing back an empty conversation would look like the fork had worked.
     let store = SessionStore::new();
     SessionRecordStore::insert(&store, GoalSessionRecord::new(goal_spec("capture a note"))).await;
     let goal_id = SessionRecordStore::list(&store).await[0]
@@ -631,11 +632,8 @@ async fn forking_a_session_with_no_transcript_is_refused_rather_than_producing_a
     let err = store
         .fork_session(goal_id, None, None)
         .await
-        .expect_err("forking an event-only session must fail loudly");
-    assert!(
-        format!("{err}").contains("no message transcript"),
-        "got: {err}"
-    );
+        .expect_err("forking a session that said nothing must fail loudly");
+    assert!(format!("{err}").contains("nothing was said"), "got: {err}");
 }
 
 #[tokio::test]
@@ -668,4 +666,124 @@ async fn a_fork_survives_a_reopen_as_its_own_self_contained_log() {
         vec!["q1", "a1"],
         "the copied transcript is in the fork's own file"
     );
+}
+
+// ── Pack turns (debt #3) ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn a_packs_turn_becomes_a_real_node_in_the_message_dag() {
+    // The whole of #3. A pack's dialogue used to be `SessionEvent`s only — which meant it was not
+    // searchable (`chat-search` matches message nodes) and the session could not be forked (forking
+    // copies a node prefix, and a flat event log has no `parent_id`). `append_turn` closes both at
+    // once, because they were always the same gap.
+    let store = SessionStore::new();
+    let s = store
+        .create_session(NewSession {
+            goal: Some(goal_spec("build a todo CLI")),
+            ..Default::default()
+        })
+        .await;
+    let id = s.id.to_string();
+
+    // A pack asks, a human answers, the pack reports.
+    store
+        .append_turn(&id, TurnAuthor::Assistant, "Rust or Node?".into())
+        .await;
+    store
+        .append_turn(&id, TurnAuthor::User, "Rust".into())
+        .await;
+    store
+        .append_turn(
+            &id,
+            TurnAuthor::Assistant,
+            "contract frozen (4 verifiers)".into(),
+        )
+        .await;
+
+    // It is a DAG, parent-linked — not a flat list. That is what forking needs.
+    let path = ConversationStore::leaf_path(&store, s.id, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        path.iter()
+            .map(|n| n.message.content.clone())
+            .collect::<Vec<_>>(),
+        vec!["Rust or Node?", "Rust", "contract frozen (4 verifiers)"],
+    );
+    assert!(path[0].parent_id.is_none(), "the first turn is the root");
+    assert_eq!(
+        path[1].parent_id,
+        Some(path[0].id),
+        "the store parents each turn itself"
+    );
+    assert_eq!(path[2].parent_id, Some(path[1].id));
+
+    // The identities survive, so a replay reconstructs who said what.
+    assert_eq!(path[0].author, Author::Assistant);
+    assert_eq!(path[1].author, Author::User);
+}
+
+#[tokio::test]
+async fn a_goal_session_can_now_be_forked_because_it_has_turns() {
+    // Before #3 this was a 400: "goal sessions record events, not turns". Forking a *coding* session
+    // at its freeze point — contract A vs contract B — is the valuable version of forking, and this
+    // is the change that makes it representable at all.
+    let store = SessionStore::new();
+    let s = store
+        .create_session(NewSession {
+            goal: Some(goal_spec("build a todo CLI")),
+            ..Default::default()
+        })
+        .await;
+    let id = s.id.to_string();
+    for (who, what) in [
+        (TurnAuthor::Assistant, "Rust or Node?"),
+        (TurnAuthor::User, "Rust"),
+        (TurnAuthor::Assistant, "draft contract A"),
+    ] {
+        store.append_turn(&id, who, what.into()).await;
+    }
+
+    // Branch at the human's answer: keep the negotiation up to that point, drop contract A.
+    let path = ConversationStore::leaf_path(&store, s.id, None)
+        .await
+        .unwrap();
+    let fork = store
+        .fork_session(s.id, Some(path[1].id), Some("contract B".into()))
+        .await
+        .expect("a goal session with a transcript is forkable");
+
+    let branched = ConversationStore::leaf_path(&store, fork.id, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        branched
+            .iter()
+            .map(|n| n.message.content.clone())
+            .collect::<Vec<_>>(),
+        vec!["Rust or Node?", "Rust"],
+        "the fork inherits the negotiation and leaves contract A behind"
+    );
+    assert_eq!(fork.parent_session, Some(s.id));
+    // The original still has its own contract A — snapshot semantics hold for goal sessions too.
+    assert_eq!(
+        ConversationStore::leaf_path(&store, s.id, None)
+            .await
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn a_turn_for_an_unknown_session_is_dropped_rather_than_inventing_one() {
+    let store = SessionStore::new();
+    store
+        .append_turn(
+            &ulid::Ulid::new().to_string(),
+            TurnAuthor::User,
+            "into the void".into(),
+        )
+        .await;
+    assert!(store.list_sessions().await.is_empty());
 }
