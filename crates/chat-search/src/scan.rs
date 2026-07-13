@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use thiserror::Error;
 
-use liberado_conversation_store::{Author, ConversationHeader, Record};
+use liberado_conversation_store::Author;
+use liberado_session_store::{Record, SessionHeader};
 
 use crate::query::ParsedQuery;
 
@@ -122,7 +123,7 @@ pub async fn search(
 
 fn scan_file(path: &Path, query: &ParsedQuery) -> Result<Option<ConversationMatch>, SearchError> {
     let contents = std::fs::read_to_string(path)?;
-    let mut header: Option<ConversationHeader> = None;
+    let mut header: Option<SessionHeader> = None;
     let mut message_matches: Vec<MessageMatch> = Vec::new();
 
     for line in contents.split('\n') {
@@ -134,7 +135,7 @@ fn scan_file(path: &Path, query: &ParsedQuery) -> Result<Option<ConversationMatc
             Err(_) => continue, // corrupt line: skip, this is a best-effort search path
         };
         match record {
-            Record::Header(h) => header = Some(h),
+            Record::Header(h) => header = Some(*h),
             Record::Node(node) => {
                 let content = &node.message.content;
                 if content.is_empty() {
@@ -149,6 +150,10 @@ fn scan_file(path: &Path, query: &ParsedQuery) -> Result<Option<ConversationMatc
                     });
                 }
             }
+            // A goal session records its transcript as *events*, which carry no searchable message
+            // text — so scanning one converged store means skipping these. (A pack that recorded
+            // its turns as message nodes instead would become searchable here for free.)
+            Record::Event(_) | Record::Status { .. } | Record::Finish { .. } => {}
         }
     }
 
@@ -158,9 +163,15 @@ fn scan_file(path: &Path, query: &ParsedQuery) -> Result<Option<ConversationMatc
     let Some(header) = header else {
         return Ok(None); // malformed file (no header line): skip in this best-effort path
     };
+    // A goal session has no title of its own; its goal reads as one. Search spans every session
+    // now, not just chats, so the label has to work for both.
+    let title = header
+        .title
+        .clone()
+        .or_else(|| header.goal.as_ref().map(|g| g.description.clone()));
     Ok(Some(ConversationMatch {
         conversation_id: header.id.to_string(),
-        title: header.title,
+        title,
         created_at: header.created_at.to_rfc3339(),
         matches: message_matches,
     }))

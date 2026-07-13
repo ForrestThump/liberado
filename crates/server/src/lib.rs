@@ -17,7 +17,6 @@ use std::path::Path;
 
 use axum::Router;
 use liberado_common::{CapabilityCatalog, CapabilitySet, DEFAULT_POOL, WriteProvenance};
-use liberado_conversation_store::JsonlStore;
 use liberado_daemon::Daemon;
 use liberado_dispatcher::Dispatcher;
 use liberado_executor::{Budget, Executor, ToolRuntime};
@@ -25,6 +24,7 @@ use liberado_main_agent::ChatSessions;
 use liberado_mcp::McpRegistry;
 use liberado_orchestrator::Orchestrator;
 use liberado_provider::Provider;
+use liberado_session_store::SessionStore;
 use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
@@ -78,6 +78,17 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
 
     let guidance = dispatcher_guidance_source(&vault_path).await;
 
+    // ── The converged Session store (S5′ / D7) ──────────────────────────────────────────────
+    // ONE store, under `<data_dir>/sessions/`, handed to *both* chat and the goal-session hub.
+    // A chat and a goal session are the same record with a different `goal: Option` — so they share
+    // an id space, a directory, and a log format. Chat sees it through `ConversationStore`, the
+    // kernel through `SessionRecordStore`; neither knows the other is there.
+    //
+    // The previous `<data_dir>/conversations/` and `<data_dir>/goal-sessions/` directories are left
+    // untouched but no longer read (deliberate: fresh start, nothing destroyed).
+    let sessions_root = liberado_bootstrap::data_dir().join("sessions");
+    let sessions = Arc::new(liberado_session_store::SessionStore::open(&sessions_root).await);
+
     let (chat, chat_tools, chat_tool_names) = build_chat(
         provider.clone(),
         mcp,
@@ -85,6 +96,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         capability_catalog.clone(),
         Path::new(&vault_path),
         guidance.clone(),
+        sessions.clone(),
     )
     .await;
 
@@ -111,14 +123,10 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     let main_agent_capabilities = config.policy.capabilities_for("main-agent");
     let dispatcher_capabilities = config.policy.capabilities_for("dispatcher");
 
-    // Goal session hub (scratchpad F): life-ops demo always; coding when a provider is available.
-    // Durable, append-only JSONL transcripts under `<data_dir>/goal-sessions/` (Decision 12/17;
-    // session-focus S5) — rehydrated on boot so finished sessions survive a restart.
-    let goals_store = liberado_session::GoalSessionStore::open(
-        liberado_bootstrap::data_dir().join("goal-sessions"),
-    )
-    .await;
-    let mut goals_hub = liberado_session::GoalSessionHub::new(goals_store);
+    // Goal session hub: life-ops demo always; coding when a provider is available. It runs on the
+    // **same** store as chat (S5′) — `SessionStore` implements the kernel's `SessionRecordStore`,
+    // so goal sessions rehydrate on boot from the very directory chat conversations live in.
+    let mut goals_hub = liberado_session::GoalSessionHub::new(SessionStore::clone(&sessions));
     goals_hub.register_pack(Arc::new(liberado_session::LifeOpsDemoRunner));
     if let Some(p) = provider.as_ref() {
         let work_parent = liberado_bootstrap::data_dir().join("goal-workspaces");
@@ -144,7 +152,11 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         chat_tools,
         chat_tool_names,
         catalog: capability_catalog,
-        conversations_root: liberado_bootstrap::data_dir().join("conversations"),
+        // Search scans the converged log directly, so it now reads every session's file rather than
+        // a chat-only directory. In practice it still only *finds* chat turns: search matches
+        // message nodes, and packs currently record their transcripts as events. A pack that wrote
+        // its turns as nodes would become searchable for free — no change here.
+        conversations_root: sessions_root.clone(),
         main_agent_capabilities,
         dispatcher_capabilities,
         config: Arc::new(config.clone()),
@@ -307,10 +319,14 @@ pub fn config_check(dir: Option<&Path>) -> Result<(), Box<dyn std::error::Error>
 }
 
 /// Build the chat agent when a provider is available: a connected tool runtime (the configured MCP
-/// server, or none) + the executor + a durable conversation store. Returns `(chat, tool_count, tool_names)`
-/// so callers can surface tool availability in diagnostics. Returns `(None, 0, empty)` when there's no
-/// provider. This is the composition root — it injects the concrete [`JsonlStore`] so [`ChatSessions`]
-/// stays store-agnostic.
+/// server, or none) + the executor + the **converged session store** (S5′), injected by the caller.
+/// Returns `(chat, tool_count, tool_names)` so callers can surface tool availability in diagnostics.
+/// Returns `(None, 0, empty)` when there's no provider.
+///
+/// The store is a parameter rather than built here because [`run`] builds **one** store and hands
+/// the same object to chat *and* to the goal-session hub — that shared object is what convergence
+/// actually is (D7). `ChatSessions` still only sees the `ConversationStore` trait, so it neither
+/// knows nor cares that goal sessions live in the same log.
 ///
 /// `catalog` is the shared, live `CapabilityCatalog` built once in [`run`] — the same object the
 /// daemon's reactive dispatch and the server's own `/api/catalog` read, not an independent snapshot.
@@ -324,6 +340,7 @@ async fn build_chat(
     catalog: Arc<CapabilityCatalog>,
     vault_path: &Path,
     guidance: Option<Arc<dyn liberado_common::ToolGuidanceSource>>,
+    store: Arc<dyn liberado_conversation_store::ConversationStore>,
 ) -> (Option<Arc<ChatSessions>>, usize, Vec<String>) {
     let provider = match provider {
         Some(p) => p,
@@ -334,12 +351,6 @@ async fn build_chat(
     let main_agent_caps = config.policy.capabilities_for("main-agent");
     let dispatcher_caps = config.policy.capabilities_for("dispatcher");
     let main_agent_cfg = &config.topology.main_agent;
-
-    // Conversation logs live outside the vault (Decision 12 operational data), under
-    // `<LIBERADO_DATA_DIR>/conversations`. `JsonlStore::new` creates the directory.
-    let store = Arc::new(JsonlStore::new(
-        liberado_bootstrap::data_dir().join("conversations"),
-    ));
 
     // Consequence catalog + proposals dir: shared with `configure_daemon`'s own Orchestrator wiring
     // (`liberado_bootstrap::guard_context`) so the two boot paths can't independently drift on how
