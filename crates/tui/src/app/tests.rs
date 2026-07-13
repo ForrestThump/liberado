@@ -2412,3 +2412,84 @@ fn sending_a_chat_message_after_finish_auto_leaves_the_session() {
         [Effect::StartChatStream { .. }]
     ));
 }
+
+// ── Forking from a selected message in history ───────────────────────────────
+
+/// A loaded 3-turn conversation, as the message pane holds it.
+fn browsable_chat() -> App {
+    let mut app = test_app();
+    app.session = Some("c1".into());
+    app.messages = vec![
+        Message::User("q1".into()),      // 0  your turn 1
+        Message::Assistant("a1".into()), // 1
+        Message::User("q2".into()),      // 2  your turn 2
+        Message::Assistant("a2".into()), // 3
+        Message::User("q3".into()),      // 4  your turn 3
+        Message::Assistant("a3".into()), // 5
+    ];
+    app
+}
+
+#[test]
+fn selecting_your_own_turn_forks_before_it_so_you_can_say_something_else() {
+    // The reason you scroll back at all: "I want to re-ask *this*." The context you get is the
+    // context you had when you typed it — so turn 2 itself is left behind.
+    let mut app = browsable_chat();
+    app.chat_cursor = 2; // your turn 2
+    assert_eq!(app.fork_turn_at_cursor(), Some(1));
+
+    app.focus = Focus::ChatMessages;
+    let effects = app.handle_key(key(KeyCode::Char('f')));
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::ForkConversation {
+            after_turn: Some(1),
+            ..
+        }
+    )));
+    // You land back in the input box, ready to type the different thing.
+    assert_eq!(app.focus, Focus::Input);
+}
+
+#[test]
+fn selecting_an_answer_forks_after_it_so_you_keep_it_and_go_a_different_way() {
+    // The other intent: "this answer was fine — carry on from here differently."
+    let mut app = browsable_chat();
+    app.chat_cursor = 3; // the reply to your turn 2
+    assert_eq!(app.fork_turn_at_cursor(), Some(2));
+}
+
+#[test]
+fn forking_at_your_very_first_message_is_refused_rather_than_making_an_empty_chat() {
+    // There is nothing above it to keep, so a "fork" here is just a new conversation.
+    let mut app = browsable_chat();
+    app.chat_cursor = 0;
+    assert_eq!(app.fork_turn_at_cursor(), None);
+
+    app.focus = Focus::ChatMessages;
+    let effects = app.handle_key(key(KeyCode::Char('f')));
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::ForkConversation { .. })),
+        "must not fork"
+    );
+    let last = app.messages.last().unwrap();
+    assert!(matches!(last, Message::System(m) if m.contains("start of the conversation")));
+}
+
+#[test]
+fn a_pruned_history_does_not_make_the_fork_point_lie() {
+    // The trap: the pane drops the oldest messages to stay bounded. If the surviving turns were
+    // counted from 1, `f` on the top message would branch at a completely different place than the
+    // one on screen — the server counts from the real first turn. `turn_offset` is what keeps the
+    // two talking about the same turn.
+    let mut app = browsable_chat();
+    app.turn_offset = 10; // ten of your turns were pruned off the top
+    app.chat_cursor = 2; // the first *visible* turn of yours is really turn 11
+    assert_eq!(
+        app.fork_turn_at_cursor(),
+        Some(11),
+        "the fork point must be the real turn, not the on-screen one"
+    );
+}

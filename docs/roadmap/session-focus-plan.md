@@ -257,11 +257,22 @@ always reconstruct the context prior to any split point, and nothing had ever *a
 
 - **`/fork`** — branch the whole conversation as it stands. A snapshot, not a move: you land in the
   branch and the original is still in `/sessions`, untouched.
+- **`f` while browsing history** — the one you actually reach for. Tab into the message pane, scroll
+  to the message you wish had gone differently, press `f`. Selecting **one of your turns** branches
+  *before* it (you get back the context you had when you typed it, and can say something else);
+  selecting an **answer** branches *after* it (you keep that answer and continue a different way).
+  Both collapse to the same count — the turns that completed strictly above the selected message —
+  so one number serves both intents.
 - **`/fork <n>`** — go back to just after your **turn n** and take a different path. The client names
   the branch point by *turn*, because that is what a human can see and point at; the server resolves
   turn → node; the store speaks node ids. User turns are numbered in the chat pane (`3> …`) so the
   number is pickable rather than counted — offset by `App::turn_offset` when a long history has been
   pruned, or every number on screen would mean something else to the server.
+
+  The branch point is a **turn**, not a node id, and that is load-bearing rather than a shortcut: a
+  live-streamed message never receives a node id from the SSE stream, so if the branch point had to
+  be a node, every message you had not reloaded from the server would be unforkable — half the pane.
+  Turn counting works identically for live and rehydrated messages.
 - **Copy semantics**, as decided above. Verified live: forked a real 3-turn chat at turn 1, then
   continued *both* sides — the original went on to `FOUR`, the fork went `ONE → BRANCH`, neither
   moved the other, and both survived a daemon restart. The fork's `.jsonl` holds its own header plus

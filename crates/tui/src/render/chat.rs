@@ -41,7 +41,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spi
     let focus_hint = if joined.is_some() {
         " [/back to leave]"
     } else if app.focus == Focus::ChatMessages {
-        " [j/k · Enter expand tools · Esc back]"
+        " [j/k · Enter expand tools · f fork here · Esc back]"
     } else {
         " [Tab focus history]"
     };

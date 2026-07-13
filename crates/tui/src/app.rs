@@ -371,6 +371,39 @@ impl App {
     /// stitched together here. The client was re-deriving a distinction the model says does not
     /// exist. Now `GET /api/sessions` returns both, and the only difference between a row that
     /// *joins* and a row that *opens* is whether it has a goal.
+    /// The `after_turn` that forks **at the message under the chat cursor** — i.e. keep the context
+    /// that existed *above* it, and leave it and everything below behind.
+    ///
+    /// `None` means there is nothing above the selection to keep (you are sitting on your very first
+    /// turn), which is a fresh conversation, not a fork.
+    ///
+    /// One count serves both readings of "fork here", because they turn out to be the same number —
+    /// the turns that *completed* before the selected message:
+    ///
+    /// * On **one of your turns**: branches *before* it, so you get back the context you had when you
+    ///   typed it and can say something else. (Selecting the message you want to redo is the whole
+    ///   point of forking from history.)
+    /// * On an **assistant reply or tool chip**: branches *after* the turn it belongs to, so you keep
+    ///   that answer and continue a different way from there.
+    ///
+    /// Turns are counted, not node ids, because a live-streamed message never receives a node id from
+    /// the SSE stream — half the messages on screen would be unforkable if the branch point had to be
+    /// a node. `turn_offset` keeps this agreeing with the server when a long history has been pruned.
+    pub fn fork_turn_at_cursor(&self) -> Option<u32> {
+        if self.chat_cursor >= self.messages.len() {
+            return None;
+        }
+        // Both readings collapse to one number: how many of your turns *completed* strictly above
+        // the selected message. On your own turn N that is N-1 (branch before it); on the reply to
+        // turn N it is N (branch after it, keeping the answer). Same count, both intents.
+        let completed = self.messages[..self.chat_cursor]
+            .iter()
+            .filter(|m| matches!(m, Message::User(_)))
+            .count();
+        let after_turn = self.turn_offset + completed;
+        (after_turn > 0).then_some(after_turn as u32)
+    }
+
     pub fn filtered_sessions(&self) -> Vec<&SessionSummary> {
         let q = self.sidebar_filter.to_ascii_lowercase();
         self.sessions
