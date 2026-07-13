@@ -1,0 +1,24 @@
+[package]
+name = "liberado-session-store"
+version = "0.1.0"
+edition = "2024"
+
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
+[package.metadata.liberado]
+role = "store"
+
+[dependencies]
+async-trait = { workspace = true }
+chrono = { workspace = true }
+liberado-common = { workspace = true }
+liberado-conversation-store = { workspace = true }
+liberado-provider = { workspace = true }
+liberado-session = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+ulid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

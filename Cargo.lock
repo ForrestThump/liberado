@@ -3858,6 +3858,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "liberado-session-store"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "liberado-common",
+ "liberado-conversation-store",
+ "liberado-provider",
+ "liberado-session",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
 name = "liberado-telegram-approvals"
 version = "0.1.0"
 dependencies = [
