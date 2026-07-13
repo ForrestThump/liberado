@@ -19,15 +19,26 @@
 //! engine — is a derived projection or a swap-in behind the [`ConversationStore`] trait, with no
 //! schema change. See `liberado-conversation-store-spec.md` for the full rationale.
 //!
-//! v1 ships the schema, the trait, and one [`JsonlStore`] implementation.
+//! # This crate is the *contract*, not an implementation
+//!
+//! It ships the schema and the trait. **`liberado-session-store::SessionStore` is the
+//! implementation** — the converged store (D7), where a chat and a goal session are one `Session`
+//! and one JSONL log holds both message nodes and pack events. See
+//! `docs/architecture/sessions.md`.
+//!
+//! The original `JsonlStore` lived here and was deleted on 2026-07-13. It had had **no production
+//! caller** since the convergence, yet fourteen storage invariants were still tested against it —
+//! so the store doing the real work went unverified, and two live defects in it (non-monotonic ids;
+//! a durable append issued outside the lock it minted under) survived precisely because the tests
+//! were pointed at the wrong implementation. Those tests now run against `SessionStore`
+//! (`crates/session-store/tests/conversation_lens.rs`) and caught both immediately. One trait, one
+//! implementation, tested where it runs.
 
 mod error;
-mod jsonl;
 mod store;
 mod types;
 
 pub use error::{StoreError, StoreResult};
-pub use jsonl::{JsonlStore, Record};
 pub use store::ConversationStore;
 pub use types::{Author, ConversationHeader, MessageNode, NewConversation, NewNode, Timestamp};
 // Re-exported so downstream crates can name session/node ids without depending on `ulid` directly.

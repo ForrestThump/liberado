@@ -1,11 +1,11 @@
 use super::*;
 use async_trait::async_trait;
-use liberado_conversation_store::JsonlStore;
 use liberado_executor::Budget;
 use liberado_provider::{
     CompletionRequest, CompletionResponse, MockProvider, Provider, ProviderResult, Role, ToolDef,
     ToolInvocation,
 };
+use liberado_session_store::SessionStore;
 
 struct NoTools;
 #[async_trait]
@@ -31,9 +31,9 @@ impl Provider for PendingProvider {
     }
 }
 
-/// A `ChatSessions` over a JSONL store at `root`, scripted with `replies` and no tools.
-fn sessions_at(root: &std::path::Path, replies: Vec<CompletionResponse>) -> ChatSessions {
-    let store = Arc::new(JsonlStore::new(root));
+/// A `ChatSessions` over the **real** session store at `root`, scripted with `replies` and no tools.
+async fn sessions_at(root: &std::path::Path, replies: Vec<CompletionResponse>) -> ChatSessions {
+    let store = Arc::new(SessionStore::open(root).await);
     let provider = Arc::new(MockProvider::with_script("mock", replies));
     let executor = Executor::new(provider, Budget::default());
     ChatSessions::new(store, executor, Arc::new(NoTools))
@@ -47,7 +47,8 @@ async fn persisted_turn_round_trips_to_disk() {
         let sessions = sessions_at(
             dir.path(),
             vec![CompletionResponse::text("Hi! How can I help?")],
-        );
+        )
+        .await;
         let id = sessions.create(None).await.unwrap();
         let reply = sessions.turn(id, "hello").await.unwrap();
         assert_eq!(reply, "Hi! How can I help?");
@@ -56,7 +57,7 @@ async fn persisted_turn_round_trips_to_disk() {
 
     // A SECOND ChatSessions over the SAME store root must see the durable history: it round-trips
     // through disk, not an in-process cache.
-    let reopened = sessions_at(dir.path(), Vec::new());
+    let reopened = sessions_at(dir.path(), Vec::new()).await;
     let history = reopened.history(id).await.unwrap();
     assert_eq!(history[0].role, Role::System);
     assert!(
@@ -75,7 +76,7 @@ async fn append_note_folds_a_goal_session_summary_into_the_conversation() {
     // parent conversation and rehydrates as ordinary context on the next load.
     let dir = tempfile::tempdir().unwrap();
     let id = {
-        let sessions = sessions_at(dir.path(), vec![CompletionResponse::text("On it.")]);
+        let sessions = sessions_at(dir.path(), vec![CompletionResponse::text("On it.")]).await;
         let id = sessions.create(None).await.unwrap();
         sessions.turn(id, "build me a CLI").await.unwrap();
         sessions
@@ -89,7 +90,7 @@ async fn append_note_folds_a_goal_session_summary_into_the_conversation() {
     };
 
     // Reopen over the same store: the note is durable and in history.
-    let reopened = sessions_at(dir.path(), Vec::new());
+    let reopened = sessions_at(dir.path(), Vec::new()).await;
     let history = reopened.history(id).await.unwrap();
     assert!(
         history
@@ -103,7 +104,7 @@ async fn append_note_folds_a_goal_session_summary_into_the_conversation() {
 #[tokio::test]
 async fn context_carries_across_turns_via_rehydration() {
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(JsonlStore::new(dir.path()));
+    let store = Arc::new(SessionStore::open(dir.path()).await);
     let provider = Arc::new(MockProvider::with_script(
         "mock",
         [
@@ -130,7 +131,7 @@ async fn context_carries_across_turns_via_rehydration() {
 #[tokio::test]
 async fn cancelled_stream_persists_nothing() {
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(JsonlStore::new(dir.path()));
+    let store = Arc::new(SessionStore::open(dir.path()).await);
     let executor = Executor::new(Arc::new(PendingProvider), Budget::default());
     let sessions = ChatSessions::new(store, executor, Arc::new(NoTools));
 
@@ -157,7 +158,7 @@ async fn cancelled_stream_persists_nothing() {
 #[tokio::test]
 async fn list_returns_created_conversation() {
     let dir = tempfile::tempdir().unwrap();
-    let sessions = sessions_at(dir.path(), Vec::new());
+    let sessions = sessions_at(dir.path(), Vec::new()).await;
 
     sessions.create(Some("My chat".into())).await.unwrap();
     let headers = sessions.list().await.unwrap();
@@ -194,7 +195,7 @@ fn default_title_collapses_whitespace_and_truncates() {
 #[tokio::test]
 async fn turn_seeds_title_from_first_user_line() {
     let dir = tempfile::tempdir().unwrap();
-    let sessions = sessions_at(dir.path(), vec![CompletionResponse::text("ok")]);
+    let sessions = sessions_at(dir.path(), vec![CompletionResponse::text("ok")]).await;
     let id = sessions.create(None).await.unwrap();
     sessions
         .turn(id, "Plan a trip to Lisbon\nwith details")
@@ -208,7 +209,7 @@ async fn turn_seeds_title_from_first_user_line() {
 #[tokio::test]
 async fn seed_does_not_overwrite_explicit_title() {
     let dir = tempfile::tempdir().unwrap();
-    let sessions = sessions_at(dir.path(), vec![CompletionResponse::text("ok")]);
+    let sessions = sessions_at(dir.path(), vec![CompletionResponse::text("ok")]).await;
     let id = sessions.create(Some("Pinned name".into())).await.unwrap();
     sessions
         .turn(id, "this should not become the title")
@@ -225,7 +226,7 @@ async fn list_backfills_title_from_existing_user_message() {
     use liberado_provider::Message;
 
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(JsonlStore::new(dir.path()));
+    let store = Arc::new(SessionStore::open(dir.path()).await);
     // Pre-seed era: header with no title + a user message already on disk.
     let header = store
         .create(NewConversation {
@@ -247,7 +248,7 @@ async fn list_backfills_title_from_existing_user_message() {
         .await
         .unwrap();
 
-    let sessions = sessions_at(dir.path(), Vec::new());
+    let sessions = sessions_at(dir.path(), Vec::new()).await;
     let headers = sessions.list().await.unwrap();
     let h = headers.iter().find(|h| h.id == header.id).unwrap();
     assert_eq!(h.title.as_deref(), Some("Buy milk and eggs"));
@@ -271,7 +272,7 @@ async fn guarded_turn_with_risk_gated_runtime_works() {
     // The inner runtime has no tools, so the advisor should find nothing, and the turn
     // should complete as a pure conversation.
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(JsonlStore::new(dir.path()));
+    let store = Arc::new(SessionStore::open(dir.path()).await);
     let provider = Arc::new(MockProvider::with_script(
         "mock",
         [CompletionResponse::text("Hello!")],
@@ -313,7 +314,7 @@ async fn granted_mcp_tools_surface_regardless_of_phrasing() {
     use liberado_common::{Capability, CapabilitySet};
 
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(JsonlStore::new(dir.path()));
+    let store = Arc::new(SessionStore::open(dir.path()).await);
     let provider = Arc::new(MockProvider::with_script(
         "mock",
         [CompletionResponse::text("It's empty.")],
@@ -349,7 +350,7 @@ async fn ungranted_mcp_tools_are_scoped_out() {
     use liberado_common::CapabilitySet;
 
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(JsonlStore::new(dir.path()));
+    let store = Arc::new(SessionStore::open(dir.path()).await);
     let provider = Arc::new(MockProvider::with_script(
         "mock",
         [CompletionResponse::text("ok")],
@@ -399,13 +400,13 @@ impl RuntimeFactory for NoopFactory {
 /// A `ChatSessions` with dispatch routing attached: `dispatch_reply` scripts the dispatcher's
 /// classifier (a `DispatchDecision` serialized as the "model" response), `chat_replies` scripts
 /// the plain conversational executor for the `ExecuteDirect` fallthrough case.
-fn sessions_with_dispatch(
+async fn sessions_with_dispatch(
     root: &std::path::Path,
     dispatch_decision: DispatchDecision,
     chat_replies: Vec<CompletionResponse>,
     orchestrator: Orchestrator,
 ) -> ChatSessions {
-    let store = Arc::new(JsonlStore::new(root));
+    let store = Arc::new(SessionStore::open(root).await);
     let dispatch_provider = Arc::new(MockProvider::with_script(
         "dispatch",
         [CompletionResponse::text(
@@ -488,7 +489,7 @@ async fn a_delegated_subagent_becomes_a_background_session_under_the_chat_that_a
 
     let recorded = Arc::new(GoalSessionStore::new());
     let chat = ChatSessions::new(
-        Arc::new(JsonlStore::new(dir.path())),
+        Arc::new(SessionStore::open(dir.path()).await),
         Executor::new(chat_provider, liberado_executor::Budget::default()),
         Arc::new(NoTools),
     )
@@ -557,7 +558,7 @@ async fn face_agent_surfaces_only_delegate_by_default() {
             "Happy to help — what do you need?",
         )],
     ));
-    let store = Arc::new(JsonlStore::new(dir.path()));
+    let store = Arc::new(SessionStore::open(dir.path()).await);
     let dispatch_provider = Arc::new(MockProvider::with_script(
         "dispatch",
         [CompletionResponse::text(
@@ -609,7 +610,7 @@ async fn clarify_decision_answers_without_executing() {
         ProposalSigner::random(),
         "default",
     );
-    let sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), orchestrator);
+    let sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), orchestrator).await;
 
     let id = sessions.create(None).await.unwrap();
     let reply = sessions.turn(id, "clean up my notes").await.unwrap();
@@ -653,7 +654,8 @@ async fn execute_direct_decision_falls_through_to_normal_execution() {
         decision,
         vec![CompletionResponse::text("Hello from the normal path!")],
         orchestrator,
-    );
+    )
+    .await;
 
     let id = sessions.create(None).await.unwrap();
     let reply = sessions.turn(id, "hello").await.unwrap();
@@ -687,7 +689,7 @@ async fn propose_decision_writes_a_proposal_file_and_confirms() {
         ProposalSigner::random(),
         "default",
     );
-    let mut sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), orchestrator);
+    let mut sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), orchestrator).await;
     sessions = sessions.with_guards(
         Vec::new(),
         CapabilitySet::empty(),
@@ -742,7 +744,7 @@ impl ToolRuntime for TwoMcpTools {
 
 /// Build a `ChatSessions` granted both `tasks-mcp` and `email-mcp`, with dispatch attached and
 /// scripted to return `relevant_mcps`, for testing dispatcher-narrowed tool surfacing.
-fn sessions_for_narrowing_test(
+async fn sessions_for_narrowing_test(
     dir: &std::path::Path,
     relevant_mcps: Vec<String>,
 ) -> (ChatSessions, Arc<MockProvider>) {
@@ -769,7 +771,7 @@ fn sessions_for_narrowing_test(
         [CompletionResponse::text("done")],
     ));
     let executor = Executor::new(chat_provider.clone(), Budget::default());
-    let store = Arc::new(JsonlStore::new(dir));
+    let store = Arc::new(SessionStore::open(dir).await);
     let orchestrator = Orchestrator::new(
         Arc::new(MockProvider::with_script("exec", Vec::new())),
         NoopFactory,
@@ -801,7 +803,7 @@ fn sessions_for_narrowing_test(
 async fn execute_direct_relevant_mcps_narrows_the_surfaced_tools() {
     let dir = tempfile::tempdir().unwrap();
     let (sessions, chat_provider) =
-        sessions_for_narrowing_test(dir.path(), vec!["tasks-mcp".into()]);
+        sessions_for_narrowing_test(dir.path(), vec!["tasks-mcp".into()]).await;
 
     let id = sessions.create(None).await.unwrap();
     sessions.turn(id, "add milk to my list").await.unwrap();
@@ -821,7 +823,7 @@ async fn execute_direct_relevant_mcps_narrows_the_surfaced_tools() {
 #[tokio::test]
 async fn execute_direct_empty_relevant_mcps_falls_back_to_full_grant() {
     let dir = tempfile::tempdir().unwrap();
-    let (sessions, chat_provider) = sessions_for_narrowing_test(dir.path(), Vec::new());
+    let (sessions, chat_provider) = sessions_for_narrowing_test(dir.path(), Vec::new()).await;
 
     let id = sessions.create(None).await.unwrap();
     sessions.turn(id, "do something").await.unwrap();

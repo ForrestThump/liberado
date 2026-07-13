@@ -1079,7 +1079,6 @@ mod goal_message_tests {
         Arc<liberado_main_agent::ChatSessions>,
         String,
     ) {
-        use liberado_conversation_store::JsonlStore;
         use liberado_executor::{Budget, Executor};
         use liberado_provider::MockProvider;
 
@@ -1088,7 +1087,7 @@ mod goal_message_tests {
         let goals = Arc::new(hub);
 
         let root = std::env::temp_dir().join(format!("liberado-server-test-{}", Ulid::new()));
-        let store = Arc::new(JsonlStore::new(&root));
+        let store = Arc::new(liberado_session_store::SessionStore::open(&root).await);
         let executor = Executor::new(
             Arc::new(MockProvider::with_script("mock", vec![])),
             Budget::default(),

@@ -21,13 +21,16 @@ semantics), including forking from any message in history.
    Routing unattended triggers through the hub as real packs is the convergence that closes this.
    *This is the largest structural debt in the system right now, and it was taken deliberately: the
    visibility was worth having before the convergence was.*
-2. **Chat's tests don't run on the store chat actually uses.** `main-agent`'s `ChatSessions` tests
-   are built over `liberado-conversation-store::JsonlStore`, which **production no longer uses at
-   all** — production runs on `liberado-session-store::SessionStore`. Two implementations of one
-   trait, and the tests exercise the dead one. This is not theoretical: the monotonic-ULID bug fixed
-   on 2026-07-13 existed *because* `SessionStore` re-implemented what `JsonlStore` already did
-   correctly, and no `main-agent` test could have caught it. Either point those tests at
-   `SessionStore` or delete `JsonlStore`.
+2. ~~**Chat's tests don't run on the store chat actually uses.**~~ **Fixed 2026-07-13.** The
+   `ConversationStore` conformance suite (14 invariants) now runs against `SessionStore`, and
+   `JsonlStore` is **deleted** — `liberado-conversation-store` is the contract, with exactly one
+   implementation. Doing this immediately caught **two more live defects** in `SessionStore` that no
+   chat test could have found: the durable write was issued *outside* the lock its id was minted
+   under (file order could disagree with id order), and it used `writeln!`, which can issue several
+   `write` syscalls and let two appenders splice a line — which fails replay for the *entire
+   session*. It also caught a test that had never tested what it claimed: the concurrency test used
+   `#[tokio::test]` (single-threaded) + `join_all` (one task), so its 50 "concurrent" appends had
+   always run strictly one at a time.
 3. **Packs record events, not turns.** A coding session's intake Q&A are conversational turns, but
    packs emit them as `SessionEvent`s rather than message nodes — so they are not searchable, and a
    goal session cannot be forked (400: "records events, not turns"). Forking a *coding* session at

@@ -80,6 +80,8 @@ pub struct SessionStore {
     /// invert, and `leaf_path` then walks from the wrong leaf — silently truncating a conversation.
     /// Found by the fork tests, which append a whole chat inside one millisecond.
     ids: Arc<std::sync::Mutex<ulid::Generator>>,
+    /// Per-session append locks, held across mint-and-write. See [`write_lock_for`](Self::write_lock_for).
+    write_locks: Arc<std::sync::Mutex<HashMap<Ulid, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 impl SessionStore {
@@ -108,6 +110,7 @@ impl SessionStore {
             inner: Arc::new(Mutex::new(HashMap::new())),
             dir: None,
             ids: Arc::new(std::sync::Mutex::new(ulid::Generator::new())),
+            write_locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -148,6 +151,7 @@ impl SessionStore {
             inner: Arc::new(Mutex::new(map)),
             dir: Some(Arc::new(dir)),
             ids: Arc::new(std::sync::Mutex::new(ulid::Generator::new())),
+            write_locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -157,25 +161,49 @@ impl SessionStore {
 
     /// Best-effort append. A failed write is logged, never panics: losing the durable copy of an
     /// event must not take down a running session.
+    ///
+    /// **One line, one `write_all`.** This used to be `writeln!(f, "{line}")`, which goes through
+    /// `write_fmt` and is free to issue *several* `write` syscalls for one line. Two threads
+    /// appending to the same session's log could then interleave between those syscalls and produce
+    /// a spliced, unparseable line — losing not just that record but, because `replay_file` fails the
+    /// whole file on any bad line, **the entire session**. Building the line (newline included) into
+    /// one buffer and issuing a single `write_all` to an `O_APPEND` handle is atomic for writes of
+    /// this size, so concurrent appenders can interleave *between* lines but never *within* one.
     fn append_line(&self, id: Ulid, record: &Record) {
         let Some(path) = self.path_for(id) else {
             return;
         };
-        let line = match serde_json::to_string(record) {
+        let mut line = match serde_json::to_string(record) {
             Ok(l) => l,
             Err(e) => {
                 warn!(error = %e, "session store: serialize failed");
                 return;
             }
         };
+        line.push('\n');
         let write = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
-            .and_then(|mut f| writeln!(f, "{line}"));
+            .and_then(|mut f| f.write_all(line.as_bytes()));
         if let Err(e) = write {
             warn!(error = %e, path = %path.display(), "session store: append failed");
         }
+    }
+
+    /// The per-session lock held across **mint-and-write**, so a node's id order and its line's file
+    /// order cannot disagree (`liberado-conversation-store-spec.md` §3: file order == id order).
+    ///
+    /// Minting under the in-memory map lock is not enough on its own: the durable write happens after
+    /// that lock is dropped, so two appends could mint `id1 < id2` and then race, landing `id2` in
+    /// the file first. Different sessions take different locks and so never contend.
+    fn write_lock_for(&self, id: Ulid) -> Arc<tokio::sync::Mutex<()>> {
+        self.write_locks
+            .lock()
+            .expect("write-lock registry poisoned")
+            .entry(id)
+            .or_default()
+            .clone()
     }
 
     /// Open a session (chat or goal). The one constructor — that is the point.
@@ -429,6 +457,12 @@ impl ConversationStore for SessionStore {
     }
 
     async fn append(&self, conversation: Ulid, node: NewNode) -> StoreResult<MessageNode> {
+        // Held across mint-and-write: without it the id is minted under the map lock but the durable
+        // write happens after that lock is dropped, so two concurrent appends can mint `id1 < id2`
+        // and then race — landing `id2` in the file first and breaking file-order == id-order.
+        let write_lock = self.write_lock_for(conversation);
+        let _writing = write_lock.lock().await;
+
         let mut map = self.inner.lock().await;
         let live = map
             .get_mut(&conversation)

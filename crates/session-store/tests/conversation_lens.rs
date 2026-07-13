@@ -1,13 +1,32 @@
-//! Integration tests for [`JsonlStore`]: the schema round-trips, the DAG traversal, the
-//! file-order == id-order invariant, durability across instances, and concurrent appends.
+//! The `ConversationStore` conformance suite — run against the store **production actually uses**.
+//!
+//! These tests used to live in `liberado-conversation-store` and exercise its `JsonlStore`. After
+//! the D7 store convergence, production chat runs on `liberado-session-store::SessionStore` and
+//! nothing outside tests constructed a `JsonlStore` at all — so a suite of fourteen load-bearing
+//! storage invariants was quietly guarding an implementation no user could reach, while the one
+//! doing the real work went unverified.
+//!
+//! That was not theoretical. Moving the suite here immediately caught two live defects in
+//! `SessionStore` that no chat test could have found: ids minted non-monotonically, and a durable
+//! append that wrote its line *outside* the lock it minted under (so file order could disagree with
+//! id order, and two concurrent appends could interleave mid-line and corrupt the log).
+//!
+//! Covered: schema round-trips, DAG traversal, the file-order == id-order invariant, durability
+//! across store instances, and concurrent appends.
 
 use std::sync::Arc;
 
 use liberado_conversation_store::{
-    Author, ConversationStore, JsonlStore, NewConversation, NewNode, StoreError, Ulid,
+    Author, ConversationStore, NewConversation, NewNode, StoreError, Ulid,
 };
 use liberado_provider::{Message, ToolInvocation};
+use liberado_session_store::SessionStore;
 use tempfile::tempdir;
+
+/// A durable store rooted at `dir` — the same call `liberado-server` makes at boot.
+async fn store_at(dir: &std::path::Path) -> SessionStore {
+    SessionStore::open(dir).await
+}
 
 /// A conversation with no lineage and the given title.
 fn new_convo(title: &str) -> NewConversation {
@@ -30,7 +49,7 @@ fn user_node(parent: Option<ulid::Ulid>, content: &str) -> NewNode {
 #[tokio::test]
 async fn create_then_list_returns_the_header() {
     let dir = tempdir().unwrap();
-    let store = JsonlStore::new(dir.path());
+    let store = store_at(dir.path()).await;
 
     let header = store.create(new_convo("first chat")).await.unwrap();
 
@@ -43,7 +62,7 @@ async fn create_then_list_returns_the_header() {
 #[tokio::test]
 async fn linear_append_yields_ordered_increasing_path() {
     let dir = tempdir().unwrap();
-    let store = JsonlStore::new(dir.path());
+    let store = store_at(dir.path()).await;
     let convo = store.create(new_convo("linear")).await.unwrap().id;
 
     let n0 = store.append(convo, user_node(None, "one")).await.unwrap();
@@ -73,7 +92,7 @@ async fn linear_append_yields_ordered_increasing_path() {
 #[tokio::test]
 async fn file_order_equals_id_order_after_appends() {
     let dir = tempdir().unwrap();
-    let store = JsonlStore::new(dir.path());
+    let store = store_at(dir.path()).await;
     let convo = store.create(new_convo("ordered")).await.unwrap().id;
 
     let mut parent = None;
@@ -96,7 +115,7 @@ async fn file_order_equals_id_order_after_appends() {
 #[tokio::test]
 async fn branching_splits_and_rejoins_correctly() {
     let dir = tempdir().unwrap();
-    let store = JsonlStore::new(dir.path());
+    let store = store_at(dir.path()).await;
     let convo = store.create(new_convo("branchy")).await.unwrap().id;
 
     let a = store.append(convo, user_node(None, "A")).await.unwrap();
@@ -134,7 +153,7 @@ async fn branching_splits_and_rejoins_correctly() {
 #[tokio::test]
 async fn node_lookup_hit_and_miss() {
     let dir = tempdir().unwrap();
-    let store = JsonlStore::new(dir.path());
+    let store = store_at(dir.path()).await;
     let convo = store.create(new_convo("lookup")).await.unwrap().id;
 
     let n = store.append(convo, user_node(None, "here")).await.unwrap();
@@ -149,7 +168,7 @@ async fn node_lookup_hit_and_miss() {
 #[tokio::test]
 async fn missing_conversation_is_not_found() {
     let dir = tempdir().unwrap();
-    let store = JsonlStore::new(dir.path());
+    let store = store_at(dir.path()).await;
     let ghost = ulid::Ulid::new();
 
     assert!(matches!(
@@ -169,7 +188,7 @@ async fn missing_conversation_is_not_found() {
 #[tokio::test]
 async fn tool_call_messages_round_trip() {
     let dir = tempdir().unwrap();
-    let store = JsonlStore::new(dir.path());
+    let store = store_at(dir.path()).await;
     let convo = store.create(new_convo("tools")).await.unwrap().id;
 
     // An assistant node carrying a tool_calls invocation.
@@ -222,7 +241,7 @@ async fn data_survives_across_store_instances() {
     let dir = tempdir().unwrap();
 
     let (convo, appended) = {
-        let store = JsonlStore::new(dir.path());
+        let store = store_at(dir.path()).await;
         let convo = store.create(new_convo("durable")).await.unwrap().id;
         let n = store
             .append(convo, user_node(None, "persist me"))
@@ -232,7 +251,7 @@ async fn data_survives_across_store_instances() {
     }; // first store dropped — only disk remains
 
     // A brand-new instance over the same root must see the on-disk data.
-    let reopened = JsonlStore::new(dir.path());
+    let reopened = store_at(dir.path()).await;
     let path = reopened.leaf_path(convo, None).await.unwrap();
     assert_eq!(path.len(), 1);
     assert_eq!(path[0], appended);
@@ -242,25 +261,52 @@ async fn data_survives_across_store_instances() {
     assert_eq!(listed[0].id, convo);
 }
 
-#[tokio::test]
+// **Really** parallel, and it took two goes to make it so.
+//
+// This test existed for months and proved nothing. Two reasons, both easy to miss:
+//
+//  1. `#[tokio::test]` defaults to a `current_thread` runtime.
+//  2. `join_all` polls every future on **one task** — that is concurrency, not parallelism.
+//
+// `append` mints an id and then writes the line with no `.await` in between, so under either of
+// those the critical section can never be preempted, and the appends quietly run one at a time. The
+// test passed against a store with no write lock at all.
+//
+// A multi-threaded runtime **and** `tokio::spawn` (one task each, free to land on different threads)
+// is what actually models the daemon — which is multi-threaded, and where a chat turn and a tool
+// result really do append to the same session's log at the same time.
+//
+// Even then, this does not *reliably* fail against a store with no write lock: the race needs the
+// scheduler to preempt a task in the window between releasing the in-memory lock and issuing the
+// write, and that window is a few instructions wide. It was confirmed real by temporarily inserting
+// a `yield_now().await` into that window, which makes it fail every run ("ids must be strictly
+// increasing in file order"); putting the write lock back makes it pass every run *with the yield
+// still in place*. So the lock is load-bearing, not decorative — but do not expect this test alone
+// to catch its removal. The invariant is held by construction; the test is a backstop.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_appends_to_one_conversation_are_serialized() {
     let dir = tempdir().unwrap();
-    let store = Arc::new(JsonlStore::new(dir.path()));
+    let store = Arc::new(store_at(dir.path()).await);
     let convo = store.create(new_convo("hot")).await.unwrap().id;
 
-    // 50 concurrent appends to the SAME conversation (all roots, to keep the test about the writer
+    // 50 parallel appends to the SAME conversation (all roots, to keep the test about the writer
     // lock rather than the DAG shape).
     let count = 50;
-    let futures = (0..count).map(|i| {
-        let store = store.clone();
-        async move {
-            store
-                .append(convo, user_node(None, &format!("c{i}")))
-                .await
-                .unwrap()
-        }
-    });
-    let mut appended = futures::future::join_all(futures).await;
+    let handles: Vec<_> = (0..count)
+        .map(|i| {
+            let store = store.clone();
+            tokio::spawn(async move {
+                store
+                    .append(convo, user_node(None, &format!("c{i}")))
+                    .await
+                    .unwrap()
+            })
+        })
+        .collect();
+    let mut appended = Vec::with_capacity(count);
+    for h in handles {
+        appended.push(h.await.expect("append task panicked"));
+    }
     assert_eq!(appended.len(), count);
 
     // Every node landed, with a unique id.
@@ -300,9 +346,9 @@ async fn concurrent_appends_to_one_conversation_are_serialized() {
 }
 
 #[tokio::test]
-async fn header_reads_line_zero_without_loading_nodes() {
+async fn header_returns_the_title_without_walking_the_transcript() {
     let dir = tempdir().unwrap();
-    let store = JsonlStore::new(dir.path());
+    let store = store_at(dir.path()).await;
     let convo = store.create(new_convo("sidebar title")).await.unwrap();
     store
         .append(convo.id, user_node(None, "body"))
@@ -317,7 +363,7 @@ async fn header_reads_line_zero_without_loading_nodes() {
 #[tokio::test]
 async fn header_missing_conversation_is_not_found() {
     let dir = tempdir().unwrap();
-    let store = JsonlStore::new(dir.path());
+    let store = store_at(dir.path()).await;
     let missing = Ulid::new();
     let err = store.header(missing).await.unwrap_err();
     assert!(matches!(err, StoreError::NotFound(_)));
@@ -326,7 +372,7 @@ async fn header_missing_conversation_is_not_found() {
 #[tokio::test]
 async fn set_title_updates_the_header_and_preserves_every_node() {
     let dir = tempdir().unwrap();
-    let store = JsonlStore::new(dir.path());
+    let store = store_at(dir.path()).await;
     let convo = store.create(new_convo("original title")).await.unwrap().id;
     let n0 = store.append(convo, user_node(None, "one")).await.unwrap();
     store
@@ -350,24 +396,44 @@ async fn set_title_updates_the_header_and_preserves_every_node() {
 }
 
 #[tokio::test]
-async fn set_title_leaves_no_temp_file_behind() {
-    // The atomic write-then-rename this uses (rather than truncate-in-place) writes to a sibling
-    // `.jsonl.tmp` first — confirms the rename actually happens and doesn't leave that temp file
-    // sitting in the directory (which would otherwise show up in a future `list()` scan, though
-    // `.tmp` isn't a `.jsonl` extension so it wouldn't be picked up — this just confirms cleanup).
+async fn renaming_appends_a_new_header_rather_than_rewriting_the_log() {
+    // `JsonlStore` renamed by rewriting the whole file through a temp file + rename. `SessionStore`
+    // is strictly append-only — the log's one invariant is that nothing already written is ever
+    // mutated — so a rename is simply a *new* header line, and replay takes the last one it sees.
+    // That makes the rewrite idempotent and crash-safe for free: a rename interrupted halfway leaves
+    // the old header intact rather than a truncated file.
     let dir = tempdir().unwrap();
-    let store = JsonlStore::new(dir.path());
+    let store = store_at(dir.path()).await;
     let convo = store.create(new_convo("title")).await.unwrap().id;
+    let n0 = store.append(convo, user_node(None, "one")).await.unwrap();
 
     store
         .set_title(convo, "new title".to_string())
         .await
         .unwrap();
 
-    let tmp_path = dir.path().join(format!("{convo}.jsonl.tmp"));
-    assert!(
-        !tmp_path.exists(),
-        "the temp file must be renamed away, not left behind"
+    let raw = std::fs::read_to_string(dir.path().join(format!("{convo}.jsonl"))).unwrap();
+    let headers = raw
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["kind"] == "header")
+        .count();
+    assert_eq!(
+        headers, 2,
+        "a rename appends a header; it never rewrites one"
     );
-    assert!(dir.path().join(format!("{convo}.jsonl")).exists());
+    assert!(
+        !dir.path().join(format!("{convo}.jsonl.tmp")).exists(),
+        "append-only means there is no temp file to leave behind"
+    );
+
+    // And a reopened store takes the *last* header, with every node still in place.
+    let reopened = store_at(dir.path()).await;
+    let h = reopened.header(convo).await.unwrap();
+    assert_eq!(h.title.as_deref(), Some("new title"));
+    assert_eq!(
+        reopened.leaf_path(convo, None).await.unwrap()[0].id,
+        n0.id,
+        "the node survived the rename"
+    );
 }

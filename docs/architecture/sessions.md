@@ -59,9 +59,22 @@ depend on `liberado-provider`, so it cannot know what a `Message` is. A store ho
 therefore live *above* the kernel and expose a kernel-shaped view downward. The duplication that
 convergence removed was in the **storage**; what remains is two typed views of one log.
 
-**Ids are minted monotonically.** `leaf_path(conv, None)` finds the newest turn by taking the largest
-id, so two appends inside the same millisecond (an assistant node and its tool-result node) must not
-invert. `Ulid::new()` does not guarantee that; `ulid::Generator` does.
+### The append invariants (all three are load-bearing, and all three were broken)
+
+1. **Ids are minted monotonically.** `leaf_path(conv, None)` finds the newest turn by taking the
+   largest id, so two appends inside the same millisecond (an assistant node and its tool-result
+   node) must not invert. `Ulid::new()` does not guarantee that; `ulid::Generator` does.
+2. **The write happens under the same lock the id was minted under**, so file order == id order.
+   Minting under the in-memory lock is not enough: the durable write lands after that lock is
+   dropped, so two appends can mint `id1 < id2` and then race.
+3. **One line, one `write_all`.** `writeln!` goes through `write_fmt` and may issue several `write`
+   syscalls, letting two appenders interleave *within* a line — and a single spliced line fails
+   replay for the **whole session**.
+
+The conformance suite for all of this lives in `crates/session-store/tests/conversation_lens.rs`,
+and it runs against `SessionStore` — i.e. against the store production actually uses. That sounds
+obvious; it was not the case until 2026-07-13, and all three defects above survived precisely
+because the suite had been pointed at a store nothing ran on.
 
 ## Background sessions — recorded, not hosted
 
@@ -152,5 +165,5 @@ exactly one of them. See [`../reference/api.md`](../reference/api.md).
 |---|---|---|
 | `liberado-session` | kernel | `GoalSpec`, `SessionGrant`, `Visibility`, `SessionEvent`, `GoalSessionHub`, `DomainPackRunner`, `BackgroundRun`, and the `SessionRecordStore` seam |
 | `liberado-session-store` | store | `SessionStore` — the converged engine; `SessionHeader`; both lens impls |
-| `liberado-conversation-store` | store | the `ConversationStore` trait + the message-node DAG types. Its own `JsonlStore` is the pre-convergence implementation, now used only by tests |
+| `liberado-conversation-store` | store | the `ConversationStore` **trait** + the message-node DAG types. No implementation — `SessionStore` is the only one |
 | `chat-client-contract` | client | `SessionSummary`, `SessionKind`, `VisibilityWire`, `ForkRequest`/`ForkResponse` |

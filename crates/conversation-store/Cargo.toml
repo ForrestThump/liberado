@@ -1,7 +1,7 @@
 [package]
 name = "liberado-conversation-store"
 version = "0.1.0"
-description = "The Decision-17 conversation contract: the ConversationStore trait plus the message-node DAG types (id, parent_id, Author) every session transcript is made of. Production storage now lives in liberado-session-store, which implements this trait; the JsonlStore here is the original single-purpose implementation."
+description = "The Decision-17 conversation CONTRACT: the ConversationStore trait plus the message-node DAG types (id, parent_id, Author) every session transcript is made of. No implementation lives here — liberado-session-store implements it."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -14,12 +14,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
 async-trait = { workspace = true }
 ulid = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
 tempfile = { workspace = true }
 futures = { workspace = true }
 ulid = { workspace = true }

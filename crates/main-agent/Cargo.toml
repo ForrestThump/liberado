@@ -26,6 +26,11 @@ tracing = { workspace = true }
 ulid = { workspace = true }
 
 [dev-dependencies]
+# Chat's tests run against the store production ACTUALLY uses. They used to run against
+# `liberado-conversation-store::JsonlStore`, which nothing in production constructed — so the
+# storage behaviour chat depends on went unverified. A dev-dependency, so the layer rules (which
+# exempt dev-deps) stay honest: main-agent is a kernel crate and does not sit on a store.
+liberado-session-store = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 serde_json = { workspace = true }
