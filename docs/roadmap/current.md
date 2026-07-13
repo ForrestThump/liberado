@@ -21,6 +21,9 @@ semantics), including forking from any message in history.
    Routing unattended triggers through the hub as real packs is the convergence that closes this.
    *This is the largest structural debt in the system right now, and it was taken deliberately: the
    visibility was worth having before the convergence was.*
+   **Sketched:** [one-execution-engine-plan.md](one-execution-engine-plan.md) — the dispatcher +
+   orchestrator pair is already a `DomainPackRunner` in all but name, so this is a `DispatchPack`,
+   not a third engine. Decisions pending before code.
 2. ~~**Chat's tests don't run on the store chat actually uses.**~~ **Fixed 2026-07-13.** The
    `ConversationStore` conformance suite (14 invariants) now runs against `SessionStore`, and
    `JsonlStore` is **deleted** — `liberado-conversation-store` is the contract, with exactly one
