@@ -45,7 +45,7 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
     CommandSpec {
         insert: "/fork",
         name: "/fork",
-        description: "fork current conversation",
+        description: "branch this conversation, keeping the original (/fork <turn> to go back)",
     },
     CommandSpec {
         insert: "/theme ",

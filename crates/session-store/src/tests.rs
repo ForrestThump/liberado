@@ -467,3 +467,205 @@ async fn a_background_session_shows_up_in_the_one_unified_list() {
     assert_eq!(bg.len(), 1);
     assert_eq!(bg[0].goal.as_ref().unwrap().description, "nightly review");
 }
+
+// ── Forking (session-focus, after S5′) ───────────────────────────────────────────────────────
+
+/// A three-turn chat: user/assistant × 3, parent-linked into a straight line.
+async fn chat_with_turns(store: &SessionStore, turns: &[(&str, &str)]) -> ulid::Ulid {
+    let conv = store
+        .create_session(NewSession {
+            title: Some("original".into()),
+            ..Default::default()
+        })
+        .await
+        .id;
+    let mut parent = None;
+    for (q, a) in turns {
+        let u = store.append(conv, user_node(parent, q)).await.unwrap();
+        let a = store
+            .append(
+                conv,
+                NewNode {
+                    parent_id: Some(u.id),
+                    author: Author::Assistant,
+                    message: Message::assistant(*a),
+                },
+            )
+            .await
+            .unwrap();
+        parent = Some(a.id);
+    }
+    conv
+}
+
+#[tokio::test]
+async fn a_fork_copies_the_prefix_rather_than_pointing_at_it() {
+    let store = SessionStore::new();
+    let conv = chat_with_turns(&store, &[("q1", "a1"), ("q2", "a2")]).await;
+
+    let fork = store
+        .fork_session(conv, None, Some("a fork".into()))
+        .await
+        .unwrap();
+
+    // The fork's own log is self-contained: every node it needs is *in it*, not borrowed from the
+    // parent at read time. That is what keeps one session = one greppable, replayable file.
+    let copied = store.leaf_path(fork.id, None).await.unwrap();
+    let original = store.leaf_path(conv, None).await.unwrap();
+    assert_eq!(copied.len(), original.len(), "the whole prefix came across");
+    assert_eq!(
+        copied
+            .iter()
+            .map(|n| n.message.content.clone())
+            .collect::<Vec<_>>(),
+        vec!["q1", "a1", "q2", "a2"],
+    );
+
+    // Copies, not the same nodes: fresh ids, belonging to the fork, re-parented onto each other.
+    for (c, o) in copied.iter().zip(&original) {
+        assert_ne!(c.id, o.id, "a copied node must have its own id");
+        assert_eq!(c.conversation_id, fork.id);
+    }
+    assert!(copied[0].parent_id.is_none(), "the copied root is a root");
+    assert_eq!(
+        copied[1].parent_id,
+        Some(copied[0].id),
+        "re-parented onto the copy, not the original"
+    );
+
+    // Lineage is still recorded, so the tree stays walkable even though the content stands alone.
+    assert_eq!(fork.parent_session, Some(conv));
+    assert_eq!(fork.spawned_by, Some(original.last().unwrap().id));
+    assert_eq!(store.children_of(conv).await.len(), 1);
+}
+
+#[tokio::test]
+async fn continuing_the_original_after_forking_does_not_touch_the_fork() {
+    // The reason copy semantics were chosen. A fork is a *snapshot*: you go back to the original,
+    // keep talking, and the branch you took stays exactly as you left it. Under read-time stitching
+    // this is the assertion that would fail.
+    let store = SessionStore::new();
+    let conv = chat_with_turns(&store, &[("q1", "a1")]).await;
+    let fork = store.fork_session(conv, None, None).await.unwrap();
+
+    let leaf = store
+        .leaf_path(conv, None)
+        .await
+        .unwrap()
+        .last()
+        .unwrap()
+        .id;
+    store
+        .append(conv, user_node(Some(leaf), "a later thought"))
+        .await
+        .unwrap();
+
+    let forked = store.leaf_path(fork.id, None).await.unwrap();
+    assert_eq!(
+        forked.len(),
+        2,
+        "the fork is frozen at the point it was taken"
+    );
+    assert!(
+        !forked
+            .iter()
+            .any(|n| n.message.content == "a later thought"),
+        "the original moved on; the fork must not have"
+    );
+    // ...and symmetrically, the original kept its own history.
+    assert_eq!(store.leaf_path(conv, None).await.unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn forking_mid_conversation_keeps_only_the_context_prior_to_the_split() {
+    // "Go back to turn 1 and take a different path." The DAG could always reconstruct the prefix
+    // before any node — `leaf_path(conv, Some(node))` — nothing had ever *asked* it to.
+    let store = SessionStore::new();
+    let conv = chat_with_turns(&store, &[("q1", "a1"), ("q2", "a2"), ("q3", "a3")]).await;
+
+    let path = store.leaf_path(conv, None).await.unwrap();
+    let after_first_answer = path[1].id; // q1, a1  ← branch here
+
+    let fork = store
+        .fork_session(conv, Some(after_first_answer), None)
+        .await
+        .unwrap();
+
+    let copied = store.leaf_path(fork.id, None).await.unwrap();
+    assert_eq!(
+        copied
+            .iter()
+            .map(|n| n.message.content.clone())
+            .collect::<Vec<_>>(),
+        vec!["q1", "a1"],
+        "everything after the split point must be left behind"
+    );
+    assert_eq!(fork.spawned_by, Some(after_first_answer));
+    // The original is untouched and still has all three turns.
+    assert_eq!(store.leaf_path(conv, None).await.unwrap().len(), 6);
+}
+
+#[tokio::test]
+async fn a_fork_does_not_inherit_the_goal_it_was_forked_from() {
+    // A goal session runs to a terminal status under a pack. Copying the goal would mint a session
+    // claiming to run toward something with no pack running it — permanently `pending`, forever a
+    // lie in the switcher. The transcript forks; the mandate does not.
+    let store = SessionStore::new();
+    let conv = chat_with_turns(&store, &[("q1", "a1")]).await;
+    let fork = store.fork_session(conv, None, None).await.unwrap();
+    assert!(fork.goal.is_none());
+    assert_eq!(fork.status, SessionStatus::Running, "a chat is simply open");
+}
+
+#[tokio::test]
+async fn forking_a_session_with_no_transcript_is_refused_rather_than_producing_an_empty_chat() {
+    // A goal session records *events*, not message nodes, so there is nothing to fork. Silently
+    // handing back an empty conversation would look like it worked.
+    let store = SessionStore::new();
+    SessionRecordStore::insert(&store, GoalSessionRecord::new(goal_spec("capture a note"))).await;
+    let goal_id = SessionRecordStore::list(&store).await[0]
+        .id
+        .parse()
+        .unwrap();
+
+    let err = store
+        .fork_session(goal_id, None, None)
+        .await
+        .expect_err("forking an event-only session must fail loudly");
+    assert!(
+        format!("{err}").contains("no message transcript"),
+        "got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn a_fork_survives_a_reopen_as_its_own_self_contained_log() {
+    // The invariant copy buys: the fork's file stands alone. Reopening the store must rehydrate it
+    // without needing the parent at all.
+    let dir = tempfile::tempdir().unwrap();
+    let fork_id = {
+        let store = SessionStore::open(dir.path()).await;
+        let conv = chat_with_turns(&store, &[("q1", "a1")]).await;
+        store
+            .fork_session(conv, None, Some("branch".into()))
+            .await
+            .unwrap()
+            .id
+    };
+
+    let reopened = SessionStore::open(dir.path()).await;
+    let fork = reopened
+        .session(fork_id)
+        .await
+        .expect("the fork rehydrates");
+    assert_eq!(fork.title.as_deref(), Some("branch"));
+    let nodes = reopened.leaf_path(fork_id, None).await.unwrap();
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|n| n.message.content.clone())
+            .collect::<Vec<_>>(),
+        vec!["q1", "a1"],
+        "the copied transcript is in the fork's own file"
+    );
+}

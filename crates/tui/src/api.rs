@@ -14,8 +14,8 @@ use reqwest::{Client, StatusCode};
 // Re-export the shared wire types so the rest of the crate can still import them
 // from `crate::api::*` without changing call sites.
 pub use chat_client_contract::{
-    ChatMessage, ConvHeader, ConversationHistoryResponse, DaemonStatus, ModelsResponse,
-    ReactionEvent, SessionKind, SessionSummary,
+    ChatMessage, ConvHeader, ConversationHistoryResponse, DaemonStatus, ForkRequest, ForkResponse,
+    ModelsResponse, ReactionEvent, SessionKind, SessionSummary,
 };
 
 /// A tool-call chip rendered inline in the chat: `[tool] name(args preview)`.
@@ -145,6 +145,42 @@ pub async fn fetch_sessions(
     }
     resp.error_for_status_ref()?;
     resp.json().await
+}
+
+/// `POST /api/sessions/{id}/fork` — branch a conversation, keeping the original.
+///
+/// `after_turn` names the branch point by *your* turn number (1-based); `None` forks the whole
+/// conversation as it stands. Returns the new session plus what actually came across, so the UI can
+/// report what it did rather than making the human count turns to check.
+pub async fn fork_conversation(
+    client: &Client,
+    server: &str,
+    id: &str,
+    after_turn: Option<u32>,
+) -> Result<ForkResponse, String> {
+    let resp = client
+        .post(format!("{server}/api/sessions/{id}/fork"))
+        .json(&ForkRequest {
+            after_turn,
+            title: None,
+        })
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        // The server's own message is the useful one ("session has no message transcript to
+        // fork…"), so surface it rather than a bare status code.
+        let status = resp.status();
+        let detail = resp
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| v.get("error")?.as_str().map(str::to_string))
+            .unwrap_or_else(|| status.to_string());
+        return Err(detail);
+    }
+    resp.json().await.map_err(|e| e.to_string())
 }
 
 /// Outcome of `POST /api/goals/{id}/message` — mirrors the endpoint's status codes so the UI can

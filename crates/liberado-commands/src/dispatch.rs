@@ -31,7 +31,12 @@ pub fn parse(input: &str) -> Option<SlashCommand> {
             goal: parts.get(2).copied().unwrap_or("").to_string(),
         }),
         "/back" => Some(SlashCommand::Back),
-        "/fork" => Some(SlashCommand::Fork),
+        // `/fork 3` branches after your 3rd turn; a bare `/fork` takes the whole conversation.
+        // A non-numeric argument is a typo, not a turn — fall back to the whole conversation rather
+        // than silently forking at some other point than the one the human asked for.
+        "/fork" => Some(SlashCommand::Fork {
+            after_turn: parts.get(1).and_then(|t| t.parse::<u32>().ok()),
+        }),
         _ => None,
     }
 }
@@ -70,6 +75,6 @@ pub fn dispatch(cmd: &SlashCommand, ctx: &mut dyn CommandContext) -> Vec<Command
         SlashCommand::Join(id) => handlers::focus::join(id, ctx),
         SlashCommand::Spawn { domain, goal } => handlers::focus::spawn(domain, goal, ctx),
         SlashCommand::Back => handlers::focus::back(ctx),
-        SlashCommand::Fork => handlers::fork::handle(ctx),
+        SlashCommand::Fork { after_turn } => handlers::fork::handle(ctx, *after_turn),
     }
 }

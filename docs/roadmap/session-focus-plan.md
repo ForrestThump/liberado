@@ -224,7 +224,7 @@ S1–S3 are the spine and are useful alone (manual `/join` of any goal session).
 transfer" feel. S5/S5′ harden the storage (S5′ is where the unified-Session model becomes real under
 the hood); S6–S7 generalize.
 
-### Remaining order (decided 2026-07-13): ~~S7~~ → ~~S5′~~ → **forking**
+### Remaining order (decided 2026-07-13): ~~S7~~ → ~~S5′~~ → ~~**forking**~~ — **all done 2026-07-13**
 
 S7 was deliberately taken **before** S5′, and forking after both:
 
@@ -248,6 +248,36 @@ S7 was deliberately taken **before** S5′, and forking after both:
   *snapshot* semantics, so continuing the original later cannot mutate the fork. Lineage fields keep
   the relationship visible for the tree view. Forks are rare and transcripts are small; the
   duplication is worth the invariant.
+
+### Forking — done 2026-07-13
+
+`POST /api/sessions/{id}/fork`, and `/fork` in the TUI. Both things the human asked for are the same
+operation over the message DAG, which is why this was additive: `leaf_path(conv, Some(node))` could
+always reconstruct the context prior to any split point, and nothing had ever *asked* it to.
+
+- **`/fork`** — branch the whole conversation as it stands. A snapshot, not a move: you land in the
+  branch and the original is still in `/sessions`, untouched.
+- **`/fork <n>`** — go back to just after your **turn n** and take a different path. The client names
+  the branch point by *turn*, because that is what a human can see and point at; the server resolves
+  turn → node; the store speaks node ids. User turns are numbered in the chat pane (`3> …`) so the
+  number is pickable rather than counted — offset by `App::turn_offset` when a long history has been
+  pruned, or every number on screen would mean something else to the server.
+- **Copy semantics**, as decided above. Verified live: forked a real 3-turn chat at turn 1, then
+  continued *both* sides — the original went on to `FOUR`, the fork went `ONE → BRANCH`, neither
+  moved the other, and both survived a daemon restart. The fork's `.jsonl` holds its own header plus
+  every node it needs, so the invariant "one session is one self-contained, greppable log" is intact.
+- A goal session records **events, not turns**, so forking one is refused (400) rather than handing
+  back an empty conversation that looks like it worked. Forking a *coding* session at its freeze
+  point — the valuable version named above — needs packs to write their turns as message nodes, which
+  is a separate change.
+
+**Found by this slice:** `SessionStore` was minting node ids with `Ulid::new()`, which is **not
+monotonic within a millisecond** — a regression introduced in S5′ step 2, which dropped the monotonic
+generator `conversation-store` had deliberately built. `leaf_path(conv, None)` picks the newest turn
+by *largest id*, so two appends inside one millisecond (an assistant node and its tool-result node,
+say) could invert and make it walk from the wrong leaf, silently truncating a conversation. The store
+now mints monotonically, which also makes `MessageNode.id`'s own promise — "`parent_id` is always a
+smaller id" — true again.
 
 ## 6. Open questions (decide during S1/S4, none block starting)
 

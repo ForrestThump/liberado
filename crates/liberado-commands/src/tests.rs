@@ -170,7 +170,24 @@ mod tests {
 
     #[test]
     fn parse_fork() {
-        assert_eq!(parse("/fork"), Some(SlashCommand::Fork));
+        assert_eq!(
+            parse("/fork"),
+            Some(SlashCommand::Fork { after_turn: None })
+        );
+        // `/fork 3` = go back to just after your 3rd turn.
+        assert_eq!(
+            parse("/fork 3"),
+            Some(SlashCommand::Fork {
+                after_turn: Some(3)
+            })
+        );
+        // A typo'd argument must not silently fork at some *other* point than the one asked for —
+        // falling back to the whole conversation is the only non-destructive reading, and the
+        // original survives either way.
+        assert_eq!(
+            parse("/fork banana"),
+            Some(SlashCommand::Fork { after_turn: None })
+        );
     }
 
     #[test]
@@ -567,22 +584,59 @@ mod tests {
     fn dispatch_fork_with_session() {
         let mut ctx = MockContext::new();
         ctx.session = Some("c1".into());
-        let results = crate::dispatch::dispatch(&SlashCommand::Fork, &mut ctx);
+        let results = crate::dispatch::dispatch(&SlashCommand::Fork { after_turn: None }, &mut ctx);
         assert_eq!(
             results,
             vec![CommandResult::ForkRequested {
-                parent_id: "c1".into()
+                parent_id: "c1".into(),
+                after_turn: None,
             }]
         );
         assert!(ctx.messages[0].contains("Forking"));
+        // The promise the human most needs to hear, since a fork sounds like it might move them.
+        assert!(ctx.messages[0].contains("original stays put"));
+    }
+
+    #[test]
+    fn dispatch_fork_at_a_turn_carries_the_turn_through() {
+        let mut ctx = MockContext::new();
+        ctx.session = Some("c1".into());
+        let results = crate::dispatch::dispatch(
+            &SlashCommand::Fork {
+                after_turn: Some(2),
+            },
+            &mut ctx,
+        );
+        assert_eq!(
+            results,
+            vec![CommandResult::ForkRequested {
+                parent_id: "c1".into(),
+                after_turn: Some(2),
+            }]
+        );
+    }
+
+    #[test]
+    fn dispatch_fork_at_turn_zero_explains_rather_than_forking() {
+        // Turn 0 means "keep none of it", which is just a new conversation — not what was asked.
+        let mut ctx = MockContext::new();
+        ctx.session = Some("c1".into());
+        let results = crate::dispatch::dispatch(
+            &SlashCommand::Fork {
+                after_turn: Some(0),
+            },
+            &mut ctx,
+        );
+        assert_eq!(results, vec![CommandResult::None]);
+        assert!(ctx.messages[0].contains("numbered from 1"));
     }
 
     #[test]
     fn dispatch_fork_no_session() {
         let mut ctx = MockContext::new();
-        let results = crate::dispatch::dispatch(&SlashCommand::Fork, &mut ctx);
+        let results = crate::dispatch::dispatch(&SlashCommand::Fork { after_turn: None }, &mut ctx);
         assert_eq!(results, vec![CommandResult::None]);
-        assert!(ctx.messages[0].contains("No active session"));
+        assert!(ctx.messages[0].contains("No conversation to fork"));
     }
 
     // ── Display tests ──

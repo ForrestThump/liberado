@@ -102,7 +102,7 @@
 //! | `RefreshConversations` | `GET /api/conversations` → `ConversationsUpdate` |
 //! | `LoadConversationHistory(id)` | `GET /api/conversations/{id}` → `HistoryLoaded` |
 //! | `CancelStream` | Abort the in-flight SSE task |
-//! | `ForkConversation(parent_id)` | Placeholder — logs intent (server support pending) |
+//! | `ForkConversation { parent_id, after_turn }` | `POST /api/sessions/{id}/fork` → `Action::Forked`; lands the user in the branch |
 //! | `SetWindowTitle(String)` | Set the terminal window title |
 //! | `Quit` | Set the `AtomicBool` quit flag (lock-free) |
 //! | `None` | No side-effect needed |

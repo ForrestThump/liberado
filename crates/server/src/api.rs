@@ -630,6 +630,91 @@ pub async fn sessions_list(State(state): State<Arc<AppState>>) -> impl IntoRespo
     Json(state.sessions.list_sessions().await)
 }
 
+/// `POST /api/sessions/{id}/fork` — branch a conversation, keeping the original.
+///
+/// Two things a human wants and could not do: *fork this and keep the original*, and *go back to
+/// turn N and take a different path*. Both are the same operation over the message DAG — copy the
+/// prefix up to a node — which is why forking was additive rather than a migration: the store has
+/// carried `parent_id` and `leaf_path(conv, Some(node))` from day one, and nothing ever asked it to
+/// reconstruct a prefix.
+///
+/// The fork is a **copy**, so it is a snapshot: continue the original afterwards and the fork does
+/// not move (see `SessionStore::fork_session` for why copy and not reference).
+///
+/// The client names the branch point by **turn**, because that is the thing it can show a human;
+/// resolving turn → node is this function's whole job.
+pub async fn session_fork(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<chat_client_contract::ForkRequest>,
+) -> impl IntoResponse {
+    let Ok(source) = id.parse::<Ulid>() else {
+        return bad_request("session id is not a ULID");
+    };
+
+    use liberado_conversation_store::ConversationStore;
+    let path = match state.sessions.leaf_path(source, None).await {
+        Ok(p) => p,
+        Err(liberado_conversation_store::StoreError::NotFound(_)) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiError {
+                    error: "session not found".into(),
+                }),
+            )
+                .into_response();
+        }
+        Err(e) => return bad_request(&e.to_string()),
+    };
+
+    // Your turns are the anchors — the assistant's replies and the tool traffic between them hang
+    // off whichever one they answered.
+    let user_turns: Vec<usize> = path
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.author == liberado_conversation_store::Author::User)
+        .map(|(i, _)| i)
+        .collect();
+    let total_turns = user_turns.len() as u32;
+
+    let (at, kept_turns) = match req.after_turn {
+        None => (None, total_turns), // the whole conversation, as it stands
+        Some(0) => return bad_request("after_turn is 1-based; there is no turn 0"),
+        Some(n) if n as usize >= user_turns.len() => {
+            // Asking to keep every turn there is *is* forking the whole thing — not an error.
+            (None, total_turns)
+        }
+        Some(n) => {
+            // Keep turn `n` and everything that answered it: branch at the node immediately before
+            // turn `n+1` began. That is exactly the context you had when you typed turn n+1 —
+            // which is the moment the human is trying to go back to.
+            let next_turn_start = user_turns[n as usize];
+            (Some(path[next_turn_start - 1].id), n)
+        }
+    };
+
+    match state.sessions.fork_session(source, at, req.title).await {
+        Ok(header) => Json(chat_client_contract::ForkResponse {
+            id: header.id.to_string(),
+            forked_from: source.to_string(),
+            kept_turns,
+            total_turns,
+        })
+        .into_response(),
+        Err(e) => bad_request(&e.to_string()),
+    }
+}
+
+fn bad_request(message: &str) -> axum::response::Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ApiError {
+            error: message.to_string(),
+        }),
+    )
+        .into_response()
+}
+
 // ── Goal sessions (scratchpad F) — surfaces are clients; packs own the loop ──
 
 /// `GET /api/goals/domains` — which domain packs are registered (coding, life, …).
@@ -1346,5 +1431,181 @@ mod goal_message_tests {
             folded,
             "return handoff did not fold the session summary into the parent conversation"
         );
+    }
+
+    // ── Forking ──────────────────────────────────────────────────────────────────────────────
+
+    /// A router with the fork route mounted over a real `SessionStore`, seeded with a chat of
+    /// `turns` (user, assistant) exchanges. Returns the router, the store, and the conversation id.
+    async fn fork_app(
+        turns: &[(&str, &str)],
+    ) -> (Router, Arc<liberado_session_store::SessionStore>, String) {
+        use liberado_conversation_store::{Author, ConversationStore, NewNode};
+        use liberado_provider::Message;
+
+        let sessions = Arc::new(liberado_session_store::SessionStore::new());
+        let conv = sessions
+            .create_session(liberado_session_store::NewSession {
+                title: Some("original".into()),
+                ..Default::default()
+            })
+            .await
+            .id;
+
+        let mut parent = None;
+        for (q, a) in turns {
+            let u = sessions
+                .append(
+                    conv,
+                    NewNode {
+                        parent_id: parent,
+                        author: Author::User,
+                        message: Message::user(*q),
+                    },
+                )
+                .await
+                .unwrap();
+            let a = sessions
+                .append(
+                    conv,
+                    NewNode {
+                        parent_id: Some(u.id),
+                        author: Author::Assistant,
+                        message: Message::assistant(*a),
+                    },
+                )
+                .await
+                .unwrap();
+            parent = Some(a.id);
+        }
+
+        let (hook_tx, _hook_rx) = tokio::sync::mpsc::unbounded_channel();
+        let state = Arc::new(AppState {
+            start_time: Instant::now(),
+            reactions: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            dispatcher_attached: false,
+            orchestrator_attached: false,
+            vault_path: "/tmp/vault".to_string(),
+            goals: Arc::new(GoalSessionHub::new(GoalSessionStore::new())),
+            chat: None,
+            chat_tools: 0,
+            chat_tool_names: Vec::new(),
+            catalog: Arc::new(liberado_common::CapabilityCatalog::new()),
+            conversations_root: std::path::PathBuf::from("/tmp/vault/conversations"),
+            main_agent_capabilities: liberado_common::CapabilitySet::empty(),
+            dispatcher_capabilities: liberado_common::CapabilitySet::empty(),
+            config: Arc::new(test_config_with_life_grants()),
+            sessions: sessions.clone(),
+            model_name: None,
+            provider: None,
+            hooks: std::collections::HashMap::new(),
+            hook_tx,
+            hook_idempotency: crate::hooks::IdempotencyCache::default(),
+        });
+
+        let app = Router::new()
+            .route("/api/sessions/{id}/fork", axum::routing::post(session_fork))
+            .with_state(state);
+        (app, sessions, conv.to_string())
+    }
+
+    async fn post_fork(app: &Router, conv: &str, body: serde_json::Value) -> (StatusCode, String) {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/sessions/{conv}/fork"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn forking_a_whole_conversation_snapshots_it_and_leaves_the_original_alone() {
+        let (app, store, conv) = fork_app(&[("q1", "a1"), ("q2", "a2")]).await;
+
+        let (status, body) = post_fork(&app, &conv, serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let fork: chat_client_contract::ForkResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(fork.kept_turns, 2);
+        assert_eq!(fork.total_turns, 2);
+
+        use liberado_conversation_store::ConversationStore;
+        let fork_id: Ulid = fork.id.parse().unwrap();
+        let copied = store.leaf_path(fork_id, None).await.unwrap();
+        assert_eq!(
+            copied
+                .iter()
+                .map(|n| n.message.content.clone())
+                .collect::<Vec<_>>(),
+            vec!["q1", "a1", "q2", "a2"],
+        );
+        // The original still exists, unchanged, alongside the fork — that is the whole request.
+        let original: Ulid = conv.parse().unwrap();
+        assert_eq!(store.leaf_path(original, None).await.unwrap().len(), 4);
+        assert_eq!(store.list_sessions().await.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn forking_after_a_turn_resolves_that_turn_to_the_right_node() {
+        // The server's whole job here: a human points at a *turn*; the store speaks *nodes*.
+        // `after_turn: 1` must keep q1 and the answer it got, and drop everything from q2 onward.
+        let (app, store, conv) = fork_app(&[("q1", "a1"), ("q2", "a2"), ("q3", "a3")]).await;
+
+        let (status, body) = post_fork(&app, &conv, serde_json::json!({ "after_turn": 1 })).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let fork: chat_client_contract::ForkResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(fork.kept_turns, 1);
+        assert_eq!(fork.total_turns, 3);
+
+        use liberado_conversation_store::ConversationStore;
+        let copied = store
+            .leaf_path(fork.id.parse().unwrap(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            copied
+                .iter()
+                .map(|n| n.message.content.clone())
+                .collect::<Vec<_>>(),
+            vec!["q1", "a1"],
+            "the reply to turn 1 comes along; turn 2 onward does not"
+        );
+    }
+
+    #[tokio::test]
+    async fn forking_past_the_last_turn_is_the_whole_conversation_not_an_error() {
+        // Asking to keep more turns than exist is not a mistake worth refusing — it is just "all of
+        // it", which is what a bare /fork means anyway.
+        let (app, _store, conv) = fork_app(&[("q1", "a1")]).await;
+        let (status, body) = post_fork(&app, &conv, serde_json::json!({ "after_turn": 99 })).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let fork: chat_client_contract::ForkResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(fork.kept_turns, 1);
+        assert_eq!(fork.total_turns, 1);
+    }
+
+    #[tokio::test]
+    async fn forking_turn_zero_is_refused_rather_than_silently_meaning_something_else() {
+        let (app, _store, conv) = fork_app(&[("q1", "a1")]).await;
+        let (status, body) = post_fork(&app, &conv, serde_json::json!({ "after_turn": 0 })).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.contains("1-based"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn forking_an_unknown_session_is_404() {
+        let (app, _store, _conv) = fork_app(&[("q1", "a1")]).await;
+        let (status, _) = post_fork(&app, &Ulid::new().to_string(), serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 }

@@ -816,11 +816,29 @@ fn slash_fork_with_session() {
     let effects = app.handle_key(key(KeyCode::Enter));
     let last = app.messages.last().unwrap();
     assert!(matches!(last, Message::System(m) if m.contains("Forking")));
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::ForkConversation(_)))
-    );
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::ForkConversation {
+            parent_id,
+            after_turn: None
+        } if parent_id == "c1"
+    )));
+}
+
+#[test]
+fn slash_fork_at_a_turn_branches_mid_conversation() {
+    // "Go back to just after my 2nd turn and take a different path."
+    let mut app = test_app();
+    app.session = Some("c1".into());
+    app.input = "/fork 2".into();
+    let effects = app.handle_key(key(KeyCode::Enter));
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::ForkConversation {
+            after_turn: Some(2),
+            ..
+        }
+    )));
 }
 
 #[test]
@@ -829,7 +847,38 @@ fn slash_fork_no_session() {
     app.input = "/fork".into();
     app.handle_key(key(KeyCode::Enter));
     let last = app.messages.last().unwrap();
-    assert!(matches!(last, Message::System(m) if m.contains("No active session")));
+    assert!(matches!(last, Message::System(m) if m.contains("No conversation to fork")));
+}
+
+#[test]
+fn landing_in_a_fork_loads_the_branch_and_says_the_original_survived() {
+    // A fork sounds like it might move or rewrite the conversation. It does neither, and that is
+    // the one thing the human actually needs told.
+    let mut app = test_app();
+    let effects = app.update(Action::Forked(chat_client_contract::ForkResponse {
+        id: "c2".into(),
+        forked_from: "c1".into(),
+        kept_turns: 2,
+        total_turns: 5,
+    }));
+
+    let last = app.messages.last().unwrap();
+    assert!(
+        matches!(last, Message::System(m) if m.contains("turns 1") && m.contains("2 of 5")),
+        "the human should be told what actually came across, got: {last:?}"
+    );
+    assert!(
+        matches!(last, Message::System(m) if m.contains("original is untouched")),
+        "got: {last:?}"
+    );
+
+    // We land *in* the branch: the history load must not then be discarded as stale.
+    assert_eq!(app.pending_load.as_deref(), Some("c2"));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadConversationHistory(id) if id == "c2"))
+    );
 }
 
 // â”€â”€ Mouse tests â”€â”€

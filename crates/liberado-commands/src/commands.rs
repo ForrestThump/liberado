@@ -20,7 +20,14 @@ pub enum SlashCommand {
     },
     /// Return input focus to the primary chat.
     Back,
-    Fork,
+    /// Branch this conversation, keeping the original (`/fork`, or `/fork <turn>`).
+    ///
+    /// `after_turn` = keep through your Nth turn and its reply, dropping everything after it — "go
+    /// back to just after turn N and take a different path". `None` forks the whole conversation as
+    /// it stands, which is a *snapshot*: continuing the original afterwards does not move the fork.
+    Fork {
+        after_turn: Option<u32>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,7 +73,10 @@ impl std::fmt::Display for SlashCommand {
             SlashCommand::Join(id) => write!(f, "/join {id}"),
             SlashCommand::Spawn { domain, goal } => write!(f, "/spawn {domain} {goal}"),
             SlashCommand::Back => write!(f, "/back"),
-            SlashCommand::Fork => write!(f, "/fork"),
+            SlashCommand::Fork { after_turn: None } => write!(f, "/fork"),
+            SlashCommand::Fork {
+                after_turn: Some(n),
+            } => write!(f, "/fork {n}"),
         }
     }
 }

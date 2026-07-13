@@ -148,6 +148,14 @@ pub struct App {
     pub collapsed_nodes: HashSet<String>,
     pub expanded_messages: HashSet<usize>,
     pub chat_cursor: usize,
+    /// How many of the human's turns were pruned off the top of `messages` on history load.
+    ///
+    /// Turn numbers are rendered beside user messages so `/fork <n>` is something you can *point*
+    /// at. The server counts turns from the real start of the conversation, so if the client has
+    /// dropped the first N turns to stay under `MAX_MESSAGE_COUNT` and then numbers what's left from
+    /// 1, every number on screen is wrong — and `/fork 3` would silently branch at a different place
+    /// than the one you clicked. This offset is what keeps the two counting the same thing.
+    pub turn_offset: usize,
     pub input_max_height: u16,
     pub input_scroll: usize,
     pub layout: LayoutRects,
@@ -242,6 +250,7 @@ impl App {
             collapsed_nodes: HashSet::new(),
             expanded_messages: HashSet::new(),
             chat_cursor: 0,
+            turn_offset: 0,
             input_max_height: INPUT_MAX_HEIGHT,
             input_scroll: 0,
             layout: LayoutRects::default(),
@@ -786,8 +795,14 @@ impl App {
                         origin_conversation: self.session.clone(),
                     });
                 }
-                liberado_commands::CommandResult::ForkRequested { parent_id } => {
-                    effects.push(Effect::ForkConversation(parent_id.clone()));
+                liberado_commands::CommandResult::ForkRequested {
+                    parent_id,
+                    after_turn,
+                } => {
+                    effects.push(Effect::ForkConversation {
+                        parent_id: parent_id.clone(),
+                        after_turn: *after_turn,
+                    });
                 }
                 liberado_commands::CommandResult::ShowOptions { title, options } => {
                     let mut text = format!("{title}:\n");
@@ -936,6 +951,8 @@ pub enum Action {
     SseDone,
     /// SSE stream or HTTP call failed.
     SseFailed(String),
+    /// A fork landed: the branch exists on the server and is now where the human is typing.
+    Forked(crate::api::ForkResponse),
     /// Goal sessions from `GET /api/goals` — the goal rows of the session switcher.
     SessionsUpdate(Vec<SessionSummary>),
     /// One decoded frame of a joined goal session's event stream.
@@ -983,7 +1000,12 @@ pub enum Effect {
     /// Hot-swap the daemon's active model (`POST /api/models/select`).
     SelectModel(String),
     CancelStream,
-    ForkConversation(String),
+    /// Branch a conversation, keeping the original (`POST /api/sessions/{id}/fork`).
+    ForkConversation {
+        parent_id: String,
+        /// Keep through this turn of the human's (1-based). `None` = the whole conversation.
+        after_turn: Option<u32>,
+    },
     SetWindowTitle(String),
     /// Fetch `GET /api/goals` to populate the session switcher.
     RefreshSessions,
@@ -1059,6 +1081,28 @@ impl App {
                 self.mark_dirty();
                 vec![Effect::None]
             }
+            Action::Forked(fork) => {
+                // Land in the branch. The original is untouched and still in the switcher — say so,
+                // because "fork" sounds like it might have moved or rewritten the conversation, and
+                // the whole value of copy semantics is that it did neither.
+                let kept = if fork.kept_turns == fork.total_turns {
+                    format!("all {} turns", fork.total_turns)
+                } else {
+                    format!("turns 1–{} of {}", fork.kept_turns, fork.total_turns)
+                };
+                self.messages.push(Message::System(format!(
+                    "Forked into a new conversation with {kept}. You're now in the branch — the \
+                     original is untouched, in /sessions."
+                )));
+                // `pending_load` is what `HistoryLoaded` checks against, so set it before asking:
+                // otherwise the load comes back and is discarded as stale.
+                self.pending_load = Some(fork.id.clone());
+                self.mark_dirty();
+                vec![
+                    Effect::LoadConversationHistory(fork.id.clone()),
+                    Effect::RefreshSessions,
+                ]
+            }
             Action::HistoryLoaded { id, messages } => {
                 if self.pending_load.as_deref() != Some(&id) {
                     return vec![Effect::None]; // stale — newer request superseded this one
@@ -1067,6 +1111,7 @@ impl App {
                 self.pending_load = None;
                 self.messages.clear();
                 self.chat_cursor = 0;
+                self.turn_offset = 0;
                 self.expanded_messages.clear();
                 for msg in messages {
                     match msg.role.as_str() {
@@ -1088,6 +1133,14 @@ impl App {
                 // so we only prune here rather than on every user message push.
                 if self.messages.len() > MAX_MESSAGE_COUNT {
                     let removed = self.messages.len() - MAX_MESSAGE_COUNT;
+                    // Count the human's turns being dropped *before* dropping them, so the turn
+                    // numbers rendered beside what survives still agree with the server's — which
+                    // counts from the real first turn. Otherwise `/fork 3` would branch somewhere
+                    // other than the "3" you can see on screen.
+                    self.turn_offset = self.messages[..removed]
+                        .iter()
+                        .filter(|m| matches!(m, Message::User(_)))
+                        .count();
                     self.messages = self.messages.split_off(removed);
                     self.messages.insert(
                         0,

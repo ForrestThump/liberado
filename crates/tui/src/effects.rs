@@ -73,7 +73,10 @@ impl EffectRunner {
             Effect::LoadConversationHistory(id) => self.load_conversation_history(id).await,
             Effect::FetchModels => self.fetch_models().await,
             Effect::SelectModel(model) => self.select_model(model).await,
-            Effect::ForkConversation(parent_id) => self.fork_conversation(parent_id),
+            Effect::ForkConversation {
+                parent_id,
+                after_turn,
+            } => self.fork_conversation(parent_id, after_turn).await,
             Effect::SetWindowTitle(title) => self.set_window_title(&title),
             Effect::RefreshSessions => self.refresh_sessions().await,
             Effect::JoinGoalSession(id) => self.join_goal_session(id).await,
@@ -300,8 +303,22 @@ impl EffectRunner {
         let _ = execute!(io::stdout(), SetTitle(title));
     }
 
-    fn fork_conversation(&self, parent_id: String) {
-        tracing::info!(%parent_id, "fork requested (server support not yet available)");
+    /// Branch `parent_id`, then **land the user in the branch**. The original is untouched and is
+    /// still in the switcher — forking is not moving.
+    async fn fork_conversation(&self, parent_id: String, after_turn: Option<u32>) {
+        let client = self.client.clone();
+        let tx = self.action_tx.clone();
+        let server = self.server_url();
+        tokio::spawn(async move {
+            let action =
+                match api::fork_conversation(&client, &server, &parent_id, after_turn).await {
+                    Ok(fork) => Action::Forked(fork),
+                    Err(e) => Action::SseFailed(format!("fork failed: {e}")),
+                };
+            if tx.try_send(action).is_err() {
+                tracing::warn!("action channel full, dropping fork result");
+            }
+        });
     }
 
     fn cancel_stream(&self) {
@@ -467,7 +484,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::mpsc;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{body_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn make_app(server: &str) -> Arc<Mutex<App>> {
@@ -635,15 +652,84 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fork_conversation_is_noop() {
-        let app = make_app("http://localhost:0");
+    async fn fork_conversation_posts_the_branch_point_and_reports_the_new_session() {
+        // This effect used to log "server support not yet available" and return. It now actually
+        // forks — the branch point rides in the body as a turn number, not a node id, because a turn
+        // is the thing a human can see and point at.
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/sessions/c1/fork"))
+            .and(body_json(serde_json::json!({ "after_turn": 2 })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "c2",
+                "forked_from": "c1",
+                "kept_turns": 2,
+                "total_turns": 5
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
         let (action_tx, mut action_rx) = mpsc::channel(256);
         let runner = make_runner(app, action_tx);
 
-        runner.run(Effect::ForkConversation("c1".into())).await;
+        runner
+            .run(Effect::ForkConversation {
+                parent_id: "c1".into(),
+                after_turn: Some(2),
+            })
+            .await;
 
-        let result = tokio::time::timeout(Duration::from_millis(500), action_rx.recv()).await;
-        assert!(result.is_err(), "expected no action but got one");
+        let action = tokio::time::timeout(Duration::from_secs(2), action_rx.recv())
+            .await
+            .expect("timeout waiting for the fork result")
+            .expect("channel closed");
+
+        match action {
+            Action::Forked(fork) => {
+                assert_eq!(fork.id, "c2");
+                assert_eq!(fork.kept_turns, 2);
+                assert_eq!(fork.total_turns, 5);
+            }
+            other => panic!("expected Forked, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_fork_surfaces_the_servers_own_reason() {
+        // "session has no message transcript to fork" is the useful message; a bare 400 is not.
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/sessions/g1/fork"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": "session g1 has no message transcript to fork"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner
+            .run(Effect::ForkConversation {
+                parent_id: "g1".into(),
+                after_turn: None,
+            })
+            .await;
+
+        let action = tokio::time::timeout(Duration::from_secs(2), action_rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+
+        match action {
+            Action::SseFailed(msg) => assert!(
+                msg.contains("no message transcript"),
+                "the server's reason must reach the human, got: {msg}"
+            ),
+            other => panic!("expected SseFailed, got {other:?}"),
+        }
     }
 
     #[tokio::test]

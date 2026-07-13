@@ -35,6 +35,7 @@ use tracing::warn;
 use ulid::Ulid;
 
 use crate::types::{NewSession, SessionHeader};
+use liberado_session::Visibility;
 
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
@@ -70,6 +71,28 @@ struct Live {
 pub struct SessionStore {
     inner: Arc<Mutex<HashMap<Ulid, Live>>>,
     dir: Option<Arc<PathBuf>>,
+    /// Mints **monotonic** ULIDs. `Ulid::new()` is *not* monotonic: two ids minted in the same
+    /// millisecond differ only in their random suffix, so either may sort higher. The store's whole
+    /// ordering story rests on ids being time-sortable — `MessageNode.id`'s own doc promises
+    /// `parent_id` is "always a smaller id" — and `leaf_path(conv, None)` finds the newest turn by
+    /// taking the **largest** id. Sub-millisecond appends are not hypothetical: a tool loop writes
+    /// the assistant node and its tool-result node back to back. With `Ulid::new()` that pair can
+    /// invert, and `leaf_path` then walks from the wrong leaf — silently truncating a conversation.
+    /// Found by the fork tests, which append a whole chat inside one millisecond.
+    ids: Arc<std::sync::Mutex<ulid::Generator>>,
+}
+
+impl SessionStore {
+    /// The next id, monotonically after every id this store has already minted. Falls back to a
+    /// plain `Ulid::new()` only if the generator overflows (2^80 ids inside one millisecond), which
+    /// cannot happen in practice — and is still a valid, merely non-monotonic, id if it did.
+    fn next_id(&self) -> Ulid {
+        self.ids
+            .lock()
+            .expect("id generator mutex poisoned")
+            .generate()
+            .unwrap_or_else(|_| Ulid::new())
+    }
 }
 
 impl Default for SessionStore {
@@ -84,6 +107,7 @@ impl SessionStore {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
             dir: None,
+            ids: Arc::new(std::sync::Mutex::new(ulid::Generator::new())),
         }
     }
 
@@ -123,6 +147,7 @@ impl SessionStore {
         Self {
             inner: Arc::new(Mutex::new(map)),
             dir: Some(Arc::new(dir)),
+            ids: Arc::new(std::sync::Mutex::new(ulid::Generator::new())),
         }
     }
 
@@ -155,7 +180,7 @@ impl SessionStore {
 
     /// Open a session (chat or goal). The one constructor — that is the point.
     pub async fn create_session(&self, new: NewSession) -> SessionHeader {
-        let id = Ulid::new();
+        let id = self.next_id();
         let header = SessionHeader {
             id,
             title: new.title,
@@ -221,6 +246,89 @@ impl SessionStore {
             .collect();
         rows.sort_by_key(|h| h.id);
         rows
+    }
+
+    /// Fork `source` into a new session carrying the conversation **up to and including `at`**
+    /// (`None` = its newest leaf, i.e. the whole thing).
+    ///
+    /// # Copy, not reference
+    ///
+    /// The prefix nodes are **copied** into the fork's own log, with fresh ids, re-parented onto
+    /// each other. The alternative — leaving the fork empty and stitching the parent's nodes in at
+    /// read time via `parent_session` — was rejected:
+    ///
+    /// * It would break the store's one real invariant: **a session's log is self-contained**. Line
+    ///   0 is its header and every node it needs is in the file. That is what makes a log greppable
+    ///   on its own (`chat-search` reads these files directly), replayable on its own, and
+    ///   deletable without silently gutting some other session.
+    /// * It would give *live* semantics, not snapshot: appending to the original later would
+    ///   retroactively change what the fork had "started from" if the fork point ever moved, and a
+    ///   read-time stitch has to re-walk a chain of ancestors on every single load.
+    ///
+    /// Copy gives snapshot semantics, which is what a fork *means*: the original can be continued
+    /// afterwards and the fork will not notice. Forks are rare and transcripts are small; the cost
+    /// is a few kilobytes, and the invariant it preserves is worth far more.
+    ///
+    /// Lineage is still recorded — `parent_session` = `source`, `spawned_by` = the node forked at —
+    /// so the relationship stays visible even though the content stands alone.
+    pub async fn fork_session(
+        &self,
+        source: Ulid,
+        at: Option<Ulid>,
+        title: Option<String>,
+    ) -> StoreResult<SessionHeader> {
+        // The exact context that existed at the fork point — the same walk `leaf_path` does for a
+        // normal load, which is why "branch mid-conversation" needs no new traversal: the DAG could
+        // always reconstruct the prefix before any node; nothing ever *asked* it to.
+        let prefix = self.leaf_path(source, at).await?;
+        if prefix.is_empty() {
+            return Err(StoreError::NotFound(format!(
+                "session {source} has no message transcript to fork \
+                 (goal sessions record events, not turns)"
+            )));
+        }
+        let fork_point = prefix.last().expect("non-empty").id;
+
+        let parent = self
+            .session(source)
+            .await
+            .ok_or_else(|| StoreError::NotFound(format!("session {source}")))?;
+
+        let header = self
+            .create_session(NewSession {
+                title: title.or_else(|| parent.title.clone()),
+                // A fork is a chat you continue. It deliberately does **not** inherit the source's
+                // `goal`: a goal session runs to a terminal status under a pack, and copying the
+                // goal would produce a session claiming to be running toward something with no pack
+                // running it. The transcript is what forks; the mandate does not.
+                goal: None,
+                parent_session: Some(source),
+                spawned_by: Some(fork_point),
+                correlation_id: None,
+                // Whoever forked it is sitting right there looking at it.
+                visibility: Visibility::Foreground,
+                grant: parent.grant.clone(),
+            })
+            .await;
+
+        // Re-parent as we copy: each copied node points at the *copy* of its parent, not the
+        // original. Walking `prefix` root-ward means a node's parent is always already copied.
+        let mut previous: Option<Ulid> = None;
+        for node in &prefix {
+            let copied = self
+                .append(
+                    header.id,
+                    NewNode {
+                        parent_id: previous,
+                        author: node.author.clone(),
+                        message: node.message.clone(),
+                    },
+                )
+                .await?;
+            previous = Some(copied.id);
+        }
+
+        Ok(header)
     }
 }
 
@@ -327,7 +435,7 @@ impl ConversationStore for SessionStore {
             .ok_or_else(|| StoreError::NotFound(format!("session {conversation}")))?;
 
         let persisted = MessageNode {
-            id: Ulid::new(),
+            id: self.next_id(),
             parent_id: node.parent_id,
             conversation_id: conversation,
             author: node.author,

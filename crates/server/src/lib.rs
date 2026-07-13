@@ -225,6 +225,11 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         )
         // The one unified list (S5′): chats and goal sessions, same rows.
         .route("/api/sessions", axum::routing::get(api::sessions_list))
+        // Branch a conversation, keeping the original (copy semantics — a snapshot, not a pointer).
+        .route(
+            "/api/sessions/{id}/fork",
+            axum::routing::post(api::session_fork),
+        )
         .route("/api/goals/domains", axum::routing::get(api::goals_domains))
         .route(
             "/api/goals",

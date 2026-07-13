@@ -48,8 +48,13 @@ pub enum CommandResult {
         domain: String,
         goal: String,
     },
+    /// Branch `parent_id`, keeping the original. The surface POSTs `/api/sessions/{id}/fork`, then
+    /// switches to the new conversation — you carry on in the branch, and the original is still
+    /// there in the switcher, exactly as you left it.
     ForkRequested {
         parent_id: String,
+        /// Keep through this turn of yours (1-based). `None` = the whole conversation.
+        after_turn: Option<u32>,
     },
     ShowOptions {
         title: String,

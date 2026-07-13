@@ -260,6 +260,37 @@ pub struct ConvHeader {
     pub spawned_by: Option<String>,
 }
 
+/// Body of `POST /api/sessions/{id}/fork`.
+///
+/// The branch point is named by **turn number**, not by node id, because a turn is what a human can
+/// actually see and point at. The server resolves it against the message DAG; the store itself
+/// speaks node ids. A client that has a node id (a future DAG view) is not served by this endpoint's
+/// shape — that would be an additional field, not a different endpoint.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ForkRequest {
+    /// Keep the conversation through your `after_turn`-th turn and its reply, dropping everything
+    /// after — i.e. "go back to just after turn N and take a different path". 1-based.
+    ///
+    /// `None` forks the whole conversation, which is a *snapshot*, not a truncation: the fork starts
+    /// exactly where the original stands now, and the two diverge from there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_turn: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+/// Response from `POST /api/sessions/{id}/fork`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ForkResponse {
+    /// The new session. Continue here; the original is untouched.
+    pub id: String,
+    pub forked_from: String,
+    /// How many of your turns came across, and how many the original had — so a surface can say
+    /// what it actually did rather than making the human go and count.
+    pub kept_turns: u32,
+    pub total_turns: u32,
+}
+
 /// A message from `GET /api/conversations/{id}` history.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatMessage {

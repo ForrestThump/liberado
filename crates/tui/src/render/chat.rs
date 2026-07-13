@@ -99,6 +99,12 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spi
         None => &app.messages,
     };
 
+    // Your turns are numbered so `/fork <n>` is something you can *point at* rather than count.
+    // The count starts from `turn_offset`, not from zero, because a long history is pruned at the
+    // top — numbering the survivors from 1 would put a "3" on screen that means something else to
+    // the server. The joined (read-only) transcript isn't forkable, so it isn't numbered.
+    let mut user_turn = app.turn_offset;
+
     for (i, msg) in messages.iter().enumerate() {
         // Selection/expansion only applies to the primary conversation view (chat-history focus
         // navigates `app.messages`); the joined transcript renders read-only.
@@ -134,12 +140,23 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spi
                 } else {
                     c(&th.chat_user_text, "#ffffff")
                 };
+                // The turn number this message is, in the numbering `/fork <n>` uses. Read-only
+                // transcripts aren't forkable, so they stay unnumbered.
+                user_turn += 1;
+                let lead = if joined_active {
+                    "> ".to_string()
+                } else {
+                    format!("{user_turn}> ")
+                };
+                // Continuation lines indent to exactly the width of the lead, whatever its digits.
+                let cont = " ".repeat(lead.chars().count());
+
                 // Multi-line user messages: paint every line with the same soft bg.
                 let mut body_lines = text.lines().peekable();
                 if body_lines.peek().is_none() {
                     lines.push(Line::from(vec![
                         Span::styled(
-                            "> ",
+                            lead,
                             Style::default()
                                 .fg(prefix_fg)
                                 .bg(user_bg)
@@ -150,22 +167,19 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spi
                 } else {
                     let mut first = true;
                     for line in text.lines() {
-                        let lead = if first {
+                        let (lead_text, bold) = if first {
                             first = false;
-                            "> "
+                            (lead.clone(), Modifier::BOLD)
                         } else {
-                            "  "
+                            (cont.clone(), Modifier::empty())
                         };
                         lines.push(Line::from(vec![
                             Span::styled(
-                                lead,
-                                Style::default().fg(prefix_fg).bg(user_bg).add_modifier(
-                                    if lead == "> " {
-                                        Modifier::BOLD
-                                    } else {
-                                        Modifier::empty()
-                                    },
-                                ),
+                                lead_text,
+                                Style::default()
+                                    .fg(prefix_fg)
+                                    .bg(user_bg)
+                                    .add_modifier(bold),
                             ),
                             Span::styled(
                                 line.to_string(),
