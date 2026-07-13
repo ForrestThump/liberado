@@ -54,19 +54,43 @@ impl<'de> Deserialize<'de> for DomainHint {
     }
 }
 
-/// Where a goal session came from — the link back to a parent conversation when a chat turn spawned
-/// it (session-focus D2/S4). Separate-but-linked: the session's transcript stays its own, but on
-/// terminal its summary can be folded back into `conversation_id`, and `correlation_id` stitches it
-/// to the dispatch journal — the same linkage `delegate` already uses. `None` for sessions a human
-/// started directly (`POST /api/goals`, `/sessions` switcher).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Where a session came from (session-focus D2/S4). Separate-but-linked: the session's transcript
+/// stays its own, but on terminal its summary can be folded back into `conversation_id`, and
+/// `correlation_id` stitches it to the dispatch journal — the same linkage `delegate` already uses.
+/// `None` for sessions a human started directly (`POST /api/goals`, `/sessions` switcher).
+///
+/// **Both fields are optional, and independently so** — they are two different facts that happen to
+/// arrive together for a chat-spawned session. A `delegate`d subagent has both. A **cron firing has
+/// a correlation id and no parent conversation at all** (S5′ step 5): nobody spawned it from a chat,
+/// yet it still belongs to a dispatch journal entry. Requiring a parent here would have forced every
+/// unattended trigger to either invent one or throw its correlation away.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionOrigin {
     /// The parent conversation id (a `conversation-store` ULID, as a string here to keep the
     /// session kernel off that store-tier crate).
-    pub conversation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
     /// The dispatch correlation id that ties this session to the journal entry that spawned it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<String>,
+}
+
+impl SessionOrigin {
+    /// A session spawned by a chat turn — the S4 offer/return handoff.
+    pub fn from_conversation(conversation_id: impl Into<String>) -> Self {
+        Self {
+            conversation_id: Some(conversation_id.into()),
+            correlation_id: None,
+        }
+    }
+
+    /// A session with a dispatch correlation but **no parent conversation** — a cron, a webhook.
+    pub fn from_correlation(correlation_id: impl Into<String>) -> Self {
+        Self {
+            conversation_id: None,
+            correlation_id: Some(correlation_id.into()),
+        }
+    }
 }
 
 /// Input to start a goal session (HTTP body / client contract).
@@ -102,6 +126,32 @@ pub struct GoalSpec {
     /// Opaque pack payload (workspace root, vault path, contract JSON, …).
     #[serde(default)]
     pub payload: serde_json::Value,
+}
+
+/// Is anyone *there*? Not a subtype — an attribute, exactly like `goal` (D7).
+///
+/// Foreground sessions were started by a human who is watching (a chat, a `/spawn`). Background
+/// sessions were started by something that isn't: a cron firing, a webhook, a `delegate`d subagent.
+///
+/// It does **not** decide whether a session may ask a human — that is
+/// [`Capability::AskHuman`](liberado_common::Capability::AskHuman) on the grant (S6), which is
+/// enforced. This is only "who was watching", for display and for policy defaults. The two are
+/// deliberately independent: a background session *may* hold `AskHuman` (it would await an answer
+/// nobody is there to give, until its idle budget kills it), and a foreground one may lack it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Visibility {
+    /// A human started it and is (or was) attending it.
+    #[default]
+    Foreground,
+    /// A cron, a webhook, or a dispatched subagent started it. Nobody is watching.
+    Background,
+}
+
+impl Visibility {
+    pub fn is_background(self) -> bool {
+        matches!(self, Self::Background)
+    }
 }
 
 /// Lifecycle of one goal session.
@@ -157,6 +207,13 @@ pub struct GoalSessionRecord {
     /// do is as much a part of the audit trail as what it did.
     #[serde(default)]
     pub grant: SessionGrant,
+    /// Whether a human was watching when this started (D7). Carried on the *record*, not just on
+    /// the store's header, because this lens is what every non-human trigger — a cron, a webhook, a
+    /// `delegate`d subagent — writes through. While it was missing here, the store had no choice but
+    /// to stamp every session it received `Foreground`, and so nothing could ever record a
+    /// background run: the type existed and nothing could emit it.
+    #[serde(default)]
+    pub visibility: Visibility,
     pub status: SessionStatus,
     pub created_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -189,12 +246,21 @@ impl GoalSessionRecord {
             id,
             goal,
             grant,
+            visibility: Visibility::Foreground,
             status: SessionStatus::Pending,
             created_at: Utc::now(),
             finished_at: None,
             result: None,
             event_count: 0,
             awaiting_input: false,
+        }
+    }
+
+    /// A session nobody is watching — a cron firing, a webhook, a `delegate`d subagent.
+    pub fn background(goal: GoalSpec, grant: SessionGrant) -> Self {
+        Self {
+            visibility: Visibility::Background,
+            ..Self::with_grant(goal, grant)
         }
     }
 }
@@ -244,7 +310,7 @@ mod tests {
             max_turns: 0,
             max_idle_secs: None,
             origin: Some(SessionOrigin {
-                conversation_id: "01CONV".into(),
+                conversation_id: Some("01CONV".into()),
                 correlation_id: Some("corr-1".into()),
             }),
             profile: None,
@@ -253,7 +319,10 @@ mod tests {
         let json = serde_json::to_value(&with).unwrap();
         assert_eq!(json["origin"]["conversation_id"], "01CONV");
         let back: GoalSpec = serde_json::from_value(json).unwrap();
-        assert_eq!(back.origin.as_ref().unwrap().conversation_id, "01CONV");
+        assert_eq!(
+            back.origin.as_ref().unwrap().conversation_id.as_deref(),
+            Some("01CONV")
+        );
 
         // Absent origin is skipped in the wire form (backward-compatible with human-started goals).
         let without = GoalSpec {

@@ -5,25 +5,11 @@
 //! and becomes a record on disk.
 
 use liberado_conversation_store::{ConversationHeader, Timestamp};
-use liberado_session::{GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionStatus};
+use liberado_session::{
+    GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionStatus, Visibility,
+};
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
-
-/// Is anyone *there*? Not a subtype — an attribute, exactly like `goal`.
-///
-/// Foreground sessions were started by a human who is watching (a chat, a `/spawn`). Background
-/// sessions were started by something that isn't (a cron, a hook, a dispatched subagent). It does
-/// **not** decide whether a session may ask a human — that is `Capability::AskHuman` on the grant
-/// (S6), which is enforced. This is only "who was watching", for display and for policy defaults.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Visibility {
-    /// A human started it and is (or was) attending it.
-    #[default]
-    Foreground,
-    /// A cron, a webhook, or a dispatched subagent started it. Nobody is watching.
-    Background,
-}
 
 /// One session — chat or goal, they are the same record.
 ///
@@ -130,6 +116,7 @@ impl SessionHeader {
             id: self.id.to_string(),
             goal,
             grant: self.grant.clone(),
+            visibility: self.visibility,
             status: self.status,
             created_at: self.created_at,
             finished_at: self.finished_at,

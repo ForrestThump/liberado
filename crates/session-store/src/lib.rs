@@ -34,7 +34,14 @@ mod jsonl;
 mod types;
 
 pub use jsonl::{Record, SessionStore};
-pub use types::{NewSession, SessionHeader, Visibility};
+pub use types::{NewSession, SessionHeader};
+
+/// Re-exported from the kernel, where it now lives: `visibility` is an attribute of a *session*, and
+/// the kernel's `GoalSessionRecord` is one of the two lenses onto a session — so while this enum
+/// lived only up here, that lens could not carry it, and the store had no choice but to stamp
+/// everything it received `Foreground`. That is exactly why nothing could emit a background session
+/// until S5′ step 5.
+pub use liberado_session::Visibility;
 
 pub use ulid::Ulid;
 

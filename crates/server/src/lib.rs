@@ -108,7 +108,11 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         capability_catalog.clone(),
         Path::new(&vault_path),
         guidance,
-    );
+    )
+    // Every reaction the daemon takes — a cron firing, a webhook, an external vault edit — is now
+    // recorded as a **background session** in the same store chat and `/spawn` use (S5′ step 5).
+    // They were unattended *and* invisible; only the first half of that was ever intended.
+    .with_session_store(sessions.clone());
 
     // The webhook hooks endpoint's seam into the daemon's reactive pipeline — a clone of the same
     // channel every `EventSource` (vault-watch, cron) pushes onto. Grabbed before `daemon` moves
@@ -343,7 +347,10 @@ async fn build_chat(
     catalog: Arc<CapabilityCatalog>,
     vault_path: &Path,
     guidance: Option<Arc<dyn liberado_common::ToolGuidanceSource>>,
-    store: Arc<dyn liberado_conversation_store::ConversationStore>,
+    // The **concrete** converged store, not an erased `dyn ConversationStore`: chat needs both of
+    // its lenses — the chat view for its own transcript, and the kernel view to record a `delegate`d
+    // subagent as a background session. One trait object cannot be cast to the other.
+    store: Arc<SessionStore>,
 ) -> (Option<Arc<ChatSessions>>, usize, Vec<String>) {
     let provider = match provider {
         Some(p) => p,
@@ -407,11 +414,14 @@ async fn build_chat(
     });
 
     let mut sessions = ChatSessions::new(
-        store,
+        store.clone(),
         Executor::new(provider.clone(), Budget::default()),
         runtime,
     )
     .with_system_prompt(system_prompt)
+    // A `delegate`d subagent becomes a background session — a child of the chat that asked for it
+    // (S5′ step 5). The same store, seen through the kernel's lens.
+    .with_session_store(store)
     .with_guards(
         guard.consequences,
         main_agent_caps,

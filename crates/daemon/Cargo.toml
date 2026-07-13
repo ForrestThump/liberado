@@ -15,7 +15,9 @@ liberado-notify = { workspace = true }
 liberado-vault = { workspace = true }
 liberado-dispatcher = { workspace = true }
 liberado-orchestrator = { workspace = true }
+liberado-session = { workspace = true }
 chrono = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }

@@ -737,10 +737,15 @@ fn spawn_return_handoff(
             tracing::warn!(session = %session_id, "return handoff: record never settled terminal");
             return;
         };
-        let conv = match origin.conversation_id.parse::<Ulid>() {
+        // No parent conversation ⇒ nothing to hand back to. That is the normal case for an
+        // unattended session (a cron carries a correlation id but no parent), not an error.
+        let Some(parent) = origin.conversation_id.as_deref() else {
+            return;
+        };
+        let conv = match parent.parse::<Ulid>() {
             Ok(c) => c,
             Err(_) => {
-                tracing::warn!(conversation = %origin.conversation_id, "return handoff: parent id is not a ULID");
+                tracing::warn!(conversation = %parent, "return handoff: parent id is not a ULID");
                 return;
             }
         };
@@ -748,7 +753,7 @@ fn spawn_return_handoff(
         match chat.append_note(conv, note).await {
             Ok(()) => tracing::info!(
                 session = %session_id,
-                conversation = %origin.conversation_id,
+                conversation = %parent,
                 "return handoff: summary folded into parent conversation"
             ),
             Err(e) => tracing::warn!(error = %e, "return handoff: append_note failed"),

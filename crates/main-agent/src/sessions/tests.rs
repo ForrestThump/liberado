@@ -425,6 +425,110 @@ fn sessions_with_dispatch(
 }
 
 #[tokio::test]
+async fn a_delegated_subagent_becomes_a_background_session_under_the_chat_that_asked_for_it() {
+    // S5′ step 5. A `delegate` call spins up real work — a classifier, an executor, tools that touch
+    // the world — and all the chat ever saw of it was the summary paragraph handed back. The rest
+    // went into a dispatch journal nobody opens. Now the delegation is a **session**: visible while
+    // it runs, terminal when it's done, and a child of the conversation that asked for it.
+    use liberado_session::{GoalSessionStore, SessionRecordStore, SessionStatus, Visibility};
+
+    let dir = tempfile::tempdir().unwrap();
+
+    // The dispatcher classifies the delegated goal as directly executable...
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: Vec::new(),
+        },
+        confidence: 0.95,
+        rationale: "routine lookup".into(),
+    };
+    let dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "dispatch",
+            [CompletionResponse::text(
+                serde_json::to_string(&decision).unwrap(),
+            )],
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    // ...and the orchestrator's worker files a report.
+    let orchestrator = Orchestrator::new(
+        Arc::new(MockProvider::with_script(
+            "exec",
+            [CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "c",
+                liberado_executor::SUBMIT_REPORT_TOOL,
+                serde_json::json!({ "outcome": "succeeded", "summary": "found 3 open tasks" }),
+            )])],
+        )),
+        NoopFactory,
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    );
+
+    // The face agent calls `delegate`, then summarizes for the human.
+    let chat_provider = Arc::new(MockProvider::with_script(
+        "chat",
+        [
+            CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "d1",
+                crate::DELEGATE_TOOL_NAME,
+                serde_json::json!({ "goal": "how many open tasks do I have?" }),
+            )]),
+            CompletionResponse::text("You have 3 open tasks."),
+        ],
+    ));
+
+    let recorded = Arc::new(GoalSessionStore::new());
+    let chat = ChatSessions::new(
+        Arc::new(JsonlStore::new(dir.path())),
+        Executor::new(chat_provider, liberado_executor::Budget::default()),
+        Arc::new(NoTools),
+    )
+    .with_delegation_mode(true)
+    .with_session_store(recorded.clone())
+    .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()), orchestrator);
+
+    let chat_id = chat.create(None).await.unwrap();
+    chat.turn(chat_id, "how many open tasks do I have?")
+        .await
+        .unwrap();
+
+    let rows = SessionRecordStore::list(recorded.as_ref()).await;
+    assert_eq!(rows.len(), 1, "the delegation must be exactly one session");
+    let row = &rows[0];
+
+    assert_eq!(row.visibility, Visibility::Background);
+    assert_eq!(row.goal.description, "how many open tasks do I have?");
+    assert_eq!(row.status, SessionStatus::Succeeded);
+    assert_eq!(row.result.as_ref().unwrap().summary, "found 3 open tasks");
+
+    // The edge that makes it *findable*: this session hangs off the chat that delegated it, so
+    // "what did that actually do?" is a question with an answer you can open.
+    let origin = row.goal.origin.as_ref().expect("a subagent has an origin");
+    assert_eq!(
+        origin.conversation_id.as_deref(),
+        Some(chat_id.to_string().as_str()),
+        "the delegation must be a child of the chat that asked for it"
+    );
+    assert!(
+        origin
+            .correlation_id
+            .as_deref()
+            .unwrap()
+            .starts_with("chat-delegate-"),
+        "and still stitched to its dispatch journal entry"
+    );
+}
+
+#[tokio::test]
 async fn face_agent_surfaces_only_delegate_by_default() {
     let dir = tempfile::tempdir().unwrap();
     let decision = DispatchDecision {

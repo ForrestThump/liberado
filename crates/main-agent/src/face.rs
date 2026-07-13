@@ -14,10 +14,39 @@ use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_executor::ToolRuntime;
 use liberado_orchestrator::{Disposition, Orchestrator};
 use liberado_provider::{ToolDef, ToolInvocation};
+use liberado_session::{
+    BackgroundRun, DomainHint, GoalSpec, SessionGrant, SessionOrigin, SessionRecordStore,
+    TerminalKind,
+};
 use serde_json::json;
 
 /// Tool name the face agent calls to hand a goal to the dispatcher.
 pub const DELEGATE_TOOL_NAME: &str = "delegate";
+
+/// The `domain` recorded on a delegated subagent's session. Like a daemon reaction, it is run by the
+/// dispatcher/orchestrator rather than by a domain pack — so it is not `coding` or `life`, and
+/// joining one is read-only.
+const DELEGATE_DOMAIN: &str = "dispatch";
+
+/// The goal recorded for a delegation. Unlike a cron, a subagent *does* have a parent conversation:
+/// the chat whose face agent called `delegate`. Carrying it makes the session a real child edge in
+/// the store, so the tree from chat → subagent is walkable.
+fn delegated_goal(goal: &str, correlation_id: &str, parent_conversation: Option<&str>) -> GoalSpec {
+    GoalSpec {
+        id: None,
+        description: goal.to_string(),
+        success_criteria: Vec::new(),
+        domain: DomainHint::from(DELEGATE_DOMAIN),
+        max_turns: 0,
+        max_idle_secs: None,
+        origin: Some(SessionOrigin {
+            conversation_id: parent_conversation.map(str::to_string),
+            correlation_id: Some(correlation_id.to_string()),
+        }),
+        profile: None,
+        payload: json!({ "source": "delegate" }),
+    }
+}
 
 /// Shared dispatch/orchestrator bridge used by the face agent's `delegate` tool.
 pub struct DispatchBridge {
@@ -30,6 +59,14 @@ pub struct DispatchBridge {
     /// Vault `proposals/` directory — Propose dispositions are written under
     /// `proposals_dir/proposals/<id>.md` (same layout as chat/`RiskGatedToolRuntime`).
     pub proposals_dir: PathBuf,
+    /// Where a delegation is recorded as a **background session** (S5′ step 5) — `None` leaves the
+    /// old behavior exactly as it was.
+    ///
+    /// A subagent is the third unattended trigger, alongside cron and webhooks, and the one that was
+    /// hardest to see: its work vanished into a dispatch journal, and the chat got back only a
+    /// summary paragraph. Recording it as a session makes it a **child of the chat that spawned it**
+    /// (`parent_session`), so "what did that actually do?" has an answer you can open.
+    pub sessions: Option<Arc<dyn SessionRecordStore>>,
 }
 
 impl DispatchBridge {
@@ -68,6 +105,25 @@ impl DispatchBridge {
         )
         .await;
 
+        // The delegation becomes a session of its own — a *child* of the chat that asked for it.
+        // Opened before dispatch, so a subagent that is still working is visible while it works,
+        // rather than appearing only once it is over (or never, if it dies).
+        let run = match &self.sessions {
+            Some(store) => Some(
+                BackgroundRun::open(
+                    store.clone(),
+                    delegated_goal(goal, &correlation_id, parent_conversation),
+                    SessionGrant {
+                        capabilities: self.dispatcher_capabilities.clone(),
+                        profile: None,
+                        overrides: serde_json::Value::Null,
+                    },
+                )
+                .await,
+            ),
+            None => None,
+        };
+
         let req = DispatchRequest {
             goal: goal.to_string(),
             catalog: self.catalog.descriptors(),
@@ -76,11 +132,16 @@ impl DispatchBridge {
             zone_write_classes: self.zone_write_classes.clone(),
         };
 
-        let decision = self
-            .dispatcher
-            .dispatch(&req)
-            .await
-            .map_err(|e| format!("dispatch failed: {e}"))?;
+        let decision = match self.dispatcher.dispatch(&req).await {
+            Ok(d) => d,
+            Err(e) => {
+                let message = format!("dispatch failed: {e}");
+                if let Some(run) = run {
+                    run.finish(TerminalKind::Failed, message.clone()).await;
+                }
+                return Err(message);
+            }
+        };
 
         crate::dispatch_journal::append(
             &correlation_id,
@@ -88,15 +149,38 @@ impl DispatchBridge {
         )
         .await;
 
+        if let Some(run) = &run {
+            run.progress(format!(
+                "dispatched: {} (confidence {:.2}) — {}",
+                decision.action.label(),
+                decision.confidence,
+                decision.rationale
+            ))
+            .await;
+        }
+
         // ExecuteDirect also goes through the orchestrator worker path so the face agent
         // never receives tool schemas — only a report summary.
-        let disposition = self
-            .orchestrator
-            .run(decision, goal, &correlation_id)
-            .await
-            .map_err(|e| format!("orchestration failed: {e}"))?;
+        let disposition = match self.orchestrator.run(decision, goal, &correlation_id).await {
+            Ok(d) => d,
+            Err(e) => {
+                let message = format!("orchestration failed: {e}");
+                if let Some(run) = run {
+                    run.finish(TerminalKind::Failed, message.clone()).await;
+                }
+                return Err(message);
+            }
+        };
 
         let mut summary = format_disposition(&disposition, &self.proposals_dir).await;
+
+        // Close the session on the *clean* summary, before the journal footer is appended below —
+        // that footer is a hint for the face agent's next turn, not part of what the subagent did.
+        if let Some(run) = run {
+            let (terminal, note) = disposition.terminal_summary();
+            run.finish(terminal, note).await;
+        }
+
         let journal = crate::dispatch_journal::journal_display_path(&correlation_id);
         summary.push_str(&format!(
             "\n\n[dispatch journal: {journal} | id: {correlation_id}"

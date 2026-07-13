@@ -188,6 +188,50 @@ mod tests {
     }
 
     #[test]
+    fn a_session_nobody_started_is_marked_as_such_in_the_switcher() {
+        // S5′ step 5. A cron firing now *has* a row — which means it now sits in the list next to
+        // things the human actually launched. Unmarked, it would read as work they started and
+        // forgot about. The `bg` tag is what keeps "nobody was watching this" legible at a glance.
+        use chat_client_contract::VisibilityWire;
+
+        let mut cron = goal_header(
+            "g1",
+            DomainWire::Custom("dispatch".into()),
+            "summarize today's decisions",
+            "succeeded",
+            false,
+        );
+        cron.visibility = VisibilityWire::Background;
+
+        let mut app = smoke_app();
+        app.update(Action::SessionsUpdate(vec![
+            chat_summary("c1", "weekly planning"),
+            cron,
+        ]));
+        app.open_session_switcher();
+        let out = render_to_string(&mut app, 100, 20);
+
+        assert!(
+            out.contains("bg "),
+            "an unattended session must be marked:\n{out}"
+        );
+        assert!(
+            out.contains("summarize today's decisions"),
+            "and still say what it was for:\n{out}"
+        );
+        // The human's own chat is not tagged — the marker means something precisely because it is
+        // not on every row.
+        let chat_line = out
+            .lines()
+            .find(|l| l.contains("weekly planning"))
+            .expect("the chat row renders");
+        assert!(
+            !chat_line.contains("bg "),
+            "a session the human started must not be tagged background: {chat_line}"
+        );
+    }
+
+    #[test]
     fn switcher_with_only_prior_chats_renders_them() {
         let mut app = smoke_app();
         app.update(Action::SessionsUpdate(vec![chat_summary(

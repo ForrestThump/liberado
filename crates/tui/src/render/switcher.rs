@@ -121,10 +121,17 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
         };
         let mark = if active { "*" } else { " " };
 
+        // Nobody started this one — a cron, a webhook, a delegated subagent (S5′ step 5). Without a
+        // marker these rows read as things *you* launched and forgot, which is the opposite of the
+        // truth. Fixed-width so the columns stay aligned whether or not the tag is there.
+        let unattended = h.visibility == chat_client_contract::VisibilityWire::Background;
+        let bg_tag = if unattended { "bg " } else { "   " };
+
         let mut spans = vec![
             Span::styled(format!("{mark} "), row_style),
             kind_chip(kind, th),
             Span::styled(format!("  {:<7} ", kind.label()), row_style),
+            Span::styled(bg_tag, dim_style),
         ];
         // A chat has no lifecycle to report — it is simply open — so the status column belongs to
         // goal-bearing rows only. Blanking it keeps the columns aligned.

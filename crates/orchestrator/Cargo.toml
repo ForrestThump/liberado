@@ -12,6 +12,7 @@ repository.workspace = true
 liberado-common = { workspace = true }
 liberado-notify = { workspace = true }
 liberado-provider = { workspace = true }
+liberado-session = { workspace = true }
 liberado-executor = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }

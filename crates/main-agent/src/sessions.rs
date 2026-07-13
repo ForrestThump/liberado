@@ -158,6 +158,11 @@ pub struct ChatSessions {
     delegation_mode: bool,
     /// Shared bridge for the face agent's `delegate` tool (when dispatch + delegation_mode).
     face_bridge: Option<Arc<DispatchBridge>>,
+    /// Where a `delegate`d subagent is recorded as a background session (S5′ step 5). Held here
+    /// rather than reused from `store`: that one is a `dyn ConversationStore` and this needs the
+    /// kernel's `dyn SessionRecordStore` — the two lenses of the converged store, which the same
+    /// concrete `SessionStore` satisfies but a trait object cannot be cast between.
+    sessions: Option<Arc<dyn liberado_session::SessionRecordStore>>,
 }
 
 impl ChatSessions {
@@ -187,12 +192,28 @@ impl ChatSessions {
             dispatcher_capabilities: CapabilitySet::empty(),
             delegation_mode: false,
             face_bridge: None,
+            sessions: None,
         }
     }
 
     /// Override the system prompt written as the root node of new conversations.
     pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.system_prompt = prompt.into();
+        self
+    }
+
+    /// Record every `delegate`d subagent as a **background session** in `store` (S5′ step 5), as a
+    /// child of the chat that delegated it. Without this, a delegation's work is visible only as the
+    /// summary paragraph it hands back to the chat.
+    ///
+    /// In production this is the *same* `SessionStore` backing `store` — one log, seen through its
+    /// other lens (see the `sessions` field).
+    pub fn with_session_store(
+        mut self,
+        store: Arc<dyn liberado_session::SessionRecordStore>,
+    ) -> Self {
+        self.sessions = Some(store);
+        self.rebuild_face_bridge();
         self
     }
 
@@ -320,6 +341,7 @@ impl ChatSessions {
             dispatcher_capabilities: dispatcher_caps,
             zone_write_classes: self.zone_write_classes.clone(),
             proposals_dir: self.proposals_dir.clone(),
+            sessions: self.sessions.clone(),
         }));
     }
 

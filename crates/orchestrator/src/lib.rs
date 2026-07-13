@@ -32,6 +32,7 @@ use liberado_executor::{
 };
 use liberado_notify::Notifier;
 use liberado_provider::{Provider, ToolDef, ToolInvocation};
+use liberado_session::TerminalKind;
 use thiserror::Error;
 use tokio::sync::Semaphore;
 use tracing::Instrument;
@@ -75,6 +76,61 @@ pub enum Disposition {
     /// Already signed (`SignedProposal`, not a bare `Proposal`) — a write helper that takes this
     /// type can't forget to sign, by construction.
     Propose(SignedProposal),
+}
+
+impl Disposition {
+    /// How this disposition reads as the terminal state of a **background session** (S5′ step 5).
+    ///
+    /// Both unattended callers — the daemon reacting to a cron/webhook, and the face agent's
+    /// `delegate` — need exactly this mapping, so it lives here rather than in each of them, where
+    /// the two copies would eventually disagree about whether a proposal "succeeded".
+    ///
+    /// The honest reading matters more than a flattering one: a background session's status is the
+    /// only thing a human sees at a glance, so a green tick on work that never ran would be worse
+    /// than no session at all.
+    ///
+    /// * **Reported** ⇒ the executor's own outcome; only `Failed` is a failure. A partial success
+    ///   says so in the summary rather than hiding behind a status.
+    /// * **Clarify** ⇒ `Failed`. It needed a human and there was none — which is what a background
+    ///   session *is*. The unanswered questions go into the summary so they are not simply lost.
+    /// * **Propose** ⇒ `Succeeded`. Escalating a high-consequence action to a proposal *is* the
+    ///   designed correct outcome (Decision 11) and leaves a durable artifact; the summary says
+    ///   plainly that nothing has been executed yet.
+    ///
+    /// `TerminalKind` has no "awaiting review" variant and this does not invent one: a session left
+    /// non-terminal would be coerced to `Failed` by the store's replay on the next boot, quietly
+    /// turning every pending proposal into a failure.
+    pub fn terminal_summary(&self) -> (TerminalKind, String) {
+        match self {
+            Disposition::Reported(report) => {
+                let terminal = match report.outcome {
+                    Outcome::Failed => TerminalKind::Failed,
+                    _ => TerminalKind::Succeeded,
+                };
+                let summary = match report.outcome {
+                    Outcome::PartiallySucceeded => {
+                        format!("partially succeeded: {}", report.summary)
+                    }
+                    _ => report.summary.clone(),
+                };
+                (terminal, summary)
+            }
+            Disposition::Clarify { questions, .. } => (
+                TerminalKind::Failed,
+                format!(
+                    "blocked — needed a human, and nobody was there to ask: {}",
+                    questions.join(" / ")
+                ),
+            ),
+            Disposition::Propose(proposal) => (
+                TerminalKind::Succeeded,
+                format!(
+                    "escalated to a proposal for your approval (nothing executed yet): {}",
+                    proposal.rationale
+                ),
+            ),
+        }
+    }
 }
 
 /// A single sub-goal to dispatch in parallel. Each is capability-narrowed to the MCPs its

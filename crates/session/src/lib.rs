@@ -8,6 +8,7 @@
 //!
 //! See `docs/architecture/agentic-loops.md` and `docs/architecture/modularity.md`.
 
+mod background;
 mod event;
 mod goal;
 mod hub;
@@ -16,10 +17,11 @@ mod record_store;
 mod runner;
 mod store;
 
+pub use background::BackgroundRun;
 pub use event::{SessionEvent, SessionEventKind};
 pub use goal::{
     DomainHint, GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionOrigin,
-    SessionStatus, TerminalKind,
+    SessionStatus, TerminalKind, Visibility,
 };
 pub use hub::{GoalSessionHub, SendInputError, SessionSnapshot};
 pub use life_demo::LifeOpsDemoRunner;

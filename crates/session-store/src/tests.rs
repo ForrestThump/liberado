@@ -392,7 +392,7 @@ async fn the_kernel_can_insert_a_record_and_read_it_back_through_its_own_lens() 
     let store = SessionStore::new();
     let mut spec = goal_spec("from the kernel");
     spec.origin = Some(SessionOrigin {
-        conversation_id: ulid::Ulid::new().to_string(),
+        conversation_id: Some(ulid::Ulid::new().to_string()),
         correlation_id: Some("corr-1".into()),
     });
     let record = GoalSessionRecord::new(spec);
@@ -406,4 +406,64 @@ async fn the_kernel_can_insert_a_record_and_read_it_back_through_its_own_lens() 
     let header = store.session(id.parse().unwrap()).await.unwrap();
     assert!(header.parent_session.is_some());
     assert_eq!(header.correlation_id.as_deref(), Some("corr-1"));
+}
+
+#[tokio::test]
+async fn a_background_session_survives_the_kernel_lens_in_both_directions() {
+    // The regression that made S5′ step 5 impossible: `insert` stamped every record `Foreground`,
+    // because `GoalSessionRecord` had nowhere to *put* a visibility. So a cron could be recorded —
+    // and would come back claiming a human had started it. Both directions are asserted here: the
+    // way in (record → header) and the way back out (header → record).
+    let store = SessionStore::new();
+    let mut spec = goal_spec("summarize today's decisions");
+    // A cron has a correlation but no parent conversation — the reason `conversation_id` is optional.
+    spec.origin = Some(SessionOrigin::from_correlation(
+        "cron:nightly:2026-07-13T09:00:00Z",
+    ));
+    let record = GoalSessionRecord::background(spec, Default::default());
+    let id = record.id.clone();
+
+    SessionRecordStore::insert(&store, record).await;
+
+    let header = store.session(id.parse().unwrap()).await.unwrap();
+    assert_eq!(header.visibility, Visibility::Background);
+    assert_eq!(
+        header.correlation_id.as_deref(),
+        Some("cron:nightly:2026-07-13T09:00:00Z"),
+        "a correlation with no parent conversation must still land on the header"
+    );
+    assert!(
+        header.parent_session.is_none(),
+        "nobody spawned a cron from a chat"
+    );
+
+    let back = SessionRecordStore::get(&store, &id).await.expect("found");
+    assert_eq!(back.visibility, Visibility::Background);
+}
+
+#[tokio::test]
+async fn a_background_session_shows_up_in_the_one_unified_list() {
+    // The actual payoff: a cron firing is a row in the same list as your chats, so it stops firing
+    // into the void.
+    let store = SessionStore::new();
+    store
+        .create_session(NewSession {
+            title: Some("a chat".into()),
+            ..Default::default()
+        })
+        .await;
+    SessionRecordStore::insert(
+        &store,
+        GoalSessionRecord::background(goal_spec("nightly review"), Default::default()),
+    )
+    .await;
+
+    let all = store.list_sessions().await;
+    assert_eq!(all.len(), 2, "one list, both kinds");
+    let bg: Vec<_> = all
+        .iter()
+        .filter(|h| h.visibility == Visibility::Background)
+        .collect();
+    assert_eq!(bg.len(), 1);
+    assert_eq!(bg[0].goal.as_ref().unwrap().description, "nightly review");
 }

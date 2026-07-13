@@ -461,14 +461,18 @@ impl SessionRecordStore for SessionStore {
                 .goal
                 .origin
                 .as_ref()
-                .and_then(|o| o.conversation_id.parse::<Ulid>().ok()),
+                .and_then(|o| o.conversation_id.as_deref())
+                .and_then(|c| c.parse::<Ulid>().ok()),
             spawned_by: None,
             correlation_id: record
                 .goal
                 .origin
                 .as_ref()
                 .and_then(|o| o.correlation_id.clone()),
-            visibility: crate::types::Visibility::Foreground,
+            // Honor what the caller recorded. This was hardcoded `Foreground`, because the kernel's
+            // record could not carry visibility at all — which is what made a background session
+            // unrepresentable through the very lens every non-human trigger writes through.
+            visibility: record.visibility,
             grant: record.grant.clone(),
             status: record.status,
             created_at: record.created_at,
