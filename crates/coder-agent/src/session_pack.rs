@@ -563,6 +563,13 @@ impl DomainPackRunner for CodingSessionPack {
         // own homework; with it, the gates are the human's, stamped with a content hash the worker
         // cannot alter.
         if let Some(contract) = &contract {
+            // The gates are only meaningful if they are the ones the human accepted. Prove that
+            // before handing them to the worker they will grade it — a contract that no longer
+            // matches its own hash is a broken promise, not a gate, so refuse rather than build
+            // against it.
+            contract
+                .verify_integrity()
+                .map_err(|e| PackError::Setup(format!("refusing to build: {e}")))?;
             contract.apply_to_request(&mut request);
             let _ = events
                 .send(SessionEvent::new(

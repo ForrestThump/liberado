@@ -204,6 +204,27 @@ impl GoalContract {
         })
     }
 
+    /// Re-derive the hash and check it still matches the draft this contract carries.
+    ///
+    /// This is what makes [`content_hash`](Self::content_hash) mean something. A contract's whole
+    /// purpose is that the gates were agreed by a **human** at freeze time — so anything that
+    /// receives a contract second-hand (deserialized from a transcript, handed across a process,
+    /// passed to the worker that will be graded by it) must be able to prove the gates it holds are
+    /// the gates that were accepted, not ones edited afterwards. Call this before *acting* on a
+    /// contract you did not freeze yourself.
+    pub fn verify_integrity(&self) -> Result<(), String> {
+        let actual = hash_draft(&self.draft);
+        if actual == self.content_hash {
+            Ok(())
+        } else {
+            Err(format!(
+                "contract '{}' has been modified since it was frozen \
+                 (expected {}, got {})",
+                self.id, self.content_hash, actual
+            ))
+        }
+    }
+
     /// Stamp a frozen contract onto a coding run request (description, prose criteria, verifiers).
     pub fn apply_to_request(&self, request: &mut crate::CoderRunRequest) {
         request.task.description = self.draft.description.clone();
@@ -354,13 +375,21 @@ pub fn validate_draft(draft: &GoalContractDraft) -> Result<(), String> {
     Ok(())
 }
 
+/// Content digest of a draft — the identity of the *agreed* gates.
+///
+/// A real SHA-256, per `verifiers.md` §7 (`"content_hash": "sha256:…"`). This used to be
+/// `DefaultHasher` behind a `sha256-lite:` label, which was wrong in three ways that all matter for
+/// a field whose stated job is integrity: it is not collision-resistant, it is trivially
+/// forgeable, and `DefaultHasher`'s output is explicitly **not stable across Rust releases** — so a
+/// contract frozen by one build could fail to verify against the next one, for no reason at all.
+///
+/// The draft is serialized to JSON first; serde emits struct fields in declaration order, so the
+/// encoding is deterministic for a given draft.
 fn hash_draft(draft: &GoalContractDraft) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+    use sha2::{Digest, Sha256};
     let json = serde_json::to_string(draft).unwrap_or_default();
-    let mut h = DefaultHasher::new();
-    json.hash(&mut h);
-    format!("sha256-lite:{:x}", h.finish())
+    let digest = Sha256::digest(json.as_bytes());
+    format!("sha256:{digest:x}")
 }
 
 /// JSON Schema fragment for intake structured output (OpenAI-compatible json_schema mode).
@@ -477,9 +506,72 @@ mod tests {
             verify_profile: Some("rust-check".into()),
         };
         let c = GoalContract::freeze("g1", draft, FreezeAuthority::Human).unwrap();
-        assert!(c.content_hash.starts_with("sha256-lite:"));
+        // A real SHA-256, per verifiers.md §7 — 64 hex chars behind a `sha256:` label.
+        assert!(c.content_hash.starts_with("sha256:"), "got {}", c.content_hash);
+        let digest = c.content_hash.strip_prefix("sha256:").unwrap();
+        assert_eq!(digest.len(), 64);
+        assert!(digest.chars().all(|ch| ch.is_ascii_hexdigit()));
         // Structural check + expanded rust-check profile (cargo-check).
         assert_eq!(c.draft.verifiers.len(), 2);
         assert!(c.draft.verifiers.iter().any(|v| v.id() == "cargo-check"));
+        // A freshly frozen contract verifies against itself.
+        c.verify_integrity().unwrap();
+    }
+
+    fn contract_for_tamper_tests() -> GoalContract {
+        GoalContract::freeze(
+            "g1",
+            GoalContractDraft {
+                description: "Build a todo CLI".into(),
+                success_criteria: vec!["add and list work".into()],
+                verifiers: vec![VerifierSpec::Command {
+                    id: "cargo-test".into(),
+                    program: "cargo".into(),
+                    args: vec!["test".into()],
+                    env: Default::default(),
+                    timeout_secs: None,
+                    output_max_bytes: None,
+                    network: false,
+                }],
+                out_of_scope: vec![],
+                assumed_defaults: vec![],
+                domain_hint: None,
+                verify_profile: None,
+            },
+            FreezeAuthority::Human,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn weakening_the_gates_after_freeze_is_detected() {
+        // The attack the hash exists to catch: the contract said "cargo test must pass"; something
+        // downstream quietly drops the gate so the work grades itself as done. The contract must no
+        // longer verify — otherwise "frozen" means nothing.
+        let mut c = contract_for_tamper_tests();
+        c.verify_integrity().expect("pristine contract verifies");
+
+        c.draft.verifiers.clear();
+        let err = c.verify_integrity().expect_err("dropped gates must be caught");
+        assert!(err.contains("modified since it was frozen"), "got: {err}");
+    }
+
+    #[test]
+    fn rewriting_the_goal_after_freeze_is_detected() {
+        // The other half: the gates survive but the goal is swapped underneath them.
+        let mut c = contract_for_tamper_tests();
+        c.draft.description = "Build something else entirely".into();
+        assert!(c.verify_integrity().is_err());
+    }
+
+    #[test]
+    fn the_hash_is_stable_across_freezes_of_the_same_draft() {
+        // `frozen_at` differs between these two, but the hash covers the *draft*, not the stamp —
+        // so the same agreed content always has the same identity. (The old DefaultHasher was not
+        // even stable across Rust releases, which would have made a stored contract fail to verify
+        // after a toolchain bump, for no reason at all.)
+        let a = contract_for_tamper_tests();
+        let b = contract_for_tamper_tests();
+        assert_eq!(a.content_hash, b.content_hash);
     }
 }

@@ -767,7 +767,12 @@ Unknown `type` at runtime → config error at load, not silent skip.
 6. **Path checks** use the same containment as tools.  
 7. **Secrets** never appear in `log_excerpt` events (redact env-like patterns in summaries).  
 8. **content_hash** on frozen contracts so logs can prove the worker was graded against the
-   human-accepted exam.
+   human-accepted exam. **Implemented** (2026-07-13) as a real `sha256:<hex>` over the draft, plus
+   `GoalContract::verify_integrity()` — which the coding pack calls **before** applying a contract
+   to a run, so gates weakened after freeze are refused rather than silently built against. (It was
+   briefly a `DefaultHasher` behind a `sha256-lite:` label: forgeable, and not even stable across
+   Rust releases, so a stored contract could fail to verify after a toolchain bump. A hash whose job
+   is integrity has to actually be one.)
 
 ---
 
