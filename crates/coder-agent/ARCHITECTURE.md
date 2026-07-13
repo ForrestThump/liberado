@@ -1,6 +1,6 @@
 # liberado-coder-agent — coding domain pack (goal session)
 
-**Role in the mesh:** this crate is the **coding domain pack's** goal-session composition — not
+**Role in the system:** this crate is the **coding domain pack's** goal-session composition — not
 Liberado's orchestration kernel. Shared kernel pieces are `liberado-executor`, `liberado-provider`,
 `liberado-common`, and (later) domain-neutral session types. See
 [`docs/architecture/agentic-loops.md`](../../docs/architecture/agentic-loops.md) and
@@ -40,7 +40,7 @@ gates, progress guards, optional critic. UIs and the PR factory must not reimple
 
 ## Dependency posture
 
-Depends on mesh (`executor`, `provider`, `common`) + coding pack (`coder-core`, `coder-tools`,
+Depends on foundation (`executor`, `provider`, `common`) + coding pack (`coder-core`, `coder-tools`,
 `coder-sandbox`). Must not become a dependency of non-coding domains. Patterns that prove general
 (attempt loop, progress policy shape, session events) graduate upward per modularity extraction
 triggers — they do not pull life-ops into this crate.

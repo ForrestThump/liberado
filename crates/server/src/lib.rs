@@ -328,7 +328,7 @@ async fn build_chat(
         None => return (None, 0, Vec::new()),
     };
 
-    // Main-agent = chat face surface (usually thin). Dispatcher = worker ceiling for mesh tools.
+    // Main-agent = chat face surface (usually thin). Dispatcher = worker ceiling for delegated tools.
     let main_agent_caps = config.policy.capabilities_for("main-agent");
     let dispatcher_caps = config.policy.capabilities_for("dispatcher");
     let main_agent_cfg = &config.topology.main_agent;
@@ -425,7 +425,7 @@ async fn build_chat(
         }
         if main_agent_cfg.delegation_mode {
             info!(
-                "chat: face-agent mode — human interfacer + delegate tool (dispatcher mesh for work)"
+                "chat: face-agent mode — human interfacer + delegate tool (dispatcher routes work)"
             );
         } else {
             info!(

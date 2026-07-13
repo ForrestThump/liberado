@@ -1,6 +1,6 @@
 //! # liberado-session
 //!
-//! Domain-neutral **goal session** kernel for Liberado's agentic mesh (scratchpad F).
+//! Domain-neutral **goal session** kernel for Liberado's agentic orchestration (scratchpad F).
 //!
 //! Surfaces (TUI, WebUI, CLI) are **clients**: they start goals, subscribe to
 //! [`SessionEvent`] streams, and cancel — they never own tools, sandbox, or the loop.

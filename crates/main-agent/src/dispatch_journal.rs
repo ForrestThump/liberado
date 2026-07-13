@@ -1,4 +1,4 @@
-//! Append-only JSONL journals for face → mesh delegations.
+//! Append-only JSONL journals for face → dispatcher delegations.
 //!
 //! Files live under `{LIBERADO_DATA_DIR:-.liberado}/dispatches/<correlation_id>.jsonl` and are
 //! linked from the parent chat by `correlation_id` (and optional `parent_conversation` in the

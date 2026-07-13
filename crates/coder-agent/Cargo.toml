@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Coding domain pack: Liberado goal-session backend over Executor + coding tools (not the mesh kernel)"
+description = "Coding domain pack: Liberado goal-session backend over Executor + coding tools (not the session kernel)"
 
 [dependencies]
 async-trait.workspace = true

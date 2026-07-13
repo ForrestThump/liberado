@@ -16,7 +16,7 @@ use liberado_orchestrator::{Disposition, Orchestrator};
 use liberado_provider::{ToolDef, ToolInvocation};
 use serde_json::json;
 
-/// Tool name the face agent calls to hand a goal to the dispatcher mesh.
+/// Tool name the face agent calls to hand a goal to the dispatcher.
 pub const DELEGATE_TOOL_NAME: &str = "delegate";
 
 /// Shared dispatch/orchestrator bridge used by the face agent's `delegate` tool.
@@ -54,7 +54,7 @@ impl DispatchBridge {
             %correlation_id,
             parent = parent_conversation.unwrap_or("-"),
             goal = %goal.chars().take(160).collect::<String>(),
-            "face agent delegating to mesh"
+            "face agent delegating to dispatcher"
         );
 
         crate::dispatch_journal::append(
@@ -141,12 +141,12 @@ impl FaceRuntime {
     pub fn delegate_tool_def() -> ToolDef {
         ToolDef::new(
             DELEGATE_TOOL_NAME,
-            "Hand a fully-understood goal to Liberado's capability mesh (dispatcher + tools + \
-             subagents). Use this whenever the human needs real-world action, lookup, or multi-step \
-             work — you do NOT have those tools yourself. The mesh has broad capabilities (vault, \
-             tasks, external services, and more); if something is missing, the mesh may propose \
-             creating it. Pass a clear, self-contained goal. Returns a short result, clarifying \
-             questions for you to ask the human, or a proposal path for human approval.",
+            "Hand a fully-understood goal to Liberado's dispatcher (which routes it to domain packs, \
+             tools, and subagents). Use this whenever the human needs real-world action, lookup, or \
+             multi-step work — you do NOT have those tools yourself. The system has broad \
+             capabilities (vault, tasks, external services, and more); if something is missing, it \
+             may propose creating it. Pass a clear, self-contained goal. Returns a short result, \
+             clarifying questions for you to ask the human, or a proposal path for human approval.",
             json!({
                 "type": "object",
                 "properties": {
@@ -218,7 +218,7 @@ async fn format_disposition(d: &Disposition, proposals_dir: &Path) -> String {
             what_blocked,
         } => {
             let mut out = String::from(
-                "NEEDS_CLARIFICATION: The mesh cannot proceed without more information from the human.\n",
+                "NEEDS_CLARIFICATION: The system cannot proceed without more information from the human.\n",
             );
             out.push_str(&format!("Blocked by: {what_blocked:?}\n"));
             out.push_str("Ask the human:\n");
@@ -254,7 +254,7 @@ async fn format_propose(proposal: &SignedProposal, proposals_dir: &Path) -> Stri
                 "face delegate failed to write proposal note"
             );
             format!(
-                "PROPOSAL_FAILED: The mesh wanted human approval (proposal id {}) but could not \
+                "PROPOSAL_FAILED: The system wanted human approval (proposal id {}) but could not \
                  save the draft note ({e}). Tell the human honestly — there is nothing to approve \
                  on disk until this is retried successfully.",
                 proposal.id

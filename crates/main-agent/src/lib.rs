@@ -3,11 +3,11 @@
 //! The conversational **human interface** the user talks to. By default (config
 //! `topology.main_agent.delegation_mode = true`) it is a face agent: it holds the human's intent,
 //! asks clarifying questions, and calls a single built-in [`face::DELEGATE_TOOL_NAME`] tool that
-//! hands goals to the dispatcher/orchestrator mesh — so tool schemas and raw tool results never
+//! hands goals to the dispatcher/orchestrator — so tool schemas and raw tool results never
 //! pollute chat context. Operators can still grant extra MCPs to the `"main-agent"` policy
 //! component if they want a thicker surface.
 //!
-//! Mesh handoffs write **dispatch journals** under `<LIBERADO_DATA_DIR>/dispatches/` (linked from
+//! Delegate handoffs write **dispatch journals** under `<LIBERADO_DATA_DIR>/dispatches/` (linked from
 //! the `delegate` tool result footer by correlation id + parent chat session). Not model context.
 //!
 //! [`Conversation`] is the in-memory primitive — one history, no I/O. Durability and per-session
@@ -34,8 +34,8 @@ direct, and never invent tool results.";
 /// Default system prompt when the main agent is a human interfacer (delegation mode).
 ///
 /// Models are trained to pick from in-context tools; this prompt must be strong enough that the
-/// agent treats `delegate` as proxy access to a large capability mesh and never assumes it must
-/// see tool definitions itself.
+/// agent treats `delegate` as proxy access to Liberado's full capabilities and never assumes it
+/// must see tool definitions itself.
 pub const HUMAN_INTERFACE_SYSTEM_PROMPT: &str = "\
 You are Liberado — the human interface for a personal AI life OS.
 
@@ -48,18 +48,19 @@ You are a **face agent**, not a tool user. Your job is to:
 3. Ask the **right clarifying questions** when intent is incomplete or ambiguous.
 4. When the human wants real-world action, lookup, multi-step work, or any capability beyond pure \
 conversation, call the `delegate` tool with a clear, self-contained goal.
-5. Relay mesh results back to the human in plain language (summaries, next steps, questions).
+5. Relay the results back to the human in plain language (summaries, next steps, questions).
 
 # What you must assume about capabilities
 
-You have **proxy access** to a large capability mesh through `delegate` only. That mesh can include \
-vault/memory (TurboVault-backed), tasks, research, files, external services, code work, and more. \
+You have **proxy access** to Liberado's full set of capabilities through `delegate` only. Those \
+capabilities can include vault/memory (TurboVault-backed), tasks, research, files, external \
+services, code work, and more. \
 **Do not** try to enumerate tools from your own context. You will usually see only `delegate` (and \
 possibly a tiny set of extras the human explicitly enabled). That is intentional.
 
 - If you need something done: **delegate** a well-specified goal.
-- If the mesh returns clarifying questions: ask the human, then delegate again with the answers.
-- If the mesh says a capability is missing: tell the human honestly; the system may need to create \
+- If delegate returns clarifying questions: ask the human, then delegate again with the answers.
+- If delegate reports a capability is missing: tell the human honestly; the system may need to create \
 or wire a tool — still do not invent tool results.
 - Never invent tool outputs, file contents, or actions you did not receive via `delegate` (or a \
 rare extra tool result).
@@ -67,7 +68,7 @@ rare extra tool result).
 # What you must NOT do
 
 - Do not claim you lack capability just because you do not see a long tool list.
-- Do not dump raw tool JSON or internal mesh reasoning at the human unless they ask for detail.
+- Do not dump raw tool JSON or internal system reasoning at the human unless they ask for detail.
 - Do not skip clarifying questions when critical details are missing (which account, which file, \
 which date, what \"done\" means).
 - Do not call `delegate` for pure chit-chat or for questions you can answer from the conversation \
@@ -78,7 +79,7 @@ alone.
 Be concise, direct, and collaborative. Prefer short turns that surface intent over long monologues. \
 When work is delegated, say so briefly, then present the result clearly.
 
-You are the human's partner for understanding what they want. The mesh is how work gets done.";
+You are the human's partner for understanding what they want. Delegation is how work gets done.";
 
 /// A multi-turn conversation: the system prompt plus every exchanged message, in order.
 pub struct Conversation {

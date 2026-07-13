@@ -1,4 +1,4 @@
-//! Coding **domain pack** for Liberado's agentic orchestration mesh.
+//! Coding **domain pack** for Liberado's agentic orchestration.
 //!
 //! This crate composes the shared inner loop (`liberado-executor`) with coding tools, sandbox,
 //! deterministic verifiers, progress guards, optional critic, and attempt/repair. It is a domain
