@@ -11,8 +11,8 @@ use ratatui::layout::Rect;
 use std::collections::HashSet;
 
 use crate::api::{
-    ChatMessage, ConvHeader, DaemonStatus, GoalMessageOutcome, GoalSessionHeader, ReactionEvent,
-    SessionKind, ToolCallChip, ToolResultChip,
+    ChatMessage, ConvHeader, DaemonStatus, GoalMessageOutcome, ReactionEvent, SessionKind,
+    SessionSummary, ToolCallChip, ToolResultChip,
 };
 use crate::md_cache::MarkdownParseCache;
 use crate::tuning::*;
@@ -164,8 +164,9 @@ pub struct App {
     pub models_error: Option<String>,
     /// True while a models fetch is in flight.
     pub models_loading: bool,
-    /// Goal sessions from `GET /api/goals` — the goal rows of the unified session switcher.
-    pub goal_sessions: Vec<GoalSessionHeader>,
+    /// **Every** session from `GET /api/sessions` (S5′) — chats *and* goal sessions, one list.
+    /// This is the switcher's only source; the client no longer stitches two endpoints together.
+    pub sessions: Vec<SessionSummary>,
     /// The goal session input focus is currently on (`/join`), if any. `None` = the primary chat.
     pub joined: Option<JoinedSession>,
 }
@@ -250,7 +251,7 @@ impl App {
             models: Vec::new(),
             models_error: None,
             models_loading: false,
-            goal_sessions: Vec::new(),
+            sessions: Vec::new(),
             joined: None,
         }
     }
@@ -355,24 +356,28 @@ impl App {
         self.mark_dirty();
     }
 
-    /// Goal sessions matching the switcher filter (case-insensitive on description + kind label).
-    pub fn filtered_goal_sessions(&self) -> Vec<&GoalSessionHeader> {
+    /// Sessions matching the switcher filter — **one** list (S5′).
+    ///
+    /// This used to be two: `/api/conversations` for chats and `/api/goals` for goal sessions,
+    /// stitched together here. The client was re-deriving a distinction the model says does not
+    /// exist. Now `GET /api/sessions` returns both, and the only difference between a row that
+    /// *joins* and a row that *opens* is whether it has a goal.
+    pub fn filtered_sessions(&self) -> Vec<&SessionSummary> {
         let q = self.sidebar_filter.to_ascii_lowercase();
-        self.goal_sessions
+        self.sessions
             .iter()
             .filter(|h| {
                 q.is_empty()
-                    || h.description().to_ascii_lowercase().contains(&q)
+                    || h.label().to_ascii_lowercase().contains(&q)
                     || h.kind().label().to_ascii_lowercase().contains(&q)
                     || h.id.to_ascii_lowercase().contains(&q)
             })
             .collect()
     }
 
-    /// Total rows in the unified switcher: the filtered prior conversations (primary chats) followed
-    /// by the filtered goal sessions. One flat list so `/session` and `/sessions` show every chat.
+    /// Total rows in the unified switcher — one flat list of every session.
     pub fn switcher_row_count(&self) -> usize {
-        self.filtered_conversations().len() + self.filtered_goal_sessions().len()
+        self.filtered_sessions().len()
     }
 
     pub fn clamp_switcher_selection(&mut self) {
@@ -414,7 +419,7 @@ impl App {
         kind_hint: Option<SessionKind>,
         description_hint: Option<String>,
     ) {
-        let header = self.goal_sessions.iter().find(|h| h.id == id);
+        let header = self.sessions.iter().find(|h| h.id == id);
         let kind = kind_hint
             .or_else(|| header.map(|h| h.kind()))
             .unwrap_or(SessionKind::Custom);
@@ -736,7 +741,7 @@ impl App {
                     // Both `/session` and `/sessions` land on the one unified switcher.
                     self.open_session_switcher();
                     effects.push(Effect::RefreshConversations);
-                    effects.push(Effect::RefreshGoalSessions);
+                    effects.push(Effect::RefreshSessions);
                 }
                 liberado_commands::CommandResult::OpenModelBrowser => {
                     self.open_model_browser();
@@ -745,15 +750,15 @@ impl App {
                 liberado_commands::CommandResult::OpenGoalSwitcher => {
                     self.open_session_switcher();
                     effects.push(Effect::RefreshConversations);
-                    effects.push(Effect::RefreshGoalSessions);
+                    effects.push(Effect::RefreshSessions);
                 }
                 liberado_commands::CommandResult::JoinGoalSession { id } => {
                     // Resolve an id prefix against the known goal sessions (full id wins).
                     let resolved = self
-                        .goal_sessions
+                        .sessions
                         .iter()
                         .find(|h| h.id == *id)
-                        .or_else(|| self.goal_sessions.iter().find(|h| h.id.starts_with(id)))
+                        .or_else(|| self.sessions.iter().find(|h| h.id.starts_with(id)))
                         .map(|h| h.id.clone())
                         .unwrap_or_else(|| id.clone());
                     self.join_session(resolved.clone());
@@ -932,7 +937,7 @@ pub enum Action {
     /// SSE stream or HTTP call failed.
     SseFailed(String),
     /// Goal sessions from `GET /api/goals` — the goal rows of the session switcher.
-    GoalSessionsUpdate(Vec<GoalSessionHeader>),
+    SessionsUpdate(Vec<SessionSummary>),
     /// One decoded frame of a joined goal session's event stream.
     GoalStreamEvent(GoalUiEvent),
     /// The joined session's SSE stream ended or errored (connection-level, not a session finish).
@@ -981,7 +986,7 @@ pub enum Effect {
     ForkConversation(String),
     SetWindowTitle(String),
     /// Fetch `GET /api/goals` to populate the session switcher.
-    RefreshGoalSessions,
+    RefreshSessions,
     /// Open the joined goal session's SSE stream (`GET /api/goals/{id}/stream`).
     JoinGoalSession(String),
     /// Deliver a human message into the joined session (`POST /api/goals/{id}/message`).
@@ -1137,8 +1142,8 @@ impl App {
                 self.mark_dirty();
                 vec![Effect::RefreshConversations]
             }
-            Action::GoalSessionsUpdate(sessions) => {
-                self.goal_sessions = sessions;
+            Action::SessionsUpdate(sessions) => {
+                self.sessions = sessions;
                 self.clamp_switcher_selection();
                 self.mark_dirty();
                 vec![Effect::None]

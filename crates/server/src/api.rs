@@ -616,6 +616,20 @@ pub async fn vault(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     })
 }
 
+/// `GET /api/sessions` — **every** session, newest first: chats and goal sessions in one list (S5′).
+///
+/// This is the endpoint the unified switcher always wanted. Before convergence a surface had to poll
+/// `/api/conversations` *and* `/api/goals`, invent a row type for each, and stitch them together —
+/// which meant the client re-derived a distinction the model says does not exist. Here the
+/// distinction is one field: `goal` is absent on a chat and present on a session that runs to a
+/// terminal status.
+///
+/// The older two endpoints remain: they are the *lenses* (`/api/conversations` for the chat view,
+/// `/api/goals` for the kernel view), and things like the chat sidebar legitimately want just one.
+pub async fn sessions_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(state.sessions.list_sessions().await)
+}
+
 // ── Goal sessions (scratchpad F) — surfaces are clients; packs own the loop ──
 
 /// `GET /api/goals/domains` — which domain packs are registered (coding, life, …).
@@ -948,6 +962,7 @@ mod goal_message_tests {
             main_agent_capabilities: liberado_common::CapabilitySet::empty(),
             dispatcher_capabilities: liberado_common::CapabilitySet::empty(),
             config: Arc::new(test_config_with_life_grants()),
+            sessions: Arc::new(Default::default()),
             model_name: None,
             provider: None,
             hooks: std::collections::HashMap::new(),
@@ -1011,6 +1026,7 @@ mod goal_message_tests {
             main_agent_capabilities: liberado_common::CapabilitySet::empty(),
             dispatcher_capabilities: liberado_common::CapabilitySet::empty(),
             config: Arc::new(test_config_with_life_grants()),
+            sessions: Arc::new(Default::default()),
             model_name: None,
             provider: None,
             hooks: std::collections::HashMap::new(),

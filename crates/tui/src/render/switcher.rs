@@ -80,9 +80,8 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
     let accent = c(&th.accent, "#00ffff");
     let bg = c(&th.app_bg, "#0d0d1a");
 
-    let convs = app.filtered_conversations();
-    let goals = app.filtered_goal_sessions();
-    let title = format!(" {} session(s) ", convs.len() + goals.len());
+    let sessions = app.filtered_sessions();
+    let title = format!(" {} session(s) ", sessions.len());
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -90,60 +89,23 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
         .border_style(Style::default().fg(border))
         .style(Style::default().bg(bg));
 
-    let mut items: Vec<ListItem> = Vec::with_capacity(convs.len() + goals.len());
+    let mut items: Vec<ListItem> = Vec::with_capacity(sessions.len());
 
     // Not focused on a live goal session → the active conversation is the current surface.
     let on_primary = app.joined.as_ref().map(|j| j.finished).unwrap_or(true);
 
-    // Conversation rows (primary chats) — index 0..convs.len().
-    for (i, h) in convs.iter().enumerate() {
+    // ONE loop over ONE list (S5′). A row's kind, its status column, and whether Enter joins or
+    // opens it all fall out of the same `goal: Option` the store uses — the client no longer
+    // maintains a parallel notion of "chat rows" versus "goal rows".
+    for (i, h) in sessions.iter().enumerate() {
         let selected = app.sidebar_selection == i;
-        let active = on_primary && app.session.as_deref() == Some(h.id.as_str());
-        let row_style = if selected {
-            Style::default()
-                .fg(sel_fg)
-                .bg(sel_bg)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(text_fg).bg(bg)
-        };
-        let title_text = h
-            .title
-            .as_deref()
-            .map(str::trim)
-            .filter(|t| !t.is_empty())
-            .unwrap_or("(untitled chat)");
-        let mark = if active { "*" } else { " " };
-        let spans = vec![
-            Span::styled(format!("{mark} "), row_style),
-            kind_chip(SessionKind::Primary, th),
-            Span::styled(format!("  {:<7} ", SessionKind::Primary.label()), row_style),
-            Span::styled(title_text.to_string(), row_style),
-            Span::styled(
-                format!("  {}", relative_time(&h.created_at)),
-                if selected {
-                    row_style
-                } else {
-                    Style::default().fg(dim).bg(bg)
-                },
-            ),
-            Span::styled(
-                format!("  [{}]", short_id(&h.id)),
-                if selected {
-                    row_style
-                } else {
-                    Style::default().fg(dim).bg(bg)
-                },
-            ),
-        ];
-        items.push(ListItem::new(Line::from(spans)));
-    }
-
-    // Goal-session rows — index convs.len()..end.
-    for (i, h) in goals.iter().enumerate() {
-        let selected = app.sidebar_selection == convs.len() + i;
-        let joined = app.joined.as_ref().map(|j| j.id == h.id).unwrap_or(false);
         let kind = h.kind();
+        let joined = app.joined.as_ref().map(|j| j.id == h.id).unwrap_or(false);
+        let active = if h.has_goal() {
+            joined
+        } else {
+            on_primary && app.session.as_deref() == Some(h.id.as_str())
+        };
         let row_style = if selected {
             Style::default()
                 .fg(sel_fg)
@@ -152,34 +114,45 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
         } else {
             Style::default().fg(text_fg).bg(bg)
         };
-        let (status_label, status_color) = status_display(h, th);
-        let mark = if joined { "*" } else { " " };
-        let desc = {
-            let d = h.description();
-            if d.is_empty() { "(no description)" } else { d }
+        let dim_style = if selected {
+            row_style
+        } else {
+            Style::default().fg(dim).bg(bg)
         };
-        let spans = vec![
+        let mark = if active { "*" } else { " " };
+
+        let mut spans = vec![
             Span::styled(format!("{mark} "), row_style),
             kind_chip(kind, th),
             Span::styled(format!("  {:<7} ", kind.label()), row_style),
-            Span::styled(
+        ];
+        // A chat has no lifecycle to report — it is simply open — so the status column belongs to
+        // goal-bearing rows only. Blanking it keeps the columns aligned.
+        if h.has_goal() {
+            let (status_label, status_color) = status_display(h, th);
+            spans.push(Span::styled(
                 format!("{status_label:<9} "),
                 if selected {
                     row_style
                 } else {
                     Style::default().fg(status_color).bg(bg)
                 },
-            ),
-            Span::styled(desc.to_string(), row_style),
-            Span::styled(
-                format!("  [{}]", short_id(&h.id)),
-                if selected {
-                    row_style
-                } else {
-                    Style::default().fg(dim).bg(bg)
-                },
-            ),
-        ];
+            ));
+        } else {
+            spans.push(Span::styled(format!("{:<9} ", ""), row_style));
+        }
+
+        let label = {
+            let l = h.label();
+            if l.is_empty() { "(untitled)" } else { l }
+        };
+        spans.push(Span::styled(label.to_string(), row_style));
+        spans.push(Span::styled(
+            format!("  {}", relative_time(&h.created_at)),
+            dim_style,
+        ));
+        spans.push(Span::styled(format!("  [{}]", short_id(&h.id)), dim_style));
+
         items.push(ListItem::new(Line::from(spans)));
     }
 
@@ -199,7 +172,7 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
 /// Status label + color for a goal row: `awaiting` (needs you) stands out; terminal states are
 /// colored by outcome.
 fn status_display(
-    h: &chat_client_contract::GoalSessionHeader,
+    h: &chat_client_contract::SessionSummary,
     th: &Theme,
 ) -> (String, ratatui::style::Color) {
     if h.awaiting_input && !h.is_terminal() {

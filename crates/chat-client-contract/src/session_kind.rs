@@ -136,12 +136,30 @@ pub struct GoalHeaderResult {
     pub artifacts: Vec<String>,
 }
 
-/// A goal session as a surface sees it in `GET /api/goals` — the read-only header for the unified
-/// session switcher. Deserializes from `liberado_session::GoalSessionRecord`'s JSON (unknown fields
-/// ignored), keeping surfaces off the store-tier crate.
+/// Whether anyone was watching when this session started. Mirrors
+/// `liberado_session_store::Visibility`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VisibilityWire {
+    #[default]
+    Foreground,
+    /// Started by a cron, a hook, or a dispatched subagent — nobody is attending it.
+    Background,
+}
+
+/// **One** session as a surface sees it in `GET /api/sessions` — chat or goal, they are the same
+/// row (D7). Deserializes from `liberado_session_store::SessionHeader`'s JSON (unknown fields
+/// ignored), keeping surfaces off the store tier.
+///
+/// `goal` is the whole difference: `None` ⇒ a chat, `Some` ⇒ a session that runs to a terminal
+/// status. A surface therefore renders one list and branches on one `Option`, instead of stitching
+/// two endpoints together and inventing a row type for each.
 #[derive(Debug, Clone, Deserialize)]
-pub struct GoalSessionHeader {
+pub struct SessionSummary {
     pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    /// `None` ⇒ this is a chat. Presence ⇒ run-to-terminal.
     #[serde(default)]
     pub goal: Option<GoalHeaderSpec>,
     /// Lifecycle tag as a string (`"running"`, `"succeeded"`, …) — surfaces render/branch on it
@@ -154,15 +172,36 @@ pub struct GoalSessionHeader {
     pub awaiting_input: bool,
     #[serde(default)]
     pub result: Option<GoalHeaderResult>,
+    #[serde(default)]
+    pub visibility: VisibilityWire,
+    /// The session this one was spawned from — a real id, so the tree is walkable client-side.
+    #[serde(default)]
+    pub parent_session: Option<String>,
 }
 
-impl GoalSessionHeader {
-    /// The kind chip for this session, from its pack domain.
+impl SessionSummary {
+    /// The kind chip for this session. A goal-less session is the **primary chat** — that is what
+    /// `goal: None` *means*, so it must not fall through to `Custom`.
     pub fn kind(&self) -> SessionKind {
-        self.goal
-            .as_ref()
-            .map(|g| SessionKind::from_domain(&g.domain))
-            .unwrap_or(SessionKind::Custom)
+        match &self.goal {
+            Some(g) => SessionKind::from_domain(&g.domain),
+            None => SessionKind::Primary,
+        }
+    }
+
+    /// Whether this session runs to a terminal status at all (D7: terminality *is* `goal.is_some()`).
+    pub fn has_goal(&self) -> bool {
+        self.goal.is_some()
+    }
+
+    /// The label for a switcher row: an explicit title, else the goal, else nothing.
+    pub fn label(&self) -> &str {
+        self.title
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .or_else(|| self.goal.as_ref().map(|g| g.description.as_str()))
+            .unwrap_or("")
     }
 
     /// The goal description (empty when absent).
@@ -243,7 +282,7 @@ mod tests {
             "event_count": 3,
             "awaiting_input": true
         });
-        let h: GoalSessionHeader = serde_json::from_value(json).unwrap();
+        let h: SessionSummary = serde_json::from_value(json).unwrap();
         assert_eq!(h.id, "g_01ABC");
         assert_eq!(h.kind(), SessionKind::Coding);
         assert_eq!(h.description(), "build a hello CLI");
@@ -262,7 +301,7 @@ mod tests {
             "awaiting_input": false,
             "result": { "terminal": "succeeded", "summary": "wrote note", "artifacts": ["vault/x.md"] }
         });
-        let h: GoalSessionHeader = serde_json::from_value(json).unwrap();
+        let h: SessionSummary = serde_json::from_value(json).unwrap();
         assert!(h.is_terminal());
         assert_eq!(h.kind(), SessionKind::Life);
         assert_eq!(h.result.as_ref().unwrap().summary, "wrote note");

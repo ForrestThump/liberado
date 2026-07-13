@@ -152,6 +152,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         chat_tools,
         chat_tool_names,
         catalog: capability_catalog,
+        sessions: sessions.clone(),
         // Search scans the converged log directly, so it now reads every session's file rather than
         // a chat-only directory. In practice it still only *finds* chat turns: search matches
         // message nodes, and packs currently record their transcripts as events. A pack that wrote
@@ -218,6 +219,8 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
             "/api/hooks/{name}",
             axum::routing::post(hooks::trigger_hook),
         )
+        // The one unified list (S5′): chats and goal sessions, same rows.
+        .route("/api/sessions", axum::routing::get(api::sessions_list))
         .route("/api/goals/domains", axum::routing::get(api::goals_domains))
         .route(
             "/api/goals",

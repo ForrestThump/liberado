@@ -29,6 +29,6 @@ pub mod native;
 
 // Re-export all wire types at the crate root for backward-compatible import paths.
 pub use session_kind::{
-    DomainWire, GoalHeaderResult, GoalHeaderSpec, GoalSessionHeader, SessionKind,
+    DomainWire, GoalHeaderResult, GoalHeaderSpec, SessionKind, SessionSummary, VisibilityWire,
 };
 pub use wire::*;

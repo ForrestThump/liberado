@@ -14,8 +14,8 @@ use reqwest::{Client, StatusCode};
 // Re-export the shared wire types so the rest of the crate can still import them
 // from `crate::api::*` without changing call sites.
 pub use chat_client_contract::{
-    ChatMessage, ConvHeader, ConversationHistoryResponse, DaemonStatus, GoalSessionHeader,
-    ModelsResponse, ReactionEvent, SessionKind,
+    ChatMessage, ConvHeader, ConversationHistoryResponse, DaemonStatus, ModelsResponse,
+    ReactionEvent, SessionKind, SessionSummary,
 };
 
 /// A tool-call chip rendered inline in the chat: `[tool] name(args preview)`.
@@ -129,13 +129,17 @@ pub async fn select_model(
     resp.json().await
 }
 
-/// Fetch `GET /api/goals` — every goal session (newest first), as read-only headers for the
-/// unified session switcher. Empty when the daemon is unavailable.
-pub async fn fetch_goal_sessions(
+/// Fetch `GET /api/sessions` — **every** session (newest first): chats and goal sessions in one
+/// list (S5′). Empty when the daemon is unavailable.
+///
+/// This replaces the two calls the switcher used to make (`/api/conversations` + `/api/goals`) and
+/// the client-side stitching that followed. The rows are the same rows; `goal: Option` is the only
+/// thing that differs between them.
+pub async fn fetch_sessions(
     client: &Client,
     server: &str,
-) -> Result<Vec<GoalSessionHeader>, reqwest::Error> {
-    let resp = client.get(format!("{server}/api/goals")).send().await?;
+) -> Result<Vec<SessionSummary>, reqwest::Error> {
+    let resp = client.get(format!("{server}/api/sessions")).send().await?;
     if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
         return Ok(Vec::new());
     }

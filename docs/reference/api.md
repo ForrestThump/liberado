@@ -34,8 +34,9 @@ human input. Packs registered at boot: **`life`** (always, second-domain demo) a
 
 | Method | Path | Body / notes |
 |---|---|---|
+| GET | `/api/sessions` | **Every session, newest first — chats *and* goal sessions in one list (S5′).** `goal` is absent on a chat and present on a session that runs to a terminal status; that `Option` is the only difference. Also carries `title`, `status`, `awaiting_input`, `visibility` (`foreground`/`background`), and `parent_session` (a real id, so the session tree is walkable). This is what a switcher should read. |
 | GET | `/api/goals/domains` | `{ "domains": ["life","coding"] }` |
-| GET | `/api/goals` | List sessions (newest first) |
+| GET | `/api/goals` | The **kernel lens**: only goal-bearing sessions (newest first). A goal-less session has no `GoalSessionRecord` representation, so it cannot appear here. Prefer `/api/sessions` for a list; this is for callers that specifically want run-to-terminal sessions. |
 | POST | `/api/goals` | JSON `GoalSpec`: `description`, `domain` (`life`\|`coding`), `success_criteria`, optional `max_idle_secs`, optional `payload` |
 | GET | `/api/goals/{id}` | Snapshot: record (incl. `awaiting_input`) + event history |
 | GET | `/api/goals/{id}/stream` | SSE: catch-up then live `session_started`, `tool_*`, `awaiting_input`, `session_finished`, … |
@@ -106,6 +107,13 @@ conversation header (`[{id,title,created_at}]`, newest first), and **`GET /api/c
 returns one conversation's full message history (`{"messages":[…]}`; `404` if it doesn't exist).
 **`PATCH /api/conversations/{id}`** with `{"title": "..."}` renames a conversation (`200` on success,
 `404` if it doesn't exist, `503` if chat is disabled).
+
+> **Since S5′ these are *lenses*, not separate stores.** Chats and goal sessions live in one
+> converged `Session` store, so `/api/conversations` is the **chat lens** — and it therefore lists
+> *every* session, including goal sessions (whose title falls back to their goal). `/api/goals` is
+> the **kernel lens** and shows only goal-bearing ones. For a list of everything as one kind of
+> thing, read **`/api/sessions`**; the two older endpoints remain because a caller often legitimately
+> wants exactly one of the two views.
 
 **`GET /api/catalog`** returns the live MCP capability catalog (`{"mcps":[{name,description,
 consequence,tool_count,tool_names,visible_to_main_agent,visible_to_dispatcher}]}`) — the same

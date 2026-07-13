@@ -93,7 +93,7 @@ mod tests {
     // human smoke would, short of "does it look nice".
 
     use crate::app::{Action, App, GoalUiEvent};
-    use chat_client_contract::{ConvHeader, DomainWire, GoalHeaderSpec, GoalSessionHeader};
+    use chat_client_contract::{DomainWire, GoalHeaderSpec, SessionSummary};
     use liberado_theme::ThemeRegistry;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -119,8 +119,8 @@ mod tests {
         desc: &str,
         status: &str,
         awaiting: bool,
-    ) -> GoalSessionHeader {
-        GoalSessionHeader {
+    ) -> SessionSummary {
+        SessionSummary {
             id: id.into(),
             goal: Some(GoalHeaderSpec {
                 description: desc.into(),
@@ -130,16 +130,24 @@ mod tests {
             created_at: String::new(),
             awaiting_input: awaiting,
             result: None,
+            title: None,
+            visibility: Default::default(),
+            parent_session: None,
         }
     }
 
-    fn conv_header(id: &str, title: &str) -> ConvHeader {
-        ConvHeader {
+    /// A goal-less session — i.e. a chat. `goal: None` is the entire difference (D7).
+    fn chat_summary(id: &str, title: &str) -> SessionSummary {
+        SessionSummary {
             id: id.into(),
-            title: Some(title.into()),
+            goal: None,
+            status: "running".into(),
             created_at: String::new(),
-            parent_conversation: None,
-            spawned_by: None,
+            awaiting_input: false,
+            result: None,
+            title: Some(title.into()),
+            visibility: Default::default(),
+            parent_session: None,
         }
     }
 
@@ -152,17 +160,15 @@ mod tests {
     #[test]
     fn switcher_renders_prior_chats_kind_chips_and_status() {
         let mut app = smoke_app();
-        app.update(Action::ConversationsUpdate(vec![conv_header(
-            "c1",
-            "weekly planning",
-        )]));
-        app.update(Action::GoalSessionsUpdate(vec![
+        // One list: a chat and two goal sessions, all rows of the same kind of thing (S5′).
+        app.update(Action::SessionsUpdate(vec![
+            chat_summary("c1", "weekly planning"),
             goal_header("g1", DomainWire::Coding, "build a CLI", "running", false),
             goal_header("g2", DomainWire::Life, "capture a note", "running", true),
         ]));
         app.open_session_switcher();
         let out = render_to_string(&mut app, 100, 20);
-        // The prior conversation renders as a primary (CHAT) row, then both goal-session chips.
+        // The goal-less session renders as a primary (CHAT) row; the goal ones carry their chips.
         assert!(out.contains("Primary"), "missing primary chat row:\n{out}");
         assert!(
             out.contains("weekly planning"),
@@ -184,13 +190,13 @@ mod tests {
     #[test]
     fn switcher_with_only_prior_chats_renders_them() {
         let mut app = smoke_app();
-        app.update(Action::ConversationsUpdate(vec![conv_header(
+        app.update(Action::SessionsUpdate(vec![chat_summary(
             "c1",
             "weekly planning",
         )]));
         app.open_session_switcher();
         let out = render_to_string(&mut app, 80, 12);
-        // Even with no goal sessions, prior chats populate the switcher.
+        // Even with no goal sessions, goal-less ones (chats) populate the switcher.
         assert!(out.contains("Primary"), "missing primary chat row:\n{out}");
         assert!(
             out.contains("weekly planning"),
@@ -212,7 +218,7 @@ mod tests {
     #[test]
     fn joined_view_renders_kind_header_and_awaiting_banner() {
         let mut app = smoke_app();
-        app.update(Action::GoalSessionsUpdate(vec![goal_header(
+        app.update(Action::SessionsUpdate(vec![goal_header(
             "g1",
             DomainWire::Coding,
             "build a CLI",

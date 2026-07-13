@@ -75,7 +75,7 @@ impl EffectRunner {
             Effect::SelectModel(model) => self.select_model(model).await,
             Effect::ForkConversation(parent_id) => self.fork_conversation(parent_id),
             Effect::SetWindowTitle(title) => self.set_window_title(&title),
-            Effect::RefreshGoalSessions => self.refresh_goal_sessions().await,
+            Effect::RefreshSessions => self.refresh_sessions().await,
             Effect::JoinGoalSession(id) => self.join_goal_session(id).await,
             Effect::SendGoalMessage { id, text } => self.send_goal_message(id, text).await,
             Effect::SpawnGoalSession {
@@ -93,15 +93,15 @@ impl EffectRunner {
     }
 
     /// `GET /api/goals` → populate the session switcher.
-    async fn refresh_goal_sessions(&self) {
+    async fn refresh_sessions(&self) {
         let client = self.client.clone();
         let tx = self.action_tx.clone();
         let server = self.server_url();
         tokio::spawn(async move {
-            match api::fetch_goal_sessions(&client, &server).await {
+            match api::fetch_sessions(&client, &server).await {
                 Ok(sessions) => {
-                    if tx.try_send(Action::GoalSessionsUpdate(sessions)).is_err() {
-                        tracing::warn!("action channel full, dropping GoalSessionsUpdate");
+                    if tx.try_send(Action::SessionsUpdate(sessions)).is_err() {
+                        tracing::warn!("action channel full, dropping SessionsUpdate");
                     }
                 }
                 Err(e) => tracing::warn!(error = %e, "fetch goal sessions failed"),

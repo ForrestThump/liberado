@@ -2063,7 +2063,7 @@ fn handle_up_roundtrip() {
 
 // ── Unified session switcher + goal-session focus (session-focus S3) ──────────
 
-use chat_client_contract::{DomainWire, GoalHeaderSpec, GoalSessionHeader, SessionKind};
+use chat_client_contract::{DomainWire, GoalHeaderSpec, SessionKind, SessionSummary};
 
 fn goal_header(
     id: &str,
@@ -2071,8 +2071,8 @@ fn goal_header(
     desc: &str,
     status: &str,
     awaiting: bool,
-) -> GoalSessionHeader {
-    GoalSessionHeader {
+) -> SessionSummary {
+    SessionSummary {
         id: id.into(),
         goal: Some(GoalHeaderSpec {
             description: desc.into(),
@@ -2082,34 +2082,86 @@ fn goal_header(
         created_at: String::new(),
         awaiting_input: awaiting,
         result: None,
+        title: None,
+        visibility: Default::default(),
+        parent_session: None,
+    }
+}
+
+/// A goal-less session — i.e. a chat. `goal: None` is the *entire* difference (D7).
+fn chat_summary(id: &str, title: &str) -> SessionSummary {
+    SessionSummary {
+        id: id.into(),
+        goal: None,
+        status: "running".into(),
+        created_at: String::new(),
+        awaiting_input: false,
+        result: None,
+        title: Some(title.into()),
+        visibility: Default::default(),
+        parent_session: None,
     }
 }
 
 #[test]
-fn goal_sessions_update_populates_and_clamps_switcher() {
+fn sessions_update_populates_and_clamps_switcher() {
     let mut app = test_app();
     app.open_session_switcher();
     assert_eq!(app.focus, Focus::SessionSwitcher);
-    app.update(Action::GoalSessionsUpdate(vec![
+
+    // One list holds both (S5′). A chat and two goal sessions are three rows of the same kind of
+    // thing — the switcher no longer stitches `/api/conversations` and `/api/goals` together.
+    app.update(Action::SessionsUpdate(vec![
+        chat_summary("c1", "yesterday's chat"),
         goal_header("g1", DomainWire::Coding, "build a CLI", "running", false),
         goal_header("g2", DomainWire::Life, "note it", "awaiting", true),
     ]));
-    // No prior conversations here, so the two goal sessions are the only rows.
-    assert_eq!(app.switcher_row_count(), 2);
-    assert_eq!(app.goal_sessions.len(), 2);
-
-    // Prior conversations become primary-chat rows above the goal sessions.
-    app.update(Action::ConversationsUpdate(vec![conv(
-        "c1",
-        "yesterday's chat",
-    )]));
     assert_eq!(app.switcher_row_count(), 3);
+    assert_eq!(app.sessions.len(), 3);
+
+    // Conversations no longer feed the switcher at all — that was the old two-list glue.
+    app.update(Action::ConversationsUpdate(vec![conv("c9", "not a row")]));
+    assert_eq!(app.switcher_row_count(), 3);
+}
+
+#[test]
+fn the_switcher_branches_on_the_goal_not_on_a_row_type() {
+    // The one distinction that matters: a row *with* a goal is joined; a row *without* one is a
+    // chat and becomes the active conversation.
+    let mut app = test_app();
+    app.update(Action::SessionsUpdate(vec![
+        chat_summary("c1", "a chat"),
+        goal_header("g1", DomainWire::Coding, "build a CLI", "running", false),
+    ]));
+    app.open_session_switcher();
+
+    // Row 0 is the chat → opens it.
+    app.sidebar_selection = 0;
+    let effects = app.handle_key(key(KeyCode::Enter));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadConversationHistory(id) if id == "c1")),
+        "a goal-less session must open as a conversation, got {effects:?}"
+    );
+
+    // Row 1 is the goal session → joins it.
+    app.open_session_switcher();
+    app.sidebar_selection = 1;
+    let effects = app.handle_key(key(KeyCode::Enter));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::JoinGoalSession(id) if id == "g1")),
+        "a goal-bearing session must be joined, got {effects:?}"
+    );
+    assert_eq!(app.joined.as_ref().map(|j| j.id.as_str()), Some("g1"));
 }
 
 #[test]
 fn joining_focuses_the_session_and_routes_input_there() {
     let mut app = test_app();
-    app.update(Action::GoalSessionsUpdate(vec![goal_header(
+    app.update(Action::SessionsUpdate(vec![goal_header(
         "g1",
         DomainWire::Coding,
         "build a CLI",

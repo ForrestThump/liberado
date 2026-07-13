@@ -50,6 +50,10 @@ pub struct AppState {
     /// The `"dispatcher"` component's capability grant — which MCPs the daemon's
     /// dispatch/orchestrate pipeline may call. See `main_agent_capabilities` above.
     pub dispatcher_capabilities: CapabilitySet,
+    /// The converged `Session` store (S5′) — the *same* object `chat` and `goals` are built over.
+    /// Held directly so `GET /api/sessions` can serve the one unified list, instead of a client
+    /// polling two endpoints and stitching chats and goal sessions together itself.
+    pub sessions: Arc<liberado_session_store::SessionStore>,
     /// The resolved config — held so `POST /api/goals` can turn a session's `profile` into its
     /// [`SessionGrant`](liberado_session::SessionGrant) (S6) via `Config::resolve_session_profile`.
     /// The *server* owns this resolution because the session kernel must stay free of the config

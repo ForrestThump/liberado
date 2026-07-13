@@ -58,50 +58,45 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
-/// Enter on the selected row. Conversation rows come first (switch the primary chat to that
-/// conversation, leaving any joined goal session); goal rows follow (`/join` the session).
+/// Enter on the selected row.
+///
+/// One list, and the branch is the one attribute that actually distinguishes a session (D7): a row
+/// **with a goal** is joined (it runs to a terminal status and you watch it); a row **without one**
+/// is a chat, so it becomes the active conversation. No row-type bookkeeping, no index arithmetic
+/// across two lists — the store's own distinction is the UI's.
 fn open_selected(app: &mut App) -> Vec<Effect> {
-    let conv_count = app.filtered_conversations().len();
     let sel = app.sidebar_selection;
 
-    if sel < conv_count {
-        // Conversation row → make it the active primary chat.
-        let convs = app.filtered_conversations();
-        let Some(header) = convs.get(sel) else {
+    let (id, has_goal) = {
+        let sessions = app.filtered_sessions();
+        let Some(s) = sessions.get(sel) else {
             return vec![Effect::None];
         };
-        let id = header.id.clone();
-        let already_active = app.session.as_deref() == Some(id.as_str());
-        drop(convs);
+        (s.id.clone(), s.has_goal())
+    };
 
+    if has_goal {
         app.close_session_switcher();
-        let mut effects = Vec::new();
-        // Selecting a conversation always returns you to the primary chat surface.
-        if app.joined.is_some() {
-            app.leave_session();
-            effects.push(Effect::LeaveGoalSession);
-        }
-        if already_active {
-            // Already on this conversation — just came back to it (no reload needed).
-            if effects.is_empty() {
-                effects.push(Effect::None);
-            }
-            return effects;
-        }
-        app.pending_load = Some(id.clone());
-        effects.push(Effect::LoadConversationHistory(id));
-        return effects;
+        app.join_session(id.clone());
+        return vec![Effect::JoinGoalSession(id)];
     }
 
-    // Goal-session row → focus (`/join`) it.
-    let idx = sel - conv_count;
-    let filtered = app.filtered_goal_sessions();
-    let Some(header) = filtered.get(idx) else {
-        return vec![Effect::None];
-    };
-    let id = header.id.clone();
-    drop(filtered);
+    // A chat → make it the active conversation. Selecting one always returns you to the primary
+    // surface, so any joined session is left behind first.
+    let already_active = app.session.as_deref() == Some(id.as_str());
     app.close_session_switcher();
-    app.join_session(id.clone());
-    vec![Effect::JoinGoalSession(id)]
+    let mut effects = Vec::new();
+    if app.joined.is_some() {
+        app.leave_session();
+        effects.push(Effect::LeaveGoalSession);
+    }
+    if already_active {
+        if effects.is_empty() {
+            effects.push(Effect::None);
+        }
+        return effects;
+    }
+    app.pending_load = Some(id.clone());
+    effects.push(Effect::LoadConversationHistory(id));
+    effects
 }
