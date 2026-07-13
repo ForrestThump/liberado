@@ -465,10 +465,9 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn make_app(server: &str) -> Arc<Mutex<App>> {
-        Arc::new(Mutex::new(App::new(
-            server.to_string(),
-            ThemeRegistry::new(),
-        )))
+        let mut app = App::new(server.to_string(), ThemeRegistry::new());
+        app.settings_path = None; // never touch the user's real config during tests
+        Arc::new(Mutex::new(app))
     }
 
     fn make_runner(app: Arc<Mutex<App>>, action_tx: mpsc::Sender<Action>) -> EffectRunner {

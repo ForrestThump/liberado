@@ -93,7 +93,7 @@ mod tests {
     // human smoke would, short of "does it look nice".
 
     use crate::app::{Action, App, GoalUiEvent};
-    use chat_client_contract::{DomainWire, GoalHeaderSpec, GoalSessionHeader};
+    use chat_client_contract::{ConvHeader, DomainWire, GoalHeaderSpec, GoalSessionHeader};
     use liberado_theme::ThemeRegistry;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -124,21 +124,35 @@ mod tests {
         }
     }
 
+    fn conv_header(id: &str, title: &str) -> ConvHeader {
+        ConvHeader {
+            id: id.into(),
+            title: Some(title.into()),
+            created_at: String::new(),
+            parent_conversation: None,
+            spawned_by: None,
+        }
+    }
+
     fn smoke_app() -> App {
-        App::new("http://127.0.0.1:4201".to_string(), ThemeRegistry::new())
+        let mut app = App::new("http://127.0.0.1:4201".to_string(), ThemeRegistry::new());
+        app.settings_path = None; // never touch the user's real config during tests
+        app
     }
 
     #[test]
-    fn switcher_renders_primary_row_kind_chips_and_status() {
+    fn switcher_renders_prior_chats_kind_chips_and_status() {
         let mut app = smoke_app();
+        app.update(Action::ConversationsUpdate(vec![conv_header("c1", "weekly planning")]));
         app.update(Action::GoalSessionsUpdate(vec![
             goal_header("g1", DomainWire::Coding, "build a CLI", "running", false),
             goal_header("g2", DomainWire::Life, "capture a note", "running", true),
         ]));
         app.open_session_switcher();
         let out = render_to_string(&mut app, 100, 20);
-        // The primary (goal-less) row plus both kind chips + labels.
-        assert!(out.contains("Primary"), "missing primary row:\n{out}");
+        // The prior conversation renders as a primary (CHAT) row, then both goal-session chips.
+        assert!(out.contains("Primary"), "missing primary chat row:\n{out}");
+        assert!(out.contains("weekly planning"), "missing chat title:\n{out}");
         assert!(out.contains("CODE") && out.contains("Coding"), "missing coding chip:\n{out}");
         assert!(out.contains("LIFE") && out.contains("Life"), "missing life chip:\n{out}");
         // The awaiting session's status stands out.
@@ -147,12 +161,22 @@ mod tests {
     }
 
     #[test]
-    fn switcher_with_no_goal_sessions_still_renders_primary() {
+    fn switcher_with_only_prior_chats_renders_them() {
+        let mut app = smoke_app();
+        app.update(Action::ConversationsUpdate(vec![conv_header("c1", "weekly planning")]));
+        app.open_session_switcher();
+        let out = render_to_string(&mut app, 80, 12);
+        // Even with no goal sessions, prior chats populate the switcher.
+        assert!(out.contains("Primary"), "missing primary chat row:\n{out}");
+        assert!(out.contains("weekly planning"), "missing chat title:\n{out}");
+    }
+
+    #[test]
+    fn switcher_with_nothing_shows_empty_hint() {
         let mut app = smoke_app();
         app.open_session_switcher();
         let out = render_to_string(&mut app, 80, 12);
-        assert!(out.contains("Primary"));
-        assert!(out.contains("no goal sessions"));
+        assert!(out.contains("no sessions yet"), "missing empty hint:\n{out}");
     }
 
     #[test]

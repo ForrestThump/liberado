@@ -215,15 +215,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_session_list() {
-        assert_eq!(
-            parse("/session"),
-            Some(SlashCommand::Session(SessionCmd::List))
-        );
-        assert_eq!(
-            parse("/session list"),
-            Some(SlashCommand::Session(SessionCmd::List))
-        );
+    fn bare_session_is_an_alias_for_the_unified_switcher() {
+        // `/session` and `/session list` both open the same unified switcher as `/sessions`.
+        assert_eq!(parse("/session"), Some(SlashCommand::Sessions));
+        assert_eq!(parse("/session list"), Some(SlashCommand::Sessions));
+        assert_eq!(parse("/sessions"), Some(SlashCommand::Sessions));
     }
 
     #[test]

@@ -3,7 +3,10 @@ use crate::format::relative_time;
 use crossterm::event::{MouseButton, MouseEventKind};
 
 fn test_app() -> App {
-    App::new("http://127.0.0.1:4201".to_string(), ThemeRegistry::new())
+    let mut app = App::new("http://127.0.0.1:4201".to_string(), ThemeRegistry::new());
+    // Never persist theme changes to the user's real config during tests.
+    app.settings_path = None;
+    app
 }
 fn conv(id: &str, title: &str) -> ConvHeader {
     ConvHeader {
@@ -650,7 +653,8 @@ fn slash_session_list() {
     app.conversations = vec![conv("c1", "alpha"), conv("c2", "beta")];
     app.input = "/session list".into();
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.focus, Focus::SessionBrowser);
+    // `/session list` is an alias for the unified switcher.
+    assert_eq!(app.focus, Focus::SessionSwitcher);
     assert!(app.input.is_empty());
 }
 #[test]
@@ -1364,12 +1368,13 @@ fn tab_cycles_input_and_chat() {
 }
 
 #[test]
-fn slash_session_opens_browser() {
+fn slash_session_opens_switcher() {
     let mut app = test_app();
     app.conversations = vec![conv("c1", "alpha")];
     app.input = "/session".into();
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.focus, Focus::SessionBrowser);
+    // `/session` and `/sessions` both open the one unified switcher.
+    assert_eq!(app.focus, Focus::SessionSwitcher);
 }
 
 #[test]
@@ -1832,11 +1837,11 @@ fn slash_theme_set_named() {
 }
 
 #[test]
-fn slash_session_bare_opens_browser() {
+fn slash_session_bare_opens_switcher() {
     let mut app = test_app();
     app.input = "/session".into();
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.focus, Focus::SessionBrowser);
+    assert_eq!(app.focus, Focus::SessionSwitcher);
 }
 
 #[test]
@@ -2083,9 +2088,13 @@ fn goal_sessions_update_populates_and_clamps_switcher() {
         goal_header("g1", DomainWire::Coding, "build a CLI", "running", false),
         goal_header("g2", DomainWire::Life, "note it", "awaiting", true),
     ]));
-    // Row 0 is the primary chat; the two goal sessions follow.
-    assert_eq!(app.switcher_row_count(), 3);
+    // No prior conversations here, so the two goal sessions are the only rows.
+    assert_eq!(app.switcher_row_count(), 2);
     assert_eq!(app.goal_sessions.len(), 2);
+
+    // Prior conversations become primary-chat rows above the goal sessions.
+    app.update(Action::ConversationsUpdate(vec![conv("c1", "yesterday's chat")]));
+    assert_eq!(app.switcher_row_count(), 3);
 }
 
 #[test]

@@ -19,8 +19,8 @@ pub fn parse(input: &str) -> Option<SlashCommand> {
         "/status" => Some(SlashCommand::Status),
         "/theme" => Some(parse_theme(parts.get(1).copied(), parts.get(2).copied())),
         "/model" => Some(SlashCommand::Model),
-        // `/session` (singular) = conversation subcommands; `/sessions` (plural) = the unified
-        // session switcher (primary chat + goal sessions).
+        // `/session` and `/sessions` are aliases: both open the one unified switcher (all chats +
+        // goal sessions). `/session <sub>` still exposes the power-user subcommands (info/switch/close).
         "/session" => Some(parse_session(parts.get(1).copied(), parts.get(2).copied())),
         "/sessions" => Some(SlashCommand::Sessions),
         "/join" => Some(SlashCommand::Join(parts.get(1).copied().unwrap_or("").to_string())),
@@ -47,7 +47,8 @@ fn parse_session(sub: Option<&str>, extra: Option<&str>) -> SlashCommand {
     match sub.unwrap_or("") {
         "close" => SlashCommand::Session(SessionCmd::Close),
         "switch" => SlashCommand::Session(SessionCmd::Switch(extra.unwrap_or("").to_string())),
-        "list" | "" => SlashCommand::Session(SessionCmd::List),
+        // Bare `/session` (and `/session list`) is an alias for `/sessions`: the unified switcher.
+        "list" | "" => SlashCommand::Sessions,
         "info" => SlashCommand::Session(SessionCmd::Info),
         other => SlashCommand::Session(SessionCmd::Unknown(other.to_string())),
     }

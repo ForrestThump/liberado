@@ -1,8 +1,9 @@
-//! Unified session switcher keyboard handler (`Focus::SessionSwitcher`, opened by `/sessions`).
+//! Unified session switcher keyboard handler (`Focus::SessionSwitcher`, opened by `/session` and
+//! `/sessions`).
 //!
-//! Row 0 is always the **primary chat** (selecting it returns focus there — the `/back`
-//! affordance); rows 1.. are goal sessions filtered by the type-ahead. Enter on a goal row
-//! `/join`s it.
+//! One flat, filterable list: prior conversations (primary chats) first, then goal sessions. Enter
+//! on a conversation switches the primary chat to it (leaving any joined goal session); Enter on a
+//! goal row `/join`s it.
 
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -57,20 +58,43 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
-/// Enter on the selected row: row 0 = primary chat (leave any joined session); rows 1.. = join the
-/// corresponding goal session.
+/// Enter on the selected row. Conversation rows come first (switch the primary chat to that
+/// conversation, leaving any joined goal session); goal rows follow (`/join` the session).
 fn open_selected(app: &mut App) -> Vec<Effect> {
-    if app.sidebar_selection == 0 {
-        // Primary chat row: return focus there, dropping any joined session.
+    let conv_count = app.filtered_conversations().len();
+    let sel = app.sidebar_selection;
+
+    if sel < conv_count {
+        // Conversation row → make it the active primary chat.
+        let convs = app.filtered_conversations();
+        let Some(header) = convs.get(sel) else {
+            return vec![Effect::None];
+        };
+        let id = header.id.clone();
+        let already_active = app.session.as_deref() == Some(id.as_str());
+        drop(convs);
+
         app.close_session_switcher();
+        let mut effects = Vec::new();
+        // Selecting a conversation always returns you to the primary chat surface.
         if app.joined.is_some() {
             app.leave_session();
-            return vec![Effect::LeaveGoalSession];
+            effects.push(Effect::LeaveGoalSession);
         }
-        return vec![Effect::None];
+        if already_active {
+            // Already on this conversation — just came back to it (no reload needed).
+            if effects.is_empty() {
+                effects.push(Effect::None);
+            }
+            return effects;
+        }
+        app.pending_load = Some(id.clone());
+        effects.push(Effect::LoadConversationHistory(id));
+        return effects;
     }
 
-    let idx = app.sidebar_selection - 1;
+    // Goal-session row → focus (`/join`) it.
+    let idx = sel - conv_count;
     let filtered = app.filtered_goal_sessions();
     let Some(header) = filtered.get(idx) else {
         return vec![Effect::None];

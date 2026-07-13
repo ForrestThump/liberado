@@ -120,6 +120,9 @@ pub struct App {
     pub sidebar_filter: String,
     pub theme: Theme,
     pub theme_registry: ThemeRegistry,
+    /// Where `set_theme` persists the theme preference. `Some` in the real binary (the platform
+    /// config `settings.toml`); `None` in tests so they never touch — or clobber — the user's config.
+    pub settings_path: Option<std::path::PathBuf>,
     pub daemon_connected: bool,
     pub collapsed_nodes: HashSet<String>,
     pub expanded_messages: HashSet<usize>,
@@ -212,6 +215,7 @@ impl App {
             sidebar_filter: String::new(),
             theme,
             theme_registry: registry,
+            settings_path: liberado_theme::user_settings_path(),
             daemon_connected: false,
             collapsed_nodes: HashSet::new(),
             expanded_messages: HashSet::new(),
@@ -344,10 +348,10 @@ impl App {
             .collect()
     }
 
-    /// Total rows in the switcher: row 0 is always the primary chat, then the filtered goal
-    /// sessions. (The primary row isn't filtered out — it's the "return to chat" affordance.)
+    /// Total rows in the unified switcher: the filtered prior conversations (primary chats) followed
+    /// by the filtered goal sessions. One flat list so `/session` and `/sessions` show every chat.
     pub fn switcher_row_count(&self) -> usize {
-        1 + self.filtered_goal_sessions().len()
+        self.filtered_conversations().len() + self.filtered_goal_sessions().len()
     }
 
     pub fn clamp_switcher_selection(&mut self) {
@@ -707,8 +711,10 @@ impl App {
                 }
                 liberado_commands::CommandResult::OpenSessionBrowser
                 | liberado_commands::CommandResult::SessionListed => {
-                    self.open_session_browser();
+                    // Both `/session` and `/sessions` land on the one unified switcher.
+                    self.open_session_switcher();
                     effects.push(Effect::RefreshConversations);
+                    effects.push(Effect::RefreshGoalSessions);
                 }
                 liberado_commands::CommandResult::OpenModelBrowser => {
                     self.open_model_browser();
@@ -716,6 +722,7 @@ impl App {
                 }
                 liberado_commands::CommandResult::OpenGoalSwitcher => {
                     self.open_session_switcher();
+                    effects.push(Effect::RefreshConversations);
                     effects.push(Effect::RefreshGoalSessions);
                 }
                 liberado_commands::CommandResult::JoinGoalSession { id } => {
