@@ -185,16 +185,26 @@ pub async fn post_goal_message(
 /// so interactive-aware packs (life demo; coding intake, later) open in their ask-a-human path, and
 /// carries `origin` = the current conversation so the session's summary folds back on terminal
 /// (S4 return handoff). Returns the new session id, or an error string.
+///
+/// `profile_or_domain` is `/spawn`'s first argument, and it may be either — so it is sent as **both**
+/// `profile` and `domain`. The server resolves profile-first (S6): a name matching an enabled
+/// `[[session_profiles]]` entry wins and supplies the real pack + grant; anything else falls through
+/// to the bare domain. One argument, no client-side table of what profiles exist.
+///
+/// Note `payload.interactive` is only a *request*: whether the session may actually ask the human is
+/// decided by its grant (`AskHuman`), not by this flag. Spawning a profile without that capability
+/// yields a session that runs to completion without ever prompting.
 pub async fn spawn_goal(
     client: &Client,
     server: &str,
-    domain: &str,
+    profile_or_domain: &str,
     goal: &str,
     origin_conversation: Option<&str>,
 ) -> Result<String, String> {
     let mut body = serde_json::json!({
         "description": goal,
-        "domain": domain,
+        "domain": profile_or_domain,
+        "profile": profile_or_domain,
         "payload": { "interactive": true },
     });
     if let Some(conv) = origin_conversation {

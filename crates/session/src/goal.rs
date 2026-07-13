@@ -1,12 +1,18 @@
 //! Goal and session status types (domain-neutral).
 
 use chrono::{DateTime, Utc};
+use liberado_common::CapabilitySet;
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
 /// Which domain pack should run this goal.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
+///
+/// **Wire form is a plain string** — the pack's name (`"coding"`, `"life"`, or any other). A domain
+/// *is* a pack name, so an unrecognized one deserializes to [`Custom`](Self::Custom) rather than
+/// erroring: that is what lets a caller name a `[[session_profiles]]` hat (S6) it can't know is a
+/// profile rather than a pack, and let the server resolve which. An unregistered name still fails
+/// loudly at `start` ("no domain pack registered"), just not at the JSON boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum DomainHint {
     /// Default for dogfood / self-improvement coding goals.
     #[default]
@@ -23,6 +29,28 @@ impl DomainHint {
             Self::Life => "life",
             Self::Custom(s) => s.as_str(),
         }
+    }
+}
+
+impl From<&str> for DomainHint {
+    fn from(s: &str) -> Self {
+        match s {
+            "coding" => Self::Coding,
+            "life" => Self::Life,
+            other => Self::Custom(other.to_string()),
+        }
+    }
+}
+
+impl Serialize for DomainHint {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for DomainHint {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Self::from(String::deserialize(d)?.as_str()))
     }
 }
 
@@ -65,6 +93,12 @@ pub struct GoalSpec {
     /// offer/return handoff (S4). `None` for human-started sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<SessionOrigin>,
+    /// Which `[[session_profiles]]` "hat" to run this session under (S6) — selects the domain pack,
+    /// the capability grant, and the pack's opaque overrides. `None` runs the bare `domain` with the
+    /// grant keyed by the domain itself. The kernel never reads this: the *server* resolves it
+    /// against config into a [`SessionGrant`], keeping the kernel free of the config stack.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// Opaque pack payload (workspace root, vault path, contract JSON, …).
     #[serde(default)]
     pub payload: serde_json::Value,
@@ -117,6 +151,12 @@ pub struct GoalResult {
 pub struct GoalSessionRecord {
     pub id: String,
     pub goal: GoalSpec,
+    /// The authority this session runs under (S6) — resolved once at start from its profile (or the
+    /// bare domain) and **never widened** thereafter (Decision 4). Recorded here rather than held
+    /// only in memory so it lands in the durable JSONL transcript: what a session was *allowed* to
+    /// do is as much a part of the audit trail as what it did.
+    #[serde(default)]
+    pub grant: SessionGrant,
     pub status: SessionStatus,
     pub created_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -133,7 +173,13 @@ pub struct GoalSessionRecord {
 }
 
 impl GoalSessionRecord {
+    /// A session with **zero authority** — the fail-safe default (Decision 4: no ambient authority).
+    /// Callers that mean to grant something use [`with_grant`](Self::with_grant).
     pub fn new(goal: GoalSpec) -> Self {
+        Self::with_grant(goal, SessionGrant::default())
+    }
+
+    pub fn with_grant(goal: GoalSpec, grant: SessionGrant) -> Self {
         let id = goal
             .id
             .clone()
@@ -142,6 +188,7 @@ impl GoalSessionRecord {
         Self {
             id,
             goal,
+            grant,
             status: SessionStatus::Pending,
             created_at: Utc::now(),
             finished_at: None,
@@ -149,6 +196,37 @@ impl GoalSessionRecord {
             event_count: 0,
             awaiting_input: false,
         }
+    }
+}
+
+/// What a goal session is allowed to do, and how its pack is configured (S6).
+///
+/// Two things the server resolves from `[[session_profiles]]` before the kernel starts a session:
+/// the **capability set** (the authority ceiling — narrow-only from here) and the pack's **opaque
+/// overrides** (role/model/prompt — the kernel never looks inside; only the pack parses them, the
+/// same contract `[tuning.coder]` has).
+///
+/// Defaults to zero authority and no overrides, so a session started without an explicit grant can
+/// do nothing — notably it cannot [`AskHuman`](liberado_common::Capability::AskHuman), so it can
+/// never block waiting on a person.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionGrant {
+    /// The session's authority ceiling.
+    #[serde(default)]
+    pub capabilities: CapabilitySet,
+    /// The profile this grant came from, for display/audit. `None` = the bare domain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// Opaque, pack-parsed configuration.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub overrides: serde_json::Value,
+}
+
+impl SessionGrant {
+    /// Whether this session may interrupt a human for guidance — the check the hub makes before it
+    /// wires up an input channel at all.
+    pub fn grants_ask_human(&self) -> bool {
+        self.capabilities.grants_ask_human()
     }
 }
 
@@ -169,6 +247,7 @@ mod tests {
                 conversation_id: "01CONV".into(),
                 correlation_id: Some("corr-1".into()),
             }),
+            profile: None,
             payload: serde_json::json!({}),
         };
         let json = serde_json::to_value(&with).unwrap();

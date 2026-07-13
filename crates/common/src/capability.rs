@@ -206,6 +206,15 @@ pub enum Capability {
     ReadSummary(Zone),
     /// Permission to invoke a specific MCP by name.
     ExecuteMcp(String),
+    /// Permission to **interrupt a human for guidance** — the human-input channel
+    /// (`docs/architecture/channels-and-interactivity.md`, Decision A: interactivity is a
+    /// capability, not a session subtype).
+    ///
+    /// A session whose grant omits this may not await human input: the kernel hands its pack a
+    /// closed [`InputChannel`](../../session/src/runner.rs) and rejects any inbound `send_input`.
+    /// This is what makes an unattended profile (a cron, a narrow research hat) *structurally*
+    /// unable to block on a person who isn't there, rather than merely conventionally so.
+    AskHuman,
 }
 
 /// A set of capabilities held by an actor (component, subagent, or dispatch grant).
@@ -242,6 +251,12 @@ impl CapabilitySet {
         self.capabilities
             .iter()
             .any(|c| matches!(c, Capability::ExecuteMcp(name) if name == mcp))
+    }
+
+    /// Whether this set permits interrupting a human for guidance ([`Capability::AskHuman`]) — the
+    /// check the session kernel makes before wiring up an interactive session's input channel.
+    pub fn grants_ask_human(&self) -> bool {
+        self.capabilities.contains(&Capability::AskHuman)
     }
 
     /// The MCP names this set grants `ExecuteMcp` on, in grant order. The runtime-scoping ceiling

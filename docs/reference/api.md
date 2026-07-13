@@ -40,7 +40,7 @@ human input. Packs registered at boot: **`life`** (always, second-domain demo) a
 | GET | `/api/goals/{id}` | Snapshot: record (incl. `awaiting_input`) + event history |
 | GET | `/api/goals/{id}/stream` | SSE: catch-up then live `session_started`, `tool_*`, `awaiting_input`, `session_finished`, … |
 | POST | `/api/goals/{id}/cancel` | Cooperative cancel |
-| POST | `/api/goals/{id}/message` | JSON `{"text":"…"}` — deliver a human reply to an `awaiting_input` prompt. `202` accepted; `404` unknown session; `409` already-finished session |
+| POST | `/api/goals/{id}/message` | JSON `{"text":"…"}` — deliver a human reply to an `awaiting_input` prompt. `202` accepted; `404` unknown session; `409` already-finished session; `403` the session's grant omits `AskHuman`, so it may **never** receive input |
 
 SSE `data` is the full `SessionEvent` JSON (envelope `session_id`/`at` + kind fields). Event names
 match kind tags (`session_started`, `tool_started`, `failed`, …) — the **same converged vocabulary
@@ -54,6 +54,21 @@ answers with `POST /api/goals/{id}/message`, which delivers the text into the se
 it back into the transcript as a `human_input` (`{"text"}`) event, so the history is complete for any
 later subscriber. `GoalSpec.max_idle_secs`, when set, bounds how long a session waits at such a
 prompt before terminating `budget_exhausted`.
+
+**Interactivity is a capability, not a request (S6).** Whether a session may prompt at all is decided
+by its `SessionGrant`, not by the caller: `payload.interactive` is only a *request*. A session whose
+grant omits `Capability::AskHuman` is handed a closed input channel — it runs to completion **without
+ever prompting**, even when `interactive: true` was passed — and `POST …/message` returns `403`
+(never allowed), which is deliberately distinct from `409` (allowed once, but finished).
+
+**Session profiles (S6).** `GoalSpec.profile` names a `[[session_profiles]]` entry in
+`topology.toml`, which selects three things: the **pack** that runs it (`domain`), the **capability
+grant** that bounds it (`component` — a key into `policy.toml`'s `[[grants]]`, defaulting to the
+profile's own name), and an **opaque `overrides`** table the pack parses itself. With no profile, a
+session runs its `domain` pack under the grant keyed by the domain name (`life`, `coding`). Because
+the profile picks the pack, `domain` in the request body is advisory — a profile overrides it. The
+`domain` field is a plain pack-name string; an unrecognized one is accepted at the JSON boundary (it
+may be a profile name) and only fails at start if no such pack is registered.
 
 ## The chat stream contract (the spine)
 

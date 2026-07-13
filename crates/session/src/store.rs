@@ -350,6 +350,7 @@ mod tests {
             max_turns: 0,
             max_idle_secs: None,
             origin: None,
+            profile: None,
             payload: serde_json::json!({}),
         })
     }

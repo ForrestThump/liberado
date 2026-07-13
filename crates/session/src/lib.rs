@@ -17,11 +17,14 @@ mod store;
 
 pub use event::{SessionEvent, SessionEventKind};
 pub use goal::{
-    DomainHint, GoalResult, GoalSessionRecord, GoalSpec, SessionOrigin, SessionStatus, TerminalKind,
+    DomainHint, GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionOrigin, SessionStatus,
+    TerminalKind,
 };
 pub use hub::{GoalSessionHub, SendInputError, SessionSnapshot};
 pub use life_demo::LifeOpsDemoRunner;
-pub use runner::{DomainPackRunner, HumanInput, InputChannel, InputOutcome, PackError};
+pub use runner::{
+    DomainPackRunner, HumanInput, InputChannel, InputOutcome, PackContext, PackError,
+};
 pub use store::GoalSessionStore;
 
 /// Stable domain id for the life-ops demo pack (second-domain pigeonhole proof).

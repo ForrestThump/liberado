@@ -46,6 +46,8 @@ pub fn validate_merged_config(config: &Config) -> Result<(), ConfigLoadError> {
                         )));
                     }
                 }
+                // Self-contained: names no zone and no MCP, so there is nothing to resolve.
+                Capability::AskHuman => {}
             }
         }
     }

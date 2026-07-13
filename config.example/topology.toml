@@ -238,3 +238,20 @@ transport = { kind = "stdio", command = "riggers-mcp", args = ["--config", "rigg
 # secret_ref = "WAKEUP_HOOK_SECRET"
 # goal = "A wake-up you previously scheduled for yourself has fired. Read the context below for what you asked to be reminded to do, and act on it."
 # enabled = true
+
+# --- Session profiles (session-focus S6) -------------------------------------------------------
+# A profile is a HAT a goal session wears: which pack runs it (`domain`), what authority it holds
+# (`component` — the key into policy.toml's [[grants]]; defaults to `name`), and an OPAQUE
+# `overrides` table the pack parses itself (never interpreted here — same rule as [tuning.coder]).
+# Start one with `/spawn <profile> <goal>`.
+#
+# Declaring none changes nothing: an unprofiled session runs its pack with the grant keyed by the
+# domain name (`life`, `coding`), exactly as before profiles existed.
+# [[session_profiles]]
+# name = "research"
+# domain = "life"          # same pack as a normal life session...
+# component = "research"   # ...but a strictly narrower grant: read-only, and no AskHuman
+# enabled = true
+#
+# [session_profiles.overrides]
+# role = "researcher"      # opaque to the config stack; the life pack reads it

@@ -14,8 +14,8 @@ use liberado_coder_core::{
 use liberado_common::Outcome;
 use liberado_provider::Provider;
 use liberado_session::{
-    CODING_DOMAIN, DomainPackRunner, GoalResult, GoalSpec, InputChannel, PackError, SessionEvent,
-    SessionEventKind, TerminalKind,
+    CODING_DOMAIN, DomainPackRunner, GoalResult, GoalSpec, InputChannel, PackContext, PackError,
+    SessionEvent, SessionEventKind, TerminalKind,
 };
 use tokio::sync::mpsc::Sender;
 
@@ -54,6 +54,11 @@ impl DomainPackRunner for CodingSessionPack {
         &self,
         session_id: &str,
         goal: &GoalSpec,
+        // The session's grant + opaque overrides (S6). Coding sessions run inside an isolated
+        // workspace, so their containment is the sandbox rather than vault-zone capabilities; the
+        // context is threaded through now so the intake-first path (S7) can consult `AskHuman`
+        // before it starts asking clarifying questions.
+        _ctx: &PackContext<'_>,
         events: Sender<SessionEvent>,
         // Coding sessions are not yet interactive (the intake-first path is session-focus S7);
         // accepting and dropping the channel keeps the pack a valid conformer meanwhile.

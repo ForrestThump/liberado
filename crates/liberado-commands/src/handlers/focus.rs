@@ -32,15 +32,19 @@ pub fn back(ctx: &mut dyn CommandContext) -> Vec<CommandResult> {
     vec![CommandResult::BackToPrimary]
 }
 
-/// `/spawn <domain> <goal>` — start a new interactive goal session and focus it. Empty domain/goal
-/// prints usage.
+/// `/spawn <profile|domain> <goal>` — start a new interactive goal session and focus it. The first
+/// argument may name a domain pack (`life`, `coding`) or a `[[session_profiles]]` hat (`research`);
+/// the server resolves profile-first. Empty argument prints usage.
 pub fn spawn(domain: &str, goal: &str, ctx: &mut dyn CommandContext) -> Vec<CommandResult> {
     ctx.clear_input();
     let domain = domain.trim();
     let goal = goal.trim();
     if domain.is_empty() || goal.is_empty() {
         ctx.push_system_message(
-            "Usage: /spawn <domain> <goal>   e.g. /spawn life \"plan my week\"".into(),
+            "Usage: /spawn <profile|domain> <goal>\n\
+             e.g. /spawn life \"plan my week\"   (the life pack)\n\
+             e.g. /spawn research \"compare X\"  (a narrower hat on the same pack)"
+                .into(),
         );
         return vec![CommandResult::None];
     }

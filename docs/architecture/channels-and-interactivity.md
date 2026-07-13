@@ -45,13 +45,23 @@ session **type** would force exactly that impossible decision.
 
 | Attribute | Question | Mechanism |
 |---|---|---|
-| `ask_human` | *May* the pack reach out at a crossroads? | a **capability flag** on the session / hat profile (to build — one grant) |
+| `AskHuman` | *May* the pack reach out at a crossroads? | a real **`Capability`**, granted per session profile (**done — S6**) |
 | `visibility` | Is anyone *there* to answer? | derived from `origin`: `/spawn` or a human-attended chat turn ⇒ foreground; cron/hook ⇒ background |
 | budget (`max_turns` / `max_idle_secs`) | How long before it gives up? | already on `GoalSpec` |
 
 The **channel** those attributes gate is the S1 primitive — already shipped and durable. There is
-nothing new to *build* for "let the model ask a human when it hits a crossroads"; there is a flag to
-add that says *whether it may*, and the surrounding context decides *whether anyone answers*.
+nothing new to *build* for "let the model ask a human when it hits a crossroads"; there is a flag
+that says *whether it may*, and the surrounding context decides *whether anyone answers*.
+
+**As of S6 this is enforced, not merely declared.** `Capability::AskHuman` is an ordinary capability
+in the usual grant machinery, so a session's `SessionGrant` either carries it or does not, and the
+kernel acts on that: **without it, the pack is handed an already-closed `InputChannel`** — it cannot
+block on a human even if it wants to — and `POST /api/goals/{id}/message` answers **403 Forbidden**
+("never allowed"), which is deliberately distinct from **409** ("too late, it finished"). Notice what
+this buys: `payload.interactive` is only a *request*. A caller can ask for an interactive session all
+it likes; if the grant withholds `AskHuman`, the session runs to completion without ever prompting.
+Interactivity is therefore not something a caller can assert — it is something the authority model
+*permits*. That is the whole content of "interactivity is a capability, not a subtype."
 
 **Consequences (these settle open questions):**
 
@@ -67,9 +77,9 @@ add that says *whether it may*, and the surrounding context decides *whether any
 - **"5-turn subagent" and "long-running goal session" are the same thing**, differing only by
   `max_turns`. Crons always carry a goal. No new types.
 
-**Build status:** channel + idle reaper = **done (S1)**; `/spawn` trigger = **to build** (re-scopes
-S4, below); `ask_human` capability flag on session/hat profiles = **to build** (small); `SessionOffered`
-wire vocabulary = **done (S4 foundation)**.
+**Build status:** channel + idle reaper = **done (S1)**; `SessionOffered` wire vocabulary = **done
+(S4 foundation)**; `/spawn` trigger + return handoff = **done (S4)**; `Capability::AskHuman` on
+session profiles = **done (S6)** — kernel-enforced, with the 403/409 split above.
 
 ---
 
@@ -112,8 +122,11 @@ one daemon) and the agent-pools verdict.
 - **S4 trigger re-scoped to `/spawn`** (human-initiated), *not* dispatcher interactivity
   classification. `SessionOffered` is retained for the human-attended offer case only. This is a real
   simplification — no dispatch-side "is this interactive?" heuristic to build.
-- **New small item:** an `ask_human` capability flag on sessions / hat profiles (Decision A). Slots
-  in with S6 (hat profiles) — it's a component-style grant.
+- ~~**New small item:** an `ask_human` capability flag on sessions / hat profiles (Decision A)~~ —
+  **shipped in S6** as `Capability::AskHuman`, granted per `[[session_profiles]]` entry and enforced
+  in the kernel (closed input channel + 403). It turned out to be the *load-bearing* piece of S6, not
+  a footnote: goal sessions had no authority boundary at all before it, so there was nothing for a
+  "narrower grant" to narrow.
 - **Deferred + gated:** the internal fact bus (Decision B). Not on the near roadmap; documented so
   future work has a home and a trigger condition, not a standing invitation to over-build.
 

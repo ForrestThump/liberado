@@ -96,6 +96,38 @@ capabilities = [
 #                                                  # less than "dispatcher"'s own grant above.
 # ]
 
+# --- Goal-session grants (session-focus S6) ---------------------------------------------------
+# A goal session's authority is `capabilities_for(<component>)`, where the component is its
+# `[[session_profiles]].component` (topology.toml) or — with no profile — the domain pack's own name.
+#
+# `AskHuman` is the capability to INTERRUPT YOU. It is what makes a session interactive: without it
+# the kernel hands the pack a closed input channel and refuses inbound messages (403), so the session
+# physically cannot block on a person. Grant it to hats a human attends (`/spawn`); withhold it from
+# anything unattended (a cron), so an abandoned session can never wedge on a prompt nobody answers.
+[[grants]]
+component = "life"
+capabilities = [
+    { Read = { Vault = "tasks" } },
+    { Write = { Vault = "tasks" } },
+    "AskHuman",
+]
+
+[[grants]]
+component = "coding"
+capabilities = [
+    { Read = { Vault = "decisions" } },
+    "AskHuman",
+]
+
+# The S6 worked example: the SAME life pack under a strictly narrower hat — read-only, and no
+# AskHuman, so it can neither interrupt you nor write the vault. Paired with the
+# `[[session_profiles]]` entry named `research` in topology.toml.
+[[grants]]
+component = "research"
+capabilities = [
+    { Read = { Vault = "tasks" } },
+]
+
 # Names of secrets the components need, resolved from the environment (never inlined). Each entry
 # must be present as an env var at boot — `config check` reports any that are missing.
 # secret_refs = ["DEEPSEEK_API_KEY"]

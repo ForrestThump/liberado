@@ -11,6 +11,7 @@ use liberado_provider::{ToolDef, ToolInvocation};
 use tokio::sync::{Mutex, mpsc::UnboundedSender};
 
 use liberado_common::{CapabilityCatalog, CapabilitySet};
+use liberado_bootstrap::Config;
 use liberado_provider::Provider;
 use liberado_session::GoalSessionHub;
 
@@ -49,6 +50,11 @@ pub struct AppState {
     /// The `"dispatcher"` component's capability grant — which MCPs the daemon's
     /// dispatch/orchestrate pipeline may call. See `main_agent_capabilities` above.
     pub dispatcher_capabilities: CapabilitySet,
+    /// The resolved config — held so `POST /api/goals` can turn a session's `profile` into its
+    /// [`SessionGrant`](liberado_session::SessionGrant) (S6) via `Config::resolve_session_profile`.
+    /// The *server* owns this resolution because the session kernel must stay free of the config
+    /// stack: the kernel is handed an already-resolved authority, never a config key to look up.
+    pub config: Arc<Config>,
     /// The active model id, from `Provider::model()` (`None` when no provider is configured).
     /// Display-only for now — there is no runtime model switch; the model is fixed at daemon
     /// startup by config/env (`DEEPSEEK_MODEL`).

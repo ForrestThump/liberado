@@ -146,6 +146,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         conversations_root: liberado_bootstrap::data_dir().join("conversations"),
         main_agent_capabilities,
         dispatcher_capabilities,
+        config: Arc::new(config.clone()),
         model_name,
         provider: provider.clone(),
         hooks: resolved_hooks,

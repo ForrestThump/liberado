@@ -633,12 +633,32 @@ pub async fn goals_list(State(state): State<Arc<AppState>>) -> impl IntoResponse
 /// `POST /api/goals` — start a goal session. Body: [`liberado_session::GoalSpec`]. When the spec
 /// carries an `origin` (a chat turn spawned it, e.g. via `/spawn`), a **return-handoff** watcher is
 /// spawned so the session's terminal summary folds back into the parent conversation (S4/D2).
+///
+/// The spec's optional `profile` selects a `[[session_profiles]]` hat (S6): the pack that runs it,
+/// the capability grant that bounds it, and the pack's opaque overrides.
 pub async fn goals_start(
     State(state): State<Arc<AppState>>,
-    Json(goal): Json<liberado_session::GoalSpec>,
+    Json(mut goal): Json<liberado_session::GoalSpec>,
 ) -> impl IntoResponse {
     let origin = goal.origin.clone();
-    match state.goals.start(goal).await {
+
+    // Resolve the session's "hat" (S6) into a concrete authority before the kernel sees it. A
+    // profile picks the pack, the capability grant, and the pack's opaque overrides; no profile
+    // falls back to the bare domain, keyed by the domain name (the pool rule). Whether this session
+    // may interrupt a human is decided *here*, by the grant — not by the caller asserting it.
+    let (domain, capabilities, overrides) = state
+        .config
+        .resolve_session_profile(goal.profile.as_deref(), goal.domain.as_str());
+    if domain.as_str() != goal.domain.as_str() {
+        goal.domain = liberado_session::DomainHint::from(domain.as_str());
+    }
+    let grant = liberado_session::SessionGrant {
+        capabilities,
+        profile: goal.profile.clone(),
+        overrides: serde_json::to_value(&overrides).unwrap_or(serde_json::Value::Null),
+    };
+
+    match state.goals.start_with_grant(goal, grant).await {
         Ok(id) => {
             if let Some(origin) = origin {
                 spawn_return_handoff(state.clone(), id.clone(), origin);
@@ -782,7 +802,9 @@ pub struct GoalMessageRequest {
 /// session (the reply to an `awaiting_input` prompt). A thin wrapper over
 /// [`liberado_session::GoalSessionHub::send_input`], which echoes the message into the transcript
 /// as a `human_input` event. `202 Accepted` on delivery; `404` when the session is unknown; `409`
-/// when it has already finished (a terminal session accepts no input).
+/// when it has already finished (a terminal session accepts no input); `403` when the session's
+/// grant omits `AskHuman` and so may *never* receive human input (S6) — an authority answer, not a
+/// timing one.
 pub async fn goals_message(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -793,6 +815,9 @@ pub async fn goals_message(
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(e @ SendInputError::Unknown) => {
             (StatusCode::NOT_FOUND, Json(ApiError { error: e.to_string() })).into_response()
+        }
+        Err(e @ SendInputError::NotPermitted) => {
+            (StatusCode::FORBIDDEN, Json(ApiError { error: e.to_string() })).into_response()
         }
         Err(e @ (SendInputError::Terminal | SendInputError::Closed)) => {
             (StatusCode::CONFLICT, Json(ApiError { error: e.to_string() })).into_response()
@@ -908,6 +933,7 @@ mod goal_message_tests {
             conversations_root: std::path::PathBuf::from("/tmp/vault/conversations"),
             main_agent_capabilities: liberado_common::CapabilitySet::empty(),
             dispatcher_capabilities: liberado_common::CapabilitySet::empty(),
+            config: Arc::new(test_config_with_life_grants()),
             model_name: None,
             provider: None,
             hooks: std::collections::HashMap::new(),
@@ -962,6 +988,7 @@ mod goal_message_tests {
             conversations_root: root,
             main_agent_capabilities: liberado_common::CapabilitySet::empty(),
             dispatcher_capabilities: liberado_common::CapabilitySet::empty(),
+            config: Arc::new(test_config_with_life_grants()),
             model_name: None,
             provider: None,
             hooks: std::collections::HashMap::new(),
@@ -985,18 +1012,56 @@ mod goal_message_tests {
             .unwrap()
     }
 
+    /// The grant an attended `/spawn` of the life pack resolves to: it may interrupt the human, and
+    /// it may write the note it was asked for. Interactivity is a capability (S6) — a session
+    /// started without `AskHuman` cannot receive input at all, so these tests must grant it
+    /// explicitly rather than relying on an ambient "interactive" payload flag.
+    fn attended_life_grant() -> liberado_session::SessionGrant {
+        liberado_session::SessionGrant {
+            capabilities: life_capabilities(),
+            profile: None,
+            overrides: serde_json::Value::Null,
+        }
+    }
+
+    fn life_capabilities() -> liberado_common::CapabilitySet {
+        use liberado_common::{Capability, CapabilitySet, Zone};
+        let mut capabilities = CapabilitySet::empty();
+        capabilities.grant(Capability::AskHuman);
+        capabilities.grant(Capability::Write(Zone::vault("tasks")));
+        capabilities
+    }
+
+    /// A config whose `"life"` component holds the grant an unprofiled life session resolves to —
+    /// mirroring the shipped `policy.toml`. Without this the HTTP path would resolve *zero*
+    /// authority and a `/spawn`ed session would (correctly) refuse to ask the human anything, which
+    /// is precisely the behavior `spawned_session_without_ask_human_never_awaits` pins down.
+    fn test_config_with_life_grants() -> liberado_bootstrap::Config {
+        use liberado_config::Grant;
+        let mut config = liberado_bootstrap::Config::default();
+        config.policy.grants.push(Grant {
+            component: "life".into(),
+            capabilities: life_capabilities().capabilities,
+        });
+        config
+    }
+
     async fn start_interactive(goals: &Arc<GoalSessionHub>) -> String {
         goals
-            .start(GoalSpec {
-                id: None,
-                description: "capture a note interactively".into(),
-                success_criteria: vec![],
-                domain: DomainHint::Life,
-                max_turns: 0,
-                max_idle_secs: None,
-                origin: None,
-                payload: serde_json::json!({ "interactive": true }),
-            })
+            .start_with_grant(
+                GoalSpec {
+                    id: None,
+                    description: "capture a note interactively".into(),
+                    success_criteria: vec![],
+                    domain: DomainHint::Life,
+                    max_turns: 0,
+                    max_idle_secs: None,
+                    origin: None,
+                    profile: None,
+                    payload: serde_json::json!({ "interactive": true }),
+                },
+                attended_life_grant(),
+            )
             .await
             .unwrap()
     }
@@ -1083,6 +1148,7 @@ mod goal_message_tests {
             max_turns: 0,
             max_idle_secs: None,
             origin: None,
+            profile: None,
             payload: serde_json::json!({}),
         });
         record.status = SessionStatus::Succeeded;
@@ -1103,20 +1169,11 @@ mod goal_message_tests {
     #[tokio::test]
     async fn message_to_finished_session_is_409() {
         let (app, goals) = goals_app();
-        // A non-interactive life goal finishes on its own; its input sender is then removed.
-        let id = goals
-            .start(GoalSpec {
-                id: None,
-                description: "quick non-interactive goal".into(),
-                success_criteria: vec!["done".into()],
-                domain: DomainHint::Life,
-                max_turns: 0,
-                max_idle_secs: None,
-                origin: None,
-                payload: serde_json::json!({}),
-            })
-            .await
-            .unwrap();
+        // A session that *could* take input (it holds AskHuman), answered and now terminal. This is
+        // the real 409: not "you may not", but "you're too late".
+        let id = start_interactive(&goals).await;
+        wait_awaiting(&goals, &id).await;
+        goals.send_input(&id, "Weekly Review").await.unwrap();
         let _ = wait_terminal(&goals, &id).await;
 
         let response = app
@@ -1127,6 +1184,66 @@ mod goal_message_tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn message_to_a_session_without_ask_human_is_403_not_409() {
+        // The S6 distinction the status code has to carry: this session was *never allowed* human
+        // input (its grant omits AskHuman), which is an authority answer — not the timing answer a
+        // 409 gives. Started with the default zero-authority grant, exactly like an unattended cron.
+        let (app, goals) = goals_app();
+        let id = goals
+            .start(GoalSpec {
+                id: None,
+                description: "unattended goal".into(),
+                success_criteria: vec!["done".into()],
+                domain: DomainHint::Life,
+                max_turns: 0,
+                max_idle_secs: None,
+                origin: None,
+                profile: None,
+                payload: serde_json::json!({ "interactive": true }),
+            })
+            .await
+            .unwrap();
+
+        let response = app
+            .oneshot(post_json(
+                &format!("/api/goals/{id}/message"),
+                r#"{"text": "let me help"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn a_session_without_ask_human_never_awaits_even_when_asked_to_be_interactive() {
+        // Interactivity is a capability, not a payload flag the caller can assert. Despite
+        // `interactive: true`, a zero-authority grant means the pack gets a closed input channel and
+        // must finish on its own rather than block on a human who can never reply.
+        let (_app, goals) = goals_app();
+        let id = goals
+            .start(GoalSpec {
+                id: None,
+                description: "unattended note".into(),
+                success_criteria: vec!["done".into()],
+                domain: DomainHint::Life,
+                max_turns: 0,
+                max_idle_secs: None,
+                origin: None,
+                profile: None,
+                payload: serde_json::json!({ "interactive": true }),
+            })
+            .await
+            .unwrap();
+
+        let snap = wait_terminal(&goals, &id).await;
+        assert!(
+            !snap.session.awaiting_input,
+            "a session without AskHuman must never await a human"
+        );
+        assert!(snap.session.status.is_terminal());
     }
 
     #[tokio::test]

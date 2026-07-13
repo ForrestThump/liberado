@@ -82,7 +82,7 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
     CommandSpec {
         insert: "/spawn ",
         name: "/spawn",
-        description: "start an interactive session: /spawn <domain> <goal>",
+        description: "start an interactive session: /spawn <profile|domain> <goal>",
     },
     CommandSpec {
         insert: "/join ",

@@ -5,11 +5,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::event::{SessionEvent, SessionEventKind};
-use crate::goal::{GoalResult, GoalSessionRecord, GoalSpec, SessionStatus, TerminalKind};
-use crate::runner::{DomainPackRunner, HumanInput, InputChannel, PackError};
+use crate::goal::{
+    GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionStatus, TerminalKind,
+};
+use crate::runner::{DomainPackRunner, HumanInput, InputChannel, PackContext, PackError};
 use crate::store::GoalSessionStore;
 
 /// Bound on how many un-consumed human inputs a session buffers before back-pressure. Interactive
@@ -25,13 +27,17 @@ pub struct SessionSnapshot {
 
 /// Why a [`GoalSessionHub::send_input`] delivery could not happen. Typed (not a `String`) so the
 /// HTTP layer can map it to a status code — 404 for [`Unknown`](Self::Unknown), 409 for
-/// [`Terminal`](Self::Terminal) — rather than string-matching a message.
+/// [`Terminal`](Self::Terminal), 403 for [`NotPermitted`](Self::NotPermitted) — rather than
+/// string-matching a message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SendInputError {
     /// No goal session with this id exists (or ever did).
     Unknown,
     /// The session exists but has already reached a terminal state, so it accepts no more input.
     Terminal,
+    /// The session's grant omits [`Capability::AskHuman`], so it may never receive human input —
+    /// not a timing problem but an authority one (S6).
+    NotPermitted,
     /// The session's input channel closed underneath us — a rare teardown race between the lookup
     /// and the send.
     Closed,
@@ -44,6 +50,10 @@ impl std::fmt::Display for SendInputError {
             Self::Terminal => {
                 write!(f, "goal session has already finished — not accepting input")
             }
+            Self::NotPermitted => write!(
+                f,
+                "goal session's grant does not include AskHuman — it cannot receive human input"
+            ),
             Self::Closed => write!(f, "goal session input channel is closed"),
         }
     }
@@ -85,8 +95,29 @@ impl GoalSessionHub {
         self.packs.keys().cloned().collect()
     }
 
-    /// Start a goal session asynchronously. Returns the session id immediately.
-    pub async fn start(self: &Arc<Self>, mut goal: GoalSpec) -> Result<String, String> {
+    /// Start a goal session with **zero authority** — the fail-safe default. Prefer
+    /// [`start_with_grant`](Self::start_with_grant); this exists for callers (and tests) that mean
+    /// "a session that may do nothing consequential and may not ask a human anything".
+    pub async fn start(self: &Arc<Self>, goal: GoalSpec) -> Result<String, String> {
+        self.start_with_grant(goal, SessionGrant::default()).await
+    }
+
+    /// Start a goal session under an explicit authority `grant` (S6). Returns the session id
+    /// immediately.
+    ///
+    /// The grant is resolved by the *server* from the session's profile — the kernel never reads
+    /// config. It is recorded on the session and never widened afterwards.
+    ///
+    /// **Interactivity is a capability**, not a session subtype
+    /// (`docs/architecture/channels-and-interactivity.md`, Decision A): a grant without
+    /// [`Capability::AskHuman`] gets no inbound input sender at all, so its pack receives an
+    /// already-closed [`InputChannel`] and *cannot* block on a human who may not be there. This is
+    /// the structural difference between an attended `/spawn` and an unattended cron.
+    pub async fn start_with_grant(
+        self: &Arc<Self>,
+        mut goal: GoalSpec,
+        grant: SessionGrant,
+    ) -> Result<String, String> {
         let domain = goal.domain.as_str().to_string();
         if !self.packs.contains_key(&domain) {
             return Err(format!(
@@ -98,7 +129,8 @@ impl GoalSessionHub {
             return Err("goal description must not be empty".into());
         }
 
-        let record = GoalSessionRecord::new(goal.clone());
+        let interactive = grant.grants_ask_human();
+        let record = GoalSessionRecord::with_grant(goal.clone(), grant);
         let id = record.id.clone();
         goal.id = Some(id.clone());
         self.store.insert(record).await;
@@ -107,7 +139,19 @@ impl GoalSessionHub {
         self.cancels.lock().await.insert(id.clone(), cancel_tx);
 
         let (input_tx, input_rx) = mpsc::channel::<HumanInput>(INPUT_CHANNEL_CAPACITY);
-        self.inputs.lock().await.insert(id.clone(), input_tx);
+        // The AskHuman gate. Registering the sender is what makes a session reachable by
+        // `send_input`; *dropping* it here (rather than storing it) closes the channel, so a pack
+        // that tries to await input on an unpermitted session gets `Closed` immediately instead of
+        // hanging until its idle budget expires.
+        if interactive {
+            self.inputs.lock().await.insert(id.clone(), input_tx);
+        } else {
+            drop(input_tx);
+            debug!(
+                session = %id,
+                "session grant omits AskHuman — running non-interactively (input channel closed)"
+            );
+        }
         let idle_budget = goal.max_idle_secs.map(Duration::from_secs);
         let inputs = InputChannel::new(input_rx, idle_budget);
 
@@ -151,10 +195,16 @@ impl GoalSessionHub {
         };
         let sender = match sender {
             Some(s) => s,
-            // No live input sender. Disambiguate a finished session (its record still lives in the
-            // store) from one that never existed, so the caller can answer 409 vs 404.
+            // No live input sender — three different reasons, and the caller needs to tell them
+            // apart. Consult the record: a session that never held `AskHuman` was never *allowed*
+            // input (403), which is a different fact from one that has since finished (409) or one
+            // that never existed (404). Without this check the first would masquerade as the
+            // second, which reads as "you were too late" when the truth is "you were never allowed".
             None => {
                 return Err(match self.store.get(id).await {
+                    Some(record) if !record.grant.grants_ask_human() => {
+                        SendInputError::NotPermitted
+                    }
                     Some(_) => SendInputError::Terminal,
                     None => SendInputError::Unknown,
                 });
@@ -212,8 +262,19 @@ impl GoalSessionHub {
         );
         let _ = tx.send(start).await;
 
+        // The grant recorded at `start_with_grant` is the session's authority for its whole life —
+        // read back from the store rather than passed along, so there is exactly one source of
+        // truth for what this session may do (and the non-widening invariant has something to hold).
+        let grant = self
+            .store
+            .get(&session_id)
+            .await
+            .map(|r| r.grant)
+            .unwrap_or_default();
+        let ctx = PackContext { grant: &grant };
+
         let result = pack
-            .run(&session_id, &goal, tx.clone(), inputs, cancel)
+            .run(&session_id, &goal, &ctx, tx.clone(), inputs, cancel)
             .await;
 
         let (status, goal_result) = match result {

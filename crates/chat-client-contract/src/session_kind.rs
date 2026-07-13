@@ -12,16 +12,48 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The pack `domain` a goal session runs under, mirroring `liberado_session::DomainHint`'s wire form
-/// (`"coding"`, `"life"`, or `{"custom": "<name>"}`). Surfaces don't depend on `liberado-session`
-/// (a store-tier crate), so this is the client-tier mirror they deserialize from `GET /api/goals`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
+/// The pack `domain` a goal session runs under, mirroring `liberado_session::DomainHint`'s wire
+/// form: **a plain string** — the pack's name (`"coding"`, `"life"`, or any other, which lands in
+/// [`Custom`](Self::Custom)). Surfaces don't depend on `liberado-session` (a store-tier crate), so
+/// this is the client-tier mirror they deserialize from `GET /api/goals`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum DomainWire {
     #[default]
     Coding,
     Life,
     Custom(String),
+}
+
+impl DomainWire {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Coding => "coding",
+            Self::Life => "life",
+            Self::Custom(s) => s.as_str(),
+        }
+    }
+}
+
+impl From<&str> for DomainWire {
+    fn from(s: &str) -> Self {
+        match s {
+            "coding" => Self::Coding,
+            "life" => Self::Life,
+            other => Self::Custom(other.to_string()),
+        }
+    }
+}
+
+impl Serialize for DomainWire {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for DomainWire {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Self::from(String::deserialize(d)?.as_str()))
+    }
 }
 
 /// What kind of session this is, for at-a-glance identity. Orthogonal to whether it has a goal:
@@ -164,7 +196,17 @@ mod tests {
 
     #[test]
     fn domain_wire_matches_domain_hint_json() {
-        // The three shapes `liberado_session::DomainHint` serializes to.
+        // `liberado_session::DomainHint` serializes as a plain pack-name string — including an
+        // unknown one, which must deserialize to `Custom` rather than erroring (S6: a caller may
+        // name a profile it can't know isn't a pack; the server resolves which).
+        assert_eq!(
+            serde_json::from_value::<DomainWire>(serde_json::json!("research")).unwrap(),
+            DomainWire::Custom("research".into())
+        );
+        assert_eq!(
+            serde_json::to_value(DomainWire::Custom("research".into())).unwrap(),
+            serde_json::json!("research")
+        );
         assert_eq!(
             serde_json::from_value::<DomainWire>(serde_json::json!("coding")).unwrap(),
             DomainWire::Coding
@@ -172,11 +214,6 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<DomainWire>(serde_json::json!("life")).unwrap(),
             DomainWire::Life
-        );
-        assert_eq!(
-            serde_json::from_value::<DomainWire>(serde_json::json!({ "custom": "research" }))
-                .unwrap(),
-            DomainWire::Custom("research".into())
         );
     }
 

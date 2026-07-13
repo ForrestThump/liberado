@@ -85,6 +85,11 @@ pub struct Topology {
     /// pools need an entry so `CronSchedule.pool`/`HookConfig.pool` have something to validate
     /// against.
     pub pools: Vec<PoolConfig>,
+    /// Named session profiles (session-focus S6) — "run pack X wearing hat Y", where the hat is a
+    /// capability grant key plus opaque pack overrides. Declaring none keeps today's behavior: a
+    /// session's authority is `capabilities_for(<domain>)`.
+    #[serde(default)]
+    pub session_profiles: Vec<SessionProfile>,
     /// How the conversational main agent presents itself and which tools it sees.
     /// Default: human-interfacer + built-in `delegate` tool (specialist MCPs stay on the dispatcher).
     pub main_agent: MainAgentConfig,
@@ -129,6 +134,7 @@ impl Default for Topology {
             hooks: Vec::new(),
             schedules: Vec::new(),
             pools: Vec::new(),
+            session_profiles: Vec::new(),
             main_agent: MainAgentConfig::default(),
         }
     }
@@ -195,6 +201,49 @@ pub struct PoolConfig {
     pub name: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+/// A named **session profile** (session-focus S6) — "run this pack wearing this hat".
+///
+/// A profile is the goal-session analogue of a [`PoolConfig`]: authority segregation plus a little
+/// pack-local flavor. It answers three questions and nothing else:
+///
+/// * `domain` — which registered domain pack runs the session (`"life"`, `"coding"`, …).
+/// * `component` — the capability grant key. Like a pool, the **name is the component**: the
+///   session's authority is exactly `Policy::capabilities_for(component)`, no new mechanism. This
+///   is what lets a `research` profile on the life pack hold strictly less than the default one —
+///   including omitting [`Capability::AskHuman`](liberado_common::Capability::AskHuman), which
+///   makes the session structurally unable to interrupt a human.
+/// * `overrides` — an **opaque** blob the pack parses itself (role, model, prompt path, …). The
+///   config stack deliberately does not interpret it, exactly like `[tuning.coder]`: adding a knob
+///   to a pack must never require a change here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionProfile {
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Which domain pack runs sessions started under this profile.
+    pub domain: String,
+    /// Capability grant key — `policy.toml`'s `[[grants]] component = "…"`. Defaults to `name`
+    /// (the pool rule: the name *is* the component) when omitted.
+    #[serde(default)]
+    pub component: Option<String>,
+    /// Opaque, pack-parsed overrides. Never interpreted by the config stack.
+    #[serde(default = "empty_table")]
+    pub overrides: toml::Value,
+}
+
+/// An empty TOML table — `toml::Value` has no `Default`, and "no overrides" must deserialize to an
+/// empty table (not a null) so packs can parse it uniformly.
+fn empty_table() -> toml::Value {
+    toml::Value::Table(toml::map::Map::new())
+}
+
+impl SessionProfile {
+    /// The capability grant key this profile resolves to — `component` when set, else `name`.
+    pub fn component_key(&self) -> &str {
+        self.component.as_deref().unwrap_or(&self.name)
+    }
 }
 
 /// A configured cron schedule: wiring only (Decision 14) — the daemon-assembly layer
@@ -786,6 +835,39 @@ impl Config {
         ConfigBuilder::default()
     }
 
+    /// Resolve what a goal session should run as (session-focus S6).
+    ///
+    /// `profile` names a `[[session_profiles]]` entry; when absent (or naming no enabled profile),
+    /// the session falls back to `domain_fallback` with the grant keyed by the domain itself — the
+    /// pool rule, so `[[grants]] component = "coding"` bounds an unprofiled coding session.
+    ///
+    /// Returns `(domain, capabilities, overrides)`. The capability set is **the** authority
+    /// boundary for the session and can only ever be narrowed from here (Decision 4).
+    pub fn resolve_session_profile(
+        &self,
+        profile: Option<&str>,
+        domain_fallback: &str,
+    ) -> (String, CapabilitySet, toml::Value) {
+        let found = profile.and_then(|name| {
+            self.topology
+                .session_profiles
+                .iter()
+                .find(|p| p.enabled && p.name == name)
+        });
+        match found {
+            Some(p) => (
+                p.domain.clone(),
+                self.policy.capabilities_for(p.component_key()),
+                p.overrides.clone(),
+            ),
+            None => (
+                domain_fallback.to_string(),
+                self.policy.capabilities_for(domain_fallback),
+                empty_table(),
+            ),
+        }
+    }
+
     /// Validate invariants checkable from the resolved model alone. The daemon's loader layers
     /// additional cross-cutting checks on top (port/socket collisions, dangling zone/secret
     /// refs, triggerless hooks). Returns the first violation found.
@@ -985,6 +1067,38 @@ impl Config {
                     "topology.hooks['{}'].pool '{pool}' does not name \"default\" or a \
                          declared, enabled topology.pools entry",
                     hook.name
+                )));
+            }
+        }
+
+        // Session profiles (S6): unique names, a non-empty domain, and a capability grant that
+        // actually exists. A profile whose component names no grant would silently run with ZERO
+        // authority — the fail-safe default is correct but a silent one here is almost always a
+        // typo, so it fails fast like every other config reference (Decision 14).
+        let mut seen_profile_names = std::collections::HashSet::new();
+        for profile in &self.topology.session_profiles {
+            if !seen_profile_names.insert(profile.name.as_str()) {
+                return Err(Error::Config(format!(
+                    "topology.session_profiles has a duplicate name '{}'",
+                    profile.name
+                )));
+            }
+            if profile.domain.trim().is_empty() {
+                return Err(Error::Config(format!(
+                    "topology.session_profiles['{}'].domain is empty — it must name a domain pack \
+                     (e.g. \"life\", \"coding\")",
+                    profile.name
+                )));
+            }
+            if !profile.enabled {
+                continue;
+            }
+            let component = profile.component_key();
+            if !self.policy.grants.iter().any(|g| g.component == component) {
+                return Err(Error::Config(format!(
+                    "topology.session_profiles['{}'].component '{component}' names no \
+                     policy.toml [[grants]] entry — the session would run with zero authority",
+                    profile.name
                 )));
             }
         }
@@ -1380,6 +1494,106 @@ max_turns = 44
             cron_schedule("nightly", "0 0 12 * * * *"),
         ];
         assert!(cfg.validate().is_err());
+    }
+
+    // ── Session profiles (session-focus S6) ──────────────────────────────────
+
+    fn profile(name: &str, domain: &str, component: Option<&str>) -> SessionProfile {
+        SessionProfile {
+            name: name.into(),
+            enabled: true,
+            domain: domain.into(),
+            component: component.map(Into::into),
+            overrides: empty_table(),
+        }
+    }
+
+    /// A config with a narrow `research` hat and a normal `life` grant — the S6 worked example.
+    fn config_with_profiles() -> Config {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.policy.grants = vec![
+            Grant {
+                component: "life".into(),
+                capabilities: vec![
+                    Capability::Write(Zone::vault("tasks")),
+                    Capability::AskHuman,
+                ],
+            },
+            Grant {
+                component: "research".into(),
+                capabilities: vec![Capability::Read(Zone::vault("tasks"))],
+            },
+        ];
+        cfg.topology.session_profiles = vec![profile("research", "life", Some("research"))];
+        cfg
+    }
+
+    #[test]
+    fn a_profile_resolves_to_its_pack_and_its_own_narrower_grant() {
+        let cfg = config_with_profiles();
+        let (domain, caps, _overrides) = cfg.resolve_session_profile(Some("research"), "coding");
+
+        // The profile picks the pack — the caller's fallback domain is overridden.
+        assert_eq!(domain, "life");
+        // ...and it holds strictly less than the default `life` grant: read-only, and crucially it
+        // cannot interrupt a human.
+        assert!(caps.contains(&Capability::Read(Zone::vault("tasks"))));
+        assert!(!caps.contains(&Capability::Write(Zone::vault("tasks"))));
+        assert!(
+            !caps.grants_ask_human(),
+            "the research hat must not be able to interrupt a human"
+        );
+    }
+
+    #[test]
+    fn no_profile_falls_back_to_the_grant_keyed_by_the_domain() {
+        let cfg = config_with_profiles();
+        let (domain, caps, _) = cfg.resolve_session_profile(None, "life");
+        assert_eq!(domain, "life");
+        assert!(caps.grants_ask_human(), "an attended life session may ask");
+        assert!(caps.contains(&Capability::Write(Zone::vault("tasks"))));
+    }
+
+    #[test]
+    fn an_unknown_profile_name_falls_back_rather_than_inventing_authority() {
+        let cfg = config_with_profiles();
+        let (domain, caps, _) = cfg.resolve_session_profile(Some("nonexistent"), "life");
+        // Falls back to the domain's own grant — it must never synthesize capabilities.
+        assert_eq!(domain, "life");
+        assert_eq!(caps, cfg.policy.capabilities_for("life"));
+    }
+
+    #[test]
+    fn a_domain_with_no_grant_at_all_resolves_to_zero_authority() {
+        let cfg = config_with_profiles();
+        let (_, caps, _) = cfg.resolve_session_profile(None, "coding");
+        assert!(caps.capabilities.is_empty(), "fail safe: no grant, no authority");
+        assert!(!caps.grants_ask_human());
+    }
+
+    #[test]
+    fn a_profile_whose_component_names_no_grant_fails_validation() {
+        // Silently running with zero authority is the *safe* outcome but almost always a typo, so
+        // it fails fast rather than leaving the user wondering why their hat can do nothing.
+        let mut cfg = config_with_profiles();
+        cfg.topology.session_profiles = vec![profile("research", "life", Some("typoed"))];
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn duplicate_profile_names_fail_validation() {
+        let mut cfg = config_with_profiles();
+        cfg.topology
+            .session_profiles
+            .push(profile("research", "life", Some("research")));
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn a_profile_component_defaults_to_its_name() {
+        let p = profile("research", "life", None);
+        assert_eq!(p.component_key(), "research");
     }
 
     fn hook_config(name: &str) -> HookConfig {

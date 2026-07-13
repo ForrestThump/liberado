@@ -3,10 +3,11 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use liberado_common::Capability;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::event::SessionEvent;
-use crate::goal::{GoalResult, GoalSpec};
+use crate::goal::{GoalResult, GoalSpec, SessionGrant};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PackError {
@@ -79,18 +80,51 @@ impl InputChannel {
     }
 }
 
+/// Everything a pack is given about *how* to run this session, beyond the goal itself (S6).
+///
+/// Two halves, both resolved by the server from the session's profile before the run starts:
+///
+/// * `grant` — the session's **authority ceiling**. A pack must check it before doing anything
+///   consequential (`ctx.can(&Capability::Write(zone))`), exactly as the MCP boundary does. It can
+///   never be widened mid-run — see the non-widening invariant in the hub's tests.
+/// * `grant.overrides` — the pack's own **opaque** config (role, model, prompt path). The kernel
+///   never interprets it; only this pack does.
+pub struct PackContext<'a> {
+    pub grant: &'a SessionGrant,
+}
+
+impl PackContext<'_> {
+    /// Whether this session holds `cap`. The one call a pack should make before a consequential act.
+    pub fn can(&self, cap: &Capability) -> bool {
+        self.grant.capabilities.contains(cap)
+    }
+
+    /// The pack's opaque overrides (an empty table when the profile set none).
+    pub fn overrides(&self) -> &serde_json::Value {
+        &self.grant.overrides
+    }
+
+    /// The profile name this session runs under, if any.
+    pub fn profile(&self) -> Option<&str> {
+        self.grant.profile.as_deref()
+    }
+}
+
 /// One domain pack's goal-session implementation (coding, life, …).
 #[async_trait]
 pub trait DomainPackRunner: Send + Sync {
     fn domain_id(&self) -> &str;
 
     /// Run until terminal result. Emit events on `events`. Interactive packs await human input via
-    /// `inputs` (non-interactive packs ignore it). Poll `cancel` and exit with
-    /// [`PackError::Cancelled`] when true.
+    /// `inputs` — but only if the session's grant permits [`Capability::AskHuman`]; without it the
+    /// hub hands over an already-closed channel, so `inputs.recv()` yields
+    /// [`InputOutcome::Closed`] immediately and the pack must proceed without a human. Poll
+    /// `cancel` and exit with [`PackError::Cancelled`] when true.
     async fn run(
         &self,
         session_id: &str,
         goal: &GoalSpec,
+        ctx: &PackContext<'_>,
         events: Sender<SessionEvent>,
         inputs: InputChannel,
         cancel: tokio::sync::watch::Receiver<bool>,
