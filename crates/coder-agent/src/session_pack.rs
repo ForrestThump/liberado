@@ -213,7 +213,14 @@ impl CodingSessionPack {
                     }
                     for q in &questions {
                         match self
-                            .ask(session_id, events, inputs, cancel, question_prompt(q), q.options.clone())
+                            .ask(
+                                session_id,
+                                events,
+                                inputs,
+                                cancel,
+                                question_prompt(q),
+                                q.options.clone(),
+                            )
                             .await?
                         {
                             Some(text) => answers.push(IntakeAnswer {
@@ -222,7 +229,9 @@ impl CodingSessionPack {
                             }),
                             None => {
                                 return Ok(IntakePhase::IdleExpired(
-                                    goal.max_idle_secs.map(Duration::from_secs).unwrap_or_default(),
+                                    goal.max_idle_secs
+                                        .map(Duration::from_secs)
+                                        .unwrap_or_default(),
                                 ));
                             }
                         }
@@ -244,7 +253,10 @@ impl CodingSessionPack {
     ) -> Result<FreezeReply, PackError> {
         let prompt = render_draft(draft, rationale);
         let options = vec!["accept".to_string(), "reject".to_string()];
-        match self.ask(session_id, events, inputs, cancel, prompt, options).await? {
+        match self
+            .ask(session_id, events, inputs, cancel, prompt, options)
+            .await?
+        {
             None => Ok(FreezeReply::IdleExpired(Duration::default())),
             Some(text) => Ok(match text.trim().to_ascii_lowercase().as_str() {
                 // Exact matches only. A revision like "add a test for the parser" begins with "a";
@@ -412,7 +424,14 @@ impl DomainPackRunner for CodingSessionPack {
 
         let contract = if settings.enabled && may_ask {
             match self
-                .run_intake_phase(session_id, goal, &settings, &events, &mut inputs, &mut cancel)
+                .run_intake_phase(
+                    session_id,
+                    goal,
+                    &settings,
+                    &events,
+                    &mut inputs,
+                    &mut cancel,
+                )
                 .await?
             {
                 IntakePhase::Frozen(contract) => Some(contract),
@@ -810,7 +829,8 @@ mod tests {
 
     #[tokio::test]
     async fn rejecting_the_draft_builds_nothing() {
-        let (pack, ev_tx, _ev_rx, mut inputs, mut cancel, _cancel_tx) = harness(vec![&ready_json("Build a todo CLI")], vec!["reject"]);
+        let (pack, ev_tx, _ev_rx, mut inputs, mut cancel, _cancel_tx) =
+            harness(vec![&ready_json("Build a todo CLI")], vec!["reject"]);
 
         let phase = pack
             .run_intake_phase(
@@ -855,14 +875,19 @@ mod tests {
             ),
             other => panic!("expected the revised contract to freeze, got {other:?}"),
         }
-        assert_eq!(prompts(&mut ev_rx).len(), 2, "the human reviewed two drafts");
+        assert_eq!(
+            prompts(&mut ev_rx).len(),
+            2,
+            "the human reviewed two drafts"
+        );
     }
 
     #[tokio::test]
     async fn exhausting_clarify_rounds_stops_and_hands_back_the_partial_draft() {
         // Bounded, not an open-ended therapist loop (verifiers.md §3.4 step 5): a model that keeps
         // asking gets cut off, and the human is handed whatever was worked out rather than nothing.
-        let (pack, ev_tx, _ev_rx, mut inputs, mut cancel, _cancel_tx) = harness(vec![CLARIFY_JSON, CLARIFY_JSON], vec!["Rust"]);
+        let (pack, ev_tx, _ev_rx, mut inputs, mut cancel, _cancel_tx) =
+            harness(vec![CLARIFY_JSON, CLARIFY_JSON], vec!["Rust"]);
 
         let phase = pack
             .run_intake_phase(

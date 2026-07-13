@@ -12,16 +12,18 @@ mod event;
 mod goal;
 mod hub;
 mod life_demo;
+mod record_store;
 mod runner;
 mod store;
 
 pub use event::{SessionEvent, SessionEventKind};
 pub use goal::{
-    DomainHint, GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionOrigin, SessionStatus,
-    TerminalKind,
+    DomainHint, GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionOrigin,
+    SessionStatus, TerminalKind,
 };
 pub use hub::{GoalSessionHub, SendInputError, SessionSnapshot};
 pub use life_demo::LifeOpsDemoRunner;
+pub use record_store::SessionRecordStore;
 pub use runner::{
     DomainPackRunner, HumanInput, InputChannel, InputOutcome, PackContext, PackError,
 };

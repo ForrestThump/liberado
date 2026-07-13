@@ -167,7 +167,10 @@ impl GoalSessionHeader {
 
     /// The goal description (empty when absent).
     pub fn description(&self) -> &str {
-        self.goal.as_ref().map(|g| g.description.as_str()).unwrap_or("")
+        self.goal
+            .as_ref()
+            .map(|g| g.description.as_str())
+            .unwrap_or("")
     }
 
     /// Whether this session has reached a terminal status (matches
@@ -186,8 +189,14 @@ mod tests {
 
     #[test]
     fn kind_from_domain_maps_known_packs() {
-        assert_eq!(SessionKind::from_domain(&DomainWire::Coding), SessionKind::Coding);
-        assert_eq!(SessionKind::from_domain(&DomainWire::Life), SessionKind::Life);
+        assert_eq!(
+            SessionKind::from_domain(&DomainWire::Coding),
+            SessionKind::Coding
+        );
+        assert_eq!(
+            SessionKind::from_domain(&DomainWire::Life),
+            SessionKind::Life
+        );
         assert_eq!(
             SessionKind::from_domain(&DomainWire::Custom("research".into())),
             SessionKind::Custom

@@ -256,9 +256,15 @@ mod tests {
         assert_eq!(back.origin.as_ref().unwrap().conversation_id, "01CONV");
 
         // Absent origin is skipped in the wire form (backward-compatible with human-started goals).
-        let without = GoalSpec { origin: None, ..with };
+        let without = GoalSpec {
+            origin: None,
+            ..with
+        };
         let json = serde_json::to_value(&without).unwrap();
-        assert!(json.get("origin").is_none(), "origin should be omitted when None");
+        assert!(
+            json.get("origin").is_none(),
+            "origin should be omitted when None"
+        );
         let rec = GoalSessionRecord::new(without);
         assert!(rec.goal.origin.is_none());
     }

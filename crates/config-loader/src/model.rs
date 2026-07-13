@@ -1568,7 +1568,10 @@ max_turns = 44
     fn a_domain_with_no_grant_at_all_resolves_to_zero_authority() {
         let cfg = config_with_profiles();
         let (_, caps, _) = cfg.resolve_session_profile(None, "coding");
-        assert!(caps.capabilities.is_empty(), "fail safe: no grant, no authority");
+        assert!(
+            caps.capabilities.is_empty(),
+            "fail safe: no grant, no authority"
+        );
         assert!(!caps.grants_ask_human());
     }
 

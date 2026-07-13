@@ -23,7 +23,9 @@ pub fn parse(input: &str) -> Option<SlashCommand> {
         // goal sessions). `/session <sub>` still exposes the power-user subcommands (info/switch/close).
         "/session" => Some(parse_session(parts.get(1).copied(), parts.get(2).copied())),
         "/sessions" => Some(SlashCommand::Sessions),
-        "/join" => Some(SlashCommand::Join(parts.get(1).copied().unwrap_or("").to_string())),
+        "/join" => Some(SlashCommand::Join(
+            parts.get(1).copied().unwrap_or("").to_string(),
+        )),
         "/spawn" => Some(SlashCommand::Spawn {
             domain: parts.get(1).copied().unwrap_or("").to_string(),
             goal: parts.get(2).copied().unwrap_or("").to_string(),

@@ -64,17 +64,38 @@ pub struct AwaitingPrompt {
 /// projection of `SessionEventKind` (mapping lives in [`crate::sse`], close to the decoder).
 #[derive(Debug, Clone)]
 pub enum GoalUiEvent {
-    Started { description: String },
+    Started {
+        description: String,
+    },
     Token(String),
-    ToolStarted { name: String, args: String },
-    ToolFinished { name: String, ok: bool, preview: String },
-    Role { role: String, model: Option<String> },
+    ToolStarted {
+        name: String,
+        args: String,
+    },
+    ToolFinished {
+        name: String,
+        ok: bool,
+        preview: String,
+    },
+    Role {
+        role: String,
+        model: Option<String>,
+    },
     Progress(String),
-    Validation { ok: bool, summary: String },
+    Validation {
+        ok: bool,
+        summary: String,
+    },
     LoopGuard(String),
-    Awaiting { prompt: String, options: Vec<String> },
+    Awaiting {
+        prompt: String,
+        options: Vec<String>,
+    },
     Human(String),
-    Finished { status: String, summary: String },
+    Finished {
+        status: String,
+        summary: String,
+    },
 }
 
 /// A single chat message in the scrollback buffer.
@@ -449,7 +470,8 @@ impl App {
             GoalUiEvent::Token(t) => j.stream_buf.push_str(&t),
             GoalUiEvent::ToolStarted { name, args } => {
                 Self::flush_joined_buf(j);
-                j.messages.push(Message::ToolCall(ToolCallChip { name, args }));
+                j.messages
+                    .push(Message::ToolCall(ToolCallChip { name, args }));
             }
             GoalUiEvent::ToolFinished { name, ok, preview } => {
                 j.messages
@@ -963,7 +985,10 @@ pub enum Effect {
     /// Open the joined goal session's SSE stream (`GET /api/goals/{id}/stream`).
     JoinGoalSession(String),
     /// Deliver a human message into the joined session (`POST /api/goals/{id}/message`).
-    SendGoalMessage { id: String, text: String },
+    SendGoalMessage {
+        id: String,
+        text: String,
+    },
     /// Start a new interactive session (`/spawn`): `POST /api/goals` then focus it.
     SpawnGoalSession {
         domain: String,
@@ -1133,7 +1158,11 @@ impl App {
                 self.messages.push(Message::System(format!(
                     "▸ {} session offered: {}\n  /join {}  to focus it   (or keep chatting here)",
                     kind.label(),
-                    if description.is_empty() { session_id.as_str() } else { description.as_str() },
+                    if description.is_empty() {
+                        session_id.as_str()
+                    } else {
+                        description.as_str()
+                    },
                     session_id
                 )));
                 self.scroll_offset = 0;
@@ -1178,7 +1207,9 @@ impl App {
                     O::Accepted => {} // the echo arrives via the stream as a `human_input` event
                     O::NotFound | O::Finished | O::Error(_) => {
                         let msg = match outcome {
-                            O::NotFound => "[this session is gone — /back to return to chat]".into(),
+                            O::NotFound => {
+                                "[this session is gone — /back to return to chat]".into()
+                            }
                             O::Finished => {
                                 "[this session has finished — /back to return to chat]".into()
                             }

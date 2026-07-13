@@ -229,8 +229,9 @@ mod tests {
     #[test]
     fn goal_session_finished_maps_to_finished() {
         let mut decoder = SseDecoder::default();
-        let events = decoder
-            .push("event: session_finished\ndata: {\"status\":\"succeeded\",\"summary\":\"done\"}\n\n");
+        let events = decoder.push(
+            "event: session_finished\ndata: {\"status\":\"succeeded\",\"summary\":\"done\"}\n\n",
+        );
         let ev = to_goal_event(&events[0]).unwrap().unwrap();
         assert!(matches!(ev, GoalUiEvent::Finished { status, .. } if status == "succeeded"));
     }

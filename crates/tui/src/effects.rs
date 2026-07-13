@@ -82,7 +82,10 @@ impl EffectRunner {
                 domain,
                 goal,
                 origin_conversation,
-            } => self.spawn_goal_session(domain, goal, origin_conversation).await,
+            } => {
+                self.spawn_goal_session(domain, goal, origin_conversation)
+                    .await
+            }
             Effect::LeaveGoalSession => self.leave_goal_session(),
             Effect::Quit => self.quit(),
             Effect::None => {}
@@ -123,10 +126,9 @@ impl EffectRunner {
             let response = match api::open_goal_stream(&client, &server, &id).await {
                 Ok(r) => r,
                 Err(e) => {
-                    let _ = tx
-                        .try_send(Action::GoalStreamClosed(Some(format!(
-                            "could not reach daemon: {e}"
-                        ))));
+                    let _ = tx.try_send(Action::GoalStreamClosed(Some(format!(
+                        "could not reach daemon: {e}"
+                    ))));
                     state.lock().goal_handle = None;
                     return;
                 }
@@ -165,9 +167,8 @@ impl EffectRunner {
                         }
                     }
                     Ok(Some(Err(e))) => {
-                        let _ = tx.try_send(Action::GoalStreamClosed(Some(format!(
-                            "stream error: {e}"
-                        ))));
+                        let _ = tx
+                            .try_send(Action::GoalStreamClosed(Some(format!("stream error: {e}"))));
                         state.lock().goal_handle = None;
                         return;
                     }
@@ -213,17 +214,22 @@ impl EffectRunner {
         let tx = self.action_tx.clone();
         let server = self.server_url();
         tokio::spawn(async move {
-            let action =
-                match api::spawn_goal(&client, &server, &domain, &goal, origin_conversation.as_deref())
-                    .await
-                {
-                    Ok(session_id) => Action::GoalSpawned {
-                        session_id,
-                        domain,
-                        description: goal,
-                    },
-                    Err(e) => Action::GoalSpawnFailed(e),
-                };
+            let action = match api::spawn_goal(
+                &client,
+                &server,
+                &domain,
+                &goal,
+                origin_conversation.as_deref(),
+            )
+            .await
+            {
+                Ok(session_id) => Action::GoalSpawned {
+                    session_id,
+                    domain,
+                    description: goal,
+                },
+                Err(e) => Action::GoalSpawnFailed(e),
+            };
             if tx.try_send(action).is_err() {
                 tracing::warn!("action channel full, dropping spawn result");
             }

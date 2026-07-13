@@ -760,7 +760,9 @@ fn format_handoff_note(record: &liberado_session::GoalSessionRecord, session_id:
             note.push_str(&format!("\nArtifacts: {}", result.artifacts.join(", ")));
         }
     }
-    note.push_str(&format!("\n(Rejoin the full transcript with /join {session_id}.)"));
+    note.push_str(&format!(
+        "\n(Rejoin the full transcript with /join {session_id}.)"
+    ));
     note
 }
 
@@ -813,15 +815,27 @@ pub async fn goals_message(
     use liberado_session::SendInputError;
     match state.goals.send_input(&id, req.text).await {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
-        Err(e @ SendInputError::Unknown) => {
-            (StatusCode::NOT_FOUND, Json(ApiError { error: e.to_string() })).into_response()
-        }
-        Err(e @ SendInputError::NotPermitted) => {
-            (StatusCode::FORBIDDEN, Json(ApiError { error: e.to_string() })).into_response()
-        }
-        Err(e @ (SendInputError::Terminal | SendInputError::Closed)) => {
-            (StatusCode::CONFLICT, Json(ApiError { error: e.to_string() })).into_response()
-        }
+        Err(e @ SendInputError::Unknown) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e @ SendInputError::NotPermitted) => (
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e @ (SendInputError::Terminal | SendInputError::Closed)) => (
+            StatusCode::CONFLICT,
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
     }
 }
 
@@ -954,7 +968,12 @@ mod goal_message_tests {
     /// is never actually called for completions) and the `/api/goals` start route mounted — so the
     /// return-handoff path can fold a summary into a genuine parent conversation. Returns the router,
     /// the hub, the chat handle, and a freshly-created conversation id to use as `origin`.
-    async fn goals_app_with_chat() -> (Router, Arc<GoalSessionHub>, Arc<liberado_main_agent::ChatSessions>, String) {
+    async fn goals_app_with_chat() -> (
+        Router,
+        Arc<GoalSessionHub>,
+        Arc<liberado_main_agent::ChatSessions>,
+        String,
+    ) {
         use liberado_conversation_store::JsonlStore;
         use liberado_executor::{Budget, Executor};
         use liberado_provider::MockProvider;
@@ -965,7 +984,10 @@ mod goal_message_tests {
 
         let root = std::env::temp_dir().join(format!("liberado-server-test-{}", Ulid::new()));
         let store = Arc::new(JsonlStore::new(&root));
-        let executor = Executor::new(Arc::new(MockProvider::with_script("mock", vec![])), Budget::default());
+        let executor = Executor::new(
+            Arc::new(MockProvider::with_script("mock", vec![])),
+            Budget::default(),
+        );
         let chat = Arc::new(liberado_main_agent::ChatSessions::new(
             store,
             executor,
@@ -998,7 +1020,10 @@ mod goal_message_tests {
 
         let app = Router::new()
             .route("/api/goals", axum::routing::post(goals_start))
-            .route("/api/goals/{id}/message", axum::routing::post(goals_message))
+            .route(
+                "/api/goals/{id}/message",
+                axum::routing::post(goals_message),
+            )
             .with_state(state);
         (app, goals, chat, conv)
     }
@@ -1105,7 +1130,10 @@ mod goal_message_tests {
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
         let snap = wait_terminal(&goals, &id).await;
-        assert_eq!(snap.session.status, liberado_session::SessionStatus::Succeeded);
+        assert_eq!(
+            snap.session.status,
+            liberado_session::SessionStatus::Succeeded
+        );
         // The endpoint's `send_input` echoed the message into the transcript as `human_input`.
         assert!(snap.events.iter().any(|e| matches!(
             &e.kind,
@@ -1256,9 +1284,15 @@ mod goal_message_tests {
         let body = format!(
             r#"{{"description":"capture a note","domain":"life","payload":{{"interactive":true}},"origin":{{"conversation_id":"{conv}"}}}}"#
         );
-        let resp = app.clone().oneshot(post_json("/api/goals", &body)).await.unwrap();
+        let resp = app
+            .clone()
+            .oneshot(post_json("/api/goals", &body))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let id = v["session_id"].as_str().unwrap().to_string();
 

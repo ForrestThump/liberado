@@ -507,7 +507,11 @@ mod tests {
         };
         let c = GoalContract::freeze("g1", draft, FreezeAuthority::Human).unwrap();
         // A real SHA-256, per verifiers.md §7 — 64 hex chars behind a `sha256:` label.
-        assert!(c.content_hash.starts_with("sha256:"), "got {}", c.content_hash);
+        assert!(
+            c.content_hash.starts_with("sha256:"),
+            "got {}",
+            c.content_hash
+        );
         let digest = c.content_hash.strip_prefix("sha256:").unwrap();
         assert_eq!(digest.len(), 64);
         assert!(digest.chars().all(|ch| ch.is_ascii_hexdigit()));
@@ -552,7 +556,9 @@ mod tests {
         c.verify_integrity().expect("pristine contract verifies");
 
         c.draft.verifiers.clear();
-        let err = c.verify_integrity().expect_err("dropped gates must be caught");
+        let err = c
+            .verify_integrity()
+            .expect_err("dropped gates must be caught");
         assert!(err.contains("modified since it was frozen"), "got: {err}");
     }
 

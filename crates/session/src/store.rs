@@ -91,14 +91,21 @@ impl GoalSessionStore {
                         Some(inner) => {
                             map.insert(inner.record.id.clone(), inner);
                         }
-                        None => warn!(path = %path.display(), "goal-session store: skipped an unreadable log"),
+                        None => {
+                            warn!(path = %path.display(), "goal-session store: skipped an unreadable log")
+                        }
                     }
                 }
             }
-            Err(e) => warn!(error = %e, path = %dir.display(), "goal-session store: could not read dir"),
+            Err(e) => {
+                warn!(error = %e, path = %dir.display(), "goal-session store: could not read dir")
+            }
         }
         if !map.is_empty() {
-            tracing::info!(sessions = map.len(), "goal-session store: rehydrated from disk");
+            tracing::info!(
+                sessions = map.len(),
+                "goal-session store: rehydrated from disk"
+            );
         }
 
         Self {
@@ -219,7 +226,13 @@ impl GoalSessionStore {
             }
         };
         if let Some(finished_at) = finished_at {
-            self.append(id, &LogLine::Status { status, finished_at });
+            self.append(
+                id,
+                &LogLine::Status {
+                    status,
+                    finished_at,
+                },
+            );
         }
     }
 
@@ -332,8 +345,48 @@ fn replay_file(path: &Path) -> Option<SessionInner> {
 /// Make a session id safe as a filename (ULIDs already are; a client-supplied id might not be).
 fn sanitize_id(id: &str) -> String {
     id.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
+}
+
+/// The kernel's view of this store (S5′). Delegates to the inherent methods above — keeping those
+/// public means the concrete store stays directly usable (tests, tools) while the hub talks only to
+/// the trait, so a converged `Session` store can take its place without the hub noticing.
+#[async_trait::async_trait]
+impl crate::record_store::SessionRecordStore for GoalSessionStore {
+    async fn insert(&self, record: GoalSessionRecord) {
+        GoalSessionStore::insert(self, record).await
+    }
+    async fn get(&self, id: &str) -> Option<GoalSessionRecord> {
+        GoalSessionStore::get(self, id).await
+    }
+    async fn list(&self) -> Vec<GoalSessionRecord> {
+        GoalSessionStore::list(self).await
+    }
+    async fn events(&self, id: &str) -> Option<Vec<SessionEvent>> {
+        GoalSessionStore::events(self, id).await
+    }
+    async fn subscribe(
+        &self,
+        id: &str,
+    ) -> Option<(Vec<SessionEvent>, broadcast::Receiver<SessionEvent>)> {
+        GoalSessionStore::subscribe(self, id).await
+    }
+    async fn push_event(&self, event: SessionEvent) {
+        GoalSessionStore::push_event(self, event).await
+    }
+    async fn set_status(&self, id: &str, status: SessionStatus) {
+        GoalSessionStore::set_status(self, id, status).await
+    }
+    async fn finish(&self, id: &str, status: SessionStatus, result: GoalResult) {
+        GoalSessionStore::finish(self, id, status, result).await
+    }
 }
 
 #[cfg(test)]
@@ -430,7 +483,10 @@ mod tests {
         let reopened = GoalSessionStore::open(&dir).await;
         let rec = reopened.get("s2").await.unwrap();
         assert_eq!(rec.status, SessionStatus::Failed);
-        assert!(!rec.awaiting_input, "a restarted, unresumable session isn't awaiting");
+        assert!(
+            !rec.awaiting_input,
+            "a restarted, unresumable session isn't awaiting"
+        );
         assert!(
             rec.result.as_ref().unwrap().summary.contains("interrupted"),
             "should note the interruption"

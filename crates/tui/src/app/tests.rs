@@ -2065,7 +2065,13 @@ fn handle_up_roundtrip() {
 
 use chat_client_contract::{DomainWire, GoalHeaderSpec, GoalSessionHeader, SessionKind};
 
-fn goal_header(id: &str, domain: DomainWire, desc: &str, status: &str, awaiting: bool) -> GoalSessionHeader {
+fn goal_header(
+    id: &str,
+    domain: DomainWire,
+    desc: &str,
+    status: &str,
+    awaiting: bool,
+) -> GoalSessionHeader {
     GoalSessionHeader {
         id: id.into(),
         goal: Some(GoalHeaderSpec {
@@ -2093,7 +2099,10 @@ fn goal_sessions_update_populates_and_clamps_switcher() {
     assert_eq!(app.goal_sessions.len(), 2);
 
     // Prior conversations become primary-chat rows above the goal sessions.
-    app.update(Action::ConversationsUpdate(vec![conv("c1", "yesterday's chat")]));
+    app.update(Action::ConversationsUpdate(vec![conv(
+        "c1",
+        "yesterday's chat",
+    )]));
     assert_eq!(app.switcher_row_count(), 3);
 }
 
@@ -2129,10 +2138,16 @@ fn awaiting_then_human_input_updates_the_joined_transcript() {
         assert_eq!(j.status, "awaiting");
     }
     // The stream echoes the answer back as a human_input event.
-    app.update(Action::GoalStreamEvent(GoalUiEvent::Human("Weekly Review".into())));
+    app.update(Action::GoalStreamEvent(GoalUiEvent::Human(
+        "Weekly Review".into(),
+    )));
     let j = app.joined.as_ref().unwrap();
     assert!(j.awaiting.is_none());
-    assert!(j.messages.iter().any(|m| matches!(m, Message::User(t) if t == "Weekly Review")));
+    assert!(
+        j.messages
+            .iter()
+            .any(|m| matches!(m, Message::User(t) if t == "Weekly Review"))
+    );
 }
 
 #[test]
@@ -2173,7 +2188,11 @@ fn finished_reverts_input_to_primary_but_keeps_the_view() {
     assert!(app.input_target_session().is_none());
     assert_eq!(app.current_kind(), SessionKind::Primary);
     // The terminal summary is in the joined transcript.
-    assert!(j.messages.iter().any(|m| matches!(m, Message::System(t) if t.contains("wrote note"))));
+    assert!(
+        j.messages
+            .iter()
+            .any(|m| matches!(m, Message::System(t) if t.contains("wrote note")))
+    );
 }
 
 #[test]
@@ -2183,7 +2202,11 @@ fn back_leaves_the_session() {
     assert!(app.joined.is_some());
     let effects = app.handle_slash_command("/back");
     assert!(app.joined.is_none());
-    assert!(effects.iter().any(|e| matches!(e, Effect::LeaveGoalSession)));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LeaveGoalSession))
+    );
 }
 
 #[test]
@@ -2192,7 +2215,13 @@ fn spawn_command_emits_spawn_effect_with_origin() {
     app.session = Some("01CONV".to_string()); // a current conversation to link back to
     let effects = app.handle_slash_command("/spawn life plan my week");
     match effects.as_slice() {
-        [Effect::SpawnGoalSession { domain, goal, origin_conversation }] => {
+        [
+            Effect::SpawnGoalSession {
+                domain,
+                goal,
+                origin_conversation,
+            },
+        ] => {
             assert_eq!(domain, "life");
             assert_eq!(goal, "plan my week");
             assert_eq!(origin_conversation.as_deref(), Some("01CONV"));
@@ -2209,7 +2238,10 @@ fn spawn_result_focuses_the_new_session() {
         domain: "life".into(),
         description: "plan my week".into(),
     });
-    let j = app.joined.as_ref().expect("should focus the spawned session");
+    let j = app
+        .joined
+        .as_ref()
+        .expect("should focus the spawned session");
     assert_eq!(j.id, "g_new");
     assert_eq!(j.kind, SessionKind::Life);
     assert_eq!(j.description, "plan my week");
@@ -2221,8 +2253,16 @@ fn spawn_with_empty_args_is_usage_not_an_effect() {
     let mut app = test_app();
     let effects = app.handle_slash_command("/spawn");
     // No spawn effect; a usage note was pushed instead.
-    assert!(!effects.iter().any(|e| matches!(e, Effect::SpawnGoalSession { .. })));
-    assert!(app.messages.iter().any(|m| matches!(m, Message::System(t) if t.contains("Usage: /spawn"))));
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::SpawnGoalSession { .. }))
+    );
+    assert!(
+        app.messages
+            .iter()
+            .any(|m| matches!(m, Message::System(t) if t.contains("Usage: /spawn")))
+    );
 }
 
 #[test]
@@ -2238,8 +2278,14 @@ fn offer_renders_a_joinable_affordance_in_the_chat() {
     match last {
         Message::System(t) => {
             assert!(t.contains("Coding"), "should name the kind: {t}");
-            assert!(t.contains("build a hello CLI"), "should show the description: {t}");
-            assert!(t.contains("/join g_01ABC"), "should offer /join with the id: {t}");
+            assert!(
+                t.contains("build a hello CLI"),
+                "should show the description: {t}"
+            );
+            assert!(
+                t.contains("/join g_01ABC"),
+                "should offer /join with the id: {t}"
+            );
         }
         other => panic!("expected a System offer message, got {other:?}"),
     }
@@ -2260,5 +2306,8 @@ fn sending_a_chat_message_after_finish_auto_leaves_the_session() {
     let effects = app.handle_key(key(KeyCode::Enter));
     // Auto-return: the finished session view is dropped and the message goes to the primary chat.
     assert!(app.joined.is_none());
-    assert!(matches!(effects.as_slice(), [Effect::StartChatStream { .. }]));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::StartChatStream { .. }]
+    ));
 }

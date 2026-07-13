@@ -11,8 +11,8 @@ use crate::event::{SessionEvent, SessionEventKind};
 use crate::goal::{
     GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionStatus, TerminalKind,
 };
+use crate::record_store::SessionRecordStore;
 use crate::runner::{DomainPackRunner, HumanInput, InputChannel, PackContext, PackError};
-use crate::store::GoalSessionStore;
 
 /// Bound on how many un-consumed human inputs a session buffers before back-pressure. Interactive
 /// sessions consume one per await point, so a small buffer is plenty.
@@ -63,7 +63,9 @@ impl std::error::Error for SendInputError {}
 
 /// In-process goal session orchestrator (not the coding loop itself).
 pub struct GoalSessionHub {
-    store: GoalSessionStore,
+    /// The store seam (S5′) — a trait, not a concrete type, so the converged `Session` store can
+    /// back the same kernel without the hub knowing which engine it is talking to.
+    store: Arc<dyn SessionRecordStore>,
     packs: HashMap<String, Arc<dyn DomainPackRunner>>,
     cancels: tokio::sync::Mutex<HashMap<String, watch::Sender<bool>>>,
     /// Live sessions' inbound-input senders, keyed by id. Present only while a session runs;
@@ -72,16 +74,18 @@ pub struct GoalSessionHub {
 }
 
 impl GoalSessionHub {
-    pub fn new(store: GoalSessionStore) -> Self {
+    /// Build a hub over any [`SessionRecordStore`] — the in-memory/JSONL [`GoalSessionStore`], or
+    /// (S5′) the converged `Session` store.
+    pub fn new(store: impl SessionRecordStore + 'static) -> Self {
         Self {
-            store,
+            store: Arc::new(store),
             packs: HashMap::new(),
             cancels: tokio::sync::Mutex::new(HashMap::new()),
             inputs: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 
-    pub fn store(&self) -> &GoalSessionStore {
+    pub fn store(&self) -> &Arc<dyn SessionRecordStore> {
         &self.store
     }
 

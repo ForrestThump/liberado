@@ -10,8 +10,8 @@ use liberado_main_agent::ChatSessions;
 use liberado_provider::{ToolDef, ToolInvocation};
 use tokio::sync::{Mutex, mpsc::UnboundedSender};
 
-use liberado_common::{CapabilityCatalog, CapabilitySet};
 use liberado_bootstrap::Config;
+use liberado_common::{CapabilityCatalog, CapabilitySet};
 use liberado_provider::Provider;
 use liberado_session::GoalSessionHub;
 

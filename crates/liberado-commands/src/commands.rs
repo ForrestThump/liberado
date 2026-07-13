@@ -14,7 +14,10 @@ pub enum SlashCommand {
     /// Join a goal session by id (or id prefix), moving input focus onto it.
     Join(String),
     /// Start a new interactive goal session and focus it: `/spawn <domain> <goal>`.
-    Spawn { domain: String, goal: String },
+    Spawn {
+        domain: String,
+        goal: String,
+    },
     /// Return input focus to the primary chat.
     Back,
     Fork,

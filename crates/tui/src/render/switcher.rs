@@ -100,7 +100,10 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
         let selected = app.sidebar_selection == i;
         let active = on_primary && app.session.as_deref() == Some(h.id.as_str());
         let row_style = if selected {
-            Style::default().fg(sel_fg).bg(sel_bg).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(sel_fg)
+                .bg(sel_bg)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(text_fg).bg(bg)
         };
@@ -118,11 +121,19 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
             Span::styled(title_text.to_string(), row_style),
             Span::styled(
                 format!("  {}", relative_time(&h.created_at)),
-                if selected { row_style } else { Style::default().fg(dim).bg(bg) },
+                if selected {
+                    row_style
+                } else {
+                    Style::default().fg(dim).bg(bg)
+                },
             ),
             Span::styled(
                 format!("  [{}]", short_id(&h.id)),
-                if selected { row_style } else { Style::default().fg(dim).bg(bg) },
+                if selected {
+                    row_style
+                } else {
+                    Style::default().fg(dim).bg(bg)
+                },
             ),
         ];
         items.push(ListItem::new(Line::from(spans)));
@@ -134,7 +145,10 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
         let joined = app.joined.as_ref().map(|j| j.id == h.id).unwrap_or(false);
         let kind = h.kind();
         let row_style = if selected {
-            Style::default().fg(sel_fg).bg(sel_bg).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(sel_fg)
+                .bg(sel_bg)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(text_fg).bg(bg)
         };
@@ -150,12 +164,20 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
             Span::styled(format!("  {:<7} ", kind.label()), row_style),
             Span::styled(
                 format!("{status_label:<9} "),
-                if selected { row_style } else { Style::default().fg(status_color).bg(bg) },
+                if selected {
+                    row_style
+                } else {
+                    Style::default().fg(status_color).bg(bg)
+                },
             ),
             Span::styled(desc.to_string(), row_style),
             Span::styled(
                 format!("  [{}]", short_id(&h.id)),
-                if selected { row_style } else { Style::default().fg(dim).bg(bg) },
+                if selected {
+                    row_style
+                } else {
+                    Style::default().fg(dim).bg(bg)
+                },
             ),
         ];
         items.push(ListItem::new(Line::from(spans)));
@@ -164,7 +186,10 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
     if items.is_empty() {
         items.push(ListItem::new(Span::styled(
             "  (no sessions yet — send a message to start one, or /spawn a goal)",
-            Style::default().fg(accent).bg(bg).add_modifier(Modifier::ITALIC),
+            Style::default()
+                .fg(accent)
+                .bg(bg)
+                .add_modifier(Modifier::ITALIC),
         )));
     }
 
@@ -173,7 +198,10 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
 
 /// Status label + color for a goal row: `awaiting` (needs you) stands out; terminal states are
 /// colored by outcome.
-fn status_display(h: &chat_client_contract::GoalSessionHeader, th: &Theme) -> (String, ratatui::style::Color) {
+fn status_display(
+    h: &chat_client_contract::GoalSessionHeader,
+    th: &Theme,
+) -> (String, ratatui::style::Color) {
     if h.awaiting_input && !h.is_terminal() {
         return ("awaiting".into(), c(&th.tool_name, "#ffff00"));
     }

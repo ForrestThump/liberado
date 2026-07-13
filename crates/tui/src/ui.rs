@@ -113,10 +113,19 @@ mod tests {
         s
     }
 
-    fn goal_header(id: &str, domain: DomainWire, desc: &str, status: &str, awaiting: bool) -> GoalSessionHeader {
+    fn goal_header(
+        id: &str,
+        domain: DomainWire,
+        desc: &str,
+        status: &str,
+        awaiting: bool,
+    ) -> GoalSessionHeader {
         GoalSessionHeader {
             id: id.into(),
-            goal: Some(GoalHeaderSpec { description: desc.into(), domain }),
+            goal: Some(GoalHeaderSpec {
+                description: desc.into(),
+                domain,
+            }),
             status: status.into(),
             created_at: String::new(),
             awaiting_input: awaiting,
@@ -143,7 +152,10 @@ mod tests {
     #[test]
     fn switcher_renders_prior_chats_kind_chips_and_status() {
         let mut app = smoke_app();
-        app.update(Action::ConversationsUpdate(vec![conv_header("c1", "weekly planning")]));
+        app.update(Action::ConversationsUpdate(vec![conv_header(
+            "c1",
+            "weekly planning",
+        )]));
         app.update(Action::GoalSessionsUpdate(vec![
             goal_header("g1", DomainWire::Coding, "build a CLI", "running", false),
             goal_header("g2", DomainWire::Life, "capture a note", "running", true),
@@ -152,9 +164,18 @@ mod tests {
         let out = render_to_string(&mut app, 100, 20);
         // The prior conversation renders as a primary (CHAT) row, then both goal-session chips.
         assert!(out.contains("Primary"), "missing primary chat row:\n{out}");
-        assert!(out.contains("weekly planning"), "missing chat title:\n{out}");
-        assert!(out.contains("CODE") && out.contains("Coding"), "missing coding chip:\n{out}");
-        assert!(out.contains("LIFE") && out.contains("Life"), "missing life chip:\n{out}");
+        assert!(
+            out.contains("weekly planning"),
+            "missing chat title:\n{out}"
+        );
+        assert!(
+            out.contains("CODE") && out.contains("Coding"),
+            "missing coding chip:\n{out}"
+        );
+        assert!(
+            out.contains("LIFE") && out.contains("Life"),
+            "missing life chip:\n{out}"
+        );
         // The awaiting session's status stands out.
         assert!(out.contains("awaiting"), "missing awaiting status:\n{out}");
         assert!(out.contains("build a CLI"), "missing description:\n{out}");
@@ -163,12 +184,18 @@ mod tests {
     #[test]
     fn switcher_with_only_prior_chats_renders_them() {
         let mut app = smoke_app();
-        app.update(Action::ConversationsUpdate(vec![conv_header("c1", "weekly planning")]));
+        app.update(Action::ConversationsUpdate(vec![conv_header(
+            "c1",
+            "weekly planning",
+        )]));
         app.open_session_switcher();
         let out = render_to_string(&mut app, 80, 12);
         // Even with no goal sessions, prior chats populate the switcher.
         assert!(out.contains("Primary"), "missing primary chat row:\n{out}");
-        assert!(out.contains("weekly planning"), "missing chat title:\n{out}");
+        assert!(
+            out.contains("weekly planning"),
+            "missing chat title:\n{out}"
+        );
     }
 
     #[test]
@@ -176,7 +203,10 @@ mod tests {
         let mut app = smoke_app();
         app.open_session_switcher();
         let out = render_to_string(&mut app, 80, 12);
-        assert!(out.contains("no sessions yet"), "missing empty hint:\n{out}");
+        assert!(
+            out.contains("no sessions yet"),
+            "missing empty hint:\n{out}"
+        );
     }
 
     #[test]
@@ -198,7 +228,10 @@ mod tests {
         // Header shows the kind + the awaiting marker; the banner shows the prompt + option.
         assert!(out.contains("Coding"), "missing kind in header:\n{out}");
         assert!(out.contains("awaiting"), "missing awaiting marker:\n{out}");
-        assert!(out.contains("What should I title the note?"), "missing prompt banner:\n{out}");
+        assert!(
+            out.contains("What should I title the note?"),
+            "missing prompt banner:\n{out}"
+        );
         assert!(out.contains("Weekly Review"), "missing option:\n{out}");
     }
 
@@ -210,10 +243,11 @@ mod tests {
         let mut app = smoke_app();
         app.join_session("g1".to_string());
         app.update(Action::GoalStreamEvent(GoalUiEvent::Awaiting {
-            prompt: "Draft contract — review before I build anything.\n\nGoal: Build a todo CLI\n\n\
+            prompt:
+                "Draft contract — review before I build anything.\n\nGoal: Build a todo CLI\n\n\
                      Success criteria:\n  - add and list work\n\nVerifiers (the machine gates this \
                      will be judged against):\n  - paths: these paths must exist — src/main.rs"
-                .into(),
+                    .into(),
             options: vec!["accept".into(), "reject".into()],
         }));
         let out = render_to_string(&mut app, 100, 24);
@@ -230,7 +264,10 @@ mod tests {
                 "'{needle}' should occupy its own rendered line:\n{out}"
             );
         }
-        assert!(out.contains("accept") && out.contains("reject"), "missing verdict options:\n{out}");
+        assert!(
+            out.contains("accept") && out.contains("reject"),
+            "missing verdict options:\n{out}"
+        );
     }
 
     #[test]
@@ -238,6 +275,9 @@ mod tests {
         let mut app = smoke_app();
         let out = render_to_string(&mut app, 100, 20);
         // The at-a-glance chip for the primary chat.
-        assert!(out.contains("CHAT") && out.contains("Primary"), "missing primary chip:\n{out}");
+        assert!(
+            out.contains("CHAT") && out.contains("Primary"),
+            "missing primary chip:\n{out}"
+        );
     }
 }

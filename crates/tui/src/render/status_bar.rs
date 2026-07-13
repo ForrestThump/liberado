@@ -32,7 +32,9 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, spinner_tick: u8, t
     };
     let kind_label_span = Span::styled(
         kind_label,
-        Style::default().fg(kind_color(kind, th)).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(kind_color(kind, th))
+            .add_modifier(Modifier::BOLD),
     );
 
     let spinner = if summary.streaming {

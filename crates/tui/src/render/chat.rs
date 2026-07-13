@@ -70,10 +70,11 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spi
         .as_ref()
         .map(|j| j.stream_buf.clone())
         .unwrap_or_default();
-    let awaiting: Option<(String, Vec<String>)> = app
-        .joined
-        .as_ref()
-        .and_then(|j| j.awaiting.as_ref().map(|a| (a.prompt.clone(), a.options.clone())));
+    let awaiting: Option<(String, Vec<String>)> = app.joined.as_ref().and_then(|j| {
+        j.awaiting
+            .as_ref()
+            .map(|a| (a.prompt.clone(), a.options.clone()))
+    });
 
     // If a conversation is being loaded and we have no messages yet, show a spinner.
     if !joined_active && app.pending_load.is_some() && app.messages.is_empty() {

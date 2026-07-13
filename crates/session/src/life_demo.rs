@@ -629,7 +629,10 @@ mod tests {
         hub.send_input(&id, "Weekly Review").await.unwrap();
         let after = await_terminal(&hub, &id).await.session.grant;
 
-        assert_eq!(before, after, "human input must never widen a session's grant");
+        assert_eq!(
+            before, after,
+            "human input must never widen a session's grant"
+        );
         assert_eq!(before.capabilities, attended_grant().capabilities);
     }
 
