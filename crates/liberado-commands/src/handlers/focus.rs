@@ -31,3 +31,21 @@ pub fn back(ctx: &mut dyn CommandContext) -> Vec<CommandResult> {
     ctx.clear_input();
     vec![CommandResult::BackToPrimary]
 }
+
+/// `/spawn <domain> <goal>` — start a new interactive goal session and focus it. Empty domain/goal
+/// prints usage.
+pub fn spawn(domain: &str, goal: &str, ctx: &mut dyn CommandContext) -> Vec<CommandResult> {
+    ctx.clear_input();
+    let domain = domain.trim();
+    let goal = goal.trim();
+    if domain.is_empty() || goal.is_empty() {
+        ctx.push_system_message(
+            "Usage: /spawn <domain> <goal>   e.g. /spawn life \"plan my week\"".into(),
+        );
+        return vec![CommandResult::None];
+    }
+    vec![CommandResult::SpawnGoalSession {
+        domain: domain.to_string(),
+        goal: goal.to_string(),
+    }]
+}

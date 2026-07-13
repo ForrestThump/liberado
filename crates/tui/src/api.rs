@@ -181,6 +181,44 @@ pub async fn post_goal_message(
     }
 }
 
+/// `POST /api/goals` — start a new interactive goal session (`/spawn`). Sets `payload.interactive`
+/// so interactive-aware packs (life demo; coding intake, later) open in their ask-a-human path, and
+/// carries `origin` = the current conversation so the session's summary folds back on terminal
+/// (S4 return handoff). Returns the new session id, or an error string.
+pub async fn spawn_goal(
+    client: &Client,
+    server: &str,
+    domain: &str,
+    goal: &str,
+    origin_conversation: Option<&str>,
+) -> Result<String, String> {
+    let mut body = serde_json::json!({
+        "description": goal,
+        "domain": domain,
+        "payload": { "interactive": true },
+    });
+    if let Some(conv) = origin_conversation {
+        body["origin"] = serde_json::json!({ "conversation_id": conv });
+    }
+    let resp = client
+        .post(format!("{server}/api/goals"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("could not reach daemon: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("server returned {status}: {text}"));
+    }
+    let value: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    value
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "response missing session_id".to_string())
+}
+
 /// Open `GET /api/goals/{id}/stream` (SSE: catch-up history then live events) and return the byte
 /// stream for the shared SSE decoder — the goal-session analogue of [`post_chat_stream`].
 pub async fn open_goal_stream(

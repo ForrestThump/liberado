@@ -80,6 +80,11 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
         description: "switch sessions (primary chat + goal sessions)",
     },
     CommandSpec {
+        insert: "/spawn ",
+        name: "/spawn",
+        description: "start an interactive session: /spawn <domain> <goal>",
+    },
+    CommandSpec {
         insert: "/join ",
         name: "/join",
         description: "join a goal session by id (focus its input)",

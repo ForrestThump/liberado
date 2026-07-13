@@ -378,11 +378,27 @@ impl App {
     /// list when known; the stream fills in the rest) and return to the input. The caller pairs
     /// this with an [`Effect::JoinGoalSession`] that opens the SSE stream.
     pub fn join_session(&mut self, id: String) {
+        self.join_session_with(id, None, None);
+    }
+
+    /// Like [`join_session`](Self::join_session) but with caller-supplied kind/description hints —
+    /// used by `/spawn`, where the session isn't in the switcher list yet (it was just created).
+    pub fn join_session_with(
+        &mut self,
+        id: String,
+        kind_hint: Option<SessionKind>,
+        description_hint: Option<String>,
+    ) {
         let header = self.goal_sessions.iter().find(|h| h.id == id);
-        let (kind, description, status) = match header {
-            Some(h) => (h.kind(), h.description().to_string(), h.status.clone()),
-            None => (SessionKind::Custom, String::new(), "running".to_string()),
-        };
+        let kind = kind_hint
+            .or_else(|| header.map(|h| h.kind()))
+            .unwrap_or(SessionKind::Custom);
+        let description = description_hint
+            .or_else(|| header.map(|h| h.description().to_string()))
+            .unwrap_or_default();
+        let status = header
+            .map(|h| h.status.clone())
+            .unwrap_or_else(|| "running".to_string());
         self.joined = Some(JoinedSession {
             id,
             kind,
@@ -723,6 +739,19 @@ impl App {
                             .push(Message::System("Already in the primary chat.".into()));
                     }
                 }
+                liberado_commands::CommandResult::SpawnGoalSession { domain, goal } => {
+                    // Leaving a finished joined view (if any) so the new session takes the pane.
+                    if self.joined.as_ref().map(|j| j.finished).unwrap_or(false) {
+                        self.joined = None;
+                    }
+                    effects.push(Effect::SpawnGoalSession {
+                        domain: domain.clone(),
+                        goal: goal.clone(),
+                        // Link the new session back to the current conversation so its summary folds
+                        // in on terminal (S4 return handoff). `None` when there's no chat yet.
+                        origin_conversation: self.session.clone(),
+                    });
+                }
                 liberado_commands::CommandResult::ForkRequested { parent_id } => {
                     effects.push(Effect::ForkConversation(parent_id.clone()));
                 }
@@ -750,6 +779,7 @@ Keybindings:
   Tab         input ↔ chat history (or slash complete)
   Esc         clear input / cancel stream / leave a browser
   /sessions   switch sessions (primary chat + goal sessions)
+  /spawn d g  start an interactive session: /spawn <domain> <goal>
   /join <id>  focus a goal session · /back returns to the primary chat
   /session    full-screen searchable prior conversations
   /model      full-screen searchable model browser
@@ -888,6 +918,14 @@ pub enum Action {
         domain: String,
         description: String,
     },
+    /// `/spawn` succeeded — a new interactive session was created; focus it.
+    GoalSpawned {
+        session_id: String,
+        domain: String,
+        description: String,
+    },
+    /// `/spawn` failed (couldn't start the session).
+    GoalSpawnFailed(String),
     /// Daemon connectivity transition (true = connected, false = lost).
     ConnectionStatus(bool),
     /// Periodic heartbeat from the poller (currently a no-op in `update()`).
@@ -919,6 +957,12 @@ pub enum Effect {
     JoinGoalSession(String),
     /// Deliver a human message into the joined session (`POST /api/goals/{id}/message`).
     SendGoalMessage { id: String, text: String },
+    /// Start a new interactive session (`/spawn`): `POST /api/goals` then focus it.
+    SpawnGoalSession {
+        domain: String,
+        goal: String,
+        origin_conversation: Option<String>,
+    },
     /// Abort the joined session's SSE stream (on `/back`).
     LeaveGoalSession,
     Quit,
@@ -1078,21 +1122,30 @@ impl App {
             } => {
                 // Render the offer inline in the chat as a joinable affordance. The human accepts by
                 // running `/join <id>`; ignoring it just leaves the generalist running (D3 consent).
-                let kind = crate::api::SessionKind::from_domain(
-                    &if domain == "life" {
-                        chat_client_contract::DomainWire::Life
-                    } else if domain == "coding" {
-                        chat_client_contract::DomainWire::Coding
-                    } else {
-                        chat_client_contract::DomainWire::Custom(domain.clone())
-                    },
-                );
+                let kind = kind_from_domain_str(&domain);
                 self.messages.push(Message::System(format!(
                     "▸ {} session offered: {}\n  /join {}  to focus it   (or keep chatting here)",
                     kind.label(),
                     if description.is_empty() { session_id.as_str() } else { description.as_str() },
                     session_id
                 )));
+                self.scroll_offset = 0;
+                self.mark_dirty();
+                vec![Effect::None]
+            }
+            Action::GoalSpawned {
+                session_id,
+                domain,
+                description,
+            } => {
+                // A `/spawn` session was created — focus it immediately (the human asked for it).
+                let kind = kind_from_domain_str(&domain);
+                self.join_session_with(session_id.clone(), Some(kind), Some(description));
+                vec![Effect::JoinGoalSession(session_id)]
+            }
+            Action::GoalSpawnFailed(err) => {
+                self.messages
+                    .push(Message::System(format!("[spawn failed] {err}")));
                 self.scroll_offset = 0;
                 self.mark_dirty();
                 vec![Effect::None]
@@ -1182,6 +1235,17 @@ impl App {
                 .push(Message::ToolCall(ToolCallChip { name, args }));
         }
     }
+}
+
+/// Map a pack `domain` string (`"life"` / `"coding"` / anything else) to its display [`SessionKind`].
+/// Shared by the offer and spawn paths, which only have the domain as a string.
+pub(crate) fn kind_from_domain_str(domain: &str) -> SessionKind {
+    let wire = match domain {
+        "life" => chat_client_contract::DomainWire::Life,
+        "coding" => chat_client_contract::DomainWire::Coding,
+        other => chat_client_contract::DomainWire::Custom(other.to_string()),
+    };
+    SessionKind::from_domain(&wire)
 }
 
 /// Returns the byte index of the start of the word at or before `cursor` in the input.

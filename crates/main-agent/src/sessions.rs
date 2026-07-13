@@ -348,6 +348,36 @@ impl ChatSessions {
         Ok(header.id)
     }
 
+    /// Fold a note into a conversation at its current leaf — the goal-session **return handoff**
+    /// (session-focus S4 / D2). When a specialist session spawned from this conversation reaches a
+    /// terminal state, its summary is appended here so the main agent can discuss the outcome on the
+    /// next turn *without* carrying the whole specialist transcript (the context-efficiency pillar).
+    /// Authored as `goal-session` (provenance) with an assistant-role body so it rehydrates as
+    /// ordinary conversation context. `NotFound` if the conversation does not exist.
+    pub async fn append_note(
+        &self,
+        conversation: Ulid,
+        content: impl Into<String>,
+    ) -> SessionResult<()> {
+        let parent_leaf = self
+            .store
+            .leaf_path(conversation, None)
+            .await?
+            .last()
+            .map(|n| n.id);
+        self.store
+            .append(
+                conversation,
+                NewNode {
+                    parent_id: parent_leaf,
+                    author: Author::Named("goal-session".into()),
+                    message: Message::assistant(content),
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
     /// One non-streaming turn: rehydrate, run the agent over the full history, and — on success —
     /// persist the turn's new messages. A failed turn (the `?` short-circuit) persists nothing.
     ///

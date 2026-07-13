@@ -42,6 +42,12 @@ pub enum CommandResult {
     },
     /// Return input focus to the primary chat, leaving any joined goal session.
     BackToPrimary,
+    /// Start a new interactive goal session and focus it (`/spawn <domain> <goal>`). The surface
+    /// POSTs `/api/goals` (with `origin` = the current conversation) and joins the returned session.
+    SpawnGoalSession {
+        domain: String,
+        goal: String,
+    },
     ForkRequested {
         parent_id: String,
     },

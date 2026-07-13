@@ -78,6 +78,11 @@ impl EffectRunner {
             Effect::RefreshGoalSessions => self.refresh_goal_sessions().await,
             Effect::JoinGoalSession(id) => self.join_goal_session(id).await,
             Effect::SendGoalMessage { id, text } => self.send_goal_message(id, text).await,
+            Effect::SpawnGoalSession {
+                domain,
+                goal,
+                origin_conversation,
+            } => self.spawn_goal_session(domain, goal, origin_conversation).await,
             Effect::LeaveGoalSession => self.leave_goal_session(),
             Effect::Quit => self.quit(),
             Effect::None => {}
@@ -192,6 +197,35 @@ impl EffectRunner {
             let outcome = api::post_goal_message(&client, &server, &id, &text).await;
             if tx.try_send(Action::GoalMessageOutcome(outcome)).is_err() {
                 tracing::warn!("action channel full, dropping GoalMessageOutcome");
+            }
+        });
+    }
+
+    /// `/spawn` — `POST /api/goals` to create an interactive session, then hand the id back as
+    /// `GoalSpawned` (the App focuses it and opens its stream). `GoalSpawnFailed` on error.
+    async fn spawn_goal_session(
+        &self,
+        domain: String,
+        goal: String,
+        origin_conversation: Option<String>,
+    ) {
+        let client = self.client.clone();
+        let tx = self.action_tx.clone();
+        let server = self.server_url();
+        tokio::spawn(async move {
+            let action =
+                match api::spawn_goal(&client, &server, &domain, &goal, origin_conversation.as_deref())
+                    .await
+                {
+                    Ok(session_id) => Action::GoalSpawned {
+                        session_id,
+                        domain,
+                        description: goal,
+                    },
+                    Err(e) => Action::GoalSpawnFailed(e),
+                };
+            if tx.try_send(action).is_err() {
+                tracing::warn!("action channel full, dropping spawn result");
             }
         });
     }

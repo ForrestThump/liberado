@@ -17,7 +17,7 @@ mod store;
 
 pub use event::{SessionEvent, SessionEventKind};
 pub use goal::{
-    DomainHint, GoalResult, GoalSpec, SessionOrigin, SessionStatus, TerminalKind,
+    DomainHint, GoalResult, GoalSessionRecord, GoalSpec, SessionOrigin, SessionStatus, TerminalKind,
 };
 pub use hub::{GoalSessionHub, SendInputError, SessionSnapshot};
 pub use life_demo::LifeOpsDemoRunner;

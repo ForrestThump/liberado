@@ -2178,6 +2178,45 @@ fn back_leaves_the_session() {
 }
 
 #[test]
+fn spawn_command_emits_spawn_effect_with_origin() {
+    let mut app = test_app();
+    app.session = Some("01CONV".to_string()); // a current conversation to link back to
+    let effects = app.handle_slash_command("/spawn life plan my week");
+    match effects.as_slice() {
+        [Effect::SpawnGoalSession { domain, goal, origin_conversation }] => {
+            assert_eq!(domain, "life");
+            assert_eq!(goal, "plan my week");
+            assert_eq!(origin_conversation.as_deref(), Some("01CONV"));
+        }
+        other => panic!("expected a single SpawnGoalSession effect, got {other:?}"),
+    }
+}
+
+#[test]
+fn spawn_result_focuses_the_new_session() {
+    let mut app = test_app();
+    app.update(Action::GoalSpawned {
+        session_id: "g_new".into(),
+        domain: "life".into(),
+        description: "plan my week".into(),
+    });
+    let j = app.joined.as_ref().expect("should focus the spawned session");
+    assert_eq!(j.id, "g_new");
+    assert_eq!(j.kind, SessionKind::Life);
+    assert_eq!(j.description, "plan my week");
+    assert_eq!(app.input_target_session().as_deref(), Some("g_new"));
+}
+
+#[test]
+fn spawn_with_empty_args_is_usage_not_an_effect() {
+    let mut app = test_app();
+    let effects = app.handle_slash_command("/spawn");
+    // No spawn effect; a usage note was pushed instead.
+    assert!(!effects.iter().any(|e| matches!(e, Effect::SpawnGoalSession { .. })));
+    assert!(app.messages.iter().any(|m| matches!(m, Message::System(t) if t.contains("Usage: /spawn"))));
+}
+
+#[test]
 fn offer_renders_a_joinable_affordance_in_the_chat() {
     let mut app = test_app();
     app.update(Action::GoalOffered {

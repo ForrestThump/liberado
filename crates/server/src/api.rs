@@ -630,19 +630,118 @@ pub async fn goals_list(State(state): State<Arc<AppState>>) -> impl IntoResponse
     Json(state.goals.list().await)
 }
 
-/// `POST /api/goals` — start a goal session. Body: [`liberado_session::GoalSpec`].
+/// `POST /api/goals` — start a goal session. Body: [`liberado_session::GoalSpec`]. When the spec
+/// carries an `origin` (a chat turn spawned it, e.g. via `/spawn`), a **return-handoff** watcher is
+/// spawned so the session's terminal summary folds back into the parent conversation (S4/D2).
 pub async fn goals_start(
     State(state): State<Arc<AppState>>,
     Json(goal): Json<liberado_session::GoalSpec>,
 ) -> impl IntoResponse {
+    let origin = goal.origin.clone();
     match state.goals.start(goal).await {
-        Ok(id) => (
-            StatusCode::ACCEPTED,
-            Json(serde_json::json!({ "session_id": id, "status": "running" })),
-        )
-            .into_response(),
+        Ok(id) => {
+            if let Some(origin) = origin {
+                spawn_return_handoff(state.clone(), id.clone(), origin);
+            }
+            (
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({ "session_id": id, "status": "running" })),
+            )
+                .into_response()
+        }
         Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError { error: e })).into_response(),
     }
+}
+
+/// After an `origin`-linked session terminates, fold its summary back into the parent conversation
+/// (session-focus S4 / D2). Spawned at start, it subscribes to the session's own event stream —
+/// `subscribe()` returns catch-up history + a live receiver, so a finish between start and here is
+/// not missed — waits for the terminal event, then appends a note via `ChatSessions::append_note`.
+/// Best-effort: a missing conversation / disabled chat / append error is logged, never fatal.
+fn spawn_return_handoff(
+    state: Arc<AppState>,
+    session_id: String,
+    origin: liberado_session::SessionOrigin,
+) {
+    use liberado_session::SessionEventKind as K;
+    tokio::spawn(async move {
+        let Some((history, mut rx)) = state.goals.store().subscribe(&session_id).await else {
+            return;
+        };
+        let already_done = history
+            .iter()
+            .any(|e| matches!(e.kind, K::SessionFinished { .. }));
+        if !already_done {
+            loop {
+                match rx.recv().await {
+                    Ok(ev) if matches!(ev.kind, K::SessionFinished { .. }) => break,
+                    Ok(_) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        }
+
+        let Some(chat) = state.chat.as_ref() else {
+            return; // no conversation store to fold into (chat disabled — there was no parent anyway)
+        };
+        // The `SessionFinished` *event* broadcasts just before `store.finish()` records the terminal
+        // status/result, so read the snapshot only once the *record* has actually settled terminal —
+        // otherwise the note would say "running" with no outcome.
+        let mut snap = None;
+        for _ in 0..200 {
+            match state.goals.snapshot(&session_id).await {
+                Some(s) if s.session.status.is_terminal() => {
+                    snap = Some(s);
+                    break;
+                }
+                Some(_) => tokio::time::sleep(std::time::Duration::from_millis(5)).await,
+                None => return,
+            }
+        }
+        let Some(snap) = snap else {
+            tracing::warn!(session = %session_id, "return handoff: record never settled terminal");
+            return;
+        };
+        let conv = match origin.conversation_id.parse::<Ulid>() {
+            Ok(c) => c,
+            Err(_) => {
+                tracing::warn!(conversation = %origin.conversation_id, "return handoff: parent id is not a ULID");
+                return;
+            }
+        };
+        let note = format_handoff_note(&snap.session, &session_id);
+        match chat.append_note(conv, note).await {
+            Ok(()) => tracing::info!(
+                session = %session_id,
+                conversation = %origin.conversation_id,
+                "return handoff: summary folded into parent conversation"
+            ),
+            Err(e) => tracing::warn!(error = %e, "return handoff: append_note failed"),
+        }
+    });
+}
+
+/// The note folded back into the parent conversation: session kind/id, terminal status, summary,
+/// artifacts, and the `/join` hint so the human can reopen the full transcript. Compact by design —
+/// the parent stays lean; the transcript lives in the session (D2).
+fn format_handoff_note(record: &liberado_session::GoalSessionRecord, session_id: &str) -> String {
+    let domain = record.goal.domain.as_str();
+    let status = format!("{:?}", record.status).to_ascii_lowercase();
+    let mut note = format!(
+        "[{domain} session {status}] {}",
+        record.goal.description.trim()
+    );
+    if let Some(result) = &record.result {
+        if !result.summary.trim().is_empty() {
+            note.push_str(&format!("\nOutcome: {}", result.summary.trim()));
+        }
+        if !result.artifacts.is_empty() {
+            note.push_str(&format!("\nArtifacts: {}", result.artifacts.join(", ")));
+        }
+    }
+    note.push_str(&format!("\n(Rejoin the full transcript with /join {session_id}.)"));
+    note
 }
 
 /// `GET /api/goals/{id}` — session record + event history so far.
@@ -825,6 +924,58 @@ mod goal_message_tests {
         (app, goals)
     }
 
+    /// Like [`goals_app`] but with a **real** `ChatSessions` (temp JSONL store, `MockProvider` that
+    /// is never actually called for completions) and the `/api/goals` start route mounted — so the
+    /// return-handoff path can fold a summary into a genuine parent conversation. Returns the router,
+    /// the hub, the chat handle, and a freshly-created conversation id to use as `origin`.
+    async fn goals_app_with_chat() -> (Router, Arc<GoalSessionHub>, Arc<liberado_main_agent::ChatSessions>, String) {
+        use liberado_conversation_store::JsonlStore;
+        use liberado_executor::{Budget, Executor};
+        use liberado_provider::MockProvider;
+
+        let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+        hub.register_pack(Arc::new(LifeOpsDemoRunner));
+        let goals = Arc::new(hub);
+
+        let root = std::env::temp_dir().join(format!("liberado-server-test-{}", Ulid::new()));
+        let store = Arc::new(JsonlStore::new(&root));
+        let executor = Executor::new(Arc::new(MockProvider::with_script("mock", vec![])), Budget::default());
+        let chat = Arc::new(liberado_main_agent::ChatSessions::new(
+            store,
+            executor,
+            Arc::new(crate::state::NoTools),
+        ));
+        let conv = chat.create(None).await.unwrap().to_string();
+
+        let (hook_tx, _hook_rx) = tokio::sync::mpsc::unbounded_channel();
+        let state = Arc::new(AppState {
+            start_time: Instant::now(),
+            reactions: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            dispatcher_attached: false,
+            orchestrator_attached: false,
+            vault_path: "/tmp/vault".to_string(),
+            goals: goals.clone(),
+            chat: Some(chat.clone()),
+            chat_tools: 0,
+            chat_tool_names: Vec::new(),
+            catalog: Arc::new(liberado_common::CapabilityCatalog::new()),
+            conversations_root: root,
+            main_agent_capabilities: liberado_common::CapabilitySet::empty(),
+            dispatcher_capabilities: liberado_common::CapabilitySet::empty(),
+            model_name: None,
+            provider: None,
+            hooks: std::collections::HashMap::new(),
+            hook_tx,
+            hook_idempotency: crate::hooks::IdempotencyCache::default(),
+        });
+
+        let app = Router::new()
+            .route("/api/goals", axum::routing::post(goals_start))
+            .route("/api/goals/{id}/message", axum::routing::post(goals_message))
+            .with_state(state);
+        (app, goals, chat, conv)
+    }
+
     fn post_json(uri: &str, body: &str) -> Request<Body> {
         Request::builder()
             .method("POST")
@@ -919,6 +1070,36 @@ mod goal_message_tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
+    #[test]
+    fn handoff_note_includes_status_summary_artifacts_and_rejoin_hint() {
+        use liberado_session::{
+            DomainHint, GoalResult, GoalSessionRecord, GoalSpec, SessionStatus, TerminalKind,
+        };
+        let mut record = GoalSessionRecord::new(GoalSpec {
+            id: Some("g_01ABC".into()),
+            description: "build a hello CLI".into(),
+            success_criteria: vec![],
+            domain: DomainHint::Coding,
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: None,
+            payload: serde_json::json!({}),
+        });
+        record.status = SessionStatus::Succeeded;
+        record.result = Some(GoalResult {
+            terminal: TerminalKind::Succeeded,
+            summary: "wrote src/main.rs".into(),
+            artifacts: vec!["src/main.rs".into()],
+            diagnostics: serde_json::json!({}),
+        });
+        let note = format_handoff_note(&record, "g_01ABC");
+        assert!(note.contains("[coding session succeeded]"), "note: {note}");
+        assert!(note.contains("build a hello CLI"));
+        assert!(note.contains("Outcome: wrote src/main.rs"));
+        assert!(note.contains("Artifacts: src/main.rs"));
+        assert!(note.contains("/join g_01ABC"));
+    }
+
     #[tokio::test]
     async fn message_to_finished_session_is_409() {
         let (app, goals) = goals_app();
@@ -946,5 +1127,52 @@ mod goal_message_tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn origin_session_folds_its_summary_into_the_parent_conversation() {
+        // The full S4 return handoff, end to end: POST /api/goals with an origin → interactive
+        // session → answer it → on terminal, its summary is appended to the parent conversation.
+        let (app, goals, chat, conv) = goals_app_with_chat().await;
+
+        // Spawn an interactive life session linked to the conversation (exactly what `/spawn` posts).
+        let body = format!(
+            r#"{{"description":"capture a note","domain":"life","payload":{{"interactive":true}},"origin":{{"conversation_id":"{conv}"}}}}"#
+        );
+        let resp = app.clone().oneshot(post_json("/api/goals", &body)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let id = v["session_id"].as_str().unwrap().to_string();
+
+        wait_awaiting(&goals, &id).await;
+        let resp = app
+            .clone()
+            .oneshot(post_json(
+                &format!("/api/goals/{id}/message"),
+                r#"{"text": "Weekly Review"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        wait_terminal(&goals, &id).await;
+
+        // The handoff watcher appends the summary into the parent conversation (async — poll for it).
+        let conv_ulid: Ulid = conv.parse().unwrap();
+        let mut folded = false;
+        for _ in 0..200 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            let history = chat.history(conv_ulid).await.unwrap();
+            if history.iter().any(|m| {
+                m.content.contains("life session succeeded") && m.content.contains("Weekly Review")
+            }) {
+                folded = true;
+                break;
+            }
+        }
+        assert!(
+            folded,
+            "return handoff did not fold the session summary into the parent conversation"
+        );
     }
 }

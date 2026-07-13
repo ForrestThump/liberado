@@ -70,6 +70,37 @@ async fn persisted_turn_round_trips_to_disk() {
 }
 
 #[tokio::test]
+async fn append_note_folds_a_goal_session_summary_into_the_conversation() {
+    // The return-handoff path (S4/D2): a finished specialist session's summary is appended to the
+    // parent conversation and rehydrates as ordinary context on the next load.
+    let dir = tempfile::tempdir().unwrap();
+    let id = {
+        let sessions = sessions_at(dir.path(), vec![CompletionResponse::text("On it.")]);
+        let id = sessions.create(None).await.unwrap();
+        sessions.turn(id, "build me a CLI").await.unwrap();
+        sessions
+            .append_note(
+                id,
+                "[coding session succeeded] build a hello CLI\nOutcome: 1 file written",
+            )
+            .await
+            .unwrap();
+        id
+    };
+
+    // Reopen over the same store: the note is durable and in history.
+    let reopened = sessions_at(dir.path(), Vec::new());
+    let history = reopened.history(id).await.unwrap();
+    assert!(
+        history
+            .iter()
+            .any(|m| m.content.contains("[coding session succeeded]")
+                && m.content.contains("1 file written")),
+        "handoff note did not persist into the conversation"
+    );
+}
+
+#[tokio::test]
 async fn context_carries_across_turns_via_rehydration() {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(JsonlStore::new(dir.path()));

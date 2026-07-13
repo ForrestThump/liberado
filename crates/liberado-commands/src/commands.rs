@@ -13,6 +13,8 @@ pub enum SlashCommand {
     Sessions,
     /// Join a goal session by id (or id prefix), moving input focus onto it.
     Join(String),
+    /// Start a new interactive goal session and focus it: `/spawn <domain> <goal>`.
+    Spawn { domain: String, goal: String },
     /// Return input focus to the primary chat.
     Back,
     Fork,
@@ -59,6 +61,7 @@ impl std::fmt::Display for SlashCommand {
             },
             SlashCommand::Sessions => write!(f, "/sessions"),
             SlashCommand::Join(id) => write!(f, "/join {id}"),
+            SlashCommand::Spawn { domain, goal } => write!(f, "/spawn {domain} {goal}"),
             SlashCommand::Back => write!(f, "/back"),
             SlashCommand::Fork => write!(f, "/fork"),
         }
