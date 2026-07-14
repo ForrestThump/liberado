@@ -137,3 +137,11 @@ run should be treated as *unverified*, whatever the suite says. The commit messa
 
 And when a live run does find something, **fix the test that should have caught it** — otherwise the
 same class returns wearing different clothes, which is precisely what those twelve audits are.
+
+> **The remedy, planned but not built**:
+> [`../roadmap/live-conformance-suite.md`](../roadmap/live-conformance-suite.md). The live checks that
+> caught all of this currently exist only as commands somebody typed once. The key realisation is that
+> *most of them do not need a live model* — the ask seam, the parked session, the unenforced `Write`,
+> the no-op `cancel` are all **plumbing**, and a real daemon with a `MockProvider` catches every one.
+> So the valuable tier is fast, deterministic, and belongs in CI — not in an `#[ignore]`d graveyard
+> nobody runs.
