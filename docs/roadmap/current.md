@@ -81,6 +81,18 @@ The E5 live test passed, but only after fixing two defects it found (`1de63bc`),
   *Until one of these lands, the hours-long idle budget is a promise the daemon keeps and the product
   does not.*
 
+- **F1 — `Capability::Write` is not enforced at the MCP boundary.** *(security/authority; found live
+  2026-07-14)* `RiskGatedToolRuntime` checks `ExecuteMcp`, consequence, zone-write-class and a
+  destructive-text heuristic — and **never consults `Capability::Write(Zone)`**. A dispatch profile
+  granted `Read` + `ExecuteMcp("turbovault")` and explicitly **no `Write`** wrote a vault note anyway.
+  `ExecuteMcp` is therefore all-or-nothing: calling an MCP grants everything that MCP can do. The
+  zone-write-class guard that would be the second line of defence is **inert**, because no MCP in
+  `topology.toml` declares zones. E1's narrowing machinery *is* real (drop `ExecuteMcp` and the same
+  write is refused) — the gate just never asks the question that would make it bite. Fix needs the
+  boundary check **and** zone declarations for every writing MCP, failing **closed**; doing either alone
+  leaves it inert or breaks chat's writes. See
+  [one-execution-engine-live-test.md](one-execution-engine-live-test.md) § Control F.
+
 ## The phased roadmap
 
 The matured vision (see [Positioning](../architecture/positioning.md) and

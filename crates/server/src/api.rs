@@ -937,7 +937,11 @@ pub async fn goals_message(
             }),
         )
             .into_response(),
-        Err(e @ (SendInputError::Terminal | SendInputError::Closed)) => (
+        // `Parked` is a 409 like the others — the answer cannot be delivered — but its *message*
+        // must not claim the session finished, because it has not. A client rendering "already
+        // finished" over a session that is still holding a question for you is the difference
+        // between "start over" and "wait".
+        Err(e @ (SendInputError::Terminal | SendInputError::Parked | SendInputError::Closed)) => (
             StatusCode::CONFLICT,
             Json(ApiError {
                 error: e.to_string(),

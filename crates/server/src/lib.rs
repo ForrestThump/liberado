@@ -589,8 +589,12 @@ impl liberado_session::SessionAlert for NotifySessionAlert {
              {prompt}\n\
              Answer in the TUI or via POST /api/goals/{session_id}/message"
         );
-        if let Err(e) = self.0.notify(&message).await {
-            tracing::warn!(error = %e, %session_id, "session alert notification failed");
+        match self.0.notify(&message).await {
+            // Logged on *success*, not only on failure. Whether a ping fired is a real behavioural
+            // claim — the hub suppresses it when someone is already watching the session — and until
+            // this line existed the only way to check it was to look at a human's phone.
+            Ok(()) => tracing::info!(%session_id, "session alert sent — nobody was watching"),
+            Err(e) => tracing::warn!(error = %e, %session_id, "session alert notification failed"),
         }
     }
 }

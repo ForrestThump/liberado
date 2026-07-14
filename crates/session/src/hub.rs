@@ -38,6 +38,15 @@ pub enum SendInputError {
     /// The session's grant omits [`Capability::AskHuman`], so it may never receive human input —
     /// not a timing problem but an authority one (S6).
     NotPermitted,
+    /// The daemon restarted while the session was waiting on a human, so it replayed as
+    /// [`SessionStatus::Parked`] (E6). It is **not** finished — the question it holds for you is
+    /// still there — but no pack is hosting it, so there is nothing to deliver an answer to until
+    /// the pack can be resumed (E6-c).
+    ///
+    /// Distinct from [`Terminal`](Self::Terminal) on purpose: telling someone their parked session
+    /// "has already finished" is a lie, and it is the difference between "this is dead, start over"
+    /// and "this is waiting, and cannot be answered yet".
+    Parked,
     /// The session's input channel closed underneath us — a rare teardown race between the lookup
     /// and the send.
     Closed,
@@ -53,6 +62,12 @@ impl std::fmt::Display for SendInputError {
             Self::NotPermitted => write!(
                 f,
                 "goal session's grant does not include AskHuman — it cannot receive human input"
+            ),
+            Self::Parked => write!(
+                f,
+                "goal session is parked: the daemon restarted while it was waiting on you, so the \
+                 question it holds is still there but no pack is running to receive the answer. \
+                 It has NOT finished — it cannot be resumed yet (E6-c)"
             ),
             Self::Closed => write!(f, "goal session input channel is closed"),
         }
@@ -290,15 +305,22 @@ impl GoalSessionHub {
         };
         let sender = match sender {
             Some(s) => s,
-            // No live input sender — three different reasons, and the caller needs to tell them
+            // No live input sender — FOUR different reasons, and the caller needs to tell them
             // apart. Consult the record: a session that never held `AskHuman` was never *allowed*
-            // input (403), which is a different fact from one that has since finished (409) or one
-            // that never existed (404). Without this check the first would masquerade as the
-            // second, which reads as "you were too late" when the truth is "you were never allowed".
+            // input (403), which is a different fact from one that has since finished (409), one
+            // that is parked mid-question across a restart (409, but *not* finished), or one that
+            // never existed (404). Without these checks each masquerades as "you were too late",
+            // when the truth may be "you were never allowed" or "it is still waiting for you".
+            //
+            // `Parked` was added by E6 and this match was not updated with it, so a parked session
+            // was told it "has already finished" — the one thing it definitively has not done.
             None => {
                 return Err(match self.store.get(id).await {
                     Some(record) if !record.grant.grants_ask_human() => {
                         SendInputError::NotPermitted
+                    }
+                    Some(record) if record.status == SessionStatus::Parked => {
+                        SendInputError::Parked
                     }
                     Some(_) => SendInputError::Terminal,
                     None => SendInputError::Unknown,

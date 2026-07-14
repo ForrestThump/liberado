@@ -87,8 +87,21 @@ impl InputChannel {
 /// Two halves, both resolved by the server from the session's profile before the run starts:
 ///
 /// * `grant` — the session's **authority ceiling**. A pack must check it before doing anything
-///   consequential (`ctx.can(&Capability::Write(zone))`), exactly as the MCP boundary does. It can
-///   never be widened mid-run — see the non-widening invariant in the hub's tests.
+///   consequential (`ctx.can(&Capability::Write(zone))`). It can never be widened mid-run — see the
+///   non-widening invariant in the hub's tests.
+///
+///   This check is on its **honour**, and that is not a figure of speech. This comment used to say
+///   a pack should check `Write(zone)` "exactly as the MCP boundary does" — **the MCP boundary does
+///   not do that.** `RiskGatedToolRuntime` checks: is the MCP granted (`ExecuteMcp`), is its
+///   consequence too high, is the target zone write-class-restricted, does the call look sweepingly
+///   destructive. It never consults `Capability::Write`. So for MCP-mediated work, `ExecuteMcp` is
+///   all-or-nothing: a grant of `Read` + `ExecuteMcp("turbovault")` can write the whole vault.
+///   Proved live (control F, 2026-07-14): a `Read`-only dispatch profile wrote a note.
+///
+///   The zone-write-class guard would be the other half of that defence, but it is **inert in
+///   practice**: no MCP in `topology.toml` declares zones, so `resolve_zone` returns `None` for
+///   every tool and the guard never fires. See `docs/roadmap/one-execution-engine-live-test.md`
+///   § "Control F".
 /// * `grant.overrides` — the pack's own **opaque** config (role, model, prompt path). The kernel
 ///   never interprets it; only this pack does.
 pub struct PackContext<'a> {

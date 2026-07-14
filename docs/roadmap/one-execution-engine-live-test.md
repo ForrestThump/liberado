@@ -161,6 +161,73 @@ Control **B** is the one I would most expect to fail, and it is the cheapest to 
 SSE subscriber (a stale browser tab, a TUI in another terminal) silently suppresses the ping, and the
 symptom looks identical to a broken notifier.
 
+### Control results (run 2026-07-14)
+
+| # | Result | Notes |
+|---|---|---|
+| B | **PASS** | A watched session did **not** ping; an unwatched one did. Verified against a *positive control* — without it, "zero pings" would equally well have meant a broken notifier. Needed a new `info!` on successful send: whether a ping fired is a behavioural claim, and it was previously observable only by looking at a human's phone. |
+| C | **PASS** | A coding profile without `AskHuman` never prompted, skipped intake, and `POST …/message` returned **403** (never allowed) — correctly distinct from 409 (allowed once, now finished). |
+| E | **PASS, after a fix** | The session came back `Parked` with `awaiting_input` intact and the question visible. But the API told it *"goal session has already finished"* — the one thing it definitively has **not** done. E6 added `Parked` and never updated `send_input`'s match, so it fell through to `Some(_) => Terminal`. Added `SendInputError::Parked`. |
+| F | **FAIL — and it is the most serious finding in this whole effort** | See below. |
+
+## Control F: `Capability::Write` is not enforced at the MCP boundary
+
+A dispatch profile granted `Read { Vault = "tasks" }` + `ExecuteMcp("turbovault")` — and **no `Write`** —
+was asked to write a note. Its pool ceiling (`dispatcher`) *does* hold `Write { Vault = "tasks" }`, so
+E1's promise was that the narrower grant would bind and the write would be **refused**.
+
+**It wrote the note.**
+
+`RiskGatedToolRuntime`'s complete check sequence is:
+
+1. `grants_mcp(mcp)` — is the MCP granted at all (`ExecuteMcp`)?
+2. consequence ≥ `Irreversible` → downgrade to proposal
+3. zone write-class → downgrade if the target zone is `ProposalOnly`/`HumanOnly`
+4. sweeping-destructive heuristic on the args
+5. pass through
+
+**`Capability::Write(Zone)` is never consulted.** It is checked in exactly one place in the entire
+system — `life_demo.rs:83`, where the life pack voluntarily checks *itself*. At the tool boundary,
+authority collapses to a single question: *may you call this MCP?* If yes, you may do **everything that
+MCP can do**. `ExecuteMcp("turbovault")` is, in effect, "write the whole vault".
+
+And the guard that would have been the second line of defence — the zone write-class check — is **inert
+in practice**: no MCP in `topology.toml` declares zones, so `resolve_zone` returns `None` for every tool
+and step 3 never fires. Two layers, both silently absent.
+
+**What E1 *did* deliver** (arm 2, the positive control): remove `ExecuteMcp("turbovault")` from the grant
+and the same write is refused — `tool call blocked: MCP not in capability set`. So the narrowing machinery
+is real and correct. **The gate simply never asks the question that would make it bite for writes.** E1
+narrowed a set that the enforcement point only half-reads.
+
+### Why this matters more than a failed test
+
+A session profile cannot restrict *what* an agent does — only *which MCPs* it may call. That is a much
+coarser authority model than the config language advertises: `policy.toml` invites you to write
+`{ Read = { Vault = "tasks" } }` and withhold `Write`, and this is silently decorative for anything the
+agent does through an MCP. The whole point of S6 profiles, and the reason E1 was sequenced **first**, was
+that *"shipping the pack first would mean shipping a grant that looks enforced and is not."* That is
+exactly the state we are in — one level down from where we were looking.
+
+### The fix, and why it is not a five-minute change
+
+The mapping machinery already exists: `resolve_zone(descriptor, tool)` returns `Some(zone)` for a
+declared **write** and `None` for a declared read. So the gate can know which zone a call writes to. Two
+things are needed, and only the first is code:
+
+1. **A capability check at the boundary.** Where `resolve_zone` yields `Some(zone)`, require
+   `capabilities.contains(&Capability::Write(Zone::vault(zone)))` and refuse otherwise — a *refusal*, not
+   a proposal downgrade, because this is an authority failure, not a risk judgement.
+2. **MCPs must declare their zones.** Today none do, so (1) would be inert exactly as step 3 is. This is
+   a config change with real blast radius: every MCP write path must be classified, and getting it wrong
+   either breaks chat's existing vault writes or leaves the hole open. **Fail-closed vs fail-open on an
+   undeclared zone is the load-bearing decision** — and the current code fails *open* (an undescribed MCP
+   defaults to `ReadOnly` consequence and no zone), which is the permissive choice.
+
+Recommended: do (1) and (2) together as one slice, fail **closed** on an undeclared write, and expect to
+fix fallout in chat's delegate path. Do not do (1) alone and call it done — that is precisely the shape of
+bug this audit keeps finding.
+
 ## The gap this surfaced
 
 **The Telegram path is send-only.** `NotifySessionAlert` pings you and then tells you to *"Answer in the
@@ -217,8 +284,20 @@ nothing. Two designs, and the second is the one worth having:
 
 **(a) A Telegram reply bridge.** Point the existing `ApprovalBot` long-poll/`force_reply` machinery at
 `POST /api/goals/{id}/message`, keyed by the session id already in the alert. Low friction — reply in
-place, no context switch. But it is a keyhole: you answer a question without seeing the transcript,
-the diff, or what the pack actually tried.
+place, no context switch.
+
+But it does not scale past one session, and the reason is structural rather than cosmetic:
+**Telegram is a single flat chat with no session multiplexing.** Five sessions pinging you interleave
+into one undifferentiated stream. You cannot see which session asked what, what you last told *that*
+session, or what it did with your answer. The channel is incapable of representing the thing it is
+notifying you about — and the moment there is more than one session in flight, a reply bridge is
+answering questions into a context you cannot reconstruct. That is a good way to give a wrong answer
+confidently.
+
+So the honest division of labour is: **Telegram carries "hey, I need you"** (plus a one-tap approve when
+the decision is genuinely trivial and self-contained), and **anything that requires reviewing state
+leaves the chat.** Which means the link is not a nicety on top of the reply bridge; it is the thing that
+makes the feature usable at all beyond a single session.
 
 **(b) A deep link into the WebUI.** The alert carries a URL to the session on the homelab instance; you
 tap it and answer in a real view that shows the question *and its context*. Strictly better, and it

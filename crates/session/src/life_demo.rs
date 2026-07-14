@@ -714,4 +714,55 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("no domain pack"));
     }
+
+    #[tokio::test]
+    async fn a_parked_session_is_not_told_it_finished() {
+        // E6 added `Parked` and did not update `send_input`'s match, so a session parked mid-question
+        // across a daemon restart fell into `Some(_) => Terminal` and the API answered
+        // "goal session has already finished — not accepting input". That is the one thing it has
+        // definitively NOT done: the question it holds for you is still right there. A client (or a
+        // person) reading "finished" concludes the work is dead and starts over.
+        //
+        // Found by the live restart control, 2026-07-14.
+        let store = GoalSessionStore::new();
+        let mut rec = crate::goal::GoalSessionRecord::new(GoalSpec {
+            id: Some("parked-1".into()),
+            description: "waiting on you".into(),
+            success_criteria: vec![],
+            domain: DomainHint::Life,
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: None,
+            profile: None,
+            payload: serde_json::Value::Null,
+        });
+        // It may ask (AskHuman), it is awaiting an answer, and the daemon restarted under it.
+        rec.grant = SessionGrant {
+            capabilities: CapabilitySet::from_iter([liberado_common::Capability::AskHuman]),
+            ..Default::default()
+        };
+        rec.status = crate::goal::SessionStatus::Parked;
+        rec.awaiting_input = true;
+        crate::record_store::SessionRecordStore::insert(&store, rec).await;
+
+        let hub = Arc::new(GoalSessionHub::new(store));
+        let err = hub
+            .send_input("parked-1", "accept".to_string())
+            .await
+            .expect_err("a parked session has no live pack to receive the answer");
+
+        assert!(
+            matches!(err, crate::hub::SendInputError::Parked),
+            "a parked session must report Parked, not Terminal: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("already finished"),
+            "must not tell a parked session it finished: {msg}"
+        );
+        assert!(
+            msg.contains("parked"),
+            "and must say what it actually is: {msg}"
+        );
+    }
 }
