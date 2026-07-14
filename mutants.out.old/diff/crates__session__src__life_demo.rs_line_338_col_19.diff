@@ -1,0 +1,21 @@
+--- crates/session/src/life_demo.rs
++++ delete ! in slugify
+@@ -330,17 +330,17 @@
+ /// Lowercase, non-alphanumerics to `-`, collapsed — enough for a demo note path.
+ fn slugify(s: &str) -> String {
+     let mut out = String::new();
+     let mut prev_dash = false;
+     for ch in s.trim().chars() {
+         if ch.is_ascii_alphanumeric() {
+             out.push(ch.to_ascii_lowercase());
+             prev_dash = false;
+-        } else if !prev_dash {
++        } else if  /* ~ changed by cargo-mutants ~ */prev_dash {
+             out.push('-');
+             prev_dash = true;
+         }
+     }
+     let slug = out.trim_matches('-').to_string();
+     if slug.is_empty() { "note".into() } else { slug }
+ }
+ 

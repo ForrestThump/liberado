@@ -1,0 +1,21 @@
+--- crates/session/src/runner.rs
++++ replace PackContext<'_>::profile -> Option<&str> with Some("xyzzy")
+@@ -178,17 +178,17 @@
+ 
+     /// The pack's opaque overrides (an empty table when the profile set none).
+     pub fn overrides(&self) -> &serde_json::Value {
+         &self.grant.overrides
+     }
+ 
+     /// The profile name this session runs under, if any.
+     pub fn profile(&self) -> Option<&str> {
+-        self.grant.profile.as_deref()
++        Some("xyzzy") /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ /// One domain pack's goal-session implementation (coding, life, …).
+ #[async_trait]
+ pub trait DomainPackRunner: Send + Sync {
+     fn domain_id(&self) -> &str;
+ 

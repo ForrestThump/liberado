@@ -1,0 +1,70 @@
+--- crates/session/src/hub.rs
++++ replace GoalSessionHub::start_inner -> Result<String, String> with Ok("xyzzy".into())
+@@ -172,66 +172,17 @@
+     }
+ 
+     async fn start_inner(
+         self: &Arc<Self>,
+         mut goal: GoalSpec,
+         grant: SessionGrant,
+         visibility: Visibility,
+     ) -> Result<String, String> {
+-        let domain = goal.domain.as_str().to_string();
+-        if !self.packs.contains_key(&domain) {
+-            return Err(format!(
+-                "no domain pack registered for '{domain}' (have: {:?})",
+-                self.registered_domains()
+-            ));
+-        }
+-        if goal.description.trim().is_empty() {
+-            return Err("goal description must not be empty".into());
+-        }
+-
+-        let interactive = grant.grants_ask_human();
+-        let record = match visibility {
+-            Visibility::Foreground => GoalSessionRecord::with_grant(goal.clone(), grant),
+-            Visibility::Background => GoalSessionRecord::background(goal.clone(), grant),
+-        };
+-        let id = record.id.clone();
+-        goal.id = Some(id.clone());
+-        self.store.insert(record).await;
+-
+-        let (cancel_tx, cancel_rx) = watch::channel(false);
+-        self.cancels.lock().await.insert(id.clone(), cancel_tx);
+-
+-        let (input_tx, input_rx) = mpsc::channel::<HumanInput>(INPUT_CHANNEL_CAPACITY);
+-        // The AskHuman gate. Registering the sender is what makes a session reachable by
+-        // `send_input`; *dropping* it here (rather than storing it) closes the channel, so a pack
+-        // that tries to await input on an unpermitted session gets `Closed` immediately instead of
+-        // hanging until its idle budget expires.
+-        if interactive {
+-            self.inputs.lock().await.insert(id.clone(), input_tx);
+-        } else {
+-            drop(input_tx);
+-            debug!(
+-                session = %id,
+-                "session grant omits AskHuman — running non-interactively (input channel closed)"
+-            );
+-        }
+-        let idle_budget = goal.max_idle_secs.map(Duration::from_secs);
+-        let inputs = InputChannel::new(input_rx, idle_budget);
+-
+-        let hub = Arc::clone(self);
+-        let session_id = id.clone();
+-        let pack = self.packs.get(&domain).expect("checked above").clone();
+-
+-        tokio::spawn(async move {
+-            hub.run_session(session_id, goal, pack, inputs, cancel_rx)
+-                .await;
+-        });
+-
+-        Ok(id)
++        Ok("xyzzy".into()) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Block until the session reaches a terminal status (or is unknown). Used by `delegate`, which
+     /// is synchronous inside a chat turn and needs the pack's summary before it can reply.
+     pub async fn await_terminal(&self, id: &str) -> Result<SessionSnapshot, String> {
+         // Fast path: already done (or never started).
+         if let Some(snap) = self.snapshot(id).await {
+             if snap.session.status.is_terminal() {

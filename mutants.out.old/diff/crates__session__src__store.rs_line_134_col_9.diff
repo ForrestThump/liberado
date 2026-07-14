@@ -1,0 +1,39 @@
+--- crates/session/src/store.rs
++++ replace GoalSessionStore::append with ()
+@@ -126,35 +126,17 @@
+             inner: Arc::new(Mutex::new(map)),
+             dir: Some(Arc::new(dir)),
+         }
+     }
+ 
+     /// Append a line to a session's log (best-effort — a persistence failure is logged, never
+     /// fatal to a running session). No-op for an in-memory store.
+     fn append(&self, id: &str, line: &LogLine) {
+-        let Some(dir) = &self.dir else { return };
+-        let path = dir.join(format!("{}.jsonl", sanitize_id(id)));
+-        let mut serialized = match serde_json::to_string(line) {
+-            Ok(s) => s,
+-            Err(e) => {
+-                warn!(error = %e, "goal-session store: serialize failed");
+-                return;
+-            }
+-        };
+-        serialized.push('\n');
+-        use std::io::Write;
+-        let write = std::fs::OpenOptions::new()
+-            .create(true)
+-            .append(true)
+-            .open(&path)
+-            .and_then(|mut f| f.write_all(serialized.as_bytes()));
+-        if let Err(e) = write {
+-            warn!(error = %e, path = %path.display(), "goal-session store: append failed");
+-        }
++        () /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     pub async fn insert(&self, record: GoalSessionRecord) {
+         let id = record.id.clone();
+         self.append(
+             &id,
+             &LogLine::Start {
+                 record: Box::new(record.clone()),

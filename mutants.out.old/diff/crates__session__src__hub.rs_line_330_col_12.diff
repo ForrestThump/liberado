@@ -1,0 +1,21 @@
+--- crates/session/src/hub.rs
++++ delete ! in GoalSessionHub::resume
+@@ -322,17 +322,17 @@
+                 SendInputError::Closed
+             });
+         }
+ 
+         let Some(pack) = self.packs.get(record.goal.domain.as_str()).cloned() else {
+             return Err(SendInputError::Terminal);
+         };
+         let ctx = PackContext::new(&record.grant, self.store.clone(), id);
+-        if !pack.can_resume(&ctx).await {
++        if  /* ~ changed by cargo-mutants ~ */pack.can_resume(&ctx).await {
+             // The pack cannot rebuild itself from the transcript — for the coding pack this means
+             // the build had already started. Leave it parked and honest rather than silently
+             // re-running work that touched the filesystem.
+             return Err(SendInputError::Parked);
+         }
+ 
+         // The answer joins the transcript first, so the pack sees it on `prior_turns()`.
+         self.store

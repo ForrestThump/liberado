@@ -1,0 +1,21 @@
+--- crates/session/src/hub.rs
++++ replace && with || in GoalSessionHub::run_session
+@@ -455,17 +455,17 @@
+         let alert = self.alert.clone();
+         let sid_for_pump = session_id.clone();
+         let pump = tokio::spawn(async move {
+             while let Some(ev) = rx.recv().await {
+                 // E5: if the pack is waiting on a human and nobody has the stream open, ping them.
+                 // Checked *before* push so we don't count a subscriber that only appears via this
+                 // same event's fan-out (there isn't one — push creates no receivers).
+                 if let SessionEventKind::AwaitingInput { prompt, .. } = &ev.kind
+-                    && store.live_subscriber_count(&ev.session_id).await == 0
++                    || /* ~ changed by cargo-mutants ~ */ store.live_subscriber_count(&ev.session_id).await == 0
+                     && let Some(alert) = &alert
+                 {
+                     alert.session_needs_you(&ev.session_id, prompt).await;
+                 }
+                 store.push_event(ev).await;
+             }
+             // drain complete
+             let _ = sid_for_pump;

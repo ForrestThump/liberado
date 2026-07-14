@@ -1,0 +1,39 @@
+crates/session/src/goal.rs:37:9: replace <impl From<&str> for DomainHint>::from -> Self with Default::default()
+crates/session/src/goal.rs:53:9: replace <impl Deserialize<'de> for DomainHint>::deserialize -> Result<Self, D::Error> with Ok(Default::default())
+crates/session/src/goal.rs:81:9: replace SessionOrigin::from_conversation -> Self with Default::default()
+crates/session/src/goal.rs:89:9: replace SessionOrigin::from_correlation -> Self with Default::default()
+crates/session/src/goal.rs:153:9: replace Visibility::is_background -> bool with true
+crates/session/src/goal.rs:153:9: replace Visibility::is_background -> bool with false
+crates/session/src/goal.rs:274:13: delete field visibility from struct Self expression in GoalSessionRecord::background
+crates/session/src/hub.rs:171:9: replace GoalSessionHub::start_background -> Result<String, String> with Ok(String::new())
+crates/session/src/hub.rs:171:9: replace GoalSessionHub::start_background -> Result<String, String> with Ok("xyzzy".into())
+crates/session/src/hub.rs:261:27: replace match guard matches!(ev.kind, SessionEventKind::SessionFinished { .. }) with true in GoalSessionHub::await_terminal
+crates/session/src/hub.rs:261:27: replace match guard matches!(ev.kind, SessionEventKind::SessionFinished { .. }) with false in GoalSessionHub::await_terminal
+crates/session/src/hub.rs:281:9: replace GoalSessionHub::cancel -> Result<(), String> with Ok(())
+crates/session/src/hub.rs:438:9: replace GoalSessionHub::list -> Vec<GoalSessionRecord> with vec![]
+crates/session/src/hub.rs:463:74: replace == with != in GoalSessionHub::run_session
+crates/session/src/record_store.rs:86:9: replace SessionRecordStore::live_subscriber_count -> usize with 0
+crates/session/src/record_store.rs:86:9: replace SessionRecordStore::live_subscriber_count -> usize with 1
+crates/session/src/runner.rs:140:9: replace PackContext<'_>::record_turn with ()
+crates/session/src/runner.rs:168:9: replace PackContext<'_>::prior_events -> Vec<SessionEvent> with vec![]
+crates/session/src/runner.rs:181:9: replace PackContext<'_>::overrides -> &serde_json::Value with Box::leak(Box::new(Default::default()))
+crates/session/src/runner.rs:186:9: replace PackContext<'_>::profile -> Option<&str> with None
+crates/session/src/runner.rs:186:9: replace PackContext<'_>::profile -> Option<&str> with Some("")
+crates/session/src/runner.rs:186:9: replace PackContext<'_>::profile -> Option<&str> with Some("xyzzy")
+crates/session/src/runner.rs:230:9: replace DomainPackRunner::can_resume -> bool with true
+crates/session/src/store.rs:118:12: delete ! in GoalSessionStore::open
+crates/session/src/store.rs:181:9: replace GoalSessionStore::list -> Vec<GoalSessionRecord> with vec![]
+crates/session/src/store.rs:201:9: replace GoalSessionStore::subscribe -> Option<(Vec<SessionEvent>, broadcast::Receiver<SessionEvent>)> with None
+crates/session/src/store.rs:228:21: delete match arm SessionEventKind::HumanInput{..} in GoalSessionStore::push_event
+crates/session/src/store.rs:246:9: replace GoalSessionStore::set_status with ()
+crates/session/src/store.rs:320:25: delete match arm SessionEventKind::HumanInput{..} in replay_file
+crates/session/src/store.rs:385:5: replace sanitize_id -> String with "xyzzy".into()
+crates/session/src/store.rs:387:54: replace || with && in sanitize_id
+crates/session/src/store.rs:387:42: replace || with && in sanitize_id
+crates/session/src/store.rs:387:47: replace == with != in sanitize_id
+crates/session/src/store.rs:387:59: replace == with != in sanitize_id
+crates/session/src/store.rs:408:9: replace <impl crate::record_store::SessionRecordStore for GoalSessionStore>::list -> Vec<GoalSessionRecord> with vec![]
+crates/session/src/store.rs:417:9: replace <impl crate::record_store::SessionRecordStore for GoalSessionStore>::subscribe -> Option<(Vec<SessionEvent>, broadcast::Receiver<SessionEvent>)> with None
+crates/session/src/store.rs:423:9: replace <impl crate::record_store::SessionRecordStore for GoalSessionStore>::live_subscriber_count -> usize with 0
+crates/session/src/store.rs:423:9: replace <impl crate::record_store::SessionRecordStore for GoalSessionStore>::live_subscriber_count -> usize with 1
+crates/session/src/store.rs:433:9: replace <impl crate::record_store::SessionRecordStore for GoalSessionStore>::set_status with ()

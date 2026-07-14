@@ -1,0 +1,21 @@
+--- crates/session/src/store.rs
++++ replace <impl crate::record_store::SessionRecordStore for GoalSessionStore>::finish with ()
+@@ -428,17 +428,17 @@
+     }
+     async fn turns(&self, session_id: &str) -> Vec<(TurnAuthor, String)> {
+         GoalSessionStore::turns(self, session_id).await
+     }
+     async fn set_status(&self, id: &str, status: SessionStatus) {
+         GoalSessionStore::set_status(self, id, status).await
+     }
+     async fn finish(&self, id: &str, status: SessionStatus, result: GoalResult) {
+-        GoalSessionStore::finish(self, id, status, result).await
++        () /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+     use crate::goal::{DomainHint, GoalSpec};
+ 

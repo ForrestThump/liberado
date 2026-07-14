@@ -1,0 +1,21 @@
+--- crates/session/src/store.rs
++++ replace GoalSessionStore::events -> Option<Vec<SessionEvent>> with Some(vec![])
+@@ -185,17 +185,17 @@
+             .values()
+             .map(|s| s.record.clone())
+             .collect();
+         rows.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+         rows
+     }
+ 
+     pub async fn events(&self, id: &str) -> Option<Vec<SessionEvent>> {
+-        self.inner.lock().await.get(id).map(|s| s.events.clone())
++        Some(vec![]) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Subscribe to live events. Also returns a snapshot of events so far (for catch-up).
+     pub async fn subscribe(
+         &self,
+         id: &str,
+     ) -> Option<(Vec<SessionEvent>, broadcast::Receiver<SessionEvent>)> {
+         let map = self.inner.lock().await;

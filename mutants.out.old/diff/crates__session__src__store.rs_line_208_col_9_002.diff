@@ -1,0 +1,26 @@
+--- crates/session/src/store.rs
++++ replace GoalSessionStore::turns -> Vec<(TurnAuthor, String)> with vec![(Default::default(), "xyzzy".into())]
+@@ -200,22 +200,17 @@
+     ) -> Option<(Vec<SessionEvent>, broadcast::Receiver<SessionEvent>)> {
+         let map = self.inner.lock().await;
+         let s = map.get(id)?;
+         Some((s.events.clone(), s.bus.subscribe()))
+     }
+ 
+     /// The turns recorded for `id`, in order — what a pack (or the hub) said and was told.
+     pub async fn turns(&self, id: &str) -> Vec<(TurnAuthor, String)> {
+-        self.inner
+-            .lock()
+-            .await
+-            .get(id)
+-            .map(|s| s.turns.clone())
+-            .unwrap_or_default()
++        vec![(Default::default(), "xyzzy".into())] /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     pub async fn append_turn(&self, session_id: &str, author: TurnAuthor, content: String) {
+         if let Some(s) = self.inner.lock().await.get_mut(session_id) {
+             s.turns.push((author, content));
+         }
+     }
+ 

@@ -1,0 +1,21 @@
+--- crates/session/src/store.rs
++++ delete ! in replay_file
+@@ -348,17 +348,17 @@
+     }
+ 
+     let mut record = record?;
+     record.event_count = events.len();
+ 
+     // A session that was still running when the daemon stopped can't be resumed — mark it Failed so
+     // surfaces show it as terminal (its transcript stays fully viewable on rejoin). E6 exception:
+     // an awaiting session is only *parked*, not failed.
+-    if !record.status.is_terminal() {
++    if  /* ~ changed by cargo-mutants ~ */record.status.is_terminal() {
+         if record.awaiting_input {
+             record.status = SessionStatus::Parked;
+         } else {
+             record.status = SessionStatus::Failed;
+             record.awaiting_input = false;
+             if record.result.is_none() {
+                 record.result = Some(GoalResult {
+                     terminal: TerminalKind::Failed,

@@ -1,0 +1,21 @@
+--- crates/session/src/hub.rs
++++ replace GoalSessionHub::start -> Result<String, String> with Ok("xyzzy".into())
+@@ -131,17 +131,17 @@
+     pub fn registered_domains(&self) -> Vec<String> {
+         self.packs.keys().cloned().collect()
+     }
+ 
+     /// Start a goal session with **zero authority** — the fail-safe default. Prefer
+     /// [`start_with_grant`](Self::start_with_grant); this exists for callers (and tests) that mean
+     /// "a session that may do nothing consequential and may not ask a human anything".
+     pub async fn start(self: &Arc<Self>, goal: GoalSpec) -> Result<String, String> {
+-        self.start_with_grant(goal, SessionGrant::default()).await
++        Ok("xyzzy".into()) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Start a goal session under an explicit authority `grant` (S6). Returns the session id
+     /// immediately. Visibility is [`Foreground`](Visibility::Foreground) — a human is watching.
+     ///
+     /// The grant is resolved by the *server* from the session's profile — the kernel never reads
+     /// config. It is recorded on the session and never widened afterwards.
+     ///

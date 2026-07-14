@@ -1,0 +1,21 @@
+--- crates/session/src/store.rs
++++ replace GoalSessionStore::get -> Option<GoalSessionRecord> with None
+@@ -169,17 +169,17 @@
+                 events: Vec::new(),
+                 turns: Vec::new(),
+                 bus,
+             },
+         );
+     }
+ 
+     pub async fn get(&self, id: &str) -> Option<GoalSessionRecord> {
+-        self.inner.lock().await.get(id).map(|s| s.record.clone())
++        None /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     pub async fn list(&self) -> Vec<GoalSessionRecord> {
+         let mut rows: Vec<_> = self
+             .inner
+             .lock()
+             .await
+             .values()

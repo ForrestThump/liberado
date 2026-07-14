@@ -69,7 +69,9 @@ fn id() -> String {
 async fn a_session_round_trips() {
     for (name, store, _d) in implementations().await {
         let sid = id();
-        store.insert(GoalSessionRecord::new(spec(&sid, "build a cli"))).await;
+        store
+            .insert(GoalSessionRecord::new(spec(&sid, "build a cli")))
+            .await;
 
         let got = store
             .get(&sid)
@@ -77,7 +79,10 @@ async fn a_session_round_trips() {
             .unwrap_or_else(|| panic!("{name}: inserted session must be readable back"));
         assert_eq!(got.id, sid, "{name}");
         assert_eq!(got.goal.description, "build a cli", "{name}");
-        assert!(!got.awaiting_input, "{name}: a fresh session awaits nothing");
+        assert!(
+            !got.awaiting_input,
+            "{name}: a fresh session awaits nothing"
+        );
         assert!(
             store.list().await.iter().any(|r| r.id == sid),
             "{name}: and it must appear in the list"
@@ -92,13 +97,19 @@ async fn turns_read_back_what_was_written_in_order() {
     // works in a unit test does something different on your machine.
     for (name, store, _d) in implementations().await {
         let sid = id();
-        store.insert(GoalSessionRecord::new(spec(&sid, "goal"))).await;
+        store
+            .insert(GoalSessionRecord::new(spec(&sid, "goal")))
+            .await;
 
-        store.append_turn(&sid, TurnAuthor::User, "the goal".into()).await;
+        store
+            .append_turn(&sid, TurnAuthor::User, "the goal".into())
+            .await;
         store
             .append_turn(&sid, TurnAuthor::Assistant, "a question?".into())
             .await;
-        store.append_turn(&sid, TurnAuthor::User, "an answer".into()).await;
+        store
+            .append_turn(&sid, TurnAuthor::User, "an answer".into())
+            .await;
 
         let turns = store.turns(&sid).await;
         let said: Vec<&str> = turns.iter().map(|(_, t)| t.as_str()).collect();
@@ -119,7 +130,9 @@ async fn turns_read_back_what_was_written_in_order() {
 async fn turns_are_empty_for_a_session_that_has_said_nothing() {
     for (name, store, _d) in implementations().await {
         let sid = id();
-        store.insert(GoalSessionRecord::new(spec(&sid, "goal"))).await;
+        store
+            .insert(GoalSessionRecord::new(spec(&sid, "goal")))
+            .await;
         assert!(
             store.turns(&sid).await.is_empty(),
             "{name}: no turns recorded means no turns read back — resume must not invent an answer"
@@ -138,7 +151,9 @@ async fn awaiting_input_is_derived_from_the_event_stream_not_set_by_hand() {
     // answerable when it is not (or the reverse).
     for (name, store, _d) in implementations().await {
         let sid = id();
-        store.insert(GoalSessionRecord::new(spec(&sid, "goal"))).await;
+        store
+            .insert(GoalSessionRecord::new(spec(&sid, "goal")))
+            .await;
 
         store
             .push_event(SessionEvent::new(
@@ -173,7 +188,9 @@ async fn awaiting_input_is_derived_from_the_event_stream_not_set_by_hand() {
 async fn events_read_back_in_order() {
     for (name, store, _d) in implementations().await {
         let sid = id();
-        store.insert(GoalSessionRecord::new(spec(&sid, "goal"))).await;
+        store
+            .insert(GoalSessionRecord::new(spec(&sid, "goal")))
+            .await;
         for i in 0..5 {
             store
                 .push_event(SessionEvent::new(
@@ -195,7 +212,11 @@ async fn events_read_back_in_order() {
                 _ => None,
             })
             .collect();
-        assert_eq!(msgs, ["step 0", "step 1", "step 2", "step 3", "step 4"], "{name}");
+        assert_eq!(
+            msgs,
+            ["step 0", "step 1", "step 2", "step 3", "step 4"],
+            "{name}"
+        );
     }
 }
 
@@ -203,7 +224,9 @@ async fn events_read_back_in_order() {
 async fn finish_is_terminal_and_records_the_result() {
     for (name, store, _d) in implementations().await {
         let sid = id();
-        store.insert(GoalSessionRecord::new(spec(&sid, "goal"))).await;
+        store
+            .insert(GoalSessionRecord::new(spec(&sid, "goal")))
+            .await;
         store.set_status(&sid, SessionStatus::Running).await;
 
         store
@@ -236,7 +259,9 @@ async fn a_live_subscriber_is_counted_and_an_absent_one_is_not() {
     // disagree, the notification either never fires or fires while you are looking at the screen.
     for (name, store, _d) in implementations().await {
         let sid = id();
-        store.insert(GoalSessionRecord::new(spec(&sid, "goal"))).await;
+        store
+            .insert(GoalSessionRecord::new(spec(&sid, "goal")))
+            .await;
 
         assert_eq!(
             store.live_subscriber_count(&sid).await,
@@ -245,7 +270,10 @@ async fn a_live_subscriber_is_counted_and_an_absent_one_is_not() {
         );
 
         let sub = store.subscribe(&sid).await;
-        assert!(sub.is_some(), "{name}: a known session must be subscribable");
+        assert!(
+            sub.is_some(),
+            "{name}: a known session must be subscribable"
+        );
         assert_eq!(
             store.live_subscriber_count(&sid).await,
             1,

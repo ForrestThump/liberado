@@ -1,0 +1,21 @@
+--- crates/session/src/runner.rs
++++ replace PackContext<'_>::can -> bool with true
+@@ -168,17 +168,17 @@
+         self.store
+             .events(&self.session_id)
+             .await
+             .unwrap_or_default()
+     }
+ 
+     /// Whether this session holds `cap`. The one call a pack should make before a consequential act.
+     pub fn can(&self, cap: &Capability) -> bool {
+-        self.grant.capabilities.contains(cap)
++        true /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// The pack's opaque overrides (an empty table when the profile set none).
+     pub fn overrides(&self) -> &serde_json::Value {
+         &self.grant.overrides
+     }
+ 
+     /// The profile name this session runs under, if any.

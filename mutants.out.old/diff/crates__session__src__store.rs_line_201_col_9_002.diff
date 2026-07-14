@@ -1,0 +1,23 @@
+--- crates/session/src/store.rs
++++ replace GoalSessionStore::subscribe -> Option<(Vec<SessionEvent>, broadcast::Receiver<SessionEvent>)> with Some((vec![], Receiver::from_iter([Default::default()])))
+@@ -193,19 +193,17 @@
+         self.inner.lock().await.get(id).map(|s| s.events.clone())
+     }
+ 
+     /// Subscribe to live events. Also returns a snapshot of events so far (for catch-up).
+     pub async fn subscribe(
+         &self,
+         id: &str,
+     ) -> Option<(Vec<SessionEvent>, broadcast::Receiver<SessionEvent>)> {
+-        let map = self.inner.lock().await;
+-        let s = map.get(id)?;
+-        Some((s.events.clone(), s.bus.subscribe()))
++        Some((vec![], Receiver::from_iter([Default::default()]))) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// The turns recorded for `id`, in order — what a pack (or the hub) said and was told.
+     pub async fn turns(&self, id: &str) -> Vec<(TurnAuthor, String)> {
+         self.inner
+             .lock()
+             .await
+             .get(id)

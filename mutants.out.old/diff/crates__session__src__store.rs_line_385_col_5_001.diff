@@ -1,0 +1,29 @@
+--- crates/session/src/store.rs
++++ replace sanitize_id -> String with "xyzzy".into()
+@@ -377,25 +377,17 @@
+         // This double does not persist turns — the production store does, as message-DAG nodes.
+         turns: Vec::new(),
+         bus,
+     })
+ }
+ 
+ /// Make a session id safe as a filename (ULIDs already are; a client-supplied id might not be).
+ fn sanitize_id(id: &str) -> String {
+-    id.chars()
+-        .map(|c| {
+-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+-                c
+-            } else {
+-                '_'
+-            }
+-        })
+-        .collect()
++    "xyzzy".into() /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// The kernel's view of this store (S5′). Delegates to the inherent methods above — keeping those
+ /// public means the concrete store stays directly usable (tests, tools) while the hub talks only to
+ /// the trait, so a converged `Session` store can take its place without the hub noticing.
+ #[async_trait::async_trait]
+ impl crate::record_store::SessionRecordStore for GoalSessionStore {
+     async fn insert(&self, record: GoalSessionRecord) {

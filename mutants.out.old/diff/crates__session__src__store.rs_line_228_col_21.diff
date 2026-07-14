@@ -1,0 +1,21 @@
+--- crates/session/src/store.rs
++++ delete match arm SessionEventKind::HumanInput{..} in GoalSessionStore::push_event
+@@ -220,17 +220,17 @@
+     }
+ 
+     pub async fn push_event(&self, event: SessionEvent) {
+         let persist = {
+             let mut map = self.inner.lock().await;
+             if let Some(s) = map.get_mut(&event.session_id) {
+                 match &event.kind {
+                     SessionEventKind::AwaitingInput { .. } => s.record.awaiting_input = true,
+-                    SessionEventKind::HumanInput { .. } => s.record.awaiting_input = false,
++                     /* ~ changed by cargo-mutants ~ */
+                     _ => {}
+                 }
+                 s.events.push(event.clone());
+                 s.record.event_count = s.events.len();
+                 let _ = s.bus.send(event.clone());
+                 true
+             } else {
+                 false

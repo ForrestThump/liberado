@@ -1,0 +1,23 @@
+--- crates/session/src/store.rs
++++ replace GoalSessionStore::append_turn with ()
+@@ -209,19 +209,17 @@
+             .lock()
+             .await
+             .get(id)
+             .map(|s| s.turns.clone())
+             .unwrap_or_default()
+     }
+ 
+     pub async fn append_turn(&self, session_id: &str, author: TurnAuthor, content: String) {
+-        if let Some(s) = self.inner.lock().await.get_mut(session_id) {
+-            s.turns.push((author, content));
+-        }
++        () /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     pub async fn push_event(&self, event: SessionEvent) {
+         let persist = {
+             let mut map = self.inner.lock().await;
+             if let Some(s) = map.get_mut(&event.session_id) {
+                 match &event.kind {
+                     SessionEventKind::AwaitingInput { .. } => s.record.awaiting_input = true,

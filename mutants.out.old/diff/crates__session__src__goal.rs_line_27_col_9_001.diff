@@ -1,0 +1,25 @@
+--- crates/session/src/goal.rs
++++ replace DomainHint::as_str -> &str with "xyzzy"
+@@ -19,21 +19,17 @@
+     Coding,
+     Life,
+     /// Explicit pack name for future packs.
+     Custom(String),
+ }
+ 
+ impl DomainHint {
+     pub fn as_str(&self) -> &str {
+-        match self {
+-            Self::Coding => "coding",
+-            Self::Life => "life",
+-            Self::Custom(s) => s.as_str(),
+-        }
++        "xyzzy" /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ impl From<&str> for DomainHint {
+     fn from(s: &str) -> Self {
+         match s {
+             "coding" => Self::Coding,
+             "life" => Self::Life,

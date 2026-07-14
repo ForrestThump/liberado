@@ -1,0 +1,21 @@
+--- crates/session/src/goal.rs
++++ delete field visibility from struct Self expression in GoalSessionRecord::background
+@@ -266,17 +266,17 @@
+             event_count: 0,
+             awaiting_input: false,
+         }
+     }
+ 
+     /// A session nobody is watching — a cron firing, a webhook, a `delegate`d subagent.
+     pub fn background(goal: GoalSpec, grant: SessionGrant) -> Self {
+         Self {
+-            visibility: Visibility::Background,
++             /* ~ changed by cargo-mutants ~ */
+             ..Self::with_grant(goal, grant)
+         }
+     }
+ }
+ 
+ /// What a goal session is allowed to do, and how its pack is configured (S6).
+ ///
+ /// Two things the server resolves from `[[session_profiles]]` before the kernel starts a session:

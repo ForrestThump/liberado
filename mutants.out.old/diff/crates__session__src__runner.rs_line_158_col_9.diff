@@ -1,0 +1,21 @@
+--- crates/session/src/runner.rs
++++ replace PackContext<'_>::prior_turns -> Vec<(TurnAuthor, String)> with vec![]
+@@ -150,17 +150,17 @@
+     /// read it back cannot pick the conversation up where it stopped — it can only start over and
+     /// ask you everything again, which is not resuming, it is forgetting politely.
+     ///
+     /// This deliberately widens `PackContext`, which until now exposed *only* `record_turn` on the
+     /// principle that a pack should not see the store. The principle stands — a pack still cannot
+     /// reach the store, only its own transcript — but "write-only memory" was not a principle, it
+     /// was an oversight that happened to be invisible until something needed to remember.
+     pub async fn prior_turns(&self) -> Vec<(TurnAuthor, String)> {
+-        self.store.turns(&self.session_id).await
++        vec![] /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// The events already recorded for this session — what already *happened*, as opposed to what
+     /// was *said* ([`prior_turns`](Self::prior_turns)).
+     ///
+     /// A pack needs this to answer [`DomainPackRunner::can_resume`]: "did I get far enough to have
+     /// touched something I cannot un-touch?" is a question about events (a role started, a tool
+     /// ran), not about dialogue.

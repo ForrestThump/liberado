@@ -1,0 +1,24 @@
+--- crates/session/src/runner.rs
++++ replace PackContext<'_>::prior_events -> Vec<SessionEvent> with vec![]
+@@ -160,20 +160,17 @@
+ 
+     /// The events already recorded for this session — what already *happened*, as opposed to what
+     /// was *said* ([`prior_turns`](Self::prior_turns)).
+     ///
+     /// A pack needs this to answer [`DomainPackRunner::can_resume`]: "did I get far enough to have
+     /// touched something I cannot un-touch?" is a question about events (a role started, a tool
+     /// ran), not about dialogue.
+     pub async fn prior_events(&self) -> Vec<SessionEvent> {
+-        self.store
+-            .events(&self.session_id)
+-            .await
+-            .unwrap_or_default()
++        vec![] /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Whether this session holds `cap`. The one call a pack should make before a consequential act.
+     pub fn can(&self, cap: &Capability) -> bool {
+         self.grant.capabilities.contains(cap)
+     }
+ 
+     /// The pack's opaque overrides (an empty table when the profile set none).

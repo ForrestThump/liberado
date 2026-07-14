@@ -1,0 +1,21 @@
+--- crates/session/src/goal.rs
++++ replace <impl Serialize for DomainHint>::serialize -> Result<S::Ok, S::Error> with Ok(Default::default())
+@@ -39,17 +39,17 @@
+             "life" => Self::Life,
+             other => Self::Custom(other.to_string()),
+         }
+     }
+ }
+ 
+ impl Serialize for DomainHint {
+     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+-        s.serialize_str(self.as_str())
++        Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ impl<'de> Deserialize<'de> for DomainHint {
+     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+         Ok(Self::from(String::deserialize(d)?.as_str()))
+     }
+ }

@@ -1,0 +1,176 @@
+
+*** crates/session/src/hub.rs:236:9: replace GoalSessionHub::await_terminal -> Result<SessionSnapshot, String> with Ok(Default::default())
+
+*** mutation diff:
+--- crates/session/src/hub.rs
++++ replace GoalSessionHub::await_terminal -> Result<SessionSnapshot, String> with Ok(Default::default())
+@@ -228,58 +228,17 @@
+ 
+         Ok(id)
+     }
+ 
+     /// Block until the session reaches a terminal status (or is unknown). Used by `delegate`, which
+     /// is synchronous inside a chat turn and needs the pack's summary before it can reply.
+     pub async fn await_terminal(&self, id: &str) -> Result<SessionSnapshot, String> {
+         // Fast path: already done (or never started).
+-        if let Some(snap) = self.snapshot(id).await {
+-            if snap.session.status.is_terminal() {
+-                return Ok(snap);
+-            }
+-        } else {
+-            return Err(format!("no such goal session '{id}'"));
+-        }
+-
+-        let (_history, mut rx) = self
+-            .store
+-            .subscribe(id)
+-            .await
+-            .ok_or_else(|| format!("no such goal session '{id}'"))?;
+-
+-        loop {
+-            // Re-check after subscribe to close the race where finish landed between snapshot and
+-            // subscribe.
+-            if let Some(snap) = self.snapshot(id).await {
+-                if snap.session.status.is_terminal() {
+-                    return Ok(snap);
+-                }
+-            } else {
+-                return Err(format!("goal session '{id}' vanished"));
+-            }
+-            match rx.recv().await {
+-                Ok(ev) if matches!(ev.kind, SessionEventKind::SessionFinished { .. }) => {
+-                    return self
+-                        .snapshot(id)
+-                        .await
+-                        .ok_or_else(|| format!("goal session '{id}' vanished after finish"));
+-                }
+-                Ok(_) => continue,
+-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+-                Err(broadcast::error::RecvError::Closed) => {
+-                    // Bus closed — session tore down; snapshot should be terminal.
+-                    return self
+-                        .snapshot(id)
+-                        .await
+-                        .ok_or_else(|| format!("goal session '{id}' ended without a snapshot"));
+-                }
+-            }
+-        }
++        Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     pub async fn cancel(&self, id: &str) -> Result<(), String> {
+         let map = self.cancels.lock().await;
+         let tx = map
+             .get(id)
+             .ok_or_else(|| format!("session '{id}' not found or already finished"))?;
+         let _ = tx.send(true);
+
+
+*** C:\\Program\ Files\\Rust\ stable\ MSVC\ 1.94\\bin\\cargo.exe test --no-run --verbose --package=liberado-session@0.1.0
+       Fresh unicode-ident v1.0.24
+       Fresh cfg-if v1.0.4
+       Fresh version_check v0.9.5
+       Fresh windows-link v0.2.1
+       Fresh typenum v1.20.1
+       Fresh autocfg v1.5.1
+       Fresh proc-macro2 v1.0.106
+       Fresh hashbrown v0.17.1
+       Fresh equivalent v1.0.2
+       Fresh windows-sys v0.61.2
+       Fresh getrandom v0.2.17
+       Fresh quote v1.0.46
+       Fresh serde_core v1.0.228
+       Fresh zerocopy v0.8.52
+       Fresh getrandom v0.3.4
+       Fresh indexmap v2.14.0
+       Fresh subtle v2.6.1
+       Fresh scopeguard v1.2.0
+       Fresh smallvec v1.15.2
+       Fresh rand_core v0.6.4
+       Fresh syn v2.0.118
+       Fresh ppv-lite86 v0.2.21
+       Fresh generic-array v0.14.7
+       Fresh parking_lot_core v0.9.12
+       Fresh rand_core v0.9.5
+       Fresh lock_api v0.4.14
+       Fresh winnow v0.7.15
+       Fresh toml_write v0.1.2
+       Fresh pin-project-lite v0.2.17
+       Fresh itoa v1.0.18
+       Fresh num-traits v0.2.19
+       Fresh serde_derive v1.0.228
+       Fresh crypto-common v0.1.7
+       Fresh block-buffer v0.10.4
+       Fresh parking_lot v0.12.5
+       Fresh rand_chacha v0.3.1
+       Fresh thiserror-impl v2.0.18
+       Fresh tokio-macros v2.7.0
+       Fresh rand_chacha v0.9.0
+       Fresh zmij v1.0.21
+       Fresh socket2 v0.6.4
+       Fresh mio v1.2.1
+       Fresh serde v1.0.228
+       Fresh digest v0.10.7
+       Fresh memchr v2.8.2
+       Fresh once_cell v1.21.4
+       Fresh cpufeatures v0.2.17
+       Fresh unsafe-libyaml v0.2.11
+       Fresh bytes v1.12.0
+       Fresh ryu v1.0.23
+       Fresh rand v0.8.6
+       Fresh rand v0.9.4
+       Fresh thiserror v2.0.18
+       Fresh tracing-attributes v0.1.31
+       Fresh async-trait v0.1.89
+       Fresh toml_datetime v0.6.11
+       Fresh serde_spanned v0.6.9
+       Fresh hmac v0.12.1
+       Fresh sha2 v0.10.9
+       Fresh chrono v0.4.45
+       Fresh tokio v1.52.3
+       Fresh tracing-core v0.1.36
+       Fresh serde_yaml v0.9.34+deprecated
+       Fresh serde_json v1.0.150
+       Fresh ulid v1.2.1
+       Fresh toml_edit v0.22.27
+       Fresh tracing v0.1.44
+       Fresh toml v0.8.23
+       Fresh liberado-common v0.1.0 (C:\Users\Shiloh\Code\life-os\crates\common)
+       Dirty liberado-session v0.1.0 (C:\Users\Shiloh\Code\life-os\crates\session): the file `crates\session\src\hub.rs` has changed (13428510041.677494200s, 2s after last build at 13428510039.744893800s)
+   Compiling liberado-session v0.1.0 (C:\Users\Shiloh\Code\life-os\crates\session)
+     Running `rustc --crate-name liberado_session --edition=2024 'crates\session\src\lib.rs' --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --emit=dep-info,link -C embed-bitcode=no -C debuginfo=2 --test --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=f626ef0f9a4c5520 -C extra-filename=-133ba83ce3a3fc60 --out-dir 'C:\Users\Shiloh\Code\life-os\target\debug\deps' -C 'incremental=C:\Users\Shiloh\Code\life-os\target\debug\incremental' -L 'dependency=C:\Users\Shiloh\Code\life-os\target\debug\deps' --extern 'async_trait=C:\Users\Shiloh\Code\life-os\target\debug\deps\async_trait-043abcc1deda2a31.dll' --extern 'chrono=C:\Users\Shiloh\Code\life-os\target\debug\deps\libchrono-aa1fb4eeae40b30f.rlib' --extern 'liberado_common=C:\Users\Shiloh\Code\life-os\target\debug\deps\libliberado_common-0b5cd8f72debc46b.rlib' --extern 'serde=C:\Users\Shiloh\Code\life-os\target\debug\deps\libserde-111b90473235926b.rlib' --extern 'serde_json=C:\Users\Shiloh\Code\life-os\target\debug\deps\libserde_json-b21bda778e97de51.rlib' --extern 'thiserror=C:\Users\Shiloh\Code\life-os\target\debug\deps\libthiserror-3060c0d8457cb85d.rlib' --extern 'tokio=C:\Users\Shiloh\Code\life-os\target\debug\deps\libtokio-673dafa797bd7644.rlib' --extern 'tracing=C:\Users\Shiloh\Code\life-os\target\debug\deps\libtracing-a7e308946eeec130.rlib' --extern 'ulid=C:\Users\Shiloh\Code\life-os\target\debug\deps\libulid-169fdba300e5a6ec.rlib'`
+     Running `rustc --crate-name liberado_session --edition=2024 'crates\session\src\lib.rs' --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C embed-bitcode=no -C debuginfo=2 --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=00d58da1ce5b47f4 -C extra-filename=-fa37bea34b84dc38 --out-dir 'C:\Users\Shiloh\Code\life-os\target\debug\deps' -C 'incremental=C:\Users\Shiloh\Code\life-os\target\debug\incremental' -L 'dependency=C:\Users\Shiloh\Code\life-os\target\debug\deps' --extern 'async_trait=C:\Users\Shiloh\Code\life-os\target\debug\deps\async_trait-043abcc1deda2a31.dll' --extern 'chrono=C:\Users\Shiloh\Code\life-os\target\debug\deps\libchrono-aa1fb4eeae40b30f.rmeta' --extern 'liberado_common=C:\Users\Shiloh\Code\life-os\target\debug\deps\libliberado_common-0b5cd8f72debc46b.rmeta' --extern 'serde=C:\Users\Shiloh\Code\life-os\target\debug\deps\libserde-111b90473235926b.rmeta' --extern 'serde_json=C:\Users\Shiloh\Code\life-os\target\debug\deps\libserde_json-b21bda778e97de51.rmeta' --extern 'thiserror=C:\Users\Shiloh\Code\life-os\target\debug\deps\libthiserror-3060c0d8457cb85d.rmeta' --extern 'tokio=C:\Users\Shiloh\Code\life-os\target\debug\deps\libtokio-673dafa797bd7644.rmeta' --extern 'tracing=C:\Users\Shiloh\Code\life-os\target\debug\deps\libtracing-a7e308946eeec130.rmeta' --extern 'ulid=C:\Users\Shiloh\Code\life-os\target\debug\deps\libulid-169fdba300e5a6ec.rmeta'`
+warning: unused import: `broadcast`
+ --> crates\session\src\hub.rs:7:19
+  |
+7 | use tokio::sync::{broadcast, mpsc, watch};
+  |                   ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0277]: the trait bound `SessionSnapshot: Default` is not satisfied
+   --> crates\session\src\hub.rs:236:12
+    |
+236 |         Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+    |            ^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `Default` is not implemented for `SessionSnapshot`
+   --> crates\session\src\hub.rs:23:1
+    |
+ 23 | pub struct SessionSnapshot {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0277`.
+warning: `liberado-session` (lib) generated 1 warning
+error: could not compile `liberado-session` (lib) due to 1 previous error; 1 warning emitted
+
+Caused by:
+  process didn't exit successfully: `rustc --crate-name liberado_session --edition=2024 'crates\session\src\lib.rs' --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C embed-bitcode=no -C debuginfo=2 --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=00d58da1ce5b47f4 -C extra-filename=-fa37bea34b84dc38 --out-dir 'C:\Users\Shiloh\Code\life-os\target\debug\deps' -C 'incremental=C:\Users\Shiloh\Code\life-os\target\debug\incremental' -L 'dependency=C:\Users\Shiloh\Code\life-os\target\debug\deps' --extern 'async_trait=C:\Users\Shiloh\Code\life-os\target\debug\deps\async_trait-043abcc1deda2a31.dll' --extern 'chrono=C:\Users\Shiloh\Code\life-os\target\debug\deps\libchrono-aa1fb4eeae40b30f.rmeta' --extern 'liberado_common=C:\Users\Shiloh\Code\life-os\target\debug\deps\libliberado_common-0b5cd8f72debc46b.rmeta' --extern 'serde=C:\Users\Shiloh\Code\life-os\target\debug\deps\libserde-111b90473235926b.rmeta' --extern 'serde_json=C:\Users\Shiloh\Code\life-os\target\debug\deps\libserde_json-b21bda778e97de51.rmeta' --extern 'thiserror=C:\Users\Shiloh\Code\life-os\target\debug\deps\libthiserror-3060c0d8457cb85d.rmeta' --extern 'tokio=C:\Users\Shiloh\Code\life-os\target\debug\deps\libtokio-673dafa797bd7644.rmeta' --extern 'tracing=C:\Users\Shiloh\Code\life-os\target\debug\deps\libtracing-a7e308946eeec130.rmeta' --extern 'ulid=C:\Users\Shiloh\Code\life-os\target\debug\deps\libulid-169fdba300e5a6ec.rmeta'` (exit code: 1)
+warning: build failed, waiting for other jobs to finish...
+warning: `liberado-session` (lib test) generated 1 warning (1 duplicate)
+error: could not compile `liberado-session` (lib test) due to 1 previous error; 1 warning emitted
+
+Caused by:
+  process didn't exit successfully: `rustc --crate-name liberado_session --edition=2024 'crates\session\src\lib.rs' --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --emit=dep-info,link -C embed-bitcode=no -C debuginfo=2 --test --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=f626ef0f9a4c5520 -C extra-filename=-133ba83ce3a3fc60 --out-dir 'C:\Users\Shiloh\Code\life-os\target\debug\deps' -C 'incremental=C:\Users\Shiloh\Code\life-os\target\debug\incremental' -L 'dependency=C:\Users\Shiloh\Code\life-os\target\debug\deps' --extern 'async_trait=C:\Users\Shiloh\Code\life-os\target\debug\deps\async_trait-043abcc1deda2a31.dll' --extern 'chrono=C:\Users\Shiloh\Code\life-os\target\debug\deps\libchrono-aa1fb4eeae40b30f.rlib' --extern 'liberado_common=C:\Users\Shiloh\Code\life-os\target\debug\deps\libliberado_common-0b5cd8f72debc46b.rlib' --extern 'serde=C:\Users\Shiloh\Code\life-os\target\debug\deps\libserde-111b90473235926b.rlib' --extern 'serde_json=C:\Users\Shiloh\Code\life-os\target\debug\deps\libserde_json-b21bda778e97de51.rlib' --extern 'thiserror=C:\Users\Shiloh\Code\life-os\target\debug\deps\libthiserror-3060c0d8457cb85d.rlib' --extern 'tokio=C:\Users\Shiloh\Code\life-os\target\debug\deps\libtokio-673dafa797bd7644.rlib' --extern 'tracing=C:\Users\Shiloh\Code\life-os\target\debug\deps\libtracing-a7e308946eeec130.rlib' --extern 'ulid=C:\Users\Shiloh\Code\life-os\target\debug\deps\libulid-169fdba300e5a6ec.rlib'` (exit code: 1)
+
+*** result: Failure(101)

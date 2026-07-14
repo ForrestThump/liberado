@@ -1,0 +1,130 @@
+--- crates/session/src/hub.rs
++++ replace GoalSessionHub::run_session with ()
+@@ -441,126 +441,11 @@
+     async fn run_session(
+         &self,
+         session_id: String,
+         goal: GoalSpec,
+         pack: Arc<dyn DomainPackRunner>,
+         inputs: InputChannel,
+         cancel: watch::Receiver<bool>,
+     ) {
+-        self.store
+-            .set_status(&session_id, SessionStatus::Running)
+-            .await;
+-
+-        let (tx, mut rx) = mpsc::channel::<SessionEvent>(64);
+-        let store = self.store.clone();
+-        let alert = self.alert.clone();
+-        let sid_for_pump = session_id.clone();
+-        let pump = tokio::spawn(async move {
+-            while let Some(ev) = rx.recv().await {
+-                // E5: if the pack is waiting on a human and nobody has the stream open, ping them.
+-                // Checked *before* push so we don't count a subscriber that only appears via this
+-                // same event's fan-out (there isn't one — push creates no receivers).
+-                if let SessionEventKind::AwaitingInput { prompt, .. } = &ev.kind
+-                    && store.live_subscriber_count(&ev.session_id).await == 0
+-                    && let Some(alert) = &alert
+-                {
+-                    alert.session_needs_you(&ev.session_id, prompt).await;
+-                }
+-                store.push_event(ev).await;
+-            }
+-            // drain complete
+-            let _ = sid_for_pump;
+-        });
+-
+-        let start = SessionEvent::new(
+-            &session_id,
+-            SessionEventKind::SessionStarted {
+-                domain: pack.domain_id().to_string(),
+-                description: goal.description.clone(),
+-            },
+-        );
+-        let _ = tx.send(start).await;
+-
+-        // The grant recorded at `start_with_grant` is the session's authority for its whole life —
+-        // read back from the store rather than passed along, so there is exactly one source of
+-        // truth for what this session may do (and the non-widening invariant has something to hold).
+-        let grant = self
+-            .store
+-            .get(&session_id)
+-            .await
+-            .map(|r| r.grant)
+-            .unwrap_or_default();
+-        let ctx = PackContext::new(&grant, self.store.clone(), &session_id);
+-
+-        // The goal opens the transcript, as the human's first turn — because it *is* one: it is the
+-        // thing the human said that started all this. Recording it here rather than in each pack
+-        // means every session's transcript begins with what it was actually for, and a fork taken at
+-        // any later point inherits it.
+-        self.store
+-            .append_turn(&session_id, TurnAuthor::User, goal.description.clone())
+-            .await;
+-
+-        let result = pack
+-            .run(&session_id, &goal, &ctx, tx.clone(), inputs, cancel)
+-            .await;
+-
+-        let (status, goal_result) = match result {
+-            Ok(r) => {
+-                let status = match r.terminal {
+-                    TerminalKind::Succeeded => SessionStatus::Succeeded,
+-                    TerminalKind::Failed => SessionStatus::Failed,
+-                    TerminalKind::Cancelled => SessionStatus::Cancelled,
+-                    TerminalKind::BudgetExhausted => SessionStatus::BudgetExhausted,
+-                };
+-                (status, r)
+-            }
+-            Err(PackError::Cancelled) => (
+-                SessionStatus::Cancelled,
+-                GoalResult {
+-                    terminal: TerminalKind::Cancelled,
+-                    summary: "cancelled by client".into(),
+-                    artifacts: vec![],
+-                    diagnostics: serde_json::json!({}),
+-                },
+-            ),
+-            Err(e) => {
+-                warn!(session_id = %session_id, error = %e, "goal session pack error");
+-                (
+-                    SessionStatus::Failed,
+-                    GoalResult {
+-                        terminal: TerminalKind::Failed,
+-                        summary: e.to_string(),
+-                        artifacts: vec![],
+-                        diagnostics: serde_json::json!({}),
+-                    },
+-                )
+-            }
+-        };
+-
+-        // The outcome closes the transcript, as the session's last turn. A transcript that opens with
+-        // what was asked for and ends with what came of it reads as a conversation — which is what it
+-        // is — and a fork taken from the end inherits the answer rather than trailing off mid-thought.
+-        self.store
+-            .append_turn(
+-                &session_id,
+-                TurnAuthor::Assistant,
+-                goal_result.summary.clone(),
+-            )
+-            .await;
+-
+-        let fin = SessionEvent::new(
+-            &session_id,
+-            SessionEventKind::SessionFinished {
+-                status: format!("{:?}", status).to_ascii_lowercase(),
+-                summary: goal_result.summary.clone(),
+-            },
+-        );
+-        let _ = tx.send(fin).await;
+-        drop(tx);
+-        let _ = pump.await;
+-
+-        self.store.finish(&session_id, status, goal_result).await;
+-        self.cancels.lock().await.remove(&session_id);
+-        // Drop the input sender so any late `send_input` fails cleanly instead of blocking.
+-        self.inputs.lock().await.remove(&session_id);
++        () /* ~ changed by cargo-mutants ~ */
+     }
+ }

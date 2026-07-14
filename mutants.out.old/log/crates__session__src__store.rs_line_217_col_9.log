@@ -1,0 +1,261 @@
+
+*** crates/session/src/store.rs:217:9: replace GoalSessionStore::append_turn with ()
+
+*** mutation diff:
+--- crates/session/src/store.rs
++++ replace GoalSessionStore::append_turn with ()
+@@ -209,19 +209,17 @@
+             .lock()
+             .await
+             .get(id)
+             .map(|s| s.turns.clone())
+             .unwrap_or_default()
+     }
+ 
+     pub async fn append_turn(&self, session_id: &str, author: TurnAuthor, content: String) {
+-        if let Some(s) = self.inner.lock().await.get_mut(session_id) {
+-            s.turns.push((author, content));
+-        }
++        () /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     pub async fn push_event(&self, event: SessionEvent) {
+         let persist = {
+             let mut map = self.inner.lock().await;
+             if let Some(s) = map.get_mut(&event.session_id) {
+                 match &event.kind {
+                     SessionEventKind::AwaitingInput { .. } => s.record.awaiting_input = true,
+
+
+*** C:\\Program\ Files\\Rust\ stable\ MSVC\ 1.94\\bin\\cargo.exe test --no-run --verbose --package=liberado-session@0.1.0
+       Fresh unicode-ident v1.0.24
+       Fresh cfg-if v1.0.4
+       Fresh version_check v0.9.5
+       Fresh windows-link v0.2.1
+       Fresh typenum v1.20.1
+       Fresh equivalent v1.0.2
+       Fresh hashbrown v0.17.1
+       Fresh proc-macro2 v1.0.106
+       Fresh autocfg v1.5.1
+       Fresh indexmap v2.14.0
+       Fresh windows-sys v0.61.2
+       Fresh getrandom v0.2.17
+       Fresh quote v1.0.46
+       Fresh serde_core v1.0.228
+       Fresh zerocopy v0.8.52
+       Fresh getrandom v0.3.4
+       Fresh subtle v2.6.1
+       Fresh smallvec v1.15.2
+       Fresh scopeguard v1.2.0
+       Fresh rand_core v0.6.4
+       Fresh winnow v0.7.15
+       Fresh syn v2.0.118
+       Fresh ppv-lite86 v0.2.21
+       Fresh generic-array v0.14.7
+       Fresh lock_api v0.4.14
+       Fresh rand_core v0.9.5
+       Fresh parking_lot_core v0.9.12
+       Fresh pin-project-lite v0.2.17
+       Fresh toml_write v0.1.2
+       Fresh itoa v1.0.18
+       Fresh zmij v1.0.21
+       Fresh serde_derive v1.0.228
+       Fresh crypto-common v0.1.7
+       Fresh block-buffer v0.10.4
+       Fresh thiserror-impl v2.0.18
+       Fresh tokio-macros v2.7.0
+       Fresh rand_chacha v0.9.0
+       Fresh rand_chacha v0.3.1
+       Fresh parking_lot v0.12.5
+       Fresh num-traits v0.2.19
+       Fresh socket2 v0.6.4
+       Fresh mio v1.2.1
+       Fresh serde v1.0.228
+       Fresh digest v0.10.7
+       Fresh cpufeatures v0.2.17
+       Fresh bytes v1.12.0
+       Fresh once_cell v1.21.4
+       Fresh unsafe-libyaml v0.2.11
+       Fresh ryu v1.0.23
+       Fresh memchr v2.8.2
+       Fresh rand v0.8.6
+       Fresh rand v0.9.4
+       Fresh thiserror v2.0.18
+       Fresh tracing-attributes v0.1.31
+       Fresh async-trait v0.1.89
+       Fresh toml_datetime v0.6.11
+       Fresh serde_spanned v0.6.9
+       Fresh tokio v1.52.3
+       Fresh chrono v0.4.45
+       Fresh serde_yaml v0.9.34+deprecated
+       Fresh serde_json v1.0.150
+       Fresh tracing-core v0.1.36
+       Fresh sha2 v0.10.9
+       Fresh hmac v0.12.1
+       Fresh ulid v1.2.1
+       Fresh toml_edit v0.22.27
+       Fresh tracing v0.1.44
+       Fresh toml v0.8.23
+       Fresh liberado-common v0.1.0 (C:\Users\Shiloh\Code\life-os\crates\common)
+       Dirty liberado-session v0.1.0 (C:\Users\Shiloh\Code\life-os\crates\session): couldn't read metadata for file `target\debug\deps\libliberado_session-fa37bea34b84dc38.rlib`
+   Compiling liberado-session v0.1.0 (C:\Users\Shiloh\Code\life-os\crates\session)
+     Running `rustc --crate-name liberado_session --edition=2024 'crates\session\src\lib.rs' --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C embed-bitcode=no -C debuginfo=2 --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=00d58da1ce5b47f4 -C extra-filename=-fa37bea34b84dc38 --out-dir 'C:\Users\Shiloh\Code\life-os\target\debug\deps' -C 'incremental=C:\Users\Shiloh\Code\life-os\target\debug\incremental' -L 'dependency=C:\Users\Shiloh\Code\life-os\target\debug\deps' --extern 'async_trait=C:\Users\Shiloh\Code\life-os\target\debug\deps\async_trait-043abcc1deda2a31.dll' --extern 'chrono=C:\Users\Shiloh\Code\life-os\target\debug\deps\libchrono-aa1fb4eeae40b30f.rmeta' --extern 'liberado_common=C:\Users\Shiloh\Code\life-os\target\debug\deps\libliberado_common-0b5cd8f72debc46b.rmeta' --extern 'serde=C:\Users\Shiloh\Code\life-os\target\debug\deps\libserde-111b90473235926b.rmeta' --extern 'serde_json=C:\Users\Shiloh\Code\life-os\target\debug\deps\libserde_json-b21bda778e97de51.rmeta' --extern 'thiserror=C:\Users\Shiloh\Code\life-os\target\debug\deps\libthiserror-3060c0d8457cb85d.rmeta' --extern 'tokio=C:\Users\Shiloh\Code\life-os\target\debug\deps\libtokio-673dafa797bd7644.rmeta' --extern 'tracing=C:\Users\Shiloh\Code\life-os\target\debug\deps\libtracing-a7e308946eeec130.rmeta' --extern 'ulid=C:\Users\Shiloh\Code\life-os\target\debug\deps\libulid-169fdba300e5a6ec.rmeta'`
+     Running `rustc --crate-name liberado_session --edition=2024 'crates\session\src\lib.rs' --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --emit=dep-info,link -C embed-bitcode=no -C debuginfo=2 --test --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=f626ef0f9a4c5520 -C extra-filename=-133ba83ce3a3fc60 --out-dir 'C:\Users\Shiloh\Code\life-os\target\debug\deps' -C 'incremental=C:\Users\Shiloh\Code\life-os\target\debug\incremental' -L 'dependency=C:\Users\Shiloh\Code\life-os\target\debug\deps' --extern 'async_trait=C:\Users\Shiloh\Code\life-os\target\debug\deps\async_trait-043abcc1deda2a31.dll' --extern 'chrono=C:\Users\Shiloh\Code\life-os\target\debug\deps\libchrono-aa1fb4eeae40b30f.rlib' --extern 'liberado_common=C:\Users\Shiloh\Code\life-os\target\debug\deps\libliberado_common-0b5cd8f72debc46b.rlib' --extern 'serde=C:\Users\Shiloh\Code\life-os\target\debug\deps\libserde-111b90473235926b.rlib' --extern 'serde_json=C:\Users\Shiloh\Code\life-os\target\debug\deps\libserde_json-b21bda778e97de51.rlib' --extern 'thiserror=C:\Users\Shiloh\Code\life-os\target\debug\deps\libthiserror-3060c0d8457cb85d.rlib' --extern 'tokio=C:\Users\Shiloh\Code\life-os\target\debug\deps\libtokio-673dafa797bd7644.rlib' --extern 'tracing=C:\Users\Shiloh\Code\life-os\target\debug\deps\libtracing-a7e308946eeec130.rlib' --extern 'ulid=C:\Users\Shiloh\Code\life-os\target\debug\deps\libulid-169fdba300e5a6ec.rlib'`
+warning: unused variable: `session_id`
+   --> crates\session\src\store.rs:216:37
+    |
+216 |     pub async fn append_turn(&self, session_id: &str, author: TurnAuthor, content: String) {
+    |                                     ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_session_id`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `author`
+   --> crates\session\src\store.rs:216:55
+    |
+216 |     pub async fn append_turn(&self, session_id: &str, author: TurnAuthor, content: String) {
+    |                                                       ^^^^^^ help: if this is intentional, prefix it with an underscore: `_author`
+
+warning: unused variable: `content`
+   --> crates\session\src\store.rs:216:75
+    |
+216 |     pub async fn append_turn(&self, session_id: &str, author: TurnAuthor, content: String) {
+    |                                                                           ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_content`
+
+warning: `liberado-session` (lib) generated 3 warnings (run `cargo fix --lib -p liberado-session` to apply 3 suggestions)
+warning: `liberado-session` (lib test) generated 3 warnings (3 duplicates)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.37s
+  Executable `C:\Users\Shiloh\Code\life-os\target\debug\deps\liberado_session-133ba83ce3a3fc60.exe`
+
+*** result: Success
+
+*** C:\\Program\ Files\\Rust\ stable\ MSVC\ 1.94\\bin\\cargo.exe test --verbose --package=liberado-session@0.1.0
+       Fresh unicode-ident v1.0.24
+       Fresh cfg-if v1.0.4
+       Fresh version_check v0.9.5
+       Fresh windows-link v0.2.1
+       Fresh typenum v1.20.1
+       Fresh equivalent v1.0.2
+       Fresh autocfg v1.5.1
+       Fresh proc-macro2 v1.0.106
+       Fresh hashbrown v0.17.1
+       Fresh getrandom v0.2.17
+       Fresh windows-sys v0.61.2
+       Fresh subtle v2.6.1
+       Fresh quote v1.0.46
+       Fresh serde_core v1.0.228
+       Fresh zerocopy v0.8.52
+       Fresh indexmap v2.14.0
+       Fresh getrandom v0.3.4
+       Fresh scopeguard v1.2.0
+       Fresh smallvec v1.15.2
+       Fresh rand_core v0.6.4
+       Fresh pin-project-lite v0.2.17
+       Fresh syn v2.0.118
+       Fresh generic-array v0.14.7
+       Fresh ppv-lite86 v0.2.21
+       Fresh lock_api v0.4.14
+       Fresh rand_core v0.9.5
+       Fresh parking_lot_core v0.9.12
+       Fresh toml_write v0.1.2
+       Fresh itoa v1.0.18
+       Fresh winnow v0.7.15
+       Fresh num-traits v0.2.19
+       Fresh serde_derive v1.0.228
+       Fresh crypto-common v0.1.7
+       Fresh block-buffer v0.10.4
+       Fresh rand_chacha v0.9.0
+       Fresh zmij v1.0.21
+       Fresh parking_lot v0.12.5
+       Fresh rand_chacha v0.3.1
+       Fresh thiserror-impl v2.0.18
+       Fresh tokio-macros v2.7.0
+       Fresh socket2 v0.6.4
+       Fresh mio v1.2.1
+       Fresh serde v1.0.228
+       Fresh digest v0.10.7
+       Fresh ryu v1.0.23
+       Fresh cpufeatures v0.2.17
+       Fresh once_cell v1.21.4
+       Fresh bytes v1.12.0
+       Fresh unsafe-libyaml v0.2.11
+       Fresh memchr v2.8.2
+       Fresh rand v0.8.6
+       Fresh thiserror v2.0.18
+       Fresh rand v0.9.4
+       Fresh async-trait v0.1.89
+       Fresh tracing-attributes v0.1.31
+       Fresh serde_spanned v0.6.9
+       Fresh toml_datetime v0.6.11
+       Fresh tracing-core v0.1.36
+       Fresh chrono v0.4.45
+       Fresh serde_yaml v0.9.34+deprecated
+       Fresh tokio v1.52.3
+       Fresh serde_json v1.0.150
+       Fresh sha2 v0.10.9
+       Fresh hmac v0.12.1
+       Fresh ulid v1.2.1
+       Fresh toml_edit v0.22.27
+       Fresh tracing v0.1.44
+       Fresh toml v0.8.23
+       Fresh liberado-common v0.1.0 (C:\Users\Shiloh\Code\life-os\crates\common)
+warning: unused variable: `session_id`
+   --> crates\session\src\store.rs:216:37
+    |
+216 |     pub async fn append_turn(&self, session_id: &str, author: TurnAuthor, content: String) {
+    |                                     ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_session_id`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `author`
+   --> crates\session\src\store.rs:216:55
+    |
+216 |     pub async fn append_turn(&self, session_id: &str, author: TurnAuthor, content: String) {
+    |                                                       ^^^^^^ help: if this is intentional, prefix it with an underscore: `_author`
+
+warning: unused variable: `content`
+   --> crates\session\src\store.rs:216:75
+    |
+216 |     pub async fn append_turn(&self, session_id: &str, author: TurnAuthor, content: String) {
+    |                                                                           ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_content`
+
+warning: `liberado-session` (lib) generated 3 warnings (run `cargo fix --lib -p liberado-session` to apply 3 suggestions)
+warning: `liberado-session` (lib test) generated 3 warnings (3 duplicates)
+       Fresh liberado-session v0.1.0 (C:\Users\Shiloh\Code\life-os\crates\session)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running `C:\Users\Shiloh\Code\life-os\target\debug\deps\liberado_session-133ba83ce3a3fc60.exe`
+
+running 16 tests
+test goal::tests::origin_round_trips_and_is_omitted_when_absent ... ok
+test life_demo::tests::unknown_domain_rejected ... ok
+test life_demo::tests::send_input_to_unknown_session_is_distinct_from_terminal ... ok
+test life_demo::tests::a_parked_session_is_not_told_it_finished ... ok
+test life_demo::tests::a_session_without_ask_human_refuses_input_as_not_permitted ... ok
+test store::tests::in_memory_store_persists_nothing ... ok
+test store::tests::awaiting_session_is_parked_on_rehydrate_not_failed ... ok
+test store::tests::durable_store_rehydrates_a_finished_session ... ok
+test store::tests::mid_execution_session_is_coerced_to_failed_on_rehydrate ... ok
+test life_demo::tests::interactive_session_idle_budget_terminates_budget_exhausted ... ok
+test life_demo::tests::answering_a_parked_session_resumes_the_pack_with_its_transcript ... FAILED
+test life_demo::tests::interactive_session_asks_awaits_and_echoes_the_answer ... ok
+test life_demo::tests::send_input_to_finished_session_errors ... ok
+test life_demo::tests::a_grant_is_never_widened_by_sending_input ... ok
+test life_demo::tests::a_session_that_may_ask_but_not_write_is_refused_at_the_write ... ok
+test life_demo::tests::life_domain_session_succeeds_without_coding_pack ... ok
+
+failures:
+
+---- life_demo::tests::answering_a_parked_session_resumes_the_pack_with_its_transcript stdout ----
+
+thread 'life_demo::tests::answering_a_parked_session_resumes_the_pack_with_its_transcript' (25616) panicked at crates\session\src\life_demo.rs:861:9:
+the pack must remember the question it asked: []
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    life_demo::tests::answering_a_parked_session_resumes_the_pack_with_its_transcript
+
+test result: FAILED. 15 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `-p liberado-session --lib`
+
+*** result: Failure(101)

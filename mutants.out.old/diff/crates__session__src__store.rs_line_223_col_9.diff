@@ -1,0 +1,40 @@
+--- crates/session/src/store.rs
++++ replace GoalSessionStore::push_event with ()
+@@ -215,36 +215,17 @@
+ 
+     pub async fn append_turn(&self, session_id: &str, author: TurnAuthor, content: String) {
+         if let Some(s) = self.inner.lock().await.get_mut(session_id) {
+             s.turns.push((author, content));
+         }
+     }
+ 
+     pub async fn push_event(&self, event: SessionEvent) {
+-        let persist = {
+-            let mut map = self.inner.lock().await;
+-            if let Some(s) = map.get_mut(&event.session_id) {
+-                match &event.kind {
+-                    SessionEventKind::AwaitingInput { .. } => s.record.awaiting_input = true,
+-                    SessionEventKind::HumanInput { .. } => s.record.awaiting_input = false,
+-                    _ => {}
+-                }
+-                s.events.push(event.clone());
+-                s.record.event_count = s.events.len();
+-                let _ = s.bus.send(event.clone());
+-                true
+-            } else {
+-                false
+-            }
+-        };
+-        if persist {
+-            let id = event.session_id.clone();
+-            self.append(&id, &LogLine::Event { event });
+-        }
++        () /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     pub async fn set_status(&self, id: &str, status: SessionStatus) {
+         let finished_at = {
+             let mut map = self.inner.lock().await;
+             match map.get_mut(id) {
+                 Some(s) => {
+                     s.record.status = status;

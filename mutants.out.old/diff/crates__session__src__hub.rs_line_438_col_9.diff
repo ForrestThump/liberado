@@ -1,0 +1,21 @@
+--- crates/session/src/hub.rs
++++ replace GoalSessionHub::list -> Vec<GoalSessionRecord> with vec![]
+@@ -430,17 +430,17 @@
+ 
+     pub async fn snapshot(&self, id: &str) -> Option<SessionSnapshot> {
+         let session = self.store.get(id).await?;
+         let events = self.store.events(id).await.unwrap_or_default();
+         Some(SessionSnapshot { session, events })
+     }
+ 
+     pub async fn list(&self) -> Vec<GoalSessionRecord> {
+-        self.store.list().await
++        vec![] /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     async fn run_session(
+         &self,
+         session_id: String,
+         goal: GoalSpec,
+         pack: Arc<dyn DomainPackRunner>,
+         inputs: InputChannel,

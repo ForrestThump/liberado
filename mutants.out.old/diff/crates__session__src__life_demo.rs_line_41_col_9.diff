@@ -1,0 +1,115 @@
+--- crates/session/src/life_demo.rs
++++ replace LifeOpsDemoRunner::run_interactive -> Result<GoalResult, PackError> with Ok(Default::default())
+@@ -33,111 +33,17 @@
+     async fn run_interactive(
+         &self,
+         session_id: &str,
+         ctx: &PackContext<'_>,
+         events: Sender<SessionEvent>,
+         mut inputs: InputChannel,
+         mut cancel: tokio::sync::watch::Receiver<bool>,
+     ) -> Result<GoalResult, PackError> {
+-        const QUESTION: &str = "What should I title the note?";
+-
+-        // Asking is a *turn* — it is the pack talking to a human. The `AwaitingInput` event below is
+-        // the same fact seen by a live subscriber (it is what raises the "needs you" badge), but an
+-        // event is not dialogue: it is not searchable and it has no place in the message DAG. The
+-        // human's reply is recorded as a turn by the hub, so both halves of the exchange survive.
+-        ctx.record_turn(TurnAuthor::Assistant, QUESTION).await;
+-
+-        let _ = events
+-            .send(SessionEvent::new(
+-                session_id,
+-                SessionEventKind::AwaitingInput {
+-                    prompt: QUESTION.into(),
+-                    options: Vec::new(),
+-                },
+-            ))
+-            .await;
+-
+-        let outcome = tokio::select! {
+-            outcome = inputs.recv() => outcome,
+-            _ = cancel.changed() => InputOutcome::Closed,
+-        };
+-        if *cancel.borrow() {
+-            return Err(PackError::Cancelled);
+-        }
+-
+-        match outcome {
+-            InputOutcome::Received(input) => {
+-                let title = input.text.trim().to_string();
+-                let path = format!("vault/{NOTES_ZONE}/{}.md", slugify(&title));
+-                let _ = events
+-                    .send(SessionEvent::new(
+-                        session_id,
+-                        SessionEventKind::ToolStarted {
+-                            name: "vault_write_note".into(),
+-                            args_preview: format!("{path}: {title}"),
+-                        },
+-                    ))
+-                    .await;
+-
+-                // The capability check, at the point of the consequential act — not at dispatch,
+-                // not by convention. A profile granted only `Read` reaches here and is refused.
+-                if !ctx.can(&Capability::Write(Zone::vault(NOTES_ZONE))) {
+-                    let _ = events
+-                        .send(SessionEvent::new(
+-                            session_id,
+-                            SessionEventKind::ToolFinished {
+-                                name: "vault_write_note".into(),
+-                                ok: false,
+-                                result_preview: format!(
+-                                    "denied: grant lacks Write(vault:{NOTES_ZONE})"
+-                                ),
+-                            },
+-                        ))
+-                        .await;
+-                    return Ok(GoalResult {
+-                        terminal: TerminalKind::Failed,
+-                        summary: format!(
+-                            "refused to write '{title}' — this session's grant does not include \
+-                             Write(vault:{NOTES_ZONE})"
+-                        ),
+-                        artifacts: vec![],
+-                        diagnostics: serde_json::json!({
+-                            "domain": LIFE_OPS_DOMAIN,
+-                            "denied_capability": format!("Write(vault:{NOTES_ZONE})"),
+-                            "profile": ctx.profile(),
+-                        }),
+-                    });
+-                }
+-
+-                let _ = events
+-                    .send(SessionEvent::new(
+-                        session_id,
+-                        SessionEventKind::ToolFinished {
+-                            name: "vault_write_note".into(),
+-                            ok: true,
+-                            result_preview: "written".into(),
+-                        },
+-                    ))
+-                    .await;
+-                Ok(GoalResult {
+-                    terminal: TerminalKind::Succeeded,
+-                    summary: format!("wrote note titled '{title}'"),
+-                    artifacts: vec![path],
+-                    diagnostics: serde_json::json!({ "domain": LIFE_OPS_DOMAIN, "interactive": true }),
+-                })
+-            }
+-            InputOutcome::IdleExpired(d) => Ok(GoalResult {
+-                terminal: TerminalKind::BudgetExhausted,
+-                summary: format!("no answer after {}s idle", d.as_secs()),
+-                artifacts: vec![],
+-                diagnostics: serde_json::json!({ "domain": LIFE_OPS_DOMAIN, "idle_timeout": true }),
+-            }),
+-            InputOutcome::Closed => Err(PackError::Cancelled),
+-        }
++        Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ #[async_trait]
+ impl DomainPackRunner for LifeOpsDemoRunner {
+     fn domain_id(&self) -> &str {
+         LIFE_OPS_DOMAIN
+     }

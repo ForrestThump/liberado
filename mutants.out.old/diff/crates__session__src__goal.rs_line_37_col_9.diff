@@ -1,0 +1,25 @@
+--- crates/session/src/goal.rs
++++ replace <impl From<&str> for DomainHint>::from -> Self with Default::default()
+@@ -29,21 +29,17 @@
+             Self::Life => "life",
+             Self::Custom(s) => s.as_str(),
+         }
+     }
+ }
+ 
+ impl From<&str> for DomainHint {
+     fn from(s: &str) -> Self {
+-        match s {
+-            "coding" => Self::Coding,
+-            "life" => Self::Life,
+-            other => Self::Custom(other.to_string()),
+-        }
++        Default::default() /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ impl Serialize for DomainHint {
+     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+         s.serialize_str(self.as_str())
+     }
+ }

@@ -94,7 +94,10 @@ async fn withholding_execute_mcp_refuses_the_call() {
         .await
         .expect_err("an MCP that was not granted must not be callable");
     assert!(err.contains("not authorized"), "{err}");
-    assert!(ran.lock().unwrap().is_empty(), "and the tool must never run");
+    assert!(
+        ran.lock().unwrap().is_empty(),
+        "and the tool must never run"
+    );
 }
 
 #[tokio::test]
@@ -112,8 +115,14 @@ async fn withholding_write_refuses_the_write() {
         .await
         .expect_err("calling an MCP is not permission to write with it");
     assert!(err.contains("not authorized"), "{err}");
-    assert!(err.contains("tasks"), "the refusal must name the zone: {err}");
-    assert!(ran.lock().unwrap().is_empty(), "and the tool must never run");
+    assert!(
+        err.contains("tasks"),
+        "the refusal must name the zone: {err}"
+    );
+    assert!(
+        ran.lock().unwrap().is_empty(),
+        "and the tool must never run"
+    );
 }
 
 #[tokio::test]
@@ -177,7 +186,11 @@ async fn the_grant_that_holds_everything_is_allowed_through() {
         Ok("the tool ran".into()),
         "a fully-granted write must succeed — enforcement is not the same as breakage"
     );
-    assert_eq!(ran.lock().unwrap().len(), 1, "and the tool must actually have run");
+    assert_eq!(
+        ran.lock().unwrap().len(),
+        1,
+        "and the tool must actually have run"
+    );
 }
 
 #[tokio::test]

@@ -1,0 +1,23 @@
+--- crates/session/src/runner.rs
++++ replace PackContext<'_>::record_turn with ()
+@@ -132,19 +132,17 @@
+     /// The distinction a pack has to get right is *observation* versus *conversation*. A tool call is
+     /// an observation: emit it on `events` (`SessionEventKind::ToolStarted`). A clarifying question,
+     /// the human's answer, a drafted contract — those are **turns**. They are the dialogue, and they
+     /// belong in the message DAG, which is what makes them searchable and the session forkable.
+     ///
+     /// The store parents each turn onto the session's newest node, so a pack's transcript is a
+     /// straight line and the pack never tracks a leaf itself.
+     pub async fn record_turn(&self, author: TurnAuthor, content: impl Into<String>) {
+-        self.store
+-            .append_turn(&self.session_id, author, content.into())
+-            .await;
++        () /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// The dialogue so far — what this pack already said, and what it was already told.
+     ///
+     /// Normally empty: a fresh session has said nothing. It is **non-empty on a resume** (E6-c), and
+     /// that is the whole reason this exists. A session parked on a human across a daemon restart has
+     /// no in-memory state left; the transcript is its only surviving memory, and a pack that cannot
+     /// read it back cannot pick the conversation up where it stopped — it can only start over and

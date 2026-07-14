@@ -1,0 +1,21 @@
+--- crates/session/src/hub.rs
++++ replace match guard matches!(ev.kind, SessionEventKind::SessionFinished { .. }) with false in GoalSessionHub::await_terminal
+@@ -253,17 +253,17 @@
+             if let Some(snap) = self.snapshot(id).await {
+                 if snap.session.status.is_terminal() {
+                     return Ok(snap);
+                 }
+             } else {
+                 return Err(format!("goal session '{id}' vanished"));
+             }
+             match rx.recv().await {
+-                Ok(ev) if matches!(ev.kind, SessionEventKind::SessionFinished { .. }) => {
++                Ok(ev) if false /* ~ changed by cargo-mutants ~ */ => {
+                     return self
+                         .snapshot(id)
+                         .await
+                         .ok_or_else(|| format!("goal session '{id}' vanished after finish"));
+                 }
+                 Ok(_) => continue,
+                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                 Err(broadcast::error::RecvError::Closed) => {

@@ -1,0 +1,21 @@
+--- crates/session/src/store.rs
++++ delete match arm SessionEventKind::HumanInput{..} in replay_file
+@@ -312,17 +312,17 @@
+             continue; // tolerate a torn last line / unknown future line
+         };
+         match entry {
+             LogLine::Start { record: r } => record = Some(*r),
+             LogLine::Event { event } => {
+                 if let Some(rec) = record.as_mut() {
+                     match &event.kind {
+                         SessionEventKind::AwaitingInput { .. } => rec.awaiting_input = true,
+-                        SessionEventKind::HumanInput { .. } => rec.awaiting_input = false,
++                         /* ~ changed by cargo-mutants ~ */
+                         _ => {}
+                     }
+                 }
+                 events.push(event);
+             }
+             LogLine::Status {
+                 status,
+                 finished_at,

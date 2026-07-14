@@ -1,0 +1,21 @@
+--- crates/session/src/store.rs
++++ delete ! in GoalSessionStore::open
+@@ -110,17 +110,17 @@
+                         }
+                     }
+                 }
+             }
+             Err(e) => {
+                 warn!(error = %e, path = %dir.display(), "goal-session store: could not read dir")
+             }
+         }
+-        if !map.is_empty() {
++        if  /* ~ changed by cargo-mutants ~ */map.is_empty() {
+             tracing::info!(
+                 sessions = map.len(),
+                 "goal-session store: rehydrated from disk"
+             );
+         }
+ 
+         Self {
+             inner: Arc::new(Mutex::new(map)),

@@ -1,0 +1,59 @@
+--- crates/session/src/store.rs
++++ replace GoalSessionStore::open -> Self with Default::default()
+@@ -82,55 +82,17 @@
+         Self::default()
+     }
+ 
+     /// Open a **durable** store rooted at `dir`, rehydrating every `*.jsonl` session log found
+     /// there. The directory is created if missing. A non-terminal session in a replayed log (a
+     /// session that was mid-run when the daemon last stopped) is coerced to `Failed` — no pack is
+     /// running it after a restart and packs aren't resumable yet, so its transcript is view-only.
+     pub async fn open(dir: impl Into<PathBuf>) -> Self {
+-        let dir = dir.into();
+-        if let Err(e) = std::fs::create_dir_all(&dir) {
+-            warn!(error = %e, path = %dir.display(), "goal-session store: could not create dir — continuing in-memory");
+-            return Self::new();
+-        }
+-
+-        let mut map = HashMap::new();
+-        match std::fs::read_dir(&dir) {
+-            Ok(entries) => {
+-                for entry in entries.flatten() {
+-                    let path = entry.path();
+-                    if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+-                        continue;
+-                    }
+-                    match replay_file(&path) {
+-                        Some(inner) => {
+-                            map.insert(inner.record.id.clone(), inner);
+-                        }
+-                        None => {
+-                            warn!(path = %path.display(), "goal-session store: skipped an unreadable log")
+-                        }
+-                    }
+-                }
+-            }
+-            Err(e) => {
+-                warn!(error = %e, path = %dir.display(), "goal-session store: could not read dir")
+-            }
+-        }
+-        if !map.is_empty() {
+-            tracing::info!(
+-                sessions = map.len(),
+-                "goal-session store: rehydrated from disk"
+-            );
+-        }
+-
+-        Self {
+-            inner: Arc::new(Mutex::new(map)),
+-            dir: Some(Arc::new(dir)),
+-        }
++        Default::default() /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Append a line to a session's log (best-effort — a persistence failure is logged, never
+     /// fatal to a running session). No-op for an in-memory store.
+     fn append(&self, id: &str, line: &LogLine) {
+         let Some(dir) = &self.dir else { return };
+         let path = dir.join(format!("{}.jsonl", sanitize_id(id)));
+         let mut serialized = match serde_json::to_string(line) {

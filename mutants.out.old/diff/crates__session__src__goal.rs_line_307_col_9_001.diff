@@ -1,0 +1,21 @@
+--- crates/session/src/goal.rs
++++ replace SessionGrant::grants_ask_human -> bool with false
+@@ -299,17 +299,17 @@
+     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+     pub overrides: serde_json::Value,
+ }
+ 
+ impl SessionGrant {
+     /// Whether this session may interrupt a human for guidance — the check the hub makes before it
+     /// wires up an input channel at all.
+     pub fn grants_ask_human(&self) -> bool {
+-        self.capabilities.grants_ask_human()
++        false /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+ 
+     #[test]

@@ -1,0 +1,21 @@
+--- crates/session/src/store.rs
++++ replace <impl crate::record_store::SessionRecordStore for GoalSessionStore>::events -> Option<Vec<SessionEvent>> with Some(vec![])
+@@ -403,17 +403,17 @@
+     }
+     async fn get(&self, id: &str) -> Option<GoalSessionRecord> {
+         GoalSessionStore::get(self, id).await
+     }
+     async fn list(&self) -> Vec<GoalSessionRecord> {
+         GoalSessionStore::list(self).await
+     }
+     async fn events(&self, id: &str) -> Option<Vec<SessionEvent>> {
+-        GoalSessionStore::events(self, id).await
++        Some(vec![]) /* ~ changed by cargo-mutants ~ */
+     }
+     async fn subscribe(
+         &self,
+         id: &str,
+     ) -> Option<(Vec<SessionEvent>, broadcast::Receiver<SessionEvent>)> {
+         GoalSessionStore::subscribe(self, id).await
+     }
+     async fn push_event(&self, event: SessionEvent) {

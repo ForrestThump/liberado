@@ -1,0 +1,46 @@
+--- crates/session/src/store.rs
++++ replace GoalSessionStore::finish with ()
+@@ -263,42 +263,17 @@
+                     status,
+                     finished_at,
+                 },
+             );
+         }
+     }
+ 
+     pub async fn finish(&self, id: &str, status: SessionStatus, result: GoalResult) {
+-        let finished_at = {
+-            let mut map = self.inner.lock().await;
+-            match map.get_mut(id) {
+-                Some(s) => {
+-                    let finished_at = Utc::now();
+-                    s.record.status = status;
+-                    s.record.result = Some(result.clone());
+-                    s.record.finished_at = Some(finished_at);
+-                    // A terminal session cannot be awaiting input, even if it died mid-prompt
+-                    // (e.g. idle-budget BudgetExhausted after an AwaitingInput with no answer).
+-                    s.record.awaiting_input = false;
+-                    Some(finished_at)
+-                }
+-                None => None,
+-            }
+-        };
+-        if let Some(finished_at) = finished_at {
+-            self.append(
+-                id,
+-                &LogLine::Finish {
+-                    status,
+-                    result,
+-                    finished_at,
+-                },
+-            );
+-        }
++        () /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ /// Replay one session log into a [`SessionInner`], applying lines in order. Returns `None` if the
+ /// file has no `start` line (nothing to anchor a record on).
+ fn replay_file(path: &Path) -> Option<SessionInner> {
+     let content = std::fs::read_to_string(path).ok()?;
+     let mut record: Option<GoalSessionRecord> = None;

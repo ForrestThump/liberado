@@ -347,6 +347,7 @@ fn slugify(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::goal::SessionStatus;
     use crate::goal::{DomainHint, SessionGrant};
     use crate::hub::GoalSessionHub;
     use crate::store::GoalSessionStore;
@@ -866,5 +867,112 @@ mod tests {
             said.contains(&"Weekly Review"),
             "and must see the answer that resumed it -- it is recorded BEFORE the pack starts,              which is what makes the replay unnecessary: {said:?}"
         );
+    }
+
+    /// Cancel must actually cancel.
+    ///
+    /// Found by mutation testing (2026-07-14): replacing `GoalSessionHub::cancel`'s entire body with
+    /// `Ok(())` — making it a **no-op** — broke no test in the codebase. Both the TUI and the WebUI
+    /// offer a cancel button, `POST /api/goals/{id}/cancel` is a documented endpoint, and nothing
+    /// anywhere proved it stopped anything. A cancel that silently does nothing is worse than no
+    /// cancel button: the user believes the work stopped, and walks away while it keeps running.
+    #[tokio::test]
+    async fn cancel_actually_stops_a_running_pack() {
+        use crate::runner::DomainPackRunner;
+
+        /// Never finishes on its own. The ONLY way this session can terminate is if the cancel
+        /// signal genuinely reaches the pack — so a no-op cancel hangs the test rather than passing.
+        struct NeverEndingPack;
+        #[async_trait::async_trait]
+        impl DomainPackRunner for NeverEndingPack {
+            fn domain_id(&self) -> &str {
+                "life"
+            }
+            async fn run(
+                &self,
+                _id: &str,
+                _goal: &GoalSpec,
+                _ctx: &crate::runner::PackContext<'_>,
+                _events: tokio::sync::mpsc::Sender<crate::SessionEvent>,
+                _inputs: crate::runner::InputChannel,
+                mut cancel: tokio::sync::watch::Receiver<bool>,
+            ) -> Result<crate::GoalResult, crate::runner::PackError> {
+                loop {
+                    if *cancel.borrow() {
+                        return Err(crate::runner::PackError::Cancelled);
+                    }
+                    if cancel.changed().await.is_err() {
+                        return Err(crate::runner::PackError::Cancelled);
+                    }
+                }
+            }
+        }
+
+        let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+        hub.register_pack(Arc::new(NeverEndingPack));
+        let hub = Arc::new(hub);
+
+        let id = hub
+            .start(GoalSpec {
+                id: None,
+                description: "work forever until told to stop".into(),
+                success_criteria: vec![],
+                domain: DomainHint::Life,
+                max_turns: 0,
+                max_idle_secs: None,
+                origin: None,
+                profile: None,
+                payload: serde_json::Value::Null,
+            })
+            .await
+            .unwrap();
+
+        // Cancel work that is genuinely running, not a task that has not started.
+        for _ in 0..100 {
+            if hub.snapshot(&id).await.map(|s| s.session.status) == Some(SessionStatus::Running) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        hub.cancel(&id).await.expect("cancel must be accepted");
+
+        let snap = await_terminal(&hub, &id).await;
+        assert_eq!(
+            snap.session.status,
+            SessionStatus::Cancelled,
+            "a cancelled session must actually reach Cancelled — this pack cannot finish any other way"
+        );
+    }
+
+    /// `list` must actually list. Mutation testing found that replacing it with `vec![]` broke
+    /// nothing — and the session switcher in every surface reads it.
+    #[tokio::test]
+    async fn list_returns_the_sessions_that_exist() {
+        let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+        hub.register_pack(Arc::new(LifeOpsDemoRunner));
+        let hub = Arc::new(hub);
+
+        assert!(hub.list().await.is_empty(), "no sessions yet");
+
+        let id = hub
+            .start(GoalSpec {
+                id: None,
+                description: "capture a note".into(),
+                success_criteria: vec!["done".into()],
+                domain: DomainHint::Life,
+                max_turns: 0,
+                max_idle_secs: None,
+                origin: None,
+                profile: None,
+                payload: serde_json::Value::Null,
+            })
+            .await
+            .unwrap();
+        await_terminal(&hub, &id).await;
+
+        let listed = hub.list().await;
+        assert_eq!(listed.len(), 1, "the session must be listable");
+        assert_eq!(listed[0].id, id);
     }
 }

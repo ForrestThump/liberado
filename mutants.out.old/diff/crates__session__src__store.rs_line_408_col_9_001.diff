@@ -1,0 +1,21 @@
+--- crates/session/src/store.rs
++++ replace <impl crate::record_store::SessionRecordStore for GoalSessionStore>::list -> Vec<GoalSessionRecord> with vec![Default::default()]
+@@ -400,17 +400,17 @@
+ impl crate::record_store::SessionRecordStore for GoalSessionStore {
+     async fn insert(&self, record: GoalSessionRecord) {
+         GoalSessionStore::insert(self, record).await
+     }
+     async fn get(&self, id: &str) -> Option<GoalSessionRecord> {
+         GoalSessionStore::get(self, id).await
+     }
+     async fn list(&self) -> Vec<GoalSessionRecord> {
+-        GoalSessionStore::list(self).await
++        vec![Default::default()] /* ~ changed by cargo-mutants ~ */
+     }
+     async fn events(&self, id: &str) -> Option<Vec<SessionEvent>> {
+         GoalSessionStore::events(self, id).await
+     }
+     async fn subscribe(
+         &self,
+         id: &str,
+     ) -> Option<(Vec<SessionEvent>, broadcast::Receiver<SessionEvent>)> {

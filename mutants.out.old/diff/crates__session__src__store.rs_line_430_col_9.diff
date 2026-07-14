@@ -1,0 +1,21 @@
+--- crates/session/src/store.rs
++++ replace <impl crate::record_store::SessionRecordStore for GoalSessionStore>::turns -> Vec<(TurnAuthor, String)> with vec![]
+@@ -422,17 +422,17 @@
+     async fn live_subscriber_count(&self, id: &str) -> usize {
+         let map = self.inner.lock().await;
+         map.get(id).map(|s| s.bus.receiver_count()).unwrap_or(0)
+     }
+     async fn append_turn(&self, session_id: &str, author: TurnAuthor, content: String) {
+         GoalSessionStore::append_turn(self, session_id, author, content).await
+     }
+     async fn turns(&self, session_id: &str) -> Vec<(TurnAuthor, String)> {
+-        GoalSessionStore::turns(self, session_id).await
++        vec![] /* ~ changed by cargo-mutants ~ */
+     }
+     async fn set_status(&self, id: &str, status: SessionStatus) {
+         GoalSessionStore::set_status(self, id, status).await
+     }
+     async fn finish(&self, id: &str, status: SessionStatus, result: GoalResult) {
+         GoalSessionStore::finish(self, id, status, result).await
+     }
+ }
