@@ -183,15 +183,27 @@ pub async fn fork_conversation(
     resp.json().await.map_err(|e| e.to_string())
 }
 
-/// Outcome of `POST /api/goals/{id}/message` — mirrors the endpoint's status codes so the UI can
-/// react (202 delivered, 404 gone, 409 already finished) instead of guessing from a body.
+/// Outcome of `POST /api/goals/{id}/message`. Each failure means a genuinely different thing to the
+/// person who just typed an answer — *never allowed*, *not now*, *no such session* — and collapsing
+/// them into "couldn't send" tells them nothing about whether to wait, retry, or give up.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GoalMessageOutcome {
     /// 202 — the message was delivered to the running session.
     Accepted,
     /// 404 — no such session.
     NotFound,
-    /// 409 — the session has already finished (or is closing) and accepts no input.
+    /// 403 — the session's grant omits `AskHuman`, so it may **never** receive input. An authority
+    /// fact, not a timing one: waiting will not help, and this used to fall through to the generic
+    /// `Error` arm and render as "server returned 403".
+    NotPermitted,
+    /// 409 — the session was awaiting a human when the daemon restarted, so it replayed as `parked`.
+    /// It has **not** finished; the question it holds for you is still there, and it simply has no
+    /// pack running to receive the answer until it can be resumed (E6-c). Distinct from
+    /// [`Finished`](Self::Finished) because telling someone their parked session "has finished" is
+    /// the difference between "start over" and "wait" — the same lie the API itself told until it
+    /// grew `SendInputError::Parked`.
+    Parked,
+    /// 409 — the session has genuinely reached a terminal status and accepts no more input.
     Finished,
     /// Transport/other error.
     Error(String),
@@ -214,7 +226,17 @@ pub async fn post_goal_message(
         Ok(resp) => match resp.status() {
             StatusCode::ACCEPTED | StatusCode::OK => GoalMessageOutcome::Accepted,
             StatusCode::NOT_FOUND => GoalMessageOutcome::NotFound,
-            StatusCode::CONFLICT => GoalMessageOutcome::Finished,
+            StatusCode::FORBIDDEN => GoalMessageOutcome::NotPermitted,
+            // 409 covers two different situations, and the server's own error text is the only
+            // thing that distinguishes them. Parked is not finished, and saying so matters.
+            StatusCode::CONFLICT => {
+                let body = resp.text().await.unwrap_or_default();
+                if body.contains("parked") {
+                    GoalMessageOutcome::Parked
+                } else {
+                    GoalMessageOutcome::Finished
+                }
+            }
             other => GoalMessageOutcome::Error(format!("server returned {other}")),
         },
         Err(e) => GoalMessageOutcome::Error(e.to_string()),

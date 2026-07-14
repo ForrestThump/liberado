@@ -1296,10 +1296,23 @@ impl App {
                 use crate::api::GoalMessageOutcome as O;
                 match outcome {
                     O::Accepted => {} // the echo arrives via the stream as a `human_input` event
-                    O::NotFound | O::Finished | O::Error(_) => {
+                    O::NotFound | O::NotPermitted | O::Parked | O::Finished | O::Error(_) => {
                         let msg = match outcome {
                             O::NotFound => {
                                 "[this session is gone — /back to return to chat]".into()
+                            }
+                            O::NotPermitted => {
+                                // Authority, not timing. Waiting will not help; the grant is the fix.
+                                "[this session was never allowed to be answered — its profile \
+                                 grants no AskHuman]"
+                                    .into()
+                            }
+                            O::Parked => {
+                                // It has NOT finished, and saying it had is the difference between
+                                // "start over" and "wait".
+                                "[this session is parked — it was waiting on you when the daemon \
+                                 restarted, and cannot take an answer until it is resumed]"
+                                    .into()
                             }
                             O::Finished => {
                                 "[this session has finished — /back to return to chat]".into()

@@ -173,6 +173,13 @@ the transcript, not the goal, because a goal session that no pack is running is 
 The two older endpoints are not legacy: they are the two lenses, and a caller often legitimately wants
 exactly one of them. See [`../reference/api.md`](../reference/api.md).
 
+## What a surface owes the user
+
+The client-side half of this model — what any surface showing sessions must display and let you do —
+is [`session-surface-contract.md`](session-surface-contract.md). It is derived from the TUI (already a
+complete session client) rather than invented, and exists so the WebUI does not have to be
+reverse-engineered out of `crates/tui/`.
+
 ## Where the code lives
 
 | Crate | Role | Holds |
