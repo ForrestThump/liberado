@@ -63,7 +63,12 @@ semantics), including forking from any message in history.
 
 The E5 live test passed, but only after fixing two defects it found (`1de63bc`), and it left two items:
 
-- **S7-c — Contract coherence.** `validate_draft` checks each verifier is well-formed *in isolation*;
+- ~~**S7-c — Contract coherence.**~~ **Fixed 2026-07-14**, live-verified: the model reproduced the exact
+  incoherent draft from run 2 (`out_of_scope: "No clippy or fmt"` while `verify_profile` re-added them),
+  the checker caught 3 contradictions, sent it back, and the human was shown **only** the corrected
+  redraft. What follows is why it was worth doing.
+
+  **The original problem.** `validate_draft` checks each verifier is well-formed *in isolation*;
   nothing checks the frozen contract **against itself**. In three runs of one test it produced: an
   `out_of_scope` clause forbidding the exact file a verifier required, an unsatisfiable `paths_exist`
   (wrong binary name), a `verify_profile` that silently re-added verifiers the model's own prose said it
@@ -111,6 +116,27 @@ The E5 live test passed, but only after fixing two defects it found (`1de63bc`),
     what F1 *was*.
   * **The tests that "covered" zone writes never granted a `Write` capability** — which is why they kept
     passing while the capability did nothing. Adding the check broke them, and the break was the proof.
+
+  **What shipped.** `contract_conflicts` checks the draft against *itself*, after `verify_profile`
+  expansion (so the list checked is the one the worker is judged against). Two tiers:
+  **contradictions** (a live verifier declared out of scope; two gates running the same command) never
+  reach the human — they go back to the *model* as an automatic revision, because catching them is
+  machine work, not a person's job at the end of a workday. **Warnings** (an `out_of_scope` line naming
+  a *file*; a `paths_exist` gate on a build artifact) are surfaced in the freeze prompt, because they
+  need judgement. `freeze()` refuses a contradictory contract outright — belt and braces.
+
+  The freeze prompt now also shows verifier **provenance**: *"[added by verify_profile = rust-strict, not
+  written for this goal]"*, plus how to remove them (clear the profile — editing the list does nothing).
+  That single line is what would have saved two manual rounds live: the model's prose and its own binding
+  verifier list disagreed, and the human reads the prose.
+
+  **What it deliberately cannot do, stated plainly.** The `TOKEN.md` case — the one that actually killed
+  a live run — is **not statically decidable**. The verifier was an opaque `Command`, and nothing in the
+  contract says it reads `TOKEN.md`. Pretending to catch it would be the exact trap this audit keeps
+  finding: a check that *looks* like it covers a class of bug and does not. So the mitigation is honest
+  and indirect — an `out_of_scope` line that names a **file** is warned about, with the consequence
+  spelled out ("if a gate needs that file, the build can never pass"). A human has a real chance with
+  that sentence in front of them. A regex does not.
 
 ## The phased roadmap
 

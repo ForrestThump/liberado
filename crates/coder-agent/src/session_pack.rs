@@ -182,6 +182,46 @@ impl CodingSessionPack {
 
             match outcome {
                 IntakeOutcome::ReadyForFreeze { draft, rationale } => {
+                    // S7-c: a draft that contradicts *itself* never reaches the human. This is the
+                    // model's mistake to fix, not something to spend a person's attention noticing
+                    // in a wall of prose at the end of a workday — send it straight back with the
+                    // finding. (It bit us twice in one live session: `verify_profile` re-added
+                    // gates the model's own out-of-scope prose said it had dropped, and the model
+                    // could not fix it by editing the verifier list, only by clearing the profile.)
+                    let conflicts = liberado_coder_core::contradictions(&draft);
+                    if !conflicts.is_empty() {
+                        rounds += 1;
+                        if rounds > settings.max_clarify_rounds {
+                            return Ok(IntakePhase::NeedsReview(Some(Box::new(draft))));
+                        }
+                        let detail = conflicts
+                            .iter()
+                            .map(|c| format!("- {}", c.message))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let _ = events
+                            .send(SessionEvent::new(
+                                session_id,
+                                SessionEventKind::Progress {
+                                    message: format!(
+                                        "draft contract contradicts itself ({} finding(s)) — \
+                                         redrafting",
+                                        conflicts.len()
+                                    ),
+                                },
+                            ))
+                            .await;
+                        answers.push(IntakeAnswer {
+                            question_id: "coherence".into(),
+                            answer: format!(
+                                "Your draft contract contradicts itself. A contract is frozen and \
+                                 binding — the worker cannot argue with it — so it must be \
+                                 coherent before I accept it. Fix these and re-draft:\n{detail}"
+                            ),
+                        });
+                        continue;
+                    }
+
                     match self
                         .confirm_freeze(session_id, ctx, &draft, &rationale, events, inputs, cancel)
                         .await?
@@ -387,13 +427,47 @@ fn render_draft(draft: &GoalContractDraft, rationale: &str) -> String {
     section(&mut s, "Success criteria", &draft.success_criteria);
 
     if !draft.verifiers.is_empty() {
+        // Verifier PROVENANCE, not just the list. `verify_profile` silently appends gates the model
+        // did not write, so its prose ("no clippy") could sincerely contradict its own binding
+        // verifier list — and the human reads the prose. Saying where each gate came from is what
+        // makes that visible; without it, the only clue is that the build fails on something nobody
+        // asked for.
+        let injected = liberado_coder_core::profile_injected_ids(draft);
         s.push_str("\nVerifiers (the machine gates this will be judged against):\n");
         for v in &draft.verifiers {
-            s.push_str(&format!("  - {}\n", verifier_label(v)));
+            let origin = if injected.iter().any(|id| id == v.id()) {
+                format!(
+                    "   [added by verify_profile = \"{}\", not written for this goal]",
+                    draft.verify_profile.as_deref().unwrap_or("?")
+                )
+            } else {
+                String::new()
+            };
+            s.push_str(&format!("  - {}{origin}\n", verifier_label(v)));
+        }
+        if !injected.is_empty() {
+            s.push_str(&format!(
+                "  ({} of these came from the profile. To drop them, clear `verify_profile` — \
+                 removing them from the list will not work, the profile re-adds them.)\n",
+                injected.len()
+            ));
         }
     }
     section(&mut s, "Out of scope", &draft.out_of_scope);
     section(&mut s, "Assumed (not asked)", &draft.assumed_defaults);
+
+    // S7-c warnings: things we cannot prove are wrong, so the judgement is the human's — but they
+    // have to actually be shown the thing to judge, and not at the bottom of a wall of prose.
+    let warnings: Vec<_> = liberado_coder_core::contract_conflicts(draft)
+        .into_iter()
+        .filter(|f| f.severity == liberado_coder_core::Severity::Warning)
+        .collect();
+    if !warnings.is_empty() {
+        s.push_str("\n⚠ Check these before you accept:\n");
+        for w in &warnings {
+            s.push_str(&format!("  - {}\n", w.message));
+        }
+    }
 
     if !rationale.trim().is_empty() {
         s.push_str(&format!("\nWhy these checks: {}\n", rationale.trim()));
@@ -1496,5 +1570,89 @@ mod tests {
         assert!(out.contains("network") && out.contains("Rust"));
         assert!(out.contains("the stack is clear"));
         assert!(out.contains("accept") && out.contains("reject"));
+    }
+
+    /// The incoherent draft from the live run, reproduced: `verify_profile = "rust-strict"` injects
+    /// clippy/fmt while the model's own `out_of_scope` sincerely says it dropped them. This must
+    /// never reach the human — it goes straight back to the model, and the human is only ever shown
+    /// the coherent redraft.
+    #[tokio::test]
+    async fn a_self_contradicting_draft_goes_back_to_the_model_not_to_the_human() {
+        let incoherent = serde_json::to_string(&IntakeOutcome::ReadyForFreeze {
+            draft: GoalContractDraft {
+                description: "Build a todo CLI".into(),
+                success_criteria: vec!["it works".into()],
+                verifiers: vec![],
+                out_of_scope: vec!["No clippy or fmt checks.".into()],
+                assumed_defaults: vec![],
+                domain_hint: Some("coding".into()),
+                // The trap: this silently re-adds cargo-clippy and cargo-fmt at expansion time, so
+                // the prose above becomes a lie about a list the model never sees.
+                verify_profile: Some("rust-strict".into()),
+            },
+            rationale: "ready".into(),
+        })
+        .unwrap();
+
+        let (pack, ev_tx, mut ev_rx, mut inputs, mut cancel, _c) = harness(
+            vec![&incoherent, &ready_json("Build a todo CLI")],
+            vec!["accept"],
+        );
+
+        let tr = Transcript::open().await;
+        let ctx = tr.ctx();
+        let phase = pack
+            .run_intake_phase(
+                "s1",
+                &goal("make a todo cli"),
+                &ctx,
+                &settings(3),
+                &ev_tx,
+                &mut inputs,
+                &mut cancel,
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(phase, IntakePhase::Frozen(_)),
+            "the redraft should freeze: {phase:?}"
+        );
+
+        // The human was asked exactly ONCE — for the coherent redraft. They never saw the
+        // contradictory one, because catching it is the machine's job, not theirs.
+        let seen = prompts(&mut ev_rx);
+        assert_eq!(
+            seen.len(),
+            1,
+            "the human must not be shown a draft that contradicts itself: {seen:#?}"
+        );
+        assert!(
+            !seen[0].contains("No clippy or fmt checks"),
+            "and certainly not the contradictory one: {}",
+            seen[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn freeze_refuses_a_contract_that_contradicts_itself() {
+        // Belt and braces: even if a contradictory draft somehow reaches freeze, freeze refuses.
+        // Freezing is what makes the gates binding — the worker cannot argue with them — so binding
+        // it to something impossible means it obeys, faithfully, into the ground.
+        let mut draft = GoalContractDraft {
+            description: "Build a todo CLI".into(),
+            success_criteria: vec!["it works".into()],
+            verifiers: vec![],
+            out_of_scope: vec!["No clippy checks.".into()],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: Some("rust-strict".into()),
+        };
+        liberado_coder_core::sanitize_draft(&mut draft);
+
+        let err = GoalContract::freeze("s1", draft, FreezeAuthority::Human)
+            .expect_err("a self-contradictory contract must not become binding");
+        assert!(err.contains("contradicts itself"), "{err}");
+        assert!(err.contains("cargo-clippy"), "must name the gate: {err}");
     }
 }

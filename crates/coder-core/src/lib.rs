@@ -9,12 +9,16 @@
 //! Also hosts **verifier** and **criteria-intake** DTOs (`verify`, `intake`) — domain-agnostic shapes
 //! first consumed by the coding pack; see `docs/architecture/verifiers.md`.
 
+mod coherence;
 mod intake;
 mod tuning;
 mod verify;
 
 pub use tuning::CoderTuning;
 
+pub use coherence::{
+    ContractFinding, Severity, contract_conflicts, contradictions, profile_injected_ids,
+};
 pub use intake::{
     FreezeAuthority, GoalContract, GoalContractDraft, IntakeOutcome, IntakeQuestion,
     expand_verify_profile_into, intake_outcome_schema, profile_verifiers, sanitize_draft,

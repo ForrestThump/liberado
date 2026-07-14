@@ -185,6 +185,15 @@ pub struct GoalContract {
 impl GoalContract {
     /// Freeze a draft after human accept (or policy auto). Computes a stable content hash.
     /// Expands `verify_profile` into concrete verifiers before hashing.
+    ///
+    /// Refuses a contract that **contradicts itself** (S7-c). Freezing is what makes the gates
+    /// authoritative — the worker cannot argue with them — so binding it to something impossible is
+    /// not a soft error it muddles through: it obeys, faithfully, into the ground. A live run did
+    /// exactly that, building against a contract that demanded a gate only `TOKEN.md` could satisfy
+    /// while forbidding it to write `TOKEN.md`. The worker was right and the contract was wrong.
+    ///
+    /// Only *contradictions* block. Warnings are the human's judgement to make, and are shown to
+    /// them at the freeze prompt rather than decided here.
     pub fn freeze(
         id: impl Into<String>,
         mut draft: GoalContractDraft,
@@ -193,6 +202,19 @@ impl GoalContract {
         sanitize_draft(&mut draft);
         expand_verify_profile_into(&mut draft);
         validate_draft(&draft)?;
+        // After expansion: the list checked here is the one the worker is actually judged against,
+        // which is the whole point — `verify_profile` adds gates the model does not know about.
+        let contradictions = crate::coherence::contradictions(&draft);
+        if !contradictions.is_empty() {
+            return Err(format!(
+                "the contract contradicts itself, so it cannot be frozen:\n{}",
+                contradictions
+                    .iter()
+                    .map(|c| format!("  - {}", c.message))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        }
         let frozen_at = Utc::now();
         let content_hash = hash_draft(&draft);
         Ok(Self {
