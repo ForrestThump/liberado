@@ -745,11 +745,15 @@ pub async fn goals_start(
     // profile picks the pack, the capability grant, and the pack's opaque overrides; no profile
     // falls back to the bare domain, keyed by the domain name (the pool rule). Whether this session
     // may interrupt a human is decided *here*, by the grant — not by the caller asserting it.
-    let (domain, capabilities, overrides) = state
+    let (domain, capabilities, overrides, profile_idle) = state
         .config
         .resolve_session_profile(goal.profile.as_deref(), goal.domain.as_str());
     if domain.as_str() != goal.domain.as_str() {
         goal.domain = liberado_session::DomainHint::from(domain.as_str());
+    }
+    // Per-goal idle wins; otherwise the profile default (E5 — hours for interactive coding).
+    if goal.max_idle_secs.is_none() {
+        goal.max_idle_secs = profile_idle;
     }
     let grant = liberado_session::SessionGrant {
         capabilities,

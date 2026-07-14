@@ -3336,11 +3336,14 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 name = "liberado-bootstrap"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "liberado-common",
  "liberado-config",
  "liberado-cron",
  "liberado-daemon",
+ "liberado-dispatch-pack",
  "liberado-dispatcher",
+ "liberado-executor",
  "liberado-mcp",
  "liberado-notify",
  "liberado-orchestrator",
@@ -3545,6 +3548,7 @@ dependencies = [
  "chrono",
  "cron",
  "liberado-common",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -3559,6 +3563,7 @@ dependencies = [
  "liberado-common",
  "liberado-config-loader",
  "liberado-cron",
+ "liberado-dispatch-pack",
  "liberado-dispatcher",
  "liberado-executor",
  "liberado-notify",
@@ -3570,6 +3575,26 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "liberado-dispatch-pack"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "liberado-common",
+ "liberado-config-loader",
+ "liberado-dispatcher",
+ "liberado-executor",
+ "liberado-notify",
+ "liberado-orchestrator",
+ "liberado-provider",
+ "liberado-session",
+ "liberado-test-support",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
 ]
@@ -3653,6 +3678,7 @@ dependencies = [
  "liberado-common",
  "liberado-config-loader",
  "liberado-conversation-store",
+ "liberado-dispatch-pack",
  "liberado-dispatcher",
  "liberado-executor",
  "liberado-mcp",
@@ -3830,7 +3856,7 @@ dependencies = [
  "liberado-main-agent",
  "liberado-mcp",
  "liberado-memory-store",
- "liberado-orchestrator",
+ "liberado-notify",
  "liberado-provider",
  "liberado-session",
  "liberado-session-store",

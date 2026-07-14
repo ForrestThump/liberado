@@ -77,6 +77,16 @@ pub trait SessionRecordStore: Send + Sync {
     /// needs a human without scanning its log.
     async fn push_event(&self, event: SessionEvent);
 
+    /// How many live subscribers are watching this session's event bus right now.
+    ///
+    /// Used for out-of-band notification (E5): when a pack emits `AwaitingInput` and this is 0,
+    /// nobody is watching the TUI/stream, so ping the human. Default `0` — stores without a bus
+    /// (tests) treat every await as unwatched.
+    async fn live_subscriber_count(&self, id: &str) -> usize {
+        let _ = id;
+        0
+    }
+
     /// Append one **turn** — a conversational message — to this session's transcript, parented onto
     /// whatever the session's newest node is.
     ///

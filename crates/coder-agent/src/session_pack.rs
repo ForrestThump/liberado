@@ -41,9 +41,12 @@ use tokio::sync::mpsc::Sender;
 use crate::LiberadoLoopBackend;
 use crate::intake_session::{IntakeAnswer, run_intake};
 
-/// Runs coding goals via [`LiberadoLoopBackend`], intake-first.
+/// Runs coding goals via a [`CoderBackend`] (in production, [`LiberadoLoopBackend`]), intake-first.
 pub struct CodingSessionPack {
-    backend: LiberadoLoopBackend,
+    /// The trait, not the concrete backend: the build loop's behaviour — notably that a human's
+    /// mid-build answer actually reaches the *next* attempt — is only testable if a double can
+    /// stand in here.
+    backend: Arc<dyn CoderBackend>,
     /// The intake model. Held separately from the backend because intake is a *different phase*
     /// with a different job: it reasons about the goal, it does not touch the workspace.
     provider: Arc<dyn Provider>,
@@ -54,14 +57,14 @@ pub struct CodingSessionPack {
 impl CodingSessionPack {
     pub fn new(provider: Arc<dyn Provider>, default_workspace_parent: PathBuf) -> Self {
         Self {
-            backend: LiberadoLoopBackend::new(provider.clone()),
+            backend: Arc::new(LiberadoLoopBackend::new(provider.clone())),
             provider,
             default_workspace_parent,
         }
     }
 
     pub fn with_backend(
-        backend: LiberadoLoopBackend,
+        backend: Arc<dyn CoderBackend>,
         provider: Arc<dyn Provider>,
         default_workspace_parent: PathBuf,
     ) -> Self {
@@ -624,55 +627,93 @@ impl DomainPackRunner for CodingSessionPack {
                 .await;
         }
 
-        let _ = events
-            .send(SessionEvent::new(
-                session_id,
-                SessionEventKind::RoleStarted {
-                    role: "coder".into(),
-                    model,
-                },
-            ))
-            .await;
-
-        // Race coding run against cancel (best-effort; LiberadoLoopBackend is not yet cancel-aware).
-        let run_fut = self.backend.run(request);
-        tokio::pin!(run_fut);
-
-        let result = tokio::select! {
-            r = &mut run_fut => r,
-            _ = cancel.changed() => {
-                if *cancel.borrow() {
-                    return Err(PackError::Cancelled);
-                }
-                run_fut.await
-            }
+        // E5: the build is a bounded attempt loop, not a single shot. When an attempt fails and this
+        // session may ask a human, the pack stops and asks — and the answer comes back as a
+        // `prior_feedback` line on the *next* attempt. That is the same channel the verifier repair
+        // loop already uses, and the workspace still holds the failed attempt's changes, so the
+        // retry continues from where it broke rather than redoing the work. Bounded by
+        // `max_mid_run_asks` (default 1): a pack that can ask forever is a chat, not a pack.
+        let mut asks_remaining = if may_ask {
+            ctx.overrides()
+                .get("max_mid_run_asks")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(1) as u32
+        } else {
+            0
         };
 
-        let _ = events
-            .send(SessionEvent::new(
-                session_id,
-                SessionEventKind::RoleFinished {
-                    role: "coder".into(),
-                },
-            ))
-            .await;
+        loop {
+            let _ = events
+                .send(SessionEvent::new(
+                    session_id,
+                    SessionEventKind::RoleStarted {
+                        role: "coder".into(),
+                        model: model.clone(),
+                    },
+                ))
+                .await;
 
-        match result {
-            Ok(r) => {
-                let ok = r.outcome == Outcome::Succeeded;
-                let _ = events
-                    .send(SessionEvent::new(
-                        session_id,
-                        SessionEventKind::ValidationFinished {
-                            ok,
-                            summary: r
-                                .validation_notes
-                                .clone()
-                                .unwrap_or_else(|| r.summary.clone()),
-                        },
-                    ))
-                    .await;
-                Ok(GoalResult {
+            // Race coding run against cancel (best-effort; LiberadoLoopBackend is not cancel-aware).
+            let run_fut = self.backend.run(request.clone());
+            tokio::pin!(run_fut);
+
+            let result = tokio::select! {
+                r = &mut run_fut => r,
+                _ = cancel.changed() => {
+                    if *cancel.borrow() {
+                        return Err(PackError::Cancelled);
+                    }
+                    run_fut.await
+                }
+            };
+
+            let _ = events
+                .send(SessionEvent::new(
+                    session_id,
+                    SessionEventKind::RoleFinished {
+                        role: "coder".into(),
+                    },
+                ))
+                .await;
+
+            let r = match result {
+                Ok(r) => r,
+                Err(e) => {
+                    let msg = e.to_string();
+                    let _ = events
+                        .send(SessionEvent::new(
+                            session_id,
+                            SessionEventKind::Failed {
+                                message: msg.clone(),
+                            },
+                        ))
+                        .await;
+                    return Ok(GoalResult {
+                        terminal: TerminalKind::Failed,
+                        summary: msg,
+                        artifacts: vec![],
+                        diagnostics: serde_json::json!({"error": "coder_backend"}),
+                    });
+                }
+            };
+
+            let ok = r.outcome == Outcome::Succeeded;
+            let _ = events
+                .send(SessionEvent::new(
+                    session_id,
+                    SessionEventKind::ValidationFinished {
+                        ok,
+                        summary: r
+                            .validation_notes
+                            .clone()
+                            .unwrap_or_else(|| r.summary.clone()),
+                    },
+                ))
+                .await;
+
+            // Succeeded, or failed with no ask left to spend: this is the outcome.
+            if ok || asks_remaining == 0 {
+                return Ok(GoalResult {
                     terminal: if ok {
                         TerminalKind::Succeeded
                     } else {
@@ -681,24 +722,70 @@ impl DomainPackRunner for CodingSessionPack {
                     summary: r.summary,
                     artifacts: r.files_changed,
                     diagnostics: r.diagnostics,
-                })
+                });
             }
-            Err(e) => {
-                let msg = e.to_string();
-                let _ = events
-                    .send(SessionEvent::new(
-                        session_id,
-                        SessionEventKind::Failed {
-                            message: msg.clone(),
-                        },
-                    ))
-                    .await;
-                Ok(GoalResult {
-                    terminal: TerminalKind::Failed,
-                    summary: msg,
-                    artifacts: vec![],
-                    diagnostics: serde_json::json!({"error": "coder_backend"}),
-                })
+
+            let prompt = format!(
+                "The build did not succeed:\n{}\n\nHow should I proceed? \
+                 Reply with guidance, or \"abort\" to stop.",
+                r.summary
+            );
+            let answer = self
+                .ask(
+                    session_id,
+                    ctx,
+                    &events,
+                    &mut inputs,
+                    &mut cancel,
+                    prompt,
+                    vec!["abort".into(), "retry".into()],
+                )
+                .await?;
+
+            match answer {
+                // Nobody answered inside the idle budget. The work stands; say so plainly.
+                None => {
+                    return Ok(GoalResult {
+                        terminal: TerminalKind::BudgetExhausted,
+                        summary: format!(
+                            "build failed and no answer to mid-run question: {}",
+                            r.summary
+                        ),
+                        artifacts: r.files_changed,
+                        diagnostics: r.diagnostics,
+                    });
+                }
+                Some(text)
+                    if text.trim().eq_ignore_ascii_case("abort")
+                        || text.trim().eq_ignore_ascii_case("stop")
+                        || text.trim().eq_ignore_ascii_case("cancel") =>
+                {
+                    return Ok(GoalResult {
+                        terminal: TerminalKind::Cancelled,
+                        summary: format!("build failed; human aborted after: {}", r.summary),
+                        artifacts: r.files_changed,
+                        diagnostics: r.diagnostics,
+                    });
+                }
+                Some(guidance) => {
+                    asks_remaining -= 1;
+                    request.attempt += 1;
+                    request.prior_feedback.push(format!(
+                        "Attempt {} failed: {}\nHuman guidance: {guidance}",
+                        request.attempt, r.summary
+                    ));
+                    let _ = events
+                        .send(SessionEvent::new(
+                            session_id,
+                            SessionEventKind::Progress {
+                                message: format!(
+                                    "retrying with human guidance: {}",
+                                    guidance.chars().take(120).collect::<String>()
+                                ),
+                            },
+                        ))
+                        .await;
+                }
             }
         }
     }
@@ -707,6 +794,7 @@ impl DomainPackRunner for CodingSessionPack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use liberado_coder_core::{CoderError, CoderRunResult};
     use liberado_provider::{CompletionResponse, MockProvider};
     use liberado_session::HumanInput;
     use tokio::sync::mpsc;
@@ -821,6 +909,183 @@ mod tests {
         fn ctx(&self) -> PackContext<'_> {
             PackContext::new(&self.grant, self.store.clone(), "s1")
         }
+    }
+
+    /// A backend that fails the first attempt and succeeds on the next, recording every request it
+    /// was handed. The recording is the point: it is the only way to prove a human's mid-build
+    /// answer actually reaches the *backend* rather than merely being narrated to the event bus.
+    struct ScriptedBackend {
+        seen: Arc<std::sync::Mutex<Vec<CoderRunRequest>>>,
+        fail_attempts: u32,
+    }
+
+    #[async_trait]
+    impl CoderBackend for ScriptedBackend {
+        fn name(&self) -> &str {
+            "scripted"
+        }
+        async fn run(&self, request: CoderRunRequest) -> Result<CoderRunResult, CoderError> {
+            let attempt = request.attempt;
+            self.seen.lock().unwrap().push(request);
+            let failed = attempt < self.fail_attempts;
+            Ok(CoderRunResult {
+                backend: "scripted".into(),
+                outcome: if failed {
+                    Outcome::Failed
+                } else {
+                    Outcome::Succeeded
+                },
+                summary: if failed {
+                    "verifier `tests` failed".into()
+                } else {
+                    "green".into()
+                },
+                files_changed: vec![],
+                validation_notes: None,
+                critic_verdict: None,
+                trace_path: None,
+                diagnostics: serde_json::json!({}),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_build_asks_the_human_and_retries_with_their_answer() {
+        // The point of the whole exercise (one-execution-engine E5): a goal-pursuing session that
+        // hits a wall stops, asks, waits, and then *uses the answer*. Recording the guidance in the
+        // transcript and failing anyway would look identical on the event bus and be worthless — so
+        // this asserts the guidance arrives in the backend's second attempt as `prior_feedback`.
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let backend = Arc::new(ScriptedBackend {
+            seen: seen.clone(),
+            fail_attempts: 1,
+        });
+        let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+        let pack = CodingSessionPack::with_backend(backend, provider, std::env::temp_dir());
+
+        let (ev_tx, _ev_rx) = mpsc::channel::<SessionEvent>(64);
+        let (in_tx, in_rx) = mpsc::channel::<HumanInput>(16);
+        in_tx
+            .try_send(HumanInput::new("pin serde to 1.0 and rerun"))
+            .unwrap();
+        drop(in_tx);
+        let inputs = InputChannel::new(in_rx, None);
+        let (_c_tx, cancel) = tokio::sync::watch::channel(false);
+
+        let workspace = std::env::temp_dir().join("liberado-e5-retry-test");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        // Intake off (this test is about the *build* loop), AskHuman on (so the pack may stop).
+        let mut g = goal("make a todo cli");
+        g.payload = serde_json::json!({
+            "workspace_root": workspace.to_string_lossy(),
+            "intake": { "enabled": false },
+        });
+
+        let store = Arc::new(liberado_session::GoalSessionStore::new());
+        let mut spec = g.clone();
+        spec.id = Some("s1".into());
+        liberado_session::SessionRecordStore::insert(
+            store.as_ref(),
+            liberado_session::GoalSessionRecord::new(spec),
+        )
+        .await;
+        let grant = liberado_session::SessionGrant {
+            capabilities: [Capability::AskHuman].into_iter().collect(),
+            ..Default::default()
+        };
+        let ctx = PackContext::new(&grant, store.clone(), "s1");
+
+        let out = pack
+            .run("s1", &g, &ctx, ev_tx, inputs, cancel)
+            .await
+            .unwrap();
+
+        let requests = seen.lock().unwrap().clone();
+        assert_eq!(
+            requests.len(),
+            2,
+            "the pack must actually re-run the backend after the human answers, not just record \
+             the answer and fail: {out:?}"
+        );
+        assert_eq!(requests[0].attempt, 0);
+        assert_eq!(requests[1].attempt, 1, "the retry is a new attempt");
+        assert!(
+            requests[1]
+                .prior_feedback
+                .iter()
+                .any(|f| f.contains("pin serde to 1.0")),
+            "the human's guidance must reach the backend as feedback: {:#?}",
+            requests[1].prior_feedback
+        );
+        assert_eq!(
+            out.terminal,
+            TerminalKind::Succeeded,
+            "the guided retry succeeded, so the session succeeded"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_ask_budget_bounds_the_retries_so_a_stuck_pack_cannot_interrogate_you() {
+        // A pack that may ask whenever it is stuck is worse than one that guesses: it would keep
+        // coming back forever. One ask (the default) means one guided retry, then it stops and
+        // reports — it does not ask a second time.
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let backend = Arc::new(ScriptedBackend {
+            seen: seen.clone(),
+            fail_attempts: 99, // never succeeds, however much guidance it is given
+        });
+        let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+        let pack = CodingSessionPack::with_backend(backend, provider, std::env::temp_dir());
+
+        let (ev_tx, mut ev_rx) = mpsc::channel::<SessionEvent>(64);
+        let (in_tx, in_rx) = mpsc::channel::<HumanInput>(16);
+        for answer in ["try again", "and again", "and again"] {
+            in_tx.try_send(HumanInput::new(answer)).unwrap();
+        }
+        drop(in_tx);
+        let inputs = InputChannel::new(in_rx, None);
+        let (_c_tx, cancel) = tokio::sync::watch::channel(false);
+
+        let workspace = std::env::temp_dir().join("liberado-e5-budget-test");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let mut g = goal("make a todo cli");
+        g.payload = serde_json::json!({
+            "workspace_root": workspace.to_string_lossy(),
+            "intake": { "enabled": false },
+        });
+
+        let store = Arc::new(liberado_session::GoalSessionStore::new());
+        let mut spec = g.clone();
+        spec.id = Some("s1".into());
+        liberado_session::SessionRecordStore::insert(
+            store.as_ref(),
+            liberado_session::GoalSessionRecord::new(spec),
+        )
+        .await;
+        let grant = liberado_session::SessionGrant {
+            capabilities: [Capability::AskHuman].into_iter().collect(),
+            ..Default::default()
+        };
+        let ctx = PackContext::new(&grant, store.clone(), "s1");
+
+        let out = pack
+            .run("s1", &g, &ctx, ev_tx, inputs, cancel)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            2,
+            "one ask means the initial attempt plus exactly one guided retry — no more"
+        );
+        assert_eq!(out.terminal, TerminalKind::Failed);
+        assert_eq!(
+            prompts(&mut ev_rx).len(),
+            1,
+            "the human is asked once, not once per failure"
+        );
     }
 
     fn prompts(rx: &mut mpsc::Receiver<SessionEvent>) -> Vec<String> {

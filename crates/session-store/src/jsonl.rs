@@ -415,11 +415,21 @@ fn replay_file(path: &Path) -> Result<Option<Live>, String> {
 
     // A goal session left non-terminal by a crash is coerced: nothing is running it now. A chat
     // (goal-less) has no terminal state to coerce to — it is just open.
+    //
+    // E6 exception: a session that was *parked on a human* (`awaiting_input`) is not mid-computation
+    // — it is waiting. Coercing it to Failed erased the fact that a question was open. Promote those
+    // to `Parked` instead (still non-terminal, still answerable once a resume path is wired). A
+    // mid-build session without `awaiting_input` still becomes Failed — packs are not resumable yet.
     if header.goal.is_some() && !header.status.is_terminal() {
-        header.status = SessionStatus::Failed;
-        header.awaiting_input = false;
-        if header.finished_at.is_none() {
-            header.finished_at = Some(Utc::now());
+        if header.awaiting_input {
+            header.status = SessionStatus::Parked;
+            // Keep awaiting_input true so the UI still shows "needs you".
+        } else {
+            header.status = SessionStatus::Failed;
+            header.awaiting_input = false;
+            if header.finished_at.is_none() {
+                header.finished_at = Some(Utc::now());
+            }
         }
     }
 
@@ -692,6 +702,16 @@ impl SessionRecordStore for SessionStore {
         if persist {
             self.append_line(ulid, &Record::Event(event));
         }
+    }
+
+    async fn live_subscriber_count(&self, id: &str) -> usize {
+        let Ok(ulid) = id.parse::<Ulid>() else {
+            return 0;
+        };
+        let map = self.inner.lock().await;
+        map.get(&ulid)
+            .map(|live| live.bus.receiver_count())
+            .unwrap_or(0)
     }
 
     /// A pack's turn becomes a **real node in the message DAG** — the same kind of node a chat turn

@@ -27,14 +27,14 @@ fn submit_report_response() -> CompletionResponse {
 fn orchestrator(
     script: Vec<CompletionResponse>,
     capabilities: CapabilitySet,
-) -> (Calls, Orchestrator) {
+) -> (Calls, Orchestrator, CapabilitySet) {
     let provider = Arc::new(MockProvider::with_script("mock", script));
     let factory = CallRecordingFactory::default();
     let calls = factory.calls.clone();
     let orch = Orchestrator::new(
         provider,
         factory,
-        capabilities,
+        capabilities.clone(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -42,7 +42,7 @@ fn orchestrator(
         ProposalSigner::random(),
         "default",
     );
-    (calls, orch)
+    (calls, orch, capabilities)
 }
 
 #[tokio::test]
@@ -50,7 +50,7 @@ async fn execute_direct_scopes_the_runtime_to_the_granted_mcps() {
     // ExecuteDirect scopes to exactly what `capabilities` grants — an empty allow-list would mean
     // "every registered MCP" to the factory, which is the bug this test guards against.
     let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("tasks-mcp".into())]);
-    let (calls, orch) = orchestrator(vec![submit_report_response()], capabilities);
+    let (calls, orch, caps) = orchestrator(vec![submit_report_response()], capabilities);
 
     let decision = DispatchDecision {
         action: DispatchAction::ExecuteDirect {
@@ -62,7 +62,12 @@ async fn execute_direct_scopes_the_runtime_to_the_granted_mcps() {
     };
 
     let disposition = orch
-        .run(decision, "tidy the inbox", "vault-change:inbox/x.md:abc123")
+        .run(
+            decision,
+            "tidy the inbox",
+            "vault-change:inbox/x.md:abc123",
+            &caps,
+        )
         .await
         .expect("run");
 
@@ -91,7 +96,7 @@ async fn execute_direct_relevant_mcps_narrows_within_the_granted_ceiling() {
         Capability::ExecuteMcp("tasks-mcp".into()),
         Capability::ExecuteMcp("email-mcp".into()),
     ]);
-    let (calls, orch) = orchestrator(vec![submit_report_response()], capabilities);
+    let (calls, orch, caps) = orchestrator(vec![submit_report_response()], capabilities);
 
     let decision = DispatchDecision {
         action: DispatchAction::ExecuteDirect {
@@ -102,7 +107,7 @@ async fn execute_direct_relevant_mcps_narrows_within_the_granted_ceiling() {
         rationale: "simple".into(),
     };
 
-    orch.run(decision, "add milk to my list", "trigger-1")
+    orch.run(decision, "add milk to my list", "trigger-1", &caps)
         .await
         .expect("run");
 
@@ -120,7 +125,7 @@ async fn execute_direct_relevant_mcps_narrows_within_the_granted_ceiling() {
 async fn execute_direct_with_zero_grants_never_calls_the_factory() {
     // No ExecuteMcp grants at all: the factory must not be asked for "every registered MCP" (what
     // an empty allow-list would otherwise mean) — it must not be called at all.
-    let (calls, orch) = orchestrator(vec![submit_report_response()], CapabilitySet::empty());
+    let (calls, orch, caps) = orchestrator(vec![submit_report_response()], CapabilitySet::empty());
 
     let decision = DispatchDecision {
         action: DispatchAction::ExecuteDirect {
@@ -131,7 +136,7 @@ async fn execute_direct_with_zero_grants_never_calls_the_factory() {
         rationale: "simple".into(),
     };
     let disposition = orch
-        .run(decision, "tidy the inbox", "trigger-1")
+        .run(decision, "tidy the inbox", "trigger-1", &caps)
         .await
         .expect("run");
     assert!(matches!(disposition, Disposition::Reported(_)));
@@ -143,7 +148,7 @@ async fn execute_direct_with_zero_grants_never_calls_the_factory() {
 
 #[tokio::test]
 async fn dispatch_subagent_uses_its_own_correlation_and_allowed_mcps() {
-    let (calls, orch) = orchestrator(vec![submit_report_response()], CapabilitySet::empty());
+    let (calls, orch, caps) = orchestrator(vec![submit_report_response()], CapabilitySet::empty());
 
     let decision = DispatchDecision {
         action: DispatchAction::DispatchSubagent {
@@ -164,6 +169,7 @@ async fn dispatch_subagent_uses_its_own_correlation_and_allowed_mcps() {
             decision,
             "outer goal is ignored for subagents",
             "trigger-xyz",
+            &caps,
         )
         .await
         .expect("run");
@@ -184,7 +190,7 @@ async fn dispatch_subagent_uses_its_own_correlation_and_allowed_mcps() {
 async fn propose_builds_a_pending_proposal_without_executing() {
     // No scripted responses + no runtime: proves nothing ran (the orchestrator only builds the
     // artifact; the daemon writes it).
-    let (calls, orch) = orchestrator(vec![], CapabilitySet::empty());
+    let (calls, orch, caps) = orchestrator(vec![], CapabilitySet::empty());
 
     let action = ProposedAction::ToolCalls(vec![ToolCall {
         tool: "email:send".into(),
@@ -200,7 +206,12 @@ async fn propose_builds_a_pending_proposal_without_executing() {
     };
 
     let disposition = orch
-        .run(decision, "email the boss", "vault-change:inbox/x.md:abc")
+        .run(
+            decision,
+            "email the boss",
+            "vault-change:inbox/x.md:abc",
+            &caps,
+        )
         .await
         .expect("run");
 
@@ -222,7 +233,7 @@ async fn propose_builds_a_pending_proposal_without_executing() {
 #[tokio::test]
 async fn clarify_short_circuits_without_executing() {
     // No scripted responses + no runtime: proves nothing ran.
-    let (calls, orch) = orchestrator(vec![], CapabilitySet::empty());
+    let (calls, orch, caps) = orchestrator(vec![], CapabilitySet::empty());
 
     let decision = DispatchDecision {
         action: DispatchAction::Clarify {
@@ -234,7 +245,7 @@ async fn clarify_short_circuits_without_executing() {
     };
 
     let disposition = orch
-        .run(decision, "ambiguous goal", "trigger-1")
+        .run(decision, "ambiguous goal", "trigger-1", &caps)
         .await
         .expect("run");
 
@@ -379,7 +390,7 @@ async fn execute_direct_downgrades_a_high_consequence_adaptive_call() {
     let orch = Orchestrator::new(
         provider,
         InvocationRecordingFactory { runtime },
-        capabilities,
+        capabilities.clone(),
         vec![("dangerous-mcp".into(), Consequence::External)],
         Vec::new(),
         Vec::new(),
@@ -398,7 +409,7 @@ async fn execute_direct_downgrades_a_high_consequence_adaptive_call() {
     };
 
     let disposition = orch
-        .run(decision, "clean up the vault", "trigger-1")
+        .run(decision, "clean up the vault", "trigger-1", &capabilities)
         .await
         .expect("run");
 
@@ -449,7 +460,7 @@ async fn execute_direct_rejects_an_out_of_capability_adaptive_call() {
     let orch = Orchestrator::new(
         provider,
         InvocationRecordingFactory { runtime },
-        capabilities,
+        capabilities.clone(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -468,7 +479,7 @@ async fn execute_direct_rejects_an_out_of_capability_adaptive_call() {
     };
 
     let disposition = orch
-        .run(decision, "do a safe thing", "trigger-1")
+        .run(decision, "do a safe thing", "trigger-1", &capabilities)
         .await
         .expect("run");
 
@@ -501,7 +512,7 @@ async fn dispatch_subagent_gates_with_the_narrowed_capability_set() {
     let orch = Orchestrator::new(
         provider,
         InvocationRecordingFactory { runtime },
-        ceiling,
+        ceiling.clone(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -525,7 +536,7 @@ async fn dispatch_subagent_gates_with_the_narrowed_capability_set() {
     };
 
     let disposition = orch
-        .run(decision, "outer goal ignored", "trigger-1")
+        .run(decision, "outer goal ignored", "trigger-1", &ceiling)
         .await
         .expect("run");
 
@@ -558,7 +569,7 @@ async fn dispatch_subagent_empty_capabilities_derives_gate_from_allowed_mcps() {
     let orch = Orchestrator::new(
         provider,
         InvocationRecordingFactory { runtime },
-        ceiling,
+        ceiling.clone(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -582,7 +593,7 @@ async fn dispatch_subagent_empty_capabilities_derives_gate_from_allowed_mcps() {
     };
 
     let disposition = orch
-        .run(decision, "outer goal ignored", "trigger-1")
+        .run(decision, "outer goal ignored", "trigger-1", &ceiling)
         .await
         .expect("run");
 
@@ -618,7 +629,7 @@ async fn dispatch_subagent_empty_capabilities_still_cannot_widen_past_ceiling() 
     let orch = Orchestrator::new(
         provider,
         InvocationRecordingFactory { runtime },
-        ceiling,
+        ceiling.clone(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -642,7 +653,7 @@ async fn dispatch_subagent_empty_capabilities_still_cannot_widen_past_ceiling() 
     };
 
     let disposition = orch
-        .run(decision, "outer goal ignored", "trigger-1")
+        .run(decision, "outer goal ignored", "trigger-1", &ceiling)
         .await
         .expect("run");
 
@@ -670,7 +681,7 @@ async fn dispatch_parallel_gates_each_sub_dispatch() {
     let orch = Orchestrator::new(
         provider,
         InvocationRecordingFactory { runtime },
-        capabilities,
+        capabilities.clone(),
         vec![("dangerous-mcp".into(), Consequence::External)],
         Vec::new(),
         Vec::new(),
@@ -829,7 +840,7 @@ async fn execute_approved_subagent_still_gates_adaptive_calls_outside_its_capabi
     let orch = Orchestrator::new(
         provider,
         InvocationRecordingFactory { runtime },
-        ceiling,
+        ceiling.clone(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -858,4 +869,64 @@ async fn execute_approved_subagent_still_gates_adaptive_calls_outside_its_capabi
         invoked.lock().unwrap().is_empty(),
         "the proposal's own (narrower) capabilities must gate it, not the orchestrator's raw ceiling"
     );
+}
+
+#[tokio::test]
+async fn per_run_capabilities_narrow_the_pool_ceiling_and_never_widen() {
+    // E1: a session grant narrower than the pool is genuinely enforced. The pool grants two MCPs;
+    // the per-run grant only grants one. The runtime must be scoped to that one — and a per-run
+    // grant that *adds* an MCP the pool lacks must not invent authority.
+    let pool = CapabilitySet::from_iter([
+        Capability::ExecuteMcp("tasks-mcp".into()),
+        Capability::ExecuteMcp("email-mcp".into()),
+    ]);
+    let (calls, orch, _pool_caps) = orchestrator(
+        vec![submit_report_response(), submit_report_response()],
+        pool,
+    );
+
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: Vec::new(),
+        },
+        confidence: 0.9,
+        rationale: "routine".into(),
+    };
+
+    // Narrower per-run grant: only tasks-mcp.
+    let session_grant = CapabilitySet::from_iter([Capability::ExecuteMcp("tasks-mcp".into())]);
+    orch.run(decision.clone(), "list tasks", "sess-1", &session_grant)
+        .await
+        .expect("run");
+    {
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].0,
+            vec!["tasks-mcp".to_string()],
+            "session grant must narrow the pool ceiling"
+        );
+    }
+
+    // Wider-looking per-run grant: claims vault-mcp the pool never held — must not appear.
+    let spoofed = CapabilitySet::from_iter([
+        Capability::ExecuteMcp("tasks-mcp".into()),
+        Capability::ExecuteMcp("email-mcp".into()),
+        Capability::ExecuteMcp("vault-mcp".into()),
+    ]);
+    orch.run(decision, "list tasks", "sess-2", &spoofed)
+        .await
+        .expect("run");
+    {
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        let mut allowed = calls[1].0.clone();
+        allowed.sort();
+        assert_eq!(
+            allowed,
+            vec!["email-mcp".to_string(), "tasks-mcp".to_string()],
+            "per-run capabilities cannot widen past the pool ceiling"
+        );
+    }
 }

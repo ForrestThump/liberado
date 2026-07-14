@@ -99,33 +99,21 @@ and it runs against `SessionStore` — i.e. against the store production actuall
 obvious; it was not the case until 2026-07-13, and all three defects above survived precisely
 because the suite had been pointed at a store nothing ran on.
 
-## Background sessions — recorded, not hosted
+## Background sessions — hosted on the one engine
 
-A cron firing, a webhook/hook, and a `delegate`d subagent are recorded as `Visibility::Background`
-sessions (`liberado_session::BackgroundRun`), in the same store and the same list as your chats.
-Before this, they fired into the void: a model was called, your vault was possibly written to, and
-the only trace was a log line.
+A cron firing, a webhook/hook, and a `delegate`d subagent are **hosted** `Visibility::Background`
+sessions on the same `GoalSessionHub` as `/spawn`, via the `dispatch` domain pack
+(`liberado-dispatch-pack`). They are joinable and cancellable; `domain: "dispatch"` is a registered
+pack, not a fake.
 
-**They are recorded, not hosted.** The dispatcher/orchestrator still executes them; the
-`GoalSessionHub` and its `DomainPackRunner` packs are *not involved*. So joining one is **read-only**
-— you watch what it did, you do not steer it.
+| Entry | Pack | Notes |
+|---|---|---|
+| `/spawn`, `POST /api/goals` | coding / life / … | Foreground when a human starts them |
+| cron / webhook / vault reaction | `dispatch` | `ReactionOutcome::Dispatched { session_id }` |
+| face-agent `delegate` | `dispatch` | Awaits terminal inside the chat turn; no `AskHuman` (D-e) |
 
-> ### The seam this leaves open
->
-> There are, honestly, **two execution engines**:
->
-> | Engine | Runs | Reached by |
-> |---|---|---|
-> | `GoalSessionHub` + `DomainPackRunner` packs | goal sessions (coding, life) | `/spawn`, `POST /api/goals` |
-> | dispatcher + orchestrator | daemon reactions, `delegate` | cron, webhooks, vault changes, the face agent's `delegate` tool |
->
-> D7 unified how sessions are *stored and displayed*. It did not unify how they are *run*. A
-> background session's `domain` is therefore recorded as `dispatch` — not `coding` or `life` — because
-> claiming a pack ran it would be a lie a surface would then act on (it would offer to steer it).
->
-> Routing unattended triggers through the hub as real packs is a later, larger convergence. This is
-> the largest remaining piece of structural debt in the session model, and it is deliberate: the
-> visibility was worth having before the convergence was.
+See [`../roadmap/one-execution-engine-plan.md`](../roadmap/one-execution-engine-plan.md) for the
+convergence (E1–E7).
 
 ## Authority (S6)
 

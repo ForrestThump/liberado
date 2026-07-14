@@ -27,7 +27,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
         .rev()
         .take(area.height.saturating_sub(2) as usize)
         .map(|r| {
-            let icon = match r.outcome {
+            let icon = match &r.outcome {
                 ReactionOutcome::Observed => Span::styled(
                     "◉",
                     Style::default().fg(c(&th.reaction_observed, "#00ffff")),
@@ -38,6 +38,9 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
                 ),
                 ReactionOutcome::Acted => {
                     Span::styled("✓", Style::default().fg(c(&th.reaction_acted, "#00ff00")))
+                }
+                ReactionOutcome::Dispatched { .. } => {
+                    Span::styled("▶", Style::default().fg(c(&th.reaction_acted, "#00ff00")))
                 }
             };
             let path = r.path.as_deref().unwrap_or("?").to_string();

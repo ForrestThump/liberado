@@ -118,6 +118,11 @@ impl AppState {
                     liberado_daemon::ReactionOutcome::Observed => ReactionOutcome::Observed,
                     liberado_daemon::ReactionOutcome::Decided(_) => ReactionOutcome::Decided,
                     liberado_daemon::ReactionOutcome::Acted(_) => ReactionOutcome::Acted,
+                    liberado_daemon::ReactionOutcome::Dispatched { session_id } => {
+                        ReactionOutcome::Dispatched {
+                            session_id: session_id.clone(),
+                        }
+                    }
                 };
 
                 let event = ReactionEvent {

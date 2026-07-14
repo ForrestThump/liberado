@@ -1,6 +1,16 @@
 # One execution engine, and sessions that wait for you
 
-**Status**: plan, 2026-07-13. Decisions settled (§3). Not started.
+**Status**: landed 2026-07-13/14 (E1–E7).
+
+A **within-run** guided retry ships with E5: a build that fails asks the human and folds their answer
+into the next attempt's `prior_feedback` — the same channel the verifier repair loop already uses,
+against a workspace that still holds the failed attempt's changes. No checkpoint is needed for that,
+because nothing is being *replayed*: the process never died.
+
+What remains deferred is narrower than it first looked — resuming a session **across a daemon
+restart** while it was mid-build. E6 parks such a session honestly (`Parked`, `awaiting_input`
+preserved) rather than pretending; answering it after a restart does not yet resume the build. That
+is the case that needs a workspace checkpoint (E6-c).
 **Debt item**: #1 from the 2026-07-13 hygiene audit ([`current.md`](current.md)).
 **Related**: [`../architecture/sessions.md`](../architecture/sessions.md) ·
 [`agentic-loops.md`](../architecture/agentic-loops.md) ·
@@ -129,9 +139,9 @@ which is the check that the convergence was real rather than an extra layer.
 
 ### E5 — A pack can ask mid-run, and you find out about it
 
-Three parts, and the first is the one that does not exist yet:
+Three parts, and the first is the one that did not exist:
 
-1. **An ask seam in the coding loop.** The pack can ask during intake and nowhere else. The build loop
+1. **An ask seam in the coding loop.** The pack could ask during intake and nowhere else. The build loop
    needs a bounded, deliberate way to stop and ask — *not* an open invitation to interrogate the human
    on every uncertainty (that would be worse than guessing). The natural trigger points, in order of
    how well-defined they are:
@@ -159,7 +169,27 @@ Three parts, and the first is the one that does not exist yet:
    per-session only, with no default. Make it settable per `[[session_profiles]]`, defaulting
    generously for interactive coding sessions (hours) and staying `None`/short for crons.
 
-**Ships**: a coding session works until it is done *or until it needs you*, tells you, and waits.
+**Ships**: a coding session works until it is done *or until it needs you*, tells you, waits — and
+then **uses the answer**.
+
+That last clause is the whole feature, and it is the one that is easy to fake. The first cut of E5
+asked the question, waited, recorded the reply as a turn, emitted a `Progress` event reading
+`retrying once with human guidance`, and then **failed the session without retrying anything**. On the
+event bus that is indistinguishable from the real thing: the human is asked, the human answers, the
+transcript shows it. Only the backend knows it was never told.
+
+So the build is now a bounded **attempt loop**, and the regression test asserts against the *backend*,
+not the event bus: two invocations, the second carrying the human's words in `prior_feedback`
+(`a_failed_build_asks_the_human_and_retries_with_their_answer`). A companion test pins the bound —
+one ask means one guided retry, not one ask per failure. Two notes on why this was possible at all:
+
+- It needed **no new checkpoint machinery**. `CoderRunRequest` already carries `attempt` and
+  `prior_feedback`, and the workspace still holds the failed attempt's changes; a guided retry *is* a
+  repair attempt whose feedback line came from a human instead of a verifier.
+- It was invisible because `CodingSessionPack` held a **concrete** `LiberadoLoopBackend`, so no test
+  double could observe what the backend received. It now holds `Arc<dyn CoderBackend>`. A loop whose
+  only observer is the thing it narrates to cannot be tested, and this is the third time in this audit
+  that a test pointed at the wrong object hid a real defect.
 
 ### E6 — An awaiting session survives a restart
 
@@ -198,9 +228,16 @@ Approaches, cheapest first — **this needs its own design pass, and I do not wa
   suspend point could be a commit, and resume a checkout. Fits the coding pack specifically, and is
   the most promising for the build loop.
 
-**Recommendation**: ship E5 with (a) — which genuinely covers "the coder asked me a question during
-intake and I answered after work" — and be *explicit in the UI* that a session parked mid-build does
-not survive a restart, until (c) lands. Do not silently lose work and call it a feature.
+**Shipped**: (a). Replay now parks an `awaiting_input` session as `Parked` with the flag **preserved**,
+so the fact that it is holding a question for you survives the restart. A session that was genuinely
+mid-execution (not awaiting) still becomes `Failed` — that coercion was always correct.
+
+One clarification that matters, because the analysis above overstated the problem. The "does not work
+for the build loop" objection applies **only to resuming across a restart**. Within a live run there is
+nothing to replay — the process never died, the workspace is right there — so the guided retry in E5
+needed no checkpoint at all. What (c) buys is narrower than this section originally claimed: answering
+a session that was parked mid-build *after a daemon restart* and having the build pick up. Until then,
+the parked session is visible and honest about what it is; it just cannot continue the build.
 
 ### E7 — Cron parity
 

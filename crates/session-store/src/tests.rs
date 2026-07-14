@@ -359,11 +359,10 @@ async fn awaiting_input_is_derived_from_the_transcript_and_survives_a_restart() 
 
     // Derived on replay from the same events — it can never drift from the transcript.
     let store = SessionStore::open(dir.path()).await;
-    // (Coerced to Failed because it was mid-run, but the awaiting flag is cleared by that coercion:
-    // a terminal session is not waiting for anyone.)
+    // E6: an awaiting session is Parked on restart, and the open question remains visible.
     let h = store.session(id).await.unwrap();
-    assert_eq!(h.status, SessionStatus::Failed);
-    assert!(!h.awaiting_input);
+    assert_eq!(h.status, SessionStatus::Parked);
+    assert!(h.awaiting_input, "the question must survive the restart");
 }
 
 #[tokio::test]

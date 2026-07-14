@@ -1,7 +1,7 @@
 [package]
-name = "liberado-daemon"
+name = "liberado-dispatch-pack"
 version = "0.1.0"
-description = "The Liberado daemon (Decision 2, daemon-first): the long-running core that watches the vault, attributes changes (loop-breaking), and emits reactable events. v1 vertical slice."
+description = "Domain pack that runs the dispatcher + orchestrator as a GoalSessionHub pack — the one-execution-engine convergence (E2)."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -11,28 +11,21 @@ repository.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 liberado-common = { workspace = true }
-liberado-notify = { workspace = true }
-liberado-vault = { workspace = true }
 liberado-dispatcher = { workspace = true }
+liberado-notify = { workspace = true }
 liberado-orchestrator = { workspace = true }
 liberado-session = { workspace = true }
-chrono = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-thiserror = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
-liberado-cron = { workspace = true }
-liberado-provider = { workspace = true }
 liberado-executor = { workspace = true }
+liberado-provider = { workspace = true }
 liberado-test-support = { workspace = true }
+tempfile = { workspace = true }
 liberado-config-loader = { workspace = true }
-liberado-dispatch-pack = { workspace = true }
-async-trait = { workspace = true }
-serde_json = { workspace = true }
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
-role = "root"
+role = "pack"

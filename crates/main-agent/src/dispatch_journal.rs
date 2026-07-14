@@ -68,17 +68,10 @@ pub fn start_record(
     })
 }
 
-pub fn decision_record(decision: &liberado_common::DispatchDecision, model: Option<&str>) -> Value {
-    json!({
-        "ts": Utc::now().to_rfc3339(),
-        "kind": "decision",
-        "model": model,
-        "action": decision.action.label(),
-        "confidence": decision.confidence,
-        "rationale": decision.rationale,
-        "decision": decision,
-    })
-}
+// There is no `decision_record` here any more. The dispatch decision is no longer journal-only: the
+// dispatch pack records it as an assistant turn on the session (one-execution-engine E2/E4), which
+// makes it searchable and forkable like any other turn. The journal keeps the start/disposition
+// bookends; the reasoning lives in the transcript.
 
 pub fn disposition_record(summary: &str, model: Option<&str>) -> Value {
     json!({

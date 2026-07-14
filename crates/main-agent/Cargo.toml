@@ -15,7 +15,6 @@ liberado-conversation-store = { workspace = true }
 liberado-dispatcher = { workspace = true }
 liberado-executor = { workspace = true }
 liberado-mcp = { workspace = true }
-liberado-orchestrator = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-session = { workspace = true }
 serde_json = { workspace = true }
@@ -31,6 +30,8 @@ ulid = { workspace = true }
 # storage behaviour chat depends on went unverified. A dev-dependency, so the layer rules (which
 # exempt dev-deps) stay honest: main-agent is a kernel crate and does not sit on a store.
 liberado-session-store = { workspace = true }
+liberado-dispatch-pack = { workspace = true }
+liberado-orchestrator = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 serde_json = { workspace = true }

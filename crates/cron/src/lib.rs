@@ -33,6 +33,9 @@ pub struct Schedule {
     /// Which named dispatcher/executor pool (Decision 18 checkpoint #3) handles this schedule's
     /// firing — `None` routes to the daemon's always-present `"default"` pool.
     pub pool: Option<String>,
+    /// Optional session profile name (E7) — carried into the event so the hub session can resolve
+    /// a grant that may include `AskHuman` / a long idle budget.
+    pub profile: Option<String>,
 }
 
 /// Errors constructing a [`CronEventSource`] — both fail-fast at construction time (Decision 14's
@@ -56,6 +59,7 @@ struct ParsedSchedule {
     name: String,
     goal: String,
     pool: Option<String>,
+    profile: Option<String>,
     parsed: cron::Schedule,
 }
 
@@ -89,6 +93,7 @@ impl CronEventSource {
                 name: s.name,
                 goal: s.goal,
                 pool: s.pool,
+                profile: s.profile,
                 parsed: expr,
             });
         }
@@ -155,6 +160,14 @@ fn build_event(schedule: &ParsedSchedule, fire_at: DateTime<Utc>) -> Event {
         EventPayload {
             summary: Some(schedule.goal.clone()),
             pool: schedule.pool.clone(),
+            data: match &schedule.profile {
+                Some(p) => {
+                    let mut map = serde_json::Map::new();
+                    map.insert("profile".into(), serde_json::Value::String(p.clone()));
+                    serde_json::Value::Object(map)
+                }
+                None => serde_json::Value::Null,
+            },
             ..Default::default()
         },
     )
@@ -170,6 +183,7 @@ mod tests {
             cron_expr: cron_expr.into(),
             goal: goal.into(),
             pool: None,
+            profile: None,
         }
     }
 

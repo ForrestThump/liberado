@@ -187,6 +187,7 @@ fn status_display(
     }
     let color = match h.status.as_str() {
         "running" | "pending" => c(&th.accent, "#00ffff"),
+        "parked" => c(&th.tool_name, "#ffff00"), // E6: waiting for you across a restart
         "succeeded" => c(&th.tool_ok, "#00ff00"),
         "failed" | "cancelled" | "budget_exhausted" => c(&th.tool_err, "#ff0000"),
         _ => c(&th.chat_system_text, "#808080"),

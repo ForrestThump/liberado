@@ -397,15 +397,20 @@ impl RuntimeFactory for NoopFactory {
     }
 }
 
-/// A `ChatSessions` with dispatch routing attached: `dispatch_reply` scripts the dispatcher's
-/// classifier (a `DispatchDecision` serialized as the "model" response), `chat_replies` scripts
-/// the plain conversational executor for the `ExecuteDirect` fallthrough case.
+/// A `ChatSessions` with dispatch classification + a hub that hosts the dispatch pack.
+/// `dispatch_decision` scripts the classifier; `chat_replies` scripts the plain conversational
+/// executor for the `ExecuteDirect` fallthrough case; `worker_script` scripts the pack's worker
+/// for non-`ExecuteDirect` outcomes.
 async fn sessions_with_dispatch(
     root: &std::path::Path,
     dispatch_decision: DispatchDecision,
     chat_replies: Vec<CompletionResponse>,
-    orchestrator: Orchestrator,
+    worker_script: Vec<CompletionResponse>,
 ) -> ChatSessions {
+    use liberado_dispatch_pack::DispatchPack;
+    use liberado_orchestrator::Orchestrator;
+    use liberado_session::{GoalSessionHub, GoalSessionStore};
+
     let store = Arc::new(SessionStore::open(root).await);
     let dispatch_provider = Arc::new(MockProvider::with_script(
         "dispatch",
@@ -415,27 +420,64 @@ async fn sessions_with_dispatch(
     ));
     let dispatcher = Dispatcher::new(dispatch_provider, DispatchTuning::default(), 4);
 
+    // A second dispatcher for the pack (the pack owns classify+execute).
+    let pack_dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "pack-dispatch",
+            [CompletionResponse::text(
+                serde_json::to_string(&dispatch_decision).unwrap(),
+            )],
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    let pack_orchestrator = Orchestrator::new(
+        Arc::new(MockProvider::with_script("pack-exec", worker_script)),
+        NoopFactory,
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    );
+    let proposals_dir = root.join("data");
+    let pack = DispatchPack::new(
+        Arc::new(CapabilityCatalog::new()),
+        Vec::new(),
+        1,
+        proposals_dir.clone(),
+    )
+    .with_pool("default", pack_dispatcher, pack_orchestrator);
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(Arc::new(pack));
+    let hub = Arc::new(hub);
+
     let chat_provider = Arc::new(MockProvider::with_script("chat", chat_replies));
     let executor = Executor::new(chat_provider, liberado_executor::Budget::default());
 
-    ChatSessions::new(store, executor, Arc::new(NoTools)).with_dispatch(
-        dispatcher,
-        Arc::new(CapabilityCatalog::new()),
-        orchestrator,
-    )
+    ChatSessions::new(store, executor, Arc::new(NoTools))
+        .with_goal_hub(hub)
+        .with_guards(
+            Vec::new(),
+            CapabilitySet::empty(),
+            proposals_dir,
+            ProposalSigner::random(),
+        )
+        .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()))
 }
 
 #[tokio::test]
 async fn a_delegated_subagent_becomes_a_background_session_under_the_chat_that_asked_for_it() {
-    // S5′ step 5. A `delegate` call spins up real work — a classifier, an executor, tools that touch
-    // the world — and all the chat ever saw of it was the summary paragraph handed back. The rest
-    // went into a dispatch journal nobody opens. Now the delegation is a **session**: visible while
-    // it runs, terminal when it's done, and a child of the conversation that asked for it.
-    use liberado_session::{GoalSessionStore, SessionRecordStore, SessionStatus, Visibility};
+    // E4: `delegate` starts a hosted hub session (dispatch pack). Visible while it runs, terminal
+    // when done, child of the conversation that asked for it.
+    use liberado_dispatch_pack::DispatchPack;
+    use liberado_orchestrator::Orchestrator;
+    use liberado_session::{GoalSessionHub, GoalSessionStore, SessionStatus, Visibility};
 
     let dir = tempfile::tempdir().unwrap();
 
-    // The dispatcher classifies the delegated goal as directly executable...
     let decision = DispatchDecision {
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
@@ -444,7 +486,7 @@ async fn a_delegated_subagent_becomes_a_background_session_under_the_chat_that_a
         confidence: 0.95,
         rationale: "routine lookup".into(),
     };
-    let dispatcher = Dispatcher::new(
+    let pack_dispatcher = Dispatcher::new(
         Arc::new(MockProvider::with_script(
             "dispatch",
             [CompletionResponse::text(
@@ -454,8 +496,7 @@ async fn a_delegated_subagent_becomes_a_background_session_under_the_chat_that_a
         DispatchTuning::default(),
         4,
     );
-    // ...and the orchestrator's worker files a report.
-    let orchestrator = Orchestrator::new(
+    let pack_orchestrator = Orchestrator::new(
         Arc::new(MockProvider::with_script(
             "exec",
             [CompletionResponse::tool_calls(vec![ToolInvocation::new(
@@ -473,6 +514,16 @@ async fn a_delegated_subagent_becomes_a_background_session_under_the_chat_that_a
         ProposalSigner::random(),
         "default",
     );
+    let pack = DispatchPack::new(
+        Arc::new(CapabilityCatalog::new()),
+        Vec::new(),
+        1,
+        std::env::temp_dir(),
+    )
+    .with_pool("default", pack_dispatcher, pack_orchestrator);
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(Arc::new(pack));
+    let hub = Arc::new(hub);
 
     // The face agent calls `delegate`, then summarizes for the human.
     let chat_provider = Arc::new(MockProvider::with_script(
@@ -487,22 +538,31 @@ async fn a_delegated_subagent_becomes_a_background_session_under_the_chat_that_a
         ],
     ));
 
-    let recorded = Arc::new(GoalSessionStore::new());
     let chat = ChatSessions::new(
         Arc::new(SessionStore::open(dir.path()).await),
         Executor::new(chat_provider, liberado_executor::Budget::default()),
         Arc::new(NoTools),
     )
     .with_delegation_mode(true)
-    .with_session_store(recorded.clone())
-    .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()), orchestrator);
+    .with_goal_hub(hub.clone())
+    .with_dispatch(
+        Dispatcher::new(
+            Arc::new(MockProvider::with_script(
+                "unused",
+                Vec::<CompletionResponse>::new(),
+            )),
+            DispatchTuning::default(),
+            4,
+        ),
+        Arc::new(CapabilityCatalog::new()),
+    );
 
     let chat_id = chat.create(None).await.unwrap();
     chat.turn(chat_id, "how many open tasks do I have?")
         .await
         .unwrap();
 
-    let rows = SessionRecordStore::list(recorded.as_ref()).await;
+    let rows = hub.list().await;
     assert_eq!(rows.len(), 1, "the delegation must be exactly one session");
     let row = &rows[0];
 
@@ -531,26 +591,8 @@ async fn a_delegated_subagent_becomes_a_background_session_under_the_chat_that_a
 
 #[tokio::test]
 async fn face_agent_surfaces_only_delegate_by_default() {
+    use liberado_session::{GoalSessionHub, GoalSessionStore};
     let dir = tempfile::tempdir().unwrap();
-    let decision = DispatchDecision {
-        action: DispatchAction::Clarify {
-            questions: vec!["which folder?".into()],
-            what_blocked: BlockReason::Ambiguous,
-        },
-        confidence: 0.9,
-        rationale: "test".into(),
-    };
-    let orchestrator = Orchestrator::new(
-        Arc::new(MockProvider::with_script("exec", Vec::new())),
-        NoopFactory,
-        CapabilitySet::empty(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        std::env::temp_dir(),
-        ProposalSigner::random(),
-        "default",
-    );
     // Face agent: model replies in prose without calling tools (just verify catalog).
     let chat_provider = Arc::new(MockProvider::with_script(
         "chat",
@@ -559,17 +601,20 @@ async fn face_agent_surfaces_only_delegate_by_default() {
         )],
     ));
     let store = Arc::new(SessionStore::open(dir.path()).await);
-    let dispatch_provider = Arc::new(MockProvider::with_script(
-        "dispatch",
-        [CompletionResponse::text(
-            serde_json::to_string(&decision).unwrap(),
-        )],
-    ));
-    let dispatcher = Dispatcher::new(dispatch_provider, DispatchTuning::default(), 4);
+    let dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "unused",
+            Vec::<CompletionResponse>::new(),
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    let hub = Arc::new(GoalSessionHub::new(GoalSessionStore::new()));
     let executor = Executor::new(chat_provider.clone(), liberado_executor::Budget::default());
     let sessions = ChatSessions::new(store, executor, Arc::new(NoTools))
         .with_delegation_mode(true)
-        .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()), orchestrator);
+        .with_goal_hub(hub)
+        .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()));
 
     let id = sessions.create(None).await.unwrap();
     sessions.turn(id, "hello").await.unwrap();
@@ -597,24 +642,16 @@ async fn clarify_decision_answers_without_executing() {
         confidence: 0.9,
         rationale: "test".into(),
     };
-    // The chat-path provider script is never touched — the turn is answered by the dispatcher
-    // before any conversational execution happens.
-    let orchestrator = Orchestrator::new(
-        Arc::new(MockProvider::with_script("exec", Vec::new())),
-        NoopFactory,
-        CapabilitySet::empty(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        std::env::temp_dir(),
-        ProposalSigner::random(),
-        "default",
-    );
-    let sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), orchestrator).await;
+    // The chat-path provider script is never touched — the turn is answered via a hub session
+    // (dispatch pack) before any conversational execution happens.
+    let sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), vec![]).await;
 
     let id = sessions.create(None).await.unwrap();
     let reply = sessions.turn(id, "clean up my notes").await.unwrap();
-    assert_eq!(reply, "which vault folder do you mean?");
+    assert!(
+        reply.contains("which vault folder do you mean?"),
+        "got: {reply}"
+    );
 
     // Persisted like any other turn: user message + assistant reply.
     let history = sessions.history(id).await.unwrap();
@@ -622,7 +659,7 @@ async fn clarify_decision_answers_without_executing() {
     assert!(
         history
             .iter()
-            .any(|m| m.content == "which vault folder do you mean?")
+            .any(|m| m.content.contains("which vault folder do you mean?"))
     );
 }
 
@@ -637,23 +674,12 @@ async fn execute_direct_decision_falls_through_to_normal_execution() {
         confidence: 0.95,
         rationale: "trivial".into(),
     };
-    // ExecuteDirect never touches the orchestrator — NoopFactory would panic if it did.
-    let orchestrator = Orchestrator::new(
-        Arc::new(MockProvider::with_script("exec", Vec::new())),
-        NoopFactory,
-        CapabilitySet::empty(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        std::env::temp_dir(),
-        ProposalSigner::random(),
-        "default",
-    );
+    // ExecuteDirect falls through to the chat path — the pack worker is never invoked.
     let sessions = sessions_with_dispatch(
         dir.path(),
         decision,
         vec![CompletionResponse::text("Hello from the normal path!")],
-        orchestrator,
+        vec![],
     )
     .await;
 
@@ -677,25 +703,8 @@ async fn propose_decision_writes_a_proposal_file_and_confirms() {
         confidence: 0.9,
         rationale: "test".into(),
     };
-    // Propose never touches the factory either — NoopFactory would panic if it did.
-    let orchestrator = Orchestrator::new(
-        Arc::new(MockProvider::with_script("exec", Vec::new())),
-        NoopFactory,
-        CapabilitySet::empty(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        std::env::temp_dir(),
-        ProposalSigner::random(),
-        "default",
-    );
-    let mut sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), orchestrator).await;
-    sessions = sessions.with_guards(
-        Vec::new(),
-        CapabilitySet::empty(),
-        dir.path().join("data"),
-        ProposalSigner::random(),
-    );
+    // Propose is handled by the dispatch pack (writes the proposal file itself).
+    let sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), vec![]).await;
 
     let id = sessions.create(None).await.unwrap();
     let reply = sessions
@@ -772,17 +781,6 @@ async fn sessions_for_narrowing_test(
     ));
     let executor = Executor::new(chat_provider.clone(), Budget::default());
     let store = Arc::new(SessionStore::open(dir).await);
-    let orchestrator = Orchestrator::new(
-        Arc::new(MockProvider::with_script("exec", Vec::new())),
-        NoopFactory,
-        CapabilitySet::empty(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        std::env::temp_dir(),
-        ProposalSigner::random(),
-        "default",
-    );
     let capabilities = CapabilitySet::from_iter([
         Capability::ExecuteMcp("tasks-mcp".into()),
         Capability::ExecuteMcp("email-mcp".into()),
@@ -794,7 +792,7 @@ async fn sessions_for_narrowing_test(
             dir.join("proposals"),
             ProposalSigner::random(),
         )
-        .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()), orchestrator);
+        .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()));
 
     (sessions, chat_provider)
 }

@@ -16,7 +16,6 @@ liberado-common = { workspace = true }
 liberado-config = { workspace = true }
 liberado-daemon = { workspace = true }
 liberado-dispatcher = { workspace = true }
-liberado-orchestrator = { workspace = true }
 liberado-mcp = { workspace = true }
 liberado-executor = { workspace = true }
 liberado-main-agent = { workspace = true }
@@ -28,6 +27,7 @@ liberado-vault = { workspace = true }
 liberado-session = { workspace = true }
 liberado-session-store = { workspace = true }
 liberado-coder-agent = { workspace = true }
+liberado-notify = { workspace = true }
 turbovault-vector = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }

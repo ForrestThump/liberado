@@ -2,30 +2,28 @@
 //!
 //! Optional extra MCP tools (from `"main-agent"` policy grants) can be layered on for power users;
 //! the architecture intent is that those stay empty and work goes through `delegate`.
+//!
+//! # One execution engine (E4)
+//!
+//! `delegate` starts a hosted background session on the [`GoalSessionHub`] (domain `"dispatch"`)
+//! and awaits its terminal result. It no longer owns a dispatcher/orchestrator pair — those live
+//! only inside `liberado-dispatch-pack`. Delegated sessions run **without** `AskHuman` (D-e).
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use liberado_common::{
-    CapabilityCatalog, CapabilitySet, PROPOSALS_DIR, SignedProposal, WriteClass,
-};
-use liberado_dispatcher::{DispatchRequest, Dispatcher};
+use liberado_common::CapabilitySet;
 use liberado_executor::ToolRuntime;
-use liberado_orchestrator::{Disposition, Orchestrator};
 use liberado_provider::{ToolDef, ToolInvocation};
 use liberado_session::{
-    BackgroundRun, DomainHint, GoalSpec, SessionGrant, SessionOrigin, SessionRecordStore,
-    TerminalKind,
+    DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin, TerminalKind,
 };
 use serde_json::json;
 
 /// Tool name the face agent calls to hand a goal to the dispatcher.
 pub const DELEGATE_TOOL_NAME: &str = "delegate";
 
-/// The `domain` recorded on a delegated subagent's session. Like a daemon reaction, it is run by the
-/// dispatcher/orchestrator rather than by a domain pack — so it is not `coding` or `life`, and
-/// joining one is read-only.
+/// The `domain` of a delegated subagent's session — the dispatch pack.
 const DELEGATE_DOMAIN: &str = "dispatch";
 
 /// The goal recorded for a delegation. Unlike a cron, a subagent *does* have a parent conversation:
@@ -48,33 +46,20 @@ fn delegated_goal(goal: &str, correlation_id: &str, parent_conversation: Option<
     }
 }
 
-/// Shared dispatch/orchestrator bridge used by the face agent's `delegate` tool.
+/// Shared bridge used by the face agent's `delegate` tool — starts a hub session and awaits it.
 pub struct DispatchBridge {
-    pub dispatcher: Arc<Dispatcher>,
-    pub orchestrator: Arc<Orchestrator>,
-    pub catalog: Arc<CapabilityCatalog>,
-    /// Ceiling for classification + worker execution (policy component `"dispatcher"`).
+    pub hub: Arc<GoalSessionHub>,
+    /// Ceiling for the delegated session (policy component `"dispatcher"`). No `AskHuman` (D-e).
     pub dispatcher_capabilities: CapabilitySet,
-    pub zone_write_classes: Vec<(String, WriteClass)>,
-    /// Vault `proposals/` directory — Propose dispositions are written under
-    /// `proposals_dir/proposals/<id>.md` (same layout as chat/`RiskGatedToolRuntime`).
-    pub proposals_dir: PathBuf,
-    /// Where a delegation is recorded as a **background session** (S5′ step 5) — `None` leaves the
-    /// old behavior exactly as it was.
-    ///
-    /// A subagent is the third unattended trigger, alongside cron and webhooks, and the one that was
-    /// hardest to see: its work vanished into a dispatch journal, and the chat got back only a
-    /// summary paragraph. Recording it as a session makes it a **child of the chat that spawned it**
-    /// (`parent_session`), so "what did that actually do?" has an answer you can open.
-    pub sessions: Option<Arc<dyn SessionRecordStore>>,
 }
 
 impl DispatchBridge {
-    /// Run the dispatcher → orchestrator path and return a **compact report** for the face agent
-    /// (never raw tool dumps).
+    /// Start a background dispatch session and return a **compact report** for the face agent
+    /// (never raw tool dumps). Blocks until the session is terminal — same as the old inline
+    /// `orchestrator.run` path, so the chat turn is not newly blocking.
     ///
-    /// `parent_conversation` is the face chat session id (if any), written into the delegation
-    /// journal under `.liberado/dispatches/<correlation_id>.jsonl` for ops/debug (not model context).
+    /// `parent_conversation` is the face chat session id (if any), written into the session origin
+    /// and the dispatch journal under `.liberado/dispatches/<correlation_id>.jsonl`.
     pub async fn delegate(
         &self,
         goal: &str,
@@ -86,12 +71,12 @@ impl DispatchBridge {
         }
 
         let correlation_id = format!("chat-delegate-{}", ulid::Ulid::new());
-        let model = None; // model lives on the shared provider; logged in dispatch spans
+        let model = None;
         tracing::info!(
             %correlation_id,
             parent = parent_conversation.unwrap_or("-"),
             goal = %goal.chars().take(160).collect::<String>(),
-            "face agent delegating to dispatcher"
+            "face agent delegating via goal session hub"
         );
 
         crate::dispatch_journal::append(
@@ -105,98 +90,67 @@ impl DispatchBridge {
         )
         .await;
 
-        // The delegation becomes a session of its own — a *child* of the chat that asked for it.
-        // Opened before dispatch, so a subagent that is still working is visible while it works,
-        // rather than appearing only once it is over (or never, if it dies).
-        let run = match &self.sessions {
-            Some(store) => Some(
-                BackgroundRun::open(
-                    store.clone(),
-                    delegated_goal(goal, &correlation_id, parent_conversation),
-                    SessionGrant {
-                        capabilities: self.dispatcher_capabilities.clone(),
-                        profile: None,
-                        overrides: serde_json::Value::Null,
-                    },
-                )
-                .await,
-            ),
-            None => None,
-        };
+        // D-e: delegated sessions run without AskHuman. Strip it even if the dispatcher grant
+        // happens to include it (a misconfigured policy must not turn a chat-turn into a multi-hour
+        // wait on a human the face agent cannot relay mid-turn).
+        let mut capabilities = self.dispatcher_capabilities.clone();
+        capabilities
+            .capabilities
+            .retain(|c| !matches!(c, liberado_common::Capability::AskHuman));
 
-        let req = DispatchRequest {
-            goal: goal.to_string(),
-            catalog: self.catalog.descriptors(),
-            capabilities: self.dispatcher_capabilities.clone(),
-            reaction_depth: 0,
-            zone_write_classes: self.zone_write_classes.clone(),
-        };
+        let session_id = self
+            .hub
+            .start_background(
+                delegated_goal(goal, &correlation_id, parent_conversation),
+                SessionGrant {
+                    capabilities,
+                    profile: None,
+                    overrides: serde_json::Value::Null,
+                },
+            )
+            .await
+            .map_err(|e| format!("failed to start delegated session: {e}"))?;
 
-        let decision = match self.dispatcher.dispatch(&req).await {
-            Ok(d) => d,
-            Err(e) => {
-                let message = format!("dispatch failed: {e}");
-                if let Some(run) = run {
-                    run.finish(TerminalKind::Failed, message.clone()).await;
-                }
-                return Err(message);
+        let snap = self
+            .hub
+            .await_terminal(&session_id)
+            .await
+            .map_err(|e| format!("delegated session failed to finish: {e}"))?;
+
+        let result = snap.session.result.as_ref();
+        let summary = result
+            .map(|r| r.summary.clone())
+            .unwrap_or_else(|| "delegated session finished with no summary".into());
+        let terminal = result
+            .map(|r| r.terminal.clone())
+            .unwrap_or(TerminalKind::Failed);
+
+        let mut report = match terminal {
+            TerminalKind::Succeeded => format!("RESULT (Succeeded):\n{}", summary.trim()),
+            TerminalKind::Failed => format!("RESULT (Failed):\n{}", summary.trim()),
+            TerminalKind::Cancelled => format!("RESULT (Cancelled):\n{}", summary.trim()),
+            TerminalKind::BudgetExhausted => {
+                format!("RESULT (BudgetExhausted):\n{}", summary.trim())
             }
         };
-
-        crate::dispatch_journal::append(
-            &correlation_id,
-            crate::dispatch_journal::decision_record(&decision, model),
-        )
-        .await;
-
-        if let Some(run) = &run {
-            run.progress(format!(
-                "dispatched: {} (confidence {:.2}) — {}",
-                decision.action.label(),
-                decision.confidence,
-                decision.rationale
-            ))
-            .await;
-        }
-
-        // ExecuteDirect also goes through the orchestrator worker path so the face agent
-        // never receives tool schemas — only a report summary.
-        let disposition = match self.orchestrator.run(decision, goal, &correlation_id).await {
-            Ok(d) => d,
-            Err(e) => {
-                let message = format!("orchestration failed: {e}");
-                if let Some(run) = run {
-                    run.finish(TerminalKind::Failed, message.clone()).await;
-                }
-                return Err(message);
-            }
-        };
-
-        let mut summary = format_disposition(&disposition, &self.proposals_dir).await;
-
-        // Close the session on the *clean* summary, before the journal footer is appended below —
-        // that footer is a hint for the face agent's next turn, not part of what the subagent did.
-        if let Some(run) = run {
-            let (terminal, note) = disposition.terminal_summary();
-            run.finish(terminal, note).await;
-        }
+        report.push_str(&format!("\n[session: {session_id}]"));
 
         let journal = crate::dispatch_journal::journal_display_path(&correlation_id);
-        summary.push_str(&format!(
+        report.push_str(&format!(
             "\n\n[dispatch journal: {journal} | id: {correlation_id}"
         ));
         if let Some(parent) = parent_conversation {
-            summary.push_str(&format!(" | parent chat: {parent}"));
+            report.push_str(&format!(" | parent chat: {parent}"));
         }
-        summary.push(']');
+        report.push(']');
 
         crate::dispatch_journal::append(
             &correlation_id,
-            crate::dispatch_journal::disposition_record(&summary, model),
+            crate::dispatch_journal::disposition_record(&report, model),
         )
         .await;
 
-        Ok(summary)
+        Ok(report)
     }
 }
 
@@ -295,98 +249,9 @@ fn parse_delegate_goal(arguments: &serde_json::Value) -> Result<String, String> 
     }
 }
 
-async fn format_disposition(d: &Disposition, proposals_dir: &Path) -> String {
-    match d {
-        Disposition::Clarify {
-            questions,
-            what_blocked,
-        } => {
-            let mut out = String::from(
-                "NEEDS_CLARIFICATION: The system cannot proceed without more information from the human.\n",
-            );
-            out.push_str(&format!("Blocked by: {what_blocked:?}\n"));
-            out.push_str("Ask the human:\n");
-            for q in questions {
-                out.push_str("- ");
-                out.push_str(q);
-                out.push('\n');
-            }
-            out
-        }
-        Disposition::Reported(report) => {
-            format!("RESULT ({:?}):\n{}", report.outcome, report.summary.trim())
-        }
-        Disposition::Propose(proposal) => format_propose(proposal, proposals_dir).await,
-    }
-}
-
-/// Persist a face-path proposal note, then describe it for the face agent (dogfood D2).
-async fn format_propose(proposal: &SignedProposal, proposals_dir: &Path) -> String {
-    match write_face_proposal(proposal, proposals_dir).await {
-        Ok(path) => format!(
-            "PROPOSAL: A high-consequence action needs human approval before it runs.\n\
-             Proposal id: {}\n\
-             Draft saved at: {}\n\
-             Tell the human to review and approve (or reject) that note in the vault proposals folder.",
-            proposal.id,
-            path.display()
-        ),
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                proposal_id = %proposal.id,
-                "face delegate failed to write proposal note"
-            );
-            format!(
-                "PROPOSAL_FAILED: The system wanted human approval (proposal id {}) but could not \
-                 save the draft note ({e}). Tell the human honestly — there is nothing to approve \
-                 on disk until this is retried successfully.",
-                proposal.id
-            )
-        }
-    }
-}
-
-async fn write_face_proposal(
-    proposal: &SignedProposal,
-    proposals_dir: &Path,
-) -> std::io::Result<PathBuf> {
-    let proposals_subdir = proposals_dir.join(PROPOSALS_DIR);
-    let proposal_path = proposals_subdir.join(format!("{}.md", proposal.id));
-    tokio::fs::create_dir_all(&proposals_subdir).await?;
-    tokio::fs::write(&proposal_path, proposal.to_note()).await?;
-    Ok(proposal_path)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liberado_common::{BlockReason, Outcome, Proposal, ProposalSigner, ProposedAction, Report};
-
-    #[tokio::test]
-    async fn format_clarify_lists_questions() {
-        let d = Disposition::Clarify {
-            questions: vec!["which folder?".into()],
-            what_blocked: BlockReason::Ambiguous,
-        };
-        let s = format_disposition(&d, Path::new(".")).await;
-        assert!(s.contains("NEEDS_CLARIFICATION"));
-        assert!(s.contains("which folder?"));
-    }
-
-    #[tokio::test]
-    async fn format_report_includes_summary() {
-        let d = Disposition::Reported(Report {
-            outcome: Outcome::Succeeded,
-            summary: "done".into(),
-            artifacts: vec![],
-            new_high_signal_facts: vec![],
-            follow_up: None,
-        });
-        let s = format_disposition(&d, Path::new(".")).await;
-        assert!(s.contains("RESULT"));
-        assert!(s.contains("done"));
-    }
 
     #[test]
     fn parse_goal_merges_context() {
@@ -394,32 +259,5 @@ mod tests {
         let g = parse_delegate_goal(&args).unwrap();
         assert!(g.contains("list tasks"));
         assert!(g.contains("inbox only"));
-    }
-
-    #[tokio::test]
-    async fn format_propose_writes_note_and_returns_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let proposals_root = dir.path().join("proposals");
-        let signer = ProposalSigner::random();
-        let pending = Proposal::pending(
-            "face-prop-1",
-            "face-prop-1",
-            "test",
-            ProposedAction::Subagent {
-                goal: "list tasks".into(),
-                capabilities: CapabilitySet::empty(),
-                allowed_mcps: vec!["turbovault".into()],
-                success_criteria: vec![],
-            },
-            "test rationale",
-        );
-        let signed = signer.sign(pending);
-        let d = Disposition::Propose(signed);
-        let s = format_disposition(&d, &proposals_root).await;
-        assert!(s.contains("PROPOSAL:"), "{s}");
-        assert!(s.contains("Draft saved at:"), "{s}");
-        assert!(s.contains("face-prop-1"), "{s}");
-        let note = proposals_root.join(PROPOSALS_DIR).join("face-prop-1.md");
-        assert!(note.is_file(), "expected proposal at {}", note.display());
     }
 }

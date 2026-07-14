@@ -351,17 +351,22 @@ fn replay_file(path: &Path) -> Option<SessionInner> {
     record.event_count = events.len();
 
     // A session that was still running when the daemon stopped can't be resumed — mark it Failed so
-    // surfaces show it as terminal (its transcript stays fully viewable on rejoin).
+    // surfaces show it as terminal (its transcript stays fully viewable on rejoin). E6 exception:
+    // an awaiting session is only *parked*, not failed.
     if !record.status.is_terminal() {
-        record.status = SessionStatus::Failed;
-        record.awaiting_input = false;
-        if record.result.is_none() {
-            record.result = Some(GoalResult {
-                terminal: TerminalKind::Failed,
-                summary: "interrupted by daemon restart (not resumable)".into(),
-                artifacts: vec![],
-                diagnostics: serde_json::json!({ "interrupted": true }),
-            });
+        if record.awaiting_input {
+            record.status = SessionStatus::Parked;
+        } else {
+            record.status = SessionStatus::Failed;
+            record.awaiting_input = false;
+            if record.result.is_none() {
+                record.result = Some(GoalResult {
+                    terminal: TerminalKind::Failed,
+                    summary: "interrupted by daemon restart (not resumable)".into(),
+                    artifacts: vec![],
+                    diagnostics: serde_json::json!({ "interrupted": true }),
+                });
+            }
         }
     }
 
@@ -413,6 +418,10 @@ impl crate::record_store::SessionRecordStore for GoalSessionStore {
     }
     async fn push_event(&self, event: SessionEvent) {
         GoalSessionStore::push_event(self, event).await
+    }
+    async fn live_subscriber_count(&self, id: &str) -> usize {
+        let map = self.inner.lock().await;
+        map.get(id).map(|s| s.bus.receiver_count()).unwrap_or(0)
     }
     async fn append_turn(&self, session_id: &str, author: TurnAuthor, content: String) {
         GoalSessionStore::append_turn(self, session_id, author, content).await
@@ -498,11 +507,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_terminal_session_is_coerced_to_failed_on_rehydrate() {
+    async fn awaiting_session_is_parked_on_rehydrate_not_failed() {
+        // E6: a session parked on a human must survive a restart as Parked — not Failed with the
+        // question erased. Mid-execution (no awaiting_input) still fails; see the next test.
         let dir = std::env::temp_dir().join(format!("liberado-goals-test-{}", ulid::Ulid::new()));
         {
             let store = GoalSessionStore::open(&dir).await;
-            store.insert(record("s2", "abandoned")).await;
+            store.insert(record("s2", "waiting on you")).await;
             store.set_status("s2", SessionStatus::Running).await;
             store
                 .push_event(SessionEvent::new(
@@ -518,11 +529,38 @@ mod tests {
 
         let reopened = GoalSessionStore::open(&dir).await;
         let rec = reopened.get("s2").await.unwrap();
-        assert_eq!(rec.status, SessionStatus::Failed);
+        assert_eq!(rec.status, SessionStatus::Parked);
         assert!(
-            !rec.awaiting_input,
-            "a restarted, unresumable session isn't awaiting"
+            rec.awaiting_input,
+            "the open question must still be visible after restart"
         );
+        assert!(rec.result.is_none(), "parked is not a terminal outcome");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn mid_execution_session_is_coerced_to_failed_on_rehydrate() {
+        let dir = std::env::temp_dir().join(format!("liberado-goals-test-{}", ulid::Ulid::new()));
+        {
+            let store = GoalSessionStore::open(&dir).await;
+            store.insert(record("s2b", "mid-build")).await;
+            store.set_status("s2b", SessionStatus::Running).await;
+            store
+                .push_event(SessionEvent::new(
+                    "s2b",
+                    SessionEventKind::Progress {
+                        message: "writing files".into(),
+                    },
+                ))
+                .await;
+            // No finish — simulate a crash mid-build (not awaiting).
+        }
+
+        let reopened = GoalSessionStore::open(&dir).await;
+        let rec = reopened.get("s2b").await.unwrap();
+        assert_eq!(rec.status, SessionStatus::Failed);
+        assert!(!rec.awaiting_input);
         assert!(
             rec.result.as_ref().unwrap().summary.contains("interrupted"),
             "should note the interruption"

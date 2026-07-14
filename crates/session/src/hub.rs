@@ -4,12 +4,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{debug, info, warn};
 
 use crate::event::{SessionEvent, SessionEventKind};
 use crate::goal::{
-    GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionStatus, TerminalKind,
+    GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionStatus, TerminalKind, Visibility,
 };
 use crate::record_store::{SessionRecordStore, TurnAuthor};
 use crate::runner::{DomainPackRunner, HumanInput, InputChannel, PackContext, PackError};
@@ -61,6 +61,15 @@ impl std::fmt::Display for SendInputError {
 
 impl std::error::Error for SendInputError {}
 
+/// Out-of-band ping when a session awaits input and nobody is watching the event bus (E5).
+///
+/// Implemented by the composition root (e.g. wrapping `liberado_notify::Notifier`) so the kernel
+/// stays free of a concrete channel. Best-effort: failures are logged, never fatal.
+#[async_trait::async_trait]
+pub trait SessionAlert: Send + Sync {
+    async fn session_needs_you(&self, session_id: &str, prompt: &str);
+}
+
 /// In-process goal session orchestrator (not the coding loop itself).
 pub struct GoalSessionHub {
     /// The store seam (S5′) — a trait, not a concrete type, so the converged `Session` store can
@@ -71,6 +80,8 @@ pub struct GoalSessionHub {
     /// Live sessions' inbound-input senders, keyed by id. Present only while a session runs;
     /// removed at teardown (like `cancels`), so `send_input` to a finished session fails cleanly.
     inputs: tokio::sync::Mutex<HashMap<String, mpsc::Sender<HumanInput>>>,
+    /// Optional out-of-band alert when a session awaits input with no live subscribers (E5).
+    alert: Option<Arc<dyn SessionAlert>>,
 }
 
 impl GoalSessionHub {
@@ -82,7 +93,14 @@ impl GoalSessionHub {
             packs: HashMap::new(),
             cancels: tokio::sync::Mutex::new(HashMap::new()),
             inputs: tokio::sync::Mutex::new(HashMap::new()),
+            alert: None,
         }
+    }
+
+    /// Attach an out-of-band alert for unwatched `AwaitingInput` events (E5).
+    pub fn with_alert(mut self, alert: Arc<dyn SessionAlert>) -> Self {
+        self.alert = Some(alert);
+        self
     }
 
     pub fn store(&self) -> &Arc<dyn SessionRecordStore> {
@@ -107,7 +125,7 @@ impl GoalSessionHub {
     }
 
     /// Start a goal session under an explicit authority `grant` (S6). Returns the session id
-    /// immediately.
+    /// immediately. Visibility is [`Foreground`](Visibility::Foreground) — a human is watching.
     ///
     /// The grant is resolved by the *server* from the session's profile — the kernel never reads
     /// config. It is recorded on the session and never widened afterwards.
@@ -119,8 +137,30 @@ impl GoalSessionHub {
     /// the structural difference between an attended `/spawn` and an unattended cron.
     pub async fn start_with_grant(
         self: &Arc<Self>,
+        goal: GoalSpec,
+        grant: SessionGrant,
+    ) -> Result<String, String> {
+        self.start_inner(goal, grant, Visibility::Foreground).await
+    }
+
+    /// Start a **background** goal session — a cron, a webhook, a `delegate`d subagent. Same as
+    /// [`start_with_grant`](Self::start_with_grant) but stamps [`Visibility::Background`].
+    ///
+    /// This is how unattended work becomes a *hosted* session (one-execution-engine plan E3/E4)
+    /// rather than a read-only recording of work the hub never ran.
+    pub async fn start_background(
+        self: &Arc<Self>,
+        goal: GoalSpec,
+        grant: SessionGrant,
+    ) -> Result<String, String> {
+        self.start_inner(goal, grant, Visibility::Background).await
+    }
+
+    async fn start_inner(
+        self: &Arc<Self>,
         mut goal: GoalSpec,
         grant: SessionGrant,
+        visibility: Visibility,
     ) -> Result<String, String> {
         let domain = goal.domain.as_str().to_string();
         if !self.packs.contains_key(&domain) {
@@ -134,7 +174,10 @@ impl GoalSessionHub {
         }
 
         let interactive = grant.grants_ask_human();
-        let record = GoalSessionRecord::with_grant(goal.clone(), grant);
+        let record = match visibility {
+            Visibility::Foreground => GoalSessionRecord::with_grant(goal.clone(), grant),
+            Visibility::Background => GoalSessionRecord::background(goal.clone(), grant),
+        };
         let id = record.id.clone();
         goal.id = Some(id.clone());
         self.store.insert(record).await;
@@ -169,6 +212,54 @@ impl GoalSessionHub {
         });
 
         Ok(id)
+    }
+
+    /// Block until the session reaches a terminal status (or is unknown). Used by `delegate`, which
+    /// is synchronous inside a chat turn and needs the pack's summary before it can reply.
+    pub async fn await_terminal(&self, id: &str) -> Result<SessionSnapshot, String> {
+        // Fast path: already done (or never started).
+        if let Some(snap) = self.snapshot(id).await {
+            if snap.session.status.is_terminal() {
+                return Ok(snap);
+            }
+        } else {
+            return Err(format!("no such goal session '{id}'"));
+        }
+
+        let (_history, mut rx) = self
+            .store
+            .subscribe(id)
+            .await
+            .ok_or_else(|| format!("no such goal session '{id}'"))?;
+
+        loop {
+            // Re-check after subscribe to close the race where finish landed between snapshot and
+            // subscribe.
+            if let Some(snap) = self.snapshot(id).await {
+                if snap.session.status.is_terminal() {
+                    return Ok(snap);
+                }
+            } else {
+                return Err(format!("goal session '{id}' vanished"));
+            }
+            match rx.recv().await {
+                Ok(ev) if matches!(ev.kind, SessionEventKind::SessionFinished { .. }) => {
+                    return self
+                        .snapshot(id)
+                        .await
+                        .ok_or_else(|| format!("goal session '{id}' vanished after finish"));
+                }
+                Ok(_) => continue,
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => {
+                    // Bus closed — session tore down; snapshot should be terminal.
+                    return self
+                        .snapshot(id)
+                        .await
+                        .ok_or_else(|| format!("goal session '{id}' ended without a snapshot"));
+                }
+            }
+        }
     }
 
     pub async fn cancel(&self, id: &str) -> Result<(), String> {
@@ -260,9 +351,19 @@ impl GoalSessionHub {
 
         let (tx, mut rx) = mpsc::channel::<SessionEvent>(64);
         let store = self.store.clone();
+        let alert = self.alert.clone();
         let sid_for_pump = session_id.clone();
         let pump = tokio::spawn(async move {
             while let Some(ev) = rx.recv().await {
+                // E5: if the pack is waiting on a human and nobody has the stream open, ping them.
+                // Checked *before* push so we don't count a subscriber that only appears via this
+                // same event's fan-out (there isn't one — push creates no receivers).
+                if let SessionEventKind::AwaitingInput { prompt, .. } = &ev.kind
+                    && store.live_subscriber_count(&ev.session_id).await == 0
+                    && let Some(alert) = &alert
+                {
+                    alert.session_needs_you(&ev.session_id, prompt).await;
+                }
                 store.push_event(ev).await;
             }
             // drain complete

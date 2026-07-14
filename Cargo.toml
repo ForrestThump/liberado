@@ -86,6 +86,7 @@ liberado-coder-sandbox = { path = "crates/coder-sandbox" }
 liberado-coder-tools = { path = "crates/coder-tools" }
 liberado-session = { path = "crates/session" }
 liberado-session-store = { path = "crates/session-store" }
+liberado-dispatch-pack = { path = "crates/dispatch-pack" }
 
 # --- co-developed path dependencies (Decision 7) ---
 # Pinned to whatever is checked out in the sibling directories (currently the

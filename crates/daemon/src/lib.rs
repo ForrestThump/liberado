@@ -24,10 +24,7 @@ use liberado_common::{
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_notify::Notifier;
 use liberado_orchestrator::{Disposition, Orchestrator, OrchestratorError};
-use liberado_session::{
-    BackgroundRun, DomainHint, GoalSpec, SessionGrant, SessionOrigin, SessionRecordStore,
-    TerminalKind,
-};
+use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
 use liberado_vault::{Vault, VaultError};
 use thiserror::Error;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -67,18 +64,24 @@ pub enum ReactionOutcome {
     /// A dispatcher routed it to a decision, but no orchestrator is attached to execute it.
     Decided(DispatchDecision),
     /// A dispatcher decided and an orchestrator executed it (or surfaced a `Clarify`).
+    /// Still used for **proposal approvals**, which execute inline rather than as a session.
     Acted(Disposition),
+    /// A goal session was started on the hub (one-execution-engine E3). The reaction feed is a
+    /// *navigation surface* — open this session id to watch or join. Concurrent with other
+    /// reactions; the session runs on its own.
+    Dispatched { session_id: String },
 }
 
 impl ReactionOutcome {
     /// A short label for tracing.
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> &str {
         match self {
             ReactionOutcome::Observed => "(observed)",
             ReactionOutcome::Decided(d) => d.action.label(),
             ReactionOutcome::Acted(Disposition::Reported(_)) => "acted:reported",
             ReactionOutcome::Acted(Disposition::Clarify { .. }) => "acted:clarify",
             ReactionOutcome::Acted(Disposition::Propose(_)) => "acted:proposed",
+            ReactionOutcome::Dispatched { .. } => "dispatched",
         }
     }
 }
@@ -178,10 +181,11 @@ pub struct Daemon {
     event_tx: Option<UnboundedSender<Event>>,
     /// Taken by `run()`; `None` after the daemon has started running once (it can only run once).
     event_rx: Option<tokio::sync::mpsc::UnboundedReceiver<Event>>,
-    /// Where reactions are recorded as **background sessions** (S5′ step 5) — `None` by default, in
-    /// which case the daemon behaves exactly as it did before: it reacts, and leaves nothing behind
-    /// but a log line. Attaching a store is what stops a cron firing into the void.
-    sessions: Option<Arc<dyn SessionRecordStore>>,
+    /// The **one** execution engine (one-execution-engine plan E3). When present, a reaction
+    /// starts a hosted background session on this hub (domain `"dispatch"`) and returns
+    /// [`ReactionOutcome::Dispatched`]. When absent, the daemon falls back to inline
+    /// dispatch → orchestrate (no session recording) — useful for watch-only / unit tests.
+    goals: Option<Arc<GoalSessionHub>>,
 }
 
 impl Daemon {
@@ -200,24 +204,19 @@ impl Daemon {
             cron_source: None,
             event_tx: Some(event_tx),
             event_rx: Some(event_rx),
-            sessions: None,
+            goals: None,
         })
     }
 
-    /// Record every reaction as a **background session** in `store` (S5′ step 5).
+    /// Route every reaction through the **goal session hub** as a hosted background session
+    /// (one-execution-engine plan E3).
     ///
-    /// Without this the daemon is exactly as it always was: a cron fires, the dispatcher decides,
-    /// the orchestrator maybe writes to your vault, and the only trace is a log line. With it, each
-    /// reaction is a session in the *same* list as your chats — running while it runs, terminal when
-    /// it is done, with a transcript of what it decided and what came of it.
-    ///
-    /// This records what already happens; it does not change what runs. The dispatcher/orchestrator
-    /// still executes the reaction, so a recorded run is **read-only** to a surface: joining one
-    /// shows you what it did, it does not let you steer it (packs, and the hub that hosts them, are
-    /// not involved). Routing unattended triggers through the hub as real packs is a later, larger
-    /// convergence.
-    pub fn with_session_store(mut self, store: Arc<dyn SessionRecordStore>) -> Self {
-        self.sessions = Some(store);
+    /// The hub must have the `"dispatch"` pack registered (see `liberado-dispatch-pack`). Each
+    /// reactable event becomes a joinable, cancellable session — not a read-only recording of work
+    /// the hub never ran. The reaction outcome is [`ReactionOutcome::Dispatched`] with the session
+    /// id; the pack itself narrates and finishes the session.
+    pub fn with_goal_hub(mut self, hub: Arc<GoalSessionHub>) -> Self {
+        self.goals = Some(hub);
         self
     }
 
@@ -415,116 +414,82 @@ impl Daemon {
 
         let request = ctx.dispatch_request(event);
 
-        // From here on, real work happens: a model is called, and it may act on the world. That is
-        // exactly what has always been invisible — so this is where the background session opens
-        // (S5′ step 5). Everything above returned early *without doing anything*, so recording those
-        // paths would only manufacture sessions for work that never ran.
-        let run = match &self.sessions {
-            Some(store) => Some(
-                BackgroundRun::open(
-                    store.clone(),
-                    reaction_goal(event, &request.goal),
-                    // The authority the reaction actually executes under — this pool's capabilities.
-                    // Recorded rather than re-derived, so the transcript answers "what was this
-                    // allowed to do" as well as "what did it do".
-                    SessionGrant {
-                        capabilities: ctx.capabilities.clone(),
-                        profile: None,
-                        overrides: serde_json::Value::Null,
-                    },
-                )
-                .await,
-            ),
-            None => None,
-        };
-
-        let Reacted { outcome, stopped } = self
-            .dispatch_and_act(pool, ctx, &request, event, run.as_ref())
-            .await;
-
-        if let Some(run) = run {
-            let (terminal, summary) = match (stopped, &outcome) {
-                // The reaction stopped short, and only the code that stopped it knows why.
-                (Some(why), _) => (TerminalKind::Failed, why),
-                // It ran to a disposition — the same reading `delegate` gives one.
-                (None, ReactionOutcome::Acted(d)) => d.terminal_summary(),
-                // Unreachable: every non-`Acted` path above sets `stopped`. Don't invent a cause.
-                (None, other) => (
-                    TerminalKind::Failed,
-                    format!("reaction ended without a result ({})", other.label()),
-                ),
+        // Preferred path (E3): start a hosted session on the hub. The dispatch pack classifies and
+        // executes; this method returns as soon as the session exists. Reactions therefore run
+        // concurrently with each other — no more awaiting one orchestrator before the next event.
+        if let Some(hub) = &self.goals {
+            let goal = reaction_goal(event, &request.goal, pool_name);
+            let grant = SessionGrant {
+                // Pool capabilities are the session's authority ceiling for this reaction. A
+                // profile-narrowed cron (E7) would resolve a narrower grant here; without a profile
+                // the pool is the grant. Crons default to no AskHuman via policy (D-d).
+                capabilities: ctx.capabilities.clone(),
+                profile: goal.profile.clone(),
+                overrides: serde_json::Value::Null,
             };
-            run.finish(terminal, summary).await;
+            match hub.start_background(goal, grant).await {
+                Ok(session_id) => {
+                    tracing::info!(
+                        %session_id,
+                        pool = pool_name,
+                        "reaction dispatched as hosted session"
+                    );
+                    return ReactionOutcome::Dispatched { session_id };
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to start reaction session on hub");
+                    return ReactionOutcome::Observed;
+                }
+            }
         }
-        outcome
+
+        // Fallback: no hub attached — inline decide/act without a session (unit tests, watch tools).
+        self.dispatch_and_act(pool, ctx, &request, event).await
     }
 
-    /// Dispatch the request and, if a pool orchestrator is attached, execute the decision. Narrates
-    /// each step into `run` when one is recording.
+    /// Inline dispatch → orchestrate when no hub is attached. Prefer the hub path in production.
     async fn dispatch_and_act(
         &self,
         pool: &DaemonPool,
         ctx: &DispatcherContext,
         request: &DispatchRequest,
         event: &Event,
-        run: Option<&BackgroundRun>,
-    ) -> Reacted {
+    ) -> ReactionOutcome {
         let decision = match ctx.dispatcher.dispatch(request).await {
             Ok(decision) => decision,
             Err(e) => {
                 tracing::warn!(error = %e, "dispatch failed");
-                return Reacted::stopped(
-                    ReactionOutcome::Observed,
-                    format!("dispatch failed, so nothing ran: {e}"),
-                );
+                return ReactionOutcome::Observed;
             }
         };
 
-        if let Some(run) = run {
-            run.progress(format!(
-                "dispatched: {} (confidence {:.2}) — {}",
-                decision.action.label(),
-                decision.confidence,
-                decision.rationale
-            ))
-            .await;
-        }
         let label = decision.action.label();
 
         let Some(orchestrator) = pool.orchestrator.as_ref() else {
-            return Reacted::stopped(
-                ReactionOutcome::Decided(decision),
-                format!(
-                    "decided '{label}', but no orchestrator is attached to this pool — nothing ran"
-                ),
-            );
+            return ReactionOutcome::Decided(decision);
         };
 
         match orchestrator
-            .run(decision.clone(), &request.goal, &event.correlation_id)
+            .run(
+                decision.clone(),
+                &request.goal,
+                &event.correlation_id,
+                &ctx.capabilities,
+            )
             .await
         {
-            // A proposal is an artifact the orchestrator built but cannot persist (no vault). Write
-            // it here, with agent provenance so attribution suppresses the write (no self-reaction).
             Ok(Disposition::Propose(proposal)) => match self.write_proposal(&proposal).await {
-                Ok(()) => Reacted::acted(Disposition::Propose(proposal)),
+                Ok(()) => ReactionOutcome::Acted(Disposition::Propose(proposal)),
                 Err(e) => {
-                    // Couldn't persist the artifact — surface the decision rather than claim it acted.
                     tracing::warn!(error = %e, "writing proposal failed");
-                    Reacted::stopped(
-                        ReactionOutcome::Decided(decision),
-                        format!("proposed an action, but the proposal could not be written: {e}"),
-                    )
+                    ReactionOutcome::Decided(decision)
                 }
             },
-            Ok(disposition) => Reacted::acted(disposition),
+            Ok(disposition) => ReactionOutcome::Acted(disposition),
             Err(e) => {
-                // Couldn't execute — surface the decision we did reach.
                 tracing::warn!(error = %e, "orchestration failed");
-                Reacted::stopped(
-                    ReactionOutcome::Decided(decision),
-                    format!("decided '{label}', but execution failed, so nothing ran: {e}"),
-                )
+                let _ = label;
+                ReactionOutcome::Decided(decision)
             }
         }
     }
@@ -709,14 +674,22 @@ impl Daemon {
     }
 }
 
-/// The goal a reaction's background session records (S5′ step 5). `goal` is what the dispatcher was
-/// actually asked — templated from the path for a vault change, the configured goal text for a cron
-/// or webhook — so the session says what the reaction was *for*, not merely that one happened.
+/// The goal a reaction's hosted session records. `goal` is what the dispatcher was actually asked —
+/// templated from the path for a vault change, the configured goal text for a cron or webhook — so
+/// the session says what the reaction was *for*, not merely that one happened.
 ///
 /// The event's `correlation_id` rides on `origin` with **no** parent conversation: nobody spawned a
 /// cron from a chat, but it still belongs to a dispatch journal entry. That is the case
 /// `SessionOrigin::from_correlation` exists for.
-fn reaction_goal(event: &Event, goal: &str) -> GoalSpec {
+///
+/// `pool` is stamped into `payload` so the dispatch pack routes to the same pool the event named.
+fn reaction_goal(event: &Event, goal: &str, pool: &str) -> GoalSpec {
+    let profile = event
+        .payload
+        .data
+        .get("profile")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     GoalSpec {
         id: None,
         description: goal.to_string(),
@@ -725,48 +698,13 @@ fn reaction_goal(event: &Event, goal: &str) -> GoalSpec {
         max_turns: 0,
         max_idle_secs: None,
         origin: Some(SessionOrigin::from_correlation(&event.correlation_id)),
-        profile: None,
+        profile,
         payload: serde_json::json!({
             "source": event.source,
             "event_type": event.event_type,
             "path": event.payload.path,
+            "pool": pool,
         }),
-    }
-}
-
-/// The result of one reaction, plus — when it stopped short of executing — **why**.
-///
-/// `ReactionOutcome::Decided` alone cannot answer that: it is returned when no orchestrator is
-/// attached, *and* when orchestration blew up, *and* when a proposal could not be written. Those are
-/// three very different things to tell a human, and a background session's summary is the only place
-/// they would ever see it. Reading the cause back off the outcome means guessing, so instead the code
-/// that stopped the reaction says so at the point where it actually knows — the alternative, which
-/// this replaces, confidently reported "no orchestrator is attached" for a live daemon whose
-/// orchestrator was attached and had simply failed to reach an MCP.
-struct Reacted {
-    outcome: ReactionOutcome,
-    /// `Some(reason)` ⇒ the reaction did not execute; the reason is human-facing.
-    stopped: Option<String>,
-}
-
-impl Reacted {
-    /// It ran to a disposition. The terminal reading comes from [`Disposition::terminal_summary`] —
-    /// the same mapping `delegate` uses, so the two unattended callers can't drift apart on whether
-    /// a proposal counts as a success.
-    fn acted(disposition: Disposition) -> Self {
-        Self {
-            outcome: ReactionOutcome::Acted(disposition),
-            stopped: None,
-        }
-    }
-
-    /// It stopped short. Not a success — the goal was not done — and saying *why* is what turns a
-    /// red row in the switcher into something the human can act on.
-    fn stopped(outcome: ReactionOutcome, reason: String) -> Self {
-        Self {
-            outcome,
-            stopped: Some(reason),
-        }
     }
 }
 
@@ -980,6 +918,7 @@ mod tests {
             cron_expr: "* * * * * * *".into(),
             goal: "a cron-dispatched goal".into(),
             pool: None,
+            profile: None,
         }])
         .unwrap();
 
@@ -1024,11 +963,15 @@ mod tests {
         use liberado_common::{DispatchAction, DispatchDecision};
         use liberado_config_loader::DispatchTuning;
         use liberado_cron::{CronEventSource, Schedule};
+        use liberado_dispatch_pack::{DISPATCH_DOMAIN, DispatchPack};
         use liberado_executor::{
             RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime,
         };
         use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
-        use liberado_session::{GoalSessionStore, SessionEventKind, SessionStatus, Visibility};
+        use liberado_session::{
+            GoalSessionHub, GoalSessionStore, SessionEventKind, SessionStatus, TerminalKind,
+            Visibility,
+        };
         use std::sync::Arc;
 
         struct NoopRuntime;
@@ -1092,25 +1035,45 @@ mod tests {
             "default",
         );
 
-        let sessions = Arc::new(GoalSessionStore::new());
+        let pack = DispatchPack::new(
+            Arc::new(CapabilityCatalog::new()),
+            Vec::new(),
+            1,
+            std::env::temp_dir(),
+        )
+        .with_pool("default", dispatcher, orchestrator);
+        let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+        hub.register_pack(Arc::new(pack));
+        let hub = Arc::new(hub);
+
         let cron = CronEventSource::new(vec![Schedule {
             name: "nightly".into(),
             cron_expr: "* * * * * * *".into(), // every second, so the test doesn't wait
             goal: "summarize today's decisions".into(),
             pool: None,
+            profile: None,
         }])
         .unwrap();
 
+        // Hub path only needs a dispatcher context for the pool name / grant; the pack owns the
+        // actual classify+execute engines. Attach a dummy pool dispatcher so pool lookup succeeds.
+        let grant_dispatcher = Dispatcher::new(
+            Arc::new(MockProvider::with_script(
+                "unused",
+                Vec::<CompletionResponse>::new(),
+            )),
+            DispatchTuning::default(),
+            4,
+        );
         let daemon = daemon
             .with_dispatcher(
-                dispatcher,
+                grant_dispatcher,
                 Arc::new(CapabilityCatalog::new()),
                 CapabilitySet::empty(),
                 Vec::new(),
             )
-            .with_orchestrator(orchestrator)
             .with_cron_source(Box::new(cron))
-            .with_session_store(sessions.clone());
+            .with_goal_hub(hub.clone());
 
         let (tx, mut rx) = unbounded_channel();
         let handle = tokio::spawn(daemon.run(tx));
@@ -1120,10 +1083,24 @@ mod tests {
             .expect("timed out waiting for the cron reaction")
             .expect("reaction channel closed");
         assert_eq!(reaction.event.source, "cron:nightly");
+        let session_id = match reaction.outcome {
+            ReactionOutcome::Dispatched { session_id } => session_id,
+            other => panic!("expected Dispatched, got {}", other.label()),
+        };
+        assert_eq!(
+            hub.snapshot(&session_id)
+                .await
+                .unwrap()
+                .session
+                .goal
+                .domain
+                .as_str(),
+            DISPATCH_DOMAIN
+        );
 
-        let rows = SessionRecordStore::list(sessions.as_ref()).await;
-        assert_eq!(rows.len(), 1, "the cron firing must be exactly one session");
-        let row = &rows[0];
+        // Session runs concurrently — wait for terminal.
+        let snap = hub.await_terminal(&session_id).await.expect("terminal");
+        let row = &snap.session;
 
         // Nobody was watching — and the record says so, which is what `Visibility` is *for*.
         assert_eq!(row.visibility, Visibility::Background);
@@ -1152,9 +1129,7 @@ mod tests {
         );
 
         // And it left a readable transcript, not just a status.
-        let events = SessionRecordStore::events(sessions.as_ref(), &row.id)
-            .await
-            .unwrap();
+        let events = &snap.events;
         assert!(matches!(
             events.first().map(|e| &e.kind),
             Some(SessionEventKind::SessionStarted { .. })
@@ -1180,8 +1155,9 @@ mod tests {
         // green. The unanswered questions have to survive into the summary, or they're lost.
         use liberado_common::{BlockReason, DispatchAction, DispatchDecision};
         use liberado_config_loader::DispatchTuning;
+        use liberado_dispatch_pack::DispatchPack;
         use liberado_provider::{CompletionResponse, MockProvider};
-        use liberado_session::{GoalSessionStore, SessionStatus, Visibility};
+        use liberado_session::{GoalSessionHub, GoalSessionStore, SessionStatus, Visibility};
         use std::sync::Arc;
 
         let (daemon, _dir) = temp_daemon().await;
@@ -1216,16 +1192,33 @@ mod tests {
             "default",
         );
 
-        let sessions = Arc::new(GoalSessionStore::new());
+        let pack = DispatchPack::new(
+            Arc::new(CapabilityCatalog::new()),
+            Vec::new(),
+            1,
+            std::env::temp_dir(),
+        )
+        .with_pool("default", dispatcher, orchestrator);
+        let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+        hub.register_pack(Arc::new(pack));
+        let hub = Arc::new(hub);
+
+        let grant_dispatcher = Dispatcher::new(
+            Arc::new(MockProvider::with_script(
+                "unused",
+                Vec::<CompletionResponse>::new(),
+            )),
+            DispatchTuning::default(),
+            4,
+        );
         let daemon = daemon
             .with_dispatcher(
-                dispatcher,
+                grant_dispatcher,
                 Arc::new(CapabilityCatalog::new()),
                 CapabilitySet::empty(),
                 Vec::new(),
             )
-            .with_orchestrator(orchestrator)
-            .with_session_store(sessions.clone());
+            .with_goal_hub(hub.clone());
 
         let sender = daemon.event_sender();
         let (tx, mut rx) = unbounded_channel();
@@ -1244,13 +1237,16 @@ mod tests {
             ))
             .unwrap();
 
-        tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
             .await
             .expect("timed out")
             .expect("channel closed");
-
-        let rows = SessionRecordStore::list(sessions.as_ref()).await;
-        let row = &rows[0];
+        let session_id = match reaction.outcome {
+            ReactionOutcome::Dispatched { session_id } => session_id,
+            other => panic!("expected Dispatched, got {}", other.label()),
+        };
+        let snap = hub.await_terminal(&session_id).await.unwrap();
+        let row = &snap.session;
         // A webhook is just as unattended as a cron — same seam, same treatment.
         assert_eq!(row.visibility, Visibility::Background);
         assert_eq!(
@@ -1270,22 +1266,17 @@ mod tests {
     #[tokio::test]
     async fn a_reaction_whose_execution_blew_up_says_so_instead_of_blaming_a_missing_orchestrator()
     {
-        // Found by the first live run of S5′ step 5, not by a unit test. `ReactionOutcome::Decided`
-        // is returned for *three* different reasons — no orchestrator attached, orchestration
-        // failed, proposal write failed — so deriving the cause from the outcome is a guess. The
-        // first version guessed, and told a human "no orchestrator is attached to this pool" about a
-        // daemon whose orchestrator was attached and had simply failed to reach an MCP. That would
-        // have sent them looking for a config bug that wasn't there.
+        // The pack's orchestration error must land in the session summary honestly — not as
+        // "no orchestrator is attached". Hub path: reaction returns Dispatched immediately; the
+        // pack fails the session with the real error.
         use liberado_common::{DispatchAction, DispatchDecision};
         use liberado_config_loader::DispatchTuning;
+        use liberado_dispatch_pack::DispatchPack;
         use liberado_executor::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
         use liberado_provider::{CompletionResponse, MockProvider};
-        use liberado_session::{GoalSessionStore, SessionStatus};
+        use liberado_session::{GoalSessionHub, GoalSessionStore, SessionStatus};
         use std::sync::Arc;
 
-        /// The orchestrator is **attached**; its execution simply cannot get off the ground — in the
-        /// live case an MCP was unreachable, here the executor's provider has nothing to say. Both
-        /// surface as `Err` out of `Orchestrator::run`, which is the arm under test.
         struct FailingFactory;
         #[async_trait::async_trait]
         impl RuntimeFactory for FailingFactory {
@@ -1310,6 +1301,9 @@ mod tests {
             confidence: 0.95,
             rationale: "routine".into(),
         };
+        // Give the pool a grant so ExecuteDirect tries the factory (empty grant uses NoMcpRuntime).
+        let pool_caps =
+            CapabilitySet::from_iter([liberado_common::Capability::ExecuteMcp("x".into())]);
         let dispatcher = Dispatcher::new(
             Arc::new(MockProvider::with_script(
                 "dispatch",
@@ -1323,7 +1317,7 @@ mod tests {
         let orchestrator = Orchestrator::new(
             Arc::new(MockProvider::with_script("exec", Vec::new())),
             FailingFactory,
-            CapabilitySet::empty(),
+            pool_caps.clone(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -1332,16 +1326,33 @@ mod tests {
             "default",
         );
 
-        let sessions = Arc::new(GoalSessionStore::new());
+        let pack = DispatchPack::new(
+            Arc::new(CapabilityCatalog::new()),
+            Vec::new(),
+            1,
+            std::env::temp_dir(),
+        )
+        .with_pool("default", dispatcher, orchestrator);
+        let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+        hub.register_pack(Arc::new(pack));
+        let hub = Arc::new(hub);
+
+        let grant_dispatcher = Dispatcher::new(
+            Arc::new(MockProvider::with_script(
+                "unused",
+                Vec::<CompletionResponse>::new(),
+            )),
+            DispatchTuning::default(),
+            4,
+        );
         let daemon = daemon
             .with_dispatcher(
-                dispatcher,
+                grant_dispatcher,
                 Arc::new(CapabilityCatalog::new()),
-                CapabilitySet::empty(),
+                pool_caps,
                 Vec::new(),
             )
-            .with_orchestrator(orchestrator)
-            .with_session_store(sessions.clone());
+            .with_goal_hub(hub.clone());
 
         let sender = daemon.event_sender();
         let (tx, mut rx) = unbounded_channel();
@@ -1359,16 +1370,19 @@ mod tests {
                 },
             ))
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
             .await
             .expect("timed out")
             .expect("channel closed");
-
-        let row = &SessionRecordStore::list(sessions.as_ref()).await[0];
-        assert_eq!(row.status, SessionStatus::Failed);
-        let summary = &row.result.as_ref().unwrap().summary;
+        let session_id = match reaction.outcome {
+            ReactionOutcome::Dispatched { session_id } => session_id,
+            other => panic!("expected Dispatched, got {}", other.label()),
+        };
+        let snap = hub.await_terminal(&session_id).await.unwrap();
+        assert_eq!(snap.session.status, SessionStatus::Failed);
+        let summary = &snap.session.result.as_ref().unwrap().summary;
         assert!(
-            summary.contains("execution failed"),
+            summary.contains("orchestration failed") || summary.contains("Connection failed"),
             "the summary must say execution was attempted and failed, got: {summary}"
         );
         assert!(

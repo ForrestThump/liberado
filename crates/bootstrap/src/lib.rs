@@ -27,6 +27,7 @@ use std::sync::Arc;
 use liberado_common::{CapabilityCatalog, DEFAULT_POOL, ToolGuidanceSource};
 use liberado_config::{McpTransport, managed_binary_path};
 use liberado_daemon::Daemon;
+use liberado_dispatch_pack::DispatchPack;
 use liberado_dispatcher::Dispatcher;
 use liberado_mcp::{HttpConnector, McpRegistry, StdioConnector};
 use liberado_notify::Notifier;
@@ -161,6 +162,7 @@ pub fn cron_source_from_config(
             cron_expr: s.cron_expr.clone(),
             goal: s.goal.clone(),
             pool: s.pool.clone(),
+            profile: s.profile.clone(),
         })
         .collect();
     if schedules.is_empty() {
@@ -338,6 +340,132 @@ pub fn configure_daemon(
                 }
             }
         })
+}
+
+/// Build the [`DispatchPack`] that hosts dispatcher+orchestrator as a goal-session pack (E2/E3).
+///
+/// Parallel construction to [`configure_daemon`]: same pools, same capability ceilings, own
+/// `McpRegistry` instances (registries are not shareable). Register the returned pack on the
+/// [`liberado_session::GoalSessionHub`] and hand that hub to the daemon via
+/// [`Daemon::with_goal_hub`](liberado_daemon::Daemon::with_goal_hub).
+///
+/// Returns `None` when there is no provider (watch-only) — without inference there is nothing to
+/// dispatch.
+pub fn build_dispatch_pack(
+    provider: Option<&Arc<dyn Provider>>,
+    config: &Config,
+    catalog: Arc<CapabilityCatalog>,
+    vault_path: &Path,
+    guidance: Option<Arc<dyn ToolGuidanceSource>>,
+) -> Option<DispatchPack> {
+    let provider = provider?;
+    let guard = guard_context(&catalog, &config.policy, vault_path);
+    let orchestrator_infra = OrchestratorInfra::new(
+        provider.clone(),
+        guard.consequences.clone(),
+        guard.zone_catalog.clone(),
+        guard.zone_write_classes.clone(),
+        guard.proposals_dir.clone(),
+        guard.signer.clone(),
+    );
+    let notifier: Option<Arc<dyn Notifier>> =
+        liberado_notify::TelegramNotifier::from_env().map(|n| Arc::new(n) as Arc<dyn Notifier>);
+
+    let capabilities = config.policy.capabilities_for("dispatcher");
+    let mut dispatcher = Dispatcher::new(
+        provider.clone(),
+        config.tuning.dispatch.clone(),
+        config.tuning.concurrency.max_reaction_depth,
+    );
+    if let Some(g) = &guidance {
+        dispatcher = dispatcher.with_guidance(g.clone());
+    }
+
+    let mut pack = DispatchPack::new(
+        catalog.clone(),
+        guard.zone_write_classes.clone(),
+        DEFAULT_REACTION_DEPTH_FOR_PACK,
+        guard.proposals_dir.clone(),
+    );
+    if let Some(n) = &notifier {
+        pack = pack.with_notifier(n.clone());
+    }
+
+    // Default pool.
+    match mcp_registry_from_config(config) {
+        Some(factory) => {
+            let orchestrator = orchestrator_infra.for_pool(factory, capabilities, DEFAULT_POOL);
+            let orchestrator = match &notifier {
+                Some(n) => orchestrator.with_notifier(n.clone()),
+                None => orchestrator,
+            };
+            pack = pack.with_pool(DEFAULT_POOL, dispatcher, orchestrator);
+        }
+        None => {
+            // Decide-only: still register a dispatcher with a no-MCP orchestrator so Clarify/Propose
+            // work; ExecuteDirect will use NoMcpRuntime.
+            let orchestrator =
+                orchestrator_infra.for_pool(EmptyRuntimeFactory, capabilities, DEFAULT_POOL);
+            pack = pack.with_pool(DEFAULT_POOL, dispatcher, orchestrator);
+            tracing::warn!(
+                "dispatch pack: no enabled MCP — decide-only (ExecuteDirect has no tools)"
+            );
+        }
+    }
+
+    // Additional named pools.
+    for pool_cfg in config.topology.pools.iter().filter(|p| p.enabled) {
+        let pool_capabilities = config.policy.capabilities_for(&pool_cfg.name);
+        let mut pool_dispatcher = Dispatcher::new(
+            provider.clone(),
+            config.tuning.dispatch.clone(),
+            config.tuning.concurrency.max_reaction_depth,
+        );
+        if let Some(g) = &guidance {
+            pool_dispatcher = pool_dispatcher.with_guidance(g.clone());
+        }
+        match mcp_registry_from_config(config) {
+            Some(factory) => {
+                let orchestrator =
+                    orchestrator_infra.for_pool(factory, pool_capabilities, pool_cfg.name.clone());
+                let orchestrator = match &notifier {
+                    Some(n) => orchestrator.with_notifier(n.clone()),
+                    None => orchestrator,
+                };
+                pack = pack.with_pool(pool_cfg.name.clone(), pool_dispatcher, orchestrator);
+            }
+            None => {
+                let orchestrator = orchestrator_infra.for_pool(
+                    EmptyRuntimeFactory,
+                    pool_capabilities,
+                    pool_cfg.name.clone(),
+                );
+                pack = pack.with_pool(pool_cfg.name.clone(), pool_dispatcher, orchestrator);
+            }
+        }
+    }
+
+    Some(pack)
+}
+
+/// Matches the daemon's default reaction depth (first agent step reacting to an external change).
+const DEFAULT_REACTION_DEPTH_FOR_PACK: u32 = 1;
+
+/// A `RuntimeFactory` that never connects — used when topology has no MCPs so the pack can still
+/// classify (and fail ExecuteDirect honestly with no tools).
+struct EmptyRuntimeFactory;
+
+#[async_trait::async_trait]
+impl liberado_executor::RuntimeFactory for EmptyRuntimeFactory {
+    async fn runtime_for(
+        &self,
+        _allowed_mcps: &[String],
+        _provenance: liberado_common::WriteProvenance,
+    ) -> Result<Box<dyn liberado_executor::ToolRuntime>, liberado_executor::RuntimeSetupError> {
+        Err(liberado_executor::RuntimeSetupError(
+            "no MCP is configured in topology.mcps".into(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -577,6 +705,7 @@ mod tests {
             cron_expr: "0 0 9 * * * *".into(),
             goal: "summarize today's decisions".into(),
             pool: None,
+            profile: None,
         }
     }
 

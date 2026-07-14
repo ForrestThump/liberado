@@ -160,6 +160,10 @@ impl Visibility {
 pub enum SessionStatus {
     Pending,
     Running,
+    /// Parked on a human answer across a daemon restart (E6). Not terminal — answering restarts
+    /// the pack with prior human turns available. Distinct from `Running` (mid-computation) so
+    /// replay can keep the honest "waiting for you" sessions without lying about mid-build ones.
+    Parked,
     Succeeded,
     Failed,
     Cancelled,

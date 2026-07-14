@@ -233,12 +233,15 @@ pub struct ReactionEvent {
 /// How far a reaction progressed. The three `Acted` sub-variants from the daemon
 /// (`acted:reported`, `acted:clarify`, `acted:proposed`) are intentionally collapsed into
 /// a single `Acted` on the wire — if the distinction is needed later, re-add sub-variants.
+///
+/// `Dispatched` is the one-execution-engine outcome: a hosted session started; join it by id.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReactionOutcome {
     Observed,
     Decided,
     Acted,
+    Dispatched { session_id: String },
 }
 
 // ──────────────────────────────────────────────────────────────

@@ -228,6 +228,11 @@ pub struct SessionProfile {
     /// (the pool rule: the name *is* the component) when omitted.
     #[serde(default)]
     pub component: Option<String>,
+    /// Kernel idle budget for interactive sessions under this profile (E5): how long the hub waits
+    /// on human input before `BudgetExhausted`. `None` = wait indefinitely (or the per-goal
+    /// `GoalSpec.max_idle_secs` wins when set). Interactive coding profiles typically want hours.
+    #[serde(default)]
+    pub max_idle_secs: Option<u64>,
     /// Opaque, pack-parsed overrides. Never interpreted by the config stack.
     #[serde(default = "empty_table")]
     pub overrides: toml::Value,
@@ -264,6 +269,11 @@ pub struct CronSchedule {
     /// (fail-fast validated).
     #[serde(default)]
     pub pool: Option<String>,
+    /// Optional `[[session_profiles]]` hat for this schedule (E7). When set, the reaction session
+    /// resolves its grant (and idle budget) from the profile — so a cron that *wants* `AskHuman`
+    /// can opt in; crons without a profile keep the pool grant, which should omit `AskHuman` (D-d).
+    #[serde(default)]
+    pub profile: Option<String>,
 }
 
 /// A configured external webhook hook: wiring only (Decision 14) — `liberado-server` resolves
@@ -841,13 +851,15 @@ impl Config {
     /// the session falls back to `domain_fallback` with the grant keyed by the domain itself — the
     /// pool rule, so `[[grants]] component = "coding"` bounds an unprofiled coding session.
     ///
-    /// Returns `(domain, capabilities, overrides)`. The capability set is **the** authority
-    /// boundary for the session and can only ever be narrowed from here (Decision 4).
+    /// Returns `(domain, capabilities, overrides, max_idle_secs)`. The capability set is **the**
+    /// authority boundary for the session and can only ever be narrowed from here (Decision 4).
+    /// `max_idle_secs` comes from the profile when set (E5); the caller may still override with a
+    /// per-goal value.
     pub fn resolve_session_profile(
         &self,
         profile: Option<&str>,
         domain_fallback: &str,
-    ) -> (String, CapabilitySet, toml::Value) {
+    ) -> (String, CapabilitySet, toml::Value, Option<u64>) {
         let found = profile.and_then(|name| {
             self.topology
                 .session_profiles
@@ -859,11 +871,13 @@ impl Config {
                 p.domain.clone(),
                 self.policy.capabilities_for(p.component_key()),
                 p.overrides.clone(),
+                p.max_idle_secs,
             ),
             None => (
                 domain_fallback.to_string(),
                 self.policy.capabilities_for(domain_fallback),
                 empty_table(),
+                None,
             ),
         }
     }
@@ -1466,6 +1480,7 @@ max_turns = 44
             cron_expr: cron_expr.into(),
             goal: "do something".into(),
             pool: None,
+            profile: None,
         }
     }
 
@@ -1504,6 +1519,7 @@ max_turns = 44
             enabled: true,
             domain: domain.into(),
             component: component.map(Into::into),
+            max_idle_secs: None,
             overrides: empty_table(),
         }
     }
@@ -1532,7 +1548,8 @@ max_turns = 44
     #[test]
     fn a_profile_resolves_to_its_pack_and_its_own_narrower_grant() {
         let cfg = config_with_profiles();
-        let (domain, caps, _overrides) = cfg.resolve_session_profile(Some("research"), "coding");
+        let (domain, caps, _overrides, _idle) =
+            cfg.resolve_session_profile(Some("research"), "coding");
 
         // The profile picks the pack — the caller's fallback domain is overridden.
         assert_eq!(domain, "life");
@@ -1549,7 +1566,7 @@ max_turns = 44
     #[test]
     fn no_profile_falls_back_to_the_grant_keyed_by_the_domain() {
         let cfg = config_with_profiles();
-        let (domain, caps, _) = cfg.resolve_session_profile(None, "life");
+        let (domain, caps, _, _) = cfg.resolve_session_profile(None, "life");
         assert_eq!(domain, "life");
         assert!(caps.grants_ask_human(), "an attended life session may ask");
         assert!(caps.contains(&Capability::Write(Zone::vault("tasks"))));
@@ -1558,7 +1575,7 @@ max_turns = 44
     #[test]
     fn an_unknown_profile_name_falls_back_rather_than_inventing_authority() {
         let cfg = config_with_profiles();
-        let (domain, caps, _) = cfg.resolve_session_profile(Some("nonexistent"), "life");
+        let (domain, caps, _, _) = cfg.resolve_session_profile(Some("nonexistent"), "life");
         // Falls back to the domain's own grant — it must never synthesize capabilities.
         assert_eq!(domain, "life");
         assert_eq!(caps, cfg.policy.capabilities_for("life"));
@@ -1567,7 +1584,7 @@ max_turns = 44
     #[test]
     fn a_domain_with_no_grant_at_all_resolves_to_zero_authority() {
         let cfg = config_with_profiles();
-        let (_, caps, _) = cfg.resolve_session_profile(None, "coding");
+        let (_, caps, _, _) = cfg.resolve_session_profile(None, "coding");
         assert!(
             caps.capabilities.is_empty(),
             "fail safe: no grant, no authority"

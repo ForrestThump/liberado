@@ -16,13 +16,13 @@ use std::time::Instant;
 use std::path::Path;
 
 use axum::Router;
-use liberado_common::{CapabilityCatalog, CapabilitySet, DEFAULT_POOL, WriteProvenance};
+use liberado_common::{CapabilityCatalog, CapabilitySet, WriteProvenance};
 use liberado_daemon::Daemon;
 use liberado_dispatcher::Dispatcher;
 use liberado_executor::{Budget, Executor, ToolRuntime};
 use liberado_main_agent::ChatSessions;
 use liberado_mcp::McpRegistry;
-use liberado_orchestrator::Orchestrator;
+
 use liberado_provider::Provider;
 use liberado_session_store::SessionStore;
 use tokio::sync::Mutex;
@@ -92,6 +92,40 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     let sessions_root = liberado_bootstrap::sessions_dir();
     let sessions = Arc::new(liberado_session_store::SessionStore::open(&sessions_root).await);
 
+    // Goal session hub first — the **one** execution engine (one-execution-engine plan E3/E4).
+    // Life-ops demo always; coding when a provider is available; dispatch pack so cron/webhook/
+    // delegate are hosted sessions, not a second engine. Built before chat so `delegate` can use it.
+    let mut goals_hub = liberado_session::GoalSessionHub::new(SessionStore::clone(&sessions));
+    goals_hub.register_pack(Arc::new(liberado_session::LifeOpsDemoRunner));
+    if let Some(p) = provider.as_ref() {
+        let work_parent = liberado_bootstrap::data_dir().join("goal-workspaces");
+        let _ = std::fs::create_dir_all(&work_parent);
+        goals_hub.register_pack(Arc::new(liberado_coder_agent::CodingSessionPack::new(
+            p.clone(),
+            work_parent,
+        )));
+    }
+    if let Some(pack) = liberado_bootstrap::build_dispatch_pack(
+        provider.as_ref(),
+        &config,
+        capability_catalog.clone(),
+        Path::new(&vault_path),
+        guidance.clone(),
+    ) {
+        goals_hub.register_pack(Arc::new(pack));
+        info!("goal session packs: life + coding + dispatch");
+    } else if provider.is_some() {
+        info!("goal session packs: life + coding (no dispatch pack)");
+    } else {
+        info!("goal session packs: life only (no provider)");
+    }
+    // E5: when a session awaits input and nobody has the stream open, ping out-of-band.
+    if let Some(n) = liberado_notify::TelegramNotifier::from_env() {
+        goals_hub = goals_hub.with_alert(Arc::new(NotifySessionAlert(Arc::new(n))));
+        info!("session alerts: telegram notifier attached");
+    }
+    let goals = Arc::new(goals_hub);
+
     let (chat, chat_tools, chat_tool_names) = build_chat(
         provider.clone(),
         mcp,
@@ -99,7 +133,10 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         capability_catalog.clone(),
         Path::new(&vault_path),
         guidance.clone(),
-        sessions.clone(),
+        SessionEngine {
+            store: sessions.clone(),
+            goals: goals.clone(),
+        },
     )
     .await;
 
@@ -112,10 +149,8 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         Path::new(&vault_path),
         guidance,
     )
-    // Every reaction the daemon takes — a cron firing, a webhook, an external vault edit — is now
-    // recorded as a **background session** in the same store chat and `/spawn` use (S5′ step 5).
-    // They were unattended *and* invisible; only the first half of that was ever intended.
-    .with_session_store(sessions.clone());
+    // Every reaction is a hosted background session on the hub (E3) — joinable, cancellable.
+    .with_goal_hub(goals.clone());
 
     // The webhook hooks endpoint's seam into the daemon's reactive pipeline — a clone of the same
     // channel every `EventSource` (vault-watch, cron) pushes onto. Grabbed before `daemon` moves
@@ -129,24 +164,6 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // `capabilities_for("main-agent")`/`capabilities_for("dispatcher")` calls below).
     let main_agent_capabilities = config.policy.capabilities_for("main-agent");
     let dispatcher_capabilities = config.policy.capabilities_for("dispatcher");
-
-    // Goal session hub: life-ops demo always; coding when a provider is available. It runs on the
-    // **same** store as chat (S5′) — `SessionStore` implements the kernel's `SessionRecordStore`,
-    // so goal sessions rehydrate on boot from the very directory chat conversations live in.
-    let mut goals_hub = liberado_session::GoalSessionHub::new(SessionStore::clone(&sessions));
-    goals_hub.register_pack(Arc::new(liberado_session::LifeOpsDemoRunner));
-    if let Some(p) = provider.as_ref() {
-        let work_parent = liberado_bootstrap::data_dir().join("goal-workspaces");
-        let _ = std::fs::create_dir_all(&work_parent);
-        goals_hub.register_pack(Arc::new(liberado_coder_agent::CodingSessionPack::new(
-            p.clone(),
-            work_parent,
-        )));
-        info!("goal session packs: life + coding");
-    } else {
-        info!("goal session packs: life only (no provider — coding pack skipped)");
-    }
-    let goals = Arc::new(goals_hub);
 
     let state = Arc::new(AppState {
         start_time: Instant::now(),
@@ -348,6 +365,16 @@ pub fn config_check(dir: Option<&Path>) -> Result<(), Box<dyn std::error::Error>
 ///
 /// When guard configuration (catalog, capabilities) is present, ChatSessions is configured with
 /// the tool-advisor and RiskGatedToolRuntime for every turn.
+/// The one execution engine, as the chat face needs it: the converged store (chat lens) and the hub
+/// that runs every goal session. They are always wired together — a chat turn that delegates hands
+/// the goal to `goals` and its transcript lands in `store` — so they travel as one thing.
+struct SessionEngine {
+    /// The **concrete** converged store (chat lens).
+    store: Arc<SessionStore>,
+    /// Goal sessions — including `delegate` — run here, not in a second inline orchestrator.
+    goals: Arc<liberado_session::GoalSessionHub>,
+}
+
 async fn build_chat(
     provider: Option<Arc<dyn Provider>>,
     mcp: Option<McpRegistry>,
@@ -355,11 +382,9 @@ async fn build_chat(
     catalog: Arc<CapabilityCatalog>,
     vault_path: &Path,
     guidance: Option<Arc<dyn liberado_common::ToolGuidanceSource>>,
-    // The **concrete** converged store, not an erased `dyn ConversationStore`: chat needs both of
-    // its lenses — the chat view for its own transcript, and the kernel view to record a `delegate`d
-    // subagent as a background session. One trait object cannot be cast to the other.
-    store: Arc<SessionStore>,
+    engine: SessionEngine,
 ) -> (Option<Arc<ChatSessions>>, usize, Vec<String>) {
+    let SessionEngine { store, goals } = engine;
     let provider = match provider {
         Some(p) => p,
         None => return (None, 0, Vec::new()),
@@ -378,10 +403,9 @@ async fn build_chat(
     let guard = liberado_bootstrap::guard_context(&catalog, &config.policy, vault_path);
     let catalog_is_empty = guard.consequences.is_empty();
 
-    // Orchestrator uses **dispatcher** caps so specialist MCPs are reachable via `delegate`
-    // without granting them to the face agent.
-    let (runtime, orchestrator) =
-        connect_chat_runtime(&provider, mcp, &dispatcher_caps, &guard).await;
+    // Face-agent tool surface: optional main-agent MCP grants only. Specialist work goes through
+    // `delegate` → hub → dispatch pack (dispatcher caps), not the face agent's own tool list.
+    let runtime = connect_chat_runtime(&provider, mcp, &main_agent_caps, &guard).await;
 
     let mut tool_names: Vec<String> = runtime.catalog().iter().map(|t| t.name.clone()).collect();
     // Face-agent surface is usually just `delegate` (+ optional main-agent MCP grants).
@@ -422,14 +446,12 @@ async fn build_chat(
     });
 
     let mut sessions = ChatSessions::new(
-        store.clone(),
+        store,
         Executor::new(provider.clone(), Budget::default()),
         runtime,
     )
     .with_system_prompt(system_prompt)
-    // A `delegate`d subagent becomes a background session — a child of the chat that asked for it
-    // (S5′ step 5). The same store, seen through the kernel's lens.
-    .with_session_store(store)
+    .with_goal_hub(goals)
     .with_guards(
         guard.consequences,
         main_agent_caps,
@@ -447,31 +469,24 @@ async fn build_chat(
         );
     }
 
-    // Dispatch routing: required for face-agent `delegate` and for legacy pre-turn path.
-    if let Some(orchestrator) = orchestrator {
-        let mut dispatcher = Dispatcher::new(
-            provider,
-            config.tuning.dispatch.clone(),
-            config.tuning.concurrency.max_reaction_depth,
-        );
-        if let Some(g) = guidance {
-            dispatcher = dispatcher.with_guidance(g);
-        }
-        if main_agent_cfg.delegation_mode {
-            info!(
-                "chat: face-agent mode — human interfacer + delegate tool (dispatcher routes work)"
-            );
-        } else {
-            info!(
-                "chat: legacy dispatch mode (pre-turn routing + main-agent MCP tools on stream path)"
-            );
-        }
-        sessions = sessions.with_dispatch(dispatcher, catalog, orchestrator);
-    } else if main_agent_cfg.delegation_mode {
-        warn!(
-            "chat: delegation_mode is on but no MCP/orchestrator — face agent will have no delegate tool"
+    // Pre-turn classification (legacy mode) + face-agent `delegate` needs a dispatcher for the
+    // classifier; execution is always the hub's dispatch pack.
+    let mut dispatcher = Dispatcher::new(
+        provider,
+        config.tuning.dispatch.clone(),
+        config.tuning.concurrency.max_reaction_depth,
+    );
+    if let Some(g) = guidance {
+        dispatcher = dispatcher.with_guidance(g);
+    }
+    if main_agent_cfg.delegation_mode {
+        info!("chat: face-agent mode — human interfacer + delegate tool (hub hosts work)");
+    } else {
+        info!(
+            "chat: legacy dispatch mode (pre-turn routing + main-agent MCP tools on stream path)"
         );
     }
+    sessions = sessions.with_dispatch(dispatcher, catalog);
 
     (Some(Arc::new(sessions)), tool_count, tool_names)
 }
@@ -529,17 +544,15 @@ async fn dispatcher_guidance_source(
     }
 }
 
-/// Connect chat's tool runtime once, reused for its lifetime, and — when an MCP registry is
-/// configured — build the Orchestrator that backs its dispatch-routed executions
-/// (Clarify/Propose/DispatchSubagent; see `build_chat`'s `with_dispatch` wiring). Without an MCP,
-/// chat still works as plain conversation and dispatch routing is skipped entirely (there would be
-/// nothing for the orchestrator to execute against).
+/// Connect chat's tool runtime once, reused for its lifetime. Specialist work goes through the
+/// hub's dispatch pack (`delegate` / pre-turn non-ExecuteDirect); this runtime is only the face
+/// agent's optional direct MCP grants.
 async fn connect_chat_runtime(
-    provider: &Arc<dyn Provider>,
+    _provider: &Arc<dyn Provider>,
     mcp: Option<McpRegistry>,
-    capabilities: &CapabilitySet,
-    guard: &liberado_bootstrap::GuardContext,
-) -> (Arc<dyn ToolRuntime>, Option<Orchestrator>) {
+    _capabilities: &CapabilitySet,
+    _guard: &liberado_bootstrap::GuardContext,
+) -> Arc<dyn ToolRuntime> {
     match mcp {
         Some(registry) => {
             let provenance = WriteProvenance::agent("liberado-chat", "chat-session");
@@ -550,22 +563,34 @@ async fn connect_chat_runtime(
             } else {
                 warn!(failed = ?failed, "chat: some MCPs failed to connect — continuing with the rest");
             }
-            let orchestrator = Orchestrator::new(
-                provider.clone(),
-                registry,
-                capabilities.clone(),
-                guard.consequences.clone(),
-                guard.zone_catalog.clone(),
-                guard.zone_write_classes.clone(),
-                guard.proposals_dir.clone(),
-                guard.signer.clone(),
-                DEFAULT_POOL,
-            );
-            (rt, Some(orchestrator))
+            // The registry is only used for the face agent's optional direct tools; worker
+            // execution lives in the dispatch pack on the hub (E4). Dropping the registry here
+            // is fine — connect_all already produced the ToolRuntime.
+            drop(registry);
+            rt
         }
         None => {
             info!("chat: no MCP configured — chat will be conversation-only");
-            (Arc::new(NoTools), None)
+            Arc::new(NoTools)
+        }
+    }
+}
+
+/// Bridges `liberado_notify::Notifier` into the hub's [`SessionAlert`](liberado_session::SessionAlert)
+/// port so an unwatched awaiting session pings Telegram (E5).
+struct NotifySessionAlert(Arc<dyn liberado_notify::Notifier>);
+
+#[async_trait::async_trait]
+impl liberado_session::SessionAlert for NotifySessionAlert {
+    async fn session_needs_you(&self, session_id: &str, prompt: &str) {
+        let message = format!(
+            "Liberado: a session needs your input.\n\
+             session: {session_id}\n\
+             {prompt}\n\
+             Answer in the TUI or via POST /api/goals/{session_id}/message"
+        );
+        if let Err(e) = self.0.notify(&message).await {
+            tracing::warn!(error = %e, %session_id, "session alert notification failed");
         }
     }
 }

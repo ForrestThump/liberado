@@ -35,14 +35,10 @@
 //! `DispatchAction` outcomes are handled asymmetrically, deliberately: `ExecuteDirect` (the common
 //! case) falls straight through into the existing streaming `Conversation::turn`/`turn_stream`
 //! path — zero change to today's token-by-token UX, now just gated on the dispatcher's approval.
-//! `Clarify`, `Propose`, and `DispatchSubagent` all route through [`Orchestrator::run`], which has
-//! no streaming variant (it calls the executor's report-mode `execute`, blocking until a full
-//! `Report`) — for `DispatchSubagent` specifically this is an accepted, deliberate UX trade-off
-//! (reserved for complex/open-ended goals, presumably rarer than direct execution) rather than an
-//! oversight; a "working on it" status plus the final report stands in for live tokens on that one
-//! path. `with_dispatch` requires an [`Orchestrator`] up front (not optional) because all three
-//! non-`ExecuteDirect` outcomes need it to produce a `Disposition` — a chat host with no MCP
-//! configured at all simply never calls `with_dispatch`, and turns run exactly as before.
+//! `Clarify`, `Propose`, and `DispatchSubagent` all start a hosted background session on the
+//! [`GoalSessionHub`] (one-execution-engine E4) and await its terminal summary — same blocking
+//! shape as the old `Orchestrator::run` path, but through the one engine. `with_dispatch` takes a
+//! classifier; `with_goal_hub` is what makes non-`ExecuteDirect` (and face-agent `delegate`) work.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -50,7 +46,7 @@ use std::sync::{Arc, Mutex};
 
 use liberado_common::{
     CapabilityCatalog, CapabilitySet, Consequence, DEFAULT_POOL, DispatchAction, McpDescriptor,
-    PROPOSALS_DIR, ProposalSigner, SignedProposal, WriteClass,
+    ProposalSigner, WriteClass,
 };
 use liberado_conversation_store::{
     Author, ConversationHeader, ConversationStore, NewConversation, NewNode, StoreError, Ulid,
@@ -58,8 +54,8 @@ use liberado_conversation_store::{
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_executor::{AgentEvent, ExecError, Executor, RiskGatedToolRuntime, ToolRuntime};
 use liberado_mcp::ScopedRuntime;
-use liberado_orchestrator::{Disposition, Orchestrator};
 use liberado_provider::{Message, Role};
+use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
 use thiserror::Error;
 use tokio::sync::mpsc::Sender;
 
@@ -147,22 +143,16 @@ pub struct ChatSessions {
     /// the daemon's reactive path and the server's API read, snapshotted fresh per dispatch call
     /// rather than frozen at construction.
     dispatch_catalog: Arc<CapabilityCatalog>,
-    /// Executes non-`ExecuteDirect` decisions. Required alongside `dispatcher` — see
-    /// [`with_dispatch`](Self::with_dispatch).
-    orchestrator: Option<Arc<Orchestrator>>,
+    /// The one execution engine — hosts non-`ExecuteDirect` pre-turn work and face-agent `delegate`.
+    goals: Option<Arc<GoalSessionHub>>,
     /// Capability ceiling for the dispatcher/worker path (`policy` component `"dispatcher"`).
     /// When unset, falls back to the main-agent `capabilities` (legacy).
     dispatcher_capabilities: CapabilitySet,
     /// Face-agent mode: main agent sees `delegate` (+ optional main-agent MCP grants), not a
     /// pre-turn fleet of tools. Off by default in unit tests; production enables via config.
     delegation_mode: bool,
-    /// Shared bridge for the face agent's `delegate` tool (when dispatch + delegation_mode).
+    /// Shared bridge for the face agent's `delegate` tool (when hub + delegation_mode).
     face_bridge: Option<Arc<DispatchBridge>>,
-    /// Where a `delegate`d subagent is recorded as a background session (S5′ step 5). Held here
-    /// rather than reused from `store`: that one is a `dyn ConversationStore` and this needs the
-    /// kernel's `dyn SessionRecordStore` — the two lenses of the converged store, which the same
-    /// concrete `SessionStore` satisfies but a trait object cannot be cast between.
-    sessions: Option<Arc<dyn liberado_session::SessionRecordStore>>,
 }
 
 impl ChatSessions {
@@ -188,11 +178,10 @@ impl ChatSessions {
             signer: ProposalSigner::random(),
             dispatcher: None,
             dispatch_catalog: Arc::new(CapabilityCatalog::new()),
-            orchestrator: None,
+            goals: None,
             dispatcher_capabilities: CapabilitySet::empty(),
             delegation_mode: false,
             face_bridge: None,
-            sessions: None,
         }
     }
 
@@ -202,24 +191,18 @@ impl ChatSessions {
         self
     }
 
-    /// Record every `delegate`d subagent as a **background session** in `store` (S5′ step 5), as a
-    /// child of the chat that delegated it. Without this, a delegation's work is visible only as the
-    /// summary paragraph it hands back to the chat.
-    ///
-    /// In production this is the *same* `SessionStore` backing `store` — one log, seen through its
-    /// other lens (see the `sessions` field).
-    pub fn with_session_store(
-        mut self,
-        store: Arc<dyn liberado_session::SessionRecordStore>,
-    ) -> Self {
-        self.sessions = Some(store);
+    /// Attach the goal session hub so `delegate` and non-`ExecuteDirect` pre-turn work run as
+    /// hosted sessions (one-execution-engine E4). Without this, face-agent mode has no `delegate`
+    /// tool and non-`ExecuteDirect` classifications fall through as plain answers about the failure.
+    pub fn with_goal_hub(mut self, hub: Arc<GoalSessionHub>) -> Self {
+        self.goals = Some(hub);
         self.rebuild_face_bridge();
         self
     }
 
     /// Enable face-agent / human-interfacer mode (built-in `delegate` tool; no pre-turn fleet).
     ///
-    /// When enabled and dispatch is attached, applies [`HUMAN_INTERFACE_SYSTEM_PROMPT`] unless a
+    /// When enabled and a hub is attached, applies [`HUMAN_INTERFACE_SYSTEM_PROMPT`] unless a
     /// custom prompt was already set via [`with_system_prompt`](Self::with_system_prompt) *after*
     /// this call — prefer setting the prompt explicitly from config in the host.
     pub fn with_delegation_mode(mut self, enabled: bool) -> Self {
@@ -231,7 +214,7 @@ impl ChatSessions {
         self
     }
 
-    /// Ceiling used for dispatcher classification and worker/orchestrator execution.
+    /// Ceiling used for dispatcher classification and delegated worker sessions.
     /// Defaults to the main-agent capability set when never set.
     pub fn with_dispatcher_capabilities(mut self, caps: CapabilitySet) -> Self {
         self.dispatcher_capabilities = caps;
@@ -285,63 +268,41 @@ impl ChatSessions {
         self
     }
 
-    /// Attach dispatch routing (see the module docs). `catalog` is the shared, live MCP catalog
-    /// the dispatcher's classifier chooses from — the same object the daemon's reactive path and
-    /// the server's API read, snapshotted fresh per turn rather than frozen at construction.
-    /// `orchestrator` executes non-streaming / worker outcomes (required alongside a dispatcher).
+    /// Attach pre-turn classification (see the module docs). `catalog` is the shared, live MCP
+    /// catalog the classifier chooses from. Non-`ExecuteDirect` outcomes need
+    /// [`with_goal_hub`](Self::with_goal_hub) to execute as hosted sessions.
     ///
     /// In **delegation mode** (`with_delegation_mode(true)`), the face agent calls `delegate`
-    /// instead of receiving a pre-turn auto-answer; the orchestrator must use **dispatcher**
-    /// capability ceilings so specialist MCPs are reachable without polluting chat tool lists.
+    /// instead of receiving a pre-turn auto-answer; the hub session uses **dispatcher** capability
+    /// ceilings so specialist MCPs are reachable without polluting chat tool lists.
     pub fn with_dispatch(
         mut self,
         dispatcher: Dispatcher,
         catalog: Arc<CapabilityCatalog>,
-        orchestrator: Orchestrator,
     ) -> Self {
-        let dispatcher = Arc::new(dispatcher);
-        let orchestrator = Arc::new(orchestrator);
-        self.dispatcher = Some(dispatcher.clone());
-        self.dispatch_catalog = catalog.clone();
-        self.orchestrator = Some(orchestrator.clone());
-        self.refresh_face_bridge(dispatcher, catalog, orchestrator);
+        self.dispatcher = Some(Arc::new(dispatcher));
+        self.dispatch_catalog = catalog;
+        self.rebuild_face_bridge();
         self
     }
 
     fn rebuild_face_bridge(&mut self) {
-        let (Some(dispatcher), Some(orchestrator)) =
-            (self.dispatcher.clone(), self.orchestrator.clone())
-        else {
-            self.face_bridge = None;
-            return;
-        };
-        let catalog = self.dispatch_catalog.clone();
-        self.refresh_face_bridge(dispatcher, catalog, orchestrator);
-    }
-
-    fn refresh_face_bridge(
-        &mut self,
-        dispatcher: Arc<Dispatcher>,
-        catalog: Arc<CapabilityCatalog>,
-        orchestrator: Arc<Orchestrator>,
-    ) {
         if !self.delegation_mode {
             self.face_bridge = None;
             return;
         }
+        let Some(hub) = self.goals.clone() else {
+            self.face_bridge = None;
+            return;
+        };
         let dispatcher_caps = if self.dispatcher_capabilities.capabilities.is_empty() {
             self.capabilities.clone()
         } else {
             self.dispatcher_capabilities.clone()
         };
         self.face_bridge = Some(Arc::new(DispatchBridge {
-            dispatcher,
-            orchestrator,
-            catalog,
+            hub,
             dispatcher_capabilities: dispatcher_caps,
-            zone_write_classes: self.zone_write_classes.clone(),
-            proposals_dir: self.proposals_dir.clone(),
-            sessions: self.sessions.clone(),
         }));
     }
 
@@ -600,7 +561,7 @@ impl ChatSessions {
     /// path, scoped by whatever narrowing the dispatcher found. See the module docs for why this
     /// split exists.
     async fn dispatch_turn(&self, user: &str) -> DispatchOutcome {
-        let (Some(dispatcher), Some(orchestrator)) = (&self.dispatcher, &self.orchestrator) else {
+        let Some(dispatcher) = &self.dispatcher else {
             return DispatchOutcome::Proceed(Vec::new()); // no dispatcher — run exactly as before
         };
 
@@ -612,7 +573,7 @@ impl ChatSessions {
         let req = DispatchRequest {
             goal: user.to_string(),
             catalog: self.dispatch_catalog.descriptors(),
-            capabilities: dispatch_caps,
+            capabilities: dispatch_caps.clone(),
             reaction_depth: 0, // user-initiated, not a background reaction
             zone_write_classes: self.zone_write_classes.clone(),
         };
@@ -627,44 +588,61 @@ impl ChatSessions {
             return DispatchOutcome::Proceed(relevant_mcps.clone());
         }
 
+        // Non-ExecuteDirect: hosted session on the hub (E4). No second engine.
+        let Some(hub) = &self.goals else {
+            return DispatchOutcome::Answered(
+                "I classified this as work that needs the dispatcher pack, but no goal hub is \
+                 attached — cannot run it."
+                    .into(),
+            );
+        };
         let correlation_id = format!("chat-{}", Ulid::new());
-        match orchestrator.run(decision, user, &correlation_id).await {
-            Ok(Disposition::Clarify { questions, .. }) => {
-                DispatchOutcome::Answered(format_questions(&questions))
-            }
-            Ok(Disposition::Reported(report)) => DispatchOutcome::Answered(report.summary),
-            Ok(Disposition::Propose(proposal)) => match self.write_chat_proposal(&proposal).await {
-                Ok(path) => DispatchOutcome::Answered(format!(
-                    "I've drafted a proposal for you to review — it needs your approval before it \
-                     runs: {}",
-                    path.display()
-                )),
-                Err(e) => {
-                    tracing::error!(error = %e, "failed to write chat proposal");
-                    DispatchOutcome::Answered(
-                        "I wanted to propose an action but couldn't save it — please try again."
-                            .into(),
-                    )
-                }
-            },
+        let mut grant_caps = dispatch_caps;
+        // Pre-turn work inside a chat turn cannot block on AskHuman (same as D-e for delegate).
+        grant_caps
+            .capabilities
+            .retain(|c| !matches!(c, liberado_common::Capability::AskHuman));
+        let goal = GoalSpec {
+            id: None,
+            description: user.to_string(),
+            success_criteria: Vec::new(),
+            domain: DomainHint::from("dispatch"),
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: Some(SessionOrigin::from_correlation(&correlation_id)),
+            profile: None,
+            payload: serde_json::json!({ "source": "chat-preturn" }),
+        };
+        let session_id = match hub
+            .start_background(
+                goal,
+                SessionGrant {
+                    capabilities: grant_caps,
+                    profile: None,
+                    overrides: serde_json::Value::Null,
+                },
+            )
+            .await
+        {
+            Ok(id) => id,
             Err(e) => {
-                tracing::warn!(error = %e, "chat orchestration failed");
-                DispatchOutcome::Answered(format!("I ran into a problem handling that: {e}"))
+                return DispatchOutcome::Answered(format!(
+                    "I ran into a problem starting that work: {e}"
+                ));
             }
+        };
+        match hub.await_terminal(&session_id).await {
+            Ok(snap) => {
+                let summary = snap
+                    .session
+                    .result
+                    .as_ref()
+                    .map(|r| r.summary.clone())
+                    .unwrap_or_else(|| "finished with no summary".into());
+                DispatchOutcome::Answered(summary)
+            }
+            Err(e) => DispatchOutcome::Answered(format!("I ran into a problem handling that: {e}")),
         }
-    }
-
-    /// Write a dispatcher-originated proposal (already signed by `Orchestrator`'s `Propose` arm) the
-    /// same way [`RiskGatedToolRuntime`]'s runtime-level proposals are written: plain
-    /// `tokio::fs::write` under `proposals_dir/proposals/`. `proposals_dir` is the vault's own
-    /// `proposals/` directory, so this lands exactly where the daemon's `react()` already watches —
-    /// approving it flows through the same pipeline pre-flight proposals use.
-    async fn write_chat_proposal(&self, proposal: &SignedProposal) -> std::io::Result<PathBuf> {
-        let proposals_subdir = self.proposals_dir.join(PROPOSALS_DIR);
-        let proposal_path = proposals_subdir.join(format!("{}.md", proposal.id));
-        tokio::fs::create_dir_all(&proposals_subdir).await?;
-        tokio::fs::write(&proposal_path, proposal.to_note()).await?;
-        Ok(proposal_path)
     }
 
     /// Build a per-turn [`ToolRuntime`] that scopes the visible tool surface to the granted
@@ -785,23 +763,6 @@ enum DispatchOutcome {
     /// The turn is already answered (a clarifying question, a proposal confirmation, or a
     /// subagent's report) — this text is the final reply, no execution needed.
     Answered(String),
-}
-
-/// Render a dispatcher's clarifying questions as a plain reply.
-fn format_questions(questions: &[String]) -> String {
-    match questions {
-        [] => "I need a bit more information before I can help with that.".to_string(),
-        [only] => only.clone(),
-        many => {
-            let mut out = String::from("I have a few questions before I can help with that:\n");
-            for q in many {
-                out.push_str("- ");
-                out.push_str(q);
-                out.push('\n');
-            }
-            out
-        }
-    }
 }
 
 /// A thin pass-through wrapper that lets us return [`Arc<dyn ToolRuntime>`] as

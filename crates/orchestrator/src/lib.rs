@@ -301,12 +301,21 @@ impl Orchestrator {
     /// Execute `decision`. `goal` is the goal an `ExecuteDirect` should accomplish (a
     /// `DispatchSubagent` carries its own restated goal). `trigger_correlation` is the id of the
     /// event that prompted this decision — the provenance correlation an `ExecuteDirect` adopts.
+    ///
+    /// `capabilities` is the **per-run** authority (a session grant, a profile, a chat turn). It is
+    /// intersected **narrow-only** with this orchestrator's pool ceiling (`self.capabilities`) —
+    /// Decision 4: authority never widens. A session profile that grants only `Read` is therefore
+    /// genuinely refused a write its pool would have allowed (one-execution-engine plan E1).
     pub async fn run(
         &self,
         decision: DispatchDecision,
         goal: &str,
         trigger_correlation: &str,
+        capabilities: &CapabilitySet,
     ) -> Result<Disposition, OrchestratorError> {
+        // Pool ceiling ∩ per-run grant. Order is deliberate: `narrow` filters *self* by *other*, so
+        // nothing outside the pool can appear even if the caller passes a wider set.
+        let effective = self.capabilities.narrow(capabilities);
         let action_label = decision.action.label();
         let span = tracing::info_span!(
             "orchestrate",
@@ -355,12 +364,12 @@ impl Orchestrator {
                     seed_calls,
                     relevant_mcps,
                 } => {
-                    // Scope to exactly the MCPs `self.capabilities` grants — an empty allow-list
-                    // means "every registered MCP" to `RuntimeFactory`/`ScopedRuntime` (the wrong
-                    // sense here, same reason `ChatSessions` special-cases it for its own scoping),
-                    // which would let an adaptive (non-seed) tool call reach any registered MCP
-                    // regardless of what the guard pre-flight actually checked the goal against.
-                    let granted: Vec<String> = self.capabilities.granted_mcps();
+                    // Scope to exactly the MCPs `effective` grants — an empty allow-list means
+                    // "every registered MCP" to `RuntimeFactory`/`ScopedRuntime` (the wrong sense
+                    // here, same reason `ChatSessions` special-cases it for its own scoping), which
+                    // would let an adaptive (non-seed) tool call reach any registered MCP regardless
+                    // of what the guard pre-flight actually checked the goal against.
+                    let granted: Vec<String> = effective.granted_mcps();
                     // Further narrow within that ceiling when the classifier named which MCPs are
                     // actually relevant (token-efficiency — see `DispatchTuning::narrow_direct_tools`).
                     // Never widens: only MCPs already in `granted` survive the intersection, so a
@@ -387,12 +396,8 @@ impl Orchestrator {
                         let provenance =
                             WriteProvenance::agent(self.source.clone(), trigger_correlation);
                         let runtime = self.factory.runtime_for(&allowed_mcps, provenance).await?;
-                        let runtime = self.gate(
-                            runtime,
-                            self.capabilities.clone(),
-                            goal,
-                            trigger_correlation,
-                        );
+                        let runtime =
+                            self.gate(runtime, effective.clone(), goal, trigger_correlation);
                         self.execute(&self.direct_budget, &*runtime, task).await?
                     };
                     tracing::Span::current().record("disposition", "reported");
@@ -402,7 +407,7 @@ impl Orchestrator {
 
                 DispatchAction::DispatchSubagent {
                     goal: subgoal,
-                    capabilities,
+                    capabilities: decision_caps,
                     allowed_mcps,
                     success_criteria,
                     correlation_id,
@@ -411,13 +416,10 @@ impl Orchestrator {
                     let provenance = WriteProvenance::agent(self.source.clone(), &correlation_id);
                     let runtime = self.factory.runtime_for(&allowed_mcps, provenance).await?;
                     // Decision 4: authority only shrinks. Classifier never emits `capabilities`
-                    // (empty default); derive the gate from ceiling ∩ allowed_mcps so the risk
+                    // (empty default); derive the gate from effective ∩ allowed_mcps so the risk
                     // gate matches the scoped tool catalog — not an empty set that blocks every MCP.
-                    let gate_capabilities = subagent_gate_capabilities(
-                        &self.capabilities,
-                        &capabilities,
-                        &allowed_mcps,
-                    );
+                    let gate_capabilities =
+                        subagent_gate_capabilities(&effective, &decision_caps, &allowed_mcps);
                     let runtime = self.gate(
                         runtime,
                         gate_capabilities,

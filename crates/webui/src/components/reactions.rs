@@ -50,15 +50,19 @@ pub fn ReactionsPanel(api_base: String) -> Element {
 
 #[component]
 fn ReactionRow(event: ReactionEvent) -> Element {
-    let outcome_cls = match event.outcome {
+    let outcome_cls = match &event.outcome {
         ReactionOutcome::Acted => "reaction-outcome acted",
         ReactionOutcome::Decided => "reaction-outcome decided",
         ReactionOutcome::Observed => "reaction-outcome observed",
+        ReactionOutcome::Dispatched { .. } => "reaction-outcome acted",
     };
-    let outcome_label = match event.outcome {
-        ReactionOutcome::Acted => "acted",
-        ReactionOutcome::Decided => "decided",
-        ReactionOutcome::Observed => "observed",
+    let outcome_label = match &event.outcome {
+        ReactionOutcome::Acted => "acted".to_string(),
+        ReactionOutcome::Decided => "decided".to_string(),
+        ReactionOutcome::Observed => "observed".to_string(),
+        ReactionOutcome::Dispatched { session_id } => {
+            format!("session {}", &session_id[..session_id.len().min(8)])
+        }
     };
     let path_str = event.path.clone().unwrap_or_else(|| "-".to_string());
     // timestamp is now an ISO-8601 String (not DateTime<Utc>); parse for display.
