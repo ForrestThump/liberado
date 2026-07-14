@@ -34,6 +34,24 @@ unreachable from the case that most needed it. **Three separate defects, one roo
 >
 > **The check.** Before trusting a test, break the code it covers on purpose and watch it fail. If it
 > doesn't fail, it never protected you. This is cheap and it has caught something every single time.
+>
+> **And do it mechanically.** `cargo mutants` breaks the code for you, one edit at a time, and reports
+> which tests never noticed. It is the only tool that attacks this class directly, and it works:
+>
+> ```
+> cargo mutants -p liberado-session --in-place --test-workspace=true
+> ```
+>
+> First run against the session kernel (2026-07-14): **148 mutants, 66 caught, 39 missed** — 37% of
+> the kernel's viable logic could be broken with no test noticing. Two of the misses were serious:
+> `GoalSessionHub::cancel` could be replaced with a **no-op** and nothing failed (both surfaces offer a
+> cancel button, and a cancel that silently does nothing is worse than no button — you believe the work
+> stopped and walk away while it keeps running), and `list` could return an empty vec, which every
+> session switcher reads.
+>
+> **Commit before running `--in-place`** — it edits your source and a crash leaves it mutated. (Ask me
+> how I know.) `--test-workspace=true` matters too, or cross-crate tests are not credited and the miss
+> count is pessimistic.
 
 ## 2. The guard that was off by default
 
