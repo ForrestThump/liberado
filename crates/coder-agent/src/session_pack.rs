@@ -76,6 +76,20 @@ impl CodingSessionPack {
     }
 }
 
+/// Is this a failure a **human answer** could plausibly unblock?
+///
+/// `NoChanges` = the model could not make progress. `Validation` = it could not satisfy a gate.
+/// Both are "I am stuck", which is exactly when a person is worth interrupting — and both used to
+/// kill the session outright, because the ask seam only ever ran on the success path.
+///
+/// Everything else (`Setup`, `Sandbox`, `Provider`, `Tool`, `Backend`) is a broken *environment*.
+/// No answer you could type fixes a dead sandbox or an unreachable provider, so those still fail
+/// fast: paging a human for them would be noise, and the whole value of the ask is that it is rare.
+fn is_stuck(e: &liberado_coder_core::CoderError) -> bool {
+    use liberado_coder_core::CoderError;
+    matches!(e, CoderError::NoChanges | CoderError::Validation(_))
+}
+
 /// How the intake phase ended.
 #[derive(Debug)]
 enum IntakePhase {
@@ -676,8 +690,52 @@ impl DomainPackRunner for CodingSessionPack {
                 ))
                 .await;
 
-            let r = match result {
-                Ok(r) => r,
+            // An attempt ends one of three ways, and conflating them is what broke this seam:
+            //
+            //  * it RAN and produced a verdict (`Ok`) — pass or fail;
+            //  * it got STUCK (`NoChanges`, `Validation`) — the model could not make progress. This
+            //    is the *strongest* reason to ask a human, and it used to be the one case that
+            //    could not: the ask lived on the `Ok` path only, so the more stuck the pack got,
+            //    the less able it was to ask. Found by the live test, where the coder built a
+            //    working CLI, hit a gate it had no way to satisfy, and died silently instead of
+            //    asking for the one thing only the human had;
+            //  * it BROKE (`Setup`/`Sandbox`/`Provider`/`Tool`/`Backend`) — the environment failed.
+            //    No human answer fixes a dead sandbox, so fail fast rather than page someone.
+            let (ok, summary, artifacts, diagnostics) = match result {
+                Ok(r) => {
+                    let ok = r.outcome == Outcome::Succeeded;
+                    let _ = events
+                        .send(SessionEvent::new(
+                            session_id,
+                            SessionEventKind::ValidationFinished {
+                                ok,
+                                summary: r
+                                    .validation_notes
+                                    .clone()
+                                    .unwrap_or_else(|| r.summary.clone()),
+                            },
+                        ))
+                        .await;
+                    (ok, r.summary, r.files_changed, r.diagnostics)
+                }
+                Err(e) if is_stuck(&e) => {
+                    let msg = e.to_string();
+                    let _ = events
+                        .send(SessionEvent::new(
+                            session_id,
+                            SessionEventKind::ValidationFinished {
+                                ok: false,
+                                summary: msg.clone(),
+                            },
+                        ))
+                        .await;
+                    (
+                        false,
+                        msg,
+                        Vec::new(),
+                        serde_json::json!({"error": "coder_backend", "stuck": true}),
+                    )
+                }
                 Err(e) => {
                     let msg = e.to_string();
                     let _ = events
@@ -697,20 +755,6 @@ impl DomainPackRunner for CodingSessionPack {
                 }
             };
 
-            let ok = r.outcome == Outcome::Succeeded;
-            let _ = events
-                .send(SessionEvent::new(
-                    session_id,
-                    SessionEventKind::ValidationFinished {
-                        ok,
-                        summary: r
-                            .validation_notes
-                            .clone()
-                            .unwrap_or_else(|| r.summary.clone()),
-                    },
-                ))
-                .await;
-
             // Succeeded, or failed with no ask left to spend: this is the outcome.
             if ok || asks_remaining == 0 {
                 return Ok(GoalResult {
@@ -719,16 +763,16 @@ impl DomainPackRunner for CodingSessionPack {
                     } else {
                         TerminalKind::Failed
                     },
-                    summary: r.summary,
-                    artifacts: r.files_changed,
-                    diagnostics: r.diagnostics,
+                    summary,
+                    artifacts,
+                    diagnostics,
                 });
             }
 
             let prompt = format!(
                 "The build did not succeed:\n{}\n\nHow should I proceed? \
                  Reply with guidance, or \"abort\" to stop.",
-                r.summary
+                summary
             );
             let answer = self
                 .ask(
@@ -748,11 +792,10 @@ impl DomainPackRunner for CodingSessionPack {
                     return Ok(GoalResult {
                         terminal: TerminalKind::BudgetExhausted,
                         summary: format!(
-                            "build failed and no answer to mid-run question: {}",
-                            r.summary
+                            "build failed and no answer to mid-run question: {summary}"
                         ),
-                        artifacts: r.files_changed,
-                        diagnostics: r.diagnostics,
+                        artifacts,
+                        diagnostics,
                     });
                 }
                 Some(text)
@@ -762,17 +805,17 @@ impl DomainPackRunner for CodingSessionPack {
                 {
                     return Ok(GoalResult {
                         terminal: TerminalKind::Cancelled,
-                        summary: format!("build failed; human aborted after: {}", r.summary),
-                        artifacts: r.files_changed,
-                        diagnostics: r.diagnostics,
+                        summary: format!("build failed; human aborted after: {summary}"),
+                        artifacts,
+                        diagnostics,
                     });
                 }
                 Some(guidance) => {
                     asks_remaining -= 1;
                     request.attempt += 1;
                     request.prior_feedback.push(format!(
-                        "Attempt {} failed: {}\nHuman guidance: {guidance}",
-                        request.attempt, r.summary
+                        "Attempt {} failed: {summary}\nHuman guidance: {guidance}",
+                        request.attempt
                     ));
                     let _ = events
                         .send(SessionEvent::new(
@@ -1022,6 +1065,163 @@ mod tests {
             out.terminal,
             TerminalKind::Succeeded,
             "the guided retry succeeded, so the session succeeded"
+        );
+    }
+
+    /// A backend that gets **stuck** (`Err(NoChanges)`) on its first attempt rather than returning a
+    /// failed verdict, then succeeds once it has been told something. This is the shape a real run
+    /// produces when the model cannot make progress — and the shape `ScriptedBackend` never made,
+    /// which is precisely why the ask seam shipped on the `Ok` path only and the live test caught it.
+    struct StuckBackend {
+        seen: Arc<std::sync::Mutex<Vec<CoderRunRequest>>>,
+    }
+
+    #[async_trait]
+    impl CoderBackend for StuckBackend {
+        fn name(&self) -> &str {
+            "stuck"
+        }
+        async fn run(&self, request: CoderRunRequest) -> Result<CoderRunResult, CoderError> {
+            let attempt = request.attempt;
+            self.seen.lock().unwrap().push(request);
+            if attempt == 0 {
+                return Err(CoderError::NoChanges);
+            }
+            Ok(CoderRunResult {
+                backend: "stuck".into(),
+                outcome: Outcome::Succeeded,
+                summary: "green".into(),
+                files_changed: vec![],
+                validation_notes: None,
+                critic_verdict: None,
+                trace_path: None,
+                diagnostics: serde_json::json!({}),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stuck_build_asks_the_human_instead_of_dying_silently() {
+        // The live test's actual failure: the coder built a working CLI, hit a gate it had no way to
+        // satisfy, could not make further progress, and the backend returned Err(NoChanges) -- which
+        // bypassed the ask entirely and killed the session. The more stuck the pack got, the less
+        // able it was to ask for help. A stuck build must ask.
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let backend = Arc::new(StuckBackend { seen: seen.clone() });
+        let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+        let pack = CodingSessionPack::with_backend(backend, provider, std::env::temp_dir());
+
+        let (ev_tx, mut ev_rx) = mpsc::channel::<SessionEvent>(64);
+        let (in_tx, in_rx) = mpsc::channel::<HumanInput>(16);
+        in_tx
+            .try_send(HumanInput::new("the release token is ORCHID-7Q"))
+            .unwrap();
+        drop(in_tx);
+        let inputs = InputChannel::new(in_rx, None);
+        let (_c_tx, cancel) = tokio::sync::watch::channel(false);
+
+        let workspace = std::env::temp_dir().join("liberado-e5-stuck-test");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let mut g = goal("make a todo cli");
+        g.payload = serde_json::json!({
+            "workspace_root": workspace.to_string_lossy(),
+            "intake": { "enabled": false },
+        });
+
+        let store = Arc::new(liberado_session::GoalSessionStore::new());
+        let mut spec = g.clone();
+        spec.id = Some("s1".into());
+        liberado_session::SessionRecordStore::insert(
+            store.as_ref(),
+            liberado_session::GoalSessionRecord::new(spec),
+        )
+        .await;
+        let grant = liberado_session::SessionGrant {
+            capabilities: [Capability::AskHuman].into_iter().collect(),
+            ..Default::default()
+        };
+        let ctx = PackContext::new(&grant, store.clone(), "s1");
+
+        let out = pack
+            .run("s1", &g, &ctx, ev_tx, inputs, cancel)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            prompts(&mut ev_rx).len(),
+            1,
+            "a stuck backend must ask the human, not die silently"
+        );
+        let requests = seen.lock().unwrap().clone();
+        assert_eq!(requests.len(), 2, "and then actually retry with the answer");
+        assert!(
+            requests[1]
+                .prior_feedback
+                .iter()
+                .any(|f| f.contains("ORCHID-7Q")),
+            "the answer must reach the backend: {:#?}",
+            requests[1].prior_feedback
+        );
+        assert_eq!(out.terminal, TerminalKind::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn a_broken_environment_fails_fast_instead_of_paging_you() {
+        // The other half of the distinction: no answer you could type fixes a dead sandbox. Asking
+        // would be noise, and the ask is only valuable because it is rare.
+        struct BrokenBackend;
+        #[async_trait]
+        impl CoderBackend for BrokenBackend {
+            fn name(&self) -> &str {
+                "broken"
+            }
+            async fn run(&self, _r: CoderRunRequest) -> Result<CoderRunResult, CoderError> {
+                Err(CoderError::Sandbox("workspace root vanished".into()))
+            }
+        }
+        let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+        let pack = CodingSessionPack::with_backend(
+            Arc::new(BrokenBackend),
+            provider,
+            std::env::temp_dir(),
+        );
+
+        let (ev_tx, mut ev_rx) = mpsc::channel::<SessionEvent>(64);
+        let (_in_tx, in_rx) = mpsc::channel::<HumanInput>(16);
+        let inputs = InputChannel::new(in_rx, None);
+        let (_c_tx, cancel) = tokio::sync::watch::channel(false);
+
+        let workspace = std::env::temp_dir().join("liberado-e5-broken-test");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let mut g = goal("make a todo cli");
+        g.payload = serde_json::json!({
+            "workspace_root": workspace.to_string_lossy(),
+            "intake": { "enabled": false },
+        });
+
+        let store = Arc::new(liberado_session::GoalSessionStore::new());
+        let mut spec = g.clone();
+        spec.id = Some("s1".into());
+        liberado_session::SessionRecordStore::insert(
+            store.as_ref(),
+            liberado_session::GoalSessionRecord::new(spec),
+        )
+        .await;
+        let grant = liberado_session::SessionGrant {
+            capabilities: [Capability::AskHuman].into_iter().collect(),
+            ..Default::default()
+        };
+        let ctx = PackContext::new(&grant, store.clone(), "s1");
+
+        let out = pack
+            .run("s1", &g, &ctx, ev_tx, inputs, cancel)
+            .await
+            .unwrap();
+        assert_eq!(out.terminal, TerminalKind::Failed);
+        assert_eq!(
+            prompts(&mut ev_rx).len(),
+            0,
+            "a dead sandbox is not a question for a human"
         );
     }
 

@@ -109,8 +109,39 @@ impl ProgressGuard {
 
     /// Observe a completed tool invocation and decide whether to nudge or fail hard.
     pub fn observe(&mut self, tool_name: &str, ok: bool, result_preview: &str) -> ProgressAction {
+        // A latched guard used to fail *every* subsequent call — including the two things its own
+        // message demands ("make the required edits or submit_report"). That is a deadlock, not a
+        // guard: the model is ordered to act and then refused every means of acting, so it burns
+        // its whole turn budget achieving nothing. Worse, `observe` runs *after* the tool has
+        // already executed, so a `write_file` that genuinely succeeded on disk was reported back
+        // to the model as a failure — it then "retries" an edit it had in fact already made.
+        //
+        // Observed live: 8 inspect calls latched ReadOnlyStall, then write_file/write_file/edit_file
+        // were all refused, the 12-turn budget drained, and the run ended `NoChanges`.
+        //
+        // So: keep refusing *exploration* — that is what the guard is for — but let the remedy
+        // through. A successful mutation means the stall is over, so clear it and resume normally.
         if self.fatal.is_some() {
-            return ProgressAction::Fatal(self.fatal.clone().expect("fatal checked as Some"));
+            let escaping =
+                is_mutating(tool_name) || tool_name == liberado_executor::SUBMIT_REPORT_TOOL;
+            if !escaping {
+                return ProgressAction::Fatal(self.fatal.clone().expect("fatal checked as Some"));
+            }
+            if is_mutating(tool_name)
+                && ok
+                && matches!(self.fatal, Some(ProgressFatal::ReadOnlyStall { .. }))
+            {
+                // It stopped exploring and actually edited something. The stall is, by definition,
+                // over. The churn guards stay latched — a write does not prove a *new approach* —
+                // but they no longer block the write or the report.
+                self.fatal = None;
+                self.saw_successful_mutation = true;
+                self.consecutive_non_mutating = 0;
+                self.read_only_nudged = false;
+                self.consecutive_same_tool = 0;
+                self.same_tool_nudged = false;
+            }
+            return ProgressAction::Continue { nudge: None };
         }
 
         if tool_name == liberado_executor::SUBMIT_REPORT_TOOL {
@@ -319,6 +350,52 @@ mod tests {
         assert!(matches!(
             fourth,
             ProgressAction::Fatal(ProgressFatal::ReadOnlyStall { consecutive: 4 })
+        ));
+    }
+
+    #[test]
+    fn a_latched_guard_still_lets_the_remedy_through() {
+        // The guard's own message says: "Stop exploring and either make the required edits or
+        // submit_report". It used to then refuse BOTH — every call after the latch returned Fatal,
+        // including write_file and submit_report. The model was ordered to act and denied every
+        // means of acting, so it burned its entire turn budget and the run died `NoChanges`. That
+        // is a deadlock, not a guard. Observed live, 2026-07-14.
+        let mut guard = ProgressGuard::new(policy());
+        for t in ["list_files", "read_file", "git_status", "search_text"] {
+            guard.observe(t, true, "{}");
+        }
+        assert!(
+            matches!(
+                guard.observe("read_file", true, "{}"),
+                ProgressAction::Fatal(_)
+            ),
+            "exploration stays blocked — that is what the guard is for"
+        );
+
+        // The two escapes the message demands must work.
+        assert!(
+            matches!(
+                guard.observe("write_file", true, r#"{"ok":true}"#),
+                ProgressAction::Continue { nudge: None }
+            ),
+            "a latched guard must not block the edit it just demanded"
+        );
+        assert!(
+            matches!(
+                guard.observe(liberado_executor::SUBMIT_REPORT_TOOL, true, "{}"),
+                ProgressAction::Continue { nudge: None }
+            ),
+            "nor the report it offered as the alternative"
+        );
+
+        // And a successful edit means the stall is over: normal operation resumes.
+        assert!(
+            guard.fatal().is_none(),
+            "a successful mutation ends a read-only stall by definition"
+        );
+        assert!(matches!(
+            guard.observe("read_file", true, "{}"),
+            ProgressAction::Continue { .. }
         ));
     }
 
