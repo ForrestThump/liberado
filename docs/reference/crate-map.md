@@ -5,7 +5,7 @@
 > Layer semantics and dependency rules: [contracts.md](../architecture/contracts.md) and
 > `crates/test-support/tests/layer_rules.rs` (the same role tags, mechanically enforced).
 
-41 workspace crates as of 2026-07-13.
+42 workspace crates as of 2026-07-13.
 
 ## foundation
 
@@ -39,7 +39,7 @@ The orchestration engine: decide/act loops, sessions, capability plumbing.
 | [`liberado-cron`](../../crates/cron/) | `liberado-common` | Cron as an EventSource (Decision 18/19): a schedule fires on its own timer and produces the same standardized Event vault-watch does, so the daemon reacts to it identically. Vault-agnostic by construction — no liberado-vault dependency — the concrete proof the core doesn't need the vault. |
 | [`liberado-dispatcher`](../../crates/dispatcher/) | `liberado-common`, `liberado-config-loader`, `liberado-provider` | The Liberado dispatcher (Decision 1): the out-of-band router that classifies a goal into a DispatchDecision, then applies the deterministic downgrade-only guard pipeline (Decision 6) that engineers safety regardless of classifier error. |
 | [`liberado-executor`](../../crates/executor/) | `liberado-common`, `liberado-notify`, `liberado-provider`, `liberado-scratchpad` | The Liberado agent execution engine: a bounded, adaptive tool loop that drives a Provider through real tool calls until it files a typed Report (delegated work) or answers in prose (conversational). |
-| [`liberado-main-agent`](../../crates/main-agent/) | `liberado-common`, `liberado-conversation-store`, `liberado-dispatcher`, `liberado-executor`, `liberado-mcp`, `liberado-orchestrator`, `liberado-provider`, `liberado-session` | The conversational main agent: a multi-turn Conversation that carries context across turns and drives the executor's tool-calling loop. The thing a chat UI talks to. |
+| [`liberado-main-agent`](../../crates/main-agent/) | `liberado-common`, `liberado-conversation-store`, `liberado-dispatcher`, `liberado-executor`, `liberado-mcp`, `liberado-provider`, `liberado-session` | The conversational main agent: a multi-turn Conversation that carries context across turns and drives the executor's tool-calling loop. The thing a chat UI talks to. |
 | [`liberado-mcp`](../../crates/mcp/) | `liberado-common`, `liberado-provider`, `liberado-executor` | The production `ToolRuntime` for Liberado: a turbomcp-client-backed adapter that exposes an MCP server's tools to the executor and injects write provenance into each call's `_meta` so tool-mediated vault writes are self-attributed (loop-broken). |
 | [`liberado-orchestrator`](../../crates/orchestrator/) | `liberado-common`, `liberado-notify`, `liberado-provider`, `liberado-session`, `liberado-executor` | Bridges a dispatcher DispatchDecision to an execution: builds the task + write provenance, runs the executor's agent loop over a ToolRuntime, and returns a Report (or surfaces a Clarify). Decoupled from MCP connection management via the RuntimeFactory trait. |
 | [`liberado-provider-openai-compat`](../../crates/provider-openai-compat/) | `liberado-provider` | A single, config-driven Provider implementation for any OpenAI-compatible chat-completions API (DeepSeek, OpenRouter, and future backends like OpenAI direct/Groq/Together) — replaces what used to be one hand-copied crate per backend. |
@@ -69,6 +69,7 @@ Domain packs (coding first). Never sit beneath kernel/config/store layers.
 | [`liberado-coder-runner`](../../crates/coder-runner/) | *none* | Process boundary for the coding pack: the liberado-coder-run subprocess bridge nested consumers (PR factory) drive over JSON. |
 | [`liberado-coder-sandbox`](../../crates/coder-sandbox/) | *none* | Workspace and command sandbox abstractions for Liberado's Rust-native coder |
 | [`liberado-coder-tools`](../../crates/coder-tools/) | *none* | Executor ToolRuntime implementation for Liberado's Rust-native coder |
+| [`liberado-dispatch-pack`](../../crates/dispatch-pack/) | `liberado-common`, `liberado-dispatcher`, `liberado-notify`, `liberado-orchestrator`, `liberado-session` | Domain pack that runs the dispatcher + orchestrator as a GoalSessionHub pack — the one-execution-engine convergence (E2). |
 
 ## service
 
@@ -96,10 +97,10 @@ Composition roots: the only crates allowed to see everything.
 
 | Crate | Internal deps | Description |
 |---|---|---|
-| [`liberado-bootstrap`](../../crates/bootstrap/) | `liberado-common`, `liberado-config`, `liberado-cron`, `liberado-daemon`, `liberado-dispatcher`, `liberado-notify`, `liberado-orchestrator`, `liberado-mcp`, `liberado-provider`, `liberado-provider-openai-compat` | Composition helpers that build Liberado's provider/dispatcher/orchestrator from the process environment — the shared daemon-assembly logic for every binary, so the env wiring lives in one place. |
+| [`liberado-bootstrap`](../../crates/bootstrap/) | `liberado-common`, `liberado-config`, `liberado-cron`, `liberado-daemon`, `liberado-dispatcher`, `liberado-dispatch-pack`, `liberado-notify`, `liberado-orchestrator`, `liberado-executor`, `liberado-mcp`, `liberado-provider`, `liberado-provider-openai-compat` | Composition helpers that build Liberado's provider/dispatcher/orchestrator from the process environment — the shared daemon-assembly logic for every binary, so the env wiring lives in one place. |
 | [`liberado-cli`](../../crates/cli/) | `liberado-server`, `chat-client-contract` | the `liberado` binary: a client + launcher — `serve` runs the daemon/API, `chat` is a streaming client |
 | [`liberado-daemon`](../../crates/daemon/) | `liberado-common`, `liberado-notify`, `liberado-vault`, `liberado-dispatcher`, `liberado-orchestrator`, `liberado-session` | The Liberado daemon (Decision 2, daemon-first): the long-running core that watches the vault, attributes changes (loop-breaking), and emits reactable events. v1 vertical slice. |
-| [`liberado-server`](../../crates/server/) | `chat-client-contract`, `liberado-bootstrap`, `liberado-chat-search`, `liberado-common`, `liberado-config`, `liberado-daemon`, `liberado-dispatcher`, `liberado-orchestrator`, `liberado-mcp`, `liberado-executor`, `liberado-main-agent`, `liberado-conversation-store`, `liberado-provider`, `liberado-telegram-approvals`, `liberado-memory-store`, `liberado-vault`, `liberado-session`, `liberado-session-store`, `liberado-coder-agent` | The Liberado daemon's API server (library): the watch loop + chat + HTTP/SSE API. Runnable via `liberado serve`. |
+| [`liberado-server`](../../crates/server/) | `chat-client-contract`, `liberado-bootstrap`, `liberado-chat-search`, `liberado-common`, `liberado-config`, `liberado-daemon`, `liberado-dispatcher`, `liberado-mcp`, `liberado-executor`, `liberado-main-agent`, `liberado-conversation-store`, `liberado-provider`, `liberado-telegram-approvals`, `liberado-memory-store`, `liberado-vault`, `liberado-session`, `liberado-session-store`, `liberado-coder-agent`, `liberado-notify` | The Liberado daemon's API server (library): the watch loop + chat + HTTP/SSE API. Runnable via `liberado serve`. |
 
 ## tooling
 

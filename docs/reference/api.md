@@ -35,10 +35,10 @@ human input. Packs registered at boot: **`life`** (always, second-domain demo) a
 | Method | Path | Body / notes |
 |---|---|---|
 | GET | `/api/sessions` | **Every session, newest first — chats *and* goal sessions in one list (S5′).** `goal` is absent on a chat and present on a session that runs to a terminal status; that `Option` is the only difference. Also carries `title`, `status`, `awaiting_input`, `visibility` (`foreground`/`background`), and `parent_session` (a real id, so the session tree is walkable). This is what a switcher should read. |
-| GET | `/api/goals/domains` | `{ "domains": ["life","coding"] }` |
+| GET | `/api/goals/domains` | The **registered packs** — `{ "domains": ["life","coding","dispatch"] }` when a provider is configured. `dispatch` is the dispatcher + orchestrator pair as a pack, so cron, webhooks and `delegate` are hosted sessions on the same hub as `/spawn` rather than a second engine. |
 | POST | `/api/sessions/{id}/fork` | **Branch a conversation, keeping the original.** Body: `{"after_turn": <n>?, "title": <string>?}`. `after_turn` is 1-based and names the branch point by the *human's* turn — keep through turn `n` and the reply it got, dropping everything after, i.e. "go back to just after turn n and take a different path". Omit it to fork the whole conversation as it stands. The server resolves turn → node; the store speaks node ids. Returns `{id, forked_from, kept_turns, total_turns}`. **Copy, not reference**: the prefix is copied into the fork's own log, so continuing the original afterwards does not move the fork, and every session's log stays self-contained. 400 if the session has no message transcript (a goal session records *events*, not turns), 404 if unknown. |
 | GET | `/api/goals` | The **kernel lens**: only goal-bearing sessions (newest first). A goal-less session has no `GoalSessionRecord` representation, so it cannot appear here. Prefer `/api/sessions` for a list; this is for callers that specifically want run-to-terminal sessions. |
-| POST | `/api/goals` | JSON `GoalSpec`: `description`, `domain` (`life`\|`coding`), `success_criteria`, optional `max_idle_secs`, optional `payload` |
+| POST | `/api/goals` | JSON `GoalSpec`: `description`, `domain` (`life`\|`coding`\|`dispatch`), `success_criteria`, optional `profile`, optional `max_idle_secs`, optional `payload` |
 | GET | `/api/goals/{id}` | Snapshot: record (incl. `awaiting_input`) + event history |
 | GET | `/api/goals/{id}/stream` | SSE: catch-up then live `session_started`, `tool_*`, `awaiting_input`, `session_finished`, … |
 | POST | `/api/goals/{id}/cancel` | Cooperative cancel |
@@ -54,8 +54,30 @@ reimplement tools/sandbox — only render.
 human answer; the record's `awaiting_input` flag flips true so a listing can badge it. The client
 answers with `POST /api/goals/{id}/message`, which delivers the text into the session **and** echoes
 it back into the transcript as a `human_input` (`{"text"}`) event, so the history is complete for any
-later subscriber. `GoalSpec.max_idle_secs`, when set, bounds how long a session waits at such a
-prompt before terminating `budget_exhausted`.
+later subscriber.
+
+**A pack may ask mid-run, and the answer changes what it does.** The coding pack asks during intake
+and — since E5 — again when a build fails and its grant carries `AskHuman`: it stops, asks, waits, and
+folds the reply into the next attempt's feedback. The ask is **bounded** (`overrides.max_mid_run_asks`,
+default 1): one ask means one guided retry, not one ask per failure. A pack that could ask on every
+uncertainty would be worse than one that guesses.
+
+**How long it waits.** `max_idle_secs` bounds the wait at a prompt before the session terminates
+`budget_exhausted`. It resolves from the session profile's `max_idle_secs` (E5), with `GoalSpec`'s own
+value winning when set. Interactive coding profiles typically want **hours** — the point is that you
+can answer after work. Crons leave it short or unset.
+
+**When nobody is watching, you get pinged.** If a session emits `awaiting_input` and the hub has no
+live subscriber on its stream (`live_subscriber_count() == 0` — observed, not guessed), the configured
+`Notifier` fires. Session open in the TUI: no ping. At work: ping.
+
+**A parked session survives a restart, but cannot yet be answered.** If the daemon stops while a
+session is awaiting input, replay restores it as `status: "parked"` with `awaiting_input` still true —
+so the question it was holding for you is visible rather than silently erased (it used to be coerced to
+`failed` with the flag wiped). No pack is hosting it, though, so `POST …/message` finds no live channel
+and fails. Restarting the pack on an answer is E6-c in
+[`one-execution-engine-plan.md`](../roadmap/one-execution-engine-plan.md). Clients should render
+`parked` as "was waiting for you — start it again", **not** as an answerable prompt.
 
 **Interactivity is a capability, not a request (S6).** Whether a session may prompt at all is decided
 by its `SessionGrant`, not by the caller: `payload.interactive` is only a *request*. A session whose

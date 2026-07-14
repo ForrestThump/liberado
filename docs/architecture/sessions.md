@@ -177,7 +177,8 @@ exactly one of them. See [`../reference/api.md`](../reference/api.md).
 
 | Crate | Role | Holds |
 |---|---|---|
-| `liberado-session` | kernel | `GoalSpec`, `SessionGrant`, `Visibility`, `SessionEvent`, `GoalSessionHub`, `DomainPackRunner`, `BackgroundRun`, and the `SessionRecordStore` seam |
+| `liberado-session` | kernel | `GoalSpec`, `SessionGrant`, `Visibility`, `SessionEvent`, `GoalSessionHub`, `DomainPackRunner`, and the `SessionRecordStore` seam |
+| `liberado-dispatch-pack` | pack | `DispatchPack` — the dispatcher + orchestrator as a pack, so cron/webhook/`delegate` are hosted sessions (there is no `BackgroundRun` any more; it was the seam that existed *because* those ran outside the hub) |
 | `liberado-session-store` | store | `SessionStore` — the converged engine; `SessionHeader`; both lens impls |
 | `liberado-conversation-store` | store | the `ConversationStore` **trait** + the message-node DAG types. No implementation — `SessionStore` is the only one |
 | `chat-client-contract` | client | `SessionSummary`, `SessionKind`, `VisibilityWire`, `ForkRequest`/`ForkResponse` |

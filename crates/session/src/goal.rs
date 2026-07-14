@@ -160,9 +160,17 @@ impl Visibility {
 pub enum SessionStatus {
     Pending,
     Running,
-    /// Parked on a human answer across a daemon restart (E6). Not terminal — answering restarts
-    /// the pack with prior human turns available. Distinct from `Running` (mid-computation) so
-    /// replay can keep the honest "waiting for you" sessions without lying about mid-build ones.
+    /// Was awaiting a human answer when the daemon stopped (E6). Not terminal, and deliberately
+    /// distinct from `Running`: a `Running` session is mid-computation and cannot survive a
+    /// restart, whereas this one was merely *parked on you*, and the only state it needs in order
+    /// to continue is the answer it never got.
+    ///
+    /// It survives replay with `awaiting_input` intact, so the question you were asked is still
+    /// visible rather than silently erased. It is **not yet answerable**: no pack is hosting it,
+    /// so `send_input` finds no live channel and `POST /api/goals/{id}/message` fails. Restarting
+    /// the pack on an answer is E6-c, and until it lands, `Parked` means "this was waiting for
+    /// you, and you can see what it wanted" — not "reply and it resumes". Do not widen that claim
+    /// without wiring the resume.
     Parked,
     Succeeded,
     Failed,

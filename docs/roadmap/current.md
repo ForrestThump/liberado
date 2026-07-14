@@ -14,20 +14,32 @@ semantics), including forking from any message in history.
 
 ### Known debt this opened — in priority order
 
-1. **Two execution engines.** D7 unified how sessions are *stored and displayed*, not how they are
-   *run*: the `GoalSessionHub` + `DomainPackRunner` packs run `/spawn`ed goal sessions, while the
-   dispatcher + orchestrator run daemon reactions and `delegate`. That is why a background session's
-   `domain` is recorded as `dispatch` and why joining one is **read-only** — no pack is hosting it.
-   Routing unattended triggers through the hub as real packs is the convergence that closes this.
-   *This is the largest structural debt in the system right now, and it was taken deliberately: the
-   visibility was worth having before the convergence was.*
-   **Planned:** [one-execution-engine-plan.md](one-execution-engine-plan.md). The dispatcher +
-   orchestrator pair is already a `DomainPackRunner` in all but name, so this is a `DispatchPack`,
-   not a third engine (E1–E4). But planning it surfaced the thing actually worth building: **a
-   goal-pursuing session that pauses for a human decision and waits hours** (E5) — which the coder
-   pack structurally cannot do today (it can only ask during *intake*; the build loop has no ask seam)
-   and which a daemon restart currently destroys without trace (E6). The engine convergence is the
-   substrate; E5 is the feature.
+1. ~~**Two execution engines.**~~ **Fixed 2026-07-14** —
+   [one-execution-engine-plan.md](one-execution-engine-plan.md) (E1–E7). `/spawn`, cron, webhooks and
+   `delegate` all run on the **one** `GoalSessionHub`: the dispatcher + orchestrator pair is now the
+   `dispatch` pack (`liberado-dispatch-pack`), so a daemon reaction is a hosted session you can join,
+   watch and cancel (`ReactionOutcome::Dispatched { session_id }`) instead of a read-only recording.
+   `BackgroundRun` is deleted, and `main-agent` no longer depends on `liberado-orchestrator`.
+
+   **The convergence was the substrate; the feature was E5** — a goal-pursuing session that pauses for
+   a human decision and waits hours. That now works: the coding pack asks mid-build (not only during
+   intake), pings you out-of-band when nobody has the stream open, waits for a profile-configured idle
+   budget measured in hours, and **folds your answer into the next attempt** — bounded, so it cannot
+   turn into a chat. Authority was fixed first (E1): a per-run grant is intersected narrow-only with
+   the pool ceiling, so a `[[session_profiles]]` entry can genuinely narrow a cron below its pool.
+
+   *Two things worth remembering from how this landed.* The first cut of E5 asked the question, took
+   the answer, announced `retrying once with human guidance`, and then **failed without retrying** —
+   indistinguishable from working, on every surface except the backend. It was invisible because
+   `CodingSessionPack` held a *concrete* backend that no test double could observe; it now holds
+   `Arc<dyn CoderBackend>`, and the regression test asserts against the backend, not the event bus.
+   That is the **third** defect in this audit hidden by a test pointed at the wrong object. And the
+   deferral was overstated: a guided retry needed no checkpoint machinery at all, because nothing is
+   replayed — the process never died.
+
+   **Still open (E6-c):** a session parked mid-build across a daemon *restart* is visible and honest
+   (`Parked`, `awaiting_input` preserved) but **not answerable** — resuming the build needs a workspace
+   snapshot. Clients must render `parked` as "was waiting for you", not as a live prompt.
 2. ~~**Chat's tests don't run on the store chat actually uses.**~~ **Fixed 2026-07-13.** The
    `ConversationStore` conformance suite (14 invariants) now runs against `SessionStore`, and
    `JsonlStore` is **deleted** — `liberado-conversation-store` is the contract, with exactly one
