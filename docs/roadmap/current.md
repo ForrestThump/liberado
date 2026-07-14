@@ -21,9 +21,13 @@ semantics), including forking from any message in history.
    Routing unattended triggers through the hub as real packs is the convergence that closes this.
    *This is the largest structural debt in the system right now, and it was taken deliberately: the
    visibility was worth having before the convergence was.*
-   **Sketched:** [one-execution-engine-plan.md](one-execution-engine-plan.md) — the dispatcher +
+   **Planned:** [one-execution-engine-plan.md](one-execution-engine-plan.md). The dispatcher +
    orchestrator pair is already a `DomainPackRunner` in all but name, so this is a `DispatchPack`,
-   not a third engine. Decisions pending before code.
+   not a third engine (E1–E4). But planning it surfaced the thing actually worth building: **a
+   goal-pursuing session that pauses for a human decision and waits hours** (E5) — which the coder
+   pack structurally cannot do today (it can only ask during *intake*; the build loop has no ask seam)
+   and which a daemon restart currently destroys without trace (E6). The engine convergence is the
+   substrate; E5 is the feature.
 2. ~~**Chat's tests don't run on the store chat actually uses.**~~ **Fixed 2026-07-13.** The
    `ConversationStore` conformance suite (14 invariants) now runs against `SessionStore`, and
    `JsonlStore` is **deleted** — `liberado-conversation-store` is the contract, with exactly one

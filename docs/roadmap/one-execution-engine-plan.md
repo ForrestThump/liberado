@@ -1,68 +1,63 @@
-# One execution engine — sketch
+# One execution engine, and sessions that wait for you
 
-**Status**: sketch, 2026-07-13. Not started. Decisions needed (§6) before code.
+**Status**: plan, 2026-07-13. Decisions settled (§3). Not started.
 **Debt item**: #1 from the 2026-07-13 hygiene audit ([`current.md`](current.md)).
 **Related**: [`../architecture/sessions.md`](../architecture/sessions.md) ·
 [`agentic-loops.md`](../architecture/agentic-loops.md) ·
-[`channels-and-interactivity.md`](../architecture/channels-and-interactivity.md)
+[`channels-and-interactivity.md`](../architecture/channels-and-interactivity.md) ·
+[`verifiers.md`](../architecture/verifiers.md)
 
 ---
 
-## 1. The problem, stated plainly
+## 1. Two problems, and the second is the one that matters
 
-D7 unified how sessions are **stored and displayed**. It did not unify how they are **run**. There
-are two engines:
+**The stated problem** is that D7 unified how sessions are *stored and displayed* but not how they
+are **run**. There are two engines — `GoalSessionHub` + packs, and `Dispatcher` + `Orchestrator` —
+and everything on the second one is *recorded, not hosted*: a background session's `domain` is the
+fake value `"dispatch"`, joining one is read-only, and authority is described two different ways.
 
-| Engine | Runs | Entered by |
-|---|---|---|
-| `GoalSessionHub` + `DomainPackRunner` | goal sessions (coding, life) | `/spawn`, `POST /api/goals` |
-| `Dispatcher` + `Orchestrator` | daemon reactions, `delegate` | cron, webhooks, vault changes, the face agent's `delegate` tool |
+**The problem worth solving** turned up while sketching the first one:
 
-Everything that runs on the second engine is **recorded, not hosted**. That is why:
+> *"Agent flows where you basically work until the task is complete or I need to make a choice could
+> be very useful — almost essential for the coder pack. Crons should generally just run."*
 
-- a background session's `domain` is the fake value `"dispatch"` — no pack ran it;
-- **joining one is read-only.** You can watch a cron work; you cannot answer it, steer it, or cancel it;
-- a `Clarify` is a **dead end**. The reaction needed a human, there wasn't one, and it dies `Failed`
-  with the questions stuffed into a summary string. Nobody can answer them, ever;
-- authority is described two ways: a `SessionGrant` (hub) and pool `capabilities` (daemon);
-- `main-agent` — a *kernel* crate — carries `dispatcher` + `orchestrator` + `mcp` deps solely to run
-  `delegate`.
+That is right, and it inverts the priority. The interesting capability is **a goal-pursuing session
+that pauses for a human decision and waits as long as it takes** — hours, across a working day. A
+cron is merely one caller, and mostly it will not use it.
 
-## 2. The realization this rests on
+Two things block that today, and neither is the engine split:
 
-**The dispatcher + orchestrator pair is already a `DomainPackRunner` in everything but name.** Compare:
+1. **The coder pack can only ask during *intake*.** `CodingSessionPack::ask` is reached from the
+   clarify rounds and the freeze prompt. Once `backend.run(request)` starts, there is **no seam at
+   all** to stop and ask. So "work until done *or until I need a choice*" is precisely what it cannot
+   do — it can only guess, or fail.
+2. **An awaiting session dies on a daemon restart.** `replay_file` coerces any non-terminal goal
+   session to `Failed`, and an awaiting session is `Running`. So a session that waits eight hours for
+   an answer is a **lie** unless the daemon happens not to restart — and this daemon restarts
+   constantly, because you are actively developing it.
+
+The engine convergence is still worth doing (it is what makes a paused session joinable, answerable
+and cancellable *at all*, rather than a read-only recording). But it is the **substrate**, and §5 is
+the point.
+
+## 2. The realization the convergence rests on
+
+**The dispatcher + orchestrator pair is already a `DomainPackRunner` in everything but name.**
 
 ```
 DomainPackRunner::run(session_id, goal, ctx, events, inputs, cancel) -> Result<GoalResult, PackError>
 
 dispatch/orchestrate:  goal -> DispatchDecision -> Disposition
-                       Disposition::terminal_summary() -> (TerminalKind, String)  // already exists
+                       Disposition::terminal_summary() -> (TerminalKind, String)   // already exists
 ```
 
 Every input it needs is already on the session: the goal text is `goal.description`, the authority is
-`ctx.grant.capabilities`, the correlation id is `goal.origin.correlation_id`, the catalog and
+`ctx.grant.capabilities`, the correlation id is `goal.origin.correlation_id`; the catalog and
 zone-write-classes are pack-held config. It produces a terminal result.
 
-So this is not "build a third thing". It is **`DispatchPack: DomainPackRunner`** — a new `pack`-role
-crate wrapping the dispatcher and orchestrator — after which cron, webhooks, and `delegate` all start
-sessions the same way `/spawn` does, and the second engine stops existing.
-
-## 3. What it buys
-
-1. **Background sessions become real sessions.** Joinable, cancellable, and — with `AskHuman` —
-   *answerable*. The read-only caveat in `sessions.md` goes away.
-2. **`Clarify` stops being a dead end.** A hosted session that needs a human can emit `AwaitingInput`
-   and wait, instead of dying with its questions in a string. Paired with the existing `Notifier`
-   (Telegram), an unattended cron could actually *ask you* and get an answer. This is the largest
-   user-visible win, and it is the one the current architecture structurally cannot deliver.
-3. **One authority model.** `SessionGrant` everywhere; pools become a grant component, which is what
-   they already are in `policy.toml`.
-4. **`domain: "dispatch"` stops being a lie** — it becomes a real registered pack.
-5. **`main-agent` sheds `dispatcher`/`orchestrator`/`mcp`.** It would hold only the hub. A kernel
-   crate gets meaningfully thinner.
-6. Reactions could run **concurrently** (see §5.2), which they cannot today.
-
-## 4. The shape
+So this is not "build a third thing". It is **`DispatchPack: DomainPackRunner`** — one new `pack`-role
+crate wrapping the dispatcher and orchestrator — after which cron, webhooks and `delegate` start
+sessions exactly the way `/spawn` does, and the second engine stops existing.
 
 ```
                     ┌───────────────────────────────┐
@@ -74,80 +69,155 @@ sessions the same way `/spawn` does, and the second engine stops existing.
                     └───────────────────────────────┘   (per pool)
 ```
 
-`DispatchPack` (new crate, role `pack`, deps: `session`, `dispatcher`, `orchestrator`, `common`):
+## 3. Decisions (settled 2026-07-13)
 
-- holds `HashMap<pool_name, (Dispatcher, Orchestrator)>` — pools stay, because an `Orchestrator` owns
-  an `McpRegistry` that is not shareable across instances;
-- reads the pool from `goal.payload["pool"]`, defaulting to `"default"`;
-- `run()`: dispatch → narrate the decision as a `Progress` **event** → orchestrate → map the
-  `Disposition` through the existing `terminal_summary()` → `GoalResult`;
-- on `Clarify`: **if `ctx.can(&Capability::AskHuman)`**, ask through `inputs` and feed the answer back
-  as a re-dispatch; otherwise terminate `Failed` exactly as today. Interactivity stays a *capability*,
-  which is Decision A.
-
-The daemon then holds an `Arc<GoalSessionHub>` instead of an `Arc<dyn SessionRecordStore>`, and
-`react()` becomes: build the `GoalSpec` (it already does — `reaction_goal()`), resolve the grant,
-`hub.start_with_grant(...)`. `BackgroundRun` is deleted; it was scaffolding for exactly this.
-
-## 5. The three things that are actually hard
-
-### 5.1 The orchestrator's authority is fixed at construction
-
-`Orchestrator::run` gates on `self.capabilities` — set in `new()`. A session grant that is *narrower*
-than its pool (which is the entire point of a session profile) **cannot currently be honored**. Two ways:
-
-- **(a)** Accept it for now: a dispatch session's grant *is* its pool's grant. Simple, ships fast,
-  but leaves "one authority model" half-true and a `[[session_profiles]]` entry silently can't narrow
-  a dispatch session.
-- **(b)** Thread capabilities through `Orchestrator::run(..., capabilities)` and intersect with
-  `self.capabilities` (**narrow-only**, per Decision 4). This is the honest fix and it is what makes
-  claim #3 above real. Moderate: touches the guard pipeline and `RiskGatedToolRuntime` construction.
-
-I recommend **(b)**, but as its own slice, *before* the pack — because doing it after means shipping a
-grant that looks enforced and isn't, which is the exact class of bug this audit keeps finding.
-
-### 5.2 `/api/reactions` semantics change
-
-Today `react()` runs the work inline and returns `Observed | Decided | Acted`. Hosted, it *starts a
-session* and the work finishes later. Options:
-
-- **(a)** `react()` awaits the session's terminal state. Preserves the wire exactly. Keeps reactions
-  serialized (they already are — one at a time, awaited in the event loop).
-- **(b)** Add `ReactionOutcome::Dispatched { session_id }` (an **additive** wire change, per D5) and
-  let reactions run concurrently. The reactions feed then links to a *joinable session* instead of
-  reporting a flat outcome string — strictly more useful.
-
-I recommend **(b)**. It is more honest about what actually happened, it makes the reactions feed a
-navigation surface instead of a log, and it removes a serialization limit nobody chose.
-
-### 5.3 `delegate` is synchronous inside a chat turn
-
-The face agent calls `delegate` and blocks for a report. Hosted, it would `hub.start_with_grant(...)`
-and await terminal — the turn already blocks on `orchestrator.run` today, so this is not new blocking.
-The subtlety is `AskHuman`: a delegated session that wants to ask a question would need the *chat* to
-route it, which is a real interaction-design question (the chat turn is mid-flight). **Recommend:
-delegated sessions run without `AskHuman` in slice 1** — behavior identical to today — and revisit as
-its own slice once background clarification works for cron.
-
-## 6. Decisions I need from you
-
-1. **Authority (§5.1)** — do (b) properly first (one more slice, but the grant actually binds), or
-   accept (a) and note the gap?
-2. **Reactions (§5.2)** — preserve the wire exactly (a), or additive `Dispatched { session_id }` and
-   concurrent reactions (b)?
-3. **Scope of the payoff** — is "a cron that gets stuck can ask you (via Telegram) and you answer it"
-   something you actually want? It is the biggest thing this unlocks, and it is *also* the thing that
-   could make an unattended session sit awaiting forever (the idle budget kills it, but still). If you
-   do not want it, this whole change is worth much less and we should weigh it again.
-
-## 7. Suggested slices
-
-| # | Slice | Ships |
+| # | Decision | Why |
 |---|---|---|
-| E1 | `Orchestrator::run` takes per-run capabilities, intersected narrow-only with its own | The grant actually binds a dispatch execution (§5.1) |
-| E2 | `liberado-dispatch-pack`: `DispatchPack: DomainPackRunner`, pool-aware, registered in the hub | The pack exists and is tested; nothing routes to it yet |
-| E3 | Daemon reactions route through the hub; `BackgroundRun` deleted; `ReactionOutcome::Dispatched` | A cron **is** a hosted session: joinable, cancellable |
-| E4 | `delegate` routes through the hub; `main-agent` drops `dispatcher`/`orchestrator`/`mcp` | One engine; a kernel crate gets thinner |
-| E5 | `Clarify` → `AwaitingInput` when the grant permits, + `Notifier` on a background ask | A stuck cron asks you instead of dying |
+| **D-a** | **Fix authority first.** `Orchestrator::run` takes per-run capabilities and intersects them **narrow-only** with its own. | `Orchestrator` gates on `self.capabilities`, fixed at `new()`. So a `SessionGrant` *narrower* than its pool — the entire point of a session profile — **cannot be honored**. Shipping the pack first would mean shipping a grant that *looks* enforced and is not. That is the exact class of bug this audit keeps finding (the `AskHuman` gate, the search root, the tests on the wrong store), and it is not one to add on purpose. |
+| **D-b** | **Additive `ReactionOutcome::Dispatched { session_id }`; reactions run concurrently.** | Honest about what actually happened (a session started), turns the reactions feed into a *navigation surface* rather than a flat log, and removes a serialization limit nobody chose (today `react()` is awaited inline, one at a time). Additive, per D5. |
+| **D-c** | **The idle budget is configurable per profile and may be hours.** A session awaiting a human **notifies out-of-band** when nobody is watching, and the human can answer later. | This is the actual feature (§1). |
+| **D-d** | **Crons default to no `AskHuman`.** Interactivity stays a capability, not a mode. | A cron should generally just run. Nothing changes for it unless its profile explicitly grants `AskHuman`. |
+| **D-e** | **Delegated sessions run without `AskHuman` in E4.** | `delegate` is synchronous inside a chat turn; routing a mid-turn question back through that turn is a real interaction-design problem, not a detail. Behavior stays identical to today, and it is revisited on its own once background asking works. |
 
-E1–E3 are the spine. E5 is the payoff. E4 is the cleanup that proves the convergence is real.
+## 4. Slices E1–E4 — the substrate
+
+### E1 — Authority actually binds
+
+`Orchestrator::run(decision, goal, correlation_id, capabilities)`, intersecting narrow-only with
+`self.capabilities` (Decision 4: authority never widens). Threads through the guard pipeline and
+`RiskGatedToolRuntime` construction.
+
+**Ships**: a session grant that is genuinely enforced on a dispatch execution — so a
+`[[session_profiles]]` entry can narrow a cron below its pool, and mean it.
+**Proves it**: a profile granting only `Read` runs a dispatch session that is *refused* the write its
+pool would have allowed.
+
+### E2 — `liberado-dispatch-pack`
+
+New crate, role `pack`. Deps: `session`, `dispatcher`, `orchestrator`, `common`.
+
+- Holds `HashMap<pool_name, (Dispatcher, Orchestrator)>` — pools stay, because an `Orchestrator` owns
+  an `McpRegistry` that is not shareable across instances.
+- Reads the pool from `goal.payload["pool"]`, defaulting to `"default"`.
+- `run()`: dispatch → narrate the decision as a `Progress` **event** → orchestrate with
+  `ctx.grant.capabilities` (E1) → map the `Disposition` through the existing `terminal_summary()`.
+- Records its dialogue as **turns** (the goal, the decision rationale, the outcome), like any pack.
+
+**Ships**: the pack exists and is tested. Nothing routes to it yet — deliberately, so E3 is a pure
+cutover with a working target.
+
+### E3 — The daemon routes through the hub
+
+`Daemon` holds `Arc<GoalSessionHub>` instead of `Arc<dyn SessionRecordStore>`. `react()` already
+builds a `GoalSpec` (`reaction_goal()`); it now resolves the grant and calls `hub.start_with_grant`.
+`ReactionOutcome::Dispatched { session_id }` (D-b). **`BackgroundRun` is deleted** — it was
+scaffolding for exactly this, and its job is done.
+
+**Ships**: a cron **is** a hosted session. Joinable, cancellable, and `domain: "dispatch"` stops being
+a lie — it is a registered pack.
+
+### E4 — `delegate` routes through the hub
+
+`DispatchBridge` calls `hub.start_with_grant(...)` and awaits terminal (the chat turn already blocks
+on `orchestrator.run` today, so this is not new blocking). **`main-agent` drops its `dispatcher`,
+`orchestrator` and `mcp` dependencies** — a kernel crate that had them only to run `delegate`.
+
+**Ships**: one engine, provably — the second one has no callers left. And the kernel gets thinner,
+which is the check that the convergence was real rather than an extra layer.
+
+## 5. E5–E7 — the payoff: sessions that wait for you
+
+### E5 — A pack can ask mid-run, and you find out about it
+
+Three parts, and the first is the one that does not exist yet:
+
+1. **An ask seam in the coding loop.** The pack can ask during intake and nowhere else. The build loop
+   needs a bounded, deliberate way to stop and ask — *not* an open invitation to interrogate the human
+   on every uncertainty (that would be worse than guessing). The natural trigger points, in order of
+   how well-defined they are:
+   - a **verifier keeps failing** the same way (the repair loop is not converging — today it burns the
+     attempt budget and fails);
+   - the loop hits an **explicit decision point** the contract does not settle (a schema choice, an
+     API shape) — the honest version of "I need a choice";
+   - a **`Propose`-class action** inside a goal session (today the orchestrator downgrades to a
+     proposal note; in a hosted session it could just *ask*).
+
+   Gated on `Capability::AskHuman`, so a session without it behaves exactly as today. **Bounded by an
+   ask budget**, so a pack cannot turn into a chat.
+
+2. **Out-of-band notification.** When a session emits `AwaitingInput` and **nobody is watching**, ping
+   the human. "Nobody is watching" is not a guess — the hub's event bus knows
+   (`broadcast::Sender::receiver_count() == 0`). If you have the session open in the TUI, no ping; if
+   you are at work, a ping.
+
+   The `Notifier` trait already exists, `TelegramNotifier` implements it, and — importantly —
+   **`telegram-approvals::ApprovalBot` already long-polls `getUpdates` and handles typed replies**
+   (`force_reply`), which is how proposal *revisions* work. Answering a session question is the same
+   machinery pointed at `POST /api/goals/{id}/message`. This is a smaller change than it sounds.
+
+3. **A long idle budget.** `max_idle_secs` exists (`GoalSpec` → hub → `InputChannel`) but is
+   per-session only, with no default. Make it settable per `[[session_profiles]]`, defaulting
+   generously for interactive coding sessions (hours) and staying `None`/short for crons.
+
+**Ships**: a coding session works until it is done *or until it needs you*, tells you, and waits.
+
+### E6 — An awaiting session survives a restart
+
+**This is the load-bearing risk of E5, and E5 is a lie without it.** Today `replay_file` coerces every
+non-terminal goal session to `Failed` on boot — and, worse, sets `awaiting_input = false` on the way
+past, so it does not merely kill the session, it **erases the fact that it was waiting for you**. An
+awaiting session is `Running`, and `Running` is not terminal. So: you go to work, the daemon restarts
+(crash, reboot, or — most likely — because you rebuilt it), and the session that was holding a
+question for you is gone, with no trace that a question was ever asked.
+
+```rust
+// crates/session-store/src/jsonl.rs — correct for a session that was mid-execution,
+// catastrophic for one that was merely parked on a human.
+if header.goal.is_some() && !header.status.is_terminal() {
+    header.status = SessionStatus::Failed;
+    header.awaiting_input = false;
+}
+```
+
+The coercion is *correct* for a session that was mid-execution: no pack is running it, packs are not
+resumable, and leaving it `Running` would be a lie the UI renders forever. But a session **blocked on
+a human** is a different thing: it is not mid-computation, it is *parked*, and the only state it needs
+in order to continue is the answer it is waiting for.
+
+Approaches, cheapest first — **this needs its own design pass, and I do not want to pretend otherwise**:
+
+- **(a) Park, don't kill.** On replay, an `awaiting_input` session becomes a distinct non-terminal
+  state (`Parked`) rather than `Failed`. Answering it **restarts the pack**, replaying the human turns
+  already in the transcript into the input channel before the new answer. *Works cleanly for intake*
+  (the intake loop is a pure function of `(goal, answers)`, which is exactly why S7 was built that
+  way). **Does not work for the build loop** — re-running it would redo real filesystem work. So this
+  buys the intake case and nothing else.
+- **(b) Checkpoint the pack.** A pack declares a serializable resume point. General, honest, and a
+  large change to `DomainPackRunner`.
+- **(c) Sandbox/workspace snapshot.** The coder pack's workspace is already a git repo (S7). A
+  suspend point could be a commit, and resume a checkout. Fits the coding pack specifically, and is
+  the most promising for the build loop.
+
+**Recommendation**: ship E5 with (a) — which genuinely covers "the coder asked me a question during
+intake and I answered after work" — and be *explicit in the UI* that a session parked mid-build does
+not survive a restart, until (c) lands. Do not silently lose work and call it a feature.
+
+### E7 — Cron parity
+
+Crons keep `AskHuman` off by default (D-d). A schedule that *wants* to be able to ask sets a profile
+that grants it and a long idle budget. Nothing to build here beyond config plumbing — noted so it is
+not forgotten.
+
+## 6. Order, and why
+
+| # | Slice | Why here |
+|---|---|---|
+| E1 | Per-run capabilities on `Orchestrator` | Everything downstream claims the grant binds. Make it true *first*, or ship a decorative one. |
+| E2 | `DispatchPack` | The pack, tested, with nothing routing to it — so E3 is a cutover, not a rewrite. |
+| E3 | Daemon → hub; `Dispatched { session_id }`; delete `BackgroundRun` | A cron becomes joinable/cancellable. The read-only caveat dies. |
+| E4 | `delegate` → hub; `main-agent` slims | The second engine has no callers left. The kernel getting thinner is the *proof* the convergence was real. |
+| E5 | Ask mid-run + notify + long idle budget | The payoff. Needs E3 (a hosted session can be answered at all). |
+| E6 | Survive a restart | Needs E5 to exist before its failure mode is worth engineering against. |
+| E7 | Cron parity | Config only. |
+
+E1–E4 is the substrate and is largely mechanical. **E5 is the feature.** E6 is what makes E5 honest.
