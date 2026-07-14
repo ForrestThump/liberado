@@ -142,6 +142,35 @@ impl PackContext<'_> {
             .await;
     }
 
+    /// The dialogue so far — what this pack already said, and what it was already told.
+    ///
+    /// Normally empty: a fresh session has said nothing. It is **non-empty on a resume** (E6-c), and
+    /// that is the whole reason this exists. A session parked on a human across a daemon restart has
+    /// no in-memory state left; the transcript is its only surviving memory, and a pack that cannot
+    /// read it back cannot pick the conversation up where it stopped — it can only start over and
+    /// ask you everything again, which is not resuming, it is forgetting politely.
+    ///
+    /// This deliberately widens `PackContext`, which until now exposed *only* `record_turn` on the
+    /// principle that a pack should not see the store. The principle stands — a pack still cannot
+    /// reach the store, only its own transcript — but "write-only memory" was not a principle, it
+    /// was an oversight that happened to be invisible until something needed to remember.
+    pub async fn prior_turns(&self) -> Vec<(TurnAuthor, String)> {
+        self.store.turns(&self.session_id).await
+    }
+
+    /// The events already recorded for this session — what already *happened*, as opposed to what
+    /// was *said* ([`prior_turns`](Self::prior_turns)).
+    ///
+    /// A pack needs this to answer [`DomainPackRunner::can_resume`]: "did I get far enough to have
+    /// touched something I cannot un-touch?" is a question about events (a role started, a tool
+    /// ran), not about dialogue.
+    pub async fn prior_events(&self) -> Vec<SessionEvent> {
+        self.store
+            .events(&self.session_id)
+            .await
+            .unwrap_or_default()
+    }
+
     /// Whether this session holds `cap`. The one call a pack should make before a consequential act.
     pub fn can(&self, cap: &Capability) -> bool {
         self.grant.capabilities.contains(cap)
@@ -177,4 +206,27 @@ pub trait DomainPackRunner: Send + Sync {
         inputs: InputChannel,
         cancel: tokio::sync::watch::Receiver<bool>,
     ) -> Result<GoalResult, PackError>;
+
+    /// May a session **parked** here (awaiting a human when the daemon stopped) be resumed by
+    /// re-running this pack from its transcript alone? Default: **no**.
+    ///
+    /// The kernel must not guess this, and it is not a property of the *pack* — it is a property of
+    /// *where the session stopped*. The coding pack is resumable while it is still negotiating the
+    /// contract (intake is a pure function of `(goal, answers)`, and every answer is a recorded
+    /// turn), and **not** resumable once the build starts, because re-running the build would redo
+    /// real filesystem work with no checkpoint to resume from.
+    ///
+    /// The safety property that makes intake resumable is not "the reconstruction is exact" — it is
+    /// not exact, and cannot be: the model may phrase its next question differently, and the
+    /// machine-generated revision feedback was never a turn. It is that **nothing irreversible
+    /// happens between a resume and the next human gate.** Intake ends at a draft contract the human
+    /// must accept. An approximate reconstruction that lands in front of a human for approval is
+    /// safe; an approximate reconstruction that starts editing files is not. That distinction, and
+    /// not convenience, is why this method exists instead of a blanket `resumable: bool`.
+    ///
+    /// Default `false` so a new pack is un-resumable until someone has actually thought about it —
+    /// the safe answer is the one you get by not deciding.
+    async fn can_resume(&self, _ctx: &PackContext<'_>) -> bool {
+        false
+    }
 }

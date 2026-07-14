@@ -286,6 +286,85 @@ impl GoalSessionHub {
         Ok(())
     }
 
+    /// Answer a **parked** session and put it back to work (E6-c).
+    ///
+    /// A session parked on a human across a daemon restart has no in-memory state left — no pack
+    /// running, no input channel, no cancel handle. What it does have is its **transcript**, and for
+    /// a pack that can rebuild itself from that, "resume" is simply: record the answer as a turn,
+    /// then run the pack again. It reads its own dialogue back on start and picks up the
+    /// conversation, rather than starting over and asking you everything a second time.
+    ///
+    /// The answer is recorded **before** the pack starts, which is the trick that makes this
+    /// simple: by the time the pack reads `prior_turns()`, the human's latest answer is already part
+    /// of the transcript, so there is no state to replay through the input channel and no window in
+    /// which the pack could ask a question that has already been answered.
+    ///
+    /// Refuses when the pack says it cannot be resumed from a transcript
+    /// ([`DomainPackRunner::can_resume`]) — the coding pack says no once the build has started,
+    /// because re-running it would redo real filesystem work with no checkpoint. That refusal is
+    /// honest rather than optimistic: the session stays parked and says so.
+    pub async fn resume(
+        self: &Arc<Self>,
+        id: &str,
+        answer: impl Into<String>,
+    ) -> Result<(), SendInputError> {
+        let answer = answer.into();
+        let record = self.store.get(id).await.ok_or(SendInputError::Unknown)?;
+
+        if !record.grant.grants_ask_human() {
+            return Err(SendInputError::NotPermitted);
+        }
+        if record.status != SessionStatus::Parked {
+            // Not parked: either it is live (and `send_input` is the right door), or it is over.
+            return Err(if record.status.is_terminal() {
+                SendInputError::Terminal
+            } else {
+                SendInputError::Closed
+            });
+        }
+
+        let Some(pack) = self.packs.get(record.goal.domain.as_str()).cloned() else {
+            return Err(SendInputError::Terminal);
+        };
+        let ctx = PackContext::new(&record.grant, self.store.clone(), id);
+        if !pack.can_resume(&ctx).await {
+            // The pack cannot rebuild itself from the transcript — for the coding pack this means
+            // the build had already started. Leave it parked and honest rather than silently
+            // re-running work that touched the filesystem.
+            return Err(SendInputError::Parked);
+        }
+
+        // The answer joins the transcript first, so the pack sees it on `prior_turns()`.
+        self.store
+            .append_turn(id, TurnAuthor::User, answer.clone())
+            .await;
+        // …and the event, so a live surface renders it and `awaiting_input` clears.
+        self.store
+            .push_event(SessionEvent::new(
+                id,
+                SessionEventKind::HumanInput { text: answer },
+            ))
+            .await;
+
+        let mut goal = record.goal.clone();
+        goal.id = Some(id.to_string());
+
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        self.cancels.lock().await.insert(id.to_string(), cancel_tx);
+        let (input_tx, input_rx) = mpsc::channel::<HumanInput>(INPUT_CHANNEL_CAPACITY);
+        self.inputs.lock().await.insert(id.to_string(), input_tx);
+        let idle_budget = goal.max_idle_secs.map(Duration::from_secs);
+        let inputs = InputChannel::new(input_rx, idle_budget);
+
+        let hub = Arc::clone(self);
+        let session_id = id.to_string();
+        tokio::spawn(async move {
+            hub.run_session(session_id, goal, pack, inputs, cancel_rx)
+                .await;
+        });
+        Ok(())
+    }
+
     /// Deliver a human message into a running interactive session. Errors if the session is
     /// unknown or finished (its input sender was removed at teardown) — distinguished as
     /// [`SendInputError::Unknown`] vs [`SendInputError::Terminal`] so the HTTP layer can answer 404

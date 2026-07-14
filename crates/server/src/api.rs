@@ -921,7 +921,16 @@ pub async fn goals_message(
     Json(req): Json<GoalMessageRequest>,
 ) -> impl IntoResponse {
     use liberado_session::SendInputError;
-    match state.goals.send_input(&id, req.text).await {
+    // A parked session has no live pack to deliver into, so `send_input` cannot take the answer —
+    // but for a pack that can rebuild itself from its transcript, answering IS the resume (E6-c).
+    // Try the live door first (the overwhelmingly common case), and fall through to resume only for
+    // the one error that means "parked". A pack that says it cannot be resumed still returns
+    // `Parked`, and the caller still gets an honest 409 saying so.
+    let outcome = match state.goals.send_input(&id, req.text.clone()).await {
+        Err(SendInputError::Parked) => state.goals.resume(&id, req.text).await,
+        other => other,
+    };
+    match outcome {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(e @ SendInputError::Unknown) => (
             StatusCode::NOT_FOUND,

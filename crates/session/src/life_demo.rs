@@ -765,4 +765,106 @@ mod tests {
             "and must say what it actually is: {msg}"
         );
     }
+
+    /// E6-c end to end: a parked session, answered, comes back with its memory intact.
+    #[tokio::test]
+    async fn answering_a_parked_session_resumes_the_pack_with_its_transcript() {
+        use crate::runner::DomainPackRunner;
+        use std::sync::Mutex;
+
+        /// A pack that can rebuild itself from its transcript, and records what it saw on start.
+        struct ResumablePack {
+            saw: Arc<Mutex<Vec<(crate::record_store::TurnAuthor, String)>>>,
+        }
+        #[async_trait::async_trait]
+        impl DomainPackRunner for ResumablePack {
+            fn domain_id(&self) -> &str {
+                "life"
+            }
+            async fn can_resume(&self, _ctx: &crate::runner::PackContext<'_>) -> bool {
+                true
+            }
+            async fn run(
+                &self,
+                _id: &str,
+                _goal: &GoalSpec,
+                ctx: &crate::runner::PackContext<'_>,
+                _events: tokio::sync::mpsc::Sender<crate::SessionEvent>,
+                _inputs: crate::runner::InputChannel,
+                _cancel: tokio::sync::watch::Receiver<bool>,
+            ) -> Result<crate::GoalResult, crate::runner::PackError> {
+                // The whole point: on a resume, the pack can see what was already said.
+                *self.saw.lock().unwrap() = ctx.prior_turns().await;
+                Ok(crate::GoalResult {
+                    terminal: crate::TerminalKind::Succeeded,
+                    summary: "resumed and finished".into(),
+                    artifacts: vec![],
+                    diagnostics: serde_json::Value::Null,
+                })
+            }
+        }
+
+        let saw = Arc::new(Mutex::new(Vec::new()));
+        let store = GoalSessionStore::new();
+
+        // A session that was parked mid-question when the daemon died: it holds a goal, a question
+        // the pack asked, and no answer.
+        let mut rec = crate::goal::GoalSessionRecord::new(GoalSpec {
+            id: Some("parked-2".into()),
+            description: "capture a note".into(),
+            success_criteria: vec![],
+            domain: DomainHint::Life,
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: None,
+            profile: None,
+            payload: serde_json::Value::Null,
+        });
+        rec.grant = SessionGrant {
+            capabilities: CapabilitySet::from_iter([liberado_common::Capability::AskHuman]),
+            ..Default::default()
+        };
+        rec.status = crate::goal::SessionStatus::Parked;
+        rec.awaiting_input = true;
+        crate::record_store::SessionRecordStore::insert(&store, rec).await;
+        crate::record_store::SessionRecordStore::append_turn(
+            &store,
+            "parked-2",
+            crate::record_store::TurnAuthor::User,
+            "capture a note".into(),
+        )
+        .await;
+        crate::record_store::SessionRecordStore::append_turn(
+            &store,
+            "parked-2",
+            crate::record_store::TurnAuthor::Assistant,
+            "What should I title it?".into(),
+        )
+        .await;
+
+        let mut hub = GoalSessionHub::new(store);
+        hub.register_pack(Arc::new(ResumablePack { saw: saw.clone() }));
+        let hub = Arc::new(hub);
+
+        // Answering a parked session IS the resume.
+        hub.resume("parked-2", "Weekly Review")
+            .await
+            .expect("a resumable parked session must accept its answer");
+
+        let snap = await_terminal(&hub, "parked-2").await;
+        assert_eq!(snap.session.status, crate::goal::SessionStatus::Succeeded);
+
+        // The pack picked the conversation back up rather than starting over: it saw the goal, the
+        // question it had asked before the restart, AND the answer that woke it.
+        let seen = saw.lock().unwrap().clone();
+        let said: Vec<&str> = seen.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(
+            said.contains(&"What should I title it?"),
+            "the pack must remember the question it asked: {said:?}"
+        );
+        assert!(
+            said.contains(&"Weekly Review"),
+            "and must see the answer that resumed it -- it is recorded BEFORE the pack starts,              which is what makes the replay unnecessary: {said:?}"
+        );
+    }
 }

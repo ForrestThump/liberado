@@ -76,6 +76,67 @@ impl CodingSessionPack {
     }
 }
 
+/// How many times the coherence checker (S7-c) may send a draft back to the model before it gives up
+/// and shows the human what it could not fix.
+///
+/// Deliberately small, and deliberately **not** the human's clarify budget. Two attempts is enough
+/// for a model that made an honest slip; a model that fails twice is not going to succeed on the
+/// fifth, and the useful thing to do at that point is hand the human the draft *with the findings
+/// attached* — not keep talking to the model until the session dies.
+const MAX_COHERENCE_REDRAFTS: u32 = 2;
+
+/// Rebuild the intake `answers` from a session's transcript (E6-c).
+///
+/// The transcript of a coding session in intake reads:
+///
+/// ```text
+/// user       <the goal>                  ← recorded by the kernel, not an answer
+/// assistant  <a clarifying question>     ← recorded by the pack's `ask`
+/// user       <the human's answer>        ← recorded by the kernel on human input
+/// assistant  <a draft contract>
+/// user       accept / or a revision
+/// ```
+///
+/// So every **user** turn after the first is an answer, and the assistant turn immediately before it
+/// is the question it answered. `run_intake` renders these as `"- {question}: {answer}"`, so pairing
+/// them this way gives the model a *better* prompt than the original run did — which used an opaque
+/// question id.
+///
+/// **What this does not recover, stated plainly.** Machine-generated intake feedback (a revision
+/// request the coherence checker sent back, S7-c) was never a *turn*, so it is not here. The model
+/// may therefore phrase its next question slightly differently than it did before the restart. That
+/// is acceptable **only** because intake ends at a draft contract the human must accept: an
+/// approximate reconstruction that lands in front of a human for approval is safe. The same
+/// approximation applied to a build loop — which edits files — would not be, and that is exactly why
+/// [`CodingSessionPack::can_resume`] says no once the build has started.
+fn answers_from_transcript(turns: &[(TurnAuthor, String)]) -> Vec<IntakeAnswer> {
+    let mut answers = Vec::new();
+    let mut last_question: Option<&str> = None;
+    let mut seen_goal = false;
+
+    for (author, content) in turns {
+        match author {
+            TurnAuthor::Assistant => last_question = Some(content.as_str()),
+            TurnAuthor::User => {
+                if !seen_goal {
+                    // The first user turn is the goal itself, not an answer to anything.
+                    seen_goal = true;
+                    continue;
+                }
+                answers.push(IntakeAnswer {
+                    question_id: last_question
+                        .map(|q| q.lines().next().unwrap_or(q).trim().to_string())
+                        .unwrap_or_else(|| "answer".into()),
+                    answer: content.clone(),
+                });
+                last_question = None;
+            }
+            _ => {}
+        }
+    }
+    answers
+}
+
 /// Is this a failure a **human answer** could plausibly unblock?
 ///
 /// `NoChanges` = the model could not make progress. `Validation` = it could not satisfy a gate.
@@ -172,8 +233,29 @@ impl CodingSessionPack {
             .and_then(|v| v.as_str())
             .filter(|c| !c.trim().is_empty());
 
-        let mut answers: Vec<IntakeAnswer> = Vec::new();
+        // E6-c: on a resume, the transcript is our only memory of the negotiation. Rebuild the
+        // answers from it so we do not re-ask what has already been answered. Empty on a fresh
+        // session, so this costs nothing in the normal case.
+        let mut answers: Vec<IntakeAnswer> = answers_from_transcript(&ctx.prior_turns().await);
+        if !answers.is_empty() {
+            let _ = events
+                .send(SessionEvent::new(
+                    session_id,
+                    SessionEventKind::Progress {
+                        message: format!(
+                            "resumed: picking the contract negotiation back up with {} prior \
+                             answer(s)",
+                            answers.len()
+                        ),
+                    },
+                ))
+                .await;
+        }
         let mut rounds: u32 = 0;
+        // Redrafts spent on the coherence checker, budgeted separately from the human's clarify
+        // rounds: they are the *model's* mistakes, and spending a person's budget on them means a
+        // stubborn model can talk the human out of ever being consulted.
+        let mut coherence_redrafts: u32 = 0;
 
         loop {
             let outcome = run_intake(&*self.provider, &goal.description, &answers, context)
@@ -189,11 +271,19 @@ impl CodingSessionPack {
                     // gates the model's own out-of-scope prose said it had dropped, and the model
                     // could not fix it by editing the verifier list, only by clearing the profile.)
                     let conflicts = liberado_coder_core::contradictions(&draft);
-                    if !conflicts.is_empty() {
-                        rounds += 1;
-                        if rounds > settings.max_clarify_rounds {
-                            return Ok(IntakePhase::NeedsReview(Some(Box::new(draft))));
-                        }
+                    // Its OWN budget, separate from the human's clarify rounds — and on exhaustion
+                    // it **gives up and asks the human**, it does not kill the session.
+                    //
+                    // Both halves of that were wrong when this shipped, and one live run found it:
+                    // the redrafts consumed `max_clarify_rounds`, so three false contradictions
+                    // (see `GENERIC` in `coherence.rs`) burned the human's entire budget and the
+                    // session died with `needs human review` — having never once asked the human
+                    // anything. A machine check that can terminate a session the human never saw is
+                    // strictly worse than no check at all: it converts "the linter is wrong" into
+                    // "the work is gone". The linter's failure mode must be *deferring to the
+                    // human*, never *overruling* them.
+                    if !conflicts.is_empty() && coherence_redrafts < MAX_COHERENCE_REDRAFTS {
+                        coherence_redrafts += 1;
                         let detail = conflicts
                             .iter()
                             .map(|c| format!("- {}", c.message))
@@ -456,12 +546,24 @@ fn render_draft(draft: &GoalContractDraft, rationale: &str) -> String {
     section(&mut s, "Out of scope", &draft.out_of_scope);
     section(&mut s, "Assumed (not asked)", &draft.assumed_defaults);
 
-    // S7-c warnings: things we cannot prove are wrong, so the judgement is the human's — but they
-    // have to actually be shown the thing to judge, and not at the bottom of a wall of prose.
-    let warnings: Vec<_> = liberado_coder_core::contract_conflicts(draft)
+    // S7-c findings. Warnings are the human's judgement to make. *Contradictions* reaching this
+    // point mean the checker sent the draft back to the model, the model failed to fix it, and the
+    // checker gave up — so the human is now the backstop and must be told plainly, rather than
+    // handed a draft that will refuse to freeze with no explanation.
+    let findings = liberado_coder_core::contract_conflicts(draft);
+    let (contradictions, warnings): (Vec<_>, Vec<_>) = findings
         .into_iter()
-        .filter(|f| f.severity == liberado_coder_core::Severity::Warning)
-        .collect();
+        .partition(|f| f.severity == liberado_coder_core::Severity::Contradiction);
+
+    if !contradictions.is_empty() {
+        s.push_str(
+            "\n⛔ This draft contradicts itself, and the model could not fix it. It will NOT \
+             freeze as-is — tell me what to change:\n",
+        );
+        for c in &contradictions {
+            s.push_str(&format!("  - {}\n", c.message));
+        }
+    }
     if !warnings.is_empty() {
         s.push_str("\n⚠ Check these before you accept:\n");
         for w in &warnings {
@@ -505,6 +607,30 @@ fn verifier_label(v: &VerifierSpec) -> String {
 impl DomainPackRunner for CodingSessionPack {
     fn domain_id(&self) -> &str {
         CODING_DOMAIN
+    }
+
+    /// Resumable while still negotiating the contract; **not** once the build has started (E6-c).
+    ///
+    /// The line is drawn exactly where irreversibility begins. Intake reasons about the goal and
+    /// touches nothing, so re-deriving it from the transcript is safe even though the
+    /// reconstruction is approximate — it ends at a draft the human must accept, and an approximate
+    /// draft in front of a human for approval harms nobody. The build *edits files*. Re-running it
+    /// from an approximate reconstruction, with no checkpoint of what the last attempt already did,
+    /// would redo real work against a workspace that is no longer in the state the reconstruction
+    /// assumes. So the answer there is no, and the session stays parked and says so, rather than
+    /// resuming optimistically and quietly corrupting a workspace.
+    ///
+    /// (The remaining work — a workspace checkpoint that would make the build resumable too — is
+    /// E6-c's deferred half. The coder workspace is already a git repo, so a commit is the obvious
+    /// suspend point; it is a design pass, not a line of code, and it is not this slice.)
+    async fn can_resume(&self, ctx: &PackContext<'_>) -> bool {
+        let started_building = ctx.prior_events().await.iter().any(|e| {
+            matches!(
+                &e.kind,
+                SessionEventKind::RoleStarted { role, .. } if role == "coder"
+            )
+        });
+        !started_building
     }
 
     async fn run(
@@ -1654,5 +1780,82 @@ mod tests {
             .expect_err("a self-contradictory contract must not become binding");
         assert!(err.contains("contradicts itself"), "{err}");
         assert!(err.contains("cargo-clippy"), "must name the gate: {err}");
+    }
+
+    #[test]
+    fn the_transcript_rebuilds_the_intake_answers() {
+        // The shape a real parked coding session leaves behind. The FIRST user turn is the goal --
+        // not an answer to anything -- and getting that wrong would feed the goal back to the model
+        // as though it were a reply, which is exactly the kind of off-by-one that produces a
+        // confidently wrong second question.
+        let turns = vec![
+            (TurnAuthor::User, "make a todo cli".to_string()),
+            (TurnAuthor::Assistant, "Rust or Node?".to_string()),
+            (TurnAuthor::User, "Rust".to_string()),
+            (
+                TurnAuthor::Assistant,
+                "What file path for persistence?".to_string(),
+            ),
+            (TurnAuthor::User, "todos.json".to_string()),
+        ];
+        let answers = answers_from_transcript(&turns);
+        assert_eq!(answers.len(), 2, "the goal is not an answer: {answers:#?}");
+        assert_eq!(answers[0].question_id, "Rust or Node?");
+        assert_eq!(answers[0].answer, "Rust");
+        assert_eq!(answers[1].question_id, "What file path for persistence?");
+        assert_eq!(answers[1].answer, "todos.json");
+    }
+
+    #[test]
+    fn a_fresh_session_reconstructs_nothing() {
+        // The normal case must cost nothing and, above all, must not invent an answer.
+        assert!(answers_from_transcript(&[]).is_empty());
+        assert!(
+            answers_from_transcript(&[(TurnAuthor::User, "make a todo cli".into())]).is_empty(),
+            "a session that has only been given its goal has answered nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_coding_pack_will_not_resume_once_the_build_has_started() {
+        // The line where irreversibility begins. Intake touches nothing, so an approximate
+        // reconstruction is safe -- it ends at a draft a human must accept. The build EDITS FILES,
+        // and re-running it from an approximate reconstruction, against a workspace no longer in the
+        // state that reconstruction assumes, is how you quietly corrupt someone's work.
+        let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+        let pack = CodingSessionPack::new(provider, std::env::temp_dir());
+        let store = Arc::new(liberado_session::GoalSessionStore::new());
+        let mut spec = goal("make a todo cli");
+        spec.id = Some("s1".into());
+        liberado_session::SessionRecordStore::insert(
+            store.as_ref(),
+            liberado_session::GoalSessionRecord::new(spec),
+        )
+        .await;
+        let grant = liberado_session::SessionGrant::default();
+
+        let ctx = PackContext::new(&grant, store.clone(), "s1");
+        assert!(
+            pack.can_resume(&ctx).await,
+            "a session still in intake is resumable"
+        );
+
+        // The build starts.
+        liberado_session::SessionRecordStore::push_event(
+            store.as_ref(),
+            SessionEvent::new(
+                "s1",
+                SessionEventKind::RoleStarted {
+                    role: "coder".into(),
+                    model: "m".into(),
+                },
+            ),
+        )
+        .await;
+
+        assert!(
+            !pack.can_resume(&ctx).await,
+            "once the build has touched the workspace, resume is no longer safe"
+        );
     }
 }

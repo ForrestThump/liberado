@@ -85,9 +85,49 @@ pub fn contradictions(draft: &GoalContractDraft) -> Vec<ContractFinding> {
         .collect()
 }
 
-/// The distinctive words by which a verifier can be recognised in prose: its id, its program, and
-/// its argument tokens (`clippy`, `fmt`, `test`…). These are what a human writes when they say "no
-/// clippy".
+/// Ordinary build vocabulary. A verifier token drawn from this list identifies **nothing** — these
+/// are the words people use to write perfectly coherent scope lines.
+///
+/// This list is not fastidiousness, it is a scar. Without it the check fired on the sentence
+/// *"Any other commands or verifiers beyond the three specified"* — because the default id of a
+/// `Command` verifier is, literally, `"command"`. The model was told its coherent contract
+/// contradicted itself, redrafted, wrote another sensible line containing "test" or "build", tripped
+/// it again, and burned its whole budget. A linter that cries wolf is worse than no linter, and this
+/// one did it live, in the first real run after it shipped.
+const GENERIC: &[&str] = &[
+    "command",
+    "commands",
+    "cargo",
+    "build",
+    "builds",
+    "test",
+    "tests",
+    "check",
+    "checks",
+    "run",
+    "runs",
+    "release",
+    "all",
+    "file",
+    "files",
+    "path",
+    "paths",
+    "powershell",
+    "bash",
+    "sh",
+    "node",
+    "npm",
+    "python",
+    "script",
+    "scripts",
+    "exec",
+    "verifier",
+    "verifiers",
+];
+
+/// The **distinctive** words by which a verifier can be recognised in prose — `clippy`, `fmt`, a
+/// hand-written id. Generic build vocabulary is excluded: it names every verifier and therefore
+/// none.
 fn verifier_tokens(v: &VerifierSpec) -> Vec<String> {
     let mut tokens = vec![v.id().to_lowercase()];
     if let VerifierSpec::Command { program, args, .. } = v {
@@ -101,8 +141,8 @@ fn verifier_tokens(v: &VerifierSpec) -> Vec<String> {
     }
     tokens
         .into_iter()
-        // One- and two-letter tokens match everything; they are noise, not signal.
-        .filter(|t| t.len() > 2)
+        // Two-letter tokens match everything; they are noise, not signal.
+        .filter(|t| t.len() > 2 && !GENERIC.contains(&t.as_str()))
         .collect()
 }
 
@@ -383,5 +423,60 @@ mod tests {
             !injected.contains(&"build".to_string()),
             "the human's own verifier is not profile-injected: {injected:?}"
         );
+    }
+
+    #[test]
+    fn ordinary_scope_prose_is_not_a_contradiction() {
+        // THE REGRESSION. Every line below is a perfectly coherent thing to write, and every one of
+        // them tripped the check when it shipped -- because the default id of a Command verifier is
+        // literally "command", and "build"/"test"/"release" are English. Live, the model was told
+        // its good contract contradicted itself, redrafted, tripped it again, and the session died
+        // WITHOUT EVER ASKING THE HUMAN ANYTHING.
+        //
+        // My original "no false positives" test used scope lines with no build vocabulary in them,
+        // which is precisely the case that could never have failed. A no-false-positive test that
+        // avoids the words the domain is made of is not testing anything.
+        let d = draft(
+            vec![
+                cmd("command", "cargo", &["build", "--release"]),
+                cmd("command", "cargo", &["test", "--all"]),
+                cmd("release-gate", "powershell", &["-File", "check.ps1"]),
+            ],
+            vec![
+                "Any other commands or verifiers beyond the three specified",
+                "No deployment or packaging beyond the release binary",
+                "No additional test frameworks",
+                "Nothing outside the build itself",
+                "No changes to files under path/to/other",
+            ],
+        );
+        let found = contradictions(&d);
+        assert!(
+            found.is_empty(),
+            "a linter that cries wolf is worse than no linter: {found:#?}"
+        );
+    }
+
+    #[test]
+    fn a_distinctive_gate_named_out_of_scope_is_still_caught() {
+        // ...and the real one must still fire. `clippy` and `fmt` are not English; they name a
+        // specific gate, and declaring one out of scope while it is binding is a genuine conflict.
+        let d = draft(
+            vec![
+                cmd("cargo-clippy", "cargo", &["clippy", "--all-targets"]),
+                cmd("command", "cargo", &["build", "--release"]),
+            ],
+            vec![
+                "No clippy or fmt checks.",
+                "No deployment beyond the release build",
+            ],
+        );
+        let found = contradictions(&d);
+        assert_eq!(
+            found.len(),
+            1,
+            "exactly the clippy conflict, and nothing from the ordinary line: {found:#?}"
+        );
+        assert!(found[0].message.contains("cargo-clippy"));
     }
 }

@@ -426,6 +426,9 @@ impl crate::record_store::SessionRecordStore for GoalSessionStore {
     async fn append_turn(&self, session_id: &str, author: TurnAuthor, content: String) {
         GoalSessionStore::append_turn(self, session_id, author, content).await
     }
+    async fn turns(&self, session_id: &str) -> Vec<(TurnAuthor, String)> {
+        GoalSessionStore::turns(self, session_id).await
+    }
     async fn set_status(&self, id: &str, status: SessionStatus) {
         GoalSessionStore::set_status(self, id, status).await
     }

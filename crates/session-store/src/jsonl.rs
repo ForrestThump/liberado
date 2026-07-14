@@ -759,6 +759,36 @@ impl SessionRecordStore for SessionStore {
         }
     }
 
+    /// The inverse of [`append_turn`](Self::append_turn): the transcript, in order.
+    ///
+    /// Walks the leaf path rather than the raw node list, so a **forked** session yields its own
+    /// branch and not the original's — the two share a node prefix by copy, and reading the flat
+    /// node set would blur them back together.
+    async fn turns(&self, session_id: &str) -> Vec<(TurnAuthor, String)> {
+        let Ok(ulid) = session_id.parse::<Ulid>() else {
+            return Vec::new();
+        };
+        let Ok(nodes) = ConversationStore::leaf_path(self, ulid, None).await else {
+            return Vec::new();
+        };
+        nodes
+            .into_iter()
+            .filter_map(|n| {
+                let author = match n.author {
+                    Author::System => TurnAuthor::System,
+                    Author::User => TurnAuthor::User,
+                    Author::Assistant => TurnAuthor::Assistant,
+                    Author::Tool => TurnAuthor::Tool,
+                    Author::Named(name) => TurnAuthor::Named(name),
+                };
+                // A node whose message carries no text (a bare tool-call node) has nothing to say
+                // and is not dialogue.
+                let content = n.message.content.clone();
+                (!content.trim().is_empty()).then_some((author, content))
+            })
+            .collect()
+    }
+
     async fn set_status(&self, id: &str, status: SessionStatus) {
         let Ok(ulid) = id.parse::<Ulid>() else { return };
         let finished_at = {

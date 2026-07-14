@@ -37,9 +37,24 @@ semantics), including forking from any message in history.
    deferral was overstated: a guided retry needed no checkpoint machinery at all, because nothing is
    replayed — the process never died.
 
-   **Still open (E6-c):** a session parked mid-build across a daemon *restart* is visible and honest
-   (`Parked`, `awaiting_input` preserved) but **not answerable** — resuming the build needs a workspace
-   snapshot. Clients must render `parked` as "was waiting for you", not as a live prompt.
+   **E6-c(a) — a parked session in *intake* is now answerable (2026-07-14, live-verified).** Answering a
+   parked session *is* the resume: the hub records the answer as a turn, re-runs the pack, and the pack
+   rebuilds the negotiation from its own transcript (`PackContext::prior_turns`) instead of starting
+   over and asking you everything again. Live: killed the daemon mid-question, restarted, answered —
+   the session resumed with its 2 prior answers, froze a contract, and started building.
+
+   The line is drawn at irreversibility, and the pack draws it (`DomainPackRunner::can_resume`, default
+   **no**). Intake reconstruction is *approximate* — the model may re-phrase its next question, and
+   machine-generated revision feedback was never a turn — and that is safe **only** because intake ends
+   at a draft the human must accept. The same approximation applied to a build loop, which edits files,
+   would silently corrupt a workspace. So the coding pack refuses to resume once the build has started,
+   and the session stays parked and says so.
+
+   **Still open (E6-c(b)):** resuming a session parked *mid-build* needs a workspace checkpoint (the
+   coder workspace is already a git repo, so a commit is the obvious suspend point). **Known wrinkle:**
+   resuming a session parked at the *freeze prompt* costs one extra confirmation — the answer re-enters
+   intake, the model redrafts, and you approve the redraft. Safe (you still gate the build), mildly
+   redundant.
 2. ~~**Chat's tests don't run on the store chat actually uses.**~~ **Fixed 2026-07-13.** The
    `ConversationStore` conformance suite (14 invariants) now runs against `SessionStore`, and
    `JsonlStore` is **deleted** — `liberado-conversation-store` is the contract, with exactly one

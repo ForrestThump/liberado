@@ -108,6 +108,15 @@ pub trait SessionRecordStore: Send + Sync {
     /// transcript is linear.
     async fn append_turn(&self, session_id: &str, author: TurnAuthor, content: String);
 
+    /// Read the transcript back: the dialogue, in order.
+    ///
+    /// The write side of this existed from the start; the read side did not, because until E6-c no
+    /// pack ever needed to know what it had already said. **Resume needs exactly that.** A session
+    /// parked on a human across a daemon restart has no in-memory state left — its only surviving
+    /// memory of the conversation is the transcript, and a pack that cannot read it cannot pick the
+    /// conversation back up.
+    async fn turns(&self, session_id: &str) -> Vec<(TurnAuthor, String)>;
+
     async fn set_status(&self, id: &str, status: SessionStatus);
 
     /// Terminal transition: final status + result, recorded together.
