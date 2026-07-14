@@ -1,7 +1,43 @@
 # Live test: a session that works until it needs you
 
-**Status**: sketch, 2026-07-14. Not yet run.
+**Status**: **RUN, 2026-07-14 — passed on the third attempt, after fixing two defects it found** (`1de63bc`).
 **Tests**: [`one-execution-engine-plan.md`](one-execution-engine-plan.md) E1–E7, as shipped in `671bde9`.
+
+## Result
+
+`TOKEN.md` ended up holding `ORCHID-7Q-KESTREL-VELLUM-42` — a string that existed nowhere in the
+workspace, the goal, the context, or any verifier's output, only in the human's head and as a SHA-256
+preimage the model cannot invert. It could not have arrived there by any route except the human's reply
+travelling into the backend's next attempt. The session asked, waited, was answered over the API,
+retried, and went green. The out-of-band ping fired (nobody was watching) and reached a phone.
+
+**Everything the unit tests asserted was true, and the feature still did not work.** Two defects, both
+invisible to 1,148 passing tests:
+
+1. **The ask seam was on the wrong path.** `CoderError::NoChanges` is an `Err`, and the ask only ran on
+   the `Ok` path — so a build that *finished but failed its gates* asked, while a build that got
+   genuinely **stuck** could not. The more stuck the pack got, the less able it was to ask for help.
+   The first run built a working CLI, hit a gate it had no way to satisfy, and died silently at exactly
+   the moment it should have spoken. Missed because `ScriptedBackend` returns `Ok(Failed)` — **the
+   double made the shape I expected, not the shape reality produces.** Third time in this audit.
+
+2. **The progress guard's remedy was the thing it blocked.** Once latched it returned `Fatal` for every
+   call — including `write_file` and `submit_report`, the two escapes its own message demands. And
+   `observe()` runs *after* the tool executes, so a `write_file` that succeeded on disk was reported
+   back as a failure and the model "retried" an edit it had already made.
+
+## The third finding: an incoherent contract executes faithfully
+
+Run 2 failed for a reason that is **not a bug** and is more interesting than the two that were.
+
+Asked to record "you cannot guess the token, you must ask me", the intake model wrote an out-of-scope
+clause: **"Modifying TOKEN.md or guessing the release token."** The frozen contract therefore demanded
+a gate that only `TOKEN.md` could satisfy while forbidding the coder from writing `TOKEN.md`. The coder
+obeyed the contract and failed. That is *correct* behaviour — the whole point of freezing is that the
+contract is authoritative and the worker cannot argue with it.
+
+Which is exactly why it is dangerous. **The contract is the one artifact in the system with authority
+over the work, and nothing checks it against itself.** See "S7-c" below.
 
 ## What only a live run can prove
 
@@ -135,11 +171,68 @@ So the story the feature is *for* — "I'm at work, I get the ping, I answer fro
 You get the ping on your phone and then need a machine to reply. Step 8 above is a `curl`, which is a
 usable test but not a usable life.
 
-**E5-b (proposed)**: point the existing `ApprovalBot` reply machinery at
-`POST /api/goals/{id}/message`, keyed by the session id already in the alert text. The plan called this
-"smaller than it sounds" and that still looks right — the long-poll, the typed reply, and the routing all
-exist. But it is not built, and until it is, the hours-long idle budget is a promise the *daemon* keeps and
-the *product* does not.
+Confirmed live: the human replied "accept" **in Telegram** and it went nowhere. The session sat waiting.
 
-Do the live run first: there is no point wiring a reply path to a feature that has not yet been shown to
-fire correctly against a real model.
+---
+
+# Next: the two things this run put on the roadmap
+
+## S7-c — Contract coherence: lint the one artifact with authority
+
+**The problem.** `validate_draft` checks each verifier is *well-formed in isolation* (program non-empty,
+paths non-empty). Nothing checks the draft **against itself**. Freeze then stamps a `content_hash` and
+makes it binding, so an incoherent contract is not a soft error that gets muddled through — it is a
+**durably authoritative** instruction to do something impossible, and the worker will faithfully obey it
+into the ground. The human reviewing the draft is the only line of defence, and they are reading a long
+prose block, possibly at 3am, on a phone.
+
+Four failure classes seen in **three runs of one test** — this is not a rare event:
+
+| Class | Seen | Why the human misses it |
+|---|---|---|
+| **Out-of-scope forbids what a verifier requires** | *"Out of scope: modifying TOKEN.md"* + a verifier only `TOKEN.md` can satisfy | The two lines are 15 lines apart in the prompt, and each is individually reasonable |
+| **Unsatisfiable path verifier** | `paths_exist: target/release/todo` — crate is `todo-cli`, and on Windows it is `.exe`. Could *never* pass | Looks like diligence, not a landmine |
+| **`verify_profile` silently re-adds verifiers** | Model said it dropped clippy/fmt; `expand_verify_profile_into` put them straight back. Its prose and its verifier list **disagreed** | The human reads the prose |
+| **A false `assumed_default` stated as fact** | *"The release token is stored in TOKEN.md"* — it was not, and the model had no way to know | Assumptions are exactly what a skimming reader skips |
+
+**The shape of the fix.** A deterministic check (no model) in `coder-core`, at the existing
+`validate_draft` seam, in two tiers:
+
+- **Contradiction → refuse to freeze**, hand back to intake with the reason. The unambiguous case: an
+  `out_of_scope` line naming a path/file that a verifier requires the worker to produce or modify.
+  Cheap to detect — extract the paths a verifier touches, look for them in the scope prose.
+- **Warning → surface *in the freeze prompt*, above the fold.** Path verifiers that nothing in the plan
+  could plausibly produce; verifiers added by profile expansion (label them: *"3 verifiers from you,
+  3 added by `verify_profile = rust-strict`"* — that alone kills the disagree-with-its-own-prose case);
+  success criteria no verifier covers.
+
+The principle: **the artifact with authority deserves a linter, not just an eyeball.** We built the
+freeze step so a model could not weaken the human's gates; we did not consider that the *human* would
+be handed gates that contradict themselves.
+
+## E5-b — Answering from your phone
+
+Today the alert says *"Answer in the TUI or via `POST /api/goals/{id}/message`"*, which on a phone means
+nothing. Two designs, and the second is the one worth having:
+
+**(a) A Telegram reply bridge.** Point the existing `ApprovalBot` long-poll/`force_reply` machinery at
+`POST /api/goals/{id}/message`, keyed by the session id already in the alert. Low friction — reply in
+place, no context switch. But it is a keyhole: you answer a question without seeing the transcript,
+the diff, or what the pack actually tried.
+
+**(b) A deep link into the WebUI.** The alert carries a URL to the session on the homelab instance; you
+tap it and answer in a real view that shows the question *and its context*. Strictly better, and it
+subsumes (a) — but it needs two things that do not exist yet:
+
+- **A goal-session view in the WebUI.** There is `chat.rs` and no session view at all. Sessions are only
+  browsable in the TUI today. This is the real work, and it belongs with the WebUI maturity effort.
+- **A public base URL in config.** The notifier composes the link, so it must know the instance's
+  externally-reachable address (`topology.public_base_url` or similar). Trivial, but *do not add it until
+  there is a page to link to* — an unused config key is a lie about what the system can do.
+
+**Recommendation**: build (b), and treat (a) as a stopgap only if the WebUI view is far off. Until either
+lands, the hours-long idle budget is a promise the **daemon** keeps and the **product** does not — the
+session will wait all day for you, and you will have no way to answer it from where you actually are.
+
+The alert text should get the link the moment (b) exists; the one-line composition site is
+`NotifySessionAlert::session_needs_you` in `crates/server/src/lib.rs`.

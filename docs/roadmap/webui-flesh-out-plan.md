@@ -269,3 +269,33 @@ After each phase:
 
 (`start-webui.ps1` / `stop-webui.ps1` remain for the non-hot-reload path: build the wasm bundle once
 and have the daemon serve it statically.)
+
+---
+
+## Goal-session view — and why it is load-bearing beyond the WebUI
+
+The WebUI has `chat.rs` and **no goal-session view at all**: sessions are browsable only in the TUI.
+That is a gap in its own right, but it also blocks something concrete.
+
+A goal session can now **stop mid-build and ask you a question**, ping you out-of-band when nobody is
+watching, and wait for hours (one-execution-engine E5). The ping reaches your phone. You then cannot
+answer it — the alert says *"answer in the TUI or via `POST /api/goals/{id}/message`"*, and a reply typed
+into Telegram goes nowhere (confirmed in the live run, 2026-07-14).
+
+The intended fix is a **deep link**: the alert carries a URL to the session on the homelab instance, you
+tap it, and you answer in a view that shows the question *and the context around it* — the transcript,
+what the pack tried, the diff so far. A Telegram reply bridge could deliver the text, but it is a
+keyhole: you would be answering a question you cannot see the reasons for.
+
+So this view is what turns "the daemon will wait 6 hours for you" into a thing you can actually use.
+
+Needs, in order:
+
+1. **A session view** — read the transcript + events (`GET /api/goals/{id}`, or the SSE stream for live),
+   render an `awaiting_input` prompt with its `options`, and `POST …/message` to answer. The API already
+   exists and the TUI already consumes it; nothing new is needed server-side.
+2. **`public_base_url` in config**, so `NotifySessionAlert::session_needs_you`
+   (`crates/server/src/lib.rs`) can compose the link. **Do not add this key before the page exists** —
+   an unused config key is a lie about what the system can do.
+
+See [one-execution-engine-live-test.md](one-execution-engine-live-test.md) § E5-b.

@@ -59,6 +59,28 @@ semantics), including forking from any message in history.
    every question through one choke point (`ask`), so a new question cannot be added that silently
    fails to reach the transcript.
 
+### Opened by the live run (2026-07-14) — see [one-execution-engine-live-test.md](one-execution-engine-live-test.md)
+
+The E5 live test passed, but only after fixing two defects it found (`1de63bc`), and it left two items:
+
+- **S7-c — Contract coherence.** `validate_draft` checks each verifier is well-formed *in isolation*;
+  nothing checks the frozen contract **against itself**. In three runs of one test it produced: an
+  `out_of_scope` clause forbidding the exact file a verifier required, an unsatisfiable `paths_exist`
+  (wrong binary name), a `verify_profile` that silently re-added verifiers the model's own prose said it
+  had dropped, and a false `assumed_default` stated as fact. Freeze then **hashes it and makes it
+  binding** — so the worker faithfully executes the impossible, and the only line of defence is a human
+  skimming prose. The artifact with authority deserves a linter, not just an eyeball. Two tiers:
+  contradictions refuse to freeze; softer conflicts are surfaced *in the freeze prompt*.
+
+- **E5-b — Answering from your phone.** The alert currently says "answer in the TUI or via `POST …`",
+  which on a phone means nothing; a reply typed into Telegram goes nowhere (confirmed live). The right
+  fix is **a deep link into a WebUI goal-session view** — so you tap the ping and answer where you can
+  see the question *and its context*. That view **does not exist** (the WebUI has `chat.rs` and no
+  session view), so this belongs with WebUI maturity; a Telegram reply bridge is a keyhole stopgap.
+  Also needs a `public_base_url` in config — but **not until there is a page to link to**.
+  *Until one of these lands, the hours-long idle budget is a promise the daemon keeps and the product
+  does not.*
+
 ## The phased roadmap
 
 The matured vision (see [Positioning](../architecture/positioning.md) and
