@@ -39,3 +39,6 @@ telegram_bot_info.md
 # Ad-hoc daemon run logs from dev scripts (start-dev-stack.ps1 etc.)
 tmp-liberado-*.log
 tmp-liberado-*.log.prev
+
+# cargo-mutants working dir (mutation testing scratch)
+mutants.out/
