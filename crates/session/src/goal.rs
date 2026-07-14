@@ -180,21 +180,56 @@ pub enum SessionStatus {
 
 impl SessionStatus {
     pub fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            Self::Succeeded | Self::Failed | Self::Cancelled | Self::BudgetExhausted
-        )
+        self.terminal_kind().is_some()
+    }
+
+    /// How this session *ended* — `None` while it is still going.
+    ///
+    /// The inverse of [`From<TerminalKind>`]. Defined as the one place that knows which statuses are
+    /// terminal, so [`is_terminal`](Self::is_terminal) cannot disagree with it: the two used to be
+    /// independent lists, and a status added to one but not the other is exactly how `Parked` came to
+    /// be told it "had already finished".
+    pub fn terminal_kind(self) -> Option<TerminalKind> {
+        match self {
+            Self::Succeeded => Some(TerminalKind::Succeeded),
+            Self::Failed => Some(TerminalKind::Failed),
+            Self::Cancelled => Some(TerminalKind::Cancelled),
+            Self::BudgetExhausted => Some(TerminalKind::BudgetExhausted),
+            Self::Pending | Self::Running | Self::Parked => None,
+        }
     }
 }
 
 /// How the session ended (surface-friendly).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// **This is deliberately not the same type as [`SessionStatus`]**, even though its variants are
+/// exactly that type's terminal subset. `SessionStatus` is a *lifecycle* — it includes `Running` and
+/// `Parked`, which are not ways a session can *end*. Keeping them separate is what makes it
+/// impossible for a pack to return "still running" as its final outcome, and that guarantee is worth
+/// more than the four lines of apparent duplication.
+///
+/// What was **not** worth keeping was the hand-written match that converted between them (it lived in
+/// `hub.rs`, and nothing stopped a fifth variant being added to one type and forgotten in the other).
+/// Use [`From`] and [`SessionStatus::terminal_kind`]; the compiler now enforces totality in both
+/// directions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminalKind {
     Succeeded,
     Failed,
     Cancelled,
     BudgetExhausted,
+}
+
+impl From<TerminalKind> for SessionStatus {
+    fn from(t: TerminalKind) -> Self {
+        match t {
+            TerminalKind::Succeeded => Self::Succeeded,
+            TerminalKind::Failed => Self::Failed,
+            TerminalKind::Cancelled => Self::Cancelled,
+            TerminalKind::BudgetExhausted => Self::BudgetExhausted,
+        }
+    }
 }
 
 /// Pack outcome after a run.
@@ -348,5 +383,53 @@ mod tests {
         );
         let rec = GoalSessionRecord::new(without);
         assert!(rec.goal.origin.is_none());
+    }
+
+    /// The two enums cannot drift apart.
+    ///
+    /// V1: `TerminalKind` is exactly `SessionStatus`'s terminal subset, and the conversion between
+    /// them used to be a hand-written match in `hub.rs`. Adding a fifth way for a session to end
+    /// would have compiled fine there and been silently dropped. Now the compiler enforces totality
+    /// (both matches are exhaustive), and this pins the *semantics* the compiler cannot: that the
+    /// round trip is the identity, and that `is_terminal` cannot disagree with `terminal_kind`.
+    ///
+    /// That disagreement is not hypothetical. `is_terminal` and the replay coercion were once two
+    /// independent lists of "which statuses are final", and `Parked` — added to one, forgotten by
+    /// the other — got told it "had already finished", which is the one thing it had not done.
+    #[test]
+    fn terminal_kind_and_session_status_round_trip() {
+        for kind in [
+            TerminalKind::Succeeded,
+            TerminalKind::Failed,
+            TerminalKind::Cancelled,
+            TerminalKind::BudgetExhausted,
+        ] {
+            let status = SessionStatus::from(kind);
+            assert!(
+                status.is_terminal(),
+                "{kind:?} is a way a session ENDS, so its status must be terminal"
+            );
+            assert_eq!(
+                status.terminal_kind(),
+                Some(kind),
+                "the round trip must be the identity — a session that ended one way must not report                  having ended another"
+            );
+        }
+    }
+
+    #[test]
+    fn a_session_still_going_has_not_ended_in_any_way() {
+        for status in [
+            SessionStatus::Pending,
+            SessionStatus::Running,
+            SessionStatus::Parked,
+        ] {
+            assert!(!status.is_terminal(), "{status:?} is not an ending");
+            assert_eq!(
+                status.terminal_kind(),
+                None,
+                "{status:?} must not be reportable as a way the session ENDED. Parked is the whole                  reason this matters: it is a session waiting for you, and calling it finished is                  the difference between 'start over' and 'wait'."
+            );
+        }
     }
 }

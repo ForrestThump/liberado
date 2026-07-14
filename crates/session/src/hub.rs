@@ -504,15 +504,9 @@ impl GoalSessionHub {
             .await;
 
         let (status, goal_result) = match result {
-            Ok(r) => {
-                let status = match r.terminal {
-                    TerminalKind::Succeeded => SessionStatus::Succeeded,
-                    TerminalKind::Failed => SessionStatus::Failed,
-                    TerminalKind::Cancelled => SessionStatus::Cancelled,
-                    TerminalKind::BudgetExhausted => SessionStatus::BudgetExhausted,
-                };
-                (status, r)
-            }
+            // Was a hand-written four-arm match. A fifth `TerminalKind` would have compiled here
+            // *and* silently gone missing, because nothing tied the two enums together.
+            Ok(r) => (SessionStatus::from(r.terminal), r),
             Err(PackError::Cancelled) => (
                 SessionStatus::Cancelled,
                 GoalResult {

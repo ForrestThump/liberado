@@ -112,6 +112,12 @@ impl VerifierSpec {
     }
 }
 
+/// One **gate's** verdict — not a session outcome, and deliberately not merged with one (V1).
+///
+/// `Error` is the variant that carries the weight: the check itself broke (the command would not
+/// run, the path could not be read) as opposed to `Fail`, where the check ran fine and the *code* is
+/// wrong. Collapsing those into a single "failed" is how a broken verifier gets mistaken for broken
+/// work, and the loop then tries to "fix" code that was never at fault.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VerdictStatus {

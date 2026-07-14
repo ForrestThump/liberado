@@ -168,7 +168,17 @@ pub struct Report {
     pub follow_up: Option<String>,
 }
 
-/// Terminal status of executed work.
+/// Terminal status of one **execution** — what an executor's `Report` says it achieved.
+///
+/// **Not the same thing as `SessionStatus`, and deliberately not merged with it** (V1, 2026-07-14).
+/// This is a level below: one execution inside a session. `PartiallySucceeded` and `Proposed` have no
+/// meaning as *session* states — a session does not sit in "proposed" — and folding them together
+/// would either lose those two variants or pollute every surface's status rendering with states it
+/// cannot act on.
+///
+/// The one conversion that matters (`Outcome` → `TerminalKind`, when an execution *is* the whole
+/// session) lives in exactly one place: `Disposition::terminal_summary`. Keep it that way — an
+/// inline second copy of that mapping is how a status starts lying.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {

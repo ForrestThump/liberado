@@ -121,9 +121,7 @@ impl DispatchBridge {
         let summary = result
             .map(|r| r.summary.clone())
             .unwrap_or_else(|| "delegated session finished with no summary".into());
-        let terminal = result
-            .map(|r| r.terminal.clone())
-            .unwrap_or(TerminalKind::Failed);
+        let terminal = result.map(|r| r.terminal).unwrap_or(TerminalKind::Failed);
 
         let mut report = match terminal {
             TerminalKind::Succeeded => format!("RESULT (Succeeded):\n{}", summary.trim()),

@@ -62,6 +62,13 @@ tool sequence that answers the goal (e.g. list_tasks or search, then report) —
 scratchpad loops or re-reading the same notes when you already have enough to report.";
 
 /// What an orchestrated decision resolved to.
+///
+/// **Not a status enum, and deliberately not merged with one** (V1, 2026-07-14). It is a sum type
+/// *carrying payloads* — a `Report`, a set of clarifying questions, a `SignedProposal` — and the
+/// payload is the point. "Succeeded/Failed" is a different question, answered by
+/// [`terminal_summary`](Self::terminal_summary), which is the single conversion from this to a
+/// session's `TerminalKind`. It is shared by the daemon and the dispatch pack precisely so the two
+/// cannot drift on what a `Propose` disposition *means* when a session ends on one.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Disposition {
     /// Work ran; here is the report for the main agent.
