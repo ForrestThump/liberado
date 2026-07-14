@@ -2,7 +2,7 @@
 
 **Status**: living architecture, 2026-07-10  
 **Implementation roadmap**: [`docs/roadmap/rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md)  
-**Hygiene audit**: [`docs/roadmap/agentic-mesh-hygiene-audit-2026-07-10.md`](../roadmap/agentic-mesh-hygiene-audit-2026-07-10.md)  
+**Hygiene audit**: [`docs/roadmap/archive/agentic-mesh-hygiene-audit-2026-07-10.md`](../roadmap/archive/agentic-mesh-hygiene-audit-2026-07-10.md)  
 **Modularity**: [`modularity.md`](modularity.md) · **Contracts**: [`contracts.md`](contracts.md) ·
 **Event-bus idea (annotated, partly superseded)**: [`meshify.md`](../ideas/meshify.md)  
 **Channels & interactivity** (authority vs information graph; interactivity as a capability, not a subtype): [`channels-and-interactivity.md`](channels-and-interactivity.md)

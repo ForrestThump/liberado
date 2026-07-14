@@ -4,7 +4,7 @@
 **Related**: [`agentic-loops.md`](agentic-loops.md) (kernel vs packs) ·
 [`channels-and-interactivity.md`](channels-and-interactivity.md) (the three channels; interactivity
 as a capability) · [`contracts.md`](contracts.md) · [`../reference/api.md`](../reference/api.md) ·
-[`../roadmap/session-focus-plan.md`](../roadmap/session-focus-plan.md) (how it was built, slice by
+[`../roadmap/archive/session-focus-plan.md`](../roadmap/archive/session-focus-plan.md) (how it was built, slice by
 slice — history, not the model itself)
 
 ---
@@ -112,7 +112,7 @@ pack, not a fake.
 | cron / webhook / vault reaction | `dispatch` | `ReactionOutcome::Dispatched { session_id }` |
 | face-agent `delegate` | `dispatch` | Awaits terminal inside the chat turn; no `AskHuman` (D-e) |
 
-See [`../roadmap/one-execution-engine-plan.md`](../roadmap/one-execution-engine-plan.md) for the
+See [`../roadmap/archive/one-execution-engine-plan.md`](../roadmap/archive/one-execution-engine-plan.md) for the
 convergence (E1–E7).
 
 ## Authority (S6)

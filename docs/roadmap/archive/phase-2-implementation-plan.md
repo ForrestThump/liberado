@@ -53,7 +53,7 @@ agent: "I need a tool that does X"
 - Capability grant for `ExecuteMcp("code-dispatch")` — the MCP exists but has no policy entry
 - Catalog triage — no component that decides "does this tool exist already, or must we create it from scratch?"
 
-Hermes' signature differentiator is its [closed self-improvement loop](../ideas/vs-hermes.md#1-closed-self-improvement-loop-skills-system): the agent can create, register, and iteratively improve its own Python skills at runtime. Phase 2 closes the equivalent gap in Liberado's Rust/MCP architecture, with the same safety invariant: **the agent can build new tools but can never widen its own authority** (capability/zone containment is the trust boundary, Decision 4).
+Hermes' signature differentiator is its [closed self-improvement loop](../../ideas/vs-hermes.md#1-closed-self-improvement-loop-skills-system): the agent can create, register, and iteratively improve its own Python skills at runtime. Phase 2 closes the equivalent gap in Liberado's Rust/MCP architecture, with the same safety invariant: **the agent can build new tools but can never widen its own authority** (capability/zone containment is the trust boundary, Decision 4).
 
 ### Target flow
 

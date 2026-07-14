@@ -5,6 +5,10 @@ about changes with an LLM, and acts on your behalf through tools — safely, and
 own work. This document is the cold-start map. Each crate has its own zoomed-in
 `crates/<name>/ARCHITECTURE.md`.
 
+> **Before you change anything**, read [`failure-modes.md`](failure-modes.md). It is five pages on the
+> five bugs this system produces repeatedly — every one of which shipped with a green test suite, and
+> none of which was found by reading the code.
+
 ## Three pillars
 
 For how these pillars position Liberado against the free alternatives, see
@@ -32,7 +36,7 @@ The next strategic slice is the **general agentic orchestration kernel** (goal s
 subagents, session/events). Coding is the **first domain pack** (PR-dispatch reliability), not the
 product identity. Architecture: [`agentic-loops.md`](agentic-loops.md). Roadmap:
 [`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md). Hygiene:
-[`agentic-mesh-hygiene-audit-2026-07-10.md`](../roadmap/agentic-mesh-hygiene-audit-2026-07-10.md).
+[`agentic-mesh-hygiene-audit-2026-07-10.md`](../roadmap/archive/agentic-mesh-hygiene-audit-2026-07-10.md).
 The coding pack is home-spun Liberado (`Provider` + `Executor` + `ToolRuntime` + `coder-*`) — not a
 VTCode wrap. Surfaces (TUI, WebUI, CLI, PR factory) are session clients; they do not own the loop.
 
@@ -60,7 +64,7 @@ servers over stdio/http/docker, and all event sources feed one channel. This is 
 a peer mesh — the agent-pools research (2026-07) rejected peer coordination, and pools never talk
 to each other. Older docs and dated audits say "mesh" for all of this; read that as this star +
 crate DAG, never as any-to-any routing (see the
-[alignment audit](../roadmap/architecture-alignment-audit-2026-07-11.md), verdict 2).
+[alignment audit](../roadmap/archive/architecture-alignment-audit-2026-07-11.md), verdict 2).
 
 ## The loop (perceive → decide → act → don't loop)
 
@@ -150,7 +154,7 @@ domain pack** (first pack — not the product center; see [`agentic-loops.md`](a
   (classifier-scoped MCP names; empty decision `capabilities` derives from `allowed_mcps`, never
   full inherit of every dispatcher tool). **Main chat** is thin by default (face agent +
   `delegate`); specialist MCPs (e.g. `turbovault`) are granted on the **`dispatcher`** component in
-  `policy.toml`. See [`delegate_dogfood_issues.md`](../roadmap/delegate_dogfood_issues.md).
+  `policy.toml`. See [`delegate_dogfood_issues.md`](../roadmap/archive/delegate_dogfood_issues.md).
 - **Provider-agnostic inference (Decision 13)** — one `Provider` trait, swappable from config, with
   role-tiered model floors. The active model id is hot-swappable at runtime (`Provider::set_model`,
   `POST /api/models/select`) without restarting the daemon. Tests inject `MockProvider` (Decision 16).
@@ -191,7 +195,7 @@ remains valid: deepening the main agent, the TUI, the Docker smoke test, and fur
 **Done:**
 1. ✅ **Reactive pipeline** — daemon watches → attributes → dispatches → orchestrates → executes, end-to-end wired and tested.
 2. ✅ **Concrete `RuntimeFactory`** — `liberado-mcp`'s `TurbomcpRuntimeFactory` connects via stdio, builds a provenance-bound `TurbomcpRuntime`, scopes it to allowed MCPs.
-3. ✅ **Daemon → hub** — `react()` starts a **hosted background session** on the `GoalSessionHub`, run by the `dispatch` pack (the dispatcher + orchestrator pair as a `DomainPackRunner`). `Reaction` carries `ReactionOutcome` (`Observed` / `Decided` / `Acted(Disposition)` / `Dispatched { session_id }`) — and `Dispatched` is the one that matters: a reaction is now a real session you can **join, watch and cancel**, not a fire-and-forget run recorded after the fact. The server assembles each pool's orchestrator from the enabled `[[mcps]]` in `topology.toml`, each connected by `transport` (`crates/bootstrap`'s `mcp_registry_from_config`). See [`../roadmap/one-execution-engine-plan.md`](../roadmap/one-execution-engine-plan.md).
+3. ✅ **Daemon → hub** — `react()` starts a **hosted background session** on the `GoalSessionHub`, run by the `dispatch` pack (the dispatcher + orchestrator pair as a `DomainPackRunner`). `Reaction` carries `ReactionOutcome` (`Observed` / `Decided` / `Acted(Disposition)` / `Dispatched { session_id }`) — and `Dispatched` is the one that matters: a reaction is now a real session you can **join, watch and cancel**, not a fire-and-forget run recorded after the fact. The server assembles each pool's orchestrator from the enabled `[[mcps]]` in `topology.toml`, each connected by `transport` (`crates/bootstrap`'s `mcp_registry_from_config`). See [`../roadmap/archive/one-execution-engine-plan.md`](../roadmap/archive/one-execution-engine-plan.md).
 4. ✅ **Single-binary consolidation** — one `liberado` binary with subcommands: `liberado serve [vault]` (daemon + chat + HTTP/SSE API), `liberado chat [session]` (client), bare `liberado <vault>` aliases `serve`. `crates/server` (`liberado-server`) is a **library** exposing `pub async fn run(vault)`, not a binary. This concretely realizes daemon-first (Decision 2): one process hosts everything; every interface is a client.
 5. ✅ **Web UI** — `liberado-server` (Axum, `:4201`, run via `liberado serve`) hosts the daemon and serves a JSON API; `liberado-webui` (Dioxus WASM) is the browser dashboard showing daemon status, reactions, and vault info. LAN-accessible. Build with `dx build --release --package liberado-webui --web` (see [`../contributing/agents.md`](../contributing/agents.md)).
 6. ✅ **Conversational chat loop** — `crates/main-agent`'s `Conversation` drives the executor's conversational tool-calling loop with context carried across turns. Served over the shared chat/SSE contract (`docs/reference/api.md`): `POST /api/chat` and the streaming `GET`/`POST /api/chat/stream` with token streaming, tool-call visibility (`tool`/`tool_result`), and stop/cancel (close the stream → turn aborts + history rolls back, persisting nothing).
@@ -199,9 +203,9 @@ remains valid: deepening the main agent, the TUI, the Docker smoke test, and fur
 8. ✅ **`liberado chat` CLI client** — a `reqwest`/SSE terminal REPL (`crates/cli/chat_client.rs`), the first native (non-browser) client of the shared chat API.
 9. ✅ **Config-driven substrate** — the daemon boots on one validated `Config` (Decision 14, `crates/bootstrap`): the dispatcher holds `policy.toml`'s grants as its base authority, and `topology.mcps` is now the **single source** for both the dispatcher's catalog AND the runtime's MCP connection. Each `[[mcps]]` entry declares a required `description` (routing), `consequence` (the risk gate), and `transport` (`stdio` command/args or `http` url — how the runtime reaches it); the dispatcher routes over the enabled MCPs and the orchestrator connects to those same names by transport, so a routed name is always a name the runtime can reach (slice 2b done — no env path remains).
 
-10. ✅ **Proposal workflow (Decision 11, emit AND approve→execute)** — the full propose→approve→execute loop is closed. The EMIT path writes a `proposals/<id>.md` artifact for high-consequence concrete actions (YAML frontmatter with `status: pending`); the APPROVE→EXECUTE half picks up a human `status: approved` edit via the watch loop, calls `orchestrator.execute_approved()` with the proposal's `correlation_id` as provenance (no re-dispatch, no guards — the edit is the authorization), and flips `status` to `done` (loop-broken, idempotent). As of 2026-07-02 every proposal also carries an HMAC-SHA256 integrity signature (tamper detection) and runtime-gated proposals (adaptive, non-seed tool calls) land in the vault too, not a data-dir dead end — see [`hardening-audit-2026-07-02.md`](../roadmap/hardening-audit-2026-07-02.md).
-11. ✅ **Phase 1 — the general MCP agent** — chat now routes every turn through `Dispatcher::dispatch` before executing (the "main-agent depth" item below is done); the three independently-static capability catalogs (daemon/chat/API) are one live, shared `Arc<CapabilityCatalog>`; `Grant.component` narrows both dispatch routing and runtime tool surfacing. Full writeups: [`chat-dispatcher-and-component-scoping.md`](../roadmap/chat-dispatcher-and-component-scoping.md), [`live-catalog-and-dispatcher-narrowed-tools.md`](../roadmap/live-catalog-and-dispatcher-narrowed-tools.md).
-12. ✅ **Phase 2 — the self-improvement moat** — `riggers/` (`liberado-pr-dispatch-mcp`) registered as `code-dispatch` (reversible, human-approved draft PRs only), with a greenfield mode to scaffold brand-new MCPs from scratch. Full report: [`phase-2-implementation-report.md`](../roadmap/phase-2-implementation-report.md). **Updated direction, 2026-07-09:** the PR factory workflow stays, but `vtcode` is no longer the strategic coding engine; see [`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md).
+10. ✅ **Proposal workflow (Decision 11, emit AND approve→execute)** — the full propose→approve→execute loop is closed. The EMIT path writes a `proposals/<id>.md` artifact for high-consequence concrete actions (YAML frontmatter with `status: pending`); the APPROVE→EXECUTE half picks up a human `status: approved` edit via the watch loop, calls `orchestrator.execute_approved()` with the proposal's `correlation_id` as provenance (no re-dispatch, no guards — the edit is the authorization), and flips `status` to `done` (loop-broken, idempotent). As of 2026-07-02 every proposal also carries an HMAC-SHA256 integrity signature (tamper detection) and runtime-gated proposals (adaptive, non-seed tool calls) land in the vault too, not a data-dir dead end — see [`hardening-audit-2026-07-02.md`](../roadmap/archive/hardening-audit-2026-07-02.md).
+11. ✅ **Phase 1 — the general MCP agent** — chat now routes every turn through `Dispatcher::dispatch` before executing (the "main-agent depth" item below is done); the three independently-static capability catalogs (daemon/chat/API) are one live, shared `Arc<CapabilityCatalog>`; `Grant.component` narrows both dispatch routing and runtime tool surfacing. Full writeups: [`chat-dispatcher-and-component-scoping.md`](../roadmap/archive/chat-dispatcher-and-component-scoping.md), [`live-catalog-and-dispatcher-narrowed-tools.md`](../roadmap/archive/live-catalog-and-dispatcher-narrowed-tools.md).
+12. ✅ **Phase 2 — the self-improvement moat** — `riggers/` (`liberado-pr-dispatch-mcp`) registered as `code-dispatch` (reversible, human-approved draft PRs only), with a greenfield mode to scaffold brand-new MCPs from scratch. Full report: [`phase-2-implementation-report.md`](../roadmap/archive/phase-2-implementation-report.md). **Updated direction, 2026-07-09:** the PR factory workflow stays, but `vtcode` is no longer the strategic coding engine; see [`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md).
 13. ✅ **`crates/tui`** — a ratatui TUI client hitting the same chat/SSE contract as the browser web UI and `liberado chat`; shares its SSE decoder and slash-command dispatcher with the other clients (`chat-client-contract`, `liberado-commands`) rather than hand-rolling its own.
 14. ✅ **Web UI flesh-out** — sidebar, MCP capability panel, Markdown rendering, and slash commands landed in `liberado-webui`. Design reference: [`webui-flesh-out-plan.md`](../roadmap/webui-flesh-out-plan.md).
 15. ✅ **Pre-Phase-3 hardening pass** — the heuristics tuning engine (`liberado-heuristics-tuner`, now tuning the dispatcher, executor, and subagent layers), the zone-write-class guard (§6 #2), resource-budget bounds (`ResourceLimit`, wall-clock + token-count), and two-way Telegram proposal approval (`liberado-notify` + `liberado-telegram-approvals`: Approve/Reject are pure code, Revise is the one LLM-touching path and can only redraft content, never grant approval). Also found and fixed, via the tuner: a multi-step tool-chaining doom-loop bug (was the "Known limitations" entry below). Full detail: [`current.md`](../roadmap/current.md)'s "Before Phase 3" section.
@@ -220,14 +224,14 @@ remains valid: deepening the main agent, the TUI, the Docker smoke test, and fur
     dev machine but its daemon wasn't running) — see
     [`human-todo.md`](../roadmap/human-todo.md#phase-4-docker-mcp-transport--needs-a-live-smoke-test--2026-07-07).
     Deferred, not built: serverless hibernation (no MCP has an idle-cost problem that justifies the
-    integration cost yet). Full design: [`phase-4-docker-transport.md`](../roadmap/phase-4-docker-transport.md).
+    integration cost yet). Full design: [`phase-4-docker-transport.md`](../roadmap/archive/phase-4-docker-transport.md).
 20. ✅ **Face-agent chat + delegation dogfood (2026-07-10/11)** — default main agent is a thin human
     interfacer (`delegate` only); vault/MCP work runs on the dispatcher ceiling. Subagent risk-gate
     derives `ceiling ∩ allowed_mcps` when decision capabilities are empty. Classifier MCP names are
     sanitized against the catalog (bare `list_tasks` no longer false-CapabilityGaps). Model catalog
     + hot-swap (`GET/POST /api/models*`). TUI: sparse layout, `/session` browser, `/model` picker,
     theme preference in platform `settings.toml`. Delegation journals under
-    `<LIBERADO_DATA_DIR>/dispatches/`. Writeup: [`delegate_dogfood_issues.md`](../roadmap/delegate_dogfood_issues.md).
+    `<LIBERADO_DATA_DIR>/dispatches/`. Writeup: [`delegate_dogfood_issues.md`](../roadmap/archive/delegate_dogfood_issues.md).
 
 **Not yet built (next slice):**
 - Rust-native agentic coder crates and PR-factory integration; see
@@ -236,11 +240,11 @@ remains valid: deepening the main agent, the TUI, the Docker smoke test, and fur
 - Splitting `liberado-common`'s grab-bag along its natural boundaries — partially underway (`config`
   and `config-loader` have already been carved off into their own crates), but `common` still has
   eight modules (`provenance`, `capability`, `catalog`, `dispatch`, `event`, `model`,
-  `proposal`, `error`) — the last open item in [`crate-modularity-audit.md`](../roadmap/crate-modularity-audit.md).
+  `proposal`, `error`) — the last open item in [`crate-modularity-audit.md`](../roadmap/archive/crate-modularity-audit.md).
   (Finding 2 of that same audit, `ChatClient` trait adoption, was resolved 2026-07-05 — the
   never-implemented trait was deleted rather than adopted; `chat_client_contract::native` now just
   documents `SseDecoder`/`ChatEvent::from_sse_data` as the real shared boundary.)
-- Writer-identity verification on proposal approval (item 1 of [`hardening-audit-2026-07-02.md`](../roadmap/hardening-audit-2026-07-02.md)) — needs OS-level MCP process isolation or an out-of-band approval channel, not a code patch.
+- Writer-identity verification on proposal approval (item 1 of [`hardening-audit-2026-07-02.md`](../roadmap/archive/hardening-audit-2026-07-02.md)) — needs OS-level MCP process isolation or an out-of-band approval channel, not a code patch.
 - Phase 4's live Docker-daemon smoke test (item 19 above) and its serverless-hibernation slice
   (deferred, no concrete need yet).
 
@@ -254,7 +258,7 @@ remains valid: deepening the main agent, the TUI, the Docker smoke test, and fur
   escalates nudge → tool removal → honest failure, plus a progress-aware budget-exhaustion report —
   live-verified 0/6 → 5/6 on the original failing scenario. Remaining gap: a fast-finish timing case
   (not a loop). Full evidence:
-  [`multi-step-execution-reliability-finding.md`](../roadmap/multi-step-execution-reliability-finding.md).
+  [`multi-step-execution-reliability-finding.md`](../roadmap/archive/multi-step-execution-reliability-finding.md).
 
 ## Where to start reading
 

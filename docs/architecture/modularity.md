@@ -38,7 +38,7 @@ orchestration types.
 ## Agentic orchestration seams (kernel vs domain packs)
 
 See [agentic-loops.md](agentic-loops.md) and the
-[hygiene audit](../roadmap/agentic-mesh-hygiene-audit-2026-07-10.md).
+[hygiene audit](../roadmap/archive/agentic-mesh-hygiene-audit-2026-07-10.md).
 
 | Seam | Reusable kernel | Coding domain pack (first) |
 |---|---|---|
@@ -83,7 +83,7 @@ Until then, coding types stay specialized and map to kernel `Report`/`Outcome` a
 > pack's parser. A second pack's section generalizes `Tuning` to a name → raw-value map.
 > Verify-DTO extraction into a `liberado-verify` crate remains available later, but is no longer
 > forced by config layering. See
-> [architecture-alignment-audit-2026-07-11](../roadmap/architecture-alignment-audit-2026-07-11.md).
+> [architecture-alignment-audit-2026-07-11](../roadmap/archive/architecture-alignment-audit-2026-07-11.md).
 
 ## Where this connects
 

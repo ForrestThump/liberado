@@ -76,7 +76,7 @@ session is awaiting input, replay restores it as `status: "parked"` with `awaiti
 so the question it was holding for you is visible rather than silently erased (it used to be coerced to
 `failed` with the flag wiped). No pack is hosting it, though, so `POST …/message` finds no live channel
 and fails. Restarting the pack on an answer is E6-c in
-[`one-execution-engine-plan.md`](../roadmap/one-execution-engine-plan.md). Clients should render
+[`one-execution-engine-plan.md`](../roadmap/archive/one-execution-engine-plan.md). Clients should render
 `parked` as "was waiting for you — start it again", **not** as an answerable prompt.
 
 **Interactivity is a capability, not a request (S6).** Whether a session may prompt at all is decided
@@ -228,7 +228,7 @@ Ordered by feel-impact. Each is a client + (sometimes) server change behind the 
 ### The TUI (proved the shared API)
 Both native clients are landed and share code (`chat-client-contract`'s `ChatEvent`/SSE decoder,
 `liberado-commands`' slash-command dispatcher — see
-[`tui-shared-code-extraction-plan.md`](../roadmap/tui-shared-code-extraction-plan.md)):
+[`tui-shared-code-extraction-plan.md`](../roadmap/archive/tui-shared-code-extraction-plan.md)):
 - **`liberado chat`** — the first native `reqwest`/SSE client of the contract: a terminal REPL
   (`crates/cli`, `chat_client.rs`) that streams the *same* `POST /api/chat/stream` and prints the
   conversation. It embeds no agent logic — it learns the session id from the `session` event and

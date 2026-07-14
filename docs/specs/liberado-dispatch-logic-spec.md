@@ -243,7 +243,7 @@ round-trip, not a human interruption. It also keeps the human-in-the-loop burden
   loop, and proposes the best candidate as a diff + rubric for human review — never auto-merges
   (same Decision-14 trust boundary as everything else that touches config/prompts). Full design:
   `docs/roadmap/heuristics-tuning-engine-plan.md`. Also surfaced a project-level open reliability
-  finding beyond prompt tuning itself: `docs/roadmap/multi-step-execution-reliability-finding.md`.
+  finding beyond prompt tuning itself: `docs/roadmap/archive/multi-step-execution-reliability-finding.md`.
 
 ---
 

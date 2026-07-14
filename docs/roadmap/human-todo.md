@@ -119,7 +119,7 @@ real — this is a small decision + config change, not something requiring new c
 
 Built `McpTransport::Docker` (a config-driven way to run an MCP server inside a container instead of
 directly as a host process — isolation for a less-trusted or freshly-scaffolded MCP) — full design in
-[phase-4-docker-transport.md](phase-4-docker-transport.md). Everything that can be verified without
+[phase-4-docker-transport.md](archive/phase-4-docker-transport.md). Everything that can be verified without
 a running Docker daemon is done: `cargo build --workspace`/`cargo clippy --all-targets` clean, all
 new unit tests passing (config round-trip, validation, `docker_argv`, registry registration).
 

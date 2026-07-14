@@ -5,7 +5,7 @@
 
 **Status**: implementation in progress, 2026-07-10  
 **Architecture**: [`docs/architecture/agentic-loops.md`](../architecture/agentic-loops.md)  
-**Hygiene audit**: [`agentic-mesh-hygiene-audit-2026-07-10.md`](agentic-mesh-hygiene-audit-2026-07-10.md)  
+**Hygiene audit**: [`agentic-mesh-hygiene-audit-2026-07-10.md`](archive/agentic-mesh-hygiene-audit-2026-07-10.md)  
 **Modularity**: [`docs/architecture/modularity.md`](../architecture/modularity.md)  
 **Design inputs**:
 [`loop_architecture_reference_article.md`](../ideas/loop_architecture_reference_article.md),
@@ -302,7 +302,7 @@ visibility, stop/progress thresholds.
 - `PathPolicy` / `CommandPolicy`: containment, deny globs, timeouts, output caps
 
 Docker first for real runs; same config style as
-[`phase-4-docker-transport.md`](phase-4-docker-transport.md) but a different isolation layer.
+[`phase-4-docker-transport.md`](archive/phase-4-docker-transport.md) but a different isolation layer.
 
 ### Event and session API
 

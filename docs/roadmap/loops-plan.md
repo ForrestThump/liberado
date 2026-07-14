@@ -7,7 +7,7 @@ inherit verifiers, capability narrowing, hats, transcripts, and (later) interact
 and the kernel never grows a second lifecycle.  
 **Vocabulary**: [`agentic-loops.md`](../architecture/agentic-loops.md) §Vocabulary — *turn loop*
 (executor) ⊂ *goal* (run-to-terminal) ⊂ *loop* (this doc) ⊂ *meta-loop* (tuner).  
-**Related**: [`session-focus-plan.md`](session-focus-plan.md) ·
+**Related**: [`session-focus-plan.md`](archive/session-focus-plan.md) ·
 [`verifiers.md`](../architecture/verifiers.md) · cron/`EventSource` (Decision 18/19) ·
 external reference: the `/goal` vs `/loop` convention
 ([`loop_architecture_reference_article.md`](../ideas/loop_architecture_reference_article.md)).

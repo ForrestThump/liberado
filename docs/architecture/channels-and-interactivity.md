@@ -6,9 +6,9 @@
 **authority-graph vs information-graph** distinction.
 **Related**: [`agentic-loops.md`](agentic-loops.md) · [`contracts.md`](contracts.md)
 (`EventSource`, `CapabilitySet`, `DomainPackRunner`) ·
-[`session-focus-plan.md`](../roadmap/session-focus-plan.md) (D7 unified `Session`, S1–S5) ·
+[`session-focus-plan.md`](../roadmap/archive/session-focus-plan.md) (D7 unified `Session`, S1–S5) ·
 [`meshify.md`](../ideas/meshify.md) (partially-superseded event-bus idea) ·
-[`architecture-alignment-audit-2026-07-11.md`](../roadmap/architecture-alignment-audit-2026-07-11.md).
+[`architecture-alignment-audit-2026-07-11.md`](../roadmap/archive/architecture-alignment-audit-2026-07-11.md).
 
 ---
 

@@ -351,7 +351,7 @@ architecture idea the way there is for a scored prompt candidate.
 ## Executor-layer live smoke tests — a real engine bug, not a prompt problem (2026-07-06)
 
 **This section's finding was elevated to a standalone, project-level doc** —
-[`multi-step-execution-reliability-finding.md`](multi-step-execution-reliability-finding.md) —
+[`multi-step-execution-reliability-finding.md`](archive/multi-step-execution-reliability-finding.md) —
 since it's not a tuner-specific issue (both `ExecuteDirect` and `DispatchSubagent` share the engine
 this affects). The full run-by-run data stays here; that doc summarizes it for readers who aren't
 here for the tuner specifically.

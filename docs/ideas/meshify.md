@@ -10,7 +10,7 @@
 >   talk to each other, and the runtime is a hub around one daemon, not a peer mesh.
 > - The live capability catalog (step 3) landed as the shared `Arc<CapabilityCatalog>`.
 > - Verdict on the "mesh" framing overall:
->   [`architecture-alignment-audit-2026-07-11.md`](../roadmap/architecture-alignment-audit-2026-07-11.md).
+>   [`architecture-alignment-audit-2026-07-11.md`](../roadmap/archive/architecture-alignment-audit-2026-07-11.md).
 
 **Goal**: Turn the current tight pipeline (watch → dispatch → execute) into a set of independent, swappable services that talk through events instead of direct calls.
 
