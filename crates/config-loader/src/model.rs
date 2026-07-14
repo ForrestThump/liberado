@@ -313,14 +313,16 @@ pub struct McpConfig {
     /// How the runtime actually reaches this server. Same source (`topology.mcps`) drives both the
     /// dispatcher catalog and the connection, so a name routed to is a name we can connect to.
     pub transport: McpTransport,
-    /// Default target zone for this MCP's write tools — a tool not named in `tools` below
-    /// inherits this. `None` if this MCP has no uniform default (e.g. a general-purpose vault MCP
-    /// whose tools each write to a different zone — declare each one explicitly in `tools`
-    /// instead), or if none of this MCP's tools are zone-scoped writes at all. Optional, not
-    /// required: an MCP that never touches vault zones (weather, a calculator) simply omits this
-    /// and every one of its tools is treated as "not a zone-write concern" by
-    /// `resolve_declared_zone` — zone-write-class gating is opt-in per MCP, not a blanket
-    /// restrictive default the way `consequence` is (most MCPs aren't vault writers at all).
+    /// Default target zone for this MCP's write tools — a tool not named in `tools` below inherits
+    /// this. Use it for a **fixed-zone** MCP (every tool lands in the same place).
+    ///
+    /// Zone declaration used to be *opt-in*, and this comment used to say so approvingly. That was
+    /// the bug (F1): opting in was the safe choice, nobody took it, and so `resolve_zone` returned
+    /// `None` for every tool of every MCP — leaving both the capability guard and the
+    /// zone-write-class guard permanently inert. A guard that is off by default is not a guard.
+    ///
+    /// A non-`read_only` MCP must now declare one of `default_zone`, `zone_from_arg` +
+    /// `write_tools`, or `writes_vault = false`, and validation refuses to boot otherwise.
     #[serde(default)]
     pub default_zone: Option<String>,
     /// Per-tool overrides. A tool named here uses its own `zone` instead of inheriting
@@ -329,6 +331,32 @@ pub struct McpConfig {
     /// inherits `default_zone` (which may itself be `None`).
     #[serde(default)]
     pub tools: Vec<ToolImpact>,
+    /// **Path-addressed MCPs only** (TurboVault): the argument whose leading path segment names the
+    /// zone this call writes to — e.g. `zone_from_arg = "path"`, so `write_note(path =
+    /// "decisions/x.md")` resolves to zone `decisions`.
+    ///
+    /// A fixed `default_zone` cannot describe such an MCP: one `write_note` can land in any zone,
+    /// so declaring a single zone would authorize writes to *every* zone under one capability.
+    #[serde(default)]
+    pub zone_from_arg: Option<String>,
+    /// **Path-addressed MCPs only**: which of this MCP's tools actually write. Everything not named
+    /// here is a read. Required alongside `zone_from_arg`, because a path argument alone cannot
+    /// tell `read_note` from `write_note` — both have one.
+    #[serde(default)]
+    pub write_tools: Vec<String>,
+    /// Set `false` to declare "this MCP has effects, but none of them are **vault zone** writes" —
+    /// a PDF tool that writes files, a memory MCP that writes its own store.
+    ///
+    /// This exists so the opt-out is a **statement**, not a silence. An MCP that simply said nothing
+    /// about zones is what F1 was: the guard resolved no zone, so it never fired, and nobody
+    /// noticed for months. A non-`read_only` MCP must now either say where its vault writes land or
+    /// say that it makes none — and validation refuses to boot until it does.
+    ///
+    /// Trust boundary, stated plainly: an MCP that declares `writes_vault = false` and then writes
+    /// the vault anyway defeats this. That is a human asserting something false in config, which is
+    /// a different (and much more visible) problem from a default that quietly protects nothing.
+    #[serde(default)]
+    pub writes_vault: Option<bool>,
 }
 
 /// One tool's zone-write override within its owning [`McpConfig`] — see `McpConfig::default_zone`
@@ -379,6 +407,9 @@ mod zone_resolution_tests {
             transport: McpTransport::Managed,
             default_zone: default_zone.map(String::from),
             tools,
+            zone_from_arg: None,
+            write_tools: Vec::new(),
+            writes_vault: None,
         }
     }
 
@@ -1813,6 +1844,9 @@ transport = { kind = "docker", image = "liberado-tasks-mcp:latest", command = "n
             },
             default_zone: None,
             tools: Vec::new(),
+            zone_from_arg: None,
+            write_tools: Vec::new(),
+            writes_vault: Some(false),
         }];
         let err = cfg
             .validate()
@@ -1986,6 +2020,9 @@ clarify_threshold_read = 0.8
                 },
                 default_zone: None,
                 tools: Vec::new(),
+                zone_from_arg: None,
+                write_tools: Vec::new(),
+                writes_vault: Some(false),
             })
             .hook(HookConfig {
                 name: "hook1".into(),

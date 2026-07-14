@@ -534,6 +534,9 @@ mod tests {
             transport,
             default_zone: None,
             tools: Vec::new(),
+            zone_from_arg: None,
+            write_tools: Vec::new(),
+            writes_vault: Some(false),
         }
     }
 

@@ -239,6 +239,8 @@ async fn score_one(
                 provenance: None,
                 default_zone: None,
                 tool_zones: Vec::new(),
+                zone_from_arg: None,
+                write_tools: Vec::new(),
             })
             .collect(),
         capabilities: CapabilitySet::from_iter(

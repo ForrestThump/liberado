@@ -81,8 +81,9 @@ The E5 live test passed, but only after fixing two defects it found (`1de63bc`),
   *Until one of these lands, the hours-long idle budget is a promise the daemon keeps and the product
   does not.*
 
-- **F1 — `Capability::Write` is not enforced at the MCP boundary.** *(security/authority; found live
-  2026-07-14)* `RiskGatedToolRuntime` checks `ExecuteMcp`, consequence, zone-write-class and a
+- ~~**F1 — `Capability::Write` is not enforced at the MCP boundary.**~~ **Fixed 2026-07-14**, live-verified
+  (a `Read`-only profile is now refused the write; a profile holding `Write` still succeeds). Kept below
+  because *how* it hid is the lesson. *(security/authority; found live 2026-07-14)* `RiskGatedToolRuntime` checks `ExecuteMcp`, consequence, zone-write-class and a
   destructive-text heuristic — and **never consults `Capability::Write(Zone)`**. A dispatch profile
   granted `Read` + `ExecuteMcp("turbovault")` and explicitly **no `Write`** wrote a vault note anyway.
   `ExecuteMcp` is therefore all-or-nothing: calling an MCP grants everything that MCP can do. The
@@ -92,6 +93,24 @@ The E5 live test passed, but only after fixing two defects it found (`1de63bc`),
   boundary check **and** zone declarations for every writing MCP, failing **closed**; doing either alone
   leaves it inert or breaks chat's writes. See
   [one-execution-engine-live-test.md](one-execution-engine-live-test.md) § Control F.
+
+  **The fix, and the rule it establishes.** Declaring an MCP now means rating it, wiring it, **and saying
+  what it touches** — `default_zone` (fixed-zone MCP), `zone_from_arg` + `write_tools` (path-addressed,
+  like TurboVault), or an explicit `writes_vault = false`. The daemon **refuses to boot** otherwise,
+  naming the offender. Failing at boot rather than at the tool call is deliberate: a refusal
+  mid-conversation is discovered three turns into something you cared about, with an error that does not
+  explain itself.
+
+  Two things this forced into the open, both worth keeping in mind:
+
+  * **A path-addressed MCP cannot be described by a tool→zone map.** TurboVault's one `write_note` lands
+    in `tasks/`, `decisions/` or `finance/` depending on its `path` argument. A `default_zone = "tasks"`
+    would have been a *lie* — `Write(tasks)` would have authorized a write to `decisions/`. So the zone
+    is resolved from the call's **arguments**, and `WriteTarget` is a three-state answer: a write whose
+    zone cannot be determined is **refused**, never silently treated as "not a write". That collapse is
+    what F1 *was*.
+  * **The tests that "covered" zone writes never granted a `Write` capability** — which is why they kept
+    passing while the capability did nothing. Adding the check broke them, and the break was the proof.
 
 ## The phased roadmap
 

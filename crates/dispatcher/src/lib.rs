@@ -747,6 +747,8 @@ mod tests {
                 provenance: None,
                 default_zone: None,
                 tool_zones: Vec::new(),
+                zone_from_arg: None,
+                write_tools: Vec::new(),
             }],
             capabilities,
             reaction_depth,
@@ -856,6 +858,8 @@ mod tests {
             provenance: None,
             default_zone: None,
             tool_zones: Vec::new(),
+            zone_from_arg: None,
+            write_tools: Vec::new(),
         });
 
         let out = dispatcher.dispatch(&req).await.unwrap();
@@ -897,6 +901,8 @@ mod tests {
                 provenance: None,
                 default_zone: None,
                 tool_zones: Vec::new(),
+                zone_from_arg: None,
+                write_tools: Vec::new(),
             }],
             capabilities: caps("email"),
             reaction_depth: 0,
@@ -933,6 +939,8 @@ mod tests {
                 provenance: None,
                 default_zone: None,
                 tool_zones: vec![("write_review".into(), Some("reviews".into()))],
+                zone_from_arg: None,
+                write_tools: Vec::new(),
             }],
             capabilities: caps("vault"),
             reaction_depth: 0,
@@ -968,6 +976,8 @@ mod tests {
                 provenance: None,
                 default_zone: None,
                 tool_zones: Vec::new(),
+                zone_from_arg: None,
+                write_tools: Vec::new(),
             }],
             capabilities: caps("email"),
             reaction_depth: 0,
@@ -1025,6 +1035,8 @@ mod tests {
                 provenance: None,
                 default_zone: None,
                 tool_zones: Vec::new(),
+                zone_from_arg: None,
+                write_tools: Vec::new(),
             }],
             capabilities: caps("vault"),
             reaction_depth: 0,
@@ -1235,6 +1247,8 @@ mod tests {
             provenance: None,
             default_zone: None,
             tool_zones: Vec::new(),
+            zone_from_arg: None,
+            write_tools: Vec::new(),
         });
         let out = dispatcher.dispatch(&req).await.unwrap();
         match out.action {
@@ -1254,6 +1268,8 @@ mod tests {
             provenance: None,
             default_zone: None,
             tool_zones: Vec::new(),
+            zone_from_arg: None,
+            write_tools: Vec::new(),
         }];
         let mut d = DispatchDecision {
             action: DispatchAction::ExecuteDirect {
@@ -1301,6 +1317,8 @@ mod tests {
             provenance: None,
             default_zone: None,
             tool_zones: Vec::new(),
+            zone_from_arg: None,
+            write_tools: Vec::new(),
         }];
         let mut d = DispatchDecision {
             action: DispatchAction::ExecuteDirect {

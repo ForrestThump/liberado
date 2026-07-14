@@ -46,7 +46,10 @@ pub use capability::{
     Capability, CapabilitySet, Consequence, Magnitude, WriteClass, Zone, assess_magnitude,
     is_sweeping_destructive, mentions_destructive,
 };
-pub use catalog::{CapabilityCatalog, McpDescriptor, resolve_zone, zone_write_restriction};
+pub use catalog::{
+    CapabilityCatalog, McpDescriptor, WriteTarget, resolve_zone, write_target,
+    zone_write_restriction,
+};
 pub use dispatch::{
     BlockReason, DispatchAction, DispatchDecision, ExecMode, JobHandle, JobStatus, Outcome, Report,
     ToolCall, bare_tool_name, mcp_of,

@@ -47,6 +47,78 @@ pub struct McpDescriptor {
     /// explicitly overrides to "not a zone write" even when `default_zone` is set. Mirrors
     /// `liberado_config_loader::McpConfig::tools`.
     pub tool_zones: Vec<(String, Option<String>)>,
+    /// For a **path-addressed** MCP: the argument whose leading path segment names the target zone.
+    ///
+    /// A tool→zone map cannot describe an MCP like TurboVault, where one `write_note` lands in
+    /// `tasks/`, `decisions/` or `finance/` depending entirely on its `path` argument. Declaring
+    /// `default_zone = "tasks"` for such an MCP would be a *lie*: a grant holding `Write(tasks)`
+    /// would be waved through a write to `decisions/`. So the zone is resolved from the call's
+    /// arguments instead — see [`write_target`].
+    pub zone_from_arg: Option<String>,
+    /// The tools of a path-addressed MCP that actually **write**. Everything else is a read.
+    ///
+    /// Needed because `zone_from_arg` alone cannot distinguish `read_note` from `write_note` —
+    /// both carry a path. Without this list, reads would be made to require a `Write` capability.
+    pub write_tools: Vec<String>,
+}
+
+/// What a tool call writes to, resolved against its MCP's declaration *and its arguments*.
+///
+/// Deliberately a three-state answer, not `Option<String>`: "this is a write whose zone I cannot
+/// determine" is a real, distinct outcome (a path-addressed write tool called with no path), and it
+/// must **not** collapse into "not a write". That collapse is exactly the class of bug F1 was — a
+/// guard that says nothing when it does not know, and is therefore silently absent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteTarget {
+    /// Not a zone write: a declared read, or an MCP that writes nothing.
+    NotAWrite,
+    /// Writes to this zone. The caller must hold `Capability::Write(Zone::vault(zone))`.
+    Zone(String),
+    /// It *is* a write, but the target zone could not be determined. **Fail closed** — refuse.
+    Undeterminable(String),
+}
+
+/// Resolve what `bare_tool_name` on `descriptor` writes to, given the call's `arguments`.
+///
+/// Two declaration styles, because two kinds of MCP exist:
+///
+/// * **Fixed-zone** (a tasks MCP whose every tool touches `tasks/`): `default_zone` + per-tool
+///   `tool_zones` overrides. Zone depends only on the tool name.
+/// * **Path-addressed** (TurboVault): `zone_from_arg` + `write_tools`. Zone depends on the call's
+///   arguments, so it can only be known here, at the boundary, with the call in hand.
+pub fn write_target(
+    descriptor: &McpDescriptor,
+    bare_tool_name: &str,
+    arguments: &serde_json::Value,
+) -> WriteTarget {
+    if let Some(arg) = &descriptor.zone_from_arg {
+        if !descriptor.write_tools.iter().any(|t| t == bare_tool_name) {
+            return WriteTarget::NotAWrite;
+        }
+        let Some(path) = arguments.get(arg).and_then(|v| v.as_str()) else {
+            return WriteTarget::Undeterminable(format!(
+                "'{bare_tool_name}' writes, and its zone comes from the '{arg}' argument, which is \
+                 missing or not a string"
+            ));
+        };
+        // The zone is the leading path segment: `tasks/foo.md` -> `tasks`. A bare filename has no
+        // zone, and a write with no zone is a write we cannot authorize.
+        let segment = path.split(['/', '\\']).find(|s| !s.is_empty() && *s != ".");
+        return match segment {
+            Some(zone) if path.contains('/') || path.contains('\\') => {
+                WriteTarget::Zone(zone.to_string())
+            }
+            _ => WriteTarget::Undeterminable(format!(
+                "'{bare_tool_name}' writes to '{path}', which names no zone (expected \
+                 '<zone>/...')"
+            )),
+        };
+    }
+
+    match resolve_zone(descriptor, bare_tool_name) {
+        Some(zone) => WriteTarget::Zone(zone),
+        None => WriteTarget::NotAWrite,
+    }
 }
 
 /// Resolve the target zone for `bare_tool_name` given `descriptor`'s zone declarations. `None`
@@ -298,7 +370,76 @@ mod tests {
             provenance: None,
             default_zone: Some("tasks".into()),
             tool_zones: vec![("write_review".into(), Some("reviews".into()))],
+            zone_from_arg: None,
+            write_tools: Vec::new(),
         }
+    }
+
+    /// A path-addressed MCP: one write tool that can land in any zone, plus a read that must NOT be
+    /// made to look like a write just because it also carries a path.
+    fn path_addressed_descriptor() -> McpDescriptor {
+        McpDescriptor {
+            name: "turbovault".into(),
+            description: "path-addressed vault".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: None,
+            tool_zones: Vec::new(),
+            zone_from_arg: Some("path".into()),
+            write_tools: vec!["write_note".into(), "delete_note".into()],
+        }
+    }
+
+    #[test]
+    fn a_path_addressed_write_takes_its_zone_from_the_argument() {
+        // The whole reason `write_target` exists: `default_zone` cannot describe this MCP. The SAME
+        // tool writes to a different zone on every call, so a fixed declaration would authorize a
+        // write to `decisions/` under a `Write(tasks)` capability.
+        let d = path_addressed_descriptor();
+        assert_eq!(
+            write_target(
+                &d,
+                "write_note",
+                &serde_json::json!({"path": "decisions/x.md"})
+            ),
+            WriteTarget::Zone("decisions".into())
+        );
+        assert_eq!(
+            write_target(&d, "write_note", &serde_json::json!({"path": "tasks/y.md"})),
+            WriteTarget::Zone("tasks".into())
+        );
+    }
+
+    #[test]
+    fn a_read_on_a_path_addressed_mcp_is_not_a_write() {
+        // `read_note` also carries a path. Without `write_tools`, it would demand a Write capability.
+        let d = path_addressed_descriptor();
+        assert_eq!(
+            write_target(
+                &d,
+                "read_note",
+                &serde_json::json!({"path": "finance/secret.md"})
+            ),
+            WriteTarget::NotAWrite
+        );
+    }
+
+    #[test]
+    fn a_write_whose_zone_cannot_be_determined_fails_closed() {
+        // A write we cannot place is a write we cannot authorize. Collapsing this into "not a write"
+        // is exactly the bug F1 was — a guard that says nothing when it does not know.
+        let d = path_addressed_descriptor();
+        assert!(matches!(
+            write_target(&d, "write_note", &serde_json::json!({})),
+            WriteTarget::Undeterminable(_)
+        ));
+        assert!(
+            matches!(
+                write_target(&d, "write_note", &serde_json::json!({"path": "loose.md"})),
+                WriteTarget::Undeterminable(_)
+            ),
+            "a bare filename names no zone"
+        );
     }
 
     #[test]

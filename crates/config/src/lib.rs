@@ -276,6 +276,8 @@ pub fn catalog_from_config(config: &Config) -> Vec<liberado_common::McpDescripto
                 .iter()
                 .map(|t| (t.name.clone(), t.zone.clone()))
                 .collect(),
+            zone_from_arg: m.zone_from_arg.clone(),
+            write_tools: m.write_tools.clone(),
         })
         .collect()
 }
@@ -447,6 +449,7 @@ name = "memory-mcp"
 description = "store and recall memories"
 consequence = "reversible"
 transport = { kind = "stdio", command = "memory-mcp", args = [] }
+writes_vault = false   # F1: a writing MCP must say what it touches, even in a fixture
 "#;
 
     /// A policy with two writable zones, a human-only zone, a grant, and no secrets.
@@ -607,6 +610,9 @@ capabilities = [ { ExecuteMcp = "ghost-mcp" } ]
                 },
                 default_zone: None,
                 tools: Vec::new(),
+                zone_from_arg: None,
+                write_tools: Vec::new(),
+                writes_vault: Some(false),
             },
             McpConfig {
                 name: "email-mcp".into(),
@@ -619,6 +625,9 @@ capabilities = [ { ExecuteMcp = "ghost-mcp" } ]
                 },
                 default_zone: None,
                 tools: Vec::new(),
+                zone_from_arg: None,
+                write_tools: Vec::new(),
+                writes_vault: Some(false),
             },
         ];
 
@@ -645,6 +654,7 @@ name = "email-mcp"
 description = "send email on the user's behalf"
 consequence = "external"
 transport = { kind = "stdio", command = "email-mcp", args = [] }
+writes_vault = false   # sends email; writes no vault zone
 "#,
         );
 

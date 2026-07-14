@@ -41,8 +41,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use liberado_common::{
-    CapabilitySet, Consequence, McpDescriptor, Proposal, ProposalSigner, ProposedAction,
-    WriteClass, bare_tool_name, is_sweeping_destructive, mcp_of, zone_write_restriction,
+    Capability, CapabilitySet, Consequence, McpDescriptor, Proposal, ProposalSigner,
+    ProposedAction, WriteClass, WriteTarget, Zone, bare_tool_name, is_sweeping_destructive, mcp_of,
+    write_target,
 };
 use liberado_notify::Notifier;
 use liberado_provider::{ToolDef, ToolInvocation};
@@ -187,6 +188,58 @@ impl ToolRuntime for RiskGatedToolRuntime {
                 }
             };
 
+            // 2b. **What does this call write, and may this grant write it? (F1)**
+            //
+            // `ExecuteMcp` says you may *call* this MCP. It does not say you may *write* with it —
+            // and until 2026-07-14 nothing else said so either: `Capability::Write(Zone)` was never
+            // consulted at this boundary, so a grant of `Read` + `ExecuteMcp("turbovault")` could
+            // write the entire vault. A live dispatch session with no `Write` capability wrote a
+            // note its profile explicitly withheld.
+            //
+            // The zone is resolved ONCE here and reused by the write-class check below. That
+            // matters: both guards were previously inert for the same reason (no MCP declared a
+            // zone, so nothing resolved), and resolving in one place means they cannot drift back
+            // apart. For a path-addressed MCP the zone depends on the call's *arguments*, so this
+            // is the only place it can be known.
+            let write_target = self
+                .zone_catalog
+                .iter()
+                .find(|d| d.name == mcp_name)
+                .map(|d| write_target(d, bare_tool_name(&call.name), &call.arguments))
+                .unwrap_or(WriteTarget::NotAWrite);
+
+            let write_zone = match &write_target {
+                // A write we cannot place. Fail closed — refusing a write whose target is unknown
+                // is the only safe answer, and it is a config bug worth surfacing loudly.
+                WriteTarget::Undeterminable(why) => {
+                    tracing::warn!(mcp = %mcp_name, %why, "tool call refused: undeterminable write zone");
+                    return Err(format!("not authorized: {why}"));
+                }
+                WriteTarget::Zone(zone) => Some(zone.clone()),
+                WriteTarget::NotAWrite => None,
+            };
+
+            if let Some(zone) = &write_zone {
+                // Deliberately a **refusal**, not a proposal downgrade. The guards below ask "this
+                // is permitted, but is it risky enough to need a human?" — a question that only
+                // makes sense once "is this permitted at all?" is yes. A missing capability is an
+                // authority failure, and reads like one: same shape as the `grants_mcp` refusal.
+                if !self.capabilities.contains(&Capability::Write(Zone::vault(zone))) {
+                    tracing::warn!(
+                        mcp = %mcp_name,
+                        tool = %bare_tool_name(&call.name),
+                        %zone,
+                        "tool call refused: no Write capability for the zone it targets"
+                    );
+                    return Err(format!(
+                        "not authorized: '{}' writes to zone '{zone}', and this session's grant \
+                         does not include Write({zone}). Calling an MCP is not permission to write \
+                         with it.",
+                        call.name
+                    ));
+                }
+            }
+
             // 3. If consequence >= Irreversible, downgrade to proposal.
             if consequence >= Consequence::Irreversible {
                 tracing::warn!(
@@ -200,16 +253,24 @@ impl ToolRuntime for RiskGatedToolRuntime {
                 return Ok(proposal_message(&proposal_path));
             }
 
-            // 3b. Zone-write-class check (§6 #2) — shared with the dispatcher's pre-flight guard
-            // via `liberado_common::zone_write_restriction` (see its doc comment) so the two
-            // enforcement points can't silently drift apart on what counts as restricted.
+            // 3b. Zone-write-class check (§6 #2). Now driven by the SAME `write_zone` resolved in
+            // 2b rather than re-deriving from the tool name alone — which is what made it inert for
+            // a path-addressed MCP: `resolve_zone` could not see the `path` argument, returned
+            // `None`, and a write to the `human_only` finance zone sailed straight through. The two
+            // guards ask different questions of one answer: 2b asks *may you*, this asks *is it
+            // safe to do directly*.
             let bare_tool = bare_tool_name(&call.name);
-            if let Some(zone) = zone_write_restriction(
-                &mcp_name,
-                bare_tool,
-                &self.zone_catalog,
-                &self.zone_write_classes,
-            ) {
+            let restricted_zone = write_zone.as_ref().filter(|zone| {
+                let class = self
+                    .zone_write_classes
+                    .iter()
+                    .find(|(z, _)| z == *zone)
+                    // An undeclared zone fails safe to the restrictive default, same as
+                    // `zone_write_restriction` does — an unknown zone is not a licence.
+                    .map_or(WriteClass::default(), |(_, wc)| *wc);
+                !class.allows_direct_agent_write()
+            });
+            if let Some(zone) = restricted_zone {
                 tracing::warn!(
                     mcp = %mcp_name,
                     tool = %bare_tool,
@@ -589,6 +650,8 @@ mod tests {
             provenance: None,
             default_zone: Some("tasks".into()),
             tool_zones: vec![("write_review".into(), Some("reviews".into()))],
+            zone_from_arg: None,
+            write_tools: Vec::new(),
         }
     }
 
@@ -596,7 +659,12 @@ mod tests {
     async fn zone_restricted_call_is_downgraded_to_proposal() {
         let dir = tempfile::TempDir::new().unwrap();
         let inner = Arc::new(MockInner::new(&["vault:write_review"], Ok("wrote".into())));
-        let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("vault".into())]);
+        // Holds the authority to write `reviews` — this test is about whether the write is SAFE to
+        // do directly (write-class), which is a question that only arises once it is PERMITTED.
+        let caps = CapabilitySet::from_iter([
+            Capability::ExecuteMcp("vault".into()),
+            Capability::Write(Zone::vault("reviews")),
+        ]);
         let rt = RiskGatedToolRuntime::new(
             inner.clone(),
             caps,
@@ -628,7 +696,10 @@ mod tests {
     async fn zone_agent_writable_call_passes_through() {
         let dir = tempfile::TempDir::new().unwrap();
         let inner = Arc::new(MockInner::new(&["vault:write_review"], Ok("wrote".into())));
-        let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("vault".into())]);
+        let caps = CapabilitySet::from_iter([
+            Capability::ExecuteMcp("vault".into()),
+            Capability::Write(Zone::vault("reviews")),
+        ]);
         let rt = RiskGatedToolRuntime::new(
             inner.clone(),
             caps,
@@ -714,5 +785,115 @@ mod tests {
                 .expect("downgrade should be Ok")
                 .contains("PROPOSAL CREATED")
         );
+    }
+
+    /// F1, the live failure, pinned: a grant that may CALL an MCP but holds no Write for the zone it
+    /// targets must be refused. Before 2026-07-14 this call succeeded — `Capability::Write` was never
+    /// consulted here, so `ExecuteMcp("turbovault")` was in effect "write the whole vault".
+    #[tokio::test]
+    async fn calling_an_mcp_is_not_permission_to_write_with_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(&["vault:write_review"], Ok("wrote".into())));
+        // ExecuteMcp but NO Write — exactly the dispatch-readonly profile from the live control.
+        let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("vault".into())]);
+        let rt = RiskGatedToolRuntime::new(
+            inner.clone(),
+            caps,
+            vec![("vault".into(), Consequence::Reversible)],
+            vec![vault_descriptor()],
+            // `reviews` is freely agent-writable: the RISK gate would happily pass this. The refusal
+            // must come from AUTHORITY, which is a different question and is asked first.
+            vec![("reviews".to_string(), WriteClass::AgentWritable)],
+            dir.path().to_path_buf(),
+            "write a review note".into(),
+            "test-f1".into(),
+            ProposalSigner::random(),
+            "default",
+        );
+
+        let call = ToolInvocation::new("c1", "vault:write_review", serde_json::json!({"c": "..."}));
+        let err = rt
+            .invoke(&call)
+            .await
+            .expect_err("a write with no Write capability must be REFUSED, not downgraded");
+        assert!(err.contains("not authorized"), "{err}");
+        assert!(
+            err.contains("reviews"),
+            "must name the zone it refused: {err}"
+        );
+        assert!(
+            inner.invoked.lock().unwrap().is_empty(),
+            "and the tool must never have run"
+        );
+    }
+
+    /// The path-addressed case, which is what TurboVault actually is: the zone comes from the call's
+    /// arguments, so `Write(tasks)` must NOT authorize a write to `decisions/`.
+    #[tokio::test]
+    async fn a_path_addressed_write_is_checked_against_the_zone_the_path_names() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let descriptor = McpDescriptor {
+            name: "turbovault".into(),
+            description: "path-addressed vault".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: None,
+            tool_zones: Vec::new(),
+            zone_from_arg: Some("path".into()),
+            write_tools: vec!["write_note".into()],
+        };
+        let caps = CapabilitySet::from_iter([
+            Capability::ExecuteMcp("turbovault".into()),
+            Capability::Write(Zone::vault("tasks")),
+        ]);
+        let classes = vec![
+            ("tasks".to_string(), WriteClass::AgentWritable),
+            ("decisions".to_string(), WriteClass::AgentWritable),
+        ];
+        let make = |inner: Arc<MockInner>| {
+            RiskGatedToolRuntime::new(
+                inner,
+                caps.clone(),
+                vec![("turbovault".into(), Consequence::Reversible)],
+                vec![descriptor.clone()],
+                classes.clone(),
+                dir.path().to_path_buf(),
+                "write a note".into(),
+                "test-path".into(),
+                ProposalSigner::random(),
+                "default",
+            )
+        };
+
+        // In-zone: permitted.
+        let ok_inner = Arc::new(MockInner::new(
+            &["turbovault:write_note"],
+            Ok("wrote".into()),
+        ));
+        let ok = make(ok_inner.clone())
+            .invoke(&ToolInvocation::new(
+                "c1",
+                "turbovault:write_note",
+                serde_json::json!({"path": "tasks/a.md"}),
+            ))
+            .await;
+        assert_eq!(ok, Ok("wrote".into()));
+
+        // Out of zone: the SAME tool, the SAME grant — refused, because the path names a zone this
+        // grant cannot write. A fixed `default_zone` could never have caught this.
+        let bad_inner = Arc::new(MockInner::new(
+            &["turbovault:write_note"],
+            Ok("wrote".into()),
+        ));
+        let err = make(bad_inner.clone())
+            .invoke(&ToolInvocation::new(
+                "c2",
+                "turbovault:write_note",
+                serde_json::json!({"path": "decisions/b.md"}),
+            ))
+            .await
+            .expect_err("Write(tasks) must not authorize a write to decisions/");
+        assert!(err.contains("decisions"), "{err}");
+        assert!(bad_inner.invoked.lock().unwrap().is_empty());
     }
 }
