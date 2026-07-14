@@ -16,7 +16,6 @@ shipped with a green test suite.
 | **E5-b** | **Answer a session from your phone** | A ping reaches you; a reply typed into Telegram goes nowhere (confirmed live). Telegram is one flat chat with **no session multiplexing** — five sessions interleave and you cannot tell which asked what. So the fix is a **deep link into W1**, not a reply bridge. Needs `public_base_url` in config — **not before there is a page to link to**. |
 | **E6-c(b)** | **Resume a session parked *mid-build*** | Intake resume shipped (E6-c(a)); the build loop cannot resume because re-running it would redo filesystem work. The workspace is already a git repo, so a commit is the obvious suspend point. Design pass, not a line of code. |
 | **T1** | **The live conformance suite** — [`live-conformance-suite.md`](live-conformance-suite.md) | Every defect found on 2026-07-13/14 passed the test suite and died on first contact with a running daemon. Those checks exist only as commands typed by hand. **Most of them need a real daemon but only a `MockProvider`**, so the valuable tier is fast and CI-able — that is the insight that makes this tractable rather than a slow `#[ignore]`d graveyard. |
-| **V1** | **Unify the outcome vocabulary** | Five overlapping ways to say "how it ended" — `Outcome`, `TerminalKind`, `SessionStatus`, `Disposition`, `VerdictStatus` — and exactly **one** conversion function in the whole codebase (`terminal_summary`). Every other mapping is ad-hoc and inline, which is precisely where the lying-status bugs came from. Needs a design decision before touching. |
 | — | [`pr-dispatch-vtcode-no-write-finding.md`](pr-dispatch-vtcode-no-write-finding.md) | **Root cause still not found.** The one genuinely open bug carried over. |
 
 ## Recently landed (2026-07-13/14)
@@ -39,6 +38,13 @@ just pointers to how it got here.
 - **F1 — `Capability::Write` is now enforced at the MCP boundary.** It never was: a profile granted
   `Read` and explicitly denied `Write` wrote to the vault, live. Declaring an MCP now means saying
   **what it touches**, and the daemon refuses to boot until you do.
+- **V1 — the outcome vocabulary.** Investigating "five overlapping ways to say how it ended" found
+  that **three of the five are not duplicates**: `Disposition` carries payloads, `VerdictStatus`'s
+  `Error` (the check broke) is not `Fail` (the code is wrong), and `Outcome` is an *execution*, a level
+  below a session. Each now documents why, so the next person to spot the "duplication" finds the
+  reasoning rather than a tidy-up opportunity. The one real duplication — `TerminalKind` vs
+  `SessionStatus`, converted by a hand-written match — is now a `From` impl plus its inverse, with
+  `is_terminal()` *defined* as `terminal_kind().is_some()` so the two cannot disagree by construction.
 - **S7-c — a contract that contradicts itself never reaches you.** And, after it killed a session by
   crying wolf, a machine check may now **defer to** a human but never **overrule** one.
 
