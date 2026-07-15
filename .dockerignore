@@ -1,0 +1,34 @@
+# Keep the build context small and the build reproducible. The Rust build needs only Cargo.toml /
+# Cargo.lock / crates/ ; everything below is either huge, vendored, host-specific, or irrelevant.
+
+# Build outputs (the biggest offender — never ship the host's target/).
+target/
+**/target/
+
+# Vendored / separate projects that are NOT part of the workspace Rust build.
+turbovault/
+liberado-pr-dispatch-mcp/
+liberado-wakeup-mcp/
+spider-mcp/
+
+# Git history and CI.
+.git/
+.github/
+
+# Runtime state and local scratch (never bake host data into the image).
+.liberado/
+mutants.out/
+mutants.out.old/
+
+# Host WebUI build artifacts (the image is headless).
+dist/
+**/dist/
+**/pkg/
+node_modules/
+**/node_modules/
+
+# Docs and editor cruft — not needed to compile.
+docs/
+*.md
+.vscode/
+.idea/

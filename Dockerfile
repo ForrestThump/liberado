@@ -1,0 +1,55 @@
+# Liberado daemon — headless deploy image (P1: the automation daemon).
+#
+# Multi-stage: build the whole Rust workspace with the official `rust` image, ship only the
+# `liberado` binary on a slim Debian runtime. No WASM WebUI here — v1 is the daemon + HTTP/SSE API +
+# Telegram + MCP clients; the WebUI (W1) is not built yet, and `serve` 404s the static route cleanly
+# when the dist dir is absent, so the API still works.
+#
+# Building in this container IS the Debian shakeout: the Unix code paths that have only ever been
+# compiled on Windows finally compile *and run* on the target platform, isolated where a bug can do no
+# harm. Build/runtime are both Debian trixie so the binary's glibc matches the homelab exactly.
+
+# ---- builder ----
+FROM rust:1-trixie AS builder
+WORKDIR /build
+
+# Build-time system deps: openssl (reqwest/native-tls), pkg-config, git (build scripts + the coder
+# pack shells out to it).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        pkg-config libssl-dev git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Cap parallel codegen so a release build of the full workspace does not spike past the box's RAM
+# (the homelab has ~11 GiB; linking several crates at once is the peak).
+ENV CARGO_BUILD_JOBS=2 \
+    CARGO_NET_GIT_FETCH_WITH_CLI=true
+
+COPY . .
+
+# `-p liberado-cli` pulls in the whole needed graph (server -> daemon -> every kernel/pack crate) and
+# emits the single `liberado` binary. The WebUI is a separate `dx` build, so it is naturally excluded.
+RUN cargo build --release -p liberado-cli \
+    && strip target/release/liberado || true
+
+# ---- runtime ----
+FROM debian:trixie-slim AS runtime
+
+# Runtime deps: TLS roots (outbound provider/MCP HTTPS), openssl runtime, git (coder pack; harmless
+# for the automation daemon), and a shell for healthchecks.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates libssl3 git curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/liberado /usr/local/bin/liberado
+
+# Config, data, and the vault are all mounts (see the compose service). Config and data are named so
+# the daemon finds them without flags; the vault path is set in topology.toml.
+ENV LIBERADO_CONFIG_DIR=/config \
+    LIBERADO_DATA_DIR=/data \
+    LIBERADO_PORT=4201
+
+EXPOSE 4201
+
+# `serve` with an empty vault arg falls back to topology.vault_path (= /vault, read-only for v1).
+ENTRYPOINT ["liberado"]
+CMD ["serve"]
