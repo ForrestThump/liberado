@@ -22,6 +22,10 @@ services:
       - "4201:4201"     # LAN: http://192.168.0.144:4201  (API + SSE; WebUI is not built yet)
     environment:
       LIBERADO_PORT: "4201"
+      # `liberado serve` requires the vault path via arg or this env — it does NOT fall back to
+      # topology.vault_path at the CLI layer (that fallback is inside run(), reached only after the
+      # CLI arg-check passes). Found on first boot, 2026-07-15.
+      LIBERADO_VAULT: "/vault"
       RUST_LOG: "info"
       # --- wired after first boot is confirmed clean ---
       # DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}     # + set `provider = "deepseek"` in topology.toml
