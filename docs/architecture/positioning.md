@@ -1,12 +1,18 @@
 ﻿# Positioning
 
 Liberado is **not** trying to win the agent-framework market. The goal is narrower and more honest:
-**build something objectively more useful *for its author* than the existing free alternatives**
-(OpenClaw/Clawdbot, Hermes, LibreChat). Building from scratch is only justified where those tools
-fall short on the metrics that matter here — otherwise we would just use them. They are also valuable
-*reference designs*: studying them tells us what is useful and what is not, and adopting their good
-parts is smart engineering, not imitation. We compete only on the metrics the author cares about, not
-on market share.
+**build something objectively more useful *for its author* than the existing free alternatives** — the
+autonomous-daemon tools (OpenClaw/Clawdbot, Hermes), the chat frontends (LibreChat), and the coding
+agents (Claude Code, Grok Build, Kilo/OpenCode). Building from scratch is only justified where those
+tools fall short on the metrics that matter here — otherwise we would just use them. They are also
+valuable *reference designs*: studying them tells us what is useful and what is not, and adopting their
+good parts is smart engineering, not imitation. We compete only on the metrics the author cares about,
+not on market share.
+
+The end state is one system that stands in for all three categories — one daemon, one session model,
+one capability boundary, one memory, spanning automation + chat + coding. But it is built in a
+**deliberate priority order** (below), because for a solo project effort is the scarce resource, not
+scope.
 
 ## The wedge — self-improving autonomy with guarantees
 
@@ -32,11 +38,48 @@ where the **dispatcher-as-tool-advisor** keeps context lean, and where the **MCP
 event architecture** (kernel + domain packs + stores + surfaces, a star around one daemon) makes
 the whole thing modular and partially deployable.
 
+## Replacement priority — what we build first, and why in this order
+
+**1. The autonomous life-OS daemon first (replace OpenClaw / Hermes).** This is where the free tools
+are weakest exactly where it matters most — OpenClaw is structurally insecure, Hermes self-improves by
+running uncontained Python — and where Liberado already holds its strongest cards: TurboVault as the
+life-system store, the capability boundary, one daemon on one event architecture. The capabilities
+that define this category, in the author's own priority: **good crons, broad MCP connections, agent
+interfacing (see and answer your autonomous agents), notifications, and life-system storage.** Storage
+is done (TurboVault) and the substrate exists (cron event-source, Telegram notifier, capability
+model); the near-term work is the **interfacing loop** — an agent that works while you are away, pings
+you, and lets you answer from your phone — plus maturing crons and MCP breadth.
+
+**2. A lean chat surface second (replace LibreChat).** LibreChat is good, but it is a heavyweight,
+multi-container chat UI that is hard to justify for a single user. The goal is not to out-feature it —
+it is to be a self-hosted, **single-binary chat surface that is yours**, provider-flexible, and light
+enough to actually run. Gated on the WebUI maturing past its current state (a chat component, no
+session view).
+
+**3. Coding third, and explicitly "good enough + integrated" — not best-in-class.** The author does
+**not** intend to replace Claude Code, Grok Build, or Kilo/OpenCode at coding, and Liberado should not
+try. The coding pack's job is to be good enough that the *integration* wins for the author's own
+workflow — a coding session is just another `Session` on the same daemon, under the same capability
+model, joinable from the same surfaces — not to beat a dedicated coding agent on its own turf. Chasing
+that would weaken the thing that actually makes Liberado worth building.
+
+**Sequencing effort, not scope.** Building in this order only works because choosing to spend effort
+on (1) does not foreclose (2) or (3). That is precisely what the CI-enforced modularity is *for*:
+kernel + domain packs + stores + surfaces, layer rules that fail the build, one converged execution
+engine, deduplicated seams. Coding is *already* a domain pack on a domain-neutral kernel; chat is
+*already* a surface on the same session store; a capability added for the daemon is available to all
+three by construction. The architecture is the thing that lets a solo project prioritize ruthlessly
+and still credibly claim it can replace all three eventually — the modularity is not neatness, it is
+the load-bearing enabler of this whole plan. See [`modularity.md`](modularity.md) and
+[`contracts.md`](contracts.md) for the frozen seams, and `crates/test-support/tests/layer_rules.rs`
+for the rules that enforce them.
+
 ## What we deliberately do NOT chase
 
-OpenClaw's integration breadth and skills-catalog scale, and LibreChat's enterprise multi-user UI. We
-win on **provable containment + lean context + single-binary autonomy** — the metrics that matter for
-this project.
+OpenClaw's integration breadth and skills-catalog scale, and LibreChat's enterprise multi-user UI, and
+Claude Code / Kilo's best-in-class coding depth. We win on **provable containment + lean context +
+single-binary autonomy + one coherent system across all three categories** — the metrics that matter
+for this project.
 
 ## Honest caveat
 

@@ -32,13 +32,17 @@ For how these pillars position Liberado against the free alternatives, see
    is sometimes unexpectedly useful, so this can be taken too far in the conservative direction.
    Empirical testing finds the balance.
 
-The next strategic slice is the **general agentic orchestration kernel** (goal sessions, verifiers,
-subagents, session/events). Coding is the **first domain pack** (PR-dispatch reliability), not the
-product identity. Architecture: [`agentic-loops.md`](agentic-loops.md). Roadmap:
-[`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md). Hygiene:
-[`agentic-mesh-hygiene-audit-2026-07-10.md`](../roadmap/archive/agentic-mesh-hygiene-audit-2026-07-10.md).
-The coding pack is home-spun Liberado (`Provider` + `Executor` + `ToolRuntime` + `coder-*`) — not a
-VTCode wrap. Surfaces (TUI, WebUI, CLI, PR factory) are session clients; they do not own the loop.
+The **general agentic orchestration kernel** (goal sessions, verifiers, subagents, session/events) is
+**built** — D7's unified Session model and the one converged execution engine (see
+[`sessions.md`](sessions.md)). Effort now follows a deliberate **replacement priority**:
+**autonomous life-OS daemon → chat → coding** — build one thing over the daily-driver line, dogfood it,
+and let the shared substrate it hardens carry the rest. The order and its rationale are in
+[`positioning.md`](positioning.md); the concrete work items, in priority order, are in
+[`../roadmap/current.md`](../roadmap/current.md). Coding is a **domain pack** on a domain-neutral
+kernel, not the product identity, and explicitly *good-enough-and-integrated* rather than a Claude
+Code / Kilo rival. The coding pack is home-spun Liberado (`Provider` + `Executor` + `ToolRuntime` +
+`coder-*`) — not a VTCode wrap. Surfaces (TUI, WebUI, CLI, PR factory) are session clients; they do not
+own the loop. Architecture: [`agentic-loops.md`](agentic-loops.md).
 
 **Operational data** (the runtime trace — Decision 12; conversation history — Decision 17)
 deliberately lives *outside* the vault as append-only JSONL, so high-volume writes don't pollute the
@@ -185,12 +189,14 @@ session-keyed conversations** (Decision 17) are complete, all hosted by **one `l
 pass (item 15 below) is done, Phase 3 is fully landed (cron, the external webhook hook receiver, and
 named dispatcher/executor pools, items 16-18 below, completing Decision 18 checkpoint #3), and
 Phase 4 v1 (Docker MCP transport, item 19 below) is built and unit-tested, pending only its live
-Docker-daemon smoke test. The next strategic work is **Rust-native agentic orchestration**: replace
-`vtcode` as the PR-dispatch coding engine with modular Liberado goal-session crates (coding domain
-first), then expose the same session/event backend to TUI/WebUI and other tool domains. See
-[`agentic-loops.md`](agentic-loops.md) and
-[`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md). Other open work
-remains valid: deepening the main agent, the TUI, the Docker smoke test, and further Phase 4 slices.
+Docker-daemon smoke test. Rust-native agentic orchestration is now **built**, not next: home-spun
+Liberado goal-session crates replaced `vtcode`, and the unified Session model (D7) plus the one
+converged execution engine expose the same session/event backend to every surface (see
+[`sessions.md`](sessions.md)). The current strategic direction is a **replacement priority** —
+**autonomous life-OS daemon → chat → coding** — sequencing effort to get one thing over the
+daily-driver line rather than three half-built. The order and rationale are in
+[`positioning.md`](positioning.md); the work items, in that order, in
+[`../roadmap/current.md`](../roadmap/current.md).
 
 **Done:**
 1. ✅ **Reactive pipeline** — daemon watches → attributes → dispatches → orchestrates → executes, end-to-end wired and tested.

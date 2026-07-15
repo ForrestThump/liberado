@@ -8,15 +8,61 @@ Before starting anything, read [`../architecture/failure-modes.md`](../architect
 five bug classes this codebase produces over and over, distilled from twelve audits. Every one of them
 shipped with a green test suite.
 
-## Open now
+## Open now — in priority order
+
+The order is deliberate and strategic, not a to-do list: **automation daemon → chat → coding.** The
+*why* — and why sequencing effort this way is what makes the full "replace all three" goal reachable
+rather than abandoning it — is in [`../architecture/positioning.md`](../architecture/positioning.md).
+Short version: get **one** thing over the daily-driver line, dogfood it hard (dogfooding is what has
+found every real bug so far), and let the shared substrate it hardens carry the other two.
+
+### Priority 1 — the autonomous life-OS daemon (replace OpenClaw / Hermes)
+
+*Already in hand: TurboVault storage, the cron event-source substrate, the Telegram notifier, the
+capability boundary.* What remains is the **interfacing loop** — an agent that works while you are
+away, pings you, and lets you answer — plus maturing crons and MCP breadth.
 
 | # | What | Why it matters |
 |---|---|---|
-| **W1** | **A goal-session view in the WebUI** (phone-first) | The WebUI has `chat.rs` and **no session view at all** — it satisfies none of [`session-surface-contract.md`](../architecture/session-surface-contract.md). This is the next real slice, and it needs eyes on a rendered UI. |
-| **E5-b** | **Answer a session from your phone** | A ping reaches you; a reply typed into Telegram goes nowhere (confirmed live). Telegram is one flat chat with **no session multiplexing** — five sessions interleave and you cannot tell which asked what. So the fix is a **deep link into W1**, not a reply bridge. Needs `public_base_url` in config — **not before there is a page to link to**. |
-| **E6-c(b)** | **Resume a session parked *mid-build*** | Intake resume shipped (E6-c(a)); the build loop cannot resume because re-running it would redo filesystem work. The workspace is already a git repo, so a commit is the obvious suspend point. Design pass, not a line of code. |
-| **T1** | **The live conformance suite** — [`live-conformance-suite.md`](live-conformance-suite.md) | Every defect found on 2026-07-13/14 passed the test suite and died on first contact with a running daemon. Those checks exist only as commands typed by hand. **Most of them need a real daemon but only a `MockProvider`**, so the valuable tier is fast and CI-able — that is the insight that makes this tractable rather than a slow `#[ignore]`d graveyard. |
+| **W1** | **A goal-session view in the WebUI** (phone-first) | See and steer your autonomous agents. The WebUI has `chat.rs` and **no session view at all** — it satisfies none of [`session-surface-contract.md`](../architecture/session-surface-contract.md). Needs a rendered UI and your eyes. |
+| **E5-b** | **Answer a session from your phone** | The OpenClaw/Hermes killer feature. A ping reaches you; a reply typed into Telegram goes nowhere (confirmed live) — Telegram is one flat chat with **no session multiplexing**. The fix is a **deep link into W1**, not a reply bridge. Needs `public_base_url` — **not before there is a page to link to**. |
+| **C1** | **Crons that spawn real sessions** | The event-source and E7 profile plumbing exist; the payoff is a schedule firing an *interactive, capability-scoped* session on its own — "run this every morning, ask me if you're unsure." Needs its own small plan. |
+| **M1** | **MCP breadth** | The author named MCP connections a P1 capability. Two concrete gaps: connection **pooling/reuse** (today a fresh connection per execution — TurboMCP's `SessionManager` is worth recycling per transport group), and **multi-server registry UX** (declare several stdio+HTTP servers from config; the `McpRegistry` machinery exists, the registration surface does not). |
+| **T1** | **The live conformance suite** — [`live-conformance-suite.md`](live-conformance-suite.md) | **Reliability is not optional for a daemon meant to run your life unattended** — this belongs here, in P1, not in a coding tier. Every defect found on 2026-07-13/14 passed the test suite and died on first contact with a running daemon, and those checks exist only as commands typed by hand. Most need a real daemon but only a `MockProvider`, so the valuable tier is fast and CI-able. |
+
+### Priority 2 — a lean chat surface (replace LibreChat)
+
+Gated on the WebUI maturing past the P1 session view. The goal is a self-hosted, single-binary chat
+that is *yours* and light enough to run — not to out-feature LibreChat.
+
+| # | What | Why it matters |
+|---|---|---|
+| **CH1** | **WebUI chat maturity** | Beyond the session view: model/provider switching, a daily-usable surface. The provider layer is already agnostic (Decision 13); this is surface work. |
+| **CH2** | **Chat history search (Tier 1)** — [`chat-search-plan.md`](chat-search-plan.md) | Lexical/ripgrep search over history, near-free given the deliberately greppable per-conversation JSONL layout. Later tiers (BM25/`tantivy`, vector) only if Tier 1 proves insufficient. |
+
+### Priority 3 — coding, good enough and integrated (NOT replacing Claude Code / Grok / Kilo)
+
+The bar here is *integration parity for the author's workflow*, not best-in-class. A coding session is
+just another `Session` on the same daemon; that it is joinable, capability-scoped and waits for you is
+the whole value, not raw coding skill.
+
+| # | What | Why it matters |
+|---|---|---|
+| **E6-c(b)** | **Resume a session parked *mid-build*** | Intake resume shipped (E6-c(a)); the build loop cannot, because re-running redoes filesystem work. The workspace is a git repo, so a commit is the obvious suspend point. A design pass, not a line of code. |
 | — | [`pr-dispatch-vtcode-no-write-finding.md`](pr-dispatch-vtcode-no-write-finding.md) | **Root cause still not found.** The one genuinely open bug carried over. |
+| — | [`coder-eval-curriculum.md`](coder-eval-curriculum.md) | Measures coding quality on an instrument. Only matters once P1/P2 are not the bottleneck. |
+
+### Cross-cutting — the enabler, and the move-on bar
+
+- **Modularity and dedup are the load-bearing enabler**, not neatness: they are what let effort go to
+  P1 without foreclosing P2 and P3 (see [`../architecture/positioning.md`](../architecture/positioning.md)
+  and [`../architecture/modularity.md`](../architecture/modularity.md)). The dogfooding dividend lands
+  on the **shared substrate** — kernel, session model, capability boundary, store — so the larger that
+  shared share stays, the more P1's polish transfers to the others. Keep it large.
+- **The move-on bar (set it consciously, don't drift):** leave P1 when you **daily-drive it without
+  wincing** — not when it is polished. Sequencing's failure mode is gold-plating category 1 forever
+  while chat and coding never get their turn; the dogfooding itself is the signal — when you reach for
+  it without friction, that is the bell.
 
 ## Recently landed (2026-07-13/14)
 
@@ -93,24 +139,14 @@ path; don't add it on intuition.
 
 ### Other
 
-- **MCP connection pooling / reuse** — today a fresh connection per execution. TurboMCP's
-  `SessionManager` (single-transport-type) is worth recycling per transport group for pooling +
-  health + reconnection.
-- **Multi-server MCP registry UX** — declare several servers (stdio `npx` + remote HTTP like
-  deepwiki) from config; the machinery (`McpRegistry`, mixed `McpConnector`s) exists, the
-  config/registration surface does not.
+*(MCP breadth and chat history search moved up into the priority tiers above — they are named
+capabilities now, not someday-maybes.)*
+
 - **A2A (Agent2Agent) interop** — captured as an idea, not scheduled:
   [`a2a-protocol-idea.md`](../ideas/a2a-protocol-idea.md). The conversation-store seams
   (`author`, conversation lineage — Decision 17) and the mesh direction (Decision 18) already
   carry most of what this needs; the real gap is a new inbound protocol surface (AgentCard +
-  Task lifecycle) and an outbound peer-delegation capability. Not before Phase 3 — same category
-  of work as vault-decoupling and cron (another event-source in, another external capability
-  out).
-- **Chat history search** — design captured, not scheduled:
-  [`chat-search-plan.md`](chat-search-plan.md). Three tiers (lexical/ripgrep, BM25/`tantivy`,
-  vector/semantic), shipped in that order, stopping whenever the simpler tier proves sufficient —
-  only Tier 1 has a clear "just build it" case today. `liberado-conversation-store`'s per-conversation
-  JSONL layout was already designed to "stay greppable," so Tier 1 is a near-free fit, not a
-  repurposing.
+  Task lifecycle) and an outbound peer-delegation capability. Same category of work as
+  vault-decoupling and cron (another event-source in, another external capability out).
 
 
