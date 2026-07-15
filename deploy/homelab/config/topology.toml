@@ -1,0 +1,24 @@
+# Liberado — homelab v1 topology (headless daemon, in-container).
+#
+# Deliberately MINIMAL: the first Debian deploy is about proving the daemon boots, mounts the vault,
+# and serves the API on the target platform — the smallest failure surface, not the full feature set.
+# MCPs, a provider, crons, and session profiles get wired *after* first boot is confirmed clean.
+
+# The Obsidian vault, mounted READ-ONLY at /vault in the container (compose `:ro`). The daemon watches
+# and reads it; it cannot write until the Unix build is shaken out and the guards are verified on
+# Debian (the F1 lesson). Any write attempt fails safe.
+vault_path = "/vault"
+
+# Chat face = human interfacer; work goes through the `delegate` tool to the dispatch pack.
+[main_agent]
+delegation_mode = true
+
+# Provider: left unset for the first boot, so the daemon comes up provider-less (life pack only) and
+# proves the platform without depending on a key. To enable chat/dispatch, set the provider here and
+# supply its key via the compose env (e.g. provider = "deepseek" + DEEPSEEK_API_KEY). The homelab runs
+# heavily on Gemini; wiring an OpenAI-compatible Gemini backend is a clean follow-up.
+# provider = "deepseek"
+
+# No [[mcps]] in v1. The homelab already runs the MCP ecosystem (turbovault, searxng-mcp, caldav-mcp,
+# mem0-mcp, …) on the `homelab` network — wiring the daemon to them by container name is the *next*
+# step (the "MCP breadth" gap is a connection job, not a build job), added once first boot is green.

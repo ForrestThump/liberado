@@ -1,0 +1,62 @@
+# Liberado — homelab v1 policy (capability model, minimal).
+#
+# Zones as in the repo default; grants stripped of every `ExecuteMcp` entry, because v1 declares no
+# MCPs and a grant that references an absent MCP fails validation at boot. The Read/Write zone grants
+# and `AskHuman` stay — they are the capability skeleton the daemon needs even before any MCP exists.
+# The vault is mounted read-only regardless, so no write actually reaches disk in v1.
+
+# --- Zones (write classes) ---------------------------------------------------------------------
+[[zones]]
+zone = "tasks"
+write_class = "agent_writable"
+
+[[zones]]
+zone = "decisions"
+write_class = "agent_writable"
+
+[[zones]]
+zone = "proposals"
+write_class = "agent_writable"
+
+[[zones]]
+zone = "inbox"
+write_class = "shared"
+
+[[zones]]
+zone = "finance"
+write_class = "human_only"
+
+# --- Capability grants (no ExecuteMcp in v1) ---------------------------------------------------
+[[grants]]
+component = "main-agent"
+capabilities = [
+    { Read = { Vault = "tasks" } },
+    { Read = { Vault = "decisions" } },
+    "AskHuman",
+]
+
+[[grants]]
+component = "dispatcher"
+capabilities = [
+    { Read = { Vault = "tasks" } },
+    { Write = { Vault = "tasks" } },
+    { Read = { Vault = "decisions" } },
+    { Write = { Vault = "decisions" } },
+    { ReadSummary = { Named = "finance" } },
+]
+
+[[grants]]
+component = "life"
+capabilities = [
+    { Read = { Vault = "tasks" } },
+    { Write = { Vault = "tasks" } },
+    { Read = { Vault = "decisions" } },
+    "AskHuman",
+]
+
+[[grants]]
+component = "coding"
+capabilities = [
+    { Read = { Vault = "decisions" } },
+    "AskHuman",
+]

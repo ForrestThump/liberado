@@ -1,0 +1,50 @@
+# Liberado — homelab v1 deploy (standalone compose).
+#
+# Deliberately a SEPARATE compose project, not an edit to the 796-line docker-compose.ai.yml: it joins
+# the existing `homelab` bridge network as external, so the daemon can reach turbovault/searxng/mem0/…
+# by container name once MCPs are wired, without any risk to the running stack. Run with:
+#   docker compose -f ~/homelab/services/liberado/docker-compose.yml up -d
+#
+# The image is built separately (`docker build -t liberado:dev ~/liberado-build`), so run and build
+# are decoupled. Docker's restart policy is the "always running" — no systemd unit needed.
+
+services:
+  liberado:
+    image: liberado:dev
+    container_name: liberado
+    restart: unless-stopped
+    dns:
+      - 192.168.0.220   # homelab internal resolver (matches the ai-service pattern)
+      - 1.1.1.1
+    networks:
+      - homelab
+    ports:
+      - "4201:4201"     # LAN: http://192.168.0.144:4201  (API + SSE; WebUI is not built yet)
+    environment:
+      LIBERADO_PORT: "4201"
+      RUST_LOG: "info"
+      # --- wired after first boot is confirmed clean ---
+      # DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}     # + set `provider = "deepseek"` in topology.toml
+      # TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN} # the interaction loop
+      # TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+    volumes:
+      # The real Obsidian vault, syncthing-synced, mounted READ-ONLY for v1 (the F1 lesson).
+      - /home/shiloh/homelab/volumes/syncthing/bulk/Obsidian/Main:/vault:ro
+      # Config (topology.toml + policy.toml) and persistent data (session store), on the host.
+      - /home/shiloh/homelab/services/liberado/config:/config:ro
+      - /home/shiloh/homelab/services/liberado/data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4201/api/status || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+          cpus: "1.5"
+
+networks:
+  homelab:
+    external: true
