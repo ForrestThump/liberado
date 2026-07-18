@@ -10,9 +10,11 @@ repository.workspace = true
 
 [dependencies]
 liberado-common = { workspace = true }
+liberado-config = { workspace = true }
 turbovault-core = { workspace = true }
 turbovault-vault = { workspace = true }
 turbovault-audit = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -21,9 +23,13 @@ tokio = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }
-# End-to-end capstone: drive a real turbovault MCP server write and attribute it back.
-turbovault = { workspace = true }
-turbomcp = { workspace = true }
+# NOTE: the turbovault umbrella + turbomcp dev-deps were dropped in the turbovault-main integration.
+# The umbrella is written against upstream turbomcp 3.1.5 and won't compile against our fork (see the
+# turbomcp `[patch]` note in the root Cargo.toml). The old provenance_e2e capstone that used them
+# tested MCP-write attribution via turbovault's audit metadata — a mechanism this integration
+# replaces with the liberado-owned provenance ledger. Re-attributing MCP writes now requires
+# liberado to record its own write-tool calls into the ledger (client-side); that follow-up will
+# carry the replacement e2e test without needing the umbrella.
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)

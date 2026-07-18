@@ -7,7 +7,11 @@ use tempfile::TempDir;
 
 async fn temp_vault() -> (Vault, TempDir) {
     let dir = TempDir::new().unwrap();
-    let vault = Vault::open("test", dir.path()).await.unwrap();
+    // Isolated provenance ledger per test (in the temp dir), not the shared data dir.
+    let ledger = dir.path().join(".provenance-ledger.jsonl");
+    let vault = Vault::open_with_ledger("test", dir.path(), ledger)
+        .await
+        .unwrap();
     (vault, dir)
 }
 

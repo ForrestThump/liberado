@@ -108,9 +108,18 @@ turbomcp-server = { path = "turbomcp/crates/turbomcp-server" } # test-only (in-p
 turbomcp-core = { path = "turbomcp/crates/turbomcp-core" }     # test-only (McpHandler)
 turbomcp-types = { path = "turbomcp/crates/turbomcp-types" }   # test-only (handler types)
 
-# Co-development: our path-dep turbovault still declares `turbomcp = "3.1.5"` from crates.io.
-# Redirect that to the local turbomcp fork so the whole tree builds against one turbomcp (the one
-# carrying the request `_meta` pass-through). Remove once turbomcp publishes the change.
+# turbomcp divergence — why we pin the ForrestThump fork instead of crates.io 3.1.5:
+# The fork carries the request `_meta` pass-through from the still-unmerged upstream PR
+# Epistates/turbomcp#21 (https://github.com/Epistates/turbomcp/pull/21), which the liberado MCP
+# servers depend on. Upstream hasn't merged/published it, so we can't use crates.io turbomcp. This
+# patch redirects any crates.io `turbomcp` dep to the fork so the tree builds against one turbomcp.
+# Remove once #21 lands and is published.
+#
+# NOTE (turbovault-main integration): turbovault's *umbrella* crate (`turbovault`, the MCP server)
+# is written against upstream turbomcp 3.1.5, which is API-incompatible with the fork — so it will
+# not compile inside this workspace against the fork. We therefore do NOT depend on the turbovault
+# umbrella here (only its storage crates: -core/-vault/-audit/-vector, which don't touch turbomcp).
+# The turbovault MCP is built and deployed as its own container against upstream turbomcp.
 [patch.crates-io]
 turbomcp = { path = "turbomcp/crates/turbomcp" }
 

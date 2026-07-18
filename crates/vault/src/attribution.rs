@@ -1,14 +1,17 @@
 //! Consumer-side hash-join attribution — the loop-breaking primitive (Decision 5 §6).
 //!
 //! A filesystem change event is provenance-blind: identical whether Turbovault, Obsidian, or git
-//! wrote the file. We attribute by **content identity**, not timing: hash the current file and
-//! match it against the `after_hash` of a recent audit entry for that path. A match whose
-//! provenance says "an agent did this" → suppress (it's ours). No match → the content was
-//! produced by something outside our write path (a human in Obsidian) → react.
+//! wrote the file. We attribute by **content identity**, not timing: hash the current file and match
+//! it against the `after_hash` of a recent write in liberado's own provenance ledger
+//! ([`crate::provenance_ledger`]) for that path. A match whose provenance says "an agent did this"
+//! → suppress (it's ours). No match → the content was produced by something outside our write path
+//! (a human in Obsidian) → react.
 //!
-//! Matching on `hash == after_hash` (rather than "the single most recent write") is what makes
-//! this robust to event coalescing and the human-edits-after-agent case: whichever agent write
-//! produced the *current* bytes is the one that explains them.
+//! Matching on `hash == after_hash` (rather than "the single most recent write") is what makes this
+//! robust to event coalescing and the human-edits-after-agent case: whichever agent write produced
+//! the *current* bytes is the one that explains them. A move records its **destination** path with
+//! the moved content's hash, so a change at the destination attributes correctly and the (now
+//! absent) source does not falsely suppress a later external recreation.
 //!
 //! Recency, cross-hook correlation de-looping, and reaction-depth limits are layered by the daemon
 //! on top of this primitive (it owns the event timestamp and the cascade state); this module is
@@ -16,14 +19,8 @@
 
 use std::path::Path;
 
-use turbovault_audit::AuditFilter;
-
 use crate::error::VaultResult;
 use crate::{Vault, WriteProvenance};
-
-/// How many recent audit entries to scan when looking for the one that explains current content.
-/// Attribution runs right after a change, so the explaining write is among the most recent.
-const SCAN_LIMIT: usize = 256;
 
 /// The result of attributing an observed change to a writer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,7 +35,7 @@ pub enum Attribution {
 }
 
 impl Vault {
-    /// Attribute the current state of `rel_path` to a writer (the §6 hash-join).
+    /// Attribute the current state of `rel_path` to a writer (the §6 hash-join over the ledger).
     pub async fn attribute(&self, rel_path: impl AsRef<Path>) -> VaultResult<Attribution> {
         let rel_path = rel_path.as_ref();
 
@@ -47,48 +44,15 @@ impl Vault {
             Err(_) => return Ok(Attribution::Missing),
         };
         let hash = Vault::content_hash(&content);
-        let target = normalize(&rel_path.to_string_lossy());
+        let target = rel_path.to_string_lossy();
 
-        // Scan recent entries and match in Rust. We deliberately do NOT narrow with
-        // `AuditFilter::with_path`: it matches only an entry's `path`, so it would miss a Move
-        // entry when attributing the move's *destination* (whose `path` field is the source).
-        // The post-filter below checks both `path` and `new_path`.
-        let entries = self
-            .audit()
-            .query(&AuditFilter::new().with_limit(SCAN_LIMIT))
-            .await?;
-
-        // Entries come newest-first. Find the most recent one whose recorded `after_hash` equals
-        // the current content hash — i.e. the write that produced what's on disk now.
-        //
-        // Match against the entry's *resulting* path: a Move records `after_hash` for the content
-        // at its destination (`new_path`), so it explains the destination, not the source. Matching
-        // a move on its source path would let a later external recreation of that source — with
-        // content that happens to hash-match the move — be falsely suppressed (a missed human edit,
-        // the one mistake loop-breaking must never make). Create/Update/Delete have no `new_path`,
-        // so they match on their own `path`.
-        for entry in entries.iter() {
-            let resulting_path = entry.new_path.as_deref().unwrap_or(entry.path.as_str());
-            if normalize(resulting_path) != target {
-                continue;
-            }
-            if entry.after_hash.as_deref() != Some(hash.as_str()) {
-                continue;
-            }
-
-            // This audit entry explains the current bytes. Attribute by its provenance.
-            return Ok(
-                match WriteProvenance::from_audit_metadata(&entry.metadata) {
-                    // An agent we recognize (not a human-sourced write) → suppress.
-                    Some(prov) if !prov.is_human() => Attribution::Agent(prov),
-                    // Matched an entry, but it was human-sourced or carried no provenance → react.
-                    _ => Attribution::External,
-                },
-            );
-        }
-
-        // No agent write produced these exact bytes → external/human edit.
-        Ok(Attribution::External)
+        // The ledger records our writes keyed by resulting path + after_hash. A match whose
+        // provenance is a recognized (non-human) agent → suppress; a human-sourced write or no
+        // match at all → react.
+        Ok(match self.ledger().attribute(&target, &hash).await {
+            Some(prov) if !prov.is_human() => Attribution::Agent(prov),
+            _ => Attribution::External,
+        })
     }
 
     /// Convenience predicate over [`attribute`](Self::attribute): should a reactive consumer act
@@ -102,12 +66,6 @@ impl Vault {
     }
 }
 
-/// Normalize path separators so attribution is cross-platform (the audit log spells relative
-/// paths with the OS separator; events/callers may use `/`).
-fn normalize(path: &str) -> String {
-    path.replace('\\', "/")
-}
-
 #[cfg(test)]
 mod tests {
     use crate::{Attribution, Vault, WriteProvenance};
@@ -115,7 +73,11 @@ mod tests {
 
     async fn temp_vault() -> (Vault, TempDir) {
         let dir = TempDir::new().unwrap();
-        let vault = Vault::open("test", dir.path()).await.unwrap();
+        // Isolated ledger per test (in the temp dir) so parallel tests don't share the data-dir ledger.
+        let ledger = dir.path().join(".provenance-ledger.jsonl");
+        let vault = Vault::open_with_ledger("test", dir.path(), ledger)
+            .await
+            .unwrap();
         (vault, dir)
     }
 

@@ -2,13 +2,14 @@
 //!
 //! Liberado's thin adapter over Turbovault. Two jobs, both load-bearing for background autonomy:
 //!
-//! 1. **Provenance-tagged writes** (Decision 5). Every agent write goes through
-//!    `write_*_with_metadata`, attaching a [`WriteProvenance`] to the audit entry. This is the
-//!    consumer side of the upstream `metadata` passthrough.
+//! 1. **Provenance-tagged writes** (Decision 5). Every agent write goes through the plain Turbovault
+//!    write API and is *also* recorded in a liberado-owned [`provenance_ledger`] as
+//!    `(path, after_hash, provenance)`. The ledger — not Turbovault's audit metadata — is our
+//!    provenance store: backend-agnostic and free of any Turbovault fork (see that module for why).
 //! 2. **Consumer-side hash-join attribution** ([`attribution`]). Given an observed change, decide
 //!    *react or suppress* by matching the file's content hash against the `after_hash` of a recent
-//!    agent write (concurrency spec §6). This is what stops reactive hooks from reacting to their
-//!    own writes.
+//!    agent write in the ledger (concurrency spec §6). This is what stops reactive hooks from
+//!    reacting to their own writes.
 //!
 //! It is also the single place the §8.1 upstream-dependency fallbacks are isolated (see
 //! [`error`]). The daemon layers recency windows, correlation-set de-looping, and reaction-depth
@@ -16,6 +17,7 @@
 
 mod attribution;
 mod error;
+mod provenance_ledger;
 
 pub use attribution::Attribution;
 pub use error::{VaultError, VaultResult};
@@ -24,47 +26,60 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio::sync::mpsc::UnboundedReceiver;
-use turbovault_audit::{AuditLog, SnapshotStore};
+use turbovault_audit::SnapshotStore;
 use turbovault_core::prelude::{ServerConfig, VaultConfig};
 use turbovault_vault::{VaultManager, VaultWatcher, WatcherConfig};
+
+use crate::provenance_ledger::ProvenanceLedger;
 
 pub use liberado_common::WriteProvenance;
 /// Re-exported so consumers (the daemon) can match on change events without depending on
 /// Turbovault directly — this crate is the single boundary to Turbovault.
 pub use turbovault_vault::VaultEvent;
 
-/// A handle to a Turbovault-backed vault with the audit log enabled.
+/// A handle to a Turbovault-backed vault plus liberado's provenance ledger.
 ///
 /// Cheap to clone (everything is `Arc`-shared), so the daemon, MCPs, and hooks can hold their own
-/// handles to the same vault.
+/// handles to the same vault *and the same ledger* — a write through one clone is attributable from
+/// any other (e.g. the approval bot's write is seen by the daemon's watcher).
 #[derive(Clone)]
 pub struct Vault {
     manager: Arc<VaultManager>,
-    audit: Arc<AuditLog>,
+    ledger: Arc<ProvenanceLedger>,
     vault_root: PathBuf,
 }
 
 impl Vault {
-    /// Open the vault at `path`, enabling the audit log + snapshot store (required for provenance
-    /// and attribution). `name` is a label for the vault registration.
+    /// Open the vault at `path`, with the provenance ledger under the liberado data dir
+    /// (`<data_dir>/provenance/<name>.jsonl`). `name` labels the vault registration and the ledger.
     pub async fn open(name: impl Into<String>, path: impl Into<PathBuf>) -> VaultResult<Self> {
+        let name = name.into();
+        let ledger_path = liberado_config::data_dir()
+            .join("provenance")
+            .join(format!("{}.jsonl", sanitize_name(&name)));
+        Self::open_with_ledger(name, path, ledger_path).await
+    }
+
+    /// Open with an explicit ledger path — used by tests for isolation (each test gets its own
+    /// ledger in a temp dir instead of colliding on the shared data dir).
+    pub async fn open_with_ledger(
+        name: impl Into<String>,
+        path: impl Into<PathBuf>,
+        ledger_path: PathBuf,
+    ) -> VaultResult<Self> {
         let vault_root = path.into();
 
         let mut config = ServerConfig::new();
         config
             .vaults
             .push(VaultConfig::builder(name, &vault_root).build()?);
-        let mut manager = VaultManager::new(config)?;
+        let manager = VaultManager::new(config)?;
 
-        // Enable the audit trail. Provenance rides on audit entries, and the hash-join reads them
-        // back — without this the loop-breaking machinery has nothing to join against.
-        let audit = Arc::new(AuditLog::new(&vault_root).await?);
-        let snapshots = Arc::new(SnapshotStore::new(audit.snapshot_dir().to_path_buf()));
-        manager.set_audit_log(audit.clone(), snapshots.clone());
+        let ledger = ProvenanceLedger::open(ledger_path).await;
 
         Ok(Self {
             manager: Arc::new(manager),
-            audit,
+            ledger: Arc::new(ledger),
             vault_root,
         })
     }
@@ -86,8 +101,8 @@ impl Vault {
     }
 
     /// Write a note with provenance. `expected_hash` enables optimistic concurrency (`None` for a
-    /// fresh create / unconditional write). The provenance is attached to the audit entry so this
-    /// write is attributable and loop-breakable.
+    /// fresh create / unconditional write). The write goes through Turbovault's plain API and is
+    /// recorded in the provenance ledger so it is attributable and loop-breakable.
     pub async fn write(
         &self,
         rel_path: impl AsRef<Path>,
@@ -95,35 +110,32 @@ impl Vault {
         expected_hash: Option<&str>,
         provenance: &WriteProvenance,
     ) -> VaultResult<()> {
+        let rel_path = rel_path.as_ref();
         self.manager
-            .write_file_with_metadata(
-                rel_path.as_ref(),
-                content,
-                expected_hash,
-                Some(provenance.to_audit_metadata()),
-            )
+            .write_file(rel_path, content, expected_hash)
             .await?;
+        let hash = Self::content_hash(content);
+        self.ledger.record(rel_path, Some(&hash), provenance).await;
         Ok(())
     }
 
-    /// Delete a note with provenance.
+    /// Delete a note with provenance. Recorded with no `after_hash` (no resulting content); the hash
+    /// join skips it — a delete surfaces to attribution as `Missing`, which the caller resolves.
     pub async fn delete(
         &self,
         rel_path: impl AsRef<Path>,
         expected_hash: Option<&str>,
         provenance: &WriteProvenance,
     ) -> VaultResult<()> {
-        self.manager
-            .delete_file_with_metadata(
-                rel_path.as_ref(),
-                expected_hash,
-                Some(provenance.to_audit_metadata()),
-            )
-            .await?;
+        let rel_path = rel_path.as_ref();
+        self.manager.delete_file(rel_path, expected_hash).await?;
+        self.ledger.record(rel_path, None, provenance).await;
         Ok(())
     }
 
-    /// Move/rename a note with provenance (wikilinks are updated by Turbovault).
+    /// Move/rename a note with provenance (wikilinks are updated by Turbovault). The ledger records
+    /// the *destination* path with the moved content's hash — the resulting bytes attribution will
+    /// see there.
     pub async fn move_note(
         &self,
         from: impl AsRef<Path>,
@@ -131,14 +143,15 @@ impl Vault {
         expected_hash: Option<&str>,
         provenance: &WriteProvenance,
     ) -> VaultResult<()> {
+        let to = to.as_ref();
         self.manager
-            .move_file_with_metadata(
-                from.as_ref(),
-                to.as_ref(),
-                expected_hash,
-                Some(provenance.to_audit_metadata()),
-            )
+            .move_file(from.as_ref(), to, expected_hash)
             .await?;
+        // Record the destination's resulting content so a change event at `to` is attributed to us.
+        if let Ok(content) = self.read(to).await {
+            let hash = Self::content_hash(&content);
+            self.ledger.record(to, Some(&hash), provenance).await;
+        }
         Ok(())
     }
 
@@ -168,10 +181,17 @@ impl Vault {
         })
     }
 
-    /// Access to the underlying audit log (used by [`attribution`]).
-    pub(crate) fn audit(&self) -> &AuditLog {
-        &self.audit
+    /// The provenance ledger backing [`attribution`].
+    pub(crate) fn ledger(&self) -> &ProvenanceLedger {
+        &self.ledger
     }
+}
+
+/// Make a vault `name` safe as a single filename component for its ledger file.
+fn sanitize_name(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect()
 }
 
 /// A live filesystem watch over the vault. Holds the watcher alive — drop it to stop watching.
