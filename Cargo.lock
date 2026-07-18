@@ -3057,6 +3057,7 @@ dependencies = [
  "liberado-orchestrator",
  "liberado-provider",
  "liberado-provider-openai-compat",
+ "liberado-vault",
  "tracing",
 ]
 
@@ -3688,8 +3689,11 @@ dependencies = [
 name = "liberado-vault"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "liberado-common",
  "liberado-config",
+ "liberado-executor",
+ "liberado-provider",
  "serde",
  "serde_json",
  "tempfile",

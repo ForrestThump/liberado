@@ -108,12 +108,16 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
             work_parent,
         )));
     }
+    // A Vault sharing the daemon's provenance ledger (same data dir → same ledger via the process
+    // registry) so goal-session MCP vault writes are recorded for the daemon's loop-break attribution.
+    let dispatch_vault = liberado_vault::Vault::open("dispatch", &vault_path).await?;
     if let Some(pack) = liberado_bootstrap::build_dispatch_pack(
         provider.as_ref(),
         &config,
         capability_catalog.clone(),
         Path::new(&vault_path),
         guidance.clone(),
+        dispatch_vault,
     ) {
         goals_hub.register_pack(Arc::new(pack));
         info!("goal session packs: life + coding + dispatch");

@@ -343,7 +343,9 @@ mod tests {
     use turbovault_vector::FastembedEngine;
 
     async fn test_store(tmp: &tempfile::TempDir) -> MemoryStore {
-        let vault = Vault::open("test", tmp.path().to_path_buf()).await.unwrap();
+        let vault = Vault::open_with_ledger("test", tmp.path().to_path_buf(), tmp.path().join(".prov.jsonl"))
+            .await
+            .unwrap();
         let embedder: Arc<dyn EmbeddingEngine> =
             Arc::new(FastembedEngine::new("all-MiniLM-L6-v2", None).unwrap());
         MemoryStore::open(

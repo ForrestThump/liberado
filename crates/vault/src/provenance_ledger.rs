@@ -17,8 +17,9 @@
 //! change) in memory, and mirrors it to disk so it survives a restart. On open it loads and compacts
 //! the file to that tail, so it never grows without bound.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
@@ -29,6 +30,17 @@ use crate::WriteProvenance;
 /// How many recent write records to retain. Attribution runs immediately after a change, so the
 /// explaining write is always among the most recent; 512 is generous headroom over a burst.
 const CAP: usize = 512;
+
+/// Process-wide registry of open ledgers keyed by file path. Every `Vault` opened over the same
+/// ledger path (the daemon's own vault, the goal-session orchestrators' recorder, the chat surface —
+/// all in one process) shares **one** ledger instance, so a write recorded by any of them is visible
+/// to the daemon's attribution in memory (not just after a file reload). Different paths — including
+/// the per-test temp ledgers — get independent instances, preserving isolation.
+static LEDGERS: OnceLock<StdMutex<HashMap<PathBuf, Arc<ProvenanceLedger>>>> = OnceLock::new();
+
+fn registry() -> &'static StdMutex<HashMap<PathBuf, Arc<ProvenanceLedger>>> {
+    LEDGERS.get_or_init(|| StdMutex::new(HashMap::new()))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LedgerRecord {
@@ -49,10 +61,28 @@ pub struct ProvenanceLedger {
 }
 
 impl ProvenanceLedger {
-    /// Open the ledger at `file`, loading and compacting its retained tail. A missing file starts
-    /// empty. Parse errors on individual lines are skipped (a truncated line from a crash is ignored)
-    /// rather than failing the daemon boot.
-    pub async fn open(file: PathBuf) -> Self {
+    /// Open (or reuse) the shared ledger for `file`. The first open for a path loads it from disk;
+    /// subsequent opens of the same path return the same instance (see [`registry`]) so all writers
+    /// and the daemon's attribution share one in-memory tail.
+    pub async fn open(file: PathBuf) -> Arc<Self> {
+        if let Some(existing) = registry().lock().unwrap().get(&file).cloned() {
+            return existing;
+        }
+        // Load from disk outside the registry lock (async), then insert — or, if another task raced
+        // us to it, discard ours and take theirs so there is exactly one instance per path.
+        let loaded = Arc::new(Self::load(file.clone()).await);
+        registry()
+            .lock()
+            .unwrap()
+            .entry(file)
+            .or_insert(loaded)
+            .clone()
+    }
+
+    /// Load a ledger from disk, compacting its retained tail. A missing file starts empty. Parse
+    /// errors on individual lines are skipped (a truncated line from a crash is ignored) rather than
+    /// failing the daemon boot. Not registry-shared — [`open`](Self::open) is the shared entry point.
+    async fn load(file: PathBuf) -> Self {
         let mut recent = VecDeque::new();
         if let Ok(contents) = tokio::fs::read_to_string(&file).await {
             for line in contents.lines().filter(|l| !l.trim().is_empty()) {
@@ -171,14 +201,15 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = ledger_path(&dir);
         {
-            let ledger = ProvenanceLedger::open(path.clone()).await;
+            // `load` (not the registry-cached `open`) so this genuinely exercises disk persistence.
+            let ledger = ProvenanceLedger::load(path.clone()).await;
             ledger
                 .record(Path::new("n.md"), Some("h"), &WriteProvenance::agent("a", "c"))
                 .await;
         }
-        // A fresh open reloads the persisted record.
-        let reopened = ProvenanceLedger::open(path).await;
-        assert!(reopened.attribute("n.md", "h").await.is_some());
+        // A fresh load reads the persisted record back from disk.
+        let reloaded = ProvenanceLedger::load(path).await;
+        assert!(reloaded.attribute("n.md", "h").await.is_some());
     }
 
     #[tokio::test]

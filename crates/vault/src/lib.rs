@@ -18,9 +18,13 @@
 mod attribution;
 mod error;
 mod provenance_ledger;
+mod recording_runtime;
 
 pub use attribution::Attribution;
 pub use error::{VaultError, VaultResult};
+pub use recording_runtime::{
+    ProvenanceRecordingRuntime, RecordingRuntimeFactory, write_specs_from_descriptors,
+};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -50,13 +54,12 @@ pub struct Vault {
 }
 
 impl Vault {
-    /// Open the vault at `path`, with the provenance ledger under the liberado data dir
-    /// (`<data_dir>/provenance/<name>.jsonl`). `name` labels the vault registration and the ledger.
+    /// Open the vault at `path`, with the provenance ledger at `<data_dir>/provenance-ledger.jsonl`.
+    /// The ledger path is intentionally **not** per-`name`: every Vault a daemon opens over its data
+    /// dir (the daemon's own, the goal-session recorder, chat) must share one ledger so a write by
+    /// any of them is visible to the daemon's attribution (see [`provenance_ledger`]).
     pub async fn open(name: impl Into<String>, path: impl Into<PathBuf>) -> VaultResult<Self> {
-        let name = name.into();
-        let ledger_path = liberado_config::data_dir()
-            .join("provenance")
-            .join(format!("{}.jsonl", sanitize_name(&name)));
+        let ledger_path = liberado_config::data_dir().join("provenance-ledger.jsonl");
         Self::open_with_ledger(name, path, ledger_path).await
     }
 
@@ -75,11 +78,12 @@ impl Vault {
             .push(VaultConfig::builder(name, &vault_root).build()?);
         let manager = VaultManager::new(config)?;
 
+        // Shared per ledger path (process-wide) so every Vault over the same ledger sees one tail.
         let ledger = ProvenanceLedger::open(ledger_path).await;
 
         Ok(Self {
             manager: Arc::new(manager),
-            ledger: Arc::new(ledger),
+            ledger,
             vault_root,
         })
     }
@@ -185,13 +189,24 @@ impl Vault {
     pub(crate) fn ledger(&self) -> &ProvenanceLedger {
         &self.ledger
     }
-}
 
-/// Make a vault `name` safe as a single filename component for its ledger file.
-fn sanitize_name(name: &str) -> String {
-    name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
-        .collect()
+    /// Record a write performed *through an MCP* (not our in-process API) so it is attributable for
+    /// loop-breaking. Reads the resulting bytes at `path` to compute the same `after_hash`
+    /// attribution will later match; a path that no longer exists (a delete) is recorded with none.
+    pub async fn record_external_write(
+        &self,
+        rel_path: impl AsRef<Path>,
+        provenance: &WriteProvenance,
+    ) {
+        let rel_path = rel_path.as_ref();
+        match self.read(rel_path).await {
+            Ok(content) => {
+                let hash = Self::content_hash(&content);
+                self.ledger.record(rel_path, Some(&hash), provenance).await;
+            }
+            Err(_) => self.ledger.record(rel_path, None, provenance).await,
+        }
+    }
 }
 
 /// A live filesystem watch over the vault. Holds the watcher alive — drop it to stop watching.

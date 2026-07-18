@@ -749,6 +749,8 @@ mod tests {
             provider,
             tuning: TelegramApprovalsTuning::default(),
             pending_revisions: Mutex::new(HashMap::new()),
+            chat: None,
+            last_activity: None,
         }
     }
 
@@ -757,7 +759,9 @@ mod tests {
         status: ProposalStatus,
     ) -> (Vault, TempDir, String) {
         let dir = TempDir::new().unwrap();
-        let vault = Vault::open("test", dir.path()).await.unwrap();
+        let vault = Vault::open_with_ledger("test", dir.path(), dir.path().join(".prov.jsonl"))
+            .await
+            .unwrap();
 
         let proposal = Proposal::pending(
             "prop-1",

@@ -8,10 +8,11 @@
 //! 2. **Invoke** — runs a model-requested tool via `call_tool_with_meta`, converting the
 //!    [`CallToolResult`] back to a string for the loop (and surfacing an `isError` result as an
 //!    in-band `Err` the model can react to).
-//! 3. **Provenance** — injects the dispatch's [`WriteProvenance`] into every call's `_meta`, so any
-//!    vault write the tool performs is recorded on the audit log as *ours* and the daemon's
-//!    attribution suppresses it (Decision 5 loop-breaking, validated end-to-end in
-//!    `liberado-vault`'s `provenance_e2e`).
+//! 3. **Provenance** — injects the dispatch's [`WriteProvenance`] into every call's `_meta` (a hint
+//!    for any MCP that consumes it). Loop-breaking itself no longer relies on the server storing that
+//!    `_meta`: `liberado-vault`'s `RecordingRuntimeFactory` wraps this runtime and records our own
+//!    vault write-tool calls into liberado's provenance ledger, which the daemon's attribution reads
+//!    (Decision 5 loop-breaking). See `liberado-vault::recording_runtime`.
 //!
 //! The runtime is constructed per execution (per dispatch correlation): the `WriteProvenance` it
 //! carries is fixed for its lifetime, so every tool call in that execution shares one correlation.

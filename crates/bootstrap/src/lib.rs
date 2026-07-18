@@ -30,6 +30,7 @@ use liberado_daemon::Daemon;
 use liberado_dispatch_pack::DispatchPack;
 use liberado_dispatcher::Dispatcher;
 use liberado_mcp::{HttpConnector, McpRegistry, StdioConnector};
+use liberado_vault::{RecordingRuntimeFactory, Vault, write_specs_from_descriptors};
 use liberado_notify::Notifier;
 use liberado_orchestrator::OrchestratorInfra;
 use liberado_provider::Provider;
@@ -222,6 +223,9 @@ pub fn configure_daemon(
     // same consequence catalog, vault-rooted proposals directory, and integrity signer chat's own
     // RiskGatedToolRuntime uses (see `RiskGatedToolRuntime`'s doc comment).
     let guard = guard_context(&catalog, &config.policy, vault_path);
+    // `mcp:tool -> path-arg` map for the write tools of path-addressed MCPs (the vault writers), so
+    // the recording runtime below knows which tool calls to fold into the provenance ledger.
+    let write_specs = write_specs_from_descriptors(&guard.zone_catalog);
     // Everything an `Orchestrator` needs that's identical across every pool (see
     // `OrchestratorInfra`'s doc comment) — built once here, then combined per pool below with just
     // that pool's own factory/capabilities/name.
@@ -270,6 +274,13 @@ pub fn configure_daemon(
     let daemon = match mcp_registry_from_config(config) {
         Some(factory) => {
             tracing::info!("orchestrator enabled (MCP execution)");
+            // Record the daemon's own MCP vault writes into the provenance ledger (shared with the
+            // daemon's Vault via the ledger registry) so attribution suppresses them.
+            let factory = RecordingRuntimeFactory::new(
+                Box::new(factory),
+                daemon.vault().clone(),
+                write_specs.clone(),
+            );
             let orchestrator = orchestrator_infra.for_pool(factory, capabilities, DEFAULT_POOL);
             let orchestrator = match &notifier {
                 Some(n) => orchestrator.with_notifier(n.clone()),
@@ -323,6 +334,11 @@ pub fn configure_daemon(
             // caching or restructuring around.
             match mcp_registry_from_config(config) {
                 Some(factory) => {
+                    let factory = RecordingRuntimeFactory::new(
+                        Box::new(factory),
+                        daemon.vault().clone(),
+                        write_specs.clone(),
+                    );
                     let orchestrator =
                         orchestrator_infra.for_pool(factory, pool_capabilities, pool.name.clone());
                     let orchestrator = match &notifier {
@@ -357,9 +373,13 @@ pub fn build_dispatch_pack(
     catalog: Arc<CapabilityCatalog>,
     vault_path: &Path,
     guidance: Option<Arc<dyn ToolGuidanceSource>>,
+    // A Vault sharing the daemon's provenance ledger (via the ledger registry) so goal-session MCP
+    // vault writes are recorded and the daemon's attribution suppresses them.
+    vault: Vault,
 ) -> Option<DispatchPack> {
     let provider = provider?;
     let guard = guard_context(&catalog, &config.policy, vault_path);
+    let write_specs = write_specs_from_descriptors(&guard.zone_catalog);
     let orchestrator_infra = OrchestratorInfra::new(
         provider.clone(),
         guard.consequences.clone(),
@@ -394,6 +414,11 @@ pub fn build_dispatch_pack(
     // Default pool.
     match mcp_registry_from_config(config) {
         Some(factory) => {
+            let factory = RecordingRuntimeFactory::new(
+                Box::new(factory),
+                vault.clone(),
+                write_specs.clone(),
+            );
             let orchestrator = orchestrator_infra.for_pool(factory, capabilities, DEFAULT_POOL);
             let orchestrator = match &notifier {
                 Some(n) => orchestrator.with_notifier(n.clone()),
@@ -426,6 +451,11 @@ pub fn build_dispatch_pack(
         }
         match mcp_registry_from_config(config) {
             Some(factory) => {
+                let factory = RecordingRuntimeFactory::new(
+                    Box::new(factory),
+                    vault.clone(),
+                    write_specs.clone(),
+                );
                 let orchestrator =
                     orchestrator_infra.for_pool(factory, pool_capabilities, pool_cfg.name.clone());
                 let orchestrator = match &notifier {

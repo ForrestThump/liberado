@@ -13,6 +13,7 @@ liberado-common = { workspace = true }
 liberado-config = { workspace = true }
 liberado-cron = { workspace = true }
 liberado-daemon = { workspace = true }
+liberado-vault = { workspace = true }
 liberado-dispatcher = { workspace = true }
 liberado-dispatch-pack = { workspace = true }
 liberado-notify = { workspace = true }

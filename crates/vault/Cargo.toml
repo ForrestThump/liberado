@@ -11,9 +11,14 @@ repository.workspace = true
 [dependencies]
 liberado-common = { workspace = true }
 liberado-config = { workspace = true }
+# store → kernel (downward, layer-legal): the provenance-recording runtime wraps the executor's
+# ToolRuntime/RuntimeFactory so liberado records its own MCP write-tool calls into the ledger.
+liberado-executor = { workspace = true }
+liberado-provider = { workspace = true }
 turbovault-core = { workspace = true }
 turbovault-vault = { workspace = true }
 turbovault-audit = { workspace = true }
+async-trait = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
