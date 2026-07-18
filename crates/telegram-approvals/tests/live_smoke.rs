@@ -3,7 +3,7 @@
 //! tap a button. Run explicitly:
 //!
 //! ```sh
-//! TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... DEEPSEEK_API_KEY=... \
+//! LIBERADO_TELEGRAM_BOT_TOKEN=... LIBERADO_TELEGRAM_CHAT_ID=... DEEPSEEK_API_KEY=... \
 //!     cargo test -p liberado-telegram-approvals --test live_smoke -- --ignored --nocapture
 //! ```
 //!
@@ -42,7 +42,7 @@ fn smoke_test_timeout() -> Duration {
 
 #[tokio::test]
 #[ignore = "hits the real Telegram API + a real model, and waits on a human tap — run manually \
-            with TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID/DEEPSEEK_API_KEY set"]
+            with LIBERADO_TELEGRAM_BOT_TOKEN/LIBERADO_TELEGRAM_CHAT_ID/DEEPSEEK_API_KEY set"]
 async fn live_full_approval_loop_smoke_test() {
     let dir = tempfile::TempDir::new().unwrap();
     let vault_path = dir.path().to_path_buf();
@@ -50,7 +50,7 @@ async fn live_full_approval_loop_smoke_test() {
 
     let signer = ProposalSigner::random();
     let notifier: Arc<dyn Notifier> =
-        Arc::new(TelegramNotifier::from_env().expect("set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID"));
+        Arc::new(TelegramNotifier::from_env().expect("set LIBERADO_TELEGRAM_BOT_TOKEN + LIBERADO_TELEGRAM_CHAT_ID"));
 
     // A mock tool runtime: approving records a fake `tasks:create` call in-memory — real execution
     // wiring, zero external side effects. Mirrors `daemon::tests::daemon_executes_an_approved_proposal`.
@@ -87,7 +87,7 @@ async fn live_full_approval_loop_smoke_test() {
         provider,
         TelegramApprovalsTuning::default(),
     )
-    .expect("set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID");
+    .expect("set LIBERADO_TELEGRAM_BOT_TOKEN + LIBERADO_TELEGRAM_CHAT_ID");
 
     let (tx, mut rx) = unbounded_channel();
     tokio::spawn(daemon.run(tx));

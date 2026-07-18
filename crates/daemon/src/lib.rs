@@ -19,12 +19,14 @@ use std::time::Duration;
 
 use liberado_common::{
     CapabilityCatalog, CapabilitySet, DEFAULT_POOL, DispatchDecision, Event, EventSource,
-    PROPOSALS_DIR, ProposalSigner, SignedProposal, WriteClass,
+    PROPOSALS_DIR, ProposalSigner, SignedProposal, WriteClass, event_source,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_notify::Notifier;
 use liberado_orchestrator::{Disposition, Orchestrator, OrchestratorError};
-use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
+use liberado_session::{
+    DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin, TerminalKind,
+};
 use liberado_vault::{Vault, VaultError};
 use thiserror::Error;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -434,6 +436,10 @@ impl Daemon {
                         pool = pool_name,
                         "reaction dispatched as hosted session"
                     );
+                    // A background session normally stores its summary silently. A cron firing is
+                    // the exception: it exists to hand that summary *back to the human*, so deliver
+                    // a cron-sourced session's result through the notifier when it finishes.
+                    self.maybe_deliver_cron_result(event, &session_id);
                     return ReactionOutcome::Dispatched { session_id };
                 }
                 Err(e) => {
@@ -445,6 +451,54 @@ impl Daemon {
 
         // Fallback: no hub attached — inline decide/act without a session (unit tests, watch tools).
         self.dispatch_and_act(pool, ctx, &request, event).await
+    }
+
+    /// Deliver a cron-fired session's result to the human via the notifier.
+    ///
+    /// Cron is the one background source whose whole purpose is to *report back* — a morning brief
+    /// nobody sees is useless. Every other background session (a `delegate`d subagent, a vault-watch
+    /// reaction) folds its outcome elsewhere and must stay silent, so this is gated strictly on the
+    /// `cron:` event source. No notifier configured, or a non-cron source → no-op.
+    ///
+    /// Spawned onto the runtime rather than awaited inline: the reaction loop must not block on a
+    /// session that may run for minutes. Best-effort delivery, matching every other `notify` call —
+    /// a failed send is logged, never fatal. (A future per-schedule `deliver = false` opt-out would
+    /// gate here; v1 delivers every cron.)
+    fn maybe_deliver_cron_result(&self, event: &Event, session_id: &str) {
+        let Some(schedule) = cron_schedule_name(&event.source) else {
+            return;
+        };
+        let (Some(hub), Some(notifier)) = (self.goals.clone(), self.notifier.clone()) else {
+            return;
+        };
+        let session_id = session_id.to_string();
+        let schedule = schedule.to_string();
+        tokio::spawn(async move {
+            let snap = match hub.await_terminal(&session_id).await {
+                Ok(snap) => snap,
+                Err(e) => {
+                    tracing::warn!(error = %e, schedule = %schedule, %session_id,
+                        "cron session never reached terminal; nothing delivered");
+                    return;
+                }
+            };
+            let (summary, terminal) = snap
+                .session
+                .result
+                .as_ref()
+                .map(|r| (r.summary.clone(), r.terminal))
+                .unwrap_or_else(|| {
+                    ("(the run finished with no summary)".to_string(), TerminalKind::Failed)
+                });
+            let message = format_cron_delivery(&schedule, &summary, terminal);
+            // `deliver_cron`, not `notify`: a chat-aware notifier folds this into the sticky
+            // conversation and may defer it around the human's activity (see the Notifier trait).
+            if let Err(e) = notifier.deliver_cron(&message).await {
+                tracing::warn!(error = %e, schedule = %schedule, "cron result delivery failed");
+            } else {
+                tracing::info!(schedule = %schedule, %session_id, "cron result delivered");
+            }
+        });
     }
 
     /// Inline dispatch → orchestrate when no hub is attached. Prefer the hub path in production.
@@ -682,6 +736,29 @@ impl Daemon {
 /// cron from a chat, but it still belongs to a dispatch journal entry. That is the case
 /// `SessionOrigin::from_correlation` exists for.
 ///
+/// The schedule name iff `source` is a cron source (`"cron:{name}"`), else `None`.
+///
+/// The gate for cron result delivery: only a `cron:`-sourced reaction should have its summary pushed
+/// to the human. A vault-watch reaction (`"turbovault-subscription"`, no `:name`) or a `delegate`d
+/// subagent must never leak here, so the match is on the source *kind*, not a substring.
+fn cron_schedule_name(source: &str) -> Option<&str> {
+    match source.split_once(':') {
+        Some((kind, name)) if kind == event_source::CRON => Some(name),
+        _ => None,
+    }
+}
+
+/// Render a cron result for delivery. On success it is just the brief under the schedule name; any
+/// non-success terminal is tagged so a failed/exhausted run can never be mistaken for a real report
+/// (the honest-status rule from `Disposition::terminal_summary`).
+fn format_cron_delivery(schedule: &str, summary: &str, terminal: TerminalKind) -> String {
+    if matches!(terminal, TerminalKind::Succeeded) {
+        format!("🕒 {schedule}\n\n{summary}")
+    } else {
+        format!("🕒 {schedule} [{terminal:?}]\n\n{summary}")
+    }
+}
+
 /// `pool` is stamped into `payload` so the dispatch pack routes to the same pool the event named.
 fn reaction_goal(event: &Event, goal: &str, pool: &str) -> GoalSpec {
     let profile = event
@@ -733,6 +810,33 @@ mod tests {
     use std::time::Duration;
     use tempfile::TempDir;
     use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn cron_schedule_name_only_matches_cron_sources() {
+        assert_eq!(cron_schedule_name("cron:daily-planning"), Some("daily-planning"));
+        // Names may themselves contain colons (rfc3339-ish); only the first split matters.
+        assert_eq!(cron_schedule_name("cron:weekly:review"), Some("weekly:review"));
+        // Non-cron sources must never trigger delivery.
+        assert_eq!(cron_schedule_name(event_source::TURBOVAULT_SUBSCRIPTION), None);
+        assert_eq!(cron_schedule_name("delegate"), None);
+        assert_eq!(cron_schedule_name("cronies:x"), None); // kind must equal "cron", not just prefix
+        assert_eq!(cron_schedule_name("cron"), None); // no name
+    }
+
+    #[test]
+    fn format_cron_delivery_flags_non_success() {
+        let ok = format_cron_delivery("daily-planning", "your brief", TerminalKind::Succeeded);
+        assert!(ok.contains("daily-planning") && ok.contains("your brief"));
+        assert!(!ok.contains('['), "success must not carry a status tag: {ok}");
+
+        for bad in [TerminalKind::Failed, TerminalKind::Cancelled, TerminalKind::BudgetExhausted] {
+            let msg = format_cron_delivery("daily-planning", "partial", bad);
+            assert!(
+                msg.contains(&format!("[{bad:?}]")),
+                "non-success must be tagged so it isn't mistaken for a real report: {msg}"
+            );
+        }
+    }
 
     async fn temp_daemon() -> (Daemon, TempDir) {
         let dir = TempDir::new().unwrap();

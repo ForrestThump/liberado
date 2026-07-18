@@ -21,8 +21,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Cap parallel codegen so a release build of the full workspace does not spike past the box's RAM
 # (the homelab has ~11 GiB; linking several crates at once is the peak).
+#
+# Override the workspace's `lto = true, codegen-units = 1` release profile for the deploy build:
+# LTO roughly triples build time and its final link is the RAM peak most likely to OOM an 11 GiB box.
+# A daemon does not need LTO's marginal runtime win, and a fast, reliable first build matters more —
+# re-enable it for a tagged "release" image later if ever worth it.
 ENV CARGO_BUILD_JOBS=2 \
-    CARGO_NET_GIT_FETCH_WITH_CLI=true
+    CARGO_NET_GIT_FETCH_WITH_CLI=true \
+    CARGO_PROFILE_RELEASE_LTO=false \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
 
 COPY . .
 

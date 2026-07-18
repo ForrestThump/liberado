@@ -1,9 +1,7 @@
-# Liberado — homelab v1 policy (capability model, minimal).
+# Liberado — homelab policy (capability model + MCP grants).
 #
-# Zones as in the repo default; grants stripped of every `ExecuteMcp` entry, because v1 declares no
-# MCPs and a grant that references an absent MCP fails validation at boot. The Read/Write zone grants
-# and `AskHuman` stay — they are the capability skeleton the daemon needs even before any MCP exists.
-# The vault is mounted read-only regardless, so no write actually reaches disk in v1.
+# Face agent stays thin (delegate only). Specialists are granted to `dispatcher`
+# so they reach the model only via dispatch-routed execution.
 
 # --- Zones (write classes) ---------------------------------------------------------------------
 [[zones]]
@@ -26,7 +24,9 @@ write_class = "shared"
 zone = "finance"
 write_class = "human_only"
 
-# --- Capability grants (no ExecuteMcp in v1) ---------------------------------------------------
+# --- Capability grants -------------------------------------------------------------------------
+
+# Face: human interfacer + built-in delegate. No ExecuteMcp — specialists stay on dispatcher.
 [[grants]]
 component = "main-agent"
 capabilities = [
@@ -35,6 +35,7 @@ capabilities = [
     "AskHuman",
 ]
 
+# Dispatcher mesh: zone RW + every wired MCP.
 [[grants]]
 component = "dispatcher"
 capabilities = [
@@ -42,21 +43,47 @@ capabilities = [
     { Write = { Vault = "tasks" } },
     { Read = { Vault = "decisions" } },
     { Write = { Vault = "decisions" } },
+    { Read = { Vault = "proposals" } },
+    { Write = { Vault = "proposals" } },
+    { Read = { Vault = "inbox" } },
+    { Write = { Vault = "inbox" } },
     { ReadSummary = { Named = "finance" } },
+    { ExecuteMcp = "turbovault" },
+    { ExecuteMcp = "liberado-search-orchestrator-mcp" },
+    { ExecuteMcp = "liberado-caldav-mcp" },
+    { ExecuteMcp = "liberado-weather-mcp" },
+    { ExecuteMcp = "liberado-pdf-mcp" },
+    { ExecuteMcp = "liberado-anythingllm-mcp" },
+    { ExecuteMcp = "liberado-calorie-counter-mcp" },
+    { ExecuteMcp = "liberado-actual-mcp" },
+    { ExecuteMcp = "liberado-spider-mcp" },
+    { ExecuteMcp = "liberado-qdrant-mcp" },
+    { ExecuteMcp = "deepwiki" },
 ]
 
+# Life pack: vault work + vault MCP (attended).
 [[grants]]
 component = "life"
 capabilities = [
     { Read = { Vault = "tasks" } },
     { Write = { Vault = "tasks" } },
     { Read = { Vault = "decisions" } },
+    { Write = { Vault = "decisions" } },
+    { Read = { Vault = "inbox" } },
+    { Write = { Vault = "inbox" } },
+    { ExecuteMcp = "turbovault" },
+    { ExecuteMcp = "liberado-search-orchestrator-mcp" },
+    { ExecuteMcp = "liberado-caldav-mcp" },
+    { ExecuteMcp = "liberado-weather-mcp" },
     "AskHuman",
 ]
 
+# Coding pack: narrow; no vault write, no finance tools.
 [[grants]]
 component = "coding"
 capabilities = [
     { Read = { Vault = "decisions" } },
+    { ExecuteMcp = "deepwiki" },
+    { ExecuteMcp = "liberado-search-orchestrator-mcp" },
     "AskHuman",
 ]

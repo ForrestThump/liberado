@@ -7,6 +7,10 @@
 #
 # The image is built separately (`docker build -t liberado:dev ~/liberado-build`), so run and build
 # are decoupled. Docker's restart policy is the "always running" — no systemd unit needed.
+#
+# Secrets: put OPENROUTER_API_KEY (and optionally DEEPSEEK_API_KEY) in a gitignored
+# `~/homelab/services/liberado/.env` next to this file — do NOT env_file the full
+# `envs/_shared/auth.env` (that dumps every homelab key into the container).
 
 services:
   liberado:
@@ -20,6 +24,8 @@ services:
       - homelab
     ports:
       - "4201:4201"     # LAN: http://192.168.0.144:4201  (API + SSE; WebUI is not built yet)
+    env_file:
+      - .env            # OPENROUTER_API_KEY (+ optional DEEPSEEK_API_KEY) only
     environment:
       LIBERADO_PORT: "4201"
       # `liberado serve` requires the vault path via arg or this env — it does NOT fall back to
@@ -27,10 +33,12 @@ services:
       # CLI arg-check passes). Found on first boot, 2026-07-15.
       LIBERADO_VAULT: "/vault"
       RUST_LOG: "info"
-      # --- wired after first boot is confirmed clean ---
-      # DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}     # + set `provider = "deepseek"` in topology.toml
-      # TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN} # the interaction loop
-      # TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      # OpenRouter → DeepSeek v4 Pro (slug confirmed on openrouter.ai). Overrides built-in default.
+      OPENROUTER_MODEL: "deepseek/deepseek-v4-pro"
+      # --- Telegram: DO NOT use TELEGRAM_BOT_TOKEN (OpenClaw owns that name). ---
+      # After LIBERADO_* rename lands in the image:
+      # LIBERADO_TELEGRAM_BOT_TOKEN: ...
+      # LIBERADO_TELEGRAM_CHAT_ID: ...
     volumes:
       # The real Obsidian vault, syncthing-synced, mounted READ-ONLY for v1 (the F1 lesson).
       - /home/shiloh/homelab/volumes/syncthing/bulk/Obsidian/Main:/vault:ro

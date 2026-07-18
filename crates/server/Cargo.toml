@@ -22,6 +22,7 @@ liberado-main-agent = { workspace = true }
 liberado-conversation-store = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-telegram-approvals = { workspace = true }
+liberado-commands = { workspace = true }
 liberado-memory-store = { workspace = true }
 liberado-vault = { workspace = true }
 liberado-session = { workspace = true }

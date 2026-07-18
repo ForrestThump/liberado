@@ -234,7 +234,7 @@ pub fn configure_daemon(
         guard.signer.clone(),
     );
 
-    // Optional — a daemon/orchestrator with no TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID set just never
+    // Optional — a daemon/orchestrator with no LIBERADO_TELEGRAM_* vars set just never
     // sends anything, same as before this existed. The motivating case is exactly this daemon
     // path: an unattended (cron-triggered, Phase 3) proposal nobody's watching the vault for.
     let notifier: Option<Arc<dyn Notifier>> =

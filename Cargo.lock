@@ -555,9 +555,9 @@ dependencies = [
 
 [[package]]
 name = "bytemuck"
-version = "1.25.0"
+version = "1.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
+checksum = "d6aedf8ae72766347502cf3cb4f41cf5e9cc37d28bee90f1fdaaae15f9cf9424"
 
 [[package]]
 name = "byteorder"
@@ -770,7 +770,7 @@ checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
  "serde",
  "termcolor",
- "unicode-width 0.2.0",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -1185,9 +1185,9 @@ dependencies = [
 
 [[package]]
 name = "cxx"
-version = "1.0.196"
+version = "1.0.197"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac6f8908ed0826ab0aec7c8358a4de3a9b26c5ed391a5dc5135765d2fd1aa8fb"
+checksum = "00424da159cc5adcb4eeea7e7b5cb1d96df41f5fa695ec596922181bdc36232a"
 dependencies = [
  "cc",
  "cxx-build",
@@ -1200,9 +1200,9 @@ dependencies = [
 
 [[package]]
 name = "cxx-build"
-version = "1.0.196"
+version = "1.0.197"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d8ae25c0ce72ac21a77b5deec4f49b452238ef97072f697dd6fd752b1355ecd"
+checksum = "43e05269dbed4dab7072ae0f04ef31799ad189d52ce2ac12710c2997b754f86a"
 dependencies = [
  "cc",
  "codespan-reporting",
@@ -1215,9 +1215,9 @@ dependencies = [
 
 [[package]]
 name = "cxxbridge-cmd"
-version = "1.0.196"
+version = "1.0.197"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27d53791812143bd27f74ab6055f22e875f04c59bbef0ca03d714ebec6f6f484"
+checksum = "e2f017b07e0da7f425642339faff0edc9f0de6459a18180183d086d1f3381e89"
 dependencies = [
  "clap",
  "codespan-reporting",
@@ -1229,15 +1229,15 @@ dependencies = [
 
 [[package]]
 name = "cxxbridge-flags"
-version = "1.0.196"
+version = "1.0.197"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd557619f7dc2252bf7373f6bec5600ce60a2b477e5b3b84eb4e074bb297795e"
+checksum = "293d267f43a5778bf3b89fff2a658f081166e7f152d9640e2ee3d917d065a5fc"
 
 [[package]]
 name = "cxxbridge-macro"
-version = "1.0.196"
+version = "1.0.197"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fe465fc5b9d0231ea141c4fae714a08f4f907855e1a7ca10cc90ab6c8b12ece"
+checksum = "72dd233dc128223fe85d2afa5c617c79743c0f47fb495b69234b5da680d4986a"
 dependencies = [
  "indexmap",
  "proc-macro2",
@@ -1403,9 +1403,9 @@ checksum = "092966b41edc516079bdf31ec78a2e0588d1d0c08f78b91d8307215928642b2b"
 
 [[package]]
 name = "der"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71fd89660b2dc699704064e59e9dba0147b903e85319429e131620d022be411b"
+checksum = "a69dedd701da44b0536442edf09c81a64b0ab97a7a4a5e3d1971f00027cbc63d"
 dependencies = [
  "pem-rfc7468",
  "zeroize",
@@ -2129,14 +2129,16 @@ dependencies = [
 
 [[package]]
 name = "exr"
-version = "1.74.0"
+version = "1.74.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4300e043a56aa2cb633c01af81ca8f699a321879a7854d3896a0ba89056363be"
+checksum = "711fe42c9964295e01ee3fba3f9fe0e1d24b98886950d68efe81b1c76e21adf3"
 dependencies = [
  "bit_field",
  "half",
  "lebe",
  "miniz_oxide",
+ "num-complex",
+ "pulp",
  "rayon-core",
  "smallvec",
  "zune-inflate",
@@ -2162,9 +2164,9 @@ checksum = "9afc2bd4d5a73106dd53d10d73d3401c2f32730ba2c0b93ddb888a8983680471"
 
 [[package]]
 name = "fastembed"
-version = "5.17.2"
+version = "5.17.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "545e4fb17fc48768ff36c2a3854aa5b0b809d0ed595ab5530fa8ac94f31bd0ea"
+checksum = "f3c8600c9ec79b51d60c19911fe14eac04fe9c2895e87d2a3e80e2213d645a32"
 dependencies = [
  "anyhow",
  "hf-hub",
@@ -3847,6 +3849,7 @@ dependencies = [
  "liberado-bootstrap",
  "liberado-chat-search",
  "liberado-coder-agent",
+ "liberado-commands",
  "liberado-common",
  "liberado-config",
  "liberado-conversation-store",
@@ -3911,6 +3914,7 @@ dependencies = [
 name = "liberado-telegram-approvals"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "liberado-common",
  "liberado-config-loader",
@@ -4030,6 +4034,12 @@ dependencies = [
  "cfg-if",
  "windows-link",
 ]
+
+[[package]]
+name = "libm"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libredox"
@@ -4202,9 +4212,9 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "matrixmultiply"
-version = "0.3.10"
+version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a06de3016e9fae57a36fd14dba131fccf49f74b40b7fbdb472f96e361ec71a08"
+checksum = "3f607c237553f086e7043417a51df26b2eb899d3caff94e6a67592ff992fedc7"
 dependencies = [
  "autocfg",
  "rawpointer",
@@ -4586,6 +4596,7 @@ version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
 dependencies = [
+ "bytemuck",
  "num-traits",
 ]
 
@@ -5254,10 +5265,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
 
 [[package]]
-name = "pxfm"
-version = "0.1.29"
+name = "pulp"
+version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0c5ccf5294c6ccd63a74f1565028353830a9c2f5eb0c682c355c471726a6e3f"
+checksum = "046aa45b989642ec2e4717c8e72d677b13edd831a4d3b6cf37d9a3e54912496a"
+dependencies = [
+ "bytemuck",
+ "cfg-if",
+ "libm",
+ "num-complex",
+ "paste",
+ "pulp-wasm-simd-flag",
+ "raw-cpuid",
+ "reborrow",
+ "version_check",
+]
+
+[[package]]
+name = "pulp-wasm-simd-flag"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d8f70e07b9c3962945a74e59ca1c511bba65b6419468acc217c457d93f3c740"
+
+[[package]]
+name = "pxfm"
+version = "0.1.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "qoi"
@@ -5601,6 +5635,12 @@ dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
 ]
+
+[[package]]
+name = "reborrow"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
 
 [[package]]
 name = "redox_syscall"
@@ -8057,9 +8097,9 @@ checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
 name = "usearch"
-version = "2.25.3"
+version = "2.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c08f764417012cf6aea6d1380ef9ea8712c5795a938b726fc67b9bf7ea8824b"
+checksum = "1cd7f672d20412962c457b11c858c6c5aecb949808a5345a95e1d671112bcf72"
 dependencies = [
  "cxx",
  "cxx-build",

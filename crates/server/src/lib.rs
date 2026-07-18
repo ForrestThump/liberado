@@ -7,11 +7,14 @@
 //! us doesn't fight over it).
 
 mod api;
+mod cron_delivery;
 mod hooks;
 mod state;
+mod sticky;
+mod telegram;
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use std::path::Path;
 
@@ -152,6 +155,52 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // Every reaction is a hosted background session on the hub (E3) — joinable, cancellable.
     .with_goal_hub(goals.clone());
 
+    // Shared state for chat-aware cron delivery (`docs/ideas/cron-delivery-timing-idea.md`): the
+    // sticky Telegram session id (also owned by the chat bridge) and the "last human message" clock
+    // (also stamped by the approval bot). Built here so the daemon's delivery notifier and the
+    // bot/bridge below all point at the same instances.
+    //
+    // The sticky id is now **persisted** across restarts (`<data_dir>/telegram-sticky-session`, on the
+    // same volume as the session store): on boot we restore the last conversation so a container
+    // restart no longer forces an implicit `/new`. A restored id is adopted only if the conversation
+    // still exists (validated against the chat store) — a stale pointer is dropped, not resurrected.
+    let telegram_sticky = if let Some(chat_sessions) = chat.as_ref() {
+        let cs = chat_sessions.clone();
+        sticky::StickySession::load(
+            liberado_bootstrap::data_dir().join("telegram-sticky-session"),
+            move |id| async move {
+                cs.list()
+                    .await
+                    .map(|headers| headers.iter().any(|h| h.id == id))
+                    .unwrap_or(false)
+            },
+        )
+        .await
+    } else {
+        sticky::StickySession::ephemeral()
+    };
+    let telegram_activity: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+
+    // When both Telegram and a chat surface exist, route the daemon's cron delivery through the
+    // chat-delivering notifier: it folds each brief into the sticky conversation and defers the send
+    // around active chat. Proposals still go out immediately (its inner notifier). Without chat or
+    // Telegram, the daemon keeps whatever `configure_daemon` set (plain immediate notify).
+    let daemon = match (chat.as_ref(), liberado_notify::TelegramNotifier::from_env()) {
+        (Some(chat_sessions), Some(inner)) => {
+            let cdn = cron_delivery::ChatDeliveringNotifier::new(
+                Arc::new(inner),
+                chat_sessions.clone(),
+                telegram_sticky.clone(),
+                telegram_activity.clone(),
+                Duration::from_secs(config.tuning.cron_delivery.quiet_delay_secs),
+                Duration::from_secs(config.tuning.cron_delivery.deliver_by_secs),
+            );
+            info!("cron delivery: folding briefs into the sticky Telegram chat (quiet-delay defer)");
+            daemon.with_notifier(Arc::new(cdn))
+        }
+        _ => daemon,
+    };
+
     // The webhook hooks endpoint's seam into the daemon's reactive pipeline — a clone of the same
     // channel every `EventSource` (vault-watch, cron) pushes onto. Grabbed before `daemon` moves
     // into its own spawned task below, same pattern as the vault/signer clones just above it.
@@ -192,21 +241,27 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         hook_idempotency: Default::default(),
     });
 
-    // Optional — a proposal Telegram approval bot, answering the Approve/Reject buttons
-    // `TelegramNotifier::notify_proposal` sends. Only meaningful when a provider is attached (no
-    // provider ⇒ no dispatcher/orchestrator ⇒ no proposals are ever created in the first place),
-    // and only runs when TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID are set (same env vars the notifier
-    // itself uses). Cloning the vault/signer here, before `daemon` moves into its own spawn below,
-    // gives the bot its own handle onto the exact same underlying vault (`Vault` is cheap to
-    // clone — see `liberado_vault::Vault`'s doc comment).
+    // Optional — Telegram bot: proposal Approve/Reject/Revise buttons + free-form chat when a
+    // ChatSessions surface exists. Only when a provider is attached and LIBERADO_TELEGRAM_* env
+    // vars are set. Cloning the vault/signer here, before `daemon` moves into its own spawn below,
+    // gives the bot its own handle onto the same vault (`Vault` is cheap to clone).
     if let Some(p) = provider.as_ref()
-        && let Some(bot) = liberado_telegram_approvals::ApprovalBot::from_env(
+        && let Some(mut bot) = liberado_telegram_approvals::ApprovalBot::from_env(
             daemon.vault().clone(),
             daemon.signer().clone(),
             p.clone(),
             config.tuning.telegram_approvals.clone(),
         )
     {
+        if state.chat.is_some() {
+            bot = bot
+                .with_chat(Arc::new(crate::telegram::TelegramChatBridge {
+                    state: state.clone(),
+                    session_id: telegram_sticky.clone(),
+                }))
+                .with_activity_tracker(telegram_activity.clone());
+            info!("Telegram free-form chat surface attached (slash commands enabled)");
+        }
         tokio::spawn(bot.run());
     }
 

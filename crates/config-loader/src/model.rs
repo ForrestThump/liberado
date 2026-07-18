@@ -620,6 +620,7 @@ pub struct Tuning {
     pub capture: CaptureTuning,
     pub maintenance: MaintenanceTuning,
     pub telegram_approvals: TelegramApprovalsTuning,
+    pub cron_delivery: CronDeliveryTuning,
     /// The `[tuning.coder]` section, kept **opaque** here — the coding pack owns its own config
     /// vocabulary (`liberado_coder_core::CoderTuning::from_value` parses + validates it at
     /// composition time). The config stack stays pack-agnostic: it knows a pack section exists,
@@ -833,6 +834,31 @@ impl Default for TelegramApprovalsTuning {
             getupdate_timeout_secs: 25,
             poll_retry_backoff_secs: 10,
             revise_temperature: 0.0,
+        }
+    }
+}
+
+/// Timing for folding a finished cron brief into the sticky Telegram conversation, deferred around
+/// the human's activity so a brief never barges into an active chat — see
+/// `docs/ideas/cron-delivery-timing-idea.md`. The cron itself still runs on time; only the delivery
+/// to the phone defers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CronDeliveryTuning {
+    /// Deliver once the Telegram chat has gone this long with no inbound (human) message. The common
+    /// case — a brief firing while you are not chatting — delivers immediately, because the chat is
+    /// already idle past this window; the delay only bites when you are mid-conversation.
+    pub quiet_delay_secs: u64,
+    /// Hard cap on how long a brief may be held waiting for quiet. Once this elapses since the brief
+    /// became ready, deliver it anyway (even into an active chat), so it is never indefinitely late.
+    pub deliver_by_secs: u64,
+}
+
+impl Default for CronDeliveryTuning {
+    fn default() -> Self {
+        Self {
+            quiet_delay_secs: 300,  // 5 minutes idle → deliver
+            deliver_by_secs: 2700,  // 45 minutes → deliver regardless
         }
     }
 }

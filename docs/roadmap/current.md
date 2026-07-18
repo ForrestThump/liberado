@@ -26,7 +26,7 @@ away, pings you, and lets you answer — plus maturing crons and MCP breadth.
 |---|---|---|
 | **W1** | **A goal-session view in the WebUI** (phone-first) | See and steer your autonomous agents. The WebUI has `chat.rs` and **no session view at all** — it satisfies none of [`session-surface-contract.md`](../architecture/session-surface-contract.md). Needs a rendered UI and your eyes. |
 | **E5-b** | **Answer a session from your phone** | The OpenClaw/Hermes killer feature. A ping reaches you; a reply typed into Telegram goes nowhere (confirmed live) — Telegram is one flat chat with **no session multiplexing**. The fix is a **deep link into W1**, not a reply bridge. Needs `public_base_url` — **not before there is a page to link to**. |
-| **C1** | **Crons that spawn real sessions** | The event-source and E7 profile plumbing exist; the payoff is a schedule firing an *interactive, capability-scoped* session on its own — "run this every morning, ask me if you're unsure." Needs its own small plan. |
+| **C1** | **Crons that spawn real sessions** | **Delivery half landed 2026-07-18** (see below): scheduled briefings fire a background session and push its summary to Telegram, and the 3 OpenClaw briefings were retired onto Liberado. What remains is the *interactive* payoff — "run this every morning, **ask me if you're unsure**" (an AskHuman-capable cron via E7 profiles). Current dogfooding gap: the briefings come back `PartiallySucceeded` because `liberado-weather-mcp` and `liberado-caldav-mcp` fail on the real path — reliability work in flight (`goal.md`). |
 | **M1** | **MCP breadth** | The author named MCP connections a P1 capability. Two concrete gaps: connection **pooling/reuse** (today a fresh connection per execution — TurboMCP's `SessionManager` is worth recycling per transport group), and **multi-server registry UX** (declare several stdio+HTTP servers from config; the `McpRegistry` machinery exists, the registration surface does not). |
 | **T1** | **The live conformance suite** — [`live-conformance-suite.md`](live-conformance-suite.md) | **Reliability is not optional for a daemon meant to run your life unattended** — this belongs here, in P1, not in a coding tier. Every defect found on 2026-07-13/14 passed the test suite and died on first contact with a running daemon, and those checks exist only as commands typed by hand. Most need a real daemon but only a `MockProvider`, so the valuable tier is fast and CI-able. |
 
@@ -64,11 +64,31 @@ the whole value, not raw coding skill.
   while chat and coding never get their turn; the dogfooding itself is the signal — when you reach for
   it without friction, that is the bell.
 
-## Recently landed (2026-07-13/14)
+## Recently landed
 
 Read [`../architecture/sessions.md`](../architecture/sessions.md) for the model itself; these are
 just pointers to how it got here.
 
+- **Cron → Telegram delivery, and the first OpenClaw cutover (2026-07-18).** A `cron:`-sourced
+  session's summary is now delivered to Telegram (`daemon::maybe_deliver_cron_result`): a scheduled
+  brief that used to store its output silently now reaches you. The three OpenClaw briefings
+  (daily-planning, evening-debrief, weekly-review) were ported to `[[schedules]]`, enabled, and their
+  OpenClaw originals disabled — Liberado now owns them. Same rebuild also shipped the Telegram
+  **free-form chat surface** (typed replies answer a session; retires the send-only limitation).
+  Delivery is smoke-verified live end-to-end. **The dogfood immediately paid off:** the real briefings
+  first came back `PartiallySucceeded` because `liberado-weather-mcp` (geocoding rejected "City, State")
+  and `liberado-caldav-mcp` `list_events` (relative-href "builder error" + datetime arg format) failed
+  — both fixed and a real brief now returns `Succeeded` live. This is exactly the "get one thing over
+  the daily-driver line and dogfood it hard" loop working as intended.
+- **Cron briefs fold into the sticky Telegram conversation (2026-07-18).** A `deliver_cron` seam on the
+  `Notifier` lets a chat-aware notifier (`server/src/cron_delivery.rs`) `append_note` each brief into
+  the sticky Telegram chat session and **defer the push around your activity** — quiet-delay (default
+  5 min idle) with a hard cap (default 45 min), so a reply to a brief carries it in context and a brief
+  never barges into an active chat. Design + the deferred reply-to-threading follow-on:
+  [`../ideas/cron-delivery-timing-idea.md`](../ideas/cron-delivery-timing-idea.md). **The sticky id now
+  persists across restarts** (`server/src/sticky.rs`, `<data_dir>/telegram-sticky-session`): a restart
+  no longer forces an implicit `/new` (restored id validated against the chat store, stale pointer
+  discarded). Live-verified across a restart 2026-07-18.
 - **The unified Session model (D7).** Everything is a `Session`; `goal: Option<_>` is the only
   difference between a chat and a run-to-terminal session. One store, one id space, one list.
   Session profiles + `Capability::AskHuman`; intake-first coding sessions; forking from any message.
@@ -142,6 +162,12 @@ path; don't add it on intuition.
 *(MCP breadth and chat history search moved up into the priority tiers above — they are named
 capabilities now, not someday-maybes.)*
 
+- **Turn-budget "battery"** — captured as an idea, not scheduled:
+  [`turn-budget-battery-idea.md`](../ideas/turn-budget-battery-idea.md). A graduated, agent-visible
+  budget signal (3–4 states) plus a reserved wrap-up phase, so a cron that exhausts its turns degrades
+  into a useful partial brief instead of a diagnostic dump — and a passively-adaptive per-schedule
+  ceiling from session history. Motivated by the 2026-07-18 briefing that hit the budget wall
+  mid-flail. P1 (unattended-cron reliability).
 - **A2A (Agent2Agent) interop** — captured as an idea, not scheduled:
   [`a2a-protocol-idea.md`](../ideas/a2a-protocol-idea.md). The conversation-store seams
   (`author`, conversation lineage — Decision 17) and the mesh direction (Decision 18) already

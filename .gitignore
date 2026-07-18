@@ -25,6 +25,14 @@ desktop.ini
 /liberado-deliberate-mcp/
 /liberado-wakeup-mcp/
 /liberado-standalone-kit/
+/liberado-actual-mcp/
+/liberado-qdrant-mcp/
+/liberado-search-orchestrator-mcp/
+/liberado-spider-mcp/
+
+# Not-for-deploy scratch (subagent-manager: operator directive — do not deploy)
+/subagent-manager-mcp-master/
+/subagent-manager-mcp-master.zip
 
 # Local configuration overrides (committed starters live in config.example/ and crates/*/config.example/)
 config/*.toml

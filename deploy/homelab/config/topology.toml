@@ -1,24 +1,183 @@
-# Liberado — homelab v1 topology (headless daemon, in-container).
+# Liberado — homelab topology (headless daemon, in-container).
 #
-# Deliberately MINIMAL: the first Debian deploy is about proving the daemon boots, mounts the vault,
-# and serves the API on the target platform — the smallest failure surface, not the full feature set.
-# MCPs, a provider, crons, and session profiles get wired *after* first boot is confirmed clean.
+# Provider: OpenRouter → DeepSeek v4 Pro. MCPs: HTTP peers on the `homelab` bridge
+# (Compose already runs them; we only connect). See docs/roadmap/mcp-homelab-wire-plan.md.
+#
+# TOML: all root keys MUST appear before any [table] header.
 
-# The Obsidian vault, mounted READ-ONLY at /vault in the container (compose `:ro`). The daemon watches
-# and reads it; it cannot write until the Unix build is shaken out and the guards are verified on
-# Debian (the F1 lesson). Any write attempt fails safe.
 vault_path = "/vault"
+provider = "openrouter"
 
-# Chat face = human interfacer; work goes through the `delegate` tool to the dispatch pack.
 [main_agent]
 delegation_mode = true
 
-# Provider: left unset for the first boot, so the daemon comes up provider-less (life pack only) and
-# proves the platform without depending on a key. To enable chat/dispatch, set the provider here and
-# supply its key via the compose env (e.g. provider = "deepseek" + DEEPSEEK_API_KEY). The homelab runs
-# heavily on Gemini; wiring an OpenAI-compatible Gemini backend is a clean follow-up.
-# provider = "deepseek"
+# =============================================================================
+# MCPs — container DNS names on the `homelab` network.
+# `url` is BASE origin only (client appends /mcp). F1: every non-read_only MCP
+# declares what it writes (default_zone | zone_from_arg+write_tools | writes_vault=false).
+# =============================================================================
 
-# No [[mcps]] in v1. The homelab already runs the MCP ecosystem (turbovault, searxng-mcp, caldav-mcp,
-# mem0-mcp, …) on the `homelab` network — wiring the daemon to them by container name is the *next*
-# step (the "MCP breadth" gap is a connection job, not a build job), added once first boot is green.
+# --- Vault (develop image via homelab rebuild-turbovault.sh) -----------------
+# Speak to the nginx front (`turbovault`), not turbovault-backend (needs Origin rewrite).
+[[mcps]]
+name = "turbovault"
+description = "Obsidian vault ops via TurboVault: notes, search, links, templates, batch edits"
+consequence = "reversible"
+transport = { kind = "http", url = "http://turbovault:3001" }
+zone_from_arg = "path"
+write_tools = [
+    "write_note",
+    "delete_note",
+    "move_note",
+    "move_file",
+    "update_frontmatter",
+    "create_from_template",
+    "update_task",
+    "delete_task",
+]
+
+# --- Search ------------------------------------------------------------------
+# turbomcp: multi-provider routing + failover + AI reranking. searxng-mcp was dropped once this was
+# proven in production (see docs/roadmap/mcp-suite-standardization.md).
+[[mcps]]
+name = "liberado-search-orchestrator-mcp"
+description = "Web and news search: multi-provider routing, failover, AI reranking"
+consequence = "read_only"
+transport = { kind = "http", url = "http://liberado-search-orchestrator-mcp:8080" }
+
+# --- Calendar ----------------------------------------------------------------
+[[mcps]]
+name = "liberado-caldav-mcp"
+description = "Calendar read/write via CalDAV"
+consequence = "reversible"
+transport = { kind = "http", url = "http://liberado-caldav-mcp:8000" }
+writes_vault = false
+
+# Memory: mem0-mcp (liberado-tool-helper-mcp) removed 2026-07-17 — superseded by the Liberado
+# delegator; do not deploy. Semantic memory is now liberado-qdrant-mcp (below).
+
+# --- Liberado-branded utilities ----------------------------------------------
+[[mcps]]
+name = "liberado-weather-mcp"
+description = "Current weather and forecast for a location"
+consequence = "read_only"
+transport = { kind = "http", url = "http://liberado-weather-mcp:8000" }
+
+[[mcps]]
+name = "liberado-pdf-mcp"
+description = "PDF manipulation: merge, split, extract, convert"
+consequence = "reversible"
+transport = { kind = "http", url = "http://liberado-pdf-mcp:8080" }
+writes_vault = false
+
+[[mcps]]
+name = "liberado-anythingllm-mcp"
+description = "Ingest and query content in AnythingLLM"
+consequence = "reversible"
+transport = { kind = "http", url = "http://liberado-anythingllm-mcp:8080" }
+writes_vault = false
+
+[[mcps]]
+name = "liberado-calorie-counter-mcp"
+description = "Food logging and calorie tracking"
+consequence = "reversible"
+transport = { kind = "http", url = "http://liberado-calorie-counter-mcp:8080" }
+writes_vault = false
+
+# rentcast-mcp removed 2026-07-17 — operator directive: skip completely.
+
+# Finance (Actual Budget). The Node/TS actual-mcp (which 404'd on /http) is retired; this is the
+# Rust/turbomcp replacement, served on :8000.
+[[mcps]]
+name = "liberado-actual-mcp"
+description = "Personal finance via Actual Budget: accounts, balances, transactions, spending"
+consequence = "external"
+transport = { kind = "http", url = "http://liberado-actual-mcp:8000" }
+writes_vault = false
+
+# Web scrape (heavier). turbomcp now; served open on the private net (the old bearer only gated the
+# Firecrawl REST). Container renamed spider-mcp -> liberado-spider-mcp in the same step.
+[[mcps]]
+name = "liberado-spider-mcp"
+description = "Web scraping and crawling: single-page scrape with extraction, and multi-page crawl"
+consequence = "external"
+transport = { kind = "http", url = "http://liberado-spider-mcp:8080" }
+writes_vault = false
+
+# --- RAG store (Qdrant) ------------------------------------------------------
+# Its own corpus, embedded LOCALLY (fastembed ONNX, 384-dim) — no API key, no external service.
+# NOTE: it shares the `qdrant` container with AnythingLLM, whose collections are 1024-dim and
+# written by a different embedder. Those are AnythingLLM's to serve (liberado-anythingllm-mcp);
+# vectors are only comparable within one model, so this MCP sticks to its own collections.
+[[mcps]]
+name = "liberado-qdrant-mcp"
+description = "Semantic memory: ingest text/files into a vector store and search it by meaning"
+consequence = "reversible"
+transport = { kind = "http", url = "http://liberado-qdrant-mcp:3000" }
+writes_vault = false
+
+# Remote docs Q&A (no local container).
+[[mcps]]
+name = "deepwiki"
+description = "Ask questions about public GitHub repository documentation"
+consequence = "read_only"
+transport = { kind = "http", url = "https://mcp.deepwiki.com" }
+
+# =============================================================================
+# Scheduled routines (ported from OpenClaw crons, 2026-07-17).
+#
+# GO-LIVE 2026-07-18: all three enabled. The cron→telegram delivery build is deployed
+# (daemon::maybe_deliver_cron_result), the LIBERADO_TELEGRAM_* env is set, and OpenClaw's three
+# equivalent jobs were disabled via `openclaw cron disable {daily-planning,evening-debrief,
+# weekly-review}` so they don't double-fire into the shared chat. Delivery was smoke-verified live.
+# RELIABILITY (fixed 2026-07-18): a live verify brief returns Succeeded with real weather, a clean
+# calendar result, turbovault tasks, and news — 0 wasted turns. Fixes: liberado-weather-mcp geocode
+# now accepts "City, State"; liberado-caldav-mcp list_events resolves relative hrefs + accepts more
+# datetime shapes. (Both MCPs build-from-URL @master.)
+#
+# Times are UTC (Liberado's cron has no timezone). Converted from Mesa, AZ (UTC-7, no DST — stable
+# year-round, unlike OpenClaw's America/Denver setting which DST-drifts for an AZ user):
+#   daily  6:55 AZ = 13:55Z | evening 20:55 AZ = 03:55Z | weekly Sun 18:55 AZ = Mon 01:55Z.
+# Goals adapted to Liberado's tools: caldav-mcp→liberado-caldav-mcp, search-orchestrator→
+# liberado-search-orchestrator-mcp; the OpenClaw `agentmail` (no Liberado MCP) and `mem0-mcp`
+# (dropped — superseded by the delegator) steps are removed. "Send to user" is gone too: the daemon
+# delivers the session's final summary automatically, so each goal just has to PRODUCE the brief.
+# =============================================================================
+
+[[schedules]]
+name = "daily-planning"
+enabled = true
+cron_expr = "0 55 13 * * * *"   # 13:55 UTC = 06:55 Mesa AZ
+goal = """
+Produce a concise morning brief for Mesa, Arizona. Your final summary IS the brief delivered to the user, so make it the report.
+1. Today's calendar events via liberado-caldav-mcp (list_calendars, then list_events for today).
+2. Current weather and today's forecast for Mesa, Arizona via liberado-weather-mcp.
+3. Incomplete tasks from turbovault (filter: incomplete only) — the primary task source.
+4. Three noteworthy headlines from the past 24 hours via liberado-search-orchestrator-mcp — one line each.
+Deliver: today's schedule, weather snapshot, open tasks, and the 3 headlines, ending with a single focus suggestion if one stands out. Keep it tight — no filler.
+"""
+
+[[schedules]]
+name = "evening-debrief"
+enabled = true
+cron_expr = "0 55 3 * * * *"    # 03:55 UTC = 20:55 Mesa AZ (previous evening)
+goal = """
+Produce a grounded end-of-day evening debrief for Mesa, Arizona. Your final summary IS the message delivered to the user.
+1. Today's calendar events via liberado-caldav-mcp — what was scheduled.
+2. Task status in turbovault — what's still open vs completed today.
+3. Tomorrow's calendar via liberado-caldav-mcp (list_events for tomorrow).
+Deliver a brief evening summary: how the day looked, open items carrying into tomorrow, and tomorrow's schedule preview. Close with one short reflection or suggested next action if something stands out. Concise, not a status report.
+"""
+
+[[schedules]]
+name = "weekly-review"
+enabled = true
+cron_expr = "0 55 1 * * MON *"  # Mon 01:55 UTC = Sun 18:55 Mesa AZ
+goal = """
+Produce a weekly review for Mesa, Arizona. Your final summary IS the review delivered to the user.
+1. Calendar for the past 7 days via liberado-caldav-mcp — what happened this week.
+2. Calendar for the coming 7 days via liberado-caldav-mcp — what's ahead.
+3. turbovault tasks: completed this week, still open, anything overdue.
+4. A brief weekly news digest via liberado-search-orchestrator-mcp — 3–5 headlines worth knowing.
+Deliver sections: **This Week** (what happened, tasks completed), **Next Week** (upcoming calendar, priorities), **Open Items** (unresolved tasks), **News Digest**, and a short **Weekly Focus** — one clear intention for the coming week. Honest and grounded, not motivational filler.
+"""

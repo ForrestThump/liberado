@@ -13,6 +13,7 @@ liberado-common = { workspace = true }
 liberado-config-loader = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-vault = { workspace = true }
+async-trait = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

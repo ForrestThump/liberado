@@ -1,26 +1,21 @@
 //! # liberado-telegram-approvals
 //!
-//! Turns a Telegram Approve/Reject button tap into a pure-code edit of a proposal note's
-//! frontmatter — no LLM anywhere in that path, so an ambiguous message can never be
-//! misinterpreted as an approval. This is the two-way half of `liberado-notify`'s
-//! `TelegramNotifier::notify_proposal`: that crate sends the buttons, this crate answers them.
+//! Two Telegram surfaces over one long-poll loop:
 //!
-//! Approve/Reject work by writing `status: approved`/`status: rejected` back to
-//! `proposals/{stem}.md` tagged with [`WriteProvenance::human`] — the exact same attribution the
-//! daemon's vault watcher already treats as an external (reacted-to) edit, identical to a human
-//! editing the note in Obsidian. No execution logic is duplicated here; the daemon's existing
-//! `handle_proposal_change` does that once it observes the edit.
+//! 1. **Proposal Approve/Reject/Revise** — pure-code frontmatter edits (Approve/Reject never
+//!    touch an LLM). The two-way half of `liberado-notify`'s `TelegramNotifier::notify_proposal`.
+//! 2. **Free-form chat** (optional) — when a [`TelegramChatSurface`] is attached, ordinary
+//!    messages from the configured chat become Liberado chat turns. While inference runs the bot
+//!    sends Telegram `sendChatAction(typing)` so the user sees "agent is typing…".
 //!
-//! Revise is different: it hands the human's free-text request to the shared [`Provider`] to
-//! redraft the proposal's `rationale`/`proposed_action`, but the result always goes back to
-//! `Pending` with a fresh signature and a fresh set of buttons — **only a subsequent Approve tap**
-//! (pure code, no LLM) can ever execute anything. The LLM can reword what's proposed; it can never
-//! grant approval.
+//! Free-form chat is opt-in via [`ApprovalBot::with_chat`]: without it, non-revision messages are
+//! ignored (the historical behaviour). Only the configured `LIBERADO_TELEGRAM_CHAT_ID` is served.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use liberado_common::{
     PROPOSALS_DIR, Proposal, ProposalSigner, ProposalStatus, ProposedAction, WriteProvenance,
 };
@@ -30,9 +25,20 @@ use liberado_vault::Vault;
 use tokio::sync::Mutex;
 
 const TELEGRAM_API_BASE: &str = "https://api.telegram.org/bot";
+/// Telegram hard-caps message text at 4096 UTF-16 code units; stay under with headroom.
+const TELEGRAM_MAX_MESSAGE_CHARS: usize = 4000;
+/// `sendChatAction` "typing" lasts ~5s on Telegram's side; refresh before it expires.
+const TYPING_REFRESH_SECS: u64 = 4;
 
-/// A Telegram bot that answers Approve/Reject/Revise taps on proposal notifications. See the
-/// module doc comment for the safety split between the pure-code and LLM-touching paths.
+/// One conversational turn for free-form Telegram messages. Implemented by the server against
+/// [`liberado_main_agent::ChatSessions`] so Telegram shares the same face agent + tools as HTTP chat.
+#[async_trait]
+pub trait TelegramChatSurface: Send + Sync {
+    async fn reply(&self, user_text: &str) -> Result<String, String>;
+}
+
+/// A Telegram bot that answers Approve/Reject/Revise taps on proposal notifications, and
+/// optionally free-form chat when a [`TelegramChatSurface`] is attached.
 pub struct ApprovalBot {
     client: reqwest::Client,
     token: String,
@@ -44,21 +50,32 @@ pub struct ApprovalBot {
     /// Telegram message_id (of a `force_reply` prompt) → the proposal stem it's revising. Lost on
     /// restart — acceptable, a human can just tap Revise again.
     pending_revisions: Mutex<HashMap<i64, String>>,
+    /// When set, free-form messages from `chat_id` run a Liberado chat turn.
+    chat: Option<Arc<dyn TelegramChatSurface>>,
+    /// Shared "last time the human sent us a message" clock. When set, every inbound message from the
+    /// configured chat stamps it `Some(now)`. The server's chat-delivering notifier reads it to hold a
+    /// cron brief until you are between messages (see `docs/ideas/cron-delivery-timing-idea.md`). The
+    /// inner `None` means "never active" → briefs deliver immediately. The outer `None` means no
+    /// delivery timing is being tracked at all — the historical behaviour.
+    last_activity: Option<Arc<Mutex<Option<std::time::Instant>>>>,
 }
 
 impl ApprovalBot {
-    /// Build from `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` — the same env vars
-    /// `TelegramNotifier::from_env` uses (one bot, two halves). `None` when either is unset;
+    /// Build from `LIBERADO_TELEGRAM_BOT_TOKEN` + `LIBERADO_TELEGRAM_CHAT_ID` — the same env
+    /// vars `TelegramNotifier::from_env` uses (one bot, two halves). `None` when either is unset;
     /// approvals stay Obsidian/TUI-only, same as today. `tuning` is `config.tuning.telegram_approvals`
     /// — pass [`TelegramApprovalsTuning::default()`] to accept the specced defaults.
+    ///
+    /// Liberado-prefixed on purpose so we do not collide with OpenClaw's `TELEGRAM_BOT_TOKEN` /
+    /// `TELEGRAM_CHAT_ID` on a shared host.
     pub fn from_env(
         vault: Vault,
         signer: ProposalSigner,
         provider: Arc<dyn Provider>,
         tuning: TelegramApprovalsTuning,
     ) -> Option<Self> {
-        let token = std::env::var("TELEGRAM_BOT_TOKEN").ok()?;
-        let chat_id = std::env::var("TELEGRAM_CHAT_ID").ok()?;
+        let token = std::env::var("LIBERADO_TELEGRAM_BOT_TOKEN").ok()?;
+        let chat_id = std::env::var("LIBERADO_TELEGRAM_CHAT_ID").ok()?;
         Some(Self {
             client: reqwest::Client::new(),
             token,
@@ -68,14 +85,38 @@ impl ApprovalBot {
             provider,
             tuning,
             pending_revisions: Mutex::new(HashMap::new()),
+            chat: None,
+            last_activity: None,
         })
+    }
+
+    /// Attach free-form chat handling (Liberado face agent). Without this, ordinary messages
+    /// that are not revision replies are ignored.
+    pub fn with_chat(mut self, chat: Arc<dyn TelegramChatSurface>) -> Self {
+        self.chat = Some(chat);
+        self
+    }
+
+    /// Share a "last inbound message" clock, stamped `Some(now)` on every message from the configured
+    /// chat. The chat-delivering notifier reads it to defer a cron brief around active conversation.
+    pub fn with_activity_tracker(mut self, clock: Arc<Mutex<Option<std::time::Instant>>>) -> Self {
+        self.last_activity = Some(clock);
+        self
     }
 
     /// Long-poll Telegram's `getUpdates` forever, dispatching each `callback_query`/`message` it
     /// sees. Never returns under normal operation — intended to be `tokio::spawn`ed alongside the
     /// daemon's own watch loop.
     pub async fn run(self) {
-        tracing::info!("starting Telegram approval-bot poll loop");
+        tracing::info!(
+            chat = self.chat.is_some(),
+            "starting Telegram bot poll loop (approvals{})",
+            if self.chat.is_some() {
+                " + free-form chat"
+            } else {
+                ""
+            }
+        );
         let mut offset: i64 = 0;
         loop {
             let updates = self.fetch_updates(offset).await;
@@ -136,13 +177,77 @@ impl ApprovalBot {
     }
 
     async fn send_message(&self, text: &str) {
+        for chunk in split_telegram_chunks(text) {
+            if let Err(e) = self.send_message_raw(&chunk).await {
+                tracing::warn!(error = %e, "Telegram sendMessage failed");
+            }
+        }
+    }
+
+    async fn send_message_raw(&self, text: &str) -> Result<(), String> {
         let url = format!("{TELEGRAM_API_BASE}{}/sendMessage", self.token);
-        let _ = self
+        let response = self
             .client
             .post(&url)
             .json(&serde_json::json!({ "chat_id": self.chat_id, "text": text }))
             .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if !response.status().is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("Telegram API: {body}"));
+        }
+        Ok(())
+    }
+
+    /// Show "agent is typing…" in the chat. Telegram expires the indicator after ~5s; call again
+    /// to refresh while inference is still running.
+    async fn send_typing(&self) {
+        let url = format!("{TELEGRAM_API_BASE}{}/sendChatAction", self.token);
+        let _ = self
+            .client
+            .post(&url)
+            .json(&serde_json::json!({
+                "chat_id": self.chat_id,
+                "action": "typing"
+            }))
+            .send()
             .await;
+    }
+
+    /// Background task that refreshes `sendChatAction(typing)` until aborted. Call
+    /// [`send_typing`](Self::send_typing) once first so the indicator shows immediately.
+    fn spawn_typing_pulse(&self) -> tokio::task::JoinHandle<()> {
+        let client = self.client.clone();
+        let token = self.token.clone();
+        let chat_id = self.chat_id.clone();
+        tokio::spawn(async move {
+            loop {
+                let url = format!("{TELEGRAM_API_BASE}{token}/sendChatAction");
+                let _ = client
+                    .post(&url)
+                    .json(&serde_json::json!({
+                        "chat_id": chat_id,
+                        "action": "typing"
+                    }))
+                    .send()
+                    .await;
+                tokio::time::sleep(Duration::from_secs(TYPING_REFRESH_SECS)).await;
+            }
+        })
+    }
+
+    fn message_is_from_allowed_chat(&self, msg: &serde_json::Value) -> bool {
+        let Some(id) = msg.get("chat").and_then(|c| c.get("id")) else {
+            return false;
+        };
+        // Telegram may send chat.id as a number; env stores a string.
+        let incoming = id
+            .as_i64()
+            .map(|n| n.to_string())
+            .or_else(|| id.as_str().map(str::to_string))
+            .unwrap_or_default();
+        incoming == self.chat_id
     }
 
     /// Send `text` with a fresh Approve/Revise/Reject button row for `stem` — used both for the
@@ -290,29 +395,99 @@ impl ApprovalBot {
         }
     }
 
-    /// Only reacts to replies threaded to one of our own `force_reply` prompts — anything else
-    /// (an unrelated message to the bot) is ignored.
+    /// Revision replies (threaded to a `force_reply` prompt) update proposals; any other
+    /// free-form text from the allowed chat runs a Liberado chat turn when a surface is attached.
     async fn handle_message(&self, msg: &serde_json::Value) {
-        let reply_to_id = msg
+        // Ignore own/other bots (including ourselves if Telegram echoes).
+        if msg
+            .get("from")
+            .and_then(|f| f.get("is_bot"))
+            .and_then(|b| b.as_bool())
+            == Some(true)
+        {
+            return;
+        }
+
+        if !self.message_is_from_allowed_chat(msg) {
+            tracing::debug!(
+                chat = ?msg.get("chat").and_then(|c| c.get("id")),
+                "Telegram message from non-configured chat — ignored"
+            );
+            return;
+        }
+
+        // The human just messaged us — stamp the shared activity clock so a pending cron brief holds
+        // off until this conversation goes quiet (any inbound message counts, chat or revision).
+        if let Some(clock) = &self.last_activity {
+            *clock.lock().await = Some(std::time::Instant::now());
+        }
+
+        // Revision path: reply to one of our force_reply prompts.
+        if let Some(reply_to_id) = msg
             .get("reply_to_message")
-            .and_then(|r| r["message_id"].as_i64());
-        let Some(reply_to_id) = reply_to_id else {
-            return;
-        };
+            .and_then(|r| r["message_id"].as_i64())
+        {
+            let stem = { self.pending_revisions.lock().await.remove(&reply_to_id) };
+            if let Some(stem) = stem {
+                let note = msg["text"].as_str().unwrap_or("").trim().to_string();
+                if note.is_empty() {
+                    self.send_message("Revision note was empty — please try again.")
+                        .await;
+                    return;
+                }
+                self.send_typing().await;
+                let pulse = self.spawn_typing_pulse();
+                self.apply_revision(&stem, &note).await;
+                pulse.abort();
+                return;
+            }
+        }
 
-        let stem = { self.pending_revisions.lock().await.remove(&reply_to_id) };
-        let Some(stem) = stem else {
-            return;
-        };
-
-        let note = msg["text"].as_str().unwrap_or("").trim().to_string();
-        if note.is_empty() {
-            self.send_message("Revision note was empty — please try again.")
+        let text = msg["text"].as_str().unwrap_or("").trim();
+        if text.is_empty() {
+            // Stickers, photos, etc. without a caption — acknowledge so it doesn't feel dead.
+            self.send_message("I only handle text messages for now.")
                 .await;
             return;
         }
 
-        self.apply_revision(&stem, &note).await;
+        let Some(chat) = self.chat.as_ref() else {
+            tracing::info!(
+                "Telegram free-form message received but no chat surface attached — ignored"
+            );
+            return;
+        };
+
+        if text == "/start" || text == "/help" {
+            self.send_message(
+                "Liberado is online. Send a normal message to chat. \
+                 Proposal Approve/Revise/Reject buttons still work as before.",
+            )
+            .await;
+            return;
+        }
+
+        tracing::info!(len = text.len(), "Telegram chat message received");
+        // Typing immediately so the user knows we got it before inference starts.
+        self.send_typing().await;
+        let pulse = self.spawn_typing_pulse();
+        let outcome = chat.reply(text).await;
+        pulse.abort();
+        match outcome {
+            Ok(reply) => {
+                let reply = reply.trim();
+                if reply.is_empty() {
+                    self.send_message("(no reply text)").await;
+                } else {
+                    self.send_message(reply).await;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Telegram chat turn failed");
+                self.send_message(&format!("Sorry — that turn failed: {e}"))
+                    .await;
+            }
+        }
     }
 
     /// Ask the shared provider to redraft `stem`'s `rationale`/`proposed_action` per `note`, then
@@ -451,6 +626,28 @@ fn revision_schema() -> serde_json::Value {
     })
 }
 
+/// Split on char boundaries into chunks that fit Telegram's message size limit.
+fn split_telegram_chunks(text: &str) -> Vec<String> {
+    if text.chars().count() <= TELEGRAM_MAX_MESSAGE_CHARS {
+        return vec![text.to_string()];
+    }
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut count = 0usize;
+    for ch in text.chars() {
+        if count >= TELEGRAM_MAX_MESSAGE_CHARS {
+            chunks.push(std::mem::take(&mut current));
+            count = 0;
+        }
+        current.push(ch);
+        count += 1;
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,6 +657,20 @@ mod tests {
     #[test]
     fn proposal_path_joins_the_stem() {
         assert_eq!(proposal_path("prop-1"), "proposals/prop-1.md");
+    }
+
+    #[test]
+    fn split_telegram_chunks_keeps_short_messages_whole() {
+        assert_eq!(split_telegram_chunks("hi"), vec!["hi".to_string()]);
+    }
+
+    #[test]
+    fn split_telegram_chunks_splits_long_messages() {
+        let long: String = "a".repeat(TELEGRAM_MAX_MESSAGE_CHARS + 50);
+        let chunks = split_telegram_chunks(&long);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].chars().count(), TELEGRAM_MAX_MESSAGE_CHARS);
+        assert_eq!(chunks[1].chars().count(), 50);
     }
 
     #[test]

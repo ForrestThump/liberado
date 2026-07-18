@@ -26,6 +26,16 @@ pub trait Notifier: Send + Sync {
         let _ = proposal_id;
         self.notify(message).await
     }
+
+    /// Deliver a scheduled (cron) session's finished result. Distinct from [`notify`](Self::notify)
+    /// because a channel may choose to *fold this into the ongoing conversation* and/or *defer it
+    /// around the human's activity* — the motivating case is the server's chat-delivering notifier,
+    /// which appends the brief to the sticky Telegram chat session (so a reply has it in context) and
+    /// holds it until you're between messages. Defaults to a plain, immediate [`notify`](Self::notify)
+    /// so every other channel (and tests) behave exactly as before.
+    async fn deliver_cron(&self, message: &str) -> Result<(), NotifyError> {
+        self.notify(message).await
+    }
 }
 
 /// A notification failed to send. Never a reason to abort the caller's own work — see the module
@@ -51,11 +61,14 @@ impl TelegramNotifier {
         }
     }
 
-    /// Build from `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`, or `None` if either is unset —
-    /// notifications are opt-in, not required for the daemon to run at all.
+    /// Build from `LIBERADO_TELEGRAM_BOT_TOKEN` + `LIBERADO_TELEGRAM_CHAT_ID`, or `None` if
+    /// either is unset — notifications are opt-in, not required for the daemon to run at all.
+    ///
+    /// Names are Liberado-prefixed on purpose: OpenClaw (and other bots on the same host) already
+    /// own `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`. Sharing those names would collide.
     pub fn from_env() -> Option<Self> {
-        let token = std::env::var("TELEGRAM_BOT_TOKEN").ok()?;
-        let chat_id = std::env::var("TELEGRAM_CHAT_ID").ok()?;
+        let token = std::env::var("LIBERADO_TELEGRAM_BOT_TOKEN").ok()?;
+        let chat_id = std::env::var("LIBERADO_TELEGRAM_CHAT_ID").ok()?;
         Some(Self::new(token, chat_id))
     }
 
@@ -203,10 +216,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID + network access"]
+    #[ignore = "requires LIBERADO_TELEGRAM_BOT_TOKEN + LIBERADO_TELEGRAM_CHAT_ID + network access"]
     async fn live_send_via_from_env_actually_delivers() {
         let notifier = TelegramNotifier::from_env()
-            .expect("set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to run this test");
+            .expect("set LIBERADO_TELEGRAM_BOT_TOKEN and LIBERADO_TELEGRAM_CHAT_ID to run this test");
         notifier
             .notify("liberado-notify: live test via cargo test -- --ignored")
             .await
