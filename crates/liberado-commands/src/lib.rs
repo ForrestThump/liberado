@@ -41,7 +41,7 @@ pub mod result;
 
 pub use catalog::{
     COMMAND_CATALOG, CommandSpec, accept_completion, complete_commands, filter_commands,
-    ghost_suffix, is_slash_prefix,
+    ghost_suffix, is_slash_prefix, telegram_commands,
 };
 pub use commands::{SessionCmd, SlashCommand, ThemeCmd};
 pub use constants::CTX_PCT_DISPLAY_CAP;

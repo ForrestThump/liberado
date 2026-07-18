@@ -258,13 +258,20 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         )
     {
         if state.chat.is_some() {
+            // The shared slash-command catalog (also used by the TUI/WebUI), curated to the
+            // top-level commands Telegram can advertise, so typing `/` shows an autocomplete menu.
+            let command_menu = liberado_commands::telegram_commands()
+                .into_iter()
+                .map(|(c, d)| (c.to_string(), d.to_string()))
+                .collect();
             bot = bot
                 .with_chat(Arc::new(crate::telegram::TelegramChatBridge {
                     state: state.clone(),
                     session_id: telegram_sticky.clone(),
                 }))
-                .with_activity_tracker(telegram_activity.clone());
-            info!("Telegram free-form chat surface attached (slash commands enabled)");
+                .with_activity_tracker(telegram_activity.clone())
+                .with_command_menu(command_menu);
+            info!("Telegram free-form chat surface attached (slash commands enabled + menu registered)");
         }
         tokio::spawn(bot.run());
     }

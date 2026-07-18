@@ -58,6 +58,9 @@ pub struct ApprovalBot {
     /// inner `None` means "never active" → briefs deliver immediately. The outer `None` means no
     /// delivery timing is being tracked at all — the historical behaviour.
     last_activity: Option<Arc<Mutex<Option<std::time::Instant>>>>,
+    /// `(command, description)` pairs (no leading `/`) registered with Telegram's `setMyCommands` on
+    /// startup, so typing `/` shows an autocomplete menu. Empty → nothing registered.
+    command_menu: Vec<(String, String)>,
 }
 
 impl ApprovalBot {
@@ -87,6 +90,7 @@ impl ApprovalBot {
             pending_revisions: Mutex::new(HashMap::new()),
             chat: None,
             last_activity: None,
+            command_menu: Vec::new(),
         })
     }
 
@@ -104,6 +108,39 @@ impl ApprovalBot {
         self
     }
 
+    /// Advertise `(command, description)` pairs (no leading `/`) to Telegram, so typing `/` shows an
+    /// autocomplete menu. Registered once on [`run`](Self::run) startup via `setMyCommands`.
+    pub fn with_command_menu(mut self, commands: Vec<(String, String)>) -> Self {
+        self.command_menu = commands;
+        self
+    }
+
+    /// Register the command menu with Telegram (`setMyCommands`), scoped to the configured chat so it
+    /// doesn't leak to other users of the same bot. Best-effort: a failure is logged, not fatal.
+    async fn register_slash_commands(&self) {
+        if self.command_menu.is_empty() {
+            return;
+        }
+        let commands: Vec<serde_json::Value> = self
+            .command_menu
+            .iter()
+            .map(|(command, description)| serde_json::json!({ "command": command, "description": description }))
+            .collect();
+        let url = format!("{TELEGRAM_API_BASE}{}/setMyCommands", self.token);
+        let body = serde_json::json!({
+            "commands": commands,
+            // Scope to this chat so the menu appears for the operator without publishing it globally.
+            "scope": { "type": "chat", "chat_id": self.chat_id },
+        });
+        match self.client.post(&url).json(&body).send().await {
+            Ok(r) if r.status().is_success() => {
+                tracing::info!(count = self.command_menu.len(), "registered Telegram slash-command menu");
+            }
+            Ok(r) => tracing::warn!(status = %r.status(), "setMyCommands non-success"),
+            Err(e) => tracing::warn!(error = %e, "setMyCommands failed"),
+        }
+    }
+
     /// Long-poll Telegram's `getUpdates` forever, dispatching each `callback_query`/`message` it
     /// sees. Never returns under normal operation — intended to be `tokio::spawn`ed alongside the
     /// daemon's own watch loop.
@@ -117,6 +154,8 @@ impl ApprovalBot {
                 ""
             }
         );
+        // Publish the slash-command autocomplete menu (typing `/` in Telegram lists these).
+        self.register_slash_commands().await;
         let mut offset: i64 = 0;
         loop {
             let updates = self.fetch_updates(offset).await;
@@ -751,6 +790,7 @@ mod tests {
             pending_revisions: Mutex::new(HashMap::new()),
             chat: None,
             last_activity: None,
+            command_menu: Vec::new(),
         }
     }
 

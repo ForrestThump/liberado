@@ -131,6 +131,21 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
     },
 ];
 
+/// The subset of commands to advertise to Telegram via the Bot API's `setMyCommands`, as
+/// `(command_without_leading_slash, description)`. Telegram commands are top-level only (no spaces or
+/// subcommands) and are shown as an autocomplete menu when the user types `/`. Ordered for the menu;
+/// descriptions reuse the shared catalog. TUI/WebUI-only commands (theme/clear/quit/exit/back and the
+/// `/session` alias + subcommand entries) are intentionally omitted.
+pub fn telegram_commands() -> Vec<(&'static str, &'static str)> {
+    const MENU: &[&str] = &[
+        "/help", "/new", "/status", "/sessions", "/spawn", "/join", "/model", "/fork",
+    ];
+    MENU.iter()
+        .filter_map(|name| COMMAND_CATALOG.iter().find(|s| s.name == *name))
+        .map(|s| (s.name.trim_start_matches('/'), s.description))
+        .collect()
+}
+
 /// Progressive filter for slash input. Empty when input is not a slash command prefix.
 ///
 /// Matching is case-insensitive prefix on `name` / `insert`. Typing more of a subcommand
