@@ -14,24 +14,23 @@ timezone = "America/Chicago"
 [main_agent]
 delegation_mode = true
 
-# --- Per-role model tuning (latency knobs; edit on the box + `up -d --force-recreate`, NO rebuild) --
-# Fast/cheap router + face, strong worker. Roles: main_agent (chat face), dispatcher (router),
-# subagent (orchestrator/worker). All fields optional; omitted = inherit `provider` + its model.
-# temperature (when set) overrides the per-call value; reasoning is "off"|"low"|"medium"|"high".
-# Measure the effect with deploy/homelab/latency-report.sh. Uncomment + set slugs OpenRouter accepts:
+# --- Per-role model tiering (latency knobs; edit on the box + `up -d --force-recreate`, NO rebuild) --
+# Roles: main_agent (chat face), dispatcher (router), subagent (orchestrator/worker). All fields
+# optional; omitted = inherit `provider` + its model. temperature (when set) overrides the per-call
+# value; reasoning is "off"|"low"|"medium"|"high". Measure with deploy/homelab/latency-report.sh.
 #
+# ACTIVE (measured 2026-07-20): the router is a pure classifier, so a fast non-thinking model there is
+# a clean win — dispatcher p50 6785ms -> ~1977ms (3.4x) with correct routing and no user-visible
+# change. Face + worker stay on v4-pro (the flash face gets chattier before delegating).
+[roles.dispatcher]
+model = "deepseek/deepseek-v4-flash"
+temperature = 0.0
+reasoning = "off"
+
+# Optional further tiering (measured: flash face ~-0.6s/call but narrates "let me delegate…"):
 # [roles.main_agent]
-# model = "deepseek/deepseek-v3-flash"
-# reasoning = "low"
-#
-# [roles.dispatcher]
-# model = "deepseek/deepseek-v3-flash"
-# temperature = 0.0
+# model = "deepseek/deepseek-v4-flash"
 # reasoning = "off"
-#
-# [roles.subagent]
-# model = "deepseek/deepseek-v4-pro"
-# reasoning = "high"
 
 # =============================================================================
 # MCPs — container DNS names on the `homelab` network.
