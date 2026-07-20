@@ -67,7 +67,7 @@ pub use local_time::{
     DEFAULT_TIMEZONE, UnknownTimezone, UserTimezone, context_line as local_time_context_line,
     with_context as local_time_with_context,
 };
-pub use model::{ModelChoice, ModelProfile, ModelRole, ModelTier, RequiredCaps};
+pub use model::{ModelChoice, ModelProfile, ModelRole, ModelTier, ReasoningLevel, RequiredCaps};
 pub use proposal::{
     PROPOSALS_DIR, Proposal, ProposalNoteError, ProposalSigner, ProposalStatus, ProposedAction,
     SignedProposal,

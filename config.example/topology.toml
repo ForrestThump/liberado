@@ -43,6 +43,31 @@ delegation_mode = true
 # model_env = "GROQ_MODEL"          # optional — omit if this backend has no override-env convention
 # extra_client_error_status = []    # e.g. [402] for a backend with its own "insufficient credits" code
 
+# --- Per-role model tuning (the execution-path latency knobs) ----------------------------------
+# Override provider / model / sampling PER ROLE, so you can run a fast cheap router and a strong
+# worker without a rebuild. Roles: `main_agent` (the chat face), `dispatcher` (the router that
+# classifies each goal), `subagent` (the orchestrator/worker that does the actual work). Every field
+# is optional; an omitted table or field inherits `provider` above and that provider's model, and
+# leaves sampling to the per-call defaults. An empty `[roles]` (the default) is exactly single-model
+# behavior. Applied at boot — edit + restart the daemon to change; no image rebuild.
+#   provider    = declared `[[providers]]` name (default: the global `provider`)
+#   model       = model slug to send (default: that provider's env/default model)
+#   temperature = sampling temperature; OVERRIDES the per-call value when set (e.g. the dispatcher's 0)
+#   reasoning   = thinking level: "off" | "low" | "medium" | "high"  (maps to the `reasoning` API field)
+#
+# [roles.main_agent]           # the chat face — fast interfacing, little deep reasoning needed
+# model = "deepseek/deepseek-v3-flash"
+# reasoning = "low"
+#
+# [roles.dispatcher]           # the router — classification only; make it fast + deterministic
+# model = "deepseek/deepseek-v3-flash"
+# temperature = 0.0
+# reasoning = "off"
+#
+# [roles.subagent]             # the worker — keep the strong model where the judgment happens
+# model = "deepseek/deepseek-v4-pro"
+# reasoning = "high"
+
 # Enabled MCP servers. Each `name` here is what a policy grant's `ExecuteMcp` must reference, and
 # it is ALSO the name the runtime connects to — `topology.mcps` is the single source for both the
 # dispatcher catalog and the actual MCP connection. `description` (what the dispatcher routes over),

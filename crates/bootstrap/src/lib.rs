@@ -24,15 +24,15 @@ pub use liberado_config::{
 use std::path::Path;
 use std::sync::Arc;
 
-use liberado_common::{CapabilityCatalog, DEFAULT_POOL, ToolGuidanceSource};
-use liberado_config::{McpTransport, managed_binary_path};
+use liberado_common::{CapabilityCatalog, DEFAULT_POOL, ModelRole, ToolGuidanceSource};
+use liberado_config::{McpTransport, ProviderProfile, RoleOverride, managed_binary_path};
 use liberado_daemon::Daemon;
 use liberado_dispatch_pack::DispatchPack;
 use liberado_dispatcher::Dispatcher;
 use liberado_mcp::{HttpConnector, McpRegistry, StdioConnector};
 use liberado_notify::Notifier;
 use liberado_orchestrator::OrchestratorInfra;
-use liberado_provider::Provider;
+use liberado_provider::{AgentRole, LatencyRecorder, MeteredProvider, Provider};
 use liberado_provider_openai_compat::OpenAiCompatibleProvider;
 
 /// Build the shared inference provider from the environment, selecting the backend named by
@@ -45,29 +45,9 @@ use liberado_provider_openai_compat::OpenAiCompatibleProvider;
 /// means the selected backend's API key isn't set, so the daemon runs watch-only and chat is
 /// disabled.
 pub fn provider_from_config(config: &Config) -> Option<Arc<dyn Provider>> {
-    let name = config.topology.provider.as_str();
-    let profile = config
-        .topology
-        .providers
-        .iter()
-        .find(|p| p.name == name)
-        .or_else(|| {
-            tracing::warn!(
-                provider = name,
-                "topology.provider names no declared topology.providers entry — falling back to deepseek"
-            );
-            config.topology.providers.iter().find(|p| p.name == "deepseek")
-        })?;
-
-    match OpenAiCompatibleProvider::from_env(
-        &profile.api_key_env,
-        profile.model_env.as_deref(),
-        &profile.default_model,
-        &profile.base_url,
-        profile.extra_client_error_status.clone(),
-    ) {
-        Ok(provider) => {
-            let provider: Arc<dyn Provider> = Arc::new(provider);
+    let profile = resolve_provider_profile(config, &config.topology.provider)?;
+    match build_provider_from_profile(profile, None) {
+        Some(provider) => {
             tracing::info!(
                 model = provider.model(),
                 provider = %profile.name,
@@ -75,7 +55,141 @@ pub fn provider_from_config(config: &Config) -> Option<Arc<dyn Provider>> {
             );
             Some(provider)
         }
-        Err(_) => None,
+        None => None,
+    }
+}
+
+/// Find the declared `[[topology.providers]]` entry named `name`, falling back to `deepseek` (with a
+/// warning) if it isn't declared — the same defensive resolution `provider_from_config` has always
+/// used, factored out so per-role provider selection resolves identically.
+fn resolve_provider_profile<'a>(config: &'a Config, name: &str) -> Option<&'a ProviderProfile> {
+    config
+        .topology
+        .providers
+        .iter()
+        .find(|p| p.name == name)
+        .or_else(|| {
+            tracing::warn!(
+                provider = name,
+                "provider names no declared topology.providers entry — falling back to deepseek"
+            );
+            config.topology.providers.iter().find(|p| p.name == "deepseek")
+        })
+}
+
+/// Build a provider for `profile`, applying a per-role override (model slug + sampling) when given.
+/// `None` when the profile's API key isn't set in the environment.
+fn build_provider_from_profile(
+    profile: &ProviderProfile,
+    role_override: Option<&RoleOverride>,
+) -> Option<Arc<dyn Provider>> {
+    let provider = OpenAiCompatibleProvider::from_env(
+        &profile.api_key_env,
+        profile.model_env.as_deref(),
+        &profile.default_model,
+        &profile.base_url,
+        profile.extra_client_error_status.clone(),
+    )
+    .ok()?;
+
+    // Apply the role's model + sampling overrides (all optional; unset = provider default).
+    let provider = if let Some(ov) = role_override {
+        if let Some(model) = &ov.model {
+            provider.set_model(model.clone());
+        }
+        provider
+            .with_temperature(ov.temperature)
+            .with_reasoning_effort(ov.reasoning.map(|r| r.as_str().to_string()))
+    } else {
+        provider
+    };
+
+    Some(Arc::new(provider))
+}
+
+/// The per-role providers the execution path uses, each already wrapped in a role-tagged
+/// [`MeteredProvider`] so every inference call is recorded (latency observability). All four are
+/// `Some` together (a provider is configured) or all `None` (watch-only).
+///
+/// `primary` is the unwrapped default provider — the one status/model display and the runtime
+/// model-swap API act on. When a role declares no `[roles.<role>]` override it **shares the same
+/// underlying provider** as `primary` (only the role tag differs), so an empty `[roles]` table is
+/// exactly today's single-model behavior; a role only becomes a distinct backend/model/sampling when
+/// it overrides something.
+pub struct RoleProviders {
+    pub primary: Option<Arc<dyn Provider>>,
+    pub face: Option<Arc<dyn Provider>>,
+    pub dispatcher: Option<Arc<dyn Provider>>,
+    pub subagent: Option<Arc<dyn Provider>>,
+}
+
+impl RoleProviders {
+    /// Watch-only when no provider is configured (no API key).
+    pub fn is_enabled(&self) -> bool {
+        self.primary.is_some()
+    }
+
+    fn none() -> Self {
+        Self {
+            primary: None,
+            face: None,
+            dispatcher: None,
+            subagent: None,
+        }
+    }
+}
+
+/// Build the per-role providers from config, tagging each with its [`AgentRole`] and the shared
+/// latency `recorder`. See [`RoleProviders`] for the sharing/override semantics.
+pub fn role_providers_from_config(
+    config: &Config,
+    recorder: Arc<dyn LatencyRecorder>,
+) -> RoleProviders {
+    // The global default (base) provider. Absent key → watch-only.
+    let Some(base_profile) = resolve_provider_profile(config, &config.topology.provider) else {
+        return RoleProviders::none();
+    };
+    let Some(base) = build_provider_from_profile(base_profile, None) else {
+        return RoleProviders::none();
+    };
+    tracing::info!(model = base.model(), provider = %base_profile.name, "provider configured (base)");
+
+    let role_provider = |mrole: ModelRole, arole: AgentRole| -> Arc<dyn Provider> {
+        let inner = match config.topology.roles.get(&mrole) {
+            // Distinct backend/model/sampling only when this role overrides something.
+            Some(ov)
+                if ov.provider.is_some()
+                    || ov.model.is_some()
+                    || ov.temperature.is_some()
+                    || ov.reasoning.is_some() =>
+            {
+                let profile = ov
+                    .provider
+                    .as_deref()
+                    .and_then(|n| resolve_provider_profile(config, n))
+                    .unwrap_or(base_profile);
+                let built = build_provider_from_profile(profile, Some(ov)).unwrap_or_else(|| base.clone());
+                tracing::info!(
+                    role = arole.as_str(),
+                    model = built.model(),
+                    provider = %profile.name,
+                    temperature = ?ov.temperature,
+                    reasoning = ?ov.reasoning.map(|r| r.as_str()),
+                    "per-role provider override applied"
+                );
+                built
+            }
+            // Otherwise share the base provider (only the role tag differs).
+            _ => base.clone(),
+        };
+        MeteredProvider::wrap(inner, arole, recorder.clone())
+    };
+
+    RoleProviders {
+        face: Some(role_provider(ModelRole::MainAgent, AgentRole::Face)),
+        dispatcher: Some(role_provider(ModelRole::Dispatcher, AgentRole::Dispatcher)),
+        subagent: Some(role_provider(ModelRole::Subagent, AgentRole::Orchestrator)),
+        primary: Some(base),
     }
 }
 
@@ -194,7 +308,7 @@ pub fn cron_source_from_config(
 /// stays free of that dependency weight and decision.
 pub fn configure_daemon(
     daemon: Daemon,
-    provider: Option<&Arc<dyn Provider>>,
+    providers: &RoleProviders,
     config: &Config,
     catalog: Arc<CapabilityCatalog>,
     vault_path: &Path,
@@ -213,12 +327,14 @@ pub fn configure_daemon(
         }
     };
 
-    let Some(provider) = provider else {
-        tracing::warn!("DEEPSEEK_API_KEY not set — running watch-only (no dispatch)");
+    let (Some(dispatcher_provider), Some(subagent_provider)) =
+        (providers.dispatcher.as_ref(), providers.subagent.as_ref())
+    else {
+        tracing::warn!("provider not configured (API key unset) — running watch-only (no dispatch)");
         return daemon;
     };
     let mut dispatcher = Dispatcher::new(
-        provider.clone(),
+        dispatcher_provider.clone(),
         config.tuning.dispatch.clone(),
         config.tuning.concurrency.max_reaction_depth,
     );
@@ -239,7 +355,7 @@ pub fn configure_daemon(
     // `OrchestratorInfra`'s doc comment) — built once here, then combined per pool below with just
     // that pool's own factory/capabilities/name.
     let orchestrator_infra = OrchestratorInfra::new(
-        provider.clone(),
+        subagent_provider.clone(),
         guard.consequences.clone(),
         guard.zone_catalog.clone(),
         guard.zone_write_classes.clone(),
@@ -313,7 +429,7 @@ pub fn configure_daemon(
                 "additional pool capability boundary configured from policy"
             );
             let mut pool_dispatcher = Dispatcher::new(
-                provider.clone(),
+                dispatcher_provider.clone(),
                 config.tuning.dispatch.clone(),
                 config.tuning.concurrency.max_reaction_depth,
             );
@@ -365,16 +481,18 @@ pub fn configure_daemon(
 /// Returns `None` when there is no provider (watch-only) — without inference there is nothing to
 /// dispatch.
 pub fn build_dispatch_pack(
-    provider: Option<&Arc<dyn Provider>>,
+    providers: &RoleProviders,
     config: &Config,
     catalog: Arc<CapabilityCatalog>,
     vault_path: &Path,
     guidance: Option<Arc<dyn ToolGuidanceSource>>,
 ) -> Option<DispatchPack> {
-    let provider = provider?;
+    // The dispatch pack needs both the router (dispatcher) and the worker (subagent) providers.
+    let dispatcher_provider = providers.dispatcher.as_ref()?;
+    let subagent_provider = providers.subagent.as_ref()?;
     let guard = guard_context(&catalog, &config.policy, vault_path);
     let orchestrator_infra = OrchestratorInfra::new(
-        provider.clone(),
+        subagent_provider.clone(),
         guard.consequences.clone(),
         guard.zone_catalog.clone(),
         guard.zone_write_classes.clone(),
@@ -386,7 +504,7 @@ pub fn build_dispatch_pack(
 
     let capabilities = config.policy.capabilities_for("dispatcher");
     let mut dispatcher = Dispatcher::new(
-        provider.clone(),
+        dispatcher_provider.clone(),
         config.tuning.dispatch.clone(),
         config.tuning.concurrency.max_reaction_depth,
     );
@@ -430,7 +548,7 @@ pub fn build_dispatch_pack(
     for pool_cfg in config.topology.pools.iter().filter(|p| p.enabled) {
         let pool_capabilities = config.policy.capabilities_for(&pool_cfg.name);
         let mut pool_dispatcher = Dispatcher::new(
-            provider.clone(),
+            dispatcher_provider.clone(),
             config.tuning.dispatch.clone(),
             config.tuning.concurrency.max_reaction_depth,
         );

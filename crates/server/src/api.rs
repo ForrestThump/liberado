@@ -109,7 +109,12 @@ async fn chat_stream_core(
         // (inside `ChatSessions`/`Conversation`) rolls the partial turn back and persists nothing, so
         // a stopped turn leaves the store clean and the per-session lock is released.
         tokio::select! {
-            result = sessions.turn_stream(session, &message, &turn_tx) => {
+            // Tag the face turn's inference with the chat session id so its latency records join the
+            // dispatch work it triggers (the dispatch pack keys the same space via correlation_id).
+            result = liberado_provider::latency::with_correlation(
+                session.to_string(),
+                sessions.turn_stream(session, &message, &turn_tx),
+            ) => {
                 let terminal = match result {
                     Ok(()) => AgentEvent::Done,
                     Err(e) => {

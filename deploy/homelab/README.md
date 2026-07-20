@@ -68,6 +68,7 @@ blocks on health at the end, so a returned success is a real success.
 | Path | Role |
 |---|---|
 | `deploy.sh` | The deploy command. Run from the dev machine. |
+| `latency-report.sh` | Per-role p50/p95 inference latency from the daemon's journal (`<data>/latency/events.jsonl`). Baseline for model-tuning. |
 | `docker-compose.yml` | Mirror of the box's `~/homelab/services/liberado/docker-compose.yml` (run config). |
 | `config/topology.toml`, `config/policy.toml` | Mirror of the box's `~/homelab/services/liberado/config/*`. Edit here, then copy to the box (config is **not** shipped by `deploy.sh` — it's a read-only mount, changed independently of the image). |
 | `liberado-mcp-diagnosis.md` | Per-MCP wiring status/troubleshooting for the on-box agent. |
@@ -76,3 +77,8 @@ blocks on health at the end, so a returned success is a real success.
 > **Config vs image are separate.** `deploy.sh` ships **code**. `topology.toml`/`policy.toml` are
 > host mounts read at boot — change them on the box (or copy the mirror over) and
 > `docker compose ... up -d --force-recreate` to reload, no rebuild needed.
+
+**Per-role model tuning (no rebuild).** `topology.toml` has a commented `[roles.main_agent|dispatcher|subagent]`
+section: set `provider` / `model` / `temperature` / `reasoning` per role to run a fast cheap router
+and a strong worker. Edit on the box + `up -d --force-recreate`. Then compare before/after with
+`bash deploy/homelab/latency-report.sh`.

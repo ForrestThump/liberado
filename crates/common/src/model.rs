@@ -18,6 +18,31 @@ pub enum ModelTier {
     WorkPlane,
 }
 
+/// How much extended reasoning ("thinking") a role's model should do. Provider-agnostic; the
+/// OpenAI-compatible provider maps it to the wire (`reasoning: { effort }`, or `{ enabled: false }`
+/// for [`Off`](ReasoningLevel::Off)). Adjustable per role from config so thinking can be dialed down
+/// on the cheap glue calls (dispatcher, face) without a rebuild.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningLevel {
+    Off,
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningLevel {
+    /// The wire token for the `reasoning.effort` field (`Off` has no effort — it disables thinking).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReasoningLevel::Off => "off",
+            ReasoningLevel::Low => "low",
+            ReasoningLevel::Medium => "medium",
+            ReasoningLevel::High => "high",
+        }
+    }
+}
+
 /// Declared capabilities of a concrete model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelProfile {

@@ -165,9 +165,17 @@ impl DomainPackRunner for DispatchPack {
             zone_write_classes: self.zone_write_classes.clone(),
         };
 
+        // Tag every inference this pack triggers (dispatcher classification + orchestrator loop)
+        // with this run's correlation id, so the latency journal joins them to the parent chat turn.
+        // The role is already fixed on each per-role provider; only the correlation is task-local.
         // Goal already recorded as the human's first turn by the hub. Record the decision rationale
         // and outcome as turns so the transcript is searchable dialogue, not only events.
-        let decision = match pool.dispatcher.dispatch(&request).await {
+        let decision = match liberado_provider::latency::with_correlation(
+            correlation_id.clone(),
+            pool.dispatcher.dispatch(&request),
+        )
+        .await
+        {
             Ok(d) => d,
             Err(e) => {
                 return Err(PackError::Failed(format!("dispatch failed: {e}")));
@@ -197,16 +205,17 @@ impl DomainPackRunner for DispatchPack {
             return Err(PackError::Cancelled);
         }
 
-        let disposition = pool
-            .orchestrator
-            .run(
+        let disposition = liberado_provider::latency::with_correlation(
+            correlation_id.clone(),
+            pool.orchestrator.run(
                 decision,
                 &goal.description,
                 &correlation_id,
                 &ctx.grant.capabilities,
-            )
-            .await
-            .map_err(|e| PackError::Failed(format!("orchestration failed: {e}")))?;
+            ),
+        )
+        .await
+        .map_err(|e| PackError::Failed(format!("orchestration failed: {e}")))?;
 
         if let Disposition::Propose(ref proposal) = disposition {
             self.write_proposal(proposal)

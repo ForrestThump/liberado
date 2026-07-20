@@ -39,6 +39,12 @@ pub struct OpenAiCompatibleProvider {
     /// Status codes beyond the common set (429/400/401/403/404/422) this backend's own API treats
     /// as a client error rather than a generic transport failure — e.g. OpenRouter's `402`.
     extra_client_error_status: Vec<u16>,
+    /// Per-role sampling temperature (config-driven). When `Some`, it **overrides** the per-request
+    /// temperature on every call this provider makes — so a role can be tuned from config.
+    temperature: Option<f32>,
+    /// Per-role reasoning ("thinking") effort — `"off"`, `"low"`, `"medium"`, or `"high"`. Mapped to
+    /// the OpenAI-compatible `reasoning` body field when `Some`.
+    reasoning_effort: Option<String>,
 }
 
 impl OpenAiCompatibleProvider {
@@ -67,6 +73,38 @@ impl OpenAiCompatibleProvider {
             model: std::sync::RwLock::new(model.into()),
             base_url: base_url.into(),
             extra_client_error_status: Vec::new(),
+            temperature: None,
+            reasoning_effort: None,
+        }
+    }
+
+    /// Set a per-role sampling temperature that overrides the per-request value (config-driven).
+    /// `None` leaves per-call behavior unchanged.
+    pub fn with_temperature(mut self, temperature: Option<f32>) -> Self {
+        self.temperature = temperature;
+        self
+    }
+
+    /// Set a per-role reasoning effort (`"off"`/`"low"`/`"medium"`/`"high"`), mapped to the
+    /// `reasoning` body field. `None` uses the provider/model default.
+    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
+        self.reasoning_effort = effort;
+        self
+    }
+
+    /// Inject the per-role sampling overrides into an already-built request body. Applied on both
+    /// the blocking and streaming paths so the two never drift.
+    fn apply_role_tuning(&self, body: &mut Value) {
+        if let Some(t) = self.temperature {
+            body["temperature"] = json!(t);
+        }
+        if let Some(effort) = &self.reasoning_effort {
+            // OpenAI-compatible reasoning control: `off` disables thinking; otherwise pass the
+            // effort level. OpenRouter and OpenAI both accept the `reasoning` object shape.
+            body["reasoning"] = match effort.as_str() {
+                "off" | "none" | "disabled" => json!({ "enabled": false }),
+                other => json!({ "effort": other }),
+            };
         }
     }
 
@@ -189,7 +227,8 @@ impl Provider for OpenAiCompatibleProvider {
     async fn complete(&self, request: CompletionRequest) -> ProviderResult<CompletionResponse> {
         let name_map = build_tool_name_map(&request.tools);
         let model = self.model();
-        let body = to_openai_request(&model, &request, &name_map);
+        let mut body = to_openai_request(&model, &request, &name_map);
+        self.apply_role_tuning(&mut body);
 
         let response = self
             .client
@@ -227,6 +266,7 @@ impl Provider for OpenAiCompatibleProvider {
         let name_map = build_tool_name_map(&request.tools);
         let model = self.model();
         let mut body = to_openai_request(&model, &request, &name_map);
+        self.apply_role_tuning(&mut body);
         body["stream"] = json!(true);
 
         let response = self

@@ -9,6 +9,7 @@
 mod api;
 mod cron_delivery;
 mod hooks;
+mod latency;
 mod state;
 mod sticky;
 mod telegram;
@@ -72,8 +73,14 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // own dispatch) — built once here instead of each independently snapshotting `topology.mcps`.
     let capability_catalog = Arc::new(liberado_bootstrap::capability_catalog_from_config(&config));
 
-    // Build the provider once and share it between the daemon (dispatch/execute) and chat.
-    let provider = liberado_bootstrap::provider_from_config(&config);
+    // Latency journal (records every inference call, off the hot path) + the per-role providers,
+    // each role-tagged and metered, built from config. `provider` here is the plain default
+    // (`primary`) used for status/model display, the coding pack, and the runtime model-swap API;
+    // the daemon/chat get the role-specific providers via `providers`.
+    let latency_recorder: Arc<dyn liberado_provider::LatencyRecorder> =
+        crate::latency::JsonlLatencyRecorder::spawn();
+    let providers = liberado_bootstrap::role_providers_from_config(&config, latency_recorder);
+    let provider = providers.primary.clone();
     let dispatcher_attached = provider.is_some();
     let model_name = provider.as_ref().map(|p| p.model().to_string());
     let mcp = liberado_bootstrap::mcp_registry_from_config(&config);
@@ -109,7 +116,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         )));
     }
     if let Some(pack) = liberado_bootstrap::build_dispatch_pack(
-        provider.as_ref(),
+        &providers,
         &config,
         capability_catalog.clone(),
         Path::new(&vault_path),
@@ -130,7 +137,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     let goals = Arc::new(goals_hub);
 
     let (chat, chat_tools, chat_tool_names) = build_chat(
-        provider.clone(),
+        &providers,
         mcp,
         &config,
         capability_catalog.clone(),
@@ -146,7 +153,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     let daemon = Daemon::open("webui", &vault_path).await?;
     let daemon = liberado_bootstrap::configure_daemon(
         daemon,
-        provider.as_ref(),
+        &providers,
         &config,
         capability_catalog.clone(),
         Path::new(&vault_path),
@@ -442,7 +449,7 @@ struct SessionEngine {
 }
 
 async fn build_chat(
-    provider: Option<Arc<dyn Provider>>,
+    providers: &liberado_bootstrap::RoleProviders,
     mcp: Option<McpRegistry>,
     config: &liberado_bootstrap::Config,
     catalog: Arc<CapabilityCatalog>,
@@ -451,10 +458,16 @@ async fn build_chat(
     engine: SessionEngine,
 ) -> (Option<Arc<ChatSessions>>, usize, Vec<String>) {
     let SessionEngine { store, goals } = engine;
-    let provider = match provider {
-        Some(p) => p,
-        None => return (None, 0, Vec::new()),
+    // The chat face runs on the `main_agent` role provider; its `delegate` classifier uses the
+    // `dispatcher` role provider (falling back to the face provider if somehow unset).
+    let Some(face_provider) = providers.face.clone() else {
+        return (None, 0, Vec::new());
     };
+    let dispatcher_provider = providers
+        .dispatcher
+        .clone()
+        .unwrap_or_else(|| face_provider.clone());
+    let provider = face_provider;
 
     // Main-agent = chat face surface (usually thin). Dispatcher = worker ceiling for delegated tools.
     let main_agent_caps = config.policy.capabilities_for("main-agent");
@@ -538,7 +551,7 @@ async fn build_chat(
     // Pre-turn classification (legacy mode) + face-agent `delegate` needs a dispatcher for the
     // classifier; execution is always the hub's dispatch pack.
     let mut dispatcher = Dispatcher::new(
-        provider,
+        dispatcher_provider,
         config.tuning.dispatch.clone(),
         config.tuning.concurrency.max_reaction_depth,
     );

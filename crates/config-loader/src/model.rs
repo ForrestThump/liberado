@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 
 use liberado_common::{
     Capability, CapabilitySet, Consequence, DEFAULT_POOL, DEFAULT_TIMEZONE, Error, ModelProfile,
-    ModelRole, Result, UserTimezone, WriteClass,
+    ModelRole, ReasoningLevel, Result, UserTimezone, WriteClass,
 };
 use serde::{Deserialize, Serialize};
 
@@ -100,6 +100,37 @@ pub struct Topology {
     /// How the conversational main agent presents itself and which tools it sees.
     /// Default: human-interfacer + built-in `delegate` tool (specialist MCPs stay on the dispatcher).
     pub main_agent: MainAgentConfig,
+    /// Per-role provider/model/sampling overrides (the execution-path tuning knobs). Keyed by
+    /// [`ModelRole`] (`main_agent` = chat face, `dispatcher` = router, `subagent` = orchestrator/
+    /// worker). Each field is optional and falls back to [`Self::provider`] + that provider's
+    /// model/defaults, so an empty table is exactly today's single-model behavior. Lets the operator
+    /// tier models (fast/cheap router, strong worker) and dial thinking/temperature per role from
+    /// config — no rebuild. See `docs/roadmap/latency-and-routing-observability-plan.md` §3.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub roles: HashMap<ModelRole, RoleOverride>,
+}
+
+/// Per-role overrides for the execution path. All fields optional; unset = inherit the global
+/// provider + its model, and leave sampling to the per-call defaults.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RoleOverride {
+    /// Which declared `[[topology.providers]]` entry (by `name`) serves this role. `None` → the
+    /// global [`Topology::provider`]. Validated against `providers` in [`Config::validate`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Model slug to send for this role (e.g. `"deepseek/deepseek-v3-flash"`). `None` → the
+    /// provider profile's env/default model. Free-form (any slug the backend accepts), like the
+    /// `*_MODEL` env vars — not required to be a declared `[[topology.models]]` entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Sampling temperature for this role. When set, it **overrides** the per-call temperature
+    /// (e.g. the dispatcher's pinned 0). `None` → leave per-call behavior unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    /// Reasoning ("thinking") level for this role. `None` → provider/model default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningLevel>,
 }
 
 /// Chat main-agent surface: human interface first, optional extra MCP tools via `policy.toml`.
@@ -144,6 +175,7 @@ impl Default for Topology {
             pools: Vec::new(),
             session_profiles: Vec::new(),
             main_agent: MainAgentConfig::default(),
+            roles: HashMap::new(),
         }
     }
 }

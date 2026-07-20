@@ -17,6 +17,8 @@ async-stream = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true }
 tracing = { workspace = true }
+# task-local role/correlation context for latency instrumentation (crate::latency)
+tokio = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

@@ -13,12 +13,14 @@
 //! nothing here pulls in an HTTP stack or commits to a framework.
 
 mod error;
+pub mod latency;
 mod mock;
 pub mod openai_compat;
 mod provider;
 mod types;
 
 pub use error::{ProviderError, ProviderResult};
+pub use latency::{AgentRole, LatencyEvent, LatencyRecorder, MeteredProvider, NoopRecorder};
 pub use mock::MockProvider;
 pub use provider::{CompletionStream, Provider, complete_json};
 pub use types::{

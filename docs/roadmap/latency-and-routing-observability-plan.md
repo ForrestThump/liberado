@@ -4,6 +4,17 @@
 slow because a single user turn that needs real work fans out across four-plus sequential LLM
 roundtrips, each with extended thinking on a strong model (`deepseek-v4-pro`).
 
+> **Landed 2026-07-20 (slice 1 — measurement + per-role config):**
+> - Every inference call is recorded by a role-tagged `MeteredProvider`
+>   (`crates/provider/src/latency.rs`) → `<data>/latency/events.jsonl` (role, model, wall_ms, TTFT,
+>   tokens; correlation set at the chat turn + dispatch pack seams). Report:
+>   `deploy/homelab/latency-report.sh` (p50/p95 per role).
+> - **Per-role model tuning is now config-driven** (`[roles.main_agent|dispatcher|subagent]` in
+>   topology.toml): provider, model slug, `temperature`, and `reasoning` level — edit + restart, no
+>   rebuild. This is the enabling half of §3.1/§3.2 below.
+> Still open in this doc: the short-circuit (§2), dispatcher-skip (§3.3), progress streaming (§2.4),
+> stage timing + JSON-span logs (§4.2/§4.4), and actually choosing per-role models from the baseline.
+
 This doc captures (1) the latency problem precisely, (2) the short-circuit idea, (3) other levers,
 and (4) the **observability work that must land first** — we cannot claim a tuning win we cannot
 measure, and today we measure nothing on this path.

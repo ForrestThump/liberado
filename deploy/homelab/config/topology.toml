@@ -14,6 +14,25 @@ timezone = "America/Chicago"
 [main_agent]
 delegation_mode = true
 
+# --- Per-role model tuning (latency knobs; edit on the box + `up -d --force-recreate`, NO rebuild) --
+# Fast/cheap router + face, strong worker. Roles: main_agent (chat face), dispatcher (router),
+# subagent (orchestrator/worker). All fields optional; omitted = inherit `provider` + its model.
+# temperature (when set) overrides the per-call value; reasoning is "off"|"low"|"medium"|"high".
+# Measure the effect with deploy/homelab/latency-report.sh. Uncomment + set slugs OpenRouter accepts:
+#
+# [roles.main_agent]
+# model = "deepseek/deepseek-v3-flash"
+# reasoning = "low"
+#
+# [roles.dispatcher]
+# model = "deepseek/deepseek-v3-flash"
+# temperature = 0.0
+# reasoning = "off"
+#
+# [roles.subagent]
+# model = "deepseek/deepseek-v4-pro"
+# reasoning = "high"
+
 # =============================================================================
 # MCPs — container DNS names on the `homelab` network.
 # `url` is BASE origin only (client appends /mcp). F1: every non-read_only MCP
