@@ -770,7 +770,7 @@ checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
  "serde",
  "termcolor",
- "unicode-width 0.1.14",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]
@@ -2492,6 +2492,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "git2"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddddbf932745a6be37109b6112d3ee09696106f848449069d3a57bba937ab82e"
+dependencies = [
+ "bitflags",
+ "libc",
+ "libgit2-sys",
+ "log",
+]
+
+[[package]]
 name = "gloo-net"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3715,10 +3727,10 @@ dependencies = [
  "tokio",
  "tracing",
  "turbomcp-client",
- "turbomcp-core",
- "turbomcp-server",
+ "turbomcp-core 3.1.5",
+ "turbomcp-server 3.1.5",
  "turbomcp-transport",
- "turbomcp-types",
+ "turbomcp-types 3.1.5",
 ]
 
 [[package]]
@@ -4026,6 +4038,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "libgit2-sys"
+version = "0.18.5+1.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "005d6ae6eac1912906073e069f7db60b1fa98e052a68227824afe3e3a1c59ca2"
+dependencies = [
+ "cc",
+ "libc",
+ "libz-sys",
+ "pkg-config",
+]
+
+[[package]]
 name = "libloading"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4066,6 +4090,18 @@ name = "libyaml-rs"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e126dda6f34391ab7b444f9922055facc83c07a910da3eb16f1e4d9c45dc777"
+
+[[package]]
+name = "libz-sys"
+version = "1.1.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85bc9657773828b90eeb625adff10eeac83cc21bbfd8e23a03eaa8a33c9e28d9"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
+ "vcpkg",
+]
 
 [[package]]
 name = "link-cplusplus"
@@ -7484,13 +7520,13 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
- "turbomcp-core",
- "turbomcp-macros",
- "turbomcp-protocol",
- "turbomcp-server",
+ "turbomcp-core 3.1.5",
+ "turbomcp-macros 3.1.5",
+ "turbomcp-protocol 3.1.5",
+ "turbomcp-server 3.1.5",
  "turbomcp-telemetry",
  "turbomcp-transport",
- "turbomcp-types",
+ "turbomcp-types 3.1.5",
  "uuid",
 ]
 
@@ -7511,7 +7547,7 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
- "turbomcp-protocol",
+ "turbomcp-protocol 3.1.5",
  "turbomcp-transport",
  "uuid",
 ]
@@ -7527,7 +7563,24 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio-util",
- "turbomcp-types",
+ "turbomcp-types 3.1.5",
+ "uuid",
+]
+
+[[package]]
+name = "turbomcp-core"
+version = "3.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f02ce2bef778c483364973c7bd41a5187a26c571d66c12a705176c071a9d7209"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "hashbrown 0.17.1",
+ "rkyv",
+ "serde",
+ "serde_json",
+ "tokio-util",
+ "turbomcp-types 3.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "uuid",
 ]
 
@@ -7543,7 +7596,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "turbomcp-protocol",
+ "turbomcp-protocol 3.1.5",
  "turbomcp-transport-traits",
  "url",
 ]
@@ -7559,7 +7612,23 @@ dependencies = [
  "serde",
  "serde_json",
  "syn",
- "turbomcp-protocol",
+ "turbomcp-protocol 3.1.5",
+]
+
+[[package]]
+name = "turbomcp-macros"
+version = "3.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3d54ebcb5ae8c66b211b19e2403dcaa2b1db7103bd4fb541b52084af3341f5d"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "schemars",
+ "serde",
+ "serde_json",
+ "syn",
+ "turbomcp-protocol 3.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -7590,8 +7659,44 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "turbomcp-core",
- "turbomcp-types",
+ "turbomcp-core 3.1.5",
+ "turbomcp-types 3.1.5",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "turbomcp-protocol"
+version = "3.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23164990da108578193a6f4e190bec74a14b8394c51a5f862893bac2ef73451d"
+dependencies = [
+ "arc-swap",
+ "bytes",
+ "chrono",
+ "ciborium",
+ "compact_str 0.9.1",
+ "crossbeam",
+ "dashmap",
+ "flate2",
+ "futures",
+ "parking_lot",
+ "percent-encoding",
+ "pin-project-lite",
+ "rand 0.10.2",
+ "regex",
+ "serde",
+ "serde_json",
+ "simd-json",
+ "simdutf8",
+ "smallvec",
+ "sonic-rs",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "turbomcp-core 3.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "turbomcp-types 3.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "url",
  "uuid",
 ]
@@ -7612,11 +7717,36 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "turbomcp-core",
- "turbomcp-macros",
- "turbomcp-protocol",
+ "turbomcp-core 3.1.5",
+ "turbomcp-macros 3.1.5",
+ "turbomcp-protocol 3.1.5",
  "turbomcp-transport",
- "turbomcp-types",
+ "turbomcp-types 3.1.5",
+ "uuid",
+]
+
+[[package]]
+name = "turbomcp-server"
+version = "3.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7085bc454707740622ea5aa1eeaa8b63f7626d9b2d90ad0577dc5ded20c70105"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "dashmap",
+ "futures",
+ "parking_lot",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "turbomcp-core 3.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "turbomcp-macros 3.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "turbomcp-protocol 3.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "turbomcp-types 3.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "uuid",
 ]
 
@@ -7631,7 +7761,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "turbomcp-protocol",
+ "turbomcp-protocol 3.1.5",
  "turbomcp-transport-traits",
  "uuid",
 ]
@@ -7657,7 +7787,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
- "turbomcp-protocol",
+ "turbomcp-protocol 3.1.5",
 ]
 
 [[package]]
@@ -7684,7 +7814,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "turbomcp-http",
- "turbomcp-protocol",
+ "turbomcp-protocol 3.1.5",
  "turbomcp-stdio",
  "turbomcp-transport-traits",
  "url",
@@ -7701,7 +7831,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
- "turbomcp-protocol",
+ "turbomcp-protocol 3.1.5",
 ]
 
 [[package]]
@@ -7713,11 +7843,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "turbomcp-types"
+version = "3.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd9cc4eef445f8743a8eff1872e93c10805f234a93dd1bf63777b19a47db8cf"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "turbovault"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "anyhow",
- "chrono",
  "clap",
  "config",
  "log",
@@ -7730,16 +7869,20 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "turbomcp",
+ "turbomcp-core 3.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "turbomcp-server 3.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "turbomcp-types 3.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "turbovault-audit",
  "turbovault-core",
  "turbovault-tools",
  "turbovault-vault",
+ "uuid",
  "yaml_serde",
 ]
 
 [[package]]
 name = "turbovault-audit"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "chrono",
  "log",
@@ -7755,13 +7898,12 @@ dependencies = [
 
 [[package]]
 name = "turbovault-batch"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "chrono",
  "schemars",
  "serde",
  "serde_json",
- "tempfile",
  "tokio",
  "turbovault-core",
  "turbovault-vault",
@@ -7770,7 +7912,7 @@ dependencies = [
 
 [[package]]
 name = "turbovault-core"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "chrono",
  "log",
@@ -7788,7 +7930,7 @@ dependencies = [
 
 [[package]]
 name = "turbovault-export"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "chrono",
  "serde",
@@ -7797,8 +7939,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "turbovault-git"
+version = "1.6.0"
+dependencies = [
+ "fs4",
+ "git2",
+ "log",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "turbovault-graph"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -7812,7 +7966,7 @@ dependencies = [
 
 [[package]]
 name = "turbovault-parser"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "pulldown-cmark",
@@ -7825,17 +7979,18 @@ dependencies = [
 
 [[package]]
 name = "turbovault-tools"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "futures",
  "log",
+ "regex",
  "serde",
  "serde_json",
  "shellexpand",
  "similar",
  "tantivy",
- "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -7844,16 +7999,18 @@ dependencies = [
  "turbovault-batch",
  "turbovault-core",
  "turbovault-export",
+ "turbovault-git",
  "turbovault-graph",
  "turbovault-parser",
  "turbovault-vault",
  "urlencoding",
+ "uuid",
  "yaml_serde",
 ]
 
 [[package]]
 name = "turbovault-vault"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -7879,7 +8036,7 @@ dependencies = [
 
 [[package]]
 name = "turbovault-vector"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7892,9 +8049,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "turbovault-core",
  "turbovault-parser",
- "turbovault-vault",
  "usearch",
  "walkdir",
 ]

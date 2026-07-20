@@ -1,5 +1,11 @@
 //! End-to-end capstone: the provenance loop closes across real components.
 //!
+//! Gated behind the `e2e` feature: it drives the turbovault **host** MCP server,
+//! which currently does not build against our local turbomcp fork (turbovault 1.6
+//! refactored its `McpHandler` usage). Run with `--features e2e` once the fork is
+//! reconciled. The core provenance/attribution self-tests do not need it.
+#![cfg(feature = "e2e")]
+//!
 //! An agent writes a note **through the turbovault MCP server**, carrying its provenance in the
 //! request `_meta`. That provenance rides the chain turbomcp surfaces and turbovault records on the
 //! audit log. A *separate* liberado `Vault` (standing in for the daemon, a different process in

@@ -17,12 +17,19 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
+# End-to-end capstone dep (drives a real turbovault MCP server). Optional +
+# feature-gated: the turbovault host currently doesn't build against our local
+# turbomcp fork (turbovault 1.6 refactored its McpHandler usage), so this test is
+# opt-in until the fork is reconciled. Core self-tests do not need it.
+turbovault = { workspace = true, optional = true }
+
+[features]
+# Enable the provenance end-to-end capstone test (needs the turbovault host).
+e2e = ["dep:turbovault"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }
-# End-to-end capstone: drive a real turbovault MCP server write and attribute it back.
-turbovault = { workspace = true }
 turbomcp = { workspace = true }
 
 [package.metadata.liberado]
