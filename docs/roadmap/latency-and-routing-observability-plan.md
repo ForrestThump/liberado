@@ -186,6 +186,54 @@ the §2/§3 tuning and compare against that baseline. Do not tune before the bas
 
 ---
 
+## 5. Open questions + test coverage (added 2026-07-20, from live dogfooding)
+
+### Why the face delegated vault work even when it held the turbovault tools
+
+Not a bug in routing — the **face system prompt makes it delegate regardless of what tools are in
+context**. `HUMAN_INTERFACE_SYSTEM_PROMPT` (`crates/main-agent/src/lib.rs:39`) is emphatic and
+"non-negotiable": *"You are a face agent, not a tool user… **Do not** try to enumerate tools from
+your own context. You will usually see only `delegate`… Delegation is how work gets done."* The
+`delegate` tool description reinforces it: *"you do NOT have those tools yourself."* So when the box
+policy (drift) granted the face all 67 turbovault tools, it created a **contradiction**: an agent
+explicitly told to ignore direct tools and delegate, with 67 direct tools sitting in front of it. The
+model mostly obeyed the prompt (delegated) and occasionally used a direct tool — inconsistent, and
+either way it paid for 67 unused tool definitions bloating every face turn's context. Removing the
+grant (done 2026-07-20) realigns config with the prompt. **Design corollary:** granting the face
+tools is only meaningful if the prompt is also changed to permit direct use — otherwise it's dead
+weight. A curated "top-N fast-path" for common vault reads (operator's idea) would need *both* a
+tool-subset grant mechanism (today `ExecuteMcp` is whole-MCP, all-or-nothing) **and** a prompt that
+sanctions using them; it's a real feature, not a config toggle. Tracked as a candidate under §2/§3.
+
+### Are dispatched subagents being tested at all? (they're not, yet)
+
+The weather/tasks turns we've measured drive the orchestrator's **ExecuteDirect** path — the
+orchestrator calls the MCP tool itself in one loop. They do **not** exercise actual **subagent
+deployment** (a `Subagent` disposition / `Orchestrator::dispatch_parallel`, where the orchestrator
+spawns one or more separate worker sessions). So the `subagent` role's model choice (currently
+v4-pro) is essentially **unmeasured** — and note `dispatch_parallel` spawns tasks, which the
+correlation task-local does **not** propagate into (those calls currently record `correlation="-"`;
+worth fixing when we test this path). Before deciding flash-vs-pro / thinking-on for subagents, we
+need task cases that *force* real subagent spawning (genuinely multi-step or parallel research,
+fan-out work) — otherwise we'd be tuning a role nothing invokes.
+
+### A live test suite (operator's idea) — reuse the tuner's scenarios
+
+We're hand-typing weather/tasks curls; that won't cover the space (classification, single-tool,
+multi-tool, subagent fan-out, clarify, propose, coding). Build a **live suite that drives real chat
+turns against a running daemon** and asserts on the latency journal + outcomes, seeded from the
+existing scenario corpora rather than new fixtures:
+- `liberado_eval::Scenario` — dispatcher classification labels (routing correctness per task class).
+- `heuristics_tuner::tool_scenarios::ToolLoopScenario` (`crates/heuristics-tuner/src/tool_scenarios.rs`)
+  — goal + tool catalog + `must_call`/`must_not_call` + expected `Outcome`; already the shape of an
+  end-to-end task assertion.
+- `heuristics_tuner::coder_scenarios` — coding-pack tasks (exercises the coding subagent path).
+Each scenario → a chat turn (or `/spawn`) → assert outcome + capture per-role latency, so a config
+change (per-role model, thinking, short-circuit) can be evaluated across **all** task classes in one
+run, not one hand-typed example. This is the harness that makes the §2/§3 tuning measurable and
+regression-safe. Likely a new `crates/…` bin or a `deploy/homelab/` script hitting `/api/chat/stream`
++ `latency-report.sh`, with a pass/fail on outcomes so it doubles as a smoke test.
+
 ## Anchors (as of this writing)
 
 - Face agent + `delegate` bridge: `crates/main-agent/src/face.rs`
