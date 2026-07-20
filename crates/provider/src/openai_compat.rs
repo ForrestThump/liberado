@@ -142,6 +142,9 @@ pub fn stream_sse_response(response: reqwest::Response, name_map: ToolNameMap) -
         let mut content = String::new();
         let mut tools: Vec<ToolAcc> = Vec::new();
         let mut finish = FinishReason::Stop;
+        // Populated by the trailing usage chunk when the request sets `stream_options.include_usage`
+        // (that chunk carries `usage` and an empty `choices`); `None` if the backend omits it.
+        let mut usage: Option<Usage> = None;
 
         while let Some(chunk) = bytes.next().await {
             let chunk = chunk.map_err(|e| ProviderError::Transport(e.to_string()))?;
@@ -155,6 +158,9 @@ pub fn stream_sse_response(response: reqwest::Response, name_map: ToolNameMap) -
                     continue;
                 }
                 let Ok(v) = serde_json::from_str::<Value>(data) else { continue };
+                if let Some(u) = parse_usage(&v["usage"]) {
+                    usage = Some(u);
+                }
                 let choice = &v["choices"][0];
                 if let Some(fr) = choice["finish_reason"].as_str() {
                     finish = map_finish_reason(fr);
@@ -178,7 +184,7 @@ pub fn stream_sse_response(response: reqwest::Response, name_map: ToolNameMap) -
             content: (!content.is_empty()).then_some(content),
             tool_calls,
             finish_reason: finish,
-            usage: None,
+            usage,
         });
     };
 

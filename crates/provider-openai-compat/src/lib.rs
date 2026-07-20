@@ -268,6 +268,8 @@ impl Provider for OpenAiCompatibleProvider {
         let mut body = to_openai_request(&model, &request, &name_map);
         self.apply_role_tuning(&mut body);
         body["stream"] = json!(true);
+        // Ask for the trailing usage chunk so streamed calls report token counts (latency journal).
+        body["stream_options"] = json!({ "include_usage": true });
 
         let response = self
             .client
