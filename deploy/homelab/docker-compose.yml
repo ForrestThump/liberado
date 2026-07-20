@@ -2,11 +2,17 @@
 #
 # Deliberately a SEPARATE compose project, not an edit to the 796-line docker-compose.ai.yml: it joins
 # the existing `homelab` bridge network as external, so the daemon can reach turbovault/searxng/mem0/…
-# by container name once MCPs are wired, without any risk to the running stack. Run with:
-#   docker compose -f ~/homelab/services/liberado/docker-compose.yml up -d
+# by container name once MCPs are wired, without any risk to the running stack.
 #
-# The image is built separately (`docker build -t liberado:dev ~/liberado-build`), so run and build
-# are decoupled. Docker's restart policy is the "always running" — no systemd unit needed.
+# >>> DO NOT deploy code by hand-running `docker build` / `docker compose up`. <<<
+# Use the deploy script from the repo on your dev machine — it ships an exact commit, rebuilds,
+# recreates, and verifies the live SHA (see deploy/homelab/README.md):
+#   bash deploy/homelab/deploy.sh
+# What's live?  ->  docker exec liberado cat /etc/liberado-build-sha
+#
+# Build and run are decoupled (image `liberado:dev`, built from ~/liberado-build). Docker's restart
+# policy is the "always running" — no systemd unit needed. Config below is a host mount: to change
+# topology/policy, edit config/ + `up -d --force-recreate` (no rebuild).
 #
 # Secrets: put OPENROUTER_API_KEY (and optionally DEEPSEEK_API_KEY) in a gitignored
 # `~/homelab/services/liberado/.env` next to this file — do NOT env_file the full

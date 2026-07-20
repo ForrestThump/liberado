@@ -49,11 +49,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /build/target/release/liberado /usr/local/bin/liberado
 
+# Build provenance — the single answer to "what commit is actually running?".
+# `deploy/homelab/deploy.sh` passes the deployed git SHA here; it lands both in a file the daemon
+# container can print and in an image LABEL. Read it without guessing:
+#   docker exec liberado cat /etc/liberado-build-sha
+#   docker inspect -f '{{ index .Config.Labels "org.liberado.git-sha" }}' liberado:dev
+# Defaults to "unknown" for a bare `docker build` with no --build-arg (i.e. someone bypassed the script).
+ARG GIT_SHA=unknown
+RUN printf '%s\n' "$GIT_SHA" > /etc/liberado-build-sha
+LABEL org.liberado.git-sha="$GIT_SHA"
+
 # Config, data, and the vault are all mounts (see the compose service). Config and data are named so
 # the daemon finds them without flags; the vault path is set in topology.toml.
 ENV LIBERADO_CONFIG_DIR=/config \
     LIBERADO_DATA_DIR=/data \
-    LIBERADO_PORT=4201
+    LIBERADO_PORT=4201 \
+    LIBERADO_BUILD_SHA=$GIT_SHA
 
 EXPOSE 4201
 

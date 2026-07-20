@@ -10,13 +10,18 @@
 
 Make every intended MCP **reachable and handshake-clean** from the `liberado` container over the `homelab` Docker network, using Liberado’s HTTP client contract (below). Prefer **KISS**: fix the MCP/service itself or its Compose env. **Do not** add nginx sidecars or reverse-proxy hacks unless explicitly asked.
 
-When a service is fixed, Liberado only needs a recreate to reconnect:
+When a service is fixed, Liberado only needs a recreate to reconnect (no rebuild — MCP peers are
+external containers, and topology/policy are host-mounted config):
 
 ```bash
 docker compose -f ~/homelab/services/liberado/docker-compose.yml up -d --force-recreate
 docker logs liberado --tail 80
 # look for: "MCP failed to connect" vs successful "SSE connection established" / tool use
 ```
+
+> Deploying new **Liberado code** is a different operation — never hand-build the image. Run
+> `bash deploy/homelab/deploy.sh` from the repo (see `deploy/homelab/README.md`), and check what's
+> live with `docker exec liberado cat /etc/liberado-build-sha`.
 
 ---
 
