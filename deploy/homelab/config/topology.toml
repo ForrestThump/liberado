@@ -7,6 +7,9 @@
 
 vault_path = "/vault"
 provider = "openrouter"
+# Single source of truth for local wall-clock (Texas / US Central). Cron expressions below stay UTC;
+# the daemon stamps "Local time: …" onto schedule/webhook goals from this zone.
+timezone = "America/Chicago"
 
 [main_agent]
 delegation_mode = true
@@ -135,23 +138,23 @@ transport = { kind = "http", url = "https://mcp.deepwiki.com" }
 # now accepts "City, State"; liberado-caldav-mcp list_events resolves relative hrefs + accepts more
 # datetime shapes. (Both MCPs build-from-URL @master.)
 #
-# Times are UTC (Liberado's cron has no timezone). Converted from Mesa, AZ (UTC-7, no DST — stable
-# year-round, unlike OpenClaw's America/Denver setting which DST-drifts for an AZ user):
-#   daily  6:55 AZ = 13:55Z | evening 20:55 AZ = 03:55Z | weekly Sun 18:55 AZ = Mon 01:55Z.
-# Goals adapted to Liberado's tools: caldav-mcp→liberado-caldav-mcp, search-orchestrator→
-# liberado-search-orchestrator-mcp; the OpenClaw `agentmail` (no Liberado MCP) and `mem0-mcp`
-# (dropped — superseded by the delegator) steps are removed. "Send to user" is gone too: the daemon
-# delivers the session's final summary automatically, so each goal just has to PRODUCE the brief.
+# Times are UTC (cron_expr has no timezone field). Operator wall-clock is topology.timezone
+# (America/Chicago). CDT = UTC-5; CST = UTC-6 — re-check these offsets when DST flips.
+#   daily  06:55 CDT = 11:55Z | evening 20:55 CDT = 01:55Z | weekly Sun 18:55 CDT = Mon 23:55Z.
+# Goals can say "today" / "this evening"; the daemon prepends "Local time: … (America/Chicago)."
+# when each schedule fires. Place names in goals should match where you actually live.
+# Goals adapted to Liberado's tools: caldav / weather / search-orchestrator / turbovault.
+# "Send to user" is gone: the daemon delivers the session summary automatically.
 # =============================================================================
 
 [[schedules]]
 name = "daily-planning"
 enabled = true
-cron_expr = "0 55 13 * * * *"   # 13:55 UTC = 06:55 Mesa AZ
+cron_expr = "0 55 11 * * * *"   # 11:55 UTC = 06:55 America/Chicago CDT
 goal = """
-Produce a concise morning brief for Mesa, Arizona. Your final summary IS the brief delivered to the user, so make it the report.
+Produce a concise morning brief. Your final summary IS the brief delivered to the user, so make it the report.
 1. Today's calendar events via liberado-caldav-mcp (list_calendars, then list_events for today).
-2. Current weather and today's forecast for Mesa, Arizona via liberado-weather-mcp.
+2. Current weather and today's forecast via liberado-weather-mcp (use my usual home area unless I said otherwise).
 3. Incomplete tasks from turbovault (filter: incomplete only) — the primary task source.
 4. Three noteworthy headlines from the past 24 hours via liberado-search-orchestrator-mcp — one line each.
 Deliver: today's schedule, weather snapshot, open tasks, and the 3 headlines, ending with a single focus suggestion if one stands out. Keep it tight — no filler.
@@ -160,9 +163,9 @@ Deliver: today's schedule, weather snapshot, open tasks, and the 3 headlines, en
 [[schedules]]
 name = "evening-debrief"
 enabled = true
-cron_expr = "0 55 3 * * * *"    # 03:55 UTC = 20:55 Mesa AZ (previous evening)
+cron_expr = "0 55 1 * * * *"    # 01:55 UTC = 20:55 America/Chicago CDT (previous evening)
 goal = """
-Produce a grounded end-of-day evening debrief for Mesa, Arizona. Your final summary IS the message delivered to the user.
+Produce a grounded end-of-day evening debrief. Your final summary IS the message delivered to the user.
 1. Today's calendar events via liberado-caldav-mcp — what was scheduled.
 2. Task status in turbovault — what's still open vs completed today.
 3. Tomorrow's calendar via liberado-caldav-mcp (list_events for tomorrow).
@@ -172,9 +175,9 @@ Deliver a brief evening summary: how the day looked, open items carrying into to
 [[schedules]]
 name = "weekly-review"
 enabled = true
-cron_expr = "0 55 1 * * MON *"  # Mon 01:55 UTC = Sun 18:55 Mesa AZ
+cron_expr = "0 55 23 * * SUN *"  # 23:55 UTC Sun = 18:55 America/Chicago CDT
 goal = """
-Produce a weekly review for Mesa, Arizona. Your final summary IS the review delivered to the user.
+Produce a weekly review. Your final summary IS the review delivered to the user.
 1. Calendar for the past 7 days via liberado-caldav-mcp — what happened this week.
 2. Calendar for the coming 7 days via liberado-caldav-mcp — what's ahead.
 3. turbovault tasks: completed this week, still open, anything overdue.

@@ -759,8 +759,9 @@ mod tests {
         // path, with a real Notifier attached, not just liberado-notify's own bare TelegramNotifier
         // in isolation — proves `with_notifier`/the `invoke`-path notify call are wired correctly,
         // not just that the underlying HTTP call works.
-        let notifier = liberado_notify::TelegramNotifier::from_env()
-            .expect("set LIBERADO_TELEGRAM_BOT_TOKEN and LIBERADO_TELEGRAM_CHAT_ID to run this test");
+        let notifier = liberado_notify::TelegramNotifier::from_env().expect(
+            "set LIBERADO_TELEGRAM_BOT_TOKEN and LIBERADO_TELEGRAM_CHAT_ID to run this test",
+        );
         let dir = tempfile::TempDir::new().unwrap();
         let inner = Arc::new(MockInner::new(&["email-mcp:send"], Ok("sent".into())));
         let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("email-mcp".into())]);

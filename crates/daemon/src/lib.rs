@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use liberado_common::{
     CapabilityCatalog, CapabilitySet, DEFAULT_POOL, DispatchDecision, Event, EventSource,
-    PROPOSALS_DIR, ProposalSigner, SignedProposal, WriteClass, event_source,
+    PROPOSALS_DIR, ProposalSigner, SignedProposal, UserTimezone, WriteClass, event_source,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_notify::Notifier;
@@ -188,6 +188,11 @@ pub struct Daemon {
     /// [`ReactionOutcome::Dispatched`]. When absent, the daemon falls back to inline
     /// dispatch → orchestrate (no session recording) — useful for watch-only / unit tests.
     goals: Option<Arc<GoalSessionHub>>,
+    /// Operator timezone ([`topology.timezone`](liberado_common::DEFAULT_TIMEZONE)). When set,
+    /// non-vault triggers (cron, webhooks/wake-ups — anything without a vault `path`) get a
+    /// "Local time: …" line prepended to the goal text so the model knows wall-clock without
+    /// putting time in every system prompt. Vault-watch reactions are left alone.
+    user_timezone: Option<UserTimezone>,
 }
 
 impl Daemon {
@@ -207,7 +212,20 @@ impl Daemon {
             event_tx: Some(event_tx),
             event_rx: Some(event_rx),
             goals: None,
+            user_timezone: None,
         })
+    }
+
+    /// Set the operator timezone used to stamp local wall-clock onto cron/webhook goals.
+    /// Production wiring: `config.topology.user_timezone()` via bootstrap.
+    pub fn with_user_timezone(mut self, tz: UserTimezone) -> Self {
+        self.user_timezone = Some(tz);
+        self
+    }
+
+    /// The timezone attached via [`with_user_timezone`](Self::with_user_timezone), if any.
+    pub fn user_timezone(&self) -> Option<UserTimezone> {
+        self.user_timezone
     }
 
     /// Route every reaction through the **goal session hub** as a hosted background session
@@ -414,7 +432,12 @@ impl Daemon {
             return ReactionOutcome::Observed; // watch-only
         };
 
-        let request = ctx.dispatch_request(event);
+        let mut request = ctx.dispatch_request(event);
+        // Cron / webhook / wake-up: stamp local wall-clock so "today" / "this evening" means the
+        // operator's zone without baking time into every system prompt. Vault-path reactions skip.
+        if let Some(stamped) = self.stamp_local_time_if_needed(event, &request.goal) {
+            request.goal = stamped;
+        }
 
         // Preferred path (E3): start a hosted session on the hub. The dispatch pack classifies and
         // executes; this method returns as soon as the session exists. Reactions therefore run
@@ -453,6 +476,17 @@ impl Daemon {
         self.dispatch_and_act(pool, ctx, &request, event).await
     }
 
+    /// Prepend "Local time: …" for non-vault triggers when a timezone is configured.
+    fn stamp_local_time_if_needed(&self, event: &Event, goal: &str) -> Option<String> {
+        if event.payload.path.is_some() {
+            return None;
+        }
+        let tz = self.user_timezone?;
+        // Prefer the event's own timestamp (the fire instant) so a delayed reaction still
+        // reports the time that mattered for the schedule, not "whenever we got around to it".
+        Some(tz.with_context_at(event.timestamp, goal))
+    }
+
     /// Deliver a cron-fired session's result to the human via the notifier.
     ///
     /// Cron is the one background source whose whole purpose is to *report back* — a morning brief
@@ -488,7 +522,10 @@ impl Daemon {
                 .as_ref()
                 .map(|r| (r.summary.clone(), r.terminal))
                 .unwrap_or_else(|| {
-                    ("(the run finished with no summary)".to_string(), TerminalKind::Failed)
+                    (
+                        "(the run finished with no summary)".to_string(),
+                        TerminalKind::Failed,
+                    )
                 });
             let message = format_cron_delivery(&schedule, &summary, terminal);
             // `deliver_cron`, not `notify`: a chat-aware notifier folds this into the sticky
@@ -813,11 +850,20 @@ mod tests {
 
     #[test]
     fn cron_schedule_name_only_matches_cron_sources() {
-        assert_eq!(cron_schedule_name("cron:daily-planning"), Some("daily-planning"));
+        assert_eq!(
+            cron_schedule_name("cron:daily-planning"),
+            Some("daily-planning")
+        );
         // Names may themselves contain colons (rfc3339-ish); only the first split matters.
-        assert_eq!(cron_schedule_name("cron:weekly:review"), Some("weekly:review"));
+        assert_eq!(
+            cron_schedule_name("cron:weekly:review"),
+            Some("weekly:review")
+        );
         // Non-cron sources must never trigger delivery.
-        assert_eq!(cron_schedule_name(event_source::TURBOVAULT_SUBSCRIPTION), None);
+        assert_eq!(
+            cron_schedule_name(event_source::TURBOVAULT_SUBSCRIPTION),
+            None
+        );
         assert_eq!(cron_schedule_name("delegate"), None);
         assert_eq!(cron_schedule_name("cronies:x"), None); // kind must equal "cron", not just prefix
         assert_eq!(cron_schedule_name("cron"), None); // no name
@@ -827,9 +873,16 @@ mod tests {
     fn format_cron_delivery_flags_non_success() {
         let ok = format_cron_delivery("daily-planning", "your brief", TerminalKind::Succeeded);
         assert!(ok.contains("daily-planning") && ok.contains("your brief"));
-        assert!(!ok.contains('['), "success must not carry a status tag: {ok}");
+        assert!(
+            !ok.contains('['),
+            "success must not carry a status tag: {ok}"
+        );
 
-        for bad in [TerminalKind::Failed, TerminalKind::Cancelled, TerminalKind::BudgetExhausted] {
+        for bad in [
+            TerminalKind::Failed,
+            TerminalKind::Cancelled,
+            TerminalKind::BudgetExhausted,
+        ] {
             let msg = format_cron_delivery("daily-planning", "partial", bad);
             assert!(
                 msg.contains(&format!("[{bad:?}]")),

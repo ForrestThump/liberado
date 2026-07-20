@@ -200,6 +200,19 @@ pub fn configure_daemon(
     vault_path: &Path,
     guidance: Option<Arc<dyn ToolGuidanceSource>>,
 ) -> Daemon {
+    // Timezone is config-only and useful even in watch-only mode (future notifiers / hooks).
+    let daemon = match config.topology.user_timezone() {
+        Ok(tz) => {
+            tracing::info!(timezone = %tz.iana_name(), "operator timezone configured");
+            daemon.with_user_timezone(tz)
+        }
+        Err(e) => {
+            // validate() already rejects bad names at load; this is a belt-and-suspenders log.
+            tracing::error!(error = %e, "topology.timezone invalid — cron/webhook goals will not get Local time stamps");
+            daemon
+        }
+    };
+
     let Some(provider) = provider else {
         tracing::warn!("DEEPSEEK_API_KEY not set — running watch-only (no dispatch)");
         return daemon;

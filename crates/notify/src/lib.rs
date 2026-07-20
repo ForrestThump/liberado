@@ -218,8 +218,9 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires LIBERADO_TELEGRAM_BOT_TOKEN + LIBERADO_TELEGRAM_CHAT_ID + network access"]
     async fn live_send_via_from_env_actually_delivers() {
-        let notifier = TelegramNotifier::from_env()
-            .expect("set LIBERADO_TELEGRAM_BOT_TOKEN and LIBERADO_TELEGRAM_CHAT_ID to run this test");
+        let notifier = TelegramNotifier::from_env().expect(
+            "set LIBERADO_TELEGRAM_BOT_TOKEN and LIBERADO_TELEGRAM_CHAT_ID to run this test",
+        );
         notifier
             .notify("liberado-notify: live test via cargo test -- --ignored")
             .await

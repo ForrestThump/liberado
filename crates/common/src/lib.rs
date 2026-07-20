@@ -24,6 +24,8 @@
 //! - [`guidance`] — [`guidance::ToolGuidanceSource`], the dispatcher's procedural-memory seam
 //!   (`liberado-dispatch-logic-spec.md` §2 steps 1/5), implemented by
 //!   `liberado_memory_store::MemoryStore`.
+//! - [`local_time`] — operator timezone + helpers to stamp local wall-clock onto agent context
+//!   when a caller opts in (cron/webhook firings do this in the daemon).
 //! - [`error`] — the crate's error type.
 //!
 //! The typed config model (Decision 14) used to live here as a `config` module — moved to
@@ -38,6 +40,7 @@ pub mod error;
 pub mod event;
 pub mod frontmatter;
 pub mod guidance;
+pub mod local_time;
 pub mod model;
 pub mod proposal;
 pub mod provenance;
@@ -60,6 +63,10 @@ pub use frontmatter::{
     FRONTMATTER_FENCE, body_after_frontmatter, extract_frontmatter, render_note,
 };
 pub use guidance::{GuidanceHit, ToolGuidanceSource};
+pub use local_time::{
+    DEFAULT_TIMEZONE, UnknownTimezone, UserTimezone, context_line as local_time_context_line,
+    with_context as local_time_with_context,
+};
 pub use model::{ModelChoice, ModelProfile, ModelRole, ModelTier, RequiredCaps};
 pub use proposal::{
     PROPOSALS_DIR, Proposal, ProposalNoteError, ProposalSigner, ProposalStatus, ProposedAction,

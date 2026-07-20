@@ -134,7 +134,10 @@ impl ApprovalBot {
         });
         match self.client.post(&url).json(&body).send().await {
             Ok(r) if r.status().is_success() => {
-                tracing::info!(count = self.command_menu.len(), "registered Telegram slash-command menu");
+                tracing::info!(
+                    count = self.command_menu.len(),
+                    "registered Telegram slash-command menu"
+                );
             }
             Ok(r) => tracing::warn!(status = %r.status(), "setMyCommands non-success"),
             Err(e) => tracing::warn!(error = %e, "setMyCommands failed"),

@@ -195,7 +195,9 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
                 Duration::from_secs(config.tuning.cron_delivery.quiet_delay_secs),
                 Duration::from_secs(config.tuning.cron_delivery.deliver_by_secs),
             );
-            info!("cron delivery: folding briefs into the sticky Telegram chat (quiet-delay defer)");
+            info!(
+                "cron delivery: folding briefs into the sticky Telegram chat (quiet-delay defer)"
+            );
             daemon.with_notifier(Arc::new(cdn))
         }
         _ => daemon,
@@ -267,7 +269,9 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
                 }))
                 .with_activity_tracker(telegram_activity.clone())
                 .with_command_menu(command_menu);
-            info!("Telegram free-form chat surface attached (slash commands enabled + menu registered)");
+            info!(
+                "Telegram free-form chat surface attached (slash commands enabled + menu registered)"
+            );
         }
         tokio::spawn(bot.run());
     }

@@ -29,8 +29,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use liberado_common::{
-    Capability, CapabilitySet, Consequence, DEFAULT_POOL, Error, ModelProfile, ModelRole, Result,
-    WriteClass,
+    Capability, CapabilitySet, Consequence, DEFAULT_POOL, DEFAULT_TIMEZONE, Error, ModelProfile,
+    ModelRole, Result, UserTimezone, WriteClass,
 };
 use serde::{Deserialize, Serialize};
 
@@ -53,6 +53,13 @@ pub struct Config {
 pub struct Topology {
     /// Path to the Obsidian vault (the source of truth). Required.
     pub vault_path: PathBuf,
+    /// Operator's IANA timezone — **single source of truth** for local wall-clock across Liberado
+    /// (e.g. `America/Chicago` for US Central / Texas CDT). Used when stamping "Local time: …"
+    /// onto cron/webhook goals and available via [`Topology::user_timezone`] / [`UserTimezone`]
+    /// anywhere a caller wants to inject now into agent context. **Not** applied to cron
+    /// *expressions* (those remain UTC); only to human-facing local-time context.
+    /// Default: [`DEFAULT_TIMEZONE`] (`America/Chicago`). Validated at load time.
+    pub timezone: String,
     /// Unix domain socket the daemon listens on for TUI/client attach (Decision 2).
     pub daemon_socket: PathBuf,
     /// Which declared `providers` entry (by `name`) supplies inference. Provider-agnostic
@@ -125,6 +132,7 @@ impl Default for Topology {
     fn default() -> Self {
         Self {
             vault_path: PathBuf::new(),
+            timezone: DEFAULT_TIMEZONE.to_string(),
             daemon_socket: PathBuf::from("/run/liberado/daemon.sock"),
             provider: "deepseek".to_string(),
             providers: default_providers(),
@@ -137,6 +145,19 @@ impl Default for Topology {
             session_profiles: Vec::new(),
             main_agent: MainAgentConfig::default(),
         }
+    }
+}
+
+impl Topology {
+    /// Resolve [`Self::timezone`] to a validated [`UserTimezone`].
+    ///
+    /// Prefer this (or the clock on the running daemon) over re-parsing the string at call sites.
+    /// Load-time [`Config::validate`] already rejects unknown names, so in a booted daemon this
+    /// is infallible unless the string was mutated after load.
+    pub fn user_timezone(
+        &self,
+    ) -> std::result::Result<UserTimezone, liberado_common::UnknownTimezone> {
+        UserTimezone::parse(&self.timezone)
     }
 }
 
@@ -254,7 +275,9 @@ impl SessionProfile {
 /// A configured cron schedule: wiring only (Decision 14) — the daemon-assembly layer
 /// (`liberado-bootstrap`) translates enabled entries into `liberado-cron`'s runtime `Schedule`
 /// type. `cron_expr` uses the `cron` crate's 6/7-field syntax (**seconds first** — not standard
-/// 5-field cron), e.g. `"0 0 9 * * * *"` for "every day at 09:00:00".
+/// 5-field cron), e.g. `"0 0 9 * * * *"` for "every day at 09:00:00" **UTC**. Local wall-clock for
+/// the model is separate: set `topology.timezone` once; the daemon stamps "Local time: …" onto the
+/// goal text when a schedule fires (see [`liberado_common::UserTimezone`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronSchedule {
     pub name: String,
@@ -857,8 +880,8 @@ pub struct CronDeliveryTuning {
 impl Default for CronDeliveryTuning {
     fn default() -> Self {
         Self {
-            quiet_delay_secs: 300,  // 5 minutes idle → deliver
-            deliver_by_secs: 2700,  // 45 minutes → deliver regardless
+            quiet_delay_secs: 300, // 5 minutes idle → deliver
+            deliver_by_secs: 2700, // 45 minutes → deliver regardless
         }
     }
 }
@@ -945,6 +968,9 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         if self.topology.vault_path.as_os_str().is_empty() {
             return Err(Error::Config("topology.vault_path is required".into()));
+        }
+        if let Err(e) = self.topology.user_timezone() {
+            return Err(Error::Config(format!("topology.timezone: {e}")));
         }
         if self.tuning.dispatch.max_concurrent_subagents == 0 {
             return Err(Error::Config(
@@ -1528,6 +1554,28 @@ max_turns = 44
             .collect();
         assert_eq!(names, vec!["deepseek", "openrouter"]);
         assert_eq!(cfg.topology.provider, "deepseek");
+    }
+
+    #[test]
+    fn default_timezone_is_america_chicago_and_resolves() {
+        let cfg = Config::default();
+        assert_eq!(cfg.topology.timezone, "America/Chicago");
+        assert_eq!(
+            cfg.topology.user_timezone().unwrap().iana_name(),
+            "America/Chicago"
+        );
+    }
+
+    #[test]
+    fn invalid_timezone_fails_validate() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.topology.timezone = "Not/ARealZone".into();
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("topology.timezone"),
+            "expected timezone validation error, got {err}"
+        );
     }
 
     fn cron_schedule(name: &str, cron_expr: &str) -> CronSchedule {

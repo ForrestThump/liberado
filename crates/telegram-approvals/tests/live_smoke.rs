@@ -49,8 +49,10 @@ async fn live_full_approval_loop_smoke_test() {
     std::fs::create_dir_all(vault_path.join("proposals")).unwrap();
 
     let signer = ProposalSigner::random();
-    let notifier: Arc<dyn Notifier> =
-        Arc::new(TelegramNotifier::from_env().expect("set LIBERADO_TELEGRAM_BOT_TOKEN + LIBERADO_TELEGRAM_CHAT_ID"));
+    let notifier: Arc<dyn Notifier> = Arc::new(
+        TelegramNotifier::from_env()
+            .expect("set LIBERADO_TELEGRAM_BOT_TOKEN + LIBERADO_TELEGRAM_CHAT_ID"),
+    );
 
     // A mock tool runtime: approving records a fake `tasks:create` call in-memory — real execution
     // wiring, zero external side effects. Mirrors `daemon::tests::daemon_executes_an_approved_proposal`.

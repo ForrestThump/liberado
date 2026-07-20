@@ -138,7 +138,14 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
 /// `/session` alias + subcommand entries) are intentionally omitted.
 pub fn telegram_commands() -> Vec<(&'static str, &'static str)> {
     const MENU: &[&str] = &[
-        "/help", "/new", "/status", "/sessions", "/spawn", "/join", "/model", "/fork",
+        "/help",
+        "/new",
+        "/status",
+        "/sessions",
+        "/spawn",
+        "/join",
+        "/model",
+        "/fork",
     ];
     MENU.iter()
         .filter_map(|name| COMMAND_CATALOG.iter().find(|s| s.name == *name))

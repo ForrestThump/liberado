@@ -15,7 +15,9 @@ New users should begin here:
 - [Agentic Loops](docs/architecture/agentic-loops.md) — kernel vs domain packs; goal sessions, verifiers, subagents
 - [Verifiers & completeness gates](docs/architecture/verifiers.md) — CI-in-the-loop schema/trait sketch (domain-agnostic)
 - [Positioning](docs/architecture/positioning.md) — the thesis and how Liberado is grounded against the free alternatives
-- [Roadmap (current)](docs/roadmap/current.md) — what is committed and in-flight
+- [Roadmap (current)](docs/roadmap/current.md) — **what's next** (W1 session WebUI first) and what recently landed
+- [Handoff](docs/handoff.md) — live homelab / Telegram / TurboVault plugin status for agents
+- [TurboVault modules](docs/roadmap/turbovault-modules-integration-roadmap.md) — plugin verticals (`vector` live, `tasks` on branch, `vault_events` next)
 - [Session focus plan](docs/roadmap/archive/session-focus-plan.md) — *how* the Session model was built, slice by slice (S1–S7, store convergence, forking). History; the model itself is in [Sessions](docs/architecture/sessions.md).
 - [Loops plan](docs/roadmap/loops-plan.md) — scheduled recurrence over goals (loop = scheduler + series memory, not a fourth engine); vocabulary: turn loop ⊂ goal ⊂ loop ⊂ meta-loop
 - [Agentic orchestration plan](docs/roadmap/rust-native-agentic-coder-plan.md) — implementation roadmap (coding pack first)
@@ -36,4 +38,4 @@ Everything here is meant to be **navigable by agents and humans alike**. Each pa
 
 ---
 
-**Last updated**: 2026-07-13 — the unified Session model (D7): one converged store, session profiles + `AskHuman`, intake-first coding sessions, cron/hook/subagent runs recorded as background sessions, and conversation forking.
+**Last updated**: 2026-07-19 — Liberado live on homelab via Telegram; TurboVault `vector` + tasks reachable from the agent; OpenClaw briefings cut over. **Next:** dogfood Telegram for friction, then C1/M1/T1; mobile WebUI session view is later (not Telegram session multiplexing).

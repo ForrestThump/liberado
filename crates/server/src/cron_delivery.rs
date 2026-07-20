@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use liberado_main_agent::ChatSessions;
-use liberado_notify::{NotifyError, Notifier};
+use liberado_notify::{Notifier, NotifyError};
 use tokio::sync::Mutex;
 
 use crate::sticky::StickySession;
@@ -85,12 +85,7 @@ impl ChatDeliveringNotifier {
         let ready_at = Instant::now();
         loop {
             let idle = self.last_activity.lock().await.map(|t| t.elapsed());
-            match Self::next_wait(
-                idle,
-                ready_at.elapsed(),
-                self.quiet_delay,
-                self.deliver_by,
-            ) {
+            match Self::next_wait(idle, ready_at.elapsed(), self.quiet_delay, self.deliver_by) {
                 None => return,
                 Some(wait) => tokio::time::sleep(wait).await,
             }
@@ -199,13 +194,9 @@ mod tests {
         // Idle is tiny (would want ~300s) but only 100s of headroom remains before the cap → wait
         // the smaller, capped amount.
         let elapsed = CAP - Duration::from_secs(100);
-        let wait = ChatDeliveringNotifier::next_wait(
-            Some(Duration::from_secs(1)),
-            elapsed,
-            QUIET,
-            CAP,
-        )
-        .unwrap();
+        let wait =
+            ChatDeliveringNotifier::next_wait(Some(Duration::from_secs(1)), elapsed, QUIET, CAP)
+                .unwrap();
         assert_eq!(wait, Duration::from_secs(100));
     }
 }

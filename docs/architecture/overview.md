@@ -34,15 +34,17 @@ For how these pillars position Liberado against the free alternatives, see
 
 The **general agentic orchestration kernel** (goal sessions, verifiers, subagents, session/events) is
 **built** — D7's unified Session model and the one converged execution engine (see
-[`sessions.md`](sessions.md)). Effort now follows a deliberate **replacement priority**:
-**autonomous life-OS daemon → chat → coding** — build one thing over the daily-driver line, dogfood it,
-and let the shared substrate it hardens carry the rest. The order and its rationale are in
-[`positioning.md`](positioning.md); the concrete work items, in priority order, are in
-[`../roadmap/current.md`](../roadmap/current.md). Coding is a **domain pack** on a domain-neutral
-kernel, not the product identity, and explicitly *good-enough-and-integrated* rather than a Claude
-Code / Kilo rival. The coding pack is home-spun Liberado (`Provider` + `Executor` + `ToolRuntime` +
-`coder-*`) — not a VTCode wrap. Surfaces (TUI, WebUI, CLI, PR factory) are session clients; they do not
-own the loop. Architecture: [`agentic-loops.md`](agentic-loops.md).
+[`sessions.md`](sessions.md)). As of 2026-07-19 the **homelab daemon is live** (Telegram sticky chat,
+OpenClaw briefings cut over, TurboVault peer with **vector search + tasks**). Effort still follows a
+deliberate **replacement priority**: **autonomous life-OS daemon → chat → coding** — the remaining
+P1 gap is the **phone-grade interfacing loop** (session WebUI + deep-link multiplexing), not storage
+or basic MCP reach. The order and its rationale are in [`positioning.md`](positioning.md); the
+concrete work items, in priority order, are in [`../roadmap/current.md`](../roadmap/current.md).
+Coding is a **domain pack** on a domain-neutral kernel, not the product identity, and explicitly
+*good-enough-and-integrated* rather than a Claude Code / Kilo rival. The coding pack is home-spun
+Liberado (`Provider` + `Executor` + `ToolRuntime` + `coder-*`) — not a VTCode wrap. Surfaces (TUI,
+WebUI, CLI, PR factory) are session clients; they do not own the loop. Architecture:
+[`agentic-loops.md`](agentic-loops.md). Live ops status: [`../handoff.md`](../handoff.md).
 
 **Operational data** (the runtime trace — Decision 12; conversation history — Decision 17)
 deliberately lives *outside* the vault as append-only JSONL, so high-volume writes don't pollute the

@@ -18,17 +18,20 @@ found every real bug so far), and let the shared substrate it hardens carry the 
 
 ### Priority 1 — the autonomous life-OS daemon (replace OpenClaw / Hermes)
 
-*Already in hand: TurboVault storage, the cron event-source substrate, the Telegram notifier, the
-capability boundary.* What remains is the **interfacing loop** — an agent that works while you are
-away, pings you, and lets you answer — plus maturing crons and MCP breadth.
+*Already in hand (2026-07-19): TurboVault storage **plus** live plugin modules (vector search + tasks)
+on the homelab peer; cron substrate; Telegram free-form chat + sticky cron delivery; capability
+boundary; OpenClaw briefing cutover with `Succeeded` briefs.* What remains is the **interfacing loop
+on a phone-grade surface** — see, answer, and steer background sessions without a laptop — plus
+hardening (conformance) and MCP ops maturity.
 
 | # | What | Why it matters |
 |---|---|---|
-| **W1** | **A goal-session view in the WebUI** (phone-first) | See and steer your autonomous agents. The WebUI has `chat.rs` and **no session view at all** — it satisfies none of [`session-surface-contract.md`](../architecture/session-surface-contract.md). Needs a rendered UI and your eyes. |
-| **E5-b** | **Answer a session from your phone** | The OpenClaw/Hermes killer feature. A ping reaches you; a reply typed into Telegram goes nowhere (confirmed live) — Telegram is one flat chat with **no session multiplexing**. The fix is a **deep link into W1**, not a reply bridge. Needs `public_base_url` — **not before there is a page to link to**. |
-| **C1** | **Crons that spawn real sessions** | **Delivery half landed 2026-07-18** (see below): scheduled briefings fire a background session and push its summary to Telegram, and the 3 OpenClaw briefings were retired onto Liberado. What remains is the *interactive* payoff — "run this every morning, **ask me if you're unsure**" (an AskHuman-capable cron via E7 profiles). Current dogfooding gap: the briefings come back `PartiallySucceeded` because `liberado-weather-mcp` and `liberado-caldav-mcp` fail on the real path — reliability work in flight (`goal.md`). |
-| **M1** | **MCP breadth** | The author named MCP connections a P1 capability. Two concrete gaps: connection **pooling/reuse** (today a fresh connection per execution — TurboMCP's `SessionManager` is worth recycling per transport group), and **multi-server registry UX** (declare several stdio+HTTP servers from config; the `McpRegistry` machinery exists, the registration surface does not). |
-| **T1** | **The live conformance suite** — [`live-conformance-suite.md`](live-conformance-suite.md) | **Reliability is not optional for a daemon meant to run your life unattended** — this belongs here, in P1, not in a coding tier. Every defect found on 2026-07-13/14 passed the test suite and died on first contact with a running daemon, and those checks exist only as commands typed by hand. Most need a real daemon but only a `MockProvider`, so the valuable tier is fast and CI-able. |
+| **Dogfood** | **Lean on Telegram harder** | Free-form sticky chat + cron delivery is the current phone surface and feels solid enough to daily-drive. The near-term product loop is **use it, collect friction, fix real pain** — not invent session multiplexing in a flat chat. Friction notes go here / handoff as they show up. |
+| **C1** | **Interactive crons (AskHuman)** | **Delivery + OpenClaw cutover + briefing reliability landed 2026-07-18** (see below). What remains is the *interactive* payoff — "run this every morning, **ask me if you're unsure**" (AskHuman-capable cron via session profiles). |
+| **M1** | **MCP ops maturity** | Homelab topology already wires a broad HTTP peer set (TurboVault, weather, CalDAV, search-orchestrator, qdrant, spider, …). Two remaining gaps: connection **pooling/reuse** (fresh connection per execution today), and **registry UX** beyond hand-edited TOML. |
+| **T1** | **The live conformance suite** — [`live-conformance-suite.md`](live-conformance-suite.md) | **Reliability is not optional for a daemon meant to run your life unattended.** Every defect found on 2026-07-13/14 passed the test suite and died on first contact with a running daemon. Most checks need a real daemon but only a `MockProvider` — CI-able. |
+| **W1** | **Goal-session view in a mobile WebUI** (browser) | **Down the road**, not the next Telegram feature. Homespun phone UI beats stuffing session multiplexing into one flat Telegram chat (operator call, 2026-07-19). WebUI still has `chat.rs` and **no session view** — when we build phone interfacing beyond Telegram, this is the surface. See [`session-surface-contract.md`](../architecture/session-surface-contract.md). |
+| **E5-b** | ~~Telegram deep-link into a specific session~~ | **Deprioritized.** Operator preference: don't multiplex background sessions inside Telegram; prefer a real mobile WebUI later. Free-form sticky chat is enough for the current use case. |
 
 ### Priority 2 — a lean chat surface (replace LibreChat)
 
@@ -52,34 +55,65 @@ the whole value, not raw coding skill.
 | — | [`pr-dispatch-vtcode-no-write-finding.md`](pr-dispatch-vtcode-no-write-finding.md) | **Root cause still not found.** The one genuinely open bug carried over. |
 | — | [`coder-eval-curriculum.md`](coder-eval-curriculum.md) | Measures coding quality on an instrument. Only matters once P1/P2 are not the bottleneck. |
 
-### Cross-cutting — the enabler, and the move-on bar
+### Cross-cutting — the enabler, modules, and the move-on bar
 
 - **Modularity and dedup are the load-bearing enabler**, not neatness: they are what let effort go to
   P1 without foreclosing P2 and P3 (see [`../architecture/positioning.md`](../architecture/positioning.md)
   and [`../architecture/modularity.md`](../architecture/modularity.md)). The dogfooding dividend lands
   on the **shared substrate** — kernel, session model, capability boundary, store — so the larger that
   shared share stays, the more P1's polish transfers to the others. Keep it large.
+- **TurboVault modules** — curated, default-off verticals on the plugin boundary (we maintain, Nick
+  curates). Sequence was `tasks → vault_events → vector`; **vector and tasks are already paying back
+  into the live daemon** (semantic search + life-OS todos over MCP). Remaining: merge/curate
+  upstream, then **`vault_events`**. Not P1-blocking; do not let module polish derail W1/E5-b.
+  Umbrella: [`turbovault-modules-integration-roadmap.md`](turbovault-modules-integration-roadmap.md).
 - **The move-on bar (set it consciously, don't drift):** leave P1 when you **daily-drive it without
   wincing** — not when it is polished. Sequencing's failure mode is gold-plating category 1 forever
   while chat and coding never get their turn; the dogfooding itself is the signal — when you reach for
   it without friction, that is the bell.
+
+## What's next (one-screen summary)
+
+```
+  P1 daily-driver ──►  dogfood Telegram (collect friction → fix)
+                   ├── C1 AskHuman crons
+                   ├── M1 MCP pool / registry UX
+                   └── T1 live conformance suite
+
+  Later (not Telegram multiplexing) ──► W1 mobile WebUI session view
+
+  TurboVault (parallel, not blocking) ──► land tasks on develop / upstream
+                                       ──► vault_events module
+                                       ──► #42/#43/#vector curation PRs
+
+  Move-on bar: daily-drive via Telegram without wincing → then chat/WebUI maturity.
+```
+
+### Known Telegram friction (dogfood notes)
+
+| Friction | Verdict |
+|---|---|
+| `/model` dumps the catalog; no typeahead for model ids while typing | **API limit.** Telegram only autocompletes **top-level** bot commands (`setMyCommands` — already used). There is no Discord-style argument autocomplete for `/model <id>`. Workarounds (inline keyboards, filtered dump on prefix) are optional UX polish — skip unless dogfood says it hurts often. Type `/model <id>` once you know the slug. |
 
 ## Recently landed
 
 Read [`../architecture/sessions.md`](../architecture/sessions.md) for the model itself; these are
 just pointers to how it got here.
 
+- **TurboVault plugins live on the homelab (2026-07-19).** Liberado (Telegram + API) talks to the
+  TurboVault peer with the **plugin boundary** in play: **`vector_*` semantic search** (prototype
+  Phases 1–4 on fork `develop` — engine + `plugin_state_dir` + change-feed helpers + module) and
+  **tasks** (plugin extraction on `feat/plugin-tasks`; core task tools + agent-driven task lists
+  already in production briefs). This is the modules roadmap paying off as capability, not plan
+  paper. Detail: [`turbovault-modules-integration-roadmap.md`](turbovault-modules-integration-roadmap.md),
+  [`turbovault-vector-prototype-plan.md`](turbovault-vector-prototype-plan.md).
 - **Cron → Telegram delivery, and the first OpenClaw cutover (2026-07-18).** A `cron:`-sourced
-  session's summary is now delivered to Telegram (`daemon::maybe_deliver_cron_result`): a scheduled
-  brief that used to store its output silently now reaches you. The three OpenClaw briefings
-  (daily-planning, evening-debrief, weekly-review) were ported to `[[schedules]]`, enabled, and their
-  OpenClaw originals disabled — Liberado now owns them. Same rebuild also shipped the Telegram
-  **free-form chat surface** (typed replies answer a session; retires the send-only limitation).
-  Delivery is smoke-verified live end-to-end. **The dogfood immediately paid off:** the real briefings
-  first came back `PartiallySucceeded` because `liberado-weather-mcp` (geocoding rejected "City, State")
-  and `liberado-caldav-mcp` `list_events` (relative-href "builder error" + datetime arg format) failed
-  — both fixed and a real brief now returns `Succeeded` live. This is exactly the "get one thing over
-  the daily-driver line and dogfood it hard" loop working as intended.
+  session's summary is delivered to Telegram (`daemon::maybe_deliver_cron_result`). The three OpenClaw
+  briefings (daily-planning, evening-debrief, weekly-review) were ported to `[[schedules]]`, enabled,
+  and their OpenClaw originals disabled — Liberado owns them. Same era shipped the Telegram
+  **free-form chat surface** (typed replies answer the sticky session). **Dogfood paid off:** first
+  real briefs came back `PartiallySucceeded` (weather geocode + CalDAV relative-href/datetime bugs)
+  — both fixed; live briefs return **`Succeeded`** with weather, calendar, turbovault tasks, and news.
 - **Cron briefs fold into the sticky Telegram conversation (2026-07-18).** A `deliver_cron` seam on the
   `Notifier` lets a chat-aware notifier (`server/src/cron_delivery.rs`) `append_note` each brief into
   the sticky Telegram chat session and **defer the push around your activity** — quiet-delay (default

@@ -13,6 +13,7 @@ two or more crates, it lives here.
 | `catalog` | `CapabilityCatalog`, `McpDescriptor` — the live, thread-safe (`Arc<RwLock<_>>` + a `watch` channel for change notification) runtime registry of available MCPs, populated at boot from `topology.mcps` and updated as MCPs come and go. The one shared `Arc<CapabilityCatalog>` the dispatcher, daemon, chat, and API all route against. | — |
 | `dispatch` | `DispatchDecision`, `DispatchAction` (`ExecuteDirect`/`DispatchSubagent`/`Clarify`), `Report`, `Outcome`, `BlockReason`, `ToolCall`, `ExecMode`, `JobHandle`/`JobStatus` | 1 |
 | `event` | `Event`, `EventPayload`, `event_source` — one shape for **both** trigger paths (vault changes and hook webhooks) | 6 |
+| `local_time` | `UserTimezone`, `DEFAULT_TIMEZONE` — IANA zone + helpers to stamp "Local time: …" onto agent context when a caller opts in (config SSoT is `topology.timezone`) | — |
 | `model` | `ModelProfile`, `ModelRole`, `ModelTier`, `ModelChoice`, `RequiredCaps` — role-tiered capability floors | 13 |
 | `proposal` | `Proposal`, `ProposalStatus`, `ProposedAction` — the human-in-the-loop artifact written to `proposals/` | 11 |
 | `error` | `Error`, `Result` | — |
@@ -37,7 +38,7 @@ vocabulary every crate compiles against regardless of whether it touches config.
 
 ## Dependencies
 
-- Depends on: only `serde`, `chrono`, `thiserror` (no internal crates).
+- Depends on: only `serde`, `chrono`, `chrono-tz`, `thiserror` (no internal crates).
 - Depended on by: essentially everything (`vault`, `dispatcher`, `executor`, `mcp`, `orchestrator`,
   `daemon`, `provider-*` indirectly).
 

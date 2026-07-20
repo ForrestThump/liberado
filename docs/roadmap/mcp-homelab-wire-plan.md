@@ -1,7 +1,11 @@
 # Homelab MCP wiring plan — connect first, forge for source discipline
 
-**Status**: plan, 2026-07-16. Goal: give Liberado the MCP breadth it needs to replace
-OpenClaw, with the smallest possible footprint on the already-running stack.
+**Status**: largely executed (2026-07-19). Homelab topology wires TurboVault (with live
+`vector` / tasks reach from Liberado), weather, CalDAV, search-orchestrator, qdrant,
+spider, actual, and others — see `deploy/homelab/config/topology.toml`. Goal was: give
+Liberado the MCP breadth it needs to replace OpenClaw, with the smallest possible
+footprint on the already-running stack. Remaining work is M1 (pool/registry UX) in
+[`current.md`](current.md), not greenfield peer wiring.
 
 **Doctrine**: live-verify every MCP one at a time (`/api/status` + logs + a real tool call).
 F1: every non-`read_only` MCP must declare what it writes or the daemon refuses to boot.

@@ -9,6 +9,12 @@
 # `serve <vault-path>` argument overrides this when given.
 vault_path = "/home/shiloh/vault"
 
+# Operator IANA timezone — single source of truth for local wall-clock (default America/Chicago).
+# Cron *expressions* are still UTC; this only stamps "Local time: …" onto cron/webhook goal text
+# so the model knows your wall-clock. Use the same string with liberado_common::UserTimezone
+# anywhere else you want to inject local now into agent context.
+# timezone = "America/Chicago"
+
 # Main chat agent = human interfacer. Specialist work goes through the built-in `delegate` tool
 # to the dispatcher mesh (grant ExecuteMcp specialists to component `dispatcher` in policy.toml).
 [main_agent]
@@ -170,13 +176,16 @@ transport = { kind = "stdio", command = "riggers-mcp", args = ["--config", "rigg
 # Cron schedules (Decision 18/19) — each fires on its own timer and dispatches `goal` through the
 # exact same reactive pipeline a vault change does (the same dispatcher, same capability boundary,
 # same guards). `cron_expr` uses the `cron` crate's 6/7-FIELD syntax — SECONDS FIRST, not standard
-# 5-field cron: sec min hour day-of-month month day-of-week [year]. No catch-up/backfill on
-# restart: a schedule due while the daemon was down simply doesn't fire retroactively. `pool`
+# 5-field cron: sec min hour day-of-month month day-of-week [year], and times are **UTC**.
+# Convert from your local zone yourself (topology.timezone is for agent context, not for parsing
+# cron_expr). Example: 21:00 America/Chicago CDT (UTC-5) → 02:00 UTC next day → "0 0 2 * * * *".
+# When a schedule fires, the daemon prepends "Local time: YYYY-MM-DD HH:MM CDT (America/Chicago)."
+# to the goal so "today"/"this evening" land correctly. No catch-up/backfill on restart. `pool`
 # (optional) routes this schedule's dispatch through a named pool declared above instead of
 # "default" — e.g. an unattended nightly job that should run with narrower authority than chat.
 # [[schedules]]
 # name = "nightly-summary"
-# cron_expr = "0 0 21 * * * *"   # every day at 21:00:00
+# cron_expr = "0 0 2 * * * *"   # 02:00 UTC ≈ 21:00 America/Chicago (CDT)
 # goal = "Summarize today's decisions and post the summary."
 # enabled = true
 # pool = "unattended"

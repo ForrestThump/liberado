@@ -4,9 +4,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use liberado_commands::{
-    CommandContext, CommandResult, SlashCommand, StatusInfo, dispatch, parse,
-};
+use liberado_commands::{CommandContext, CommandResult, SlashCommand, StatusInfo, dispatch, parse};
 use liberado_conversation_store::{Author, ConversationHeader, ConversationStore, Ulid};
 use liberado_main_agent::ChatSessions;
 use liberado_session::{DomainHint, GoalSpec, SessionGrant, SessionOrigin};
@@ -169,9 +167,9 @@ impl TelegramChatBridge {
             | CommandResult::SessionInfoShown
             | CommandResult::None => None,
 
-            CommandResult::Quit => Some(
-                "I'm a long-running bot — I can't quit. Use /new for a fresh chat.".into(),
-            ),
+            CommandResult::Quit => {
+                Some("I'm a long-running bot — I can't quit. Use /new for a fresh chat.".into())
+            }
 
             CommandResult::NewConversation { .. } => {
                 ctx.session_id = None;
@@ -363,9 +361,9 @@ impl TelegramChatBridge {
                 Some(lines.join("\n"))
             }
 
-            CommandResult::ThemeChanged { name } => {
-                Some(format!("Theme '{name}' is UI-only — Telegram has no theme surface."))
-            }
+            CommandResult::ThemeChanged { name } => Some(format!(
+                "Theme '{name}' is UI-only — Telegram has no theme surface."
+            )),
             CommandResult::ThemesReloaded { .. } | CommandResult::ThemeListed { .. } => {
                 Some("Themes are UI-only on Telegram.".into())
             }
