@@ -268,14 +268,28 @@ impl ToolRuntime for RiskGatedToolRuntime {
             // safe to do directly*.
             let bare_tool = bare_tool_name(&call.name);
             let restricted_zone = write_zone.as_ref().filter(|zone| {
-                let class = self
-                    .zone_write_classes
-                    .iter()
-                    .find(|(z, _)| z == *zone)
-                    // An undeclared zone fails safe to the restrictive default, same as
-                    // `zone_write_restriction` does — an unknown zone is not a licence.
-                    .map_or(WriteClass::default(), |(_, wc)| *wc);
-                !class.allows_direct_agent_write()
+                match self.zone_write_classes.iter().find(|(z, _)| z == *zone) {
+                    // A zone declared in policy: its write-class always wins. A base `human_only`
+                    // stays proposal-gated even with a grant (defense in depth) — the same reason
+                    // "Approve everywhere"'s auto-declared AgentWritable is shadowed by a base
+                    // declaration of the same zone.
+                    Some((_, wc)) => !wc.allows_direct_agent_write(),
+                    // An UNDECLARED zone normally fails safe to the restrictive default
+                    // (`ProposalOnly`). But if this runtime's grant already holds `Write(zone)` for
+                    // it, that authority can only have come from a human "Approve session"/"Approve
+                    // everywhere" tap — policy validation forbids granting an undeclared zone, so no
+                    // base grant can produce it — which means the human explicitly authorized direct
+                    // writes there. Treat it as agent-writable, so Session matches Everywhere (which
+                    // auto-declares the zone AgentWritable) instead of re-gating every write behind a
+                    // fresh proposal.
+                    None if self
+                        .capabilities
+                        .contains(&Capability::Write(Zone::vault(zone.as_str()))) =>
+                    {
+                        false
+                    }
+                    None => !WriteClass::default().allows_direct_agent_write(),
+                }
             });
             if let Some(zone) = restricted_zone {
                 tracing::warn!(
@@ -986,5 +1000,85 @@ mod tests {
             .expect_err("Write(tasks) must not authorize a write to decisions/");
         assert!(err.contains("decisions"), "{err}");
         assert!(bad_inner.invoked.lock().unwrap().is_empty());
+    }
+
+    /// The "Approve session" consistency fix: a write to an **undeclared** zone (not in
+    /// `zone_write_classes`, so it would normally fail safe to `ProposalOnly` and downgrade) must
+    /// write *directly* when the grant already holds `Write(zone)` for it — because that authority
+    /// can only have come from a human session/everywhere approval (policy validation forbids
+    /// granting an undeclared zone). Without this, tapping "Approve session" would pass the authority
+    /// check only to have the very next write re-gated behind a fresh proposal.
+    #[tokio::test]
+    async fn a_granted_write_to_an_undeclared_zone_is_direct_not_downgraded() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let descriptor = McpDescriptor {
+            name: "turbovault".into(),
+            description: "path-addressed vault".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: None,
+            tool_zones: Vec::new(),
+            zone_from_arg: Some("path".into()),
+            write_tools: vec!["write_note".into()],
+        };
+        // Holds Write(sandbox) — as an in-memory "Approve session" grant would — but `sandbox` is
+        // NOT declared in zone_write_classes (empty), exactly the live homelab shape.
+        let caps = CapabilitySet::from_iter([
+            Capability::ExecuteMcp("turbovault".into()),
+            Capability::Write(Zone::vault("sandbox")),
+        ]);
+        let granted_inner = Arc::new(MockInner::new(&["turbovault:write_note"], Ok("wrote".into())));
+        let rt = RiskGatedToolRuntime::new(
+            granted_inner.clone(),
+            caps,
+            vec![("turbovault".into(), Consequence::Reversible)],
+            vec![descriptor.clone()],
+            Vec::new(), // sandbox undeclared
+            dir.path().to_path_buf(),
+            "write a note".into(),
+            "test-undeclared-granted".into(),
+            ProposalSigner::random(),
+            "default",
+        );
+        let result = rt
+            .invoke(&ToolInvocation::new(
+                "c1",
+                "turbovault:write_note",
+                serde_json::json!({"path": "sandbox/x.md"}),
+            ))
+            .await;
+        assert_eq!(result, Ok("wrote".into()), "a granted undeclared-zone write runs directly");
+        assert_eq!(
+            granted_inner.invoked.lock().unwrap().len(),
+            1,
+            "the inner tool must actually run (no proposal downgrade)"
+        );
+
+        // Control: the SAME undeclared zone WITHOUT a Write grant still fails — at the authority
+        // check (:227), before the write-class question is even asked.
+        let ungranted_inner =
+            Arc::new(MockInner::new(&["turbovault:write_note"], Ok("wrote".into())));
+        let rt2 = RiskGatedToolRuntime::new(
+            ungranted_inner.clone(),
+            CapabilitySet::from_iter([Capability::ExecuteMcp("turbovault".into())]),
+            vec![("turbovault".into(), Consequence::Reversible)],
+            vec![descriptor],
+            Vec::new(),
+            dir.path().to_path_buf(),
+            "write a note".into(),
+            "test-undeclared-ungranted".into(),
+            ProposalSigner::random(),
+            "default",
+        );
+        let refused = rt2
+            .invoke(&ToolInvocation::new(
+                "c2",
+                "turbovault:write_note",
+                serde_json::json!({"path": "sandbox/x.md"}),
+            ))
+            .await
+            .expect_err("no Write(sandbox) grant must be refused, not written");
+        assert!(refused.contains("not authorized"), "{refused}");
+        assert!(ungranted_inner.invoked.lock().unwrap().is_empty());
     }
 }
