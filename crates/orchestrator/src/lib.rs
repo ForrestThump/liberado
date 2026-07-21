@@ -646,6 +646,11 @@ impl Orchestrator {
         let semaphore = Arc::new(Semaphore::new(max_concurrent.max(1)));
         let mut handles = Vec::with_capacity(sub_dispatches.len());
 
+        // `tokio::spawn` does not inherit task-locals, so each subagent would otherwise record its
+        // inference under `correlation="-"` and detach from the parent turn in the latency journal.
+        // Capture the parent correlation now and re-scope it inside each spawned worker.
+        let correlation = liberado_provider::latency::current_correlation();
+
         for sub in sub_dispatches {
             // `acquire_owned` only errs if the semaphore was `.close()`d — this one is freshly
             // created above, local to this call, and never closed, so this cannot actually fail;
@@ -679,11 +684,15 @@ impl Orchestrator {
             let provider = self.provider.clone();
             let label = sub.label.clone();
 
-            let handle = tokio::spawn(async move {
-                let result = Self::execute_with(provider, &budget, &*runtime, task).await;
-                drop(permit);
-                (label, result)
-            });
+            let correlation = correlation.clone();
+            let handle = tokio::spawn(liberado_provider::latency::with_correlation(
+                correlation,
+                async move {
+                    let result = Self::execute_with(provider, &budget, &*runtime, task).await;
+                    drop(permit);
+                    (label, result)
+                },
+            ));
             handles.push(handle);
         }
 
