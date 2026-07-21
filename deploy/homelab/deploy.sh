@@ -107,6 +107,12 @@ for i in $(seq 1 40); do
   live_sha="$(docker exec liberado cat /etc/liberado-build-sha 2>/dev/null | tr -d '[:space:]' || true)"
   if [ -n "$running" ] && [ "$live_sha" = "$SHA" ]; then
     echo ">> OK  running=true  build-sha=$live_sha"
+    # Reclaim this build's docker cache + the now-dangling old image. Each deploy is a full
+    # from-scratch build, so the buildkit cache is pure dead weight that otherwise piles up (~80 GB
+    # over a handful of deploys) until the box hits "No space left on device" mid-build.
+    echo ">> reclaiming build cache + dangling images"
+    docker builder prune -f >/dev/null 2>&1 || true
+    docker image prune -f >/dev/null 2>&1 || true
     exit 0
   fi
   sleep 3
