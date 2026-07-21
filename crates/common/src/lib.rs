@@ -44,6 +44,7 @@ pub mod local_time;
 pub mod model;
 pub mod proposal;
 pub mod provenance;
+pub mod session_grants;
 
 pub use capability::{
     Capability, CapabilitySet, Consequence, Magnitude, WriteClass, Zone, assess_magnitude,

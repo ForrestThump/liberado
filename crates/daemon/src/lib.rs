@@ -728,10 +728,10 @@ impl Daemon {
     /// - `Everywhere` → persist to the machine-owned overlay (durable; takes effect at the next boot
     ///   / container recreate, when config is re-loaded). Only a human button tap ever reaches here,
     ///   so the "agents can't edit their own permission config" invariant holds.
-    /// - `Session` → not yet a live grant: the pool ceiling is an immutable boot snapshot (see
-    ///   `liberado_orchestrator::Orchestrator::capabilities`), so a same-session live widening needs
-    ///   a mutable-ceiling refactor that's out of this slice. Behaves like `Once` for future calls —
-    ///   logged plainly so the gap is visible, not silent.
+    /// - `Session` → process-lifetime, in-memory grant via `liberado_common::session_grants`, keyed by
+    ///   the proposal's pool. Folded post-narrow into that pool's effective ceiling by
+    ///   `Orchestrator::run`, so the next same-zone write in this process passes without a prompt.
+    ///   Lost on restart (the in-memory counterpart to Everywhere's on-disk overlay).
     /// - `Once` / `None` → nothing to persist.
     ///
     /// Best-effort: a persistence failure is logged, never propagated — the approved call already ran.
@@ -763,12 +763,21 @@ impl Daemon {
                     ),
                 }
             }
-            Some(liberado_common::GrantScope::Session) => tracing::info!(
-                component,
-                ?capability,
-                "'session' grant approved: the call ran, but a live session-scoped grant is not yet \
-                 applied (immutable pool ceiling) — a later same-zone write will re-prompt"
-            ),
+            Some(liberado_common::GrantScope::Session) => {
+                // Process-lifetime, in-memory grant (gone on restart) — the counterpart to
+                // Everywhere's on-disk overlay. Keyed by the proposal's POOL (not the config
+                // component), because that's what the live orchestrator reads back via
+                // `session_grants::session_grant(&self.pool_name)`. Folded post-narrow into the pool's
+                // effective ceiling, so the next same-zone write in this process passes with no prompt.
+                let pool = proposal.pool.as_deref().unwrap_or(DEFAULT_POOL);
+                let newly = liberado_common::session_grants::grant_for_session(pool, capability.clone());
+                tracing::info!(
+                    pool,
+                    ?capability,
+                    newly,
+                    "applied 'session' grant (process-lifetime; in memory, lost on restart)"
+                );
+            }
             Some(liberado_common::GrantScope::Once) | None => {}
         }
     }

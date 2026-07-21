@@ -322,7 +322,16 @@ impl Orchestrator {
     ) -> Result<Disposition, OrchestratorError> {
         // Pool ceiling ∩ per-run grant. Order is deliberate: `narrow` filters *self* by *other*, so
         // nothing outside the pool can appear even if the caller passes a wider set.
-        let effective = self.capabilities.narrow(capabilities);
+        let mut effective = self.capabilities.narrow(capabilities);
+        // Fold in any process-lifetime "Approve session" grant for this pool (see
+        // `liberado_common::session_grants`). This is applied POST-narrow on purpose: a Session tap is
+        // a *human-authorized widening* — the very capability the pool ceiling refused — so it must
+        // survive the narrowing, exactly as "Approve everywhere" survives by widening the ceiling at
+        // boot. Empty in the overwhelmingly common case (no session grants tapped). Downstream
+        // write-class guards still apply, so this can't turn into a silent write to a restricted zone.
+        for cap in liberado_common::session_grants::session_grant(&self.pool_name).capabilities {
+            effective.grant(cap);
+        }
         let action_label = decision.action.label();
         let span = tracing::info_span!(
             "orchestrate",
