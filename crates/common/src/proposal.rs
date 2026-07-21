@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use thiserror::Error;
 
-use crate::capability::CapabilitySet;
+use crate::capability::{Capability, CapabilitySet};
 use crate::dispatch::ToolCall;
 
 /// The directory (relative to a vault root) proposal notes live under. Every consumer that reads,
@@ -48,6 +48,21 @@ impl ProposalStatus {
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Rejected | Self::Expired | Self::Done)
     }
+}
+
+/// How long a granted permission lasts, chosen by the human at approval time. Set on a permission
+/// request's note (alongside `status: approved`) by the Telegram button; the daemon reads it when
+/// applying the grant. Like `status`, it's a human-workflow field — not part of the integrity
+/// signature (the *what* — `requested_grant` — is signed; this is the *how long*).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GrantScope {
+    /// Execute the requested call once; grant nothing that persists.
+    Once,
+    /// Add the capability to the originating session's grant for the rest of that session.
+    Session,
+    /// Persist the grant to the machine-owned overlay so it survives restarts.
+    Everywhere,
 }
 
 /// The concrete action a proposal would perform once approved.
@@ -104,9 +119,30 @@ pub struct Proposal {
     /// still parses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pool: Option<String>,
+    /// When present, this proposal is a **permission request**: the capability the agent was missing
+    /// (today only `Write(<zone>)`) that the human is being asked to grant. Approving one applies the
+    /// grant at the chosen scope (once/session/everywhere) as well as executing `proposed_action`.
+    /// `None` for an ordinary proposal. Folded into `integrity` — a forged/tampered grant would be a
+    /// privilege escalation, so it must be as tamper-evident as `pool`.
+    ///
+    /// Serialized as a JSON string: `Capability::Write(Zone::Vault(..))` is a nested externally-tagged
+    /// enum, which `serde_yaml` (the proposal note format) panics on — routing it through serde_json
+    /// (which handles nested enums) sidesteps that without changing `Capability`'s own representation
+    /// used everywhere else (policy.toml, the HMAC below).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "capability_json_string"
+    )]
+    pub requested_grant: Option<Capability>,
+    /// The scope the human chose when approving a permission request (`None` until approved, or for
+    /// an ordinary proposal). Read by the daemon to decide how far to apply `requested_grant`. Not
+    /// signed — see [`GrantScope`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_scope: Option<GrantScope>,
     /// HMAC-SHA256 (hex-encoded) over `id`/`correlation_id`/`source`/`proposed_action`/`pool`/
-    /// `created`, computed by a [`ProposalSigner`] at creation and checked before an approval
-    /// executes.
+    /// `requested_grant`/`created`, computed by a [`ProposalSigner`] at creation and checked before
+    /// an approval executes.
     /// Deliberately excludes `status`/`expires`, which are meant to change as part of the normal
     /// human-approval workflow. Raises the bar against *careless* tampering with the proposed
     /// action between propose and approve (a bug, an accidental overwrite, an opportunistic script
@@ -143,12 +179,22 @@ impl Proposal {
             // existing call sites, and every proposal note written before pools existed) get
             // today's exact single-pool behavior.
             pool: None,
+            // Ordinary proposal by default; `with_requested_grant` marks it a permission request.
+            requested_grant: None,
+            approved_scope: None,
             // Unsigned until a `ProposalSigner::sign` call sets it — every real production
             // proposal-creation site signs before writing the note; tests that don't care about
             // integrity checking simply never call `execute_approved`/`handle_proposal_change` on
             // an unsigned proposal.
             integrity: String::new(),
         }
+    }
+
+    /// Mark this a **permission request** for `capability` (set before signing, so it's covered by
+    /// the integrity signature). See [`Self::requested_grant`].
+    pub fn with_requested_grant(mut self, capability: Capability) -> Self {
+        self.requested_grant = Some(capability);
+        self
     }
 
     /// Whether this proposal has expired as of `now` (independent of its stored status).
@@ -277,8 +323,45 @@ impl ProposalSigner {
         mac.update(b"\0");
         mac.update(proposal.pool.as_deref().unwrap_or("").as_bytes());
         mac.update(b"\0");
+        // A permission request's granted capability is authority-bearing — tamper-evident like `pool`.
+        if let Some(cap) = &proposal.requested_grant {
+            let cap_json = serde_json::to_vec(cap).expect("Capability serializes to JSON");
+            mac.update(&cap_json);
+        }
+        mac.update(b"\0");
         mac.update(proposal.created.to_rfc3339().as_bytes());
         hex_encode(&mac.finalize().into_bytes())
+    }
+}
+
+/// Serde adapter: represent `Option<Capability>` as an `Option<String>` of its serde_json encoding.
+/// See [`Proposal::requested_grant`] for why (serde_yaml panics on the nested externally-tagged enum).
+mod capability_json_string {
+    use super::Capability;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(
+        cap: &Option<Capability>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match cap {
+            Some(c) => {
+                let s = serde_json::to_string(c).map_err(serde::ser::Error::custom)?;
+                serializer.serialize_some(&s)
+            }
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Capability>, D::Error> {
+        match Option::<String>::deserialize(deserializer)? {
+            Some(s) => serde_json::from_str(&s)
+                .map(Some)
+                .map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
     }
 }
 
@@ -478,6 +561,43 @@ mod tests {
         assert!(
             !signer.verify(&p),
             "a tampered proposed_action must fail verification"
+        );
+    }
+
+    #[test]
+    fn note_round_trips_a_permission_request() {
+        use crate::capability::Zone;
+        let p = Proposal::pending(
+            "perm-1",
+            "corr-1",
+            "liberado",
+            ProposedAction::ToolCalls(vec![ToolCall {
+                tool: "turbovault:write_note".into(),
+                args: serde_json::json!({ "path": "finance/x.md" }),
+            }]),
+            "Subagent needs to write the finance zone",
+        )
+        .with_requested_grant(Capability::Write(Zone::vault("finance")));
+        let back = Proposal::from_note(&p.to_note()).unwrap();
+        assert_eq!(back, p);
+        assert_eq!(
+            back.requested_grant,
+            Some(Capability::Write(Zone::vault("finance")))
+        );
+    }
+
+    #[test]
+    fn tampered_requested_grant_fails_verification() {
+        // The requested grant is authority-bearing: escalating it from one zone to another between
+        // propose and approve must be as tamper-evident as retagging the pool.
+        use crate::capability::Zone;
+        let signer = ProposalSigner::random();
+        let p = sample_proposal().with_requested_grant(Capability::Write(Zone::vault("tasks")));
+        let mut p = signer.sign(p).into_proposal();
+        p.requested_grant = Some(Capability::Write(Zone::vault("finance")));
+        assert!(
+            !signer.verify(&p),
+            "a tampered requested_grant must fail verification"
         );
     }
 

@@ -69,7 +69,7 @@ pub use local_time::{
 };
 pub use model::{ModelChoice, ModelProfile, ModelRole, ModelTier, ReasoningLevel, RequiredCaps};
 pub use proposal::{
-    PROPOSALS_DIR, Proposal, ProposalNoteError, ProposalSigner, ProposalStatus, ProposedAction,
-    SignedProposal,
+    GrantScope, PROPOSALS_DIR, Proposal, ProposalNoteError, ProposalSigner, ProposalStatus,
+    ProposedAction, SignedProposal,
 };
 pub use provenance::{HUMAN_SOURCE, PROVENANCE_KEY, WriteProvenance};
