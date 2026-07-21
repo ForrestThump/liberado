@@ -423,9 +423,12 @@ impl RiskGatedToolRuntime {
         call: &ToolInvocation,
         zone: &str,
     ) -> Result<PathBuf, String> {
+        // Compact id: it must fit Telegram's callback_data budget (the full correlation lives in the
+        // proposal's `correlation_id` field, not the stem). The old `perm-{correlation_base}-{nanos}`
+        // was 65 bytes for a `chat-delegate-<ulid>` correlation — over the cap — so the buttons
+        // silently degraded to a plain, un-tappable notification.
         let proposal_id = format!(
-            "perm-{}-{}",
-            self.correlation_base,
+            "perm-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
