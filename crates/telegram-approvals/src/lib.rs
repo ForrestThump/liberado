@@ -17,7 +17,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use liberado_common::{
-    PROPOSALS_DIR, Proposal, ProposalSigner, ProposalStatus, ProposedAction, WriteProvenance,
+    GrantScope, PROPOSALS_DIR, Proposal, ProposalSigner, ProposalStatus, ProposedAction,
+    WriteProvenance,
 };
 use liberado_config_loader::TelegramApprovalsTuning;
 use liberado_provider::{CompletionRequest, Message, Provider, complete_json};
@@ -355,8 +356,84 @@ impl ApprovalBot {
             "approve" => self.set_status(cq_id, stem, ProposalStatus::Approved).await,
             "reject" => self.set_status(cq_id, stem, ProposalStatus::Rejected).await,
             "revise" => self.begin_revision(cq_id, stem).await,
+            // Permission-request scope buttons: record the human's choice; the daemon applies the
+            // grant + executes the carried call when it sees the approved note.
+            "deny" => self.set_permission_scope(cq_id, stem, None).await,
+            "once" => self.set_permission_scope(cq_id, stem, Some(GrantScope::Once)).await,
+            "session" => {
+                self.set_permission_scope(cq_id, stem, Some(GrantScope::Session))
+                    .await
+            }
+            "everywhere" => {
+                self.set_permission_scope(cq_id, stem, Some(GrantScope::Everywhere))
+                    .await
+            }
             _ => tracing::warn!(action, "unknown callback action"),
         }
+    }
+
+    /// Handle a permission-request scope tap. `scope = None` denies (Rejected); otherwise stamp the
+    /// chosen [`GrantScope`] and approve. Same pending/expired guards as [`set_status`]; the daemon's
+    /// proposal reactor does the privileged work (apply the grant, execute the carried call).
+    async fn set_permission_scope(&self, cq_id: &str, stem: &str, scope: Option<GrantScope>) {
+        let path = proposal_path(stem);
+        let content = match self.vault.read(&path).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(stem, error = %e, "approval-bot: permission request not found");
+                self.answer_callback_query(cq_id, "Request not found.").await;
+                return;
+            }
+        };
+        let mut proposal = match Proposal::from_note(&content) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(stem, error = %e, "approval-bot: permission note did not parse");
+                self.answer_callback_query(cq_id, "Could not parse that request.")
+                    .await;
+                return;
+            }
+        };
+        if proposal.requested_grant.is_none() {
+            self.answer_callback_query(cq_id, "Not a permission request.")
+                .await;
+            return;
+        }
+        if proposal.status != ProposalStatus::Pending
+            || proposal.is_expired_at(chrono::Utc::now())
+        {
+            self.answer_callback_query(cq_id, "Already decided — no action taken.")
+                .await;
+            return;
+        }
+
+        match scope {
+            None => proposal.status = ProposalStatus::Rejected,
+            Some(s) => {
+                proposal.approved_scope = Some(s);
+                proposal.status = ProposalStatus::Approved;
+            }
+        }
+        if let Err(e) = self
+            .vault
+            .write(&path, &proposal.to_note(), None, &WriteProvenance::human())
+            .await
+        {
+            tracing::error!(stem, error = %e, "approval-bot: failed to write permission decision");
+            self.answer_callback_query(cq_id, "Failed to save — try again.")
+                .await;
+            return;
+        }
+
+        let verb = match scope {
+            None => "Denied".to_string(),
+            Some(GrantScope::Once) => "Approved once".to_string(),
+            Some(GrantScope::Session) => "Approved for this session".to_string(),
+            Some(GrantScope::Everywhere) => "Approved everywhere".to_string(),
+        };
+        self.answer_callback_query(cq_id, &verb).await;
+        self.send_message(&format!("{verb}: {}", proposal.rationale))
+            .await;
     }
 
     /// Read `proposals/{stem}.md`, and — only if it is currently `Pending` and not expired — set
