@@ -3586,6 +3586,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "liberado-common",
+ "liberado-config",
  "liberado-config-loader",
  "liberado-cron",
  "liberado-dispatch-pack",

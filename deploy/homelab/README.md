@@ -82,3 +82,12 @@ blocks on health at the end, so a returned success is a real success.
 section: set `provider` / `model` / `temperature` / `reasoning` per role to run a fast cheap router
 and a strong worker. Edit on the box + `up -d --force-recreate`. Then compare before/after with
 `bash deploy/homelab/latency-report.sh`.
+
+**Permission grants persist to a machine-owned overlay (not `policy.toml`).** When an agent hits a
+zone it wasn't granted, Liberado sends a Telegram request (Deny / Once / Session / Everywhere).
+Tapping **Everywhere** appends the grant to `grants.overlay.toml` in the **data dir** (the container's
+`$LIBERADO_DATA_DIR`, a writable volume — *not* the read-only config mount), merged on top of
+`policy.toml` at boot. So an "Everywhere" grant takes effect on the next `up -d --force-recreate`, and
+`Once`/`Session` unblock only the immediate call. The daemon never rewrites your hand-edited
+`policy.toml`, and agents can't touch the overlay (it lives outside every vault zone). To revoke all
+such grants: delete `grants.overlay.toml` on the box and recreate the container.

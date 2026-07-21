@@ -26,7 +26,7 @@
 
 use std::path::{Path, PathBuf};
 
-use liberado_common::CapabilityCatalog;
+use liberado_common::{Capability, CapabilityCatalog, WriteClass, Zone};
 use thiserror::Error;
 
 pub use liberado_config_loader::{
@@ -218,11 +218,190 @@ pub fn load_config(dir: Option<&Path>) -> Result<(Config, ConfigProvenance), Con
 
     // Cross-cutting validation (dangling zone/MCP refs, missing secrets) moved into the
     // config-loader crate. Its `Validation` variant carries a bare message (no "invalid config:"
-    // prefix) so wrapping in `ConfigError::Invalid` yields the same output as before.
+    // prefix) so wrapping in `ConfigError::Invalid` yields the same output as before. This validates
+    // the *base* (hand-edited) config — a broken `policy.toml` stays fail-fast.
     liberado_config_loader::validate_merged_config(&config)
         .map_err(|e| ConfigError::Invalid(e.to_string()))?;
 
-    Ok((config, provenance))
+    // Machine-owned grants overlay (Telegram "Approve everywhere" — see `grants_overlay_path`).
+    // Merged on top of the validated base by APPENDING its grants/zones, never rewriting the
+    // hand-edited `policy.toml`. Deliberately **soft**: unlike the base, a broken or invalidating
+    // overlay must never brick boot — worst case we ignore it and grant nothing extra. So if the
+    // merged candidate fails the same cross-cutting validation, we discard the overlay and boot on
+    // `policy.toml` alone (with a loud warning), rather than refusing to start.
+    let overlay = load_grants_overlay();
+    if overlay.grants.is_empty() && overlay.zones.is_empty() {
+        return Ok((config, provenance));
+    }
+    let mut candidate = config.clone();
+    merge_overlay_into(&mut candidate.policy, overlay);
+    match liberado_config_loader::validate_merged_config(&candidate) {
+        Ok(()) => {
+            tracing::info!(
+                grants = candidate.policy.grants.len(),
+                zones = candidate.policy.zones.len(),
+                "applied machine-owned grants overlay ({})",
+                grants_overlay_path().display(),
+            );
+            Ok((candidate, provenance))
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "grants overlay produced an invalid merged config — ignoring it and booting on \
+                 policy.toml alone; the offending overlay is {}",
+                grants_overlay_path().display(),
+            );
+            Ok((config, provenance))
+        }
+    }
+}
+
+/// The machine-owned grants-overlay filename. It lives in the **writable data dir** (not the config
+/// dir — which is a read-only mount in the homelab deploy), and outside every vault zone, so no
+/// agent capability can write it: the "agents can't edit their own permission config" invariant
+/// holds. Only the daemon, reacting to a human Telegram button tap, ever writes here (see
+/// [`append_grant_to_overlay`]).
+const GRANTS_OVERLAY_FILE: &str = "grants.overlay.toml";
+
+/// A one-line header stamped atop the generated overlay so a human who opens it knows it's
+/// machine-owned and how it got there.
+const GRANTS_OVERLAY_HEADER: &str =
+    "machine-owned — appended by Liberado when you tap \"Approve everywhere\" on a permission \
+     request. Merged over policy.toml at boot. Safe to delete to revoke all such grants.";
+
+/// Path to the machine-owned grants overlay ([`GRANTS_OVERLAY_FILE`], under [`data_dir`]).
+pub fn grants_overlay_path() -> PathBuf {
+    data_dir().join(GRANTS_OVERLAY_FILE)
+}
+
+/// Read the machine-owned grants overlay ([`grants_overlay_path`]) as a partial [`Policy`] (only its
+/// `zones`/`grants` are meaningful). An absent file is the common case → an empty overlay. A
+/// present-but-unreadable/unparseable overlay is a **soft** failure: logged and treated as empty,
+/// never fatal — fail-safe means "grant nothing extra when in doubt."
+pub fn load_grants_overlay() -> Policy {
+    load_grants_overlay_at(&grants_overlay_path())
+}
+
+/// [`load_grants_overlay`] against an explicit path — the testable core (the public wrapper resolves
+/// the path from the process-global data dir, which can't be mocked without racing other tests).
+fn load_grants_overlay_at(path: &Path) -> Policy {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => match toml::from_str::<Policy>(&contents) {
+            Ok(policy) => policy,
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(), error = %e,
+                    "grants overlay did not parse — ignoring it (no extra grants applied)"
+                );
+                Policy::default()
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Policy::default(),
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(), error = %e,
+                "grants overlay could not be read — ignoring it (no extra grants applied)"
+            );
+            Policy::default()
+        }
+    }
+}
+
+/// Append the overlay's zones and grants onto `policy` — never replace. Base entries keep priority:
+/// [`Policy::write_class`] and [`Policy::capabilities_for`] scan in order and the base comes first,
+/// so an overlay can only ADD authority for a genuinely-undeclared zone; it can never downgrade a
+/// base zone's write-class (e.g. re-open a `human_only` zone) or shadow a base grant. `secret_refs`
+/// is deliberately not merged — the overlay is grants-only.
+fn merge_overlay_into(policy: &mut Policy, overlay: Policy) {
+    policy.zones.extend(overlay.zones);
+    policy.grants.extend(overlay.grants);
+}
+
+/// Persist a human-approved **"everywhere"** grant to the machine-owned overlay
+/// ([`grants_overlay_path`]): append `capability` to `component`'s grant (creating the grant if
+/// absent). So the merged config stays valid ([`validate_merged_config`] requires every granted zone
+/// be declared in `policy.zones`), it also ensures the overlay declares any vault/named zone the
+/// capability references, as [`WriteClass::AgentWritable`]. Because base zones merge first and win on
+/// write-class, this can only fill a genuinely-undeclared zone — it can never downgrade a protected
+/// base zone.
+///
+/// Idempotent: an identical grant already present (same component + capability) is a no-op returning
+/// `Ok(false)`; a real change returns `Ok(true)`. Writes atomically (temp file + rename) so a crash
+/// mid-write can't leave a half-written, unparseable overlay.
+pub fn append_grant_to_overlay(component: &str, capability: &Capability) -> std::io::Result<bool> {
+    append_grant_to_overlay_at(&grants_overlay_path(), component, capability)
+}
+
+/// [`append_grant_to_overlay`] against an explicit path — the testable core.
+fn append_grant_to_overlay_at(
+    path: &Path,
+    component: &str,
+    capability: &Capability,
+) -> std::io::Result<bool> {
+    let mut overlay = load_grants_overlay_at(path);
+
+    // Idempotent: identical grant already present → no change.
+    let already = overlay.grants.iter().any(|g| {
+        g.component == component && g.capabilities.iter().any(|c| c == capability)
+    });
+    if already {
+        return Ok(false);
+    }
+
+    // Ensure the granted zone is declared, or the merged config would fail validation. Base zones
+    // of the same name always win on write-class (merged first), so AgentWritable here is only ever
+    // consulted for a zone the base policy never declared.
+    if let Some(zone) = capability_zone_name(capability)
+        && !overlay.zones.iter().any(|z| z.zone == zone)
+    {
+        overlay.zones.push(ZonePolicy {
+            zone: zone.to_string(),
+            write_class: WriteClass::AgentWritable,
+        });
+    }
+
+    match overlay.grants.iter_mut().find(|g| g.component == component) {
+        Some(g) => g.capabilities.push(capability.clone()),
+        None => overlay.grants.push(Grant {
+            component: component.to_string(),
+            capabilities: vec![capability.clone()],
+        }),
+    }
+
+    // Serialize only zones+grants (both arrays-of-tables). A trailing scalar field like
+    // `secret_refs = []` would serialize *after* the tables and trip toml's "values must precede
+    // tables" rule — so we use a dedicated write shape rather than serializing `Policy` whole.
+    #[derive(serde::Serialize)]
+    struct OverlayFile<'a> {
+        zones: &'a [ZonePolicy],
+        grants: &'a [Grant],
+    }
+    let toml_body = toml::to_string_pretty(&OverlayFile {
+        zones: &overlay.zones,
+        grants: &overlay.grants,
+    })
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let contents = format!("# {GRANTS_OVERLAY_HEADER}\n\n{toml_body}");
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, contents.as_bytes())?;
+    std::fs::rename(&tmp, path)?;
+    Ok(true)
+}
+
+/// The zone a capability names, if any — for [`append_grant_to_overlay_at`]'s zone-declaration
+/// guard. `ExecuteMcp`/`AskHuman` name no zone.
+fn capability_zone_name(cap: &Capability) -> Option<&str> {
+    match cap {
+        Capability::Read(z) | Capability::Write(z) | Capability::ReadSummary(z) => match z {
+            Zone::Vault(name) | Zone::Named(name) => Some(name),
+        },
+        Capability::ExecuteMcp(_) | Capability::AskHuman => None,
+    }
 }
 
 /// Read one section file into its type. A missing file yields the type's `Default` (every section is
@@ -791,5 +970,166 @@ transport = { kind = "stdio", command = "tasks-mcp", args = [] }
         // a frozen archive and nothing the human had said since. Every reader of the session logs
         // must come through this one function.
         assert_eq!(sessions_dir(), data_dir().join("sessions"));
+    }
+
+    // --- grants overlay (machine-owned "Approve everywhere" persistence) ---------------------
+
+    #[test]
+    fn append_grant_to_overlay_persists_and_round_trips() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("grants.overlay.toml");
+
+        let changed = append_grant_to_overlay_at(
+            &path,
+            "dispatcher",
+            &Capability::Write(Zone::vault("sandbox")),
+        )
+        .unwrap();
+        assert!(changed, "first append must report a change");
+        assert!(path.exists(), "the overlay file must be written");
+
+        let overlay = load_grants_overlay_at(&path);
+        let grant = overlay
+            .grants
+            .iter()
+            .find(|g| g.component == "dispatcher")
+            .expect("dispatcher grant persisted");
+        assert!(
+            grant
+                .capabilities
+                .contains(&Capability::Write(Zone::vault("sandbox"))),
+            "the granted capability round-trips"
+        );
+        // The undeclared zone was auto-declared so the merged config stays valid.
+        assert!(
+            overlay.zones.iter().any(|z| z.zone == "sandbox"
+                && z.write_class == WriteClass::AgentWritable),
+            "an undeclared granted zone is declared AgentWritable in the overlay"
+        );
+    }
+
+    #[test]
+    fn append_grant_to_overlay_is_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("grants.overlay.toml");
+        let cap = Capability::Write(Zone::vault("sandbox"));
+
+        assert!(append_grant_to_overlay_at(&path, "dispatcher", &cap).unwrap());
+        // Second identical append is a no-op.
+        assert!(!append_grant_to_overlay_at(&path, "dispatcher", &cap).unwrap());
+
+        let overlay = load_grants_overlay_at(&path);
+        let grant = overlay
+            .grants
+            .iter()
+            .find(|g| g.component == "dispatcher")
+            .unwrap();
+        assert_eq!(
+            grant.capabilities.iter().filter(|c| **c == cap).count(),
+            1,
+            "the capability is not duplicated on a repeat approval"
+        );
+        assert_eq!(
+            overlay.zones.iter().filter(|z| z.zone == "sandbox").count(),
+            1,
+            "the zone declaration is not duplicated either"
+        );
+    }
+
+    #[test]
+    fn append_grant_to_overlay_accumulates_distinct_grants() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("grants.overlay.toml");
+
+        append_grant_to_overlay_at(&path, "dispatcher", &Capability::Write(Zone::vault("sandbox")))
+            .unwrap();
+        append_grant_to_overlay_at(&path, "dispatcher", &Capability::Write(Zone::vault("scratch")))
+            .unwrap();
+        append_grant_to_overlay_at(&path, "life", &Capability::Write(Zone::vault("sandbox")))
+            .unwrap();
+
+        let overlay = load_grants_overlay_at(&path);
+        let dispatcher = overlay
+            .grants
+            .iter()
+            .find(|g| g.component == "dispatcher")
+            .unwrap();
+        assert_eq!(dispatcher.capabilities.len(), 2, "two zones for dispatcher");
+        assert!(
+            overlay.grants.iter().any(|g| g.component == "life"),
+            "a second component gets its own grant entry"
+        );
+    }
+
+    #[test]
+    fn a_missing_overlay_is_an_empty_policy_not_an_error() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("does-not-exist.toml");
+        let overlay = load_grants_overlay_at(&path);
+        assert!(overlay.grants.is_empty() && overlay.zones.is_empty());
+    }
+
+    #[test]
+    fn a_corrupt_overlay_is_ignored_not_fatal() {
+        // Fail-safe: a machine overlay that somehow got mangled must never brick boot — it degrades
+        // to "grant nothing extra", not an error.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("grants.overlay.toml");
+        std::fs::write(&path, b"this is not valid toml {{{").unwrap();
+        let overlay = load_grants_overlay_at(&path);
+        assert!(overlay.grants.is_empty() && overlay.zones.is_empty());
+    }
+
+    #[test]
+    fn merged_overlay_grant_validates_against_the_config_checks() {
+        // The whole point of auto-declaring the zone: an "everywhere" grant for a zone the base
+        // policy never declared must produce a config that still passes validate_merged_config
+        // (which requires every granted zone be declared). Simulate the load_config merge.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("grants.overlay.toml");
+        append_grant_to_overlay_at(
+            &path,
+            "dispatcher",
+            &Capability::Write(Zone::vault("sandbox")),
+        )
+        .unwrap();
+        let overlay = load_grants_overlay_at(&path);
+
+        // A minimal base config with a dispatcher grant but NO sandbox zone.
+        let mut config = Config::default();
+        config.topology.vault_path = "/tmp/vault".into();
+        let mut policy = Policy::default();
+        merge_overlay_into(&mut policy, overlay);
+        config.policy = policy;
+
+        liberado_config_loader::validate_merged_config(&config)
+            .expect("the auto-declared zone keeps the merged config valid");
+    }
+
+    #[test]
+    fn base_zone_write_class_wins_over_the_overlay() {
+        // Safety: an overlay declaring `sandbox = AgentWritable` must never override a base policy
+        // that (hypothetically) declared the same zone `human_only`. Base merges first; write_class
+        // scans in order and takes the first match.
+        let mut policy = Policy {
+            zones: vec![ZonePolicy {
+                zone: "sandbox".into(),
+                write_class: WriteClass::HumanOnly,
+            }],
+            ..Policy::default()
+        };
+        let overlay = Policy {
+            zones: vec![ZonePolicy {
+                zone: "sandbox".into(),
+                write_class: WriteClass::AgentWritable,
+            }],
+            ..Policy::default()
+        };
+        merge_overlay_into(&mut policy, overlay);
+        assert_eq!(
+            policy.write_class("sandbox"),
+            WriteClass::HumanOnly,
+            "the base zone's protection must not be downgraded by the overlay"
+        );
     }
 }

@@ -685,6 +685,11 @@ impl Daemon {
         };
         let report = orch.execute_approved(&proposal).await?;
 
+        // 6.5. If this was a permission request, apply the grant the human chose. The call itself
+        //     already ran (step 6, human tap = gate); this is only about whether FUTURE calls need
+        //     to ask again. Best-effort — a persistence failure never fails the reaction.
+        self.apply_approved_grant(&proposal);
+
         // 7. Mark done and persist. The write carries agent provenance (DAEMON_SOURCE) so
         //    attribution suppresses it — no self-reaction (loop-break, Decision 5).
         proposal.status = liberado_common::ProposalStatus::Done;
@@ -713,6 +718,59 @@ impl Daemon {
         }
 
         Ok(ReactionOutcome::Acted(Disposition::Reported(report)))
+    }
+
+    /// Apply the grant a human approved on a **permission request** (`proposal.requested_grant` set),
+    /// per the scope they chose (`proposal.approved_scope`). The blocked call itself already executed
+    /// in `handle_proposal_change` (the human tap was the gate); this decides only whether *future*
+    /// calls of the same shape still have to ask:
+    ///
+    /// - `Everywhere` → persist to the machine-owned overlay (durable; takes effect at the next boot
+    ///   / container recreate, when config is re-loaded). Only a human button tap ever reaches here,
+    ///   so the "agents can't edit their own permission config" invariant holds.
+    /// - `Session` → not yet a live grant: the pool ceiling is an immutable boot snapshot (see
+    ///   `liberado_orchestrator::Orchestrator::capabilities`), so a same-session live widening needs
+    ///   a mutable-ceiling refactor that's out of this slice. Behaves like `Once` for future calls —
+    ///   logged plainly so the gap is visible, not silent.
+    /// - `Once` / `None` → nothing to persist.
+    ///
+    /// Best-effort: a persistence failure is logged, never propagated — the approved call already ran.
+    fn apply_approved_grant(&self, proposal: &liberado_common::Proposal) {
+        let Some(capability) = &proposal.requested_grant else {
+            return; // ordinary proposal, not a permission request
+        };
+        let component = grant_component_for_pool(proposal.pool.as_deref());
+        match proposal.approved_scope {
+            Some(liberado_common::GrantScope::Everywhere) => {
+                match liberado_config::append_grant_to_overlay(component, capability) {
+                    Ok(true) => tracing::info!(
+                        component,
+                        ?capability,
+                        "persisted 'everywhere' grant to the machine-owned overlay \
+                         (effective on next boot)"
+                    ),
+                    Ok(false) => tracing::info!(
+                        component,
+                        ?capability,
+                        "'everywhere' grant already present in the overlay — no change"
+                    ),
+                    Err(e) => tracing::error!(
+                        component,
+                        ?capability,
+                        error = %e,
+                        "failed to persist 'everywhere' grant to the overlay \
+                         (the approved call still ran)"
+                    ),
+                }
+            }
+            Some(liberado_common::GrantScope::Session) => tracing::info!(
+                component,
+                ?capability,
+                "'session' grant approved: the call ran, but a live session-scoped grant is not yet \
+                 applied (immutable pool ceiling) — a later same-zone write will re-prompt"
+            ),
+            Some(liberado_common::GrantScope::Once) | None => {}
+        }
     }
 
     /// Run every attached [`EventSource`] (the always-on vault watch, plus any extra source like a
@@ -796,6 +854,18 @@ fn format_cron_delivery(schedule: &str, summary: &str, terminal: TerminalKind) -
     }
 }
 
+/// The `policy.toml` grant `component` whose capability ceiling gates a given pool — so an
+/// "everywhere" grant lands where the blocked path actually reads its authority. The default pool's
+/// ceiling is `capabilities_for("dispatcher")`; a named pool's is `capabilities_for(<pool name>)`
+/// (see `liberado_bootstrap::configure_daemon`). A permission request stamps its owning pool onto
+/// `Proposal.pool`, which is `Some(DEFAULT_POOL)` ("default") for the default pool.
+fn grant_component_for_pool(pool: Option<&str>) -> &str {
+    match pool {
+        None | Some(DEFAULT_POOL) => "dispatcher",
+        Some(name) => name,
+    }
+}
+
 /// `pool` is stamped into `payload` so the dispatch pack routes to the same pool the event named.
 fn reaction_goal(event: &Event, goal: &str, pool: &str) -> GoalSpec {
     let profile = event
@@ -847,6 +917,17 @@ mod tests {
     use std::time::Duration;
     use tempfile::TempDir;
     use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn grant_component_maps_default_pool_to_the_dispatcher_ceiling() {
+        // A permission request stamps the owning pool; the default pool's authority ceiling is the
+        // "dispatcher" grant (see configure_daemon), so an "everywhere" grant must land there — not
+        // on a literal "default" component that grants nothing.
+        assert_eq!(grant_component_for_pool(None), "dispatcher");
+        assert_eq!(grant_component_for_pool(Some(DEFAULT_POOL)), "dispatcher");
+        // A named pool's ceiling is its own name.
+        assert_eq!(grant_component_for_pool(Some("research")), "research");
+    }
 
     #[test]
     fn cron_schedule_name_only_matches_cron_sources() {
