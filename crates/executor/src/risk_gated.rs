@@ -231,6 +231,13 @@ impl ToolRuntime for RiskGatedToolRuntime {
                         %zone,
                         "tool call refused: no Write capability for the zone it targets"
                     );
+                    // If a notifier is wired, don't dead-end: raise a permission request the human can
+                    // expand (Deny/Once/Session/Everywhere via Telegram). Without a notifier there's no
+                    // one to ask, so keep the hard refusal.
+                    if self.notifier.is_some() {
+                        let path = self.write_permission_request(call, zone).await?;
+                        return Ok(permission_request_message(&path, zone));
+                    }
                     return Err(format!(
                         "not authorized: '{}' writes to zone '{zone}', and this session's grant \
                          does not include Write({zone}). Calling an MCP is not permission to write \
@@ -405,6 +412,86 @@ impl RiskGatedToolRuntime {
 
         Ok(proposal_path)
     }
+
+    /// Like [`write_proposal`](Self::write_proposal), but for a **permission request**: the call is
+    /// refused for a missing `Write(zone)` and we ask the human to expand the grant. Stamps the
+    /// requested capability onto the proposal (signed, tamper-evident) and notifies with the four
+    /// scope buttons. On approval the daemon applies the grant per the chosen scope and executes the
+    /// carried call.
+    async fn write_permission_request(
+        &self,
+        call: &ToolInvocation,
+        zone: &str,
+    ) -> Result<PathBuf, String> {
+        let proposal_id = format!(
+            "perm-{}-{}",
+            self.correlation_base,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos(),
+        );
+        let proposals_subdir = self.proposals_dir.join(liberado_common::PROPOSALS_DIR);
+        let proposal_path = proposals_subdir.join(format!("{proposal_id}.md"));
+
+        let mut proposal = Proposal::pending(
+            &proposal_id,
+            &self.correlation_base,
+            "liberado-chat",
+            ProposedAction::ToolCalls(vec![liberado_common::ToolCall {
+                tool: call.name.clone(),
+                args: call.arguments.clone(),
+            }]),
+            format!("Permission request: '{}' needs Write access to zone '{zone}'.", call.name),
+        )
+        .with_requested_grant(Capability::Write(Zone::vault(zone)));
+        proposal.pool = Some(self.pool_name.clone());
+        let proposal = self.signer.sign(proposal);
+
+        if let Err(e) = tokio::fs::create_dir_all(&proposals_subdir).await {
+            tracing::error!(path = %proposals_subdir.display(), error = %e, "failed to create proposals directory");
+            return Err(format!(
+                "could not create the proposals directory at {}: {e} — no permission request was saved",
+                proposals_subdir.display()
+            ));
+        }
+        if let Err(e) = tokio::fs::write(&proposal_path, proposal.to_note()).await {
+            tracing::error!(path = %proposal_path.display(), error = %e, "failed to write permission request");
+            return Err(format!(
+                "could not save the permission request at {}: {e} — the action was NOT executed",
+                proposal_path.display()
+            ));
+        }
+        tracing::info!(path = %proposal_path.display(), tool = %call.name, %zone, "permission request written");
+
+        if let Some(notifier) = &self.notifier {
+            let message = format!(
+                "Liberado needs permission.\n'{}' wants to write zone '{zone}', which its grant \
+                 doesn't include.\nApprove once, for this session, or everywhere?",
+                call.name,
+            );
+            if let Err(e) = notifier
+                .notify_permission_request(&proposal_id, &message)
+                .await
+            {
+                tracing::warn!(error = %e, "failed to send permission-request notification");
+            }
+        }
+
+        Ok(proposal_path)
+    }
+}
+
+/// The tool *result* returned for a raised permission request. Tells the model plainly that the
+/// action is paused pending the human's grant decision — not a failure it should route around.
+fn permission_request_message(path: &std::path::Path, zone: &str) -> String {
+    format!(
+        "PERMISSION REQUESTED — the action was NOT executed. It needs Write access to zone '{zone}', \
+         which this session's grant doesn't include. A request was sent for approval \
+         (once / this session / everywhere). Saved at: {}. Do not retry or invent a result; the \
+         action runs automatically once the human approves.",
+        path.display()
+    )
 }
 
 /// The tool *result* returned for a downgraded high-consequence/sweeping call. Phrased so the model

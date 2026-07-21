@@ -27,6 +27,20 @@ pub trait Notifier: Send + Sync {
         self.notify(message).await
     }
 
+    /// Notify about a **permission request** — an agent hit a zone it wasn't granted and is asking
+    /// the human to expand its authority. Offers four scope buttons (Deny / Approve once / Approve
+    /// this session / Approve everywhere); a tap is handled by `liberado-telegram-approvals`, which
+    /// records the choice onto `proposals/{proposal_id}.md`. Defaults to plain [`notify`](Self::notify)
+    /// so non-interactive channels degrade gracefully.
+    async fn notify_permission_request(
+        &self,
+        proposal_id: &str,
+        message: &str,
+    ) -> Result<(), NotifyError> {
+        let _ = proposal_id;
+        self.notify(message).await
+    }
+
     /// Deliver a scheduled (cron) session's finished result. Distinct from [`notify`](Self::notify)
     /// because a channel may choose to *fold this into the ongoing conversation* and/or *defer it
     /// around the human's activity* — the motivating case is the server's chat-delivering notifier,
@@ -113,6 +127,33 @@ fn approval_buttons_payload(chat_id: &str, message: &str, proposal_id: &str) -> 
     })
 }
 
+/// Pure — the `sendMessage` payload for a permission request: four scope buttons whose
+/// `callback_data` is `deny:` / `once:` / `session:` / `everywhere:` + the proposal id. The longest
+/// prefix is `"everywhere:"` (11 bytes), still well inside Telegram's 64-byte `callback_data` cap for
+/// any id that passes [`fits_in_callback_data`]. Two rows so the labels aren't cramped.
+fn permission_request_payload(
+    chat_id: &str,
+    message: &str,
+    proposal_id: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "chat_id": chat_id,
+        "text": message,
+        "reply_markup": {
+            "inline_keyboard": [
+                [
+                    { "text": "✅ Once", "callback_data": format!("once:{proposal_id}") },
+                    { "text": "🔁 This session", "callback_data": format!("session:{proposal_id}") },
+                ],
+                [
+                    { "text": "♾️ Everywhere", "callback_data": format!("everywhere:{proposal_id}") },
+                    { "text": "❌ Deny", "callback_data": format!("deny:{proposal_id}") },
+                ]
+            ]
+        }
+    })
+}
+
 impl TelegramNotifier {
     /// POST `payload` to `sendMessage` and translate a non-2xx response into a [`NotifyError`] —
     /// the shared body behind both [`Notifier::notify`] and [`Notifier::notify_proposal`].
@@ -162,6 +203,25 @@ impl Notifier for TelegramNotifier {
         ))
         .await
     }
+
+    /// Sends the message with the four permission-scope buttons (see [`permission_request_payload`]).
+    /// Same `callback_data`-budget fallback to a plain notification as [`Self::notify_proposal`].
+    async fn notify_permission_request(
+        &self,
+        proposal_id: &str,
+        message: &str,
+    ) -> Result<(), NotifyError> {
+        if !fits_in_callback_data(proposal_id) {
+            tracing::warn!(
+                proposal_id,
+                len = proposal_id.len(),
+                "proposal id too long for Telegram callback_data — sending a plain notification instead"
+            );
+            return self.notify(message).await;
+        }
+        self.send(permission_request_payload(&self.chat_id, message, proposal_id))
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -200,6 +260,32 @@ mod tests {
         assert_eq!(buttons[0]["callback_data"], "approve:prop-1");
         assert_eq!(buttons[1]["callback_data"], "revise:prop-1");
         assert_eq!(buttons[2]["callback_data"], "reject:prop-1");
+    }
+
+    #[test]
+    fn permission_request_payload_has_four_scope_buttons_that_fit() {
+        let payload = permission_request_payload("42", "needs finance write", "perm-1");
+        let rows = &payload["reply_markup"]["inline_keyboard"];
+        let data: Vec<&str> = [
+            &rows[0][0], &rows[0][1], &rows[1][0], &rows[1][1],
+        ]
+        .iter()
+        .map(|b| b["callback_data"].as_str().unwrap())
+        .collect();
+        assert_eq!(
+            data,
+            vec![
+                "once:perm-1",
+                "session:perm-1",
+                "everywhere:perm-1",
+                "deny:perm-1",
+            ]
+        );
+        // Every scope's callback_data must fit Telegram's 64-byte cap for a max-length id.
+        let max_id = "x".repeat(MAX_CALLBACK_PROPOSAL_ID_LEN);
+        for prefix in ["once", "session", "everywhere", "deny"] {
+            assert!(format!("{prefix}:{max_id}").len() <= 64);
+        }
     }
 
     #[tokio::test]
