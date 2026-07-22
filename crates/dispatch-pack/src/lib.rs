@@ -97,7 +97,11 @@ impl DispatchPack {
             .unwrap_or(DEFAULT_POOL)
     }
 
-    async fn write_proposal(&self, proposal: &SignedProposal) -> Result<(), String> {
+    /// Write a pre-flight `Propose` note and notify the human. Returns whether the out-of-band
+    /// notification actually went out — the caller folds that into `GoalResult`'s `deferred_to_human`
+    /// so a chat surface suppresses the redundant reply only when the human really got the ping
+    /// (Gap 2). A best-effort notify failure is not fatal (the note is already safely written).
+    async fn write_proposal(&self, proposal: &SignedProposal) -> Result<bool, String> {
         let proposals_subdir = self.proposals_dir.join(PROPOSALS_DIR);
         let proposal_path = proposals_subdir.join(format!("{}.md", proposal.id));
         tokio::fs::create_dir_all(&proposals_subdir)
@@ -107,6 +111,7 @@ impl DispatchPack {
             .await
             .map_err(|e| format!("write proposal: {e}"))?;
 
+        let mut notified = false;
         if let Some(notifier) = &self.notifier {
             let stem = proposal.id.replace([':', '/'], "-");
             let message = format!(
@@ -114,11 +119,12 @@ impl DispatchPack {
                 proposal.rationale,
                 proposal_path.display()
             );
-            if let Err(e) = notifier.notify_proposal(&stem, &message).await {
-                tracing::warn!(error = %e, "failed to send proposal notification");
+            match notifier.notify_proposal(&stem, &message).await {
+                Ok(()) => notified = true,
+                Err(e) => tracing::warn!(error = %e, "failed to send proposal notification"),
             }
         }
-        Ok(())
+        Ok(notified)
     }
 }
 
@@ -217,11 +223,17 @@ impl DomainPackRunner for DispatchPack {
         .await
         .map_err(|e| PackError::Failed(format!("orchestration failed: {e}")))?;
 
-        if let Disposition::Propose(ref proposal) = disposition {
+        // Whether this run deferred the action to the human AND surfaced it out-of-band, so the
+        // face agent (via `delegate`) can drop the redundant reply (Gap 2). A `Reported` carries the
+        // runtime's own flag; a `Propose`'s ping is sent here, by `write_proposal`, so its notified-
+        // state is only known once that returns.
+        let deferred_to_human = if let Disposition::Propose(ref proposal) = disposition {
             self.write_proposal(proposal)
                 .await
-                .map_err(PackError::Failed)?;
-        }
+                .map_err(PackError::Failed)?
+        } else {
+            disposition.deferred_to_human()
+        };
 
         let (terminal, summary) = disposition.terminal_summary();
         // Outcome turn is also recorded by the hub's run_session; recording the disposition-shaped
@@ -243,6 +255,7 @@ impl DomainPackRunner for DispatchPack {
             diagnostics: serde_json::json!({
                 "pool": pool_name,
                 "correlation_id": correlation_id,
+                "deferred_to_human": deferred_to_human,
             }),
         })
     }
@@ -517,6 +530,7 @@ mod tests {
             artifacts: vec![],
             new_high_signal_facts: vec![],
             follow_up: None,
+            deferred_to_human: false,
         });
         let (t, s) = d.terminal_summary();
         assert_eq!(t, TerminalKind::Succeeded);

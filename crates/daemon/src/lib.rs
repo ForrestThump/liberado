@@ -44,6 +44,13 @@ const DEFAULT_REACTION_DEPTH: u32 = 1;
 /// proposal it just wrote (loop-break, Decision 5).
 const DAEMON_SOURCE: &str = "liberado";
 
+/// Where resolved (terminal) proposal notes are filed once the daemon is done with them, so the
+/// active `proposals/` dir doesn't silt up with a graveyard of `perm-…`/`prop-…` files. A per-
+/// outcome subdirectory (`approved`/`rejected`/`expired`) is appended, making the folder self-
+/// describing at a glance; the note's frontmatter still holds the authoritative status + scope.
+/// `react` excludes this whole subtree so archived notes never re-enter the proposal pipeline.
+const PROPOSALS_ARCHIVE_DIR: &str = "proposals/archive";
+
 /// The `domain` recorded on a daemon reaction's background session (S5′ step 5).
 ///
 /// A reaction is **not** run by a domain pack — the dispatcher classifies it and the orchestrator
@@ -400,8 +407,14 @@ impl Daemon {
         if let Some(path) = event.payload.path.as_deref() {
             // The path was normalized to forward slashes in build_event, so starts_with works on
             // both platforms. Exclude the exact `proposals` directory path to avoid attempting to
-            // read a directory as a proposal note on directory-creation watch events.
-            if path.starts_with(PROPOSALS_DIR) && path != Path::new(PROPOSALS_DIR) {
+            // read a directory as a proposal note on directory-creation watch events. Exclude the
+            // archive subtree too: archived notes are terminal by construction and must never
+            // re-enter the pipeline (belt-and-suspenders — the archiving move is already suppressed
+            // as a DAEMON_SOURCE write, but a human poking an archived file must be a no-op as well).
+            if path.starts_with(PROPOSALS_DIR)
+                && path != Path::new(PROPOSALS_DIR)
+                && !path.starts_with(PROPOSALS_ARCHIVE_DIR)
+            {
                 // Infra errors (orchestrator runtime_for failure) are logged but degraded to
                 // Observed so the watch loop never crashes. The proposal is NOT marked done when an
                 // error occurs, so a human re-triggering the file (or a future retry mechanism) can
@@ -647,9 +660,14 @@ impl Daemon {
             return Ok(ReactionOutcome::Observed);
         }
 
-        // 3. Terminal states are never re-executed (at-most-once journal marker, Decision 6).
+        // 3. Terminal states are never re-executed (at-most-once journal marker, Decision 6). This
+        //    is also where a human deny lands (the Telegram/Obsidian write flips status to
+        //    Rejected): observe it, and file the resolved note into the archive so the active dir
+        //    doesn't accumulate it. The approve path archives its own note inline (step 7.5) — its
+        //    Done write is suppressed and so never re-observes here.
         if proposal.status.is_terminal() {
             tracing::debug!(status = ?proposal.status, "proposal is already terminal");
+            self.archive_terminal_proposal(rel_path, &proposal).await;
             return Ok(ReactionOutcome::Observed);
         }
 
@@ -705,6 +723,12 @@ impl Daemon {
             "executed approved proposal and marked done"
         );
 
+        // 7.5. File the now-Done note into the archive so it leaves the active proposals dir. The
+        //     move is a suppressed DAEMON_SOURCE write to the excluded archive subtree, so it never
+        //     re-observes — this is the *only* place an approved note gets archived (its Done write
+        //     above never surfaces to the terminal-observe branch).
+        self.archive_terminal_proposal(rel_path, &proposal).await;
+
         if let Some(notifier) = &self.notifier {
             let message = format!(
                 "Liberado: proposal executed.\n{}\nOutcome: {:?}",
@@ -718,6 +742,52 @@ impl Daemon {
         }
 
         Ok(ReactionOutcome::Acted(Disposition::Reported(report)))
+    }
+
+    /// Best-effort move of a now-terminal proposal note out of the active `proposals/` dir into
+    /// `proposals/archive/<outcome>/`, so the active dir doesn't silt up with resolved notes
+    /// (Gap 1). The note's frontmatter still records the authoritative status + scope; the folder
+    /// split just makes the outcome legible without opening files.
+    ///
+    /// Safe against re-entry by construction: the move carries `DAEMON_SOURCE` provenance so the
+    /// destination write is suppressed by attribution, the source removal is a `FileDeleted` the
+    /// watch loop already skips, and `react` excludes the archive subtree outright. A non-terminal
+    /// status has no archive home and is left in place.
+    ///
+    /// Failure is logged and swallowed: the terminal status is already persisted, so a note that
+    /// fails to archive is merely left in the active dir — never lost, never re-executed.
+    async fn archive_terminal_proposal(
+        &self,
+        rel_path: &Path,
+        proposal: &liberado_common::Proposal,
+    ) {
+        let Some(outcome) = archive_outcome_subdir(proposal.status) else {
+            return; // not terminal — nothing to archive
+        };
+        let Some(file_name) = rel_path.file_name().and_then(|n| n.to_str()) else {
+            tracing::warn!(path = %rel_path.display(), "proposal path has no file name — not archiving");
+            return;
+        };
+        let dest = format!("{PROPOSALS_ARCHIVE_DIR}/{outcome}/{file_name}");
+        let provenance =
+            liberado_common::WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
+        match self
+            .vault
+            .move_note(rel_path, &dest, None, &provenance)
+            .await
+        {
+            Ok(()) => tracing::info!(
+                proposal_id = %proposal.id,
+                to = %dest,
+                "archived terminal proposal out of the active proposals dir"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                from = %rel_path.display(),
+                to = %dest,
+                "failed to archive terminal proposal — left in place (not re-executed)"
+            ),
+        }
     }
 
     /// Apply the grant a human approved on a **permission request** (`proposal.requested_grant` set),
@@ -873,6 +943,19 @@ fn grant_component_for_pool(pool: Option<&str>) -> &str {
     match pool {
         None | Some(DEFAULT_POOL) => "dispatcher",
         Some(name) => name,
+    }
+}
+
+/// The `proposals/archive/` subdirectory a resolved note is filed under, keyed by its terminal
+/// status — so the folder self-describes the outcome. Non-terminal statuses return `None` (they
+/// have no archive home yet), which is what keeps `archive_terminal_proposal` a no-op for them.
+fn archive_outcome_subdir(status: liberado_common::ProposalStatus) -> Option<&'static str> {
+    use liberado_common::ProposalStatus;
+    match status {
+        ProposalStatus::Done => Some("approved"),
+        ProposalStatus::Rejected => Some("rejected"),
+        ProposalStatus::Expired => Some("expired"),
+        ProposalStatus::Pending | ProposalStatus::Approved => None,
     }
 }
 
@@ -2313,19 +2396,104 @@ mod tests {
             .expect("timed out waiting for reaction")
             .expect("reaction channel closed");
 
-        // (a) The runtime recorded the approved tool invocation.
-        let recorded = invoked.lock().unwrap();
-        assert_eq!(
-            recorded.len(),
-            1,
-            "approved proposal must execute the tool call"
-        );
-        assert_eq!(recorded[0].name, "tasks:create");
+        // (a) The runtime recorded the approved tool invocation. Scope the guard so it is not held
+        //     across the archive-polling awaits below.
+        {
+            let recorded = invoked.lock().unwrap();
+            assert_eq!(
+                recorded.len(),
+                1,
+                "approved proposal must execute the tool call"
+            );
+            assert_eq!(recorded[0].name, "tasks:create");
+        }
 
-        // (b) The proposal note was flipped to Done.
-        let contents = std::fs::read_to_string(proposals_dir.join("approved.md")).unwrap();
+        // (b) The proposal note was flipped to Done and archived out of the active dir (Gap 1):
+        //     the original path is gone, and the Done note now lives under archive/approved/.
+        //     Poll for the move to land (the archive is a second vault write after the reaction).
+        let archived = proposals_dir.join("archive/approved/approved.md");
+        let mut contents = None;
+        for _ in 0..50 {
+            if archived.exists() {
+                contents = Some(std::fs::read_to_string(&archived).unwrap());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let contents =
+            contents.expect("approved proposal must be archived under archive/approved/");
+        assert!(
+            !proposals_dir.join("approved.md").exists(),
+            "archived proposal must be removed from the active proposals dir"
+        );
         let parsed = Proposal::from_note(&contents).unwrap();
         assert_eq!(parsed.status, ProposalStatus::Done);
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn daemon_archives_a_rejected_proposal() {
+        // A human deny (Telegram/Obsidian flips status to Rejected, a real human write) is observed
+        // and filed into archive/rejected/ — no orchestrator needed, since a terminal proposal is
+        // never executed. Proves the Gap 1 terminal-observe hook, distinct from the approve path.
+        use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall};
+
+        let signer = ProposalSigner::random();
+        let (daemon, dir) = temp_daemon().await;
+        let daemon = daemon
+            .with_debounce(Duration::from_millis(80))
+            .with_proposal_signer(signer.clone());
+
+        let proposals_dir = dir.path().join("proposals");
+        std::fs::create_dir_all(&proposals_dir).unwrap();
+
+        let (tx, mut rx) = unbounded_channel();
+        let handle = tokio::spawn(daemon.run(tx));
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // A signed proposal the human then rejected. Signed with the daemon's key so the integrity
+        // check (step 2.5) passes and we reach the terminal-observe branch.
+        let proposal = Proposal::pending(
+            "vault-change:rejected-proposal:xyz",
+            "vault-change:rejected-proposal:xyz",
+            "test",
+            ProposedAction::ToolCalls(vec![ToolCall {
+                tool: "tasks:create".into(),
+                args: serde_json::json!({ "summary": "denied task" }),
+            }]),
+            "a rejected proposal",
+        );
+        let mut proposal = signer.sign(proposal);
+        proposal.set_status(ProposalStatus::Rejected);
+        std::fs::write(proposals_dir.join("rejected.md"), proposal.to_note()).unwrap();
+
+        let _reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out waiting for reaction")
+            .expect("reaction channel closed");
+
+        // The rejected note moved to archive/rejected/, leaving the active dir clean.
+        let archived = proposals_dir.join("archive/rejected/rejected.md");
+        let mut contents = None;
+        for _ in 0..50 {
+            if archived.exists() {
+                contents = Some(std::fs::read_to_string(&archived).unwrap());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let contents =
+            contents.expect("rejected proposal must be archived under archive/rejected/");
+        assert!(
+            !proposals_dir.join("rejected.md").exists(),
+            "archived proposal must be removed from the active proposals dir"
+        );
+        assert_eq!(
+            Proposal::from_note(&contents).unwrap().status,
+            ProposalStatus::Rejected
+        );
 
         handle.abort();
     }

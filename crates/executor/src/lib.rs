@@ -1023,6 +1023,7 @@ fn prose_report(summary: String) -> Report {
         summary,
         artifacts: Vec::new(),
         new_high_signal_facts: Vec::new(),
+        deferred_to_human: false,
         follow_up: None,
     }
 }
@@ -1037,6 +1038,7 @@ fn budget_failed_report(turns: u32) -> Report {
         summary: format!("Execution exceeded the {turns}-turn budget without completing."),
         artifacts: Vec::new(),
         new_high_signal_facts: Vec::new(),
+        deferred_to_human: false,
         follow_up: Some("Consider dispatching a subagent with a larger budget.".into()),
     }
 }
@@ -1054,6 +1056,7 @@ fn budget_failed_report_named(resource: &str, turns: u32) -> Report {
         summary: format!("Execution exceeded its {resource} budget without completing."),
         artifacts: Vec::new(),
         new_high_signal_facts: Vec::new(),
+        deferred_to_human: false,
         follow_up: Some(format!(
             "Consider raising the {resource} budget, or narrowing the goal so less {resource} is needed."
         )),
@@ -1106,6 +1109,7 @@ fn budget_failed_report_with_progress(
         ),
         artifacts: Vec::new(),
         new_high_signal_facts: Vec::new(),
+        deferred_to_human: false,
         follow_up: Some(
             "Some tool calls may have completed before the budget ran out (see summary) — \
              redeploying with a larger budget, or a narrower remaining goal, may be able to finish \
@@ -1281,6 +1285,7 @@ fn doom_loop_failed_report(tool_name: &str) -> Report {
         ),
         artifacts: Vec::new(),
         new_high_signal_facts: Vec::new(),
+        deferred_to_human: false,
         follow_up: Some(format!(
             "The `{tool_name}` result may not carry enough information to act on, or the goal may \
              need to be rephrased/split into smaller steps."
@@ -1298,6 +1303,7 @@ fn cycle_failed_report() -> Report {
             .to_string(),
         artifacts: Vec::new(),
         new_high_signal_facts: Vec::new(),
+        deferred_to_human: false,
         follow_up: Some(
             "The goal may need to be rephrased/split into smaller, more concrete steps.".into(),
         ),

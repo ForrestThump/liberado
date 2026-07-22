@@ -10,6 +10,7 @@
 //! only inside `liberado-dispatch-pack`. Delegated sessions run **without** `AskHuman` (D-e).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use liberado_common::CapabilitySet;
@@ -64,6 +65,7 @@ impl DispatchBridge {
         &self,
         goal: &str,
         parent_conversation: Option<&str>,
+        deferral: &AtomicBool,
     ) -> Result<String, String> {
         let goal = goal.trim();
         if goal.is_empty() {
@@ -123,6 +125,18 @@ impl DispatchBridge {
             .unwrap_or_else(|| "delegated session finished with no summary".into());
         let terminal = result.map(|r| r.terminal).unwrap_or(TerminalKind::Failed);
 
+        // Gap 2: if the subagent deferred the action to the human AND already surfaced it
+        // out-of-band (an interactive proposal/permission notification went out), record it so the
+        // face turn drops the redundant chat reply — the notification is the sole communication.
+        // OR into the flag: a face turn may `delegate` more than once, and any one deferral counts.
+        let deferred = result
+            .and_then(|r| r.diagnostics.get("deferred_to_human"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if deferred {
+            deferral.store(true, Ordering::Relaxed);
+        }
+
         let mut report = match terminal {
             TerminalKind::Succeeded => format!("RESULT (Succeeded):\n{}", summary.trim()),
             TerminalKind::Failed => format!("RESULT (Failed):\n{}", summary.trim()),
@@ -159,6 +173,10 @@ pub struct FaceRuntime {
     extras: Arc<dyn ToolRuntime>,
     /// Parent face-chat session id for dispatch journals.
     parent_conversation: Option<String>,
+    /// Per-turn flag raised when a `delegate` came back deferred-and-notified-out-of-band, read by
+    /// the session after the turn to drop the redundant chat reply (Gap 2). Shared with the caller;
+    /// a fresh `false` per turn.
+    turn_deferral: Arc<AtomicBool>,
 }
 
 impl FaceRuntime {
@@ -166,11 +184,13 @@ impl FaceRuntime {
         bridge: Option<Arc<DispatchBridge>>,
         extras: Arc<dyn ToolRuntime>,
         parent_conversation: Option<String>,
+        turn_deferral: Arc<AtomicBool>,
     ) -> Self {
         Self {
             bridge,
             extras,
             parent_conversation,
+            turn_deferral,
         }
     }
 
@@ -219,7 +239,11 @@ impl ToolRuntime for FaceRuntime {
             };
             let goal = parse_delegate_goal(&call.arguments)?;
             return bridge
-                .delegate(goal.as_str(), self.parent_conversation.as_deref())
+                .delegate(
+                    goal.as_str(),
+                    self.parent_conversation.as_deref(),
+                    &self.turn_deferral,
+                )
                 .await;
         }
         self.extras.invoke(call).await

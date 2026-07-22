@@ -307,6 +307,7 @@ impl CoderRunResult {
             artifacts: self.files_changed.clone(),
             new_high_signal_facts: Vec::new(),
             follow_up: None,
+            deferred_to_human: false,
         }
     }
 }

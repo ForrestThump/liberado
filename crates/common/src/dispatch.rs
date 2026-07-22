@@ -166,6 +166,13 @@ pub struct Report {
     /// Optional suggested next step for the main agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_up: Option<String>,
+    /// Set by the runtime, not the model: this run raised a proposal / permission-request that was
+    /// **already surfaced to the human out-of-band** (an interactive notification was sent). It is
+    /// the signal a chat surface uses to suppress a redundant "you need to grant permission" reply —
+    /// the out-of-band notification is the sole, non-duplicated communication. Left `false` for an
+    /// ordinary report; serialized only when true so existing persisted reports round-trip unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deferred_to_human: bool,
 }
 
 /// Terminal status of one **execution** — what an executor's `Report` says it achieved.

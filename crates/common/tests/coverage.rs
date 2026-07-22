@@ -211,6 +211,7 @@ fn report_round_trips_each_outcome() {
             artifacts: vec!["reviews/2026-06-21.md".into()],
             new_high_signal_facts: vec![],
             follow_up: None,
+            deferred_to_human: false,
         });
     }
 }

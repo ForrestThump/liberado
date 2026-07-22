@@ -838,3 +838,22 @@ async fn execute_direct_empty_relevant_mcps_falls_back_to_full_grant() {
         "empty relevant_mcps must fall back to the full grant"
     );
 }
+
+#[test]
+fn collapse_if_deferred_replaces_reply_only_when_flagged() {
+    // Gap 2: when a delegate deferred out-of-band, the face agent's reply collapses to the tiny
+    // waiting marker; otherwise it passes through untouched.
+    let flag = AtomicBool::new(false);
+    assert_eq!(
+        collapse_if_deferred("here are your tasks".into(), &flag),
+        "here are your tasks",
+        "no deferral → reply is unchanged"
+    );
+
+    flag.store(true, Ordering::Relaxed);
+    assert_eq!(
+        collapse_if_deferred("I've asked for permission to send the email".into(), &flag),
+        DEFERRED_REPLY_MARKER,
+        "a deferral collapses the redundant reply to the waiting marker"
+    );
+}

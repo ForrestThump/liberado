@@ -42,6 +42,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use liberado_common::{
@@ -64,6 +65,22 @@ use crate::{Conversation, DEFAULT_SYSTEM_PROMPT, HUMAN_INTERFACE_SYSTEM_PROMPT};
 
 /// Max display length for the cheap first-line default title (UTF-8 chars).
 const DEFAULT_TITLE_MAX_CHARS: usize = 72;
+
+/// What the face agent's reply collapses to when its turn deferred a decision to the human
+/// out-of-band (Gap 2). The interactive proposal/permission notification is the real message;
+/// this is a tiny pointer at it so the thread doesn't read as a hang.
+const DEFERRED_REPLY_MARKER: &str = "⏳ waiting on your tap ↑";
+
+/// If `deferral` was raised during the turn, replace the face agent's now-redundant reply with the
+/// [`DEFERRED_REPLY_MARKER`]; otherwise return `reply` unchanged. See Gap 2 — the out-of-band
+/// notification (already sent) is the sole, non-duplicated communication for that decision.
+fn collapse_if_deferred(reply: String, deferral: &AtomicBool) -> String {
+    if deferral.load(Ordering::Relaxed) {
+        DEFERRED_REPLY_MARKER.to_string()
+    } else {
+        reply
+    }
+}
 
 /// Cheap default conversation title: first non-empty line of `user_text`, whitespace-collapsed,
 /// truncated. Does not call a model.
@@ -374,10 +391,15 @@ impl ChatSessions {
         let before = convo.len();
 
         let reply = if self.uses_face_agent() {
-            let turn_runtime = self.build_face_runtime(user, session);
-            convo
+            let turn_deferral = Arc::new(AtomicBool::new(false));
+            let turn_runtime = self.build_face_runtime(user, session, turn_deferral.clone());
+            let reply = convo
                 .turn(&self.executor, turn_runtime.as_ref(), user)
-                .await?
+                .await?;
+            // Gap 2: if a `delegate` this turn deferred to the human out-of-band (an interactive
+            // proposal/permission notification already landed on this surface), collapse the face
+            // agent's now-redundant reply to a tiny pointer at that notification.
+            collapse_if_deferred(reply, &turn_deferral)
         } else {
             match self.dispatch_turn(user).await {
                 DispatchOutcome::Answered(reply) => {
@@ -420,7 +442,11 @@ impl ChatSessions {
         let before = convo.len();
 
         if self.uses_face_agent() {
-            let turn_runtime = self.build_face_runtime(user, session);
+            // Streaming path (web-UI SSE): tokens are emitted live, so a post-turn deferral flag
+            // can't retract an already-streamed reply — Gap 2 suppression is a buffered-`turn`
+            // affordance (the Telegram surface). Pass a throwaway flag to satisfy the signature.
+            let turn_deferral = Arc::new(AtomicBool::new(false));
+            let turn_runtime = self.build_face_runtime(user, session, turn_deferral);
             convo
                 .turn_stream(&self.executor, turn_runtime.as_ref(), user, events)
                 .await?;
@@ -452,12 +478,22 @@ impl ChatSessions {
     /// Face-agent runtime: built-in `delegate` is never risk-gated by MCP name (it is core).
     /// Optional `"main-agent"` MCP grants are scoped + risk-gated separately so operators can
     /// thicken the surface without exposing the fleet by default.
-    fn build_face_runtime(&self, user: &str, session: Ulid) -> Box<dyn ToolRuntime> {
+    ///
+    /// `turn_deferral` is the per-turn flag a `delegate` raises when its subagent deferred the
+    /// action to the human out-of-band — read back by [`turn`](Self::turn) to drop the redundant
+    /// reply (Gap 2).
+    fn build_face_runtime(
+        &self,
+        user: &str,
+        session: Ulid,
+        turn_deferral: Arc<AtomicBool>,
+    ) -> Box<dyn ToolRuntime> {
         let extras = self.scoped_extras_runtime(user, session);
         Box::new(FaceRuntime::new(
             self.face_bridge.clone(),
             extras,
             Some(session.to_string()),
+            turn_deferral,
         ))
     }
 

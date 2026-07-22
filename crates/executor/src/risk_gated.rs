@@ -38,6 +38,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use liberado_common::{
@@ -85,6 +86,14 @@ pub struct RiskGatedToolRuntime {
     /// parameter so existing call sites don't need to change). Best-effort: a notification
     /// failure never blocks or fails the write it's reporting on.
     notifier: Option<Arc<dyn Notifier>>,
+    /// Set to `true` the moment this runtime raises a proposal / permission-request **and**
+    /// successfully surfaces it to the human out-of-band (an interactive notification went out). A
+    /// shared handle so the owning `Orchestrator` can read it back after the run and stamp it onto
+    /// the `Report` (`Report::deferred_to_human`), which a chat surface uses to drop a redundant
+    /// "you need to grant permission" reply. Stays `false` when there's no notifier or the notify
+    /// failed — then the chat reply is the only signal and must NOT be suppressed. Defaults to a
+    /// private, unshared flag (a runtime nobody wired one into simply never reports a deferral).
+    notified_deferral: Arc<AtomicBool>,
 }
 
 impl RiskGatedToolRuntime {
@@ -127,6 +136,7 @@ impl RiskGatedToolRuntime {
             signer,
             pool_name: pool_name.into(),
             notifier: None,
+            notified_deferral: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -135,6 +145,21 @@ impl RiskGatedToolRuntime {
     pub fn with_notifier(mut self, notifier: Arc<dyn Notifier>) -> Self {
         self.notifier = Some(notifier);
         self
+    }
+
+    /// Share the flag this runtime raises when it defers a call to the human out-of-band, so the
+    /// owning `Orchestrator` can read it back after the run (see [`notified_deferral`] and
+    /// [`took_deferral_to_human`](Self::took_deferral_to_human)). Without this, the runtime still
+    /// tracks the flag on its own private handle — it just has no one to report it to.
+    pub fn with_deferral_flag(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.notified_deferral = flag;
+        self
+    }
+
+    /// Whether this runtime raised a proposal / permission-request during its run **and** surfaced
+    /// it to the human out-of-band. See [`notified_deferral`].
+    pub fn took_deferral_to_human(&self) -> bool {
+        self.notified_deferral.load(Ordering::Relaxed)
     }
 }
 
@@ -420,11 +445,17 @@ impl RiskGatedToolRuntime {
                 call.name,
                 proposal_path.display()
             );
-            if let Err(e) = notifier.notify_proposal(&proposal_id, &message).await {
-                // Best-effort — the proposal itself is already safely written; a failed
-                // notification just means the human finds out by checking the vault instead of
-                // their phone, not that the safety property (a human gets to review it) broke.
-                tracing::warn!(error = %e, "failed to send proposal notification");
+            match notifier.notify_proposal(&proposal_id, &message).await {
+                // The human now has the proposal on their phone out-of-band — record it so a chat
+                // surface can drop the redundant "this needs approval" reply (Gap 2). Only on a
+                // confirmed send: a failed notify leaves the chat reply as the sole signal.
+                Ok(()) => self.notified_deferral.store(true, Ordering::Relaxed),
+                Err(e) => {
+                    // Best-effort — the proposal itself is already safely written; a failed
+                    // notification just means the human finds out by checking the vault instead of
+                    // their phone, not that the safety property (a human gets to review it) broke.
+                    tracing::warn!(error = %e, "failed to send proposal notification");
+                }
             }
         }
 
@@ -494,11 +525,17 @@ impl RiskGatedToolRuntime {
                  doesn't include.\nApprove once, for this session, or everywhere?",
                 call.name,
             );
-            if let Err(e) = notifier
+            match notifier
                 .notify_permission_request(&proposal_id, &message)
                 .await
             {
-                tracing::warn!(error = %e, "failed to send permission-request notification");
+                // The four scope buttons landed on the human's phone — record the out-of-band
+                // surfacing so the chat surface can drop the duplicate "grant permission" reply
+                // (Gap 2). Only on a confirmed send.
+                Ok(()) => self.notified_deferral.store(true, Ordering::Relaxed),
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to send permission-request notification");
+                }
             }
         }
 
@@ -564,6 +601,24 @@ mod tests {
         async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
             self.invoked.lock().unwrap().push(call.clone());
             self.result.clone()
+        }
+    }
+
+    /// A notifier whose `notify` succeeds or fails on demand — the default `notify_proposal` /
+    /// `notify_permission_request` route through it, so it stands in for both. Used to prove the
+    /// out-of-band deferral flag (Gap 2) is set on a confirmed send and left clear otherwise.
+    struct MockNotifier {
+        ok: bool,
+    }
+
+    #[async_trait]
+    impl Notifier for MockNotifier {
+        async fn notify(&self, _message: &str) -> Result<(), liberado_notify::NotifyError> {
+            if self.ok {
+                Ok(())
+            } else {
+                Err(liberado_notify::NotifyError("notify failed".into()))
+            }
         }
     }
 
@@ -649,6 +704,108 @@ mod tests {
         assert!(
             signer.verify(&written),
             "the written proposal must verify against the runtime's own signer"
+        );
+    }
+
+    /// Build a high-consequence runtime, optionally with a notifier, for the deferral-flag tests.
+    fn downgrade_runtime(
+        dir: &std::path::Path,
+        notifier: Option<MockNotifier>,
+    ) -> RiskGatedToolRuntime {
+        let inner = Arc::new(MockInner::new(&["email-mcp:send"], Ok("sent".into())));
+        let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("email-mcp".into())]);
+        let mut rt = RiskGatedToolRuntime::new(
+            inner,
+            caps,
+            vec![("email-mcp".into(), Consequence::External)],
+            Vec::new(),
+            Vec::new(),
+            dir.to_path_buf(),
+            "send an email".into(),
+            "test-deferral".into(),
+            ProposalSigner::random(),
+            "default",
+        );
+        if let Some(n) = notifier {
+            rt = rt.with_notifier(Arc::new(n));
+        }
+        rt
+    }
+
+    #[tokio::test]
+    async fn downgrade_with_a_confirmed_notify_records_out_of_band_deferral() {
+        // Gap 2: a proposal downgrade whose out-of-band notification actually sent must flag the
+        // deferral, so a chat surface can drop the redundant "needs approval" reply.
+        let dir = tempfile::TempDir::new().unwrap();
+        let rt = downgrade_runtime(dir.path(), Some(MockNotifier { ok: true }));
+        let call = ToolInvocation::new("c1", "email-mcp:send", serde_json::json!({"to": "boss"}));
+        rt.invoke(&call).await.expect("downgrade is an Ok result");
+        assert!(
+            rt.took_deferral_to_human(),
+            "a confirmed out-of-band notify must record the deferral"
+        );
+    }
+
+    #[tokio::test]
+    async fn downgrade_without_a_notifier_records_no_deferral() {
+        // No out-of-band channel → the chat reply is the only signal and must NOT be suppressed.
+        let dir = tempfile::TempDir::new().unwrap();
+        let rt = downgrade_runtime(dir.path(), None);
+        let call = ToolInvocation::new("c1", "email-mcp:send", serde_json::json!({"to": "boss"}));
+        rt.invoke(&call).await.expect("downgrade is an Ok result");
+        assert!(
+            !rt.took_deferral_to_human(),
+            "with no notifier there is no out-of-band surfacing to defer to"
+        );
+    }
+
+    #[tokio::test]
+    async fn downgrade_whose_notify_failed_records_no_deferral() {
+        // The human got no ping — suppressing the chat reply would leave them with nothing, so the
+        // flag must stay clear even though a proposal note was written.
+        let dir = tempfile::TempDir::new().unwrap();
+        let rt = downgrade_runtime(dir.path(), Some(MockNotifier { ok: false }));
+        let call = ToolInvocation::new("c1", "email-mcp:send", serde_json::json!({"to": "boss"}));
+        rt.invoke(&call)
+            .await
+            .expect("downgrade is still an Ok result");
+        assert!(
+            !rt.took_deferral_to_human(),
+            "a failed notify must not record a deferral (chat reply is the fallback)"
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_request_with_a_confirmed_notify_records_out_of_band_deferral() {
+        // The primary Gap 2 scenario: a Write with no Write capability raises a permission request
+        // (four scope buttons) instead of a hard refusal when a notifier is wired — and records the
+        // out-of-band surfacing so the face agent drops the duplicate "grant permission" reply.
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(&["vault:write_review"], Ok("wrote".into())));
+        let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("vault".into())]);
+        let rt = RiskGatedToolRuntime::new(
+            inner,
+            caps,
+            vec![("vault".into(), Consequence::Reversible)],
+            vec![vault_descriptor()],
+            vec![("reviews".to_string(), WriteClass::AgentWritable)],
+            dir.path().to_path_buf(),
+            "write a review note".into(),
+            "test-perm-deferral".into(),
+            ProposalSigner::random(),
+            "default",
+        )
+        .with_notifier(Arc::new(MockNotifier { ok: true }));
+
+        let call = ToolInvocation::new("c1", "vault:write_review", serde_json::json!({"c": "..."}));
+        let msg = rt
+            .invoke(&call)
+            .await
+            .expect("with a notifier a missing-Write becomes a permission request, not an Err");
+        assert!(msg.contains("PERMISSION REQUESTED"), "{msg}");
+        assert!(
+            rt.took_deferral_to_human(),
+            "a confirmed permission-request notify must record the deferral"
         );
     }
 

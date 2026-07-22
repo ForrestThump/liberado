@@ -19,6 +19,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use liberado_common::{
@@ -139,6 +140,19 @@ impl Disposition {
                     proposal.rationale
                 ),
             ),
+        }
+    }
+
+    /// Whether this run deferred the action to the human **and** already surfaced it out-of-band —
+    /// the signal a chat surface uses to drop a redundant "you need to grant permission" reply
+    /// (Gap 2). Only `Reported` can answer here: its flag is set by the runtime during execution.
+    /// A `Propose`'s out-of-band notify is done by whoever *writes* the note (the dispatch pack /
+    /// daemon) **after** this disposition is returned, so its notified-state is only known there —
+    /// this returns `false` for it, and the writer ORs in its own send result.
+    pub fn deferred_to_human(&self) -> bool {
+        match self {
+            Disposition::Reported(report) => report.deferred_to_human,
+            Disposition::Clarify { .. } | Disposition::Propose(_) => false,
         }
     }
 }
@@ -415,9 +429,13 @@ impl Orchestrator {
                         let provenance =
                             WriteProvenance::agent(self.source.clone(), trigger_correlation);
                         let runtime = self.factory.runtime_for(&allowed_mcps, provenance).await?;
-                        let runtime =
+                        let (runtime, deferral) =
                             self.gate(runtime, effective.clone(), goal, trigger_correlation);
-                        self.execute(&self.direct_budget, &*runtime, task).await?
+                        let mut report = self.execute(&self.direct_budget, &*runtime, task).await?;
+                        // If the gate deferred a call to the human out-of-band mid-run, mark it so a
+                        // chat surface can drop the redundant reply (Gap 2).
+                        report.deferred_to_human = deferred_flag_of(&deferral);
+                        report
                     };
                     tracing::Span::current().record("disposition", "reported");
                     tracing::info!(outcome = ?report.outcome, "execute-direct completed");
@@ -439,7 +457,7 @@ impl Orchestrator {
                     // gate matches the scoped tool catalog — not an empty set that blocks every MCP.
                     let gate_capabilities =
                         subagent_gate_capabilities(&effective, &decision_caps, &allowed_mcps);
-                    let runtime = self.gate(
+                    let (runtime, deferral) = self.gate(
                         runtime,
                         gate_capabilities,
                         subgoal.as_str(),
@@ -451,7 +469,11 @@ impl Orchestrator {
                         "building subagent task"
                     );
                     let task = Task::new(subagent_instructions(&success_criteria), subgoal);
-                    let report = self.execute(&self.subagent_budget, &*runtime, task).await?;
+                    let mut report = self.execute(&self.subagent_budget, &*runtime, task).await?;
+                    // Out-of-band deferral mid-run → mark it so a chat surface drops the redundant
+                    // reply (Gap 2). This is the primary path for a delegated subagent's permission
+                    // request bubbling up through `delegate`.
+                    report.deferred_to_human = deferred_flag_of(&deferral);
                     tracing::Span::current().record("disposition", "reported");
                     tracing::info!(outcome = ?report.outcome, "subagent dispatch completed");
                     Ok(Disposition::Reported(report))
@@ -495,6 +517,7 @@ impl Orchestrator {
                     summary: "proposal failed integrity verification — not executed".into(),
                     artifacts: Vec::new(),
                     new_high_signal_facts: Vec::new(),
+                    deferred_to_human: false,
                     follow_up: None,
                 });
             }
@@ -518,6 +541,7 @@ impl Orchestrator {
                         .into(),
                     artifacts: Vec::new(),
                     new_high_signal_facts: Vec::new(),
+                    deferred_to_human: false,
                     follow_up: None,
                 });
             }
@@ -554,6 +578,7 @@ impl Orchestrator {
                         summary: "proposed action type is not executable in v1".into(),
                         artifacts: Vec::new(),
                         new_high_signal_facts: Vec::new(),
+                        deferred_to_human: false,
                         follow_up: None,
                     })
                 }
@@ -614,6 +639,7 @@ impl Orchestrator {
             ),
             artifacts: Vec::new(),
             new_high_signal_facts: Vec::new(),
+            deferred_to_human: false,
             follow_up: None,
         })
     }
@@ -635,14 +661,15 @@ impl Orchestrator {
         let runtime = self.factory.runtime_for(allowed_mcps, provenance).await?;
         let gate_capabilities =
             subagent_gate_capabilities(&self.capabilities, capabilities, allowed_mcps);
-        let runtime = self.gate(
+        let (runtime, deferral) = self.gate(
             runtime,
             gate_capabilities,
             goal,
             proposal.correlation_id.as_str(),
         );
         let task = Task::new(subagent_instructions(success_criteria), goal);
-        let report = self.execute(&self.subagent_budget, &*runtime, task).await?;
+        let mut report = self.execute(&self.subagent_budget, &*runtime, task).await?;
+        report.deferred_to_human = deferred_flag_of(&deferral);
         tracing::info!(outcome = ?report.outcome, "executed approved subagent proposal");
         Ok(report)
     }
@@ -657,6 +684,9 @@ impl Orchestrator {
     ) -> Result<Report, OrchestratorError> {
         let semaphore = Arc::new(Semaphore::new(max_concurrent.max(1)));
         let mut handles = Vec::with_capacity(sub_dispatches.len());
+        // One deferral flag per sub-dispatch; OR'd into the merged report so a chat surface still
+        // suppresses the redundant reply if *any* parallel subagent deferred out-of-band (Gap 2).
+        let mut deferrals: Vec<Arc<AtomicBool>> = Vec::with_capacity(sub_dispatches.len());
 
         // `tokio::spawn` does not inherit task-locals, so each subagent would otherwise record its
         // inference under `correlation="-"` and detach from the parent turn in the latency journal.
@@ -685,12 +715,13 @@ impl Orchestrator {
                 &CapabilitySet::empty(),
                 &sub.allowed_mcps,
             );
-            let runtime = self.gate(
+            let (runtime, deferral) = self.gate(
                 runtime,
                 gate_capabilities,
                 sub.goal.as_str(),
                 sub.correlation_id.as_str(),
             );
+            deferrals.push(deferral);
             let task = Task::new(subagent_instructions(&sub.success_criteria), sub.goal);
             let budget = self.subagent_budget.clone();
             let provider = self.provider.clone();
@@ -743,6 +774,7 @@ impl Orchestrator {
             artifacts: all_artifacts,
             new_high_signal_facts: all_facts,
             follow_up: None,
+            deferred_to_human: deferrals.iter().any(deferred_flag_of),
         })
     }
 
@@ -780,13 +812,19 @@ impl Orchestrator {
     /// re-downgrade an approved call into a new proposal. `execute_approved`'s `Subagent` arm DOES
     /// use it, though: what a human approved there is a goal + MCP scope, not fixed calls, so the
     /// subagent's own adaptive calls during execution still need this same per-call safety net.
+    ///
+    /// Returns the gated runtime **and** the shared flag it raises when it defers a call to the
+    /// human out-of-band, so the caller can read it back after the run and stamp it onto the
+    /// `Report` (`Report::deferred_to_human`) — the signal a chat surface uses to drop a redundant
+    /// "you need to grant permission" reply (Gap 2). See [`deferred_flag_of`] for the caller side.
     fn gate(
         &self,
         runtime: Box<dyn ToolRuntime>,
         capabilities: CapabilitySet,
         goal_context: impl Into<String>,
         correlation_base: impl Into<String>,
-    ) -> Arc<dyn ToolRuntime> {
+    ) -> (Arc<dyn ToolRuntime>, Arc<AtomicBool>) {
+        let deferral_flag = Arc::new(AtomicBool::new(false));
         let mut gated = RiskGatedToolRuntime::new(
             Arc::from(runtime),
             capabilities,
@@ -798,12 +836,19 @@ impl Orchestrator {
             correlation_base.into(),
             self.signer.clone(),
             self.pool_name.clone(),
-        );
+        )
+        .with_deferral_flag(deferral_flag.clone());
         if let Some(notifier) = &self.notifier {
             gated = gated.with_notifier(notifier.clone());
         }
-        Arc::new(gated)
+        (Arc::new(gated), deferral_flag)
     }
+}
+
+/// Read a gate's deferral flag as a boolean — `true` iff the gated runtime raised a proposal /
+/// permission-request during the run and surfaced it out-of-band (see [`Orchestrator::gate`]).
+fn deferred_flag_of(flag: &Arc<AtomicBool>) -> bool {
+    flag.load(Ordering::Relaxed)
 }
 
 /// A runtime that exposes no tools — used for `ExecuteDirect` when the acting component holds no
@@ -876,6 +921,29 @@ mod tests {
         assert!(result.contains("find the answer"));
         assert!(result.contains("write it down"));
         assert!(result.contains(SUBAGENT_PREAMBLE));
+    }
+
+    #[test]
+    fn disposition_reports_the_runtime_deferral_flag() {
+        // Gap 2: `deferred_to_human()` surfaces a `Reported`'s runtime flag; other dispositions are
+        // never "already notified out-of-band" here (a `Propose`'s ping is sent by the writer).
+        let report = |deferred: bool| Report {
+            outcome: Outcome::Succeeded,
+            summary: "s".into(),
+            artifacts: vec![],
+            new_high_signal_facts: vec![],
+            follow_up: None,
+            deferred_to_human: deferred,
+        };
+        assert!(Disposition::Reported(report(true)).deferred_to_human());
+        assert!(!Disposition::Reported(report(false)).deferred_to_human());
+        assert!(
+            !Disposition::Clarify {
+                questions: vec!["?".into()],
+                what_blocked: BlockReason::Ambiguous,
+            }
+            .deferred_to_human()
+        );
     }
 
     #[test]
