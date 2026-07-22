@@ -770,7 +770,8 @@ impl Daemon {
                 // `session_grants::session_grant(&self.pool_name)`. Folded post-narrow into the pool's
                 // effective ceiling, so the next same-zone write in this process passes with no prompt.
                 let pool = proposal.pool.as_deref().unwrap_or(DEFAULT_POOL);
-                let newly = liberado_common::session_grants::grant_for_session(pool, capability.clone());
+                let newly =
+                    liberado_common::session_grants::grant_for_session(pool, capability.clone());
                 tracing::info!(
                     pool,
                     ?capability,

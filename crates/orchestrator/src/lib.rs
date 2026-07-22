@@ -69,6 +69,9 @@ scratchpad loops or re-reading the same notes when you already have enough to re
 /// [`terminal_summary`](Self::terminal_summary), which is the single conversion from this to a
 /// session's `TerminalKind`. It is shared by the daemon and the dispatch pack precisely so the two
 /// cannot drift on what a `Propose` disposition *means* when a session ends on one.
+// Payload-carrying sum type by design (see module docs above) — variants hold real artifacts,
+// not status tags. Boxing would only paper over the intentional shape for a clippy threshold.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Disposition {
     /// Work ran; here is the report for the main agent.

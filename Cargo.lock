@@ -3796,10 +3796,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "liberado-messaging"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "liberado-notify"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "liberado-messaging",
  "reqwest 0.12.28",
  "serde_json",
  "thiserror 2.0.18",
@@ -3883,6 +3892,7 @@ dependencies = [
  "liberado-main-agent",
  "liberado-mcp",
  "liberado-memory-store",
+ "liberado-messaging",
  "liberado-notify",
  "liberado-provider",
  "liberado-session",
@@ -3943,13 +3953,13 @@ dependencies = [
  "liberado-common",
  "liberado-config-loader",
  "liberado-daemon",
+ "liberado-messaging",
  "liberado-notify",
  "liberado-orchestrator",
  "liberado-provider",
  "liberado-provider-openai-compat",
  "liberado-test-support",
  "liberado-vault",
- "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tempfile",

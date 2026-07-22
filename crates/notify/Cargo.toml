@@ -1,7 +1,7 @@
 [package]
 name = "liberado-notify"
 version = "0.1.0"
-description = "A minimal, pluggable notification sink for events a human should know about even when nothing else in the daemon's own surfaces is open in front of them right now — the motivating case is an unattended (cron-triggered, Phase 3) proposal nobody's watching for. Telegram is the first implementation (free, mature); the Notifier trait exists so it isn't the only one."
+description = "A minimal, pluggable notification sink for events a human should know about even when nothing else in the daemon's own surfaces is open in front of them right now — the motivating case is an unattended (cron-triggered, Phase 3) proposal nobody's watching for. Telegram is the first implementation (free, mature); the Notifier trait exists so it isn't the only one. Also hosts Telegram's MessagingChannel impl so Matrix/Discord/Signal can plug in via the same trait."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -10,13 +10,12 @@ repository.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+liberado-messaging = { workspace = true }
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
-
-[dev-dependencies]
 tokio = { workspace = true }
+tracing = { workspace = true }
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)

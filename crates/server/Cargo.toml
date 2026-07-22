@@ -29,6 +29,7 @@ liberado-session = { workspace = true }
 liberado-session-store = { workspace = true }
 liberado-coder-agent = { workspace = true }
 liberado-notify = { workspace = true }
+liberado-messaging = { workspace = true }
 turbovault-vector = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }

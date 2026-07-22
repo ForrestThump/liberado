@@ -60,7 +60,9 @@ where
 
 /// The correlation id on the current task-local context, or `"-"` outside any [`with_correlation`].
 pub fn current_correlation() -> String {
-    CORRELATION.try_with(|c| c.clone()).unwrap_or_else(|_| "-".into())
+    CORRELATION
+        .try_with(|c| c.clone())
+        .unwrap_or_else(|_| "-".into())
 }
 
 /// One recorded inference call. Serialized as a JSONL line by the daemon's recorder.
@@ -123,7 +125,11 @@ pub struct MeteredProvider {
 }
 
 impl MeteredProvider {
-    pub fn new(inner: Arc<dyn Provider>, role: AgentRole, recorder: Arc<dyn LatencyRecorder>) -> Self {
+    pub fn new(
+        inner: Arc<dyn Provider>,
+        role: AgentRole,
+        recorder: Arc<dyn LatencyRecorder>,
+    ) -> Self {
         Self {
             inner,
             role,
@@ -164,7 +170,11 @@ impl Provider for MeteredProvider {
         let wall_ms = start.elapsed().as_millis() as u64;
 
         let (finish, tool_calls, usage) = match &result {
-            Ok(r) => (format!("{:?}", r.finish_reason), r.tool_calls.len(), r.usage),
+            Ok(r) => (
+                format!("{:?}", r.finish_reason),
+                r.tool_calls.len(),
+                r.usage,
+            ),
             Err(_) => ("error".to_string(), 0, None),
         };
         record(
@@ -273,8 +283,10 @@ mod tests {
     #[tokio::test]
     async fn records_fixed_role_and_correlation_from_scope() {
         let rec = Arc::new(CapturingRecorder::default());
-        let inner: Arc<dyn Provider> =
-            Arc::new(MockProvider::with_script("hi", [CompletionResponse::text("ok")]));
+        let inner: Arc<dyn Provider> = Arc::new(MockProvider::with_script(
+            "hi",
+            [CompletionResponse::text("ok")],
+        ));
         let metered = MeteredProvider::new(inner, AgentRole::Dispatcher, rec.clone());
 
         with_correlation("cid-123", async {
@@ -295,8 +307,10 @@ mod tests {
     #[tokio::test]
     async fn correlation_defaults_to_dash_outside_a_scope() {
         let rec = Arc::new(CapturingRecorder::default());
-        let inner: Arc<dyn Provider> =
-            Arc::new(MockProvider::with_script("hi", [CompletionResponse::text("ok")]));
+        let inner: Arc<dyn Provider> = Arc::new(MockProvider::with_script(
+            "hi",
+            [CompletionResponse::text("ok")],
+        ));
         let metered = MeteredProvider::new(inner, AgentRole::Face, rec.clone());
 
         metered

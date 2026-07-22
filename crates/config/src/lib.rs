@@ -266,8 +266,7 @@ const GRANTS_OVERLAY_FILE: &str = "grants.overlay.toml";
 
 /// A one-line header stamped atop the generated overlay so a human who opens it knows it's
 /// machine-owned and how it got there.
-const GRANTS_OVERLAY_HEADER: &str =
-    "machine-owned — appended by Liberado when you tap \"Approve everywhere\" on a permission \
+const GRANTS_OVERLAY_HEADER: &str = "machine-owned — appended by Liberado when you tap \"Approve everywhere\" on a permission \
      request. Merged over policy.toml at boot. Safe to delete to revoke all such grants.";
 
 /// Path to the machine-owned grants overlay ([`GRANTS_OVERLAY_FILE`], under [`data_dir`]).
@@ -342,9 +341,10 @@ fn append_grant_to_overlay_at(
     let mut overlay = load_grants_overlay_at(path);
 
     // Idempotent: identical grant already present → no change.
-    let already = overlay.grants.iter().any(|g| {
-        g.component == component && g.capabilities.iter().any(|c| c == capability)
-    });
+    let already = overlay
+        .grants
+        .iter()
+        .any(|g| g.component == component && g.capabilities.iter().any(|c| c == capability));
     if already {
         return Ok(false);
     }
@@ -1002,8 +1002,10 @@ transport = { kind = "stdio", command = "tasks-mcp", args = [] }
         );
         // The undeclared zone was auto-declared so the merged config stays valid.
         assert!(
-            overlay.zones.iter().any(|z| z.zone == "sandbox"
-                && z.write_class == WriteClass::AgentWritable),
+            overlay
+                .zones
+                .iter()
+                .any(|z| z.zone == "sandbox" && z.write_class == WriteClass::AgentWritable),
             "an undeclared granted zone is declared AgentWritable in the overlay"
         );
     }
@@ -1041,10 +1043,18 @@ transport = { kind = "stdio", command = "tasks-mcp", args = [] }
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("grants.overlay.toml");
 
-        append_grant_to_overlay_at(&path, "dispatcher", &Capability::Write(Zone::vault("sandbox")))
-            .unwrap();
-        append_grant_to_overlay_at(&path, "dispatcher", &Capability::Write(Zone::vault("scratch")))
-            .unwrap();
+        append_grant_to_overlay_at(
+            &path,
+            "dispatcher",
+            &Capability::Write(Zone::vault("sandbox")),
+        )
+        .unwrap();
+        append_grant_to_overlay_at(
+            &path,
+            "dispatcher",
+            &Capability::Write(Zone::vault("scratch")),
+        )
+        .unwrap();
         append_grant_to_overlay_at(&path, "life", &Capability::Write(Zone::vault("sandbox")))
             .unwrap();
 

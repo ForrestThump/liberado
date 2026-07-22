@@ -62,6 +62,7 @@ liberado-dispatcher = { path = "crates/dispatcher" }
 liberado-executor = { path = "crates/executor" }
 liberado-scratchpad = { path = "crates/scratchpad" }
 liberado-notify = { path = "crates/notify" }
+liberado-messaging = { path = "crates/messaging" }
 liberado-mcp = { path = "crates/mcp" }
 liberado-mcp-forge = { path = "crates/mcp-forge" }
 liberado-orchestrator = { path = "crates/orchestrator" }

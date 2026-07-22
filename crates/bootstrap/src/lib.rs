@@ -73,7 +73,11 @@ fn resolve_provider_profile<'a>(config: &'a Config, name: &str) -> Option<&'a Pr
                 provider = name,
                 "provider names no declared topology.providers entry — falling back to deepseek"
             );
-            config.topology.providers.iter().find(|p| p.name == "deepseek")
+            config
+                .topology
+                .providers
+                .iter()
+                .find(|p| p.name == "deepseek")
         })
 }
 
@@ -168,7 +172,8 @@ pub fn role_providers_from_config(
                     .as_deref()
                     .and_then(|n| resolve_provider_profile(config, n))
                     .unwrap_or(base_profile);
-                let built = build_provider_from_profile(profile, Some(ov)).unwrap_or_else(|| base.clone());
+                let built =
+                    build_provider_from_profile(profile, Some(ov)).unwrap_or_else(|| base.clone());
                 tracing::info!(
                     role = arole.as_str(),
                     model = built.model(),
@@ -330,7 +335,9 @@ pub fn configure_daemon(
     let (Some(dispatcher_provider), Some(subagent_provider)) =
         (providers.dispatcher.as_ref(), providers.subagent.as_ref())
     else {
-        tracing::warn!("provider not configured (API key unset) — running watch-only (no dispatch)");
+        tracing::warn!(
+            "provider not configured (API key unset) — running watch-only (no dispatch)"
+        );
         return daemon;
     };
     let mut dispatcher = Dispatcher::new(

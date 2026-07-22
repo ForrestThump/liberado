@@ -1,0 +1,17 @@
+[package]
+name = "liberado-messaging"
+version = "0.1.0"
+description = "Channel-agnostic messaging traits for Liberado chat clients (Telegram today; Matrix, Signal, Discord later). Transport only — no network deps."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
+role = "foundation"

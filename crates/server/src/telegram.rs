@@ -23,7 +23,7 @@ pub struct TelegramChatBridge {
 }
 
 #[async_trait]
-impl liberado_telegram_approvals::TelegramChatSurface for TelegramChatBridge {
+impl liberado_messaging::ChatSurface for TelegramChatBridge {
     async fn reply(&self, user_text: &str) -> Result<String, String> {
         let text = user_text.trim();
         if text.starts_with('/') {
