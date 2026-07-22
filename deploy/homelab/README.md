@@ -84,7 +84,10 @@ and a strong worker. Edit on the box + `up -d --force-recreate`. Then compare be
 `bash deploy/homelab/latency-report.sh`.
 
 **Permission grants persist to a machine-owned overlay (not `policy.toml`).** When an agent hits a
-zone it wasn't granted, Liberado sends a Telegram request (Deny / Once / Session / Everywhere).
+zone it wasn't granted, Liberado sends a Telegram request (Deny / Once / Session / Everywhere). That
+tappable notification is the **only** message for that request — the chat agent's own reply collapses
+to a small "⏳ waiting on your tap ↑" marker instead of paraphrasing the request a second time, so you
+act on the buttons above, not a duplicate.
 Tapping **Everywhere** appends the grant to `grants.overlay.toml` in the **data dir** (the container's
 `$LIBERADO_DATA_DIR`, a writable volume — *not* the read-only config mount), merged on top of
 `policy.toml` at boot. So an "Everywhere" grant takes effect on the next `up -d --force-recreate`, and

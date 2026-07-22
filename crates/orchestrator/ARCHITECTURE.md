@@ -14,6 +14,17 @@ Turns a dispatcher `DispatchDecision` into an actual execution. It is the seam b
 
 `Disposition` = `Reported(Report)` \| `Clarify { questions, what_blocked }` \| `Propose(SignedProposal)`.
 
+### Out-of-band deferral flag (suppresses a redundant chat reply)
+
+When the risk gate defers a call to the human mid-run (a proposal downgrade or a permission request)
+**and** the notification actually sent, `RiskGatedToolRuntime` raises a shared flag that `run()`
+reads back after `execute()` and stamps onto `Report::deferred_to_human`. `Disposition::deferred_to_human()`
+surfaces it. Downstream, the dispatch pack folds it into `GoalResult.diagnostics`, and the face
+agent's `delegate` reads that to collapse its now-redundant "you need to grant permission" reply to a
+tiny marker — the out-of-band Telegram notification becomes the sole communication. The flag stays
+`false` with no notifier or a failed send, so the chat reply remains the fallback. See the module
+docs in `risk_gated.rs` and `main-agent`'s `face.rs`/`sessions.rs`.
+
 **Not** full inherit of every dispatcher tool: subagent authority is always a narrow intersection
 with the pool/dispatcher ceiling (Decision 4). Empty `allowed_mcps` means all MCPs under the ceiling
 for runtime factory + gate (same sense as empty `relevant_mcps` on direct).
