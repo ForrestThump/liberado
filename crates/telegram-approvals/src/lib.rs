@@ -1,89 +1,78 @@
 //! # liberado-telegram-approvals
 //!
-//! Two Telegram surfaces over one long-poll loop:
+//! Channel-agnostic approval + free-form chat bot over a [`MessagingChannel`]:
 //!
 //! 1. **Proposal Approve/Reject/Revise** — pure-code frontmatter edits (Approve/Reject never
-//!    touch an LLM). The two-way half of `liberado-notify`'s `TelegramNotifier::notify_proposal`.
-//! 2. **Free-form chat** (optional) — when a [`TelegramChatSurface`] is attached, ordinary
-//!    messages from the configured chat become Liberado chat turns. While inference runs the bot
-//!    sends Telegram `sendChatAction(typing)` so the user sees "agent is typing…".
+//!    touch an LLM). The two-way half of `liberado-notify`'s proposal notifications.
+//! 2. **Free-form chat** (optional) — when a [`ChatSurface`] is attached, ordinary messages
+//!    become Liberado chat turns. While inference runs the bot pulses the channel's typing
+//!    indicator.
 //!
 //! Free-form chat is opt-in via [`ApprovalBot::with_chat`]: without it, non-revision messages are
-//! ignored (the historical behaviour). Only the configured `LIBERADO_TELEGRAM_CHAT_ID` is served.
+//! ignored (the historical behaviour). The default transport is Telegram
+//! ([`TelegramChannel`](liberado_notify::TelegramChannel)); Matrix / Signal / Discord plug in by
+//! implementing [`MessagingChannel`] and constructing the bot with [`ApprovalBot::new`].
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use liberado_common::{
     GrantScope, PROPOSALS_DIR, Proposal, ProposalSigner, ProposalStatus, ProposedAction,
     WriteProvenance,
 };
 use liberado_config_loader::TelegramApprovalsTuning;
+use liberado_messaging::approval_action_rows;
+use liberado_notify::TelegramNotifier;
 use liberado_provider::{CompletionRequest, Message, Provider, complete_json};
 use liberado_vault::Vault;
 use tokio::sync::Mutex;
 
-const TELEGRAM_API_BASE: &str = "https://api.telegram.org/bot";
-/// Telegram hard-caps message text at 4096 UTF-16 code units; stay under with headroom.
-const TELEGRAM_MAX_MESSAGE_CHARS: usize = 4000;
-/// `sendChatAction` "typing" lasts ~5s on Telegram's side; refresh before it expires.
+// Re-export so composition roots and the chat bridge can depend on one crate for the bot surface.
+// `TelegramChatSurface` is the historical name — prefer `ChatSurface` for new code.
+pub use liberado_messaging::{
+    ActionButton, ChatSurface, ChatSurface as TelegramChatSurface, InboundEvent, MessagingChannel,
+};
+
+/// Refresh typing indicators this often while a long turn runs. Telegram's indicator lasts ~5s;
+/// other channels no-op `set_typing` so the pulse is harmless.
 const TYPING_REFRESH_SECS: u64 = 4;
 
-/// One conversational turn for free-form Telegram messages. Implemented by the server against
-/// [`liberado_main_agent::ChatSessions`] so Telegram shares the same face agent + tools as HTTP chat.
-#[async_trait]
-pub trait TelegramChatSurface: Send + Sync {
-    async fn reply(&self, user_text: &str) -> Result<String, String>;
-}
-
-/// A Telegram bot that answers Approve/Reject/Revise taps on proposal notifications, and
-/// optionally free-form chat when a [`TelegramChatSurface`] is attached.
+/// Answers Approve/Reject/Revise (and permission-scope) taps on proposal notifications, and
+/// optionally free-form chat when a [`ChatSurface`] is attached.
+///
+/// Transport is entirely behind [`MessagingChannel`] — Telegram today, any client tomorrow.
 pub struct ApprovalBot {
-    client: reqwest::Client,
-    token: String,
-    chat_id: String,
+    channel: Arc<dyn MessagingChannel>,
     vault: Vault,
     signer: ProposalSigner,
     provider: Arc<dyn Provider>,
     tuning: TelegramApprovalsTuning,
-    /// Telegram message_id (of a `force_reply` prompt) → the proposal stem it's revising. Lost on
-    /// restart — acceptable, a human can just tap Revise again.
-    pending_revisions: Mutex<HashMap<i64, String>>,
-    /// When set, free-form messages from `chat_id` run a Liberado chat turn.
-    chat: Option<Arc<dyn TelegramChatSurface>>,
-    /// Shared "last time the human sent us a message" clock. When set, every inbound message from the
-    /// configured chat stamps it `Some(now)`. The server's chat-delivering notifier reads it to hold a
-    /// cron brief until you are between messages (see `docs/ideas/cron-delivery-timing-idea.md`). The
-    /// inner `None` means "never active" → briefs deliver immediately. The outer `None` means no
-    /// delivery timing is being tracked at all — the historical behaviour.
+    /// Prompt id (from [`MessagingChannel::request_reply`]) → proposal stem being revised.
+    /// Lost on restart — acceptable; a human can tap Revise again.
+    pending_revisions: Mutex<HashMap<String, String>>,
+    /// When set, free-form messages run a Liberado chat turn.
+    chat: Option<Arc<dyn ChatSurface>>,
+    /// Shared "last time the human sent us a message" clock. When set, every inbound message
+    /// stamps it `Some(now)`. The server's chat-delivering notifier reads it to hold a cron brief
+    /// until you are between messages. The inner `None` means "never active" → briefs deliver
+    /// immediately. The outer `None` means no delivery timing is being tracked at all.
     last_activity: Option<Arc<Mutex<Option<std::time::Instant>>>>,
-    /// `(command, description)` pairs (no leading `/`) registered with Telegram's `setMyCommands` on
-    /// startup, so typing `/` shows an autocomplete menu. Empty → nothing registered.
+    /// `(command, description)` pairs (no leading `/`) registered with the channel on startup.
     command_menu: Vec<(String, String)>,
 }
 
 impl ApprovalBot {
-    /// Build from `LIBERADO_TELEGRAM_BOT_TOKEN` + `LIBERADO_TELEGRAM_CHAT_ID` — the same env
-    /// vars `TelegramNotifier::from_env` uses (one bot, two halves). `None` when either is unset;
-    /// approvals stay Obsidian/TUI-only, same as today. `tuning` is `config.tuning.telegram_approvals`
-    /// — pass [`TelegramApprovalsTuning::default()`] to accept the specced defaults.
-    ///
-    /// Liberado-prefixed on purpose so we do not collide with OpenClaw's `TELEGRAM_BOT_TOKEN` /
-    /// `TELEGRAM_CHAT_ID` on a shared host.
-    pub fn from_env(
+    /// Build over an arbitrary [`MessagingChannel`]. Prefer this when wiring Matrix/Discord/Signal.
+    pub fn new(
+        channel: Arc<dyn MessagingChannel>,
         vault: Vault,
         signer: ProposalSigner,
         provider: Arc<dyn Provider>,
         tuning: TelegramApprovalsTuning,
-    ) -> Option<Self> {
-        let token = std::env::var("LIBERADO_TELEGRAM_BOT_TOKEN").ok()?;
-        let chat_id = std::env::var("LIBERADO_TELEGRAM_CHAT_ID").ok()?;
-        Some(Self {
-            client: reqwest::Client::new(),
-            token,
-            chat_id,
+    ) -> Self {
+        Self {
+            channel,
             vault,
             signer,
             provider,
@@ -92,296 +81,221 @@ impl ApprovalBot {
             chat: None,
             last_activity: None,
             command_menu: Vec::new(),
-        })
+        }
+    }
+
+    /// Build a Telegram-backed bot from `LIBERADO_TELEGRAM_BOT_TOKEN` + `LIBERADO_TELEGRAM_CHAT_ID`.
+    /// `None` when either is unset; approvals stay Obsidian/TUI-only. `tuning` is
+    /// `config.tuning.telegram_approvals` — pass [`TelegramApprovalsTuning::default()`] for defaults.
+    pub fn from_env(
+        vault: Vault,
+        signer: ProposalSigner,
+        provider: Arc<dyn Provider>,
+        tuning: TelegramApprovalsTuning,
+    ) -> Option<Self> {
+        let channel = TelegramNotifier::from_env()?.with_poll_tuning(
+            tuning.getupdate_timeout_secs,
+            tuning.poll_retry_backoff_secs,
+        );
+        Some(Self::new(
+            Arc::new(channel),
+            vault,
+            signer,
+            provider,
+            tuning,
+        ))
     }
 
     /// Attach free-form chat handling (Liberado face agent). Without this, ordinary messages
     /// that are not revision replies are ignored.
-    pub fn with_chat(mut self, chat: Arc<dyn TelegramChatSurface>) -> Self {
+    pub fn with_chat(mut self, chat: Arc<dyn ChatSurface>) -> Self {
         self.chat = Some(chat);
         self
     }
 
-    /// Share a "last inbound message" clock, stamped `Some(now)` on every message from the configured
-    /// chat. The chat-delivering notifier reads it to defer a cron brief around active conversation.
+    /// Share a "last inbound message" clock, stamped `Some(now)` on every message from the channel.
+    /// The chat-delivering notifier reads it to defer a cron brief around active conversation.
     pub fn with_activity_tracker(mut self, clock: Arc<Mutex<Option<std::time::Instant>>>) -> Self {
         self.last_activity = Some(clock);
         self
     }
 
-    /// Advertise `(command, description)` pairs (no leading `/`) to Telegram, so typing `/` shows an
-    /// autocomplete menu. Registered once on [`run`](Self::run) startup via `setMyCommands`.
+    /// Advertise `(command, description)` pairs (no leading `/`) for slash-command autocomplete.
+    /// Registered once on [`run`](Self::run) startup via the channel.
     pub fn with_command_menu(mut self, commands: Vec<(String, String)>) -> Self {
         self.command_menu = commands;
         self
     }
 
-    /// Register the command menu with Telegram (`setMyCommands`), scoped to the configured chat so it
-    /// doesn't leak to other users of the same bot. Best-effort: a failure is logged, not fatal.
-    async fn register_slash_commands(&self) {
-        if self.command_menu.is_empty() {
-            return;
-        }
-        let commands: Vec<serde_json::Value> = self
-            .command_menu
-            .iter()
-            .map(|(command, description)| serde_json::json!({ "command": command, "description": description }))
-            .collect();
-        let url = format!("{TELEGRAM_API_BASE}{}/setMyCommands", self.token);
-        let body = serde_json::json!({
-            "commands": commands,
-            // Scope to this chat so the menu appears for the operator without publishing it globally.
-            "scope": { "type": "chat", "chat_id": self.chat_id },
-        });
-        match self.client.post(&url).json(&body).send().await {
-            Ok(r) if r.status().is_success() => {
-                tracing::info!(
-                    count = self.command_menu.len(),
-                    "registered Telegram slash-command menu"
-                );
-            }
-            Ok(r) => tracing::warn!(status = %r.status(), "setMyCommands non-success"),
-            Err(e) => tracing::warn!(error = %e, "setMyCommands failed"),
-        }
-    }
-
-    /// Long-poll Telegram's `getUpdates` forever, dispatching each `callback_query`/`message` it
-    /// sees. Never returns under normal operation — intended to be `tokio::spawn`ed alongside the
-    /// daemon's own watch loop.
+    /// Poll the channel forever, dispatching each inbound event. Never returns under normal
+    /// operation — intended to be `tokio::spawn`ed alongside the daemon's own watch loop.
     pub async fn run(self) {
         tracing::info!(
+            channel = self.channel.name(),
             chat = self.chat.is_some(),
-            "starting Telegram bot poll loop (approvals{})",
+            "starting messaging bot poll loop (approvals{})",
             if self.chat.is_some() {
                 " + free-form chat"
             } else {
                 ""
             }
         );
-        // Publish the slash-command autocomplete menu (typing `/` in Telegram lists these).
-        self.register_slash_commands().await;
-        let mut offset: i64 = 0;
-        loop {
-            let updates = self.fetch_updates(offset).await;
-            for update in &updates {
-                let update_id = update["update_id"].as_i64().unwrap_or(0);
-                offset = offset.max(update_id + 1);
+        if !self.command_menu.is_empty() {
+            match self.channel.register_commands(&self.command_menu).await {
+                Ok(()) => tracing::info!(
+                    count = self.command_menu.len(),
+                    channel = self.channel.name(),
+                    "registered slash-command menu"
+                ),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    channel = self.channel.name(),
+                    "register_commands failed"
+                ),
+            }
+        }
 
-                if let Some(cq) = update.get("callback_query") {
-                    self.handle_callback_query(cq).await;
-                } else if let Some(msg) = update.get("message") {
-                    self.handle_message(msg).await;
+        let mut cursor = String::from("0");
+        loop {
+            match self.channel.receive(&mut cursor).await {
+                Ok(events) => {
+                    for event in events {
+                        self.handle_event(event).await;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        channel = self.channel.name(),
+                        "messaging receive error"
+                    );
+                    tokio::time::sleep(Duration::from_secs(self.tuning.poll_retry_backoff_secs))
+                        .await;
                 }
             }
         }
     }
 
-    async fn fetch_updates(&self, offset: i64) -> Vec<serde_json::Value> {
-        let getupdate_timeout = self.tuning.getupdate_timeout_secs;
-        let url = format!(
-            "{TELEGRAM_API_BASE}{token}/getUpdates?offset={offset}&timeout={getupdate_timeout}\
-             &allowed_updates=[\"message\",\"callback_query\"]",
-            token = self.token,
-        );
-        match self
-            .client
-            .get(&url)
-            .timeout(Duration::from_secs(getupdate_timeout + 5))
-            .send()
-            .await
-        {
-            Ok(r) if r.status().is_success() => r
-                .json::<serde_json::Value>()
+    async fn handle_event(&self, event: InboundEvent) {
+        match event {
+            InboundEvent::Action {
+                action,
+                correlation_id,
+                event_id,
+                message_ref,
+            } => {
+                self.handle_action(&action, &correlation_id, &event_id, message_ref.as_deref())
+                    .await
+            }
+            InboundEvent::Message {
+                text,
+                reply_to_prompt,
+                from_bot,
+            } => {
+                if from_bot {
+                    return;
+                }
+                self.handle_message(&text, reply_to_prompt).await;
+            }
+        }
+    }
+
+    async fn handle_action(
+        &self,
+        action: &str,
+        stem: &str,
+        event_id: &str,
+        message_ref: Option<&str>,
+    ) {
+        match action {
+            "approve" => {
+                self.set_status(event_id, message_ref, stem, ProposalStatus::Approved)
+                    .await
+            }
+            "reject" => {
+                self.set_status(event_id, message_ref, stem, ProposalStatus::Rejected)
+                    .await
+            }
+            "revise" => self.begin_revision(event_id, stem).await,
+            "deny" => {
+                self.set_permission_scope(event_id, message_ref, stem, None)
+                    .await
+            }
+            "once" => {
+                self.set_permission_scope(event_id, message_ref, stem, Some(GrantScope::Once))
+                    .await
+            }
+            "session" => {
+                self.set_permission_scope(event_id, message_ref, stem, Some(GrantScope::Session))
+                    .await
+            }
+            "everywhere" => {
+                self.set_permission_scope(
+                    event_id,
+                    message_ref,
+                    stem,
+                    Some(GrantScope::Everywhere),
+                )
                 .await
-                .ok()
-                .and_then(|v| v["result"].as_array().cloned())
-                .unwrap_or_default(),
-            Ok(r) => {
-                tracing::warn!(status = %r.status(), "getUpdates non-success");
-                tokio::time::sleep(Duration::from_secs(self.tuning.poll_retry_backoff_secs)).await;
-                vec![]
             }
-            Err(e) => {
-                tracing::warn!("getUpdates error: {e}");
-                tokio::time::sleep(Duration::from_secs(self.tuning.poll_retry_backoff_secs)).await;
-                vec![]
-            }
+            _ => tracing::warn!(action, "unknown messaging action"),
         }
     }
 
-    async fn answer_callback_query(&self, callback_query_id: &str, text: &str) {
-        let url = format!("{TELEGRAM_API_BASE}{}/answerCallbackQuery", self.token);
-        let _ = self
-            .client
-            .post(&url)
-            .json(&serde_json::json!({ "callback_query_id": callback_query_id, "text": text }))
-            .send()
-            .await;
+    async fn ack(&self, event_id: &str, text: &str) {
+        if let Err(e) = self.channel.acknowledge(event_id, text).await {
+            tracing::warn!(error = %e, "acknowledge failed");
+        }
     }
 
-    async fn send_message(&self, text: &str) {
-        for chunk in split_telegram_chunks(text) {
-            if let Err(e) = self.send_message_raw(&chunk).await {
-                tracing::warn!(error = %e, "Telegram sendMessage failed");
+    async fn send_text(&self, text: &str) {
+        if let Err(e) = self.channel.send_text(text).await {
+            tracing::warn!(error = %e, channel = self.channel.name(), "send_text failed");
+        }
+    }
+
+    /// Stamp a decision receipt: edit the tapped message to `body` and strip its now-stale buttons.
+    /// Falls back to a fresh message when the channel gave us no message ref or editing failed, so
+    /// the human always sees the outcome.
+    async fn receipt(&self, message_ref: Option<&str>, body: &str) {
+        match message_ref {
+            Some(mref) => {
+                if let Err(e) = self.channel.edit_message(mref, body).await {
+                    tracing::warn!(error = %e, "approval-bot: edit_message receipt failed; sending plain text");
+                    self.send_text(body).await;
+                }
             }
+            None => self.send_text(body).await,
         }
     }
 
-    async fn send_message_raw(&self, text: &str) -> Result<(), String> {
-        let url = format!("{TELEGRAM_API_BASE}{}/sendMessage", self.token);
-        let response = self
-            .client
-            .post(&url)
-            .json(&serde_json::json!({ "chat_id": self.chat_id, "text": text }))
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        if !response.status().is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(format!("Telegram API: {body}"));
-        }
-        Ok(())
-    }
-
-    /// Show "agent is typing…" in the chat. Telegram expires the indicator after ~5s; call again
-    /// to refresh while inference is still running.
-    async fn send_typing(&self) {
-        let url = format!("{TELEGRAM_API_BASE}{}/sendChatAction", self.token);
-        let _ = self
-            .client
-            .post(&url)
-            .json(&serde_json::json!({
-                "chat_id": self.chat_id,
-                "action": "typing"
-            }))
-            .send()
-            .await;
-    }
-
-    /// Background task that refreshes `sendChatAction(typing)` until aborted. Call
-    /// [`send_typing`](Self::send_typing) once first so the indicator shows immediately.
+    /// Background task that refreshes the typing indicator until aborted.
     fn spawn_typing_pulse(&self) -> tokio::task::JoinHandle<()> {
-        let client = self.client.clone();
-        let token = self.token.clone();
-        let chat_id = self.chat_id.clone();
+        let channel = self.channel.clone();
         tokio::spawn(async move {
             loop {
-                let url = format!("{TELEGRAM_API_BASE}{token}/sendChatAction");
-                let _ = client
-                    .post(&url)
-                    .json(&serde_json::json!({
-                        "chat_id": chat_id,
-                        "action": "typing"
-                    }))
-                    .send()
-                    .await;
+                let _ = channel.set_typing().await;
                 tokio::time::sleep(Duration::from_secs(TYPING_REFRESH_SECS)).await;
             }
         })
     }
 
-    fn message_is_from_allowed_chat(&self, msg: &serde_json::Value) -> bool {
-        let Some(id) = msg.get("chat").and_then(|c| c.get("id")) else {
-            return false;
-        };
-        // Telegram may send chat.id as a number; env stores a string.
-        let incoming = id
-            .as_i64()
-            .map(|n| n.to_string())
-            .or_else(|| id.as_str().map(str::to_string))
-            .unwrap_or_default();
-        incoming == self.chat_id
-    }
-
-    /// Send `text` with a fresh Approve/Revise/Reject button row for `stem` — used both for the
-    /// initial notification (via `liberado-notify`'s `TelegramNotifier`, a separate crate) and
-    /// here, after a revision, so the human reviews the redraft before re-approving.
-    async fn send_approval_buttons(&self, stem: &str, text: &str) {
-        let url = format!("{TELEGRAM_API_BASE}{}/sendMessage", self.token);
-        let _ = self
-            .client
-            .post(&url)
-            .json(&serde_json::json!({
-                "chat_id": self.chat_id,
-                "text": text,
-                "reply_markup": {
-                    "inline_keyboard": [[
-                        { "text": "✅ Approve", "callback_data": format!("approve:{stem}") },
-                        { "text": "📝 Revise", "callback_data": format!("revise:{stem}") },
-                        { "text": "❌ Reject", "callback_data": format!("reject:{stem}") }
-                    ]]
-                }
-            }))
-            .send()
-            .await;
-    }
-
-    /// Send a `force_reply` prompt so the human's next message is captured as a revision note.
-    /// Returns the sent message's id (needed to correlate the reply back to `stem`).
-    async fn send_force_reply(&self, text: &str) -> Option<i64> {
-        let url = format!("{TELEGRAM_API_BASE}{}/sendMessage", self.token);
-        let response = self
-            .client
-            .post(&url)
-            .json(&serde_json::json!({
-                "chat_id": self.chat_id,
-                "text": text,
-                "reply_markup": {
-                    "force_reply": true,
-                    "input_field_placeholder": "Describe the changes needed..."
-                }
-            }))
-            .send()
-            .await
-            .ok()?;
-        response
-            .json::<serde_json::Value>()
-            .await
-            .ok()?
-            .get("result")?
-            .get("message_id")?
-            .as_i64()
-    }
-
-    async fn handle_callback_query(&self, cq: &serde_json::Value) {
-        let cq_id = cq["id"].as_str().unwrap_or("");
-        let data = cq["data"].as_str().unwrap_or("");
-
-        let Some((action, stem)) = parse_callback_data(data) else {
-            tracing::warn!(data, "unexpected callback_data format");
-            return;
-        };
-
-        match action {
-            "approve" => self.set_status(cq_id, stem, ProposalStatus::Approved).await,
-            "reject" => self.set_status(cq_id, stem, ProposalStatus::Rejected).await,
-            "revise" => self.begin_revision(cq_id, stem).await,
-            // Permission-request scope buttons: record the human's choice; the daemon applies the
-            // grant + executes the carried call when it sees the approved note.
-            "deny" => self.set_permission_scope(cq_id, stem, None).await,
-            "once" => self.set_permission_scope(cq_id, stem, Some(GrantScope::Once)).await,
-            "session" => {
-                self.set_permission_scope(cq_id, stem, Some(GrantScope::Session))
-                    .await
-            }
-            "everywhere" => {
-                self.set_permission_scope(cq_id, stem, Some(GrantScope::Everywhere))
-                    .await
-            }
-            _ => tracing::warn!(action, "unknown callback action"),
-        }
-    }
-
     /// Handle a permission-request scope tap. `scope = None` denies (Rejected); otherwise stamp the
     /// chosen [`GrantScope`] and approve. Same pending/expired guards as [`set_status`]; the daemon's
     /// proposal reactor does the privileged work (apply the grant, execute the carried call).
-    async fn set_permission_scope(&self, cq_id: &str, stem: &str, scope: Option<GrantScope>) {
+    async fn set_permission_scope(
+        &self,
+        event_id: &str,
+        message_ref: Option<&str>,
+        stem: &str,
+        scope: Option<GrantScope>,
+    ) {
         let path = proposal_path(stem);
         let content = match self.vault.read(&path).await {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!(stem, error = %e, "approval-bot: permission request not found");
-                self.answer_callback_query(cq_id, "Request not found.").await;
+                self.ack(event_id, "Request not found.").await;
                 return;
             }
         };
@@ -389,20 +303,17 @@ impl ApprovalBot {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(stem, error = %e, "approval-bot: permission note did not parse");
-                self.answer_callback_query(cq_id, "Could not parse that request.")
-                    .await;
+                self.ack(event_id, "Could not parse that request.").await;
                 return;
             }
         };
         if proposal.requested_grant.is_none() {
-            self.answer_callback_query(cq_id, "Not a permission request.")
-                .await;
+            self.ack(event_id, "Not a permission request.").await;
             return;
         }
-        if proposal.status != ProposalStatus::Pending
-            || proposal.is_expired_at(chrono::Utc::now())
+        if proposal.status != ProposalStatus::Pending || proposal.is_expired_at(chrono::Utc::now())
         {
-            self.answer_callback_query(cq_id, "Already decided — no action taken.")
+            self.ack(event_id, "Already decided — no action taken.")
                 .await;
             return;
         }
@@ -420,35 +331,38 @@ impl ApprovalBot {
             .await
         {
             tracing::error!(stem, error = %e, "approval-bot: failed to write permission decision");
-            self.answer_callback_query(cq_id, "Failed to save — try again.")
-                .await;
+            self.ack(event_id, "Failed to save — try again.").await;
             return;
         }
 
-        let verb = match scope {
-            None => "Denied".to_string(),
-            Some(GrantScope::Once) => "Approved once".to_string(),
-            Some(GrantScope::Session) => "Approved for this session".to_string(),
-            Some(GrantScope::Everywhere) => "Approved everywhere".to_string(),
+        let (icon, verb) = match scope {
+            None => ("❌", "Denied"),
+            Some(GrantScope::Once) => ("✅", "Approved once"),
+            Some(GrantScope::Session) => ("🔁", "Approved for this session"),
+            Some(GrantScope::Everywhere) => ("♾️", "Approved everywhere"),
         };
-        self.answer_callback_query(cq_id, &verb).await;
-        self.send_message(&format!("{verb}: {}", proposal.rationale))
+        self.ack(event_id, verb).await;
+        self.receipt(message_ref, &format!("{icon} {verb} — {}", proposal.rationale))
             .await;
     }
 
     /// Read `proposals/{stem}.md`, and — only if it is currently `Pending` and not expired — set
-    /// its status and write it back tagged as a human write. Any other current state (already
-    /// approved/rejected/expired/done, or an unparseable note) is reported back to the human and
-    /// left untouched, mirroring the same guards `Daemon::handle_proposal_change` itself checks.
-    async fn set_status(&self, cq_id: &str, stem: &str, new_status: ProposalStatus) {
+    /// its status and write it back tagged as a human write. Any other current state is reported
+    /// back to the human and left untouched.
+    async fn set_status(
+        &self,
+        event_id: &str,
+        message_ref: Option<&str>,
+        stem: &str,
+        new_status: ProposalStatus,
+    ) {
         let path = proposal_path(stem);
 
         let content = match self.vault.read(&path).await {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!(stem, error = %e, "approval-bot: proposal not found");
-                self.answer_callback_query(cq_id, "Proposal not found.")
-                    .await;
+                self.ack(event_id, "Proposal not found.").await;
                 return;
             }
         };
@@ -457,8 +371,7 @@ impl ApprovalBot {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(stem, error = %e, "approval-bot: proposal note did not parse");
-                self.answer_callback_query(cq_id, "Could not parse that proposal.")
-                    .await;
+                self.ack(event_id, "Could not parse that proposal.").await;
                 return;
             }
         };
@@ -470,7 +383,7 @@ impl ApprovalBot {
             } else {
                 format!("{:?}", proposal.status)
             };
-            self.answer_callback_query(cq_id, &format!("Already {note} — no action taken."))
+            self.ack(event_id, &format!("Already {note} — no action taken."))
                 .await;
             return;
         }
@@ -482,103 +395,80 @@ impl ApprovalBot {
             .await
         {
             tracing::error!(stem, error = %e, "approval-bot: failed to write status change");
-            self.answer_callback_query(cq_id, "Failed to save — try again.")
-                .await;
+            self.ack(event_id, "Failed to save — try again.").await;
             return;
         }
 
-        let verb = match new_status {
-            ProposalStatus::Approved => "Approved",
-            ProposalStatus::Rejected => "Rejected",
-            _ => "Updated",
+        let (icon, verb) = match new_status {
+            ProposalStatus::Approved => ("✅", "Approved"),
+            ProposalStatus::Rejected => ("❌", "Rejected"),
+            _ => ("✏️", "Updated"),
         };
-        self.answer_callback_query(cq_id, verb).await;
-        self.send_message(&format!("{verb}: {}", proposal.rationale))
+        self.ack(event_id, verb).await;
+        self.receipt(message_ref, &format!("{icon} {verb} — {}", proposal.rationale))
             .await;
     }
 
     /// Tapped Revise: prompt for a free-text note and remember which proposal it belongs to.
-    /// Doesn't touch the proposal itself yet — that happens once the reply arrives
-    /// ([`apply_revision`](Self::apply_revision)).
-    async fn begin_revision(&self, cq_id: &str, stem: &str) {
-        self.answer_callback_query(cq_id, "Awaiting your revision note...")
-            .await;
+    async fn begin_revision(&self, event_id: &str, stem: &str) {
+        self.ack(event_id, "Awaiting your revision note...").await;
         let prompt = format!("Reply to this message with the changes you want for `{stem}`.");
-        if let Some(msg_id) = self.send_force_reply(&prompt).await {
-            self.pending_revisions
-                .lock()
-                .await
-                .insert(msg_id, stem.to_string());
-        } else {
-            tracing::warn!(stem, "approval-bot: failed to send force_reply prompt");
+        match self.channel.request_reply(&prompt).await {
+            Ok(prompt_id) => {
+                self.pending_revisions
+                    .lock()
+                    .await
+                    .insert(prompt_id, stem.to_string());
+            }
+            Err(e) => {
+                tracing::warn!(stem, error = %e, "approval-bot: failed to send revision prompt");
+            }
         }
     }
 
-    /// Revision replies (threaded to a `force_reply` prompt) update proposals; any other
-    /// free-form text from the allowed chat runs a Liberado chat turn when a surface is attached.
-    async fn handle_message(&self, msg: &serde_json::Value) {
-        // Ignore own/other bots (including ourselves if Telegram echoes).
-        if msg
-            .get("from")
-            .and_then(|f| f.get("is_bot"))
-            .and_then(|b| b.as_bool())
-            == Some(true)
-        {
-            return;
-        }
-
-        if !self.message_is_from_allowed_chat(msg) {
-            tracing::debug!(
-                chat = ?msg.get("chat").and_then(|c| c.get("id")),
-                "Telegram message from non-configured chat — ignored"
-            );
-            return;
-        }
-
+    /// Revision replies update proposals; any other free-form text runs a Liberado chat turn when
+    /// a surface is attached.
+    async fn handle_message(&self, text: &str, reply_to_prompt: Option<String>) {
         // The human just messaged us — stamp the shared activity clock so a pending cron brief holds
-        // off until this conversation goes quiet (any inbound message counts, chat or revision).
+        // off until this conversation goes quiet.
         if let Some(clock) = &self.last_activity {
             *clock.lock().await = Some(std::time::Instant::now());
         }
 
-        // Revision path: reply to one of our force_reply prompts.
-        if let Some(reply_to_id) = msg
-            .get("reply_to_message")
-            .and_then(|r| r["message_id"].as_i64())
-        {
-            let stem = { self.pending_revisions.lock().await.remove(&reply_to_id) };
+        // Revision path: reply to one of our request_reply prompts.
+        if let Some(prompt_id) = reply_to_prompt {
+            let stem = { self.pending_revisions.lock().await.remove(&prompt_id) };
             if let Some(stem) = stem {
-                let note = msg["text"].as_str().unwrap_or("").trim().to_string();
+                let note = text.trim();
                 if note.is_empty() {
-                    self.send_message("Revision note was empty — please try again.")
+                    self.send_text("Revision note was empty — please try again.")
                         .await;
                     return;
                 }
-                self.send_typing().await;
+                let _ = self.channel.set_typing().await;
                 let pulse = self.spawn_typing_pulse();
-                self.apply_revision(&stem, &note).await;
+                self.apply_revision(&stem, note).await;
                 pulse.abort();
                 return;
             }
         }
 
-        let text = msg["text"].as_str().unwrap_or("").trim();
+        let text = text.trim();
         if text.is_empty() {
-            // Stickers, photos, etc. without a caption — acknowledge so it doesn't feel dead.
-            self.send_message("I only handle text messages for now.")
-                .await;
+            self.send_text("I only handle text messages for now.").await;
             return;
         }
 
         let Some(chat) = self.chat.as_ref() else {
             tracing::info!(
-                "Telegram free-form message received but no chat surface attached — ignored"
+                channel = self.channel.name(),
+                "free-form message received but no chat surface attached — ignored"
             );
             return;
         };
 
         if text == "/start" || text == "/help" {
-            self.send_message(
+            self.send_text(
                 "Liberado is online. Send a normal message to chat. \
                  Proposal Approve/Revise/Reject buttons still work as before.",
             )
@@ -586,9 +476,12 @@ impl ApprovalBot {
             return;
         }
 
-        tracing::info!(len = text.len(), "Telegram chat message received");
-        // Typing immediately so the user knows we got it before inference starts.
-        self.send_typing().await;
+        tracing::info!(
+            channel = self.channel.name(),
+            len = text.len(),
+            "chat message received"
+        );
+        let _ = self.channel.set_typing().await;
         let pulse = self.spawn_typing_pulse();
         let outcome = chat.reply(text).await;
         pulse.abort();
@@ -596,14 +489,14 @@ impl ApprovalBot {
             Ok(reply) => {
                 let reply = reply.trim();
                 if reply.is_empty() {
-                    self.send_message("(no reply text)").await;
+                    self.send_text("(no reply text)").await;
                 } else {
-                    self.send_message(reply).await;
+                    self.send_text(reply).await;
                 }
             }
             Err(e) => {
-                tracing::warn!(error = %e, "Telegram chat turn failed");
-                self.send_message(&format!("Sorry — that turn failed: {e}"))
+                tracing::warn!(error = %e, "chat turn failed");
+                self.send_text(&format!("Sorry — that turn failed: {e}"))
                     .await;
             }
         }
@@ -611,7 +504,7 @@ impl ApprovalBot {
 
     /// Ask the shared provider to redraft `stem`'s `rationale`/`proposed_action` per `note`, then
     /// write the result back as a **fresh, re-signed, still-Pending** proposal and send new
-    /// buttons. Never auto-approves — see the module doc comment.
+    /// buttons. Never auto-approves.
     async fn apply_revision(&self, stem: &str, note: &str) {
         let path = proposal_path(stem);
 
@@ -619,7 +512,7 @@ impl ApprovalBot {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!(stem, error = %e, "approval-bot: proposal not found for revision");
-                self.send_message("Could not find that proposal.").await;
+                self.send_text("Could not find that proposal.").await;
                 return;
             }
         };
@@ -628,13 +521,13 @@ impl ApprovalBot {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(stem, error = %e, "approval-bot: proposal note did not parse");
-                self.send_message("Could not parse that proposal.").await;
+                self.send_text("Could not parse that proposal.").await;
                 return;
             }
         };
 
         if proposal.status != ProposalStatus::Pending {
-            self.send_message(&format!(
+            self.send_text(&format!(
                 "Proposal is already {:?} — cannot revise.",
                 proposal.status
             ))
@@ -648,7 +541,7 @@ impl ApprovalBot {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!(stem, error = %e, "approval-bot: revision LLM call failed");
-                    self.send_message(&format!(
+                    self.send_text(&format!(
                         "Could not apply that revision ({e}) — the proposal is unchanged."
                     ))
                     .await;
@@ -656,9 +549,8 @@ impl ApprovalBot {
                 }
             };
 
-        // proposed_action is a signed field (see ProposalSigner::compute) — any revision, even a
-        // no-op one, must get a fresh signature. status stays Pending: only a subsequent Approve
-        // tap (pure code) can ever execute this.
+        // proposed_action is a signed field — any revision must get a fresh signature. status stays
+        // Pending: only a subsequent Approve tap (pure code) can ever execute this.
         proposal.rationale = revision.rationale;
         proposal.proposed_action = revision.proposed_action;
         let mut proposal = self.signer.sign(proposal);
@@ -670,50 +562,41 @@ impl ApprovalBot {
             .await
         {
             tracing::error!(stem, error = %e, "approval-bot: failed to write revision");
-            self.send_message("Failed to save the revision — try again.")
+            self.send_text("Failed to save the revision — try again.")
                 .await;
             return;
         }
 
-        self.send_approval_buttons(
-            stem,
-            &format!(
-                "Revised — please review before approving:\n{}",
-                proposal.rationale
-            ),
-        )
-        .await;
+        if let Err(e) = self
+            .channel
+            .send_with_actions(
+                &format!(
+                    "Revised — please review before approving:\n{}",
+                    proposal.rationale
+                ),
+                &approval_action_rows(stem),
+            )
+            .await
+        {
+            tracing::warn!(error = %e, "approval-bot: failed to send revised proposal buttons");
+        }
     }
 }
 
 /// What the provider is asked to return for a revision: a redrafted rationale plus (possibly
-/// edited) proposed action. Reuses [`ProposedAction`]'s own `Deserialize` directly — if the model
-/// doesn't reproduce its shape, `complete_json` surfaces a decode error and the revision fails
-/// safely (the proposal file is left untouched).
+/// edited) proposed action.
 #[derive(serde::Deserialize)]
 struct ProposalRevision {
     rationale: String,
     proposed_action: ProposedAction,
 }
 
-/// Pure — the vault-relative path for a proposal's filename stem. Matches the convention both
-/// `Daemon::write_proposal` and `RiskGatedToolRuntime::write_proposal` already write to.
+/// Pure — the vault-relative path for a proposal's filename stem.
 fn proposal_path(stem: &str) -> String {
     format!("{PROPOSALS_DIR}/{stem}.md")
 }
 
-/// Pure — split Telegram `callback_data` of the form `"{action}:{stem}"` into its parts.
-/// `split_once` (not a full split) is deliberate: a proposal stem is itself dash-only (see
-/// `liberado_daemon`'s `slugify`), never containing `:`, but splitting on the *first* colon only
-/// is what makes this robust even if that ever changed.
-fn parse_callback_data(data: &str) -> Option<(&str, &str)> {
-    data.split_once(':')
-}
-
-/// Pure — the `CompletionRequest` for a revision call: the current rationale/action as a concrete
-/// worked example, plus the human's free-text note. `temperature` is
-/// `config.tuning.telegram_approvals.revise_temperature` (0 by default, for a faithful,
-/// non-creative edit rather than an unrelated rewrite).
+/// Pure — the `CompletionRequest` for a revision call.
 fn build_revision_request(proposal: &Proposal, note: &str, temperature: f32) -> CompletionRequest {
     let current_action = serde_json::to_string_pretty(&proposal.proposed_action)
         .unwrap_or_else(|_| "{}".to_string());
@@ -731,9 +614,7 @@ fn build_revision_request(proposal: &Proposal, note: &str, temperature: f32) -> 
         .with_temperature(temperature)
 }
 
-/// Pure — a loose JSON schema for [`ProposalRevision`] (the prompt carries the exact shape via the
-/// worked example in [`build_revision_request`], same "the prompt carries the shape" precedent
-/// `liberado-dispatcher`'s own schema uses — no `schemars` dependency exists in this codebase).
+/// Pure — a loose JSON schema for [`ProposalRevision`].
 fn revision_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
@@ -745,69 +626,87 @@ fn revision_schema() -> serde_json::Value {
     })
 }
 
-/// Split on char boundaries into chunks that fit Telegram's message size limit.
-fn split_telegram_chunks(text: &str) -> Vec<String> {
-    if text.chars().count() <= TELEGRAM_MAX_MESSAGE_CHARS {
-        return vec![text.to_string()];
-    }
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-    let mut count = 0usize;
-    for ch in text.chars() {
-        if count >= TELEGRAM_MAX_MESSAGE_CHARS {
-            chunks.push(std::mem::take(&mut current));
-            count = 0;
-        }
-        current.push(ch);
-        count += 1;
-    }
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-    chunks
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use liberado_messaging::MessagingError;
     use liberado_provider::{CompletionResponse, MockProvider};
     use tempfile::TempDir;
+
+    /// Silent channel for unit tests that only exercise vault writes.
+    struct NullChannel;
+
+    #[async_trait]
+    impl MessagingChannel for NullChannel {
+        fn name(&self) -> &str {
+            "null"
+        }
+        async fn send_text(&self, _: &str) -> Result<(), MessagingError> {
+            Ok(())
+        }
+        async fn send_with_actions(
+            &self,
+            _: &str,
+            _: &[Vec<liberado_messaging::ActionButton>],
+        ) -> Result<(), MessagingError> {
+            Ok(())
+        }
+        async fn request_reply(&self, _: &str) -> Result<String, MessagingError> {
+            Ok("prompt-1".into())
+        }
+        async fn acknowledge(&self, _: &str, _: &str) -> Result<(), MessagingError> {
+            Ok(())
+        }
+        async fn receive(&self, _: &mut String) -> Result<Vec<InboundEvent>, MessagingError> {
+            Ok(vec![])
+        }
+    }
+
+    /// Records edit_message + send_text calls so tests can assert how a decision was receipted.
+    #[derive(Default)]
+    struct RecordingChannel {
+        edits: std::sync::Mutex<Vec<(String, String)>>,
+        sends: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl MessagingChannel for RecordingChannel {
+        fn name(&self) -> &str {
+            "recording"
+        }
+        async fn send_text(&self, text: &str) -> Result<(), MessagingError> {
+            self.sends.lock().unwrap().push(text.to_string());
+            Ok(())
+        }
+        async fn send_with_actions(
+            &self,
+            _: &str,
+            _: &[Vec<liberado_messaging::ActionButton>],
+        ) -> Result<(), MessagingError> {
+            Ok(())
+        }
+        async fn request_reply(&self, _: &str) -> Result<String, MessagingError> {
+            Ok("prompt-1".into())
+        }
+        async fn acknowledge(&self, _: &str, _: &str) -> Result<(), MessagingError> {
+            Ok(())
+        }
+        async fn edit_message(&self, message_ref: &str, text: &str) -> Result<(), MessagingError> {
+            self.edits
+                .lock()
+                .unwrap()
+                .push((message_ref.to_string(), text.to_string()));
+            Ok(())
+        }
+        async fn receive(&self, _: &mut String) -> Result<Vec<InboundEvent>, MessagingError> {
+            Ok(vec![])
+        }
+    }
 
     #[test]
     fn proposal_path_joins_the_stem() {
         assert_eq!(proposal_path("prop-1"), "proposals/prop-1.md");
-    }
-
-    #[test]
-    fn split_telegram_chunks_keeps_short_messages_whole() {
-        assert_eq!(split_telegram_chunks("hi"), vec!["hi".to_string()]);
-    }
-
-    #[test]
-    fn split_telegram_chunks_splits_long_messages() {
-        let long: String = "a".repeat(TELEGRAM_MAX_MESSAGE_CHARS + 50);
-        let chunks = split_telegram_chunks(&long);
-        assert_eq!(chunks.len(), 2);
-        assert_eq!(chunks[0].chars().count(), TELEGRAM_MAX_MESSAGE_CHARS);
-        assert_eq!(chunks[1].chars().count(), 50);
-    }
-
-    #[test]
-    fn parse_callback_data_splits_on_first_colon_only() {
-        assert_eq!(
-            parse_callback_data("approve:prop-1"),
-            Some(("approve", "prop-1"))
-        );
-        // A stem is dash-only in practice, but split_once proves this is robust even if it weren't.
-        assert_eq!(
-            parse_callback_data("reject:vault-change-inbox-x-md-abc"),
-            Some(("reject", "vault-change-inbox-x-md-abc"))
-        );
-    }
-
-    #[test]
-    fn parse_callback_data_rejects_malformed_input() {
-        assert_eq!(parse_callback_data("no-colon-here"), None);
     }
 
     #[test]
@@ -859,19 +758,13 @@ mod tests {
     }
 
     fn test_bot(vault: Vault, signer: ProposalSigner, provider: Arc<dyn Provider>) -> ApprovalBot {
-        ApprovalBot {
-            client: reqwest::Client::new(),
-            token: "unused".into(),
-            chat_id: "unused".into(),
+        ApprovalBot::new(
+            Arc::new(NullChannel),
             vault,
             signer,
             provider,
-            tuning: TelegramApprovalsTuning::default(),
-            pending_revisions: Mutex::new(HashMap::new()),
-            chat: None,
-            last_activity: None,
-            command_menu: Vec::new(),
-        }
+            TelegramApprovalsTuning::default(),
+        )
     }
 
     async fn temp_vault_with_proposal(
@@ -911,7 +804,7 @@ mod tests {
         let (vault, _dir, stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
         let bot = test_bot(vault.clone(), signer, Arc::new(MockProvider::new("mock")));
 
-        bot.set_status("cq-1", &stem, ProposalStatus::Approved)
+        bot.set_status("cq-1", None, &stem, ProposalStatus::Approved)
             .await;
 
         let content = vault.read("proposals/prop-1.md").await.unwrap();
@@ -925,7 +818,7 @@ mod tests {
         let (vault, _dir, stem) = temp_vault_with_proposal(&signer, ProposalStatus::Approved).await;
         let bot = test_bot(vault.clone(), signer, Arc::new(MockProvider::new("mock")));
 
-        bot.set_status("cq-1", &stem, ProposalStatus::Rejected)
+        bot.set_status("cq-1", None, &stem, ProposalStatus::Rejected)
             .await;
 
         // Still Approved — the guard must refuse to touch a non-Pending proposal.
@@ -941,13 +834,63 @@ mod tests {
         let signer = ProposalSigner::random();
         let (vault, _dir, stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
         let bot = test_bot(vault.clone(), signer, Arc::new(MockProvider::new("mock")));
-        bot.set_status("cq-1", &stem, ProposalStatus::Approved)
+        bot.set_status("cq-1", None, &stem, ProposalStatus::Approved)
             .await;
 
         assert_eq!(
             vault.attribute("proposals/prop-1.md").await.unwrap(),
             liberado_vault::Attribution::External
         );
+    }
+
+    #[tokio::test]
+    async fn a_decision_with_a_message_ref_edits_the_message_to_strip_buttons() {
+        // The button-cleanup UX: a tap edits the original message (receipt + no buttons) instead of
+        // sending a fresh message and leaving the now-stale buttons live.
+        let signer = ProposalSigner::random();
+        let (vault, _dir, stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let channel = Arc::new(RecordingChannel::default());
+        let bot = ApprovalBot::new(
+            channel.clone(),
+            vault,
+            signer,
+            Arc::new(MockProvider::new("mock")),
+            TelegramApprovalsTuning::default(),
+        );
+
+        bot.set_status("cq-1", Some("777"), &stem, ProposalStatus::Approved)
+            .await;
+
+        let edits = channel.edits.lock().unwrap();
+        assert_eq!(edits.len(), 1, "the tapped message should be edited once");
+        assert_eq!(edits[0].0, "777", "edits the message the button was on");
+        assert!(edits[0].1.contains("Approved"), "receipt says what was tapped");
+        assert!(
+            channel.sends.lock().unwrap().is_empty(),
+            "no fresh message when we can edit in place"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_decision_without_a_message_ref_falls_back_to_a_fresh_message() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let channel = Arc::new(RecordingChannel::default());
+        let bot = ApprovalBot::new(
+            channel.clone(),
+            vault,
+            signer,
+            Arc::new(MockProvider::new("mock")),
+            TelegramApprovalsTuning::default(),
+        );
+
+        bot.set_status("cq-1", None, &stem, ProposalStatus::Rejected)
+            .await;
+
+        assert!(channel.edits.lock().unwrap().is_empty());
+        let sends = channel.sends.lock().unwrap();
+        assert_eq!(sends.len(), 1, "no message ref → send a fresh receipt");
+        assert!(sends[0].contains("Rejected"));
     }
 
     #[tokio::test]
