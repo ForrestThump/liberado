@@ -345,9 +345,13 @@ impl RiskGatedToolRuntime {
         call: &ToolInvocation,
         rationale: &str,
     ) -> Result<PathBuf, String> {
+        // Compact id so the stem fits Telegram's 50-char callback_data budget — the full
+        // correlation lives in the proposal's `correlation_id` field below, not the stem. The old
+        // `{correlation_base}-{nanos}` was 60 bytes for a `chat-delegate-<ulid>` correlation, over
+        // the cap, so a write-class/high-consequence downgrade sent a plain, un-tappable
+        // notification (mirrors the `write_permission_request` fix).
         let proposal_id = format!(
-            "{}-{}",
-            self.correlation_base,
+            "prop-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -459,7 +463,10 @@ impl RiskGatedToolRuntime {
                 tool: call.name.clone(),
                 args: call.arguments.clone(),
             }]),
-            format!("Permission request: '{}' needs Write access to zone '{zone}'.", call.name),
+            format!(
+                "Permission request: '{}' needs Write access to zone '{zone}'.",
+                call.name
+            ),
         )
         .with_requested_grant(Capability::Write(Zone::vault(zone)));
         proposal.pool = Some(self.pool_name.clone());
@@ -1027,7 +1034,10 @@ mod tests {
             Capability::ExecuteMcp("turbovault".into()),
             Capability::Write(Zone::vault("sandbox")),
         ]);
-        let granted_inner = Arc::new(MockInner::new(&["turbovault:write_note"], Ok("wrote".into())));
+        let granted_inner = Arc::new(MockInner::new(
+            &["turbovault:write_note"],
+            Ok("wrote".into()),
+        ));
         let rt = RiskGatedToolRuntime::new(
             granted_inner.clone(),
             caps,
@@ -1047,7 +1057,11 @@ mod tests {
                 serde_json::json!({"path": "sandbox/x.md"}),
             ))
             .await;
-        assert_eq!(result, Ok("wrote".into()), "a granted undeclared-zone write runs directly");
+        assert_eq!(
+            result,
+            Ok("wrote".into()),
+            "a granted undeclared-zone write runs directly"
+        );
         assert_eq!(
             granted_inner.invoked.lock().unwrap().len(),
             1,
@@ -1056,8 +1070,10 @@ mod tests {
 
         // Control: the SAME undeclared zone WITHOUT a Write grant still fails — at the authority
         // check (:227), before the write-class question is even asked.
-        let ungranted_inner =
-            Arc::new(MockInner::new(&["turbovault:write_note"], Ok("wrote".into())));
+        let ungranted_inner = Arc::new(MockInner::new(
+            &["turbovault:write_note"],
+            Ok("wrote".into()),
+        ));
         let rt2 = RiskGatedToolRuntime::new(
             ungranted_inner.clone(),
             CapabilitySet::from_iter([Capability::ExecuteMcp("turbovault".into())]),
