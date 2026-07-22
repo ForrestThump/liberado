@@ -29,6 +29,7 @@ desktop.ini
 /liberado-qdrant-mcp/
 /liberado-search-orchestrator-mcp/
 /liberado-spider-mcp/
+/liberado-python-interpreter-mcp/
 
 # Not-for-deploy scratch (subagent-manager: operator directive — do not deploy)
 /subagent-manager-mcp-master/
