@@ -781,7 +781,10 @@ impl ChatSessions {
     /// Get-or-insert the per-session turn lock, so two turns on the same conversation serialize
     /// (and never interleave their appends) while different conversations run concurrently.
     fn session_lock(&self, session: Ulid) -> Arc<tokio::sync::Mutex<()>> {
-        let mut locks = self.locks.lock().unwrap();
+        let mut locks = self
+            .locks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         locks
             .entry(session)
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))

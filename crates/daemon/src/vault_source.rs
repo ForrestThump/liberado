@@ -98,7 +98,13 @@ pub(crate) async fn attribute_and_build_event(
     rel_path: &Path,
 ) -> Result<Option<Event>, VaultError> {
     match vault.attribute(rel_path).await? {
-        Attribution::External => Ok(Some(build_event(vault, rel_path).await)),
+        Attribution::External => match build_event(vault, rel_path).await {
+            Ok(event) => Ok(Some(event)),
+            Err(e) => {
+                tracing::warn!(error = %e, ?rel_path, "vault read failed between attribution and event build — skipping change");
+                Ok(None)
+            }
+        },
         Attribution::Agent(_) | Attribution::Missing => Ok(None),
     }
 }
@@ -106,14 +112,14 @@ pub(crate) async fn attribute_and_build_event(
 /// Build the standardized event for an attributed-external change. The `correlation_id` keys
 /// idempotency/loop-breaking downstream; it is derived from the path + a short content hash so
 /// distinct edits are distinct events while a redelivery of the same state is not.
-async fn build_event(vault: &Vault, rel_path: &Path) -> Event {
-    let content = vault.read(rel_path).await.unwrap_or_default();
+async fn build_event(vault: &Vault, rel_path: &Path) -> Result<Event, VaultError> {
+    let content = vault.read(rel_path).await?;
     let hash = Vault::content_hash(&content);
     let rel = rel_path.to_string_lossy().replace('\\', "/");
     // `get(..N)` (not `[..N]`) is panic-safe regardless of the hash's byte boundaries.
     let short_hash = hash.get(..CORRELATION_HASH_LEN).unwrap_or(&hash);
     let correlation_id = format!("{CORRELATION_PREFIX}:{rel}:{short_hash}");
-    Event::trigger(
+    Ok(Event::trigger(
         VAULT_NOTE_CHANGED,
         event_source::TURBOVAULT_SUBSCRIPTION,
         correlation_id,
@@ -121,7 +127,7 @@ async fn build_event(vault: &Vault, rel_path: &Path) -> Event {
             path: Some(rel),
             ..Default::default()
         },
-    )
+    ))
 }
 
 /// Sleep until `deadline`, or forever when `None` (so the watch loop's select only wakes on

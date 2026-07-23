@@ -229,12 +229,15 @@ impl CapabilityCatalog {
     /// Tests may set `Duration::ZERO` so the next [`is_degraded`](Self::is_degraded) /
     /// [`routing_descriptors`](Self::routing_descriptors) call expires every mark immediately.
     pub fn set_degraded_half_open_ttl(&self, ttl: Duration) {
-        self.inner.write().unwrap().degraded_ttl = ttl;
+        self.inner
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .degraded_ttl = ttl;
     }
 
     /// Register (or update) an MCP descriptor. Notifies subscribers on change.
     pub fn register(&self, mcp: McpDescriptor) {
-        let mut state = self.inner.write().unwrap();
+        let mut state = self.inner.write().unwrap_or_else(|e| e.into_inner());
         state.mcps.insert(mcp.name.clone(), mcp);
         state.last_updated = Instant::now();
         let _ = self.updated.send(());
@@ -243,7 +246,7 @@ impl CapabilityCatalog {
     /// Remove an MCP descriptor by name. No-op if the name is not registered.
     /// Notifies subscribers on change.
     pub fn deregister(&self, name: &str) {
-        let mut state = self.inner.write().unwrap();
+        let mut state = self.inner.write().unwrap_or_else(|e| e.into_inner());
         state.mcps.remove(name);
         state.degraded.remove(name);
         state.last_updated = Instant::now();
@@ -256,7 +259,7 @@ impl CapabilityCatalog {
     /// The peer is omitted from [`routing_descriptors`](Self::routing_descriptors) until
     /// [`mark_healthy`](Self::mark_healthy) or half-open expiry of the stored mark Instant.
     pub fn mark_degraded(&self, name: &str) {
-        let mut state = self.inner.write().unwrap();
+        let mut state = self.inner.write().unwrap_or_else(|e| e.into_inner());
         if !state.mcps.contains_key(name) {
             return;
         }
@@ -267,7 +270,7 @@ impl CapabilityCatalog {
 
     /// Clear degraded status after a successful connect or successful tool invoke (recovery).
     pub fn mark_healthy(&self, name: &str) {
-        let mut state = self.inner.write().unwrap();
+        let mut state = self.inner.write().unwrap_or_else(|e| e.into_inner());
         if state.degraded.remove(name).is_some() {
             state.last_updated = Instant::now();
             let _ = self.updated.send(());
@@ -279,7 +282,7 @@ impl CapabilityCatalog {
     fn purge_expired_degraded(&self) -> bool {
         let now = Instant::now();
         {
-            let state = self.inner.read().unwrap();
+            let state = self.inner.read().unwrap_or_else(|e| e.into_inner());
             let any_expired = state
                 .degraded
                 .values()
@@ -288,7 +291,7 @@ impl CapabilityCatalog {
                 return false;
             }
         }
-        let mut state = self.inner.write().unwrap();
+        let mut state = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let ttl = state.degraded_ttl;
         let before = state.degraded.len();
         state
@@ -306,7 +309,11 @@ impl CapabilityCatalog {
     /// Whether `name` is currently marked degraded for routing (after half-open expiry purge).
     pub fn is_degraded(&self, name: &str) -> bool {
         self.purge_expired_degraded();
-        self.inner.read().unwrap().degraded.contains_key(name)
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .degraded
+            .contains_key(name)
     }
 
     /// Return a snapshot of all registered descriptors (including degraded peers).
@@ -314,7 +321,13 @@ impl CapabilityCatalog {
     /// Use for zone/authority checks. For **dispatcher routing**, prefer
     /// [`routing_descriptors`](Self::routing_descriptors).
     pub fn descriptors(&self) -> Vec<McpDescriptor> {
-        self.inner.read().unwrap().mcps.values().cloned().collect()
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .mcps
+            .values()
+            .cloned()
+            .collect()
     }
 
     /// Descriptors eligible for dispatcher / classifier routing — **excludes** degraded peers.
@@ -324,7 +337,7 @@ impl CapabilityCatalog {
     /// or half-open expiry of the stored mark Instant.
     pub fn routing_descriptors(&self) -> Vec<McpDescriptor> {
         self.purge_expired_degraded();
-        let state = self.inner.read().unwrap();
+        let state = self.inner.read().unwrap_or_else(|e| e.into_inner());
         state
             .mcps
             .values()
@@ -335,7 +348,12 @@ impl CapabilityCatalog {
 
     /// Look up a single descriptor by name.
     pub fn get(&self, name: &str) -> Option<McpDescriptor> {
-        self.inner.read().unwrap().mcps.get(name).cloned()
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .mcps
+            .get(name)
+            .cloned()
     }
 
     /// Subscribe to catalog changes. The returned receiver yields `()` every time
@@ -346,12 +364,20 @@ impl CapabilityCatalog {
 
     /// Whether the catalog is currently empty.
     pub fn is_empty(&self) -> bool {
-        self.inner.read().unwrap().mcps.is_empty()
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .mcps
+            .is_empty()
     }
 
     /// Number of registered descriptors.
     pub fn len(&self) -> usize {
-        self.inner.read().unwrap().mcps.len()
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .mcps
+            .len()
     }
 
     /// `(mcp_name, consequence)` pairs for every registered descriptor — the shape
