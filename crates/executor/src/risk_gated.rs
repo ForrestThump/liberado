@@ -42,9 +42,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use liberado_common::{
-    Capability, CapabilitySet, Consequence, McpDescriptor, Proposal, ProposalSigner,
-    ProposedAction, WriteClass, WriteTarget, Zone, bare_tool_name, is_sweeping_destructive, mcp_of,
-    write_target,
+    Capability, CapabilityCatalog, CapabilitySet, Consequence, McpDescriptor, Proposal,
+    ProposalSigner, ProposedAction, WriteClass, WriteTarget, Zone, bare_tool_name,
+    is_sweeping_destructive, mcp_of, write_target,
 };
 use liberado_notify::Notifier;
 use liberado_provider::{ToolDef, ToolInvocation};
@@ -59,11 +59,14 @@ pub struct RiskGatedToolRuntime {
     /// The capability set — the MCP must be granted to execute.
     capabilities: CapabilitySet,
     /// Consequence catalog: `(mcp_name, consequence)` pairs for each MCP.
+    /// Used when [`live_catalog`](Self::with_live_catalog) is not set (tests / static fixtures).
     consequence_catalog: Vec<(String, Consequence)>,
-    /// Per-MCP zone declarations (§6 #2's zone-write-class guard) — the same `McpDescriptor` list
-    /// the live `CapabilityCatalog` already provides (`catalog.descriptors()`), reused directly
-    /// rather than deriving yet another shape the way `consequence_catalog` is its own tuple list.
+    /// Per-MCP zone declarations (§6 #2's zone-write-class guard).
+    /// Used when `live_catalog` is not set.
     zone_catalog: Vec<McpDescriptor>,
+    /// When set, consequence and zone declarations are read **live** on every invoke so hot-reload
+    /// of topology MCP peers is reflected without rebuilding this gate.
+    live_catalog: Option<Arc<CapabilityCatalog>>,
     /// `(zone, write_class)` pairs from `Policy.zones` — what a call's resolved target zone (via
     /// `zone_catalog`) is checked against. A zone absent here fails safe to
     /// `WriteClass::default()` (`ProposalOnly`), the same conservative default
@@ -129,6 +132,7 @@ impl RiskGatedToolRuntime {
             capabilities,
             consequence_catalog,
             zone_catalog,
+            live_catalog: None,
             zone_write_classes,
             proposals_dir,
             goal_context,
@@ -140,11 +144,64 @@ impl RiskGatedToolRuntime {
         }
     }
 
+    /// Prefer the live capability catalog for consequence + zone resolution on every invoke
+    /// (hot-reload safe). Snapshot vectors passed to [`new`](Self::new) remain as fallback when
+    /// this is unset.
+    pub fn with_live_catalog(mut self, catalog: Arc<CapabilityCatalog>) -> Self {
+        self.live_catalog = Some(catalog);
+        self
+    }
+
     /// Attach a [`Notifier`] to tell about every proposal this runtime writes. Optional — a
     /// runtime with no notifier attached just never sends anything, the same as today.
     pub fn with_notifier(mut self, notifier: Arc<dyn Notifier>) -> Self {
         self.notifier = Some(notifier);
         self
+    }
+
+    fn consequence_of(&self, mcp_name: &str) -> Consequence {
+        if let Some(cat) = &self.live_catalog {
+            return cat
+                .get(mcp_name)
+                .map(|d| d.consequence)
+                .unwrap_or_else(|| {
+                    tracing::warn!(
+                        mcp = %mcp_name,
+                        "MCP is capability-granted but missing from live catalog — \
+                         defaulting to ReadOnly"
+                    );
+                    Consequence::ReadOnly
+                });
+        }
+        match self
+            .consequence_catalog
+            .iter()
+            .find(|(name, _)| name == mcp_name)
+        {
+            Some((_, c)) => *c,
+            None => {
+                tracing::warn!(
+                    mcp = %mcp_name,
+                    "MCP is capability-granted but missing from consequence_catalog — \
+                     defaulting to ReadOnly; check for a name mismatch between the two catalogs"
+                );
+                Consequence::ReadOnly
+            }
+        }
+    }
+
+    fn write_target_of(&self, mcp_name: &str, call: &ToolInvocation) -> WriteTarget {
+        let descriptor = if let Some(cat) = &self.live_catalog {
+            cat.get(mcp_name)
+        } else {
+            self.zone_catalog
+                .iter()
+                .find(|d| d.name == mcp_name)
+                .cloned()
+        };
+        descriptor
+            .map(|d| write_target(&d, bare_tool_name(&call.name), &call.arguments))
+            .unwrap_or(WriteTarget::NotAWrite)
     }
 
     /// Share the flag this runtime raises when it defers a call to the human out-of-band, so the
@@ -191,27 +248,8 @@ impl ToolRuntime for RiskGatedToolRuntime {
                 ));
             }
 
-            // 2. Consequence check: look up the MCP's consequence. A miss here means the
-            // capability set (checked above) and consequence_catalog have drifted — the MCP is
-            // granted but undescribed, most likely a name mismatch between the two catalogs.
-            // Fails open to ReadOnly (matching the dispatcher pre-flight guard's own documented
-            // "undescribed contributes nothing" stance — see guards.rs's max_consequence), but
-            // logs so a catalog typo isn't a silent risk downgrade.
-            let consequence = match self
-                .consequence_catalog
-                .iter()
-                .find(|(name, _)| name == &mcp_name)
-            {
-                Some((_, c)) => *c,
-                None => {
-                    tracing::warn!(
-                        mcp = %mcp_name,
-                        "MCP is capability-granted but missing from consequence_catalog — \
-                         defaulting to ReadOnly; check for a name mismatch between the two catalogs"
-                    );
-                    Consequence::ReadOnly
-                }
-            };
+            // 2. Consequence check — live catalog when wired (hot-reload), else boot snapshot.
+            let consequence = self.consequence_of(&mcp_name);
 
             // 2b. **What does this call write, and may this grant write it? (F1)**
             //
@@ -226,12 +264,7 @@ impl ToolRuntime for RiskGatedToolRuntime {
             // zone, so nothing resolved), and resolving in one place means they cannot drift back
             // apart. For a path-addressed MCP the zone depends on the call's *arguments*, so this
             // is the only place it can be known.
-            let write_target = self
-                .zone_catalog
-                .iter()
-                .find(|d| d.name == mcp_name)
-                .map(|d| write_target(d, bare_tool_name(&call.name), &call.arguments))
-                .unwrap_or(WriteTarget::NotAWrite);
+            let write_target = self.write_target_of(&mcp_name, call);
 
             let write_zone = match &write_target {
                 // A write we cannot place. Fail closed — refusing a write whose target is unknown

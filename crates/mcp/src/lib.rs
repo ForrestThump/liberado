@@ -20,12 +20,14 @@
 
 mod connector;
 mod factory;
+mod live_runtime;
 mod multi;
 mod pool;
 mod scoped;
 
 pub use connector::{HttpConnector, McpConnector, StdioConnector};
 pub use factory::{McpPoolSettings, McpRegistry};
+pub use live_runtime::LiveRegistryRuntime;
 pub use multi::MultiMcpRuntime;
 pub use pool::{PoolPolicy, RebindableRuntime};
 pub use scoped::ScopedRuntime;

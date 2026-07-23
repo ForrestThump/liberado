@@ -857,3 +857,154 @@ fn collapse_if_deferred_replaces_reply_only_when_flagged() {
         "a deferral collapses the redundant reply to the waiting marker"
     );
 }
+
+/// Inner runtime that would write if RiskGated let the call through.
+struct WouldWrite;
+#[async_trait]
+impl ToolRuntime for WouldWrite {
+    fn catalog(&self) -> Vec<ToolDef> {
+        vec![ToolDef::new(
+            "vault:write_note",
+            "write a note",
+            serde_json::json!({"type": "object"}),
+        )]
+    }
+    async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+        Ok("WRITTEN".into())
+    }
+}
+
+#[tokio::test]
+async fn face_extras_with_empty_boot_consequences_still_gate_via_live_catalog_after_peer_apply() {
+    // Empty boot-time consequence snapshot + live catalog + ExecuteMcp grant: face extras must
+    // still refuse a zoned write without Write(zone) after the peer is registered (hot-reload).
+    use liberado_common::{
+        Capability, CapabilitySet, Consequence, McpDescriptor, ProposalSigner, WriteClass,
+    };
+    use liberado_session::{GoalSessionHub, GoalSessionStore};
+
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = Arc::new(CapabilityCatalog::new());
+    // Boot: empty catalog (no consequence snapshot material).
+    assert!(catalog.is_empty());
+
+    // Hot-reload: path-addressed write peer appears on the live catalog.
+    catalog.register(McpDescriptor {
+        name: "vault".into(),
+        description: "path-addressed vault".into(),
+        consequence: Consequence::Reversible,
+        provenance: None,
+        default_zone: None,
+        tool_zones: Vec::new(),
+        zone_from_arg: Some("path".into()),
+        write_tools: vec!["write_note".into()],
+    });
+
+    let provider = Arc::new(MockProvider::with_script(
+        "chat",
+        [
+            CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "c1",
+                "vault:write_note",
+                serde_json::json!({"path": "tasks/x.md"}),
+            )]),
+            // If the gate lets the write through, the model would see WRITTEN and may continue;
+            // we assert the transcript never contains a successful write result.
+            CompletionResponse::text("done"),
+        ],
+    ));
+    let hub = Arc::new(GoalSessionHub::new(GoalSessionStore::new()));
+    let dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "unused",
+            Vec::<CompletionResponse>::new(),
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+
+    let sessions = ChatSessions::new(
+        Arc::new(SessionStore::open(dir.path()).await),
+        Executor::new(provider, Budget::default()),
+        Arc::new(WouldWrite),
+    )
+    .with_delegation_mode(true)
+    .with_goal_hub(hub)
+    .with_dispatch(dispatcher, catalog.clone())
+    // Boot-empty consequences (the bug path) — live catalog must still gate.
+    .with_guards(
+        Vec::new(),
+        CapabilitySet::from_iter([Capability::ExecuteMcp("vault".into())]),
+        dir.path().join("proposals"),
+        ProposalSigner::random(),
+    )
+    .with_zone_guards(
+        Vec::new(), // empty zone snapshot at boot
+        vec![("tasks".into(), WriteClass::AgentWritable)],
+    )
+    .with_live_catalog(catalog);
+
+    let id = sessions.create(None).await.unwrap();
+    let reply = sessions.turn(id, "write a note").await.unwrap();
+    assert_ne!(
+        reply, "WRITTEN",
+        "face extras must not execute the write when only ExecuteMcp is granted"
+    );
+    // History must not contain a tool result of a successful write.
+    let history = sessions.history(id).await.unwrap();
+    let texts: Vec<&str> = history.iter().map(|m| m.content.as_str()).collect();
+    assert!(
+        texts.iter().all(|t| !t.contains("WRITTEN")),
+        "ungated write must not land in transcript: {texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn live_catalog_without_grants_does_not_pass_through_all_registry_tools() {
+    // empty capabilities + empty consequences + live_catalog must not PassThrough the full
+    // LiveRegistryRuntime (regression vs boot-None MCP → NoTools).
+    use liberado_common::{CapabilitySet, ProposalSigner};
+
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = Arc::new(CapabilityCatalog::new());
+    catalog.register(liberado_common::McpDescriptor {
+        name: "tasks".into(),
+        description: "tasks".into(),
+        consequence: liberado_common::Consequence::Reversible,
+        provenance: None,
+        default_zone: None,
+        tool_zones: Vec::new(),
+        zone_from_arg: None,
+        write_tools: Vec::new(),
+    });
+
+    let provider = Arc::new(MockProvider::with_script(
+        "chat",
+        [CompletionResponse::text("ok")],
+    ));
+    let sessions = ChatSessions::new(
+        Arc::new(SessionStore::open(dir.path()).await),
+        Executor::new(provider.clone(), Budget::default()),
+        Arc::new(OneTool("tasks:add")),
+    )
+    .with_guards(
+        Vec::new(),
+        CapabilitySet::empty(),
+        dir.path().join("proposals"),
+        ProposalSigner::random(),
+    )
+    .with_live_catalog(catalog);
+
+    let id = sessions.create(None).await.unwrap();
+    sessions.turn(id, "add a task").await.unwrap();
+
+    let offered: Vec<String> = provider.received_requests()[0]
+        .tools
+        .iter()
+        .map(|t| t.name.clone())
+        .collect();
+    assert!(
+        offered.is_empty() || !offered.iter().any(|n| n == "tasks:add"),
+        "empty grants + live catalog must not surface peer tools unscoped; got {offered:?}"
+    );
+}

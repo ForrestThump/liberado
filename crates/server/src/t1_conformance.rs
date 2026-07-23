@@ -133,6 +133,7 @@ impl T1Harness {
             hooks: std::collections::HashMap::new(),
             hook_tx,
             hook_idempotency: crate::hooks::IdempotencyCache::default(),
+            live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         });
 
         let app = Router::new()

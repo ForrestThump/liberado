@@ -15,4 +15,4 @@ pub use goals::{
 };
 pub use search::search_conversations;
 pub use sessions::{session_fork, sessions_list};
-pub use status::{catalog, models, reactions, select_model, status, vault};
+pub use status::{catalog, models, reactions, reload_mcp_peers, select_model, status, vault};

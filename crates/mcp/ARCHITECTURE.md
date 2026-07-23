@@ -70,7 +70,11 @@ Degraded entries half-open after a TTL (default 60s) so routing can retry withou
 out-of-band acquire. Dispatch / chat / daemon build `DispatchRequest.catalog` from
 `CapabilityCatalog::routing_descriptors()` so classifiers never see known-dead peers. Full
 `descriptors()` still lists every registered MCP for zone/authority.
-**Registry UX** (editing topology beyond hand-edited TOML) remains open.
+**Registration surface:** hand-edited `topology.toml` only (no admin UI, no agent-owned MCPs).
+**Hot-reload:** composition holds a cloneable `McpRegistry` + shared `CapabilityCatalog`;
+`liberado_bootstrap::apply_mcp_peer_set` / `LiveMcpController::reload_from_config_dir` (and
+`POST /api/mcp/reload`) re-apply the desired peer set without process restart — the same
+transition boot uses.
 
 ## Dependencies
 

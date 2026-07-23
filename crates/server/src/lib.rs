@@ -23,14 +23,12 @@ use std::time::{Duration, Instant};
 use std::path::Path;
 
 use axum::Router;
-use liberado_common::{CapabilityCatalog, CapabilitySet, WriteProvenance};
+use liberado_common::{CapabilityCatalog, WriteProvenance};
 use liberado_daemon::Daemon;
 use liberado_dispatcher::Dispatcher;
 use liberado_executor::{Budget, Executor, ToolRuntime};
 use liberado_main_agent::ChatSessions;
 use liberado_mcp::McpRegistry;
-
-use liberado_provider::Provider;
 use liberado_session_store::SessionStore;
 use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
@@ -40,7 +38,7 @@ use tracing::{info, warn};
 /// Where `dx build --release --package liberado-webui --web` places the built frontend.
 const DIST_DIR: &str = "target/dx/liberado-webui/release/web/public";
 
-use crate::state::{AppState, NoTools};
+use crate::state::AppState;
 
 const DEFAULT_PORT: u16 = 4201;
 
@@ -72,9 +70,11 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         vault_path
     };
 
-    // One live catalog, shared by every consumer (the API, the daemon's reactive dispatch, chat's
-    // own dispatch) — built once here instead of each independently snapshotting `topology.mcps`.
-    let capability_catalog = Arc::new(liberado_bootstrap::capability_catalog_from_config(&config));
+    // One live catalog + shared MCP registry (boot apply + hot-reload). Every consumer (API,
+    // daemon pools, chat, dispatch pack) uses the same cloneable registry handle.
+    let live_mcp = liberado_bootstrap::live_mcp_from_config(&config, None);
+    let capability_catalog = live_mcp.catalog();
+    let mcp_registry = live_mcp.registry();
 
     // Latency journal (records every inference call, off the hot path) + the per-role providers,
     // each role-tagged and metered, built from config. `provider` here is the plain default
@@ -86,11 +86,9 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     let provider = providers.primary.clone();
     let dispatcher_attached = provider.is_some();
     let model_name = provider.as_ref().map(|p| p.model().to_string());
-    let mcp = liberado_bootstrap::mcp_registry_from_config(
-        &config,
-        Some(capability_catalog.clone()),
-    );
-    let orchestrator_attached = dispatcher_attached && mcp.is_some();
+    // Orchestrator is always wired with the live registry (possibly empty); emptiness no longer
+    // freezes EmptyRuntimeFactory at boot.
+    let orchestrator_attached = dispatcher_attached;
 
     let guidance = dispatcher_guidance_source(&vault_path).await;
 
@@ -125,6 +123,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         &providers,
         &config,
         capability_catalog.clone(),
+        mcp_registry.clone(),
         Path::new(&vault_path),
         guidance.clone(),
     ) {
@@ -144,7 +143,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
 
     let (chat, chat_tools, chat_tool_names) = build_chat(
         &providers,
-        mcp,
+        mcp_registry.clone(),
         &config,
         capability_catalog.clone(),
         Path::new(&vault_path),
@@ -162,6 +161,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         &providers,
         &config,
         capability_catalog.clone(),
+        mcp_registry.clone(),
         Path::new(&vault_path),
         guidance,
     )
@@ -254,6 +254,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         hooks: resolved_hooks,
         hook_tx,
         hook_idempotency: Default::default(),
+        live_mcp: live_mcp.clone(),
     });
 
     // Optional — Telegram bot: proposal Approve/Reject/Revise buttons + free-form chat when a
@@ -299,6 +300,10 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/models", axum::routing::get(api::models))
         .route("/api/models/select", axum::routing::post(api::select_model))
         .route("/api/catalog", axum::routing::get(api::catalog))
+        .route(
+            "/api/mcp/reload",
+            axum::routing::post(api::reload_mcp_peers),
+        )
         .route("/api/reactions", axum::routing::get(api::reactions))
         .route("/api/vault", axum::routing::get(api::vault))
         .route("/api/chat", axum::routing::post(api::chat))
@@ -456,7 +461,7 @@ struct SessionEngine {
 
 async fn build_chat(
     providers: &liberado_bootstrap::RoleProviders,
-    mcp: Option<McpRegistry>,
+    mcp: McpRegistry,
     config: &liberado_bootstrap::Config,
     catalog: Arc<CapabilityCatalog>,
     vault_path: &Path,
@@ -480,17 +485,14 @@ async fn build_chat(
     let dispatcher_caps = config.policy.capabilities_for("dispatcher");
     let main_agent_cfg = &config.topology.main_agent;
 
-    // Consequence catalog + proposals dir: shared with `configure_daemon`'s own Orchestrator wiring
-    // (`liberado_bootstrap::guard_context`) so the two boot paths can't independently drift on how
-    // either is derived. A one-time snapshot at boot is fine here — MCP declarations aren't
-    // runtime-dynamic yet — but the dispatch-routing catalog below stays the live `Arc` so it and the
-    // daemon/API never drift apart from each other.
+    // Consequence catalog + proposals dir: shared with `configure_daemon`'s own Orchestrator wiring.
+    // Snapshots seed guards; `with_live_catalog` keeps consequence/zone lookups hot-reload safe.
     let guard = liberado_bootstrap::guard_context(&catalog, &config.policy, vault_path);
-    let catalog_is_empty = guard.consequences.is_empty();
+    let catalog_is_empty = catalog.is_empty();
 
-    // Face-agent tool surface: optional main-agent MCP grants only. Specialist work goes through
-    // `delegate` → hub → dispatch pack (dispatcher caps), not the face agent's own tool list.
-    let runtime = connect_chat_runtime(&provider, mcp, &main_agent_caps, &guard).await;
+    // Face-agent tool surface: live registry (refresh on peer-set change). Specialist work goes
+    // through `delegate` → hub → dispatch pack, not the face agent's own tool list.
+    let runtime = connect_chat_runtime(mcp);
 
     let mut tool_names: Vec<String> = runtime.catalog().iter().map(|t| t.name.clone()).collect();
     // Face-agent surface is usually just `delegate` (+ optional main-agent MCP grants).
@@ -544,6 +546,7 @@ async fn build_chat(
         guard.signer.clone(),
     )
     .with_zone_guards(guard.zone_catalog, guard.zone_write_classes)
+    .with_live_catalog(catalog.clone())
     .with_dispatcher_capabilities(dispatcher_caps)
     .with_delegation_mode(main_agent_cfg.delegation_mode);
 
@@ -629,36 +632,17 @@ async fn dispatcher_guidance_source(
     }
 }
 
-/// Connect chat's tool runtime once, reused for its lifetime. Specialist work goes through the
-/// hub's dispatch pack (`delegate` / pre-turn non-ExecuteDirect); this runtime is only the face
-/// agent's optional direct MCP grants.
-async fn connect_chat_runtime(
-    _provider: &Arc<dyn Provider>,
-    mcp: Option<McpRegistry>,
-    _capabilities: &CapabilitySet,
-    _guard: &liberado_bootstrap::GuardContext,
-) -> Arc<dyn ToolRuntime> {
-    match mcp {
-        Some(registry) => {
-            let provenance = WriteProvenance::agent("liberado-chat", "chat-session");
-            let (rt, failed) = registry.connect_all_best_effort(provenance).await;
-            let rt: Arc<dyn ToolRuntime> = Arc::from(rt);
-            if failed.is_empty() {
-                info!("chat: connected MCP tools");
-            } else {
-                warn!(failed = ?failed, "chat: some MCPs failed to connect — continuing with the rest");
-            }
-            // The registry is only used for the face agent's optional direct tools; worker
-            // execution lives in the dispatch pack on the hub (E4). Dropping the registry here
-            // is fine — connect_all already produced the ToolRuntime.
-            drop(registry);
-            rt
-        }
-        None => {
-            info!("chat: no MCP configured — chat will be conversation-only");
-            Arc::new(NoTools)
-        }
-    }
+/// Chat face tools: live registry handle that re-connects when the peer set changes (empty→add
+/// after `POST /api/mcp/reload` works without process restart).
+fn connect_chat_runtime(mcp: McpRegistry) -> Arc<dyn ToolRuntime> {
+    info!(
+        peers = mcp.len(),
+        "chat: live MCP registry runtime (refreshes on peer-set change)"
+    );
+    Arc::new(liberado_mcp::LiveRegistryRuntime::new(
+        mcp,
+        WriteProvenance::agent("liberado-chat", "chat-session"),
+    ))
 }
 
 /// Bridges `liberado_notify::Notifier` into the hub's [`SessionAlert`](liberado_session::SessionAlert)

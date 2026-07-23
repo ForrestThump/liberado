@@ -142,6 +142,41 @@ pub struct SelectModelRequest {
     model: String,
 }
 
+/// `POST /api/mcp/reload` — re-read topology from the config dir and apply the MCP peer set
+/// without restarting the process. Hand-edited `topology.toml` is the operator surface; this is
+/// the architectural hot-reload seam (not agent self-registration).
+pub async fn reload_mcp_peers(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.live_mcp.reload_from_config_dir() {
+        Ok(report) => {
+            tracing::info!(
+                enabled = ?report.enabled,
+                added = ?report.added,
+                removed = ?report.removed,
+                "POST /api/mcp/reload: MCP peer set applied"
+            );
+            (
+                axum::http::StatusCode::OK,
+                Json(serde_json::json!({
+                    "ok": true,
+                    "enabled": report.enabled,
+                    "added": report.added,
+                    "removed": report.removed,
+                })),
+            )
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "POST /api/mcp/reload rejected — prior peer set kept");
+            (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "ok": false,
+                    "error": e.message,
+                })),
+            )
+        }
+    }
+}
+
 pub async fn catalog(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let descriptors = state.catalog.descriptors();
 

@@ -61,4 +61,5 @@ Leaked temp dirs for process lifetime.
 ## Merge notes
 
 - Do not land this PR on `main` until intentional promotion of the post-TurboVault tip.
-- Homelab redeploy and registry UX remained open product/ops items (not blockers for the code fixes above).
+- Homelab redeploy remained an open ops item (not a blocker for the code fixes above).
+  Registry UX was later **struck** from the plan (operator 2026-07-23) — hand-edited topology only.

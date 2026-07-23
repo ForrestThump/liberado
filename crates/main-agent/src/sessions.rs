@@ -141,6 +141,8 @@ pub struct ChatSessions {
     consequences: Vec<(String, Consequence)>,
     /// MCP descriptors (zone declarations) for RiskGatedToolRuntime's zone-write-class gating.
     zone_catalog: Vec<McpDescriptor>,
+    /// Live catalog for hot-reload-safe consequence/zone lookups (preferred over snapshots).
+    live_catalog: Option<Arc<CapabilityCatalog>>,
     /// `(zone, write_class)` pairs from `Policy.zones` for the same check.
     zone_write_classes: Vec<(String, WriteClass)>,
     /// Capability grants for RiskGatedToolRuntime capability checking.
@@ -189,6 +191,7 @@ impl ChatSessions {
             locks: Mutex::new(HashMap::new()),
             consequences: Vec::new(),
             zone_catalog: Vec::new(),
+            live_catalog: None,
             zone_write_classes: Vec::new(),
             capabilities: CapabilitySet::empty(),
             proposals_dir: PathBuf::new(),
@@ -282,6 +285,12 @@ impl ChatSessions {
     ) -> Self {
         self.zone_catalog = zone_catalog;
         self.zone_write_classes = zone_write_classes;
+        self
+    }
+
+    /// Prefer live catalog lookups in per-turn RiskGated gates (topology MCP hot-reload).
+    pub fn with_live_catalog(mut self, catalog: Arc<CapabilityCatalog>) -> Self {
+        self.live_catalog = Some(catalog);
         self
     }
 
@@ -497,6 +506,16 @@ impl ChatSessions {
         ))
     }
 
+    /// Whether runtime risk/zone/consequence gates must wrap tool calls.
+    ///
+    /// A boot-time empty consequence snapshot is **not** enough to skip gating when a live
+    /// catalog is attached — empty→add hot-reload can register write peers after construction.
+    fn risk_gate_enabled(&self) -> bool {
+        self.live_catalog.is_some()
+            || !self.consequences.is_empty()
+            || !self.zone_catalog.is_empty()
+    }
+
     /// Optional MCP tools granted to main-agent only (usually empty under the face design).
     fn scoped_extras_runtime(&self, user: &str, session: Ulid) -> Arc<dyn ToolRuntime> {
         let granted_mcps = self.capabilities.granted_mcps();
@@ -505,10 +524,12 @@ impl ChatSessions {
         }
         let scoped: Arc<dyn ToolRuntime> =
             Arc::new(ScopedRuntime::new(self.runtime.clone(), granted_mcps));
-        if self.consequences.is_empty() {
+        // Never return raw scoped tools when a live catalog (or snapshot gate data) is configured:
+        // empty boot-time `consequences` must not bypass Write(zone)/consequence after reload.
+        if !self.risk_gate_enabled() {
             return scoped;
         }
-        Arc::new(RiskGatedToolRuntime::new(
+        let mut gated = RiskGatedToolRuntime::new(
             scoped,
             self.capabilities.clone(),
             self.consequences.clone(),
@@ -519,7 +540,11 @@ impl ChatSessions {
             session.to_string(),
             self.signer.clone(),
             DEFAULT_POOL,
-        ))
+        );
+        if let Some(cat) = &self.live_catalog {
+            gated = gated.with_live_catalog(cat.clone());
+        }
+        Arc::new(gated)
     }
 
     /// Every conversation header, newest first — the sidebar listing.
@@ -687,16 +712,20 @@ impl ChatSessions {
     /// [`dispatch_turn`](Self::dispatch_turn) and `DispatchTuning::narrow_direct_tools`) and wraps
     /// the result in [`RiskGatedToolRuntime`] for capability / consequence / magnitude guards.
     ///
-    /// When no guard configuration is attached, returns the raw `self.runtime` unchanged.
+    /// When no guard configuration is attached (and no live catalog), returns the raw
+    /// `self.runtime` unchanged. If a live catalog is wired, never pass through unscoped tools —
+    /// empty grants mean no tools (not every peer on the live registry).
     fn build_turn_runtime(
         &self,
         user: &str,
         session: Ulid,
         relevant_mcps: &[String],
     ) -> Box<dyn ToolRuntime> {
-        if self.capabilities.capabilities.is_empty() && self.consequences.is_empty() {
-            // No guards configured — use the raw runtime directly.
-            // We wrap in a pass-through box so the caller's interface stays uniform.
+        if self.capabilities.capabilities.is_empty()
+            && self.consequences.is_empty()
+            && self.live_catalog.is_none()
+        {
+            // Truly unguarded test fixtures — raw runtime only when no live catalog is attached.
             return Box::new(PassThroughRuntime(self.runtime.clone()));
         }
 
@@ -731,7 +760,7 @@ impl ChatSessions {
         // capability scope) — tagged "default" so an approved chat-originated proposal executes
         // via the daemon's "default" pool orchestrator on approval, exactly matching today's
         // pre-pool behavior (one orchestrator handled every approval, regardless of origin).
-        Box::new(RiskGatedToolRuntime::new(
+        let mut gated = RiskGatedToolRuntime::new(
             inner,
             self.capabilities.clone(),
             self.consequences.clone(),
@@ -742,7 +771,11 @@ impl ChatSessions {
             session.to_string(),
             self.signer.clone(),
             DEFAULT_POOL,
-        ))
+        );
+        if let Some(cat) = &self.live_catalog {
+            gated = gated.with_live_catalog(cat.clone());
+        }
+        Box::new(gated)
     }
 
     /// Get-or-insert the per-session turn lock, so two turns on the same conversation serialize

@@ -16,7 +16,7 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 |---|---|---|
 | **Dogfood** | **Lean on Telegram harder** | Collect friction → fix real pain. Free-form sticky chat is the phone surface. |
 | **C1** | **Interactive crons (AskHuman)** | Delivery landed; remaining is “ask me if unsure” via session profiles. |
-| **M1b** | **MCP registry UX** | Pooling **landed**; **degraded-catalog routing landed** (`CapabilityCatalog::routing_descriptors` + registry health publish). Remaining: **registry UX** beyond hand-edited TOML. |
+| **M1b** | MCP live peers + hot-reload | Pooling + **degraded-catalog routing** landed. **Hot-reload** of the hand-edited topology MCP slice via `apply_mcp_peer_set` / `POST /api/mcp/reload` (no process restart; no agent self-registration; no admin UI). |
 | **T1** | **Live conformance suite** — [`live-conformance-suite.md`](live-conformance-suite.md) | **L1–L10 landed** (`crates/server/src/t1_conformance.rs` L1–L8/L10; daemon `l9_*` for L9). **Open:** Tier 2 only. |
 | **W1** | **Goal-session view in mobile WebUI** | Later phone surface beyond Telegram. See [`../architecture/session-surface-contract.md`](../architecture/session-surface-contract.md). |
 | **E5-b** | ~~Telegram session deep-link~~ | **Deprioritized** (prefer WebUI later). |
@@ -48,7 +48,7 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 ```
   P1 daily-driver ──►  dogfood Telegram
                    ├── C1 AskHuman crons
-                   ├── M1b registry UX (degraded-catalog routing done)
+                   ├── M1b done (pool + degraded routing + topology MCP hot-reload)
                    └── T1 Tier-1 done (Tier 2 optional)
 
   Later ──► W1 mobile WebUI session view

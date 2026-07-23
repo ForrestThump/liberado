@@ -2,9 +2,12 @@
 //! see, acquire a (possibly pooled) runtime for each, and present them as one [`ToolRuntime`]
 //! whose tools are namespaced `<server>:<tool>` (Decision 4 narrowing is "which servers," routing
 //! is by namespace).
+//!
+//! The connector map is interior-mutable and the handle is cheaply [`Clone`] so composition can
+//! share one live registry across pools/chat and hot-apply a new desired peer set without restart.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -52,13 +55,21 @@ impl From<McpPoolSettings> for PoolPolicy {
     }
 }
 
-/// A named set of MCP servers. Implements `RuntimeFactory`: each `runtime_for` acquires a runtime
-/// for the selected servers (pooled by default) and unions their tools.
-pub struct McpRegistry {
-    connectors: HashMap<String, Box<dyn McpConnector>>,
+struct McpRegistryInner {
+    connectors: RwLock<HashMap<String, Arc<dyn McpConnector>>>,
     pool: Arc<ConnectionPool>,
     /// Optional shared catalog for M1b peer health (degraded after connect/transport failure).
-    health: Option<Arc<CapabilityCatalog>>,
+    health: RwLock<Option<Arc<CapabilityCatalog>>>,
+}
+
+/// A named set of MCP servers. Implements `RuntimeFactory`: each `runtime_for` acquires a runtime
+/// for the selected servers (pooled by default) and unions their tools.
+///
+/// Cheaply [`Clone`] — clones share the same live connector map and pool so hot-reload and
+/// multi-pool composition update one surface.
+#[derive(Clone)]
+pub struct McpRegistry {
+    inner: Arc<McpRegistryInner>,
 }
 
 impl Default for McpRegistry {
@@ -78,14 +89,15 @@ impl McpRegistry {
         let pool = Arc::new(ConnectionPool::new(settings.into()));
         pool.spawn_reaper();
         Self {
-            connectors: HashMap::new(),
-            pool,
-            health: None,
+            inner: Arc::new(McpRegistryInner {
+                connectors: RwLock::new(HashMap::new()),
+                pool,
+                health: RwLock::new(None),
+            }),
         }
     }
 
     /// Custom pool clock for idle-TTL tests (inject "now" without sleeping).
-    /// Not used in production wiring.
     pub fn with_pool_and_clock(
         settings: McpPoolSettings,
         clock: Arc<dyn Fn() -> std::time::Instant + Send + Sync>,
@@ -93,9 +105,11 @@ impl McpRegistry {
         let pool = Arc::new(ConnectionPool::with_clock(settings.into(), clock));
         pool.spawn_reaper();
         Self {
-            connectors: HashMap::new(),
-            pool,
-            health: None,
+            inner: Arc::new(McpRegistryInner {
+                connectors: RwLock::new(HashMap::new()),
+                pool,
+                health: RwLock::new(None),
+            }),
         }
     }
 
@@ -103,91 +117,141 @@ impl McpRegistry {
     ///
     /// Composition roots pass the same `Arc` used for dispatcher routing so
     /// `routing_descriptors()` excludes peers this registry marks degraded.
-    pub fn with_health_catalog(mut self, catalog: Arc<CapabilityCatalog>) -> Self {
-        self.health = Some(catalog);
+    /// Shared by all clones of this registry.
+    pub fn with_health_catalog(self, catalog: Arc<CapabilityCatalog>) -> Self {
+        *self.inner.health.write().unwrap_or_else(|e| e.into_inner()) = Some(catalog);
         self
     }
 
     /// Register a server under `name` (the namespace its tools are exposed under). Chainable.
     pub fn register(
-        mut self,
+        self,
         name: impl Into<String>,
         connector: impl McpConnector + 'static,
     ) -> Self {
-        self.connectors.insert(name.into(), Box::new(connector));
+        self.inner
+            .connectors
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(name.into(), Arc::new(connector));
         self
     }
 
+    /// Atomically replace the connector map with `new_connectors`.
+    ///
+    /// Pool slots for names that disappear are invalidated so idle children for removed peers do
+    /// not stick around. Names that remain may still reuse pool slots (transport identity is
+    /// operator responsibility when only the command line changes).
+    pub fn replace_connectors(&self, new_connectors: HashMap<String, Arc<dyn McpConnector>>) {
+        let mut guard = self
+            .inner
+            .connectors
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        let old: HashSet<String> = guard.keys().cloned().collect();
+        let new_names: HashSet<String> = new_connectors.keys().cloned().collect();
+        for removed in old.difference(&new_names) {
+            self.inner.pool.invalidate(removed);
+        }
+        // Transport change for a kept name: drop any pooled session so the next acquire reconnects.
+        for kept in old.intersection(&new_names) {
+            self.inner.pool.invalidate(kept);
+        }
+        *guard = new_connectors;
+    }
+
+    fn health_catalog(&self) -> Option<Arc<CapabilityCatalog>> {
+        self.inner
+            .health
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     fn publish_healthy(&self, name: &str) {
-        if let Some(cat) = &self.health {
+        if let Some(cat) = self.health_catalog() {
             cat.mark_healthy(name);
         }
     }
 
     fn publish_degraded(&self, name: &str) {
-        if let Some(cat) = &self.health {
+        if let Some(cat) = self.health_catalog() {
             cat.mark_degraded(name);
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.connectors.is_empty()
+        self.inner
+            .connectors
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
     }
 
-    /// The names of the registered MCP connectors (the routable surface). Lets a caller assert the
-    /// config→registry mapping without spawning a server.
-    pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.connectors.keys().map(String::as_str)
+    /// Names of registered MCP connectors (the routable/connectable surface).
+    pub fn names(&self) -> Vec<String> {
+        self.inner
+            .connectors
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .cloned()
+            .collect()
     }
 
     pub fn len(&self) -> usize {
-        self.connectors.len()
+        self.inner
+            .connectors
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
     }
 
     /// Whether pooling is enabled for this registry.
     pub fn pooling_enabled(&self) -> bool {
-        self.pool.policy().enabled
+        self.inner.pool.policy().enabled
     }
 
     /// Acquire one server's runtime: pool checkout (with provenance rebind) or fresh connect.
-    ///
-    /// Holds a per-name concurrency permit for the lifetime of the returned runtime so parallel
-    /// sessions cannot unbounded-spawn children for the same peer.
     async fn acquire(
         &self,
         name: &str,
         provenance: WriteProvenance,
     ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
-        let permit = self.pool.acquire_permit(name).await?;
+        let permit = self.inner.pool.acquire_permit(name).await?;
+        let health = self.health_catalog();
 
-        if let Some(checkout) = self.pool.try_checkout(name, provenance.clone()) {
-            // Do **not** mark_healthy on bare pool checkout — an idle connection may already be
-            // dead. Healthy is published after a successful invoke (or a fresh connect below).
+        if let Some(checkout) = self.inner.pool.try_checkout(name, provenance.clone()) {
             return Ok(Box::new(
                 checkout
-                    .with_health_catalog(self.health.clone())
+                    .with_health_catalog(health.clone())
                     .with_permit(permit),
             ));
         }
 
-        let connector = self
-            .connectors
-            .get(name)
-            .ok_or_else(|| RuntimeSetupError(format!("MCP '{name}' is not registered")))?;
+        let connector = {
+            let guard = self
+                .inner
+                .connectors
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
+            guard.get(name).cloned().ok_or_else(|| {
+                RuntimeSetupError(format!("MCP '{name}' is not registered"))
+            })?
+        };
 
         match connector.connect(provenance.clone()).await {
             Ok(runtime) => {
-                // Fresh connect is the designed recovery path for M1b degraded peers.
                 self.publish_healthy(name);
-                if self.pool.policy().enabled {
+                if self.inner.pool.policy().enabled {
                     Ok(Box::new(
                         PooledCheckout::from_fresh(
                             name.to_string(),
                             runtime,
                             provenance,
-                            Arc::clone(&self.pool),
+                            Arc::clone(&self.inner.pool),
                         )
-                        .with_health_catalog(self.health.clone())
+                        .with_health_catalog(health)
                         .with_permit(permit),
                     ))
                 } else {
@@ -195,30 +259,25 @@ impl McpRegistry {
                         inner: AsToolRuntime(runtime),
                         _permit: permit,
                         name: name.to_string(),
-                        health: self.health.clone(),
+                        health,
                     }))
                 }
             }
             Err(e) => {
-                self.pool.invalidate(name);
+                self.inner.pool.invalidate(name);
                 self.publish_degraded(name);
-                // permit dropped here
                 Err(e)
             }
         }
     }
 
     /// Connect to every registered MCP independently and in parallel, tolerating individual
-    /// failures instead of aborting the whole batch — the "best effort" counterpart to
-    /// `RuntimeFactory::runtime_for`'s strict, all-required semantics (used by dispatch-routed
-    /// execution, where a missing *required* MCP should hard-fail, not silently narrow the
-    /// scope). Returns the names that failed alongside the runtime, so the caller can log/report
-    /// a summary; each individual failure is also logged at the point of failure.
+    /// failures instead of aborting the whole batch.
     pub async fn connect_all_best_effort(
         &self,
         provenance: WriteProvenance,
     ) -> (Box<dyn ToolRuntime>, Vec<String>) {
-        let names: Vec<String> = self.connectors.keys().cloned().collect();
+        let names = self.names();
         let attempts = names.into_iter().map(|name| {
             let provenance = provenance.clone();
             async move {
@@ -237,8 +296,7 @@ impl McpRegistry {
                 Ok(entry) => servers.push(entry),
                 Err((name, e)) => {
                     tracing::warn!(mcp = %name, error = %e, "MCP failed to connect — continuing without it");
-                    // Ensure a bad pool slot is not retained; health already marked degraded in acquire.
-                    self.pool.invalidate(&name);
+                    self.inner.pool.invalidate(&name);
                     failed.push(name);
                 }
             }
@@ -254,14 +312,13 @@ impl RuntimeFactory for McpRegistry {
         allowed_mcps: &[String],
         provenance: WriteProvenance,
     ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
-        // Empty allow-list = every registered server; otherwise the named (known) ones. Narrowing
-        // selects *which servers* the execution may reach (a subagent's disjoint slice).
         let selected: Vec<String> = if allowed_mcps.is_empty() {
-            self.connectors.keys().cloned().collect()
+            self.names()
         } else {
+            let known: HashSet<String> = self.names().into_iter().collect();
             allowed_mcps
                 .iter()
-                .filter(|name| self.connectors.contains_key(name.as_str()))
+                .filter(|name| known.contains(name.as_str()))
                 .cloned()
                 .collect()
         };

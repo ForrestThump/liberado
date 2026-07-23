@@ -192,9 +192,12 @@ pub struct Orchestrator {
     /// one here would let a direct execution reach MCPs the guard pre-flight never considered.
     capabilities: CapabilitySet,
     /// `(mcp_name, consequence)` pairs for the runtime-level gate's consequence check (see `gate`).
+    /// Fallback when [`live_catalog`](Self::with_live_catalog) is unset.
     consequence_catalog: Vec<(String, Consequence)>,
     /// MCP descriptors (zone declarations) for the runtime-level gate's zone-write-class check.
     zone_catalog: Vec<McpDescriptor>,
+    /// Live capability catalog for hot-reload-safe gate lookups (preferred over the Vec snapshots).
+    live_catalog: Option<Arc<liberado_common::CapabilityCatalog>>,
     /// `(zone, write_class)` pairs from `Policy.zones` for the same check.
     zone_write_classes: Vec<(String, WriteClass)>,
     /// Base directory for proposal files a runtime-level downgrade writes (see `gate`).
@@ -227,8 +230,8 @@ pub struct Orchestrator {
 /// naming only what actually differs.
 pub struct OrchestratorInfra {
     provider: Arc<dyn Provider>,
-    consequence_catalog: Vec<(String, Consequence)>,
-    zone_catalog: Vec<McpDescriptor>,
+    /// Shared live catalog — gate consequence/zone data is refreshed from here after MCP apply.
+    live_catalog: Arc<liberado_common::CapabilityCatalog>,
     zone_write_classes: Vec<(String, WriteClass)>,
     proposals_dir: PathBuf,
     signer: ProposalSigner,
@@ -237,16 +240,14 @@ pub struct OrchestratorInfra {
 impl OrchestratorInfra {
     pub fn new(
         provider: Arc<dyn Provider>,
-        consequence_catalog: Vec<(String, Consequence)>,
-        zone_catalog: Vec<McpDescriptor>,
+        live_catalog: Arc<liberado_common::CapabilityCatalog>,
         zone_write_classes: Vec<(String, WriteClass)>,
         proposals_dir: PathBuf,
         signer: ProposalSigner,
     ) -> Self {
         Self {
             provider,
-            consequence_catalog,
-            zone_catalog,
+            live_catalog,
             zone_write_classes,
             proposals_dir,
             signer,
@@ -265,8 +266,10 @@ impl OrchestratorInfra {
             provider: self.provider.clone(),
             factory: Box::new(factory),
             capabilities,
-            consequence_catalog: self.consequence_catalog.clone(),
-            zone_catalog: self.zone_catalog.clone(),
+            // Snapshots kept for API compatibility; live_catalog wins on every invoke.
+            consequence_catalog: self.live_catalog.consequence_catalog(),
+            zone_catalog: self.live_catalog.descriptors(),
+            live_catalog: Some(self.live_catalog.clone()),
             zone_write_classes: self.zone_write_classes.clone(),
             proposals_dir: self.proposals_dir.clone(),
             signer: self.signer.clone(),
@@ -298,6 +301,7 @@ impl Orchestrator {
             capabilities,
             consequence_catalog,
             zone_catalog,
+            live_catalog: None,
             zone_write_classes,
             proposals_dir,
             signer,
@@ -307,6 +311,15 @@ impl Orchestrator {
             subagent_budget: Budget::default(),
             notifier: None,
         }
+    }
+
+    /// Prefer live catalog lookups in the runtime gate (topology MCP hot-reload).
+    pub fn with_live_catalog(
+        mut self,
+        catalog: Arc<liberado_common::CapabilityCatalog>,
+    ) -> Self {
+        self.live_catalog = Some(catalog);
+        self
     }
 
     /// Override the provenance `source` recorded for executions (e.g. a per-deployment id).
@@ -825,11 +838,20 @@ impl Orchestrator {
         correlation_base: impl Into<String>,
     ) -> (Arc<dyn ToolRuntime>, Arc<AtomicBool>) {
         let deferral_flag = Arc::new(AtomicBool::new(false));
+        // Prefer live catalog so peers added via hot-reload still get consequence/zone gates.
+        let (consequences, zones) = if let Some(cat) = &self.live_catalog {
+            (cat.consequence_catalog(), cat.descriptors())
+        } else {
+            (
+                self.consequence_catalog.clone(),
+                self.zone_catalog.clone(),
+            )
+        };
         let mut gated = RiskGatedToolRuntime::new(
             Arc::from(runtime),
             capabilities,
-            self.consequence_catalog.clone(),
-            self.zone_catalog.clone(),
+            consequences,
+            zones,
             self.zone_write_classes.clone(),
             self.proposals_dir.clone(),
             goal_context.into(),
@@ -838,6 +860,9 @@ impl Orchestrator {
             self.pool_name.clone(),
         )
         .with_deferral_flag(deferral_flag.clone());
+        if let Some(cat) = &self.live_catalog {
+            gated = gated.with_live_catalog(cat.clone());
+        }
         if let Some(notifier) = &self.notifier {
             gated = gated.with_notifier(notifier.clone());
         }

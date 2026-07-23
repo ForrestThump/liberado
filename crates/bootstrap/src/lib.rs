@@ -21,15 +21,18 @@ pub use liberado_config::{
     sessions_dir,
 };
 
+mod mcp_apply;
+pub use mcp_apply::{LiveMcpController, McpApplyError, McpApplyReport, apply_mcp_peer_set};
+
 use std::path::Path;
 use std::sync::Arc;
 
 use liberado_common::{CapabilityCatalog, DEFAULT_POOL, ModelRole, ToolGuidanceSource};
-use liberado_config::{McpTransport, ProviderProfile, RoleOverride, managed_binary_path};
+use liberado_config::{ProviderProfile, RoleOverride};
 use liberado_daemon::Daemon;
 use liberado_dispatch_pack::DispatchPack;
 use liberado_dispatcher::Dispatcher;
-use liberado_mcp::{HttpConnector, McpRegistry, StdioConnector};
+use liberado_mcp::{McpPoolSettings, McpRegistry};
 use liberado_notify::Notifier;
 use liberado_orchestrator::OrchestratorInfra;
 use liberado_provider::{AgentRole, LatencyRecorder, MeteredProvider, Provider};
@@ -206,7 +209,7 @@ pub fn role_providers_from_config(
 /// newline-delimited JSON-RPC stream. `--rm` plus the child process dying (`ChildProcessTransport`'s
 /// `kill_on_drop`, which breaks the attached stdin pipe and sends the container EOF) is enough to
 /// clean up the container — no explicit `docker stop`/container-ID tracking needed.
-fn docker_argv(
+pub(crate) fn docker_argv(
     image: &str,
     command: Option<&str>,
     args: &[String],
@@ -230,10 +233,10 @@ fn docker_argv(
     argv
 }
 
-/// Build the MCP registry from the ENABLED MCPs in `config.topology.mcps`, registering each by its
-/// `name` with a connector from its transport. `None` when no MCP is enabled (decide-only daemon,
-/// tool-less chat). This shares ONE source (topology.mcps) with the dispatcher catalog, so a name the
-/// dispatcher routes to is a name the runtime can actually connect to.
+/// Build the MCP registry from the ENABLED MCPs in `config.topology.mcps` via the same
+/// [`apply_mcp_peer_set`] transition used for hot-reload. `None` when no MCP is enabled
+/// (decide-only daemon, tool-less chat) — callers that need a live handle for later reload should
+/// use [`live_mcp_from_config`] instead (always returns a controller, possibly with an empty set).
 ///
 /// When `health_catalog` is provided (the same `Arc` used for dispatcher routing), connect/transport
 /// failures publish M1b **degraded** peer state so `routing_descriptors()` omits dead peers.
@@ -241,43 +244,38 @@ pub fn mcp_registry_from_config(
     config: &Config,
     health_catalog: Option<std::sync::Arc<CapabilityCatalog>>,
 ) -> Option<McpRegistry> {
-    let pool = liberado_mcp::McpPoolSettings {
+    let controller = live_mcp_from_config(config, health_catalog);
+    (!controller.registry().is_empty()).then_some(controller.registry())
+}
+
+fn pool_settings_from_config(config: &Config) -> McpPoolSettings {
+    McpPoolSettings {
         enabled: config.tuning.mcp_pooling.enabled,
         idle_ttl: std::time::Duration::from_secs(config.tuning.mcp_pooling.idle_ttl_secs),
         max_in_flight_per_name: config.tuning.mcp_pooling.max_in_flight_per_name,
         connect_wait: std::time::Duration::from_secs(config.tuning.mcp_pooling.connect_wait_secs),
-    };
-    let base = McpRegistry::with_pool_settings(pool);
-    let base = match health_catalog {
-        Some(cat) => base.with_health_catalog(cat),
-        None => base,
-    };
-    let registry = config.topology.mcps.iter().filter(|m| m.enabled).fold(
-        base,
-        |registry, m| match &m.transport {
-            McpTransport::Stdio { command, args } => {
-                registry.register(&m.name, StdioConnector::new(command.clone(), args.clone()))
-            }
-            McpTransport::Http { url } => {
-                registry.register(&m.name, HttpConnector::new(url.clone()))
-            }
-            McpTransport::Managed => {
-                let bin = managed_binary_path(&mcp_install_dir(), &m.name);
-                registry.register(&m.name, StdioConnector::new(bin.to_string_lossy(), vec![]))
-            }
-            McpTransport::Docker {
-                image,
-                command,
-                args,
-                volumes,
-                env,
-            } => {
-                let argv = docker_argv(image, command.as_deref(), args, volumes, env);
-                registry.register(&m.name, StdioConnector::new("docker", argv))
-            }
-        },
-    );
-    (!registry.is_empty()).then_some(registry)
+    }
+}
+
+/// Construct the live MCP controller: shared [`CapabilityCatalog`] + cloneable [`McpRegistry`],
+/// peers applied from `config.topology.mcps` (boot = first apply). Prefer this over
+/// [`mcp_registry_from_config`] when hot-reload must remain possible even if the initial set is empty.
+///
+/// If `health_catalog` is `None`, a fresh catalog is created and seeded by the apply. Pass the
+/// process-wide catalog so routing and health stay one object.
+pub fn live_mcp_from_config(
+    config: &Config,
+    health_catalog: Option<Arc<CapabilityCatalog>>,
+) -> LiveMcpController {
+    let catalog = health_catalog.unwrap_or_else(|| Arc::new(CapabilityCatalog::new()));
+    let registry =
+        McpRegistry::with_pool_settings(pool_settings_from_config(config)).with_health_catalog(catalog.clone());
+    let controller = LiveMcpController::new(catalog, registry);
+    // Boot apply: empty → desired. Reject is unexpected after Config::validate; log and leave empty.
+    if let Err(e) = controller.apply_config(config) {
+        tracing::error!(error = %e, "initial MCP peer apply failed — starting with empty peer set");
+    }
+    controller
 }
 
 /// Build a [`liberado_cron::CronEventSource`] from the enabled entries in
@@ -315,6 +313,9 @@ pub fn cron_source_from_config(
 /// can make those differ). With no provider the daemon stays watch-only; with a provider but no MCP
 /// it is decide-only. This is the single owner of the daemon's decide/act wiring.
 ///
+/// `mcp` is the **shared** live [`McpRegistry`] (from [`LiveMcpController`]); clones are cheap and
+/// hot-reload updates every pool. Pass an empty registry for decide-only.
+///
 /// The dispatcher is built from `config.tuning`, and the `"dispatcher"` component's capabilities
 /// (`config.policy.capabilities_for("dispatcher")` — the union of grants naming that component) are
 /// its maximal authority, so the Decision 4 boundary is now *configured* rather than empty. The
@@ -333,6 +334,7 @@ pub fn configure_daemon(
     providers: &RoleProviders,
     config: &Config,
     catalog: Arc<CapabilityCatalog>,
+    mcp: McpRegistry,
     vault_path: &Path,
     guidance: Option<Arc<dyn ToolGuidanceSource>>,
 ) -> Daemon {
@@ -378,10 +380,10 @@ pub fn configure_daemon(
     // Everything an `Orchestrator` needs that's identical across every pool (see
     // `OrchestratorInfra`'s doc comment) — built once here, then combined per pool below with just
     // that pool's own factory/capabilities/name.
+    // Live catalog Arc — orchestrator gates re-read consequence/zone data after MCP hot-reload.
     let orchestrator_infra = OrchestratorInfra::new(
         subagent_provider.clone(),
-        guard.consequences.clone(),
-        guard.zone_catalog.clone(),
+        catalog.clone(),
         guard.zone_write_classes.clone(),
         guard.proposals_dir.clone(),
         guard.signer.clone(),
@@ -420,26 +422,23 @@ pub fn configure_daemon(
             daemon
         }
     };
-    let daemon = match mcp_registry_from_config(config, Some(catalog.clone())) {
-        Some(factory) => {
-            tracing::info!("orchestrator enabled (MCP execution)");
-            let orchestrator = orchestrator_infra.for_pool(factory, capabilities, DEFAULT_POOL);
-            let orchestrator = match &notifier {
-                Some(n) => orchestrator.with_notifier(n.clone()),
-                None => orchestrator,
-            };
-            daemon.with_orchestrator(orchestrator)
-        }
-        None => {
-            tracing::warn!("no enabled MCP in topology.mcps — decide-only (no MCP execution)");
-            daemon
-        }
+    // Always wire the shared live registry (even when empty) so empty→add hot-reload can acquire
+    // peers without a process restart. Emptiness only affects acquisition, not composition.
+    tracing::info!(
+        peers = mcp.len(),
+        "orchestrator enabled (live MCP registry; empty set is decide-until-reload)"
+    );
+    let orchestrator = orchestrator_infra.for_pool(mcp.clone(), capabilities, DEFAULT_POOL);
+    let orchestrator = match &notifier {
+        Some(n) => orchestrator.with_notifier(n.clone()),
+        None => orchestrator,
     };
+    let daemon = daemon.with_orchestrator(orchestrator);
 
     // Additional named pools (Decision 18 checkpoint #3) — same provider/tuning/consequence
     // catalog/proposals dir/signer as the default pool, differing only in the capability grant
-    // named after the pool and (necessarily) their own `McpRegistry` instance, since registries
-    // aren't `Clone`/shareable across orchestrators.
+    // named after the pool. MCP runtime is the **shared** live registry (clone), so peer hot-reload
+    // stays one transition for every pool.
     config
         .topology
         .pools
@@ -466,40 +465,21 @@ pub fn configure_daemon(
                 catalog.clone(),
                 pool_capabilities.clone(),
             );
-            // Intentionally called again here (once per enabled pool, so N+1 total calls across
-            // this function for N additional pools) rather than reusing the default pool's registry
-            // built above: each pool needs its own, independently owned `McpRegistry` (registries
-            // aren't `Clone`/shareable across orchestrators — see the `fold`'s own doc comment
-            // above), so there is no cheaper way to get N separate registries than building each
-            // from `config.topology.mcps` N times. Cheap in absolute terms (this reads the same
-            // small, already-in-memory `config`, not a file or network round-trip), so not worth
-            // caching or restructuring around.
-            match mcp_registry_from_config(config, Some(catalog.clone())) {
-                Some(factory) => {
-                    let orchestrator =
-                        orchestrator_infra.for_pool(factory, pool_capabilities, pool.name.clone());
-                    let orchestrator = match &notifier {
-                        Some(n) => orchestrator.with_notifier(n.clone()),
-                        None => orchestrator,
-                    };
-                    daemon.with_pool_orchestrator(pool.name.clone(), orchestrator)
-                }
-                None => {
-                    tracing::warn!(
-                        pool = pool.name,
-                        "no enabled MCP in topology.mcps — pool is decide-only (no MCP execution)"
-                    );
-                    daemon
-                }
-            }
+            let orchestrator =
+                orchestrator_infra.for_pool(mcp.clone(), pool_capabilities, pool.name.clone());
+            let orchestrator = match &notifier {
+                Some(n) => orchestrator.with_notifier(n.clone()),
+                None => orchestrator,
+            };
+            daemon.with_pool_orchestrator(pool.name.clone(), orchestrator)
         })
 }
 
 /// Build the [`DispatchPack`] that hosts dispatcher+orchestrator as a goal-session pack (E2/E3).
 ///
-/// Parallel construction to [`configure_daemon`]: same pools, same capability ceilings, own
-/// `McpRegistry` instances (registries are not shareable). Register the returned pack on the
-/// [`liberado_session::GoalSessionHub`] and hand that hub to the daemon via
+/// Parallel construction to [`configure_daemon`]: same pools, same capability ceilings, and the
+/// **same** shared [`McpRegistry`] (clone) so hot-reload stays consistent. Register the returned pack
+/// on the [`liberado_session::GoalSessionHub`] and hand that hub to the daemon via
 /// [`Daemon::with_goal_hub`](liberado_daemon::Daemon::with_goal_hub).
 ///
 /// Returns `None` when there is no provider (watch-only) — without inference there is nothing to
@@ -508,6 +488,7 @@ pub fn build_dispatch_pack(
     providers: &RoleProviders,
     config: &Config,
     catalog: Arc<CapabilityCatalog>,
+    mcp: McpRegistry,
     vault_path: &Path,
     guidance: Option<Arc<dyn ToolGuidanceSource>>,
 ) -> Option<DispatchPack> {
@@ -517,8 +498,7 @@ pub fn build_dispatch_pack(
     let guard = guard_context(&catalog, &config.policy, vault_path);
     let orchestrator_infra = OrchestratorInfra::new(
         subagent_provider.clone(),
-        guard.consequences.clone(),
-        guard.zone_catalog.clone(),
+        catalog.clone(),
         guard.zone_write_classes.clone(),
         guard.proposals_dir.clone(),
         guard.signer.clone(),
@@ -546,29 +526,20 @@ pub fn build_dispatch_pack(
         pack = pack.with_notifier(n.clone());
     }
 
-    // Default pool.
-    match mcp_registry_from_config(config, Some(catalog.clone())) {
-        Some(factory) => {
-            let orchestrator = orchestrator_infra.for_pool(factory, capabilities, DEFAULT_POOL);
-            let orchestrator = match &notifier {
-                Some(n) => orchestrator.with_notifier(n.clone()),
-                None => orchestrator,
-            };
-            pack = pack.with_pool(DEFAULT_POOL, dispatcher, orchestrator);
-        }
-        None => {
-            // Decide-only: still register a dispatcher with a no-MCP orchestrator so Clarify/Propose
-            // work; ExecuteDirect will use NoMcpRuntime.
-            let orchestrator =
-                orchestrator_infra.for_pool(EmptyRuntimeFactory, capabilities, DEFAULT_POOL);
-            pack = pack.with_pool(DEFAULT_POOL, dispatcher, orchestrator);
-            tracing::warn!(
-                "dispatch pack: no enabled MCP — decide-only (ExecuteDirect has no tools)"
-            );
-        }
+    // Always wire the live registry (empty peers still allow later hot-reload).
+    if mcp.is_empty() {
+        tracing::info!(
+            "dispatch pack: live MCP registry empty at boot — ExecuteDirect gains tools after reload"
+        );
     }
+    let orchestrator = orchestrator_infra.for_pool(mcp.clone(), capabilities, DEFAULT_POOL);
+    let orchestrator = match &notifier {
+        Some(n) => orchestrator.with_notifier(n.clone()),
+        None => orchestrator,
+    };
+    pack = pack.with_pool(DEFAULT_POOL, dispatcher, orchestrator);
 
-    // Additional named pools.
+    // Additional named pools — same shared registry clone.
     for pool_cfg in config.topology.pools.iter().filter(|p| p.enabled) {
         let pool_capabilities = config.policy.capabilities_for(&pool_cfg.name);
         let mut pool_dispatcher = Dispatcher::new(
@@ -579,25 +550,13 @@ pub fn build_dispatch_pack(
         if let Some(g) = &guidance {
             pool_dispatcher = pool_dispatcher.with_guidance(g.clone());
         }
-        match mcp_registry_from_config(config, Some(catalog.clone())) {
-            Some(factory) => {
-                let orchestrator =
-                    orchestrator_infra.for_pool(factory, pool_capabilities, pool_cfg.name.clone());
-                let orchestrator = match &notifier {
-                    Some(n) => orchestrator.with_notifier(n.clone()),
-                    None => orchestrator,
-                };
-                pack = pack.with_pool(pool_cfg.name.clone(), pool_dispatcher, orchestrator);
-            }
-            None => {
-                let orchestrator = orchestrator_infra.for_pool(
-                    EmptyRuntimeFactory,
-                    pool_capabilities,
-                    pool_cfg.name.clone(),
-                );
-                pack = pack.with_pool(pool_cfg.name.clone(), pool_dispatcher, orchestrator);
-            }
-        }
+        let orchestrator =
+            orchestrator_infra.for_pool(mcp.clone(), pool_capabilities, pool_cfg.name.clone());
+        let orchestrator = match &notifier {
+            Some(n) => orchestrator.with_notifier(n.clone()),
+            None => orchestrator,
+        };
+        pack = pack.with_pool(pool_cfg.name.clone(), pool_dispatcher, orchestrator);
     }
 
     Some(pack)
@@ -606,28 +565,11 @@ pub fn build_dispatch_pack(
 /// Matches the daemon's default reaction depth (first agent step reacting to an external change).
 const DEFAULT_REACTION_DEPTH_FOR_PACK: u32 = 1;
 
-/// A `RuntimeFactory` that never connects — used when topology has no MCPs so the pack can still
-/// classify (and fail ExecuteDirect honestly with no tools).
-struct EmptyRuntimeFactory;
-
-#[async_trait::async_trait]
-impl liberado_executor::RuntimeFactory for EmptyRuntimeFactory {
-    async fn runtime_for(
-        &self,
-        _allowed_mcps: &[String],
-        _provenance: liberado_common::WriteProvenance,
-    ) -> Result<Box<dyn liberado_executor::ToolRuntime>, liberado_executor::RuntimeSetupError> {
-        Err(liberado_executor::RuntimeSetupError(
-            "no MCP is configured in topology.mcps".into(),
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use liberado_common::capability::Consequence;
-    use liberado_config::McpConfig;
+    use liberado_config::{McpConfig, McpTransport};
 
     // These mirror the existing `*_from_env_uses_environment_variables`-style tests in
     // `liberado-provider-openai-compat`: they don't mutate process env vars (races under parallel
@@ -727,9 +669,9 @@ mod tests {
 
         let registry =
             mcp_registry_from_config(&config, None).expect("two enabled MCPs => Some");
-        let mut names: Vec<&str> = registry.names().collect();
+        let mut names = registry.names();
         names.sort_unstable();
-        assert_eq!(names, vec!["tasks-mcp", "wiki-mcp"]);
+        assert_eq!(names, vec!["tasks-mcp".to_string(), "wiki-mcp".to_string()]);
     }
 
     #[test]
@@ -739,8 +681,8 @@ mod tests {
 
         let registry =
             mcp_registry_from_config(&config, None).expect("one enabled MCP => Some");
-        let names: Vec<&str> = registry.names().collect();
-        assert_eq!(names, vec!["weather-mcp"]);
+        let names = registry.names();
+        assert_eq!(names, vec!["weather-mcp".to_string()]);
     }
 
     #[test]
@@ -760,8 +702,8 @@ mod tests {
 
         let registry =
             mcp_registry_from_config(&config, None).expect("one enabled MCP => Some");
-        let names: Vec<&str> = registry.names().collect();
-        assert_eq!(names, vec!["tasks-mcp-docker"]);
+        let names = registry.names();
+        assert_eq!(names, vec!["tasks-mcp-docker".to_string()]);
     }
 
     #[test]

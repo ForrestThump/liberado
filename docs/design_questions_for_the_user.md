@@ -18,9 +18,9 @@ Each item points at the docs (or code areas) that disagree or leave a gap.
 
 ## 2. M1 remaining scope: registry UX vs degraded catalog
 
-**Status (2026-07-23):** **Degraded-catalog routing landed** (`routing_descriptors` + MCP registry health publish). Remaining open question is **registry UX only** (beyond hand-edited topology TOML) — when / how to ship it.
-
-**Related:** [roadmap/current.md](roadmap/current.md) (M1b), [crates/mcp/ARCHITECTURE.md](../crates/mcp/ARCHITECTURE.md), research baseline [research/archive/grok-architecture-analysis-2026-07-22.md](research/archive/grok-architecture-analysis-2026-07-22.md).
+**Status (2026-07-23):** **Closed.** Degraded-catalog routing landed; topology MCP **hot-reload**
+landed (`apply_mcp_peer_set` / `POST /api/mcp/reload`). No product registry UI; no agent-owned
+MCPs; hand-edited `topology.toml` remains the operator surface.
 
 ---
 

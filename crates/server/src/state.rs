@@ -10,7 +10,7 @@ use liberado_main_agent::ChatSessions;
 use liberado_provider::{ToolDef, ToolInvocation};
 use tokio::sync::{Mutex, mpsc::UnboundedSender};
 
-use liberado_bootstrap::Config;
+use liberado_bootstrap::{Config, LiveMcpController};
 use liberado_common::{CapabilityCatalog, CapabilitySet};
 use liberado_provider::Provider;
 use liberado_session::GoalSessionHub;
@@ -79,6 +79,9 @@ pub struct AppState {
     /// Best-effort dedup for a hook's `X-Liberado-Idempotency-Key`, shared across all hooks (keys
     /// are already namespaced by hook name — see `hooks::trigger_hook`).
     pub hook_idempotency: IdempotencyCache,
+    /// Shared MCP peer controller (catalog + registry). `POST /api/mcp/reload` re-applies the
+    /// hand-edited topology MCP slice without process restart.
+    pub live_mcp: LiveMcpController,
 }
 
 /// A tool runtime with no tools — chat still works (just conversation) when no MCP is configured.

@@ -342,6 +342,7 @@ mod tests {
             hooks,
             hook_tx,
             hook_idempotency: IdempotencyCache::default(),
+            live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         });
 
         let app = Router::new()
@@ -410,6 +411,7 @@ mod tests {
             hooks,
             hook_tx,
             hook_idempotency: IdempotencyCache::default(),
+            live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         });
         let app = Router::new()
             .route("/api/hooks/{name}", axum::routing::post(trigger_hook))
