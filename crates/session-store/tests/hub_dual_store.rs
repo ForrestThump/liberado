@@ -287,7 +287,7 @@ async fn a4_park_answer_resume_pack_sees_prior_turns_on_both_stores() {
             "{name}: pack must see prior assistant question: {texts:?}"
         );
         assert!(
-            texts.iter().any(|t| *t == "A4-Resume-Answer"),
+            texts.contains(&"A4-Resume-Answer"),
             "{name}: pack must see resume answer in prior_turns: {texts:?}"
         );
         assert!(
