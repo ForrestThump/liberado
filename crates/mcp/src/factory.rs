@@ -13,7 +13,9 @@ use liberado_executor::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
 
 use crate::MultiMcpRuntime;
 use crate::connector::McpConnector;
-use crate::pool::{AsToolRuntime, ConnectionPool, PoolPolicy, PooledCheckout};
+use crate::pool::{
+    AsToolRuntime, ConnectionPool, PermittedRuntime, PoolPolicy, PooledCheckout,
+};
 
 /// Pooling knobs passed into [`McpRegistry`] at construction (from `tuning.mcp_pooling`).
 #[derive(Debug, Clone)]
@@ -22,6 +24,10 @@ pub struct McpPoolSettings {
     pub enabled: bool,
     /// Idle TTL for checked-in connections.
     pub idle_ttl: Duration,
+    /// Max simultaneous live checkouts/connects for one MCP name.
+    pub max_in_flight_per_name: usize,
+    /// How long an acquire waits for a concurrency permit before failing.
+    pub connect_wait: Duration,
 }
 
 impl Default for McpPoolSettings {
@@ -29,6 +35,8 @@ impl Default for McpPoolSettings {
         Self {
             enabled: true,
             idle_ttl: Duration::from_secs(300),
+            max_in_flight_per_name: 4,
+            connect_wait: Duration::from_secs(60),
         }
     }
 }
@@ -38,6 +46,8 @@ impl From<McpPoolSettings> for PoolPolicy {
         PoolPolicy {
             enabled: s.enabled,
             idle_ttl: s.idle_ttl,
+            max_in_flight_per_name: s.max_in_flight_per_name,
+            connect_wait: s.connect_wait,
         }
     }
 }
@@ -58,16 +68,18 @@ impl Default for McpRegistry {
 }
 
 impl McpRegistry {
-    /// Registry with default pooling (**on**, 300s idle TTL).
+    /// Registry with default pooling (**on**, 300s idle TTL, reaper + concurrency caps).
     pub fn new() -> Self {
         Self::with_pool_settings(McpPoolSettings::default())
     }
 
     /// Registry with explicit pooling policy (composition root wires config here).
     pub fn with_pool_settings(settings: McpPoolSettings) -> Self {
+        let pool = Arc::new(ConnectionPool::new(settings.into()));
+        pool.spawn_reaper();
         Self {
             connectors: HashMap::new(),
-            pool: Arc::new(ConnectionPool::new(settings.into())),
+            pool,
             health: None,
         }
     }
@@ -78,9 +90,11 @@ impl McpRegistry {
         settings: McpPoolSettings,
         clock: Arc<dyn Fn() -> std::time::Instant + Send + Sync>,
     ) -> Self {
+        let pool = Arc::new(ConnectionPool::with_clock(settings.into(), clock));
+        pool.spawn_reaper();
         Self {
             connectors: HashMap::new(),
-            pool: Arc::new(ConnectionPool::with_clock(settings.into(), clock)),
+            pool,
             health: None,
         }
     }
@@ -136,15 +150,24 @@ impl McpRegistry {
     }
 
     /// Acquire one server's runtime: pool checkout (with provenance rebind) or fresh connect.
+    ///
+    /// Holds a per-name concurrency permit for the lifetime of the returned runtime so parallel
+    /// sessions cannot unbounded-spawn children for the same peer.
     async fn acquire(
         &self,
         name: &str,
         provenance: WriteProvenance,
     ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+        let permit = self.pool.acquire_permit(name).await?;
+
         if let Some(checkout) = self.pool.try_checkout(name, provenance.clone()) {
-            // Reusing a pooled peer implies it was healthy when checked in.
-            self.publish_healthy(name);
-            return Ok(Box::new(checkout.with_health_catalog(self.health.clone())));
+            // Do **not** mark_healthy on bare pool checkout — an idle connection may already be
+            // dead. Healthy is published after a successful invoke (or a fresh connect below).
+            return Ok(Box::new(
+                checkout
+                    .with_health_catalog(self.health.clone())
+                    .with_permit(permit),
+            ));
         }
 
         let connector = self
@@ -154,6 +177,7 @@ impl McpRegistry {
 
         match connector.connect(provenance.clone()).await {
             Ok(runtime) => {
+                // Fresh connect is the designed recovery path for M1b degraded peers.
                 self.publish_healthy(name);
                 if self.pool.policy().enabled {
                     Ok(Box::new(
@@ -163,15 +187,22 @@ impl McpRegistry {
                             provenance,
                             Arc::clone(&self.pool),
                         )
-                        .with_health_catalog(self.health.clone()),
+                        .with_health_catalog(self.health.clone())
+                        .with_permit(permit),
                     ))
                 } else {
-                    Ok(Box::new(AsToolRuntime(runtime)))
+                    Ok(Box::new(PermittedRuntime {
+                        inner: AsToolRuntime(runtime),
+                        _permit: permit,
+                        name: name.to_string(),
+                        health: self.health.clone(),
+                    }))
                 }
             }
             Err(e) => {
                 self.pool.invalidate(name);
                 self.publish_degraded(name);
+                // permit dropped here
                 Err(e)
             }
         }

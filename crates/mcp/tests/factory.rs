@@ -374,6 +374,7 @@ async fn pooling_disabled_connects_every_acquisition() {
     let settings = McpPoolSettings {
         enabled: false,
         idle_ttl: Duration::from_secs(300),
+        ..Default::default()
     };
     let registry = counting_registry(settings, connects.clone());
 
@@ -534,6 +535,7 @@ async fn idle_ttl_expiry_forces_new_connect() {
     let settings = McpPoolSettings {
         enabled: true,
         idle_ttl: Duration::from_secs(10),
+        ..Default::default()
     };
     let registry =
         McpRegistry::with_pool_and_clock(settings, Arc::new(move || *clock_now.lock().unwrap()))
@@ -565,6 +567,153 @@ async fn idle_ttl_expiry_forces_new_connect() {
         2,
         "after idle TTL, pool entry must expire and reconnect"
     );
+}
+
+#[tokio::test]
+async fn idle_ttl_reaped_when_another_peer_is_acquired() {
+    // Regression: idle TTL must not wait for the *same* name to be re-acquired (eager reap on
+    // any pool activity + background reaper). Peer "weather" idles out while "tasks" is used.
+    let weather_connects = Arc::new(AtomicUsize::new(0));
+    let tasks_connects = Arc::new(AtomicUsize::new(0));
+    let now = Arc::new(std::sync::Mutex::new(Instant::now()));
+    let clock_now = Arc::clone(&now);
+    let settings = McpPoolSettings {
+        enabled: true,
+        idle_ttl: Duration::from_secs(10),
+        ..Default::default()
+    };
+    let registry =
+        McpRegistry::with_pool_and_clock(settings, Arc::new(move || *clock_now.lock().unwrap()))
+            .register(
+                "weather",
+                CountingConnector {
+                    connects: weather_connects.clone(),
+                    server: EchoServer {
+                        tool: "forecast",
+                        reply: "sunny",
+                    },
+                    fail_on: None,
+                },
+            )
+            .register(
+                "tasks",
+                CountingConnector {
+                    connects: tasks_connects.clone(),
+                    server: EchoServer {
+                        tool: "add",
+                        reply: "added",
+                    },
+                    fail_on: None,
+                },
+            );
+
+    {
+        let rt = registry
+            .runtime_for(&["weather".into()], prov())
+            .await
+            .unwrap();
+        drop(rt); // weather checked in
+    }
+    assert_eq!(weather_connects.load(Ordering::SeqCst), 1);
+
+    *now.lock().unwrap() += Duration::from_secs(11);
+
+    // Activity on a *different* peer must reap weather's expired slot.
+    {
+        let rt = registry
+            .runtime_for(&["tasks".into()], prov())
+            .await
+            .unwrap();
+        drop(rt);
+    }
+    assert_eq!(tasks_connects.load(Ordering::SeqCst), 1);
+
+    {
+        let rt = registry
+            .runtime_for(&["weather".into()], prov())
+            .await
+            .unwrap();
+        drop(rt);
+    }
+    assert_eq!(
+        weather_connects.load(Ordering::SeqCst),
+        2,
+        "weather must reconnect after idle TTL even though it was never re-checked-out until now"
+    );
+}
+
+#[tokio::test]
+async fn concurrent_connect_cap_times_out_when_permits_exhausted() {
+    // max_in_flight=1: second acquire while first is still live must wait, then time out.
+    let connects = Arc::new(AtomicUsize::new(0));
+    let settings = McpPoolSettings {
+        enabled: true,
+        max_in_flight_per_name: 1,
+        connect_wait: Duration::from_millis(50),
+        ..Default::default()
+    };
+    let registry = counting_registry(settings, connects.clone());
+
+    let first = registry.runtime_for(&[], prov()).await.unwrap();
+    let second = registry.runtime_for(&[], prov()).await;
+    let err = match second {
+        Ok(_) => panic!(
+            "second concurrent acquire must fail when max_in_flight=1 and wait expires"
+        ),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        err.contains("max concurrent") || err.contains("timed out"),
+        "{err}"
+    );
+    drop(first);
+    // After release, acquire works again.
+    let third = registry.runtime_for(&[], prov()).await.unwrap();
+    drop(third);
+}
+
+#[tokio::test]
+async fn pool_checkout_does_not_clear_degraded_until_successful_invoke() {
+    use liberado_common::{CapabilityCatalog, Consequence, McpDescriptor};
+
+    let catalog = Arc::new(CapabilityCatalog::new());
+    catalog.register(McpDescriptor {
+        name: "tasks".into(),
+        description: "tasks".into(),
+        consequence: Consequence::Reversible,
+        provenance: None,
+        ..Default::default()
+    });
+
+    let connects = Arc::new(AtomicUsize::new(0));
+    let registry = counting_registry(McpPoolSettings::default(), connects.clone())
+        .with_health_catalog(catalog.clone());
+
+    // Prime the pool with a healthy connection.
+    {
+        let rt = registry.runtime_for(&[], prov()).await.unwrap();
+        assert!(rt.invoke(&call("tasks:add")).await.is_ok());
+        drop(rt);
+    }
+    assert_eq!(connects.load(Ordering::SeqCst), 1);
+
+    // Simulate an external mark (e.g. earlier transport failure path) while a pool slot remains.
+    catalog.mark_degraded("tasks");
+    assert!(catalog.is_degraded("tasks"));
+
+    // Pool hit must not mark_healthy before any successful work.
+    let rt = registry.runtime_for(&[], prov()).await.unwrap();
+    assert_eq!(connects.load(Ordering::SeqCst), 1, "must reuse pool slot");
+    assert!(
+        catalog.is_degraded("tasks"),
+        "pool checkout alone must not clear degraded"
+    );
+    assert!(rt.invoke(&call("tasks:add")).await.is_ok());
+    assert!(
+        !catalog.is_degraded("tasks"),
+        "successful invoke must clear degraded"
+    );
+    drop(rt);
 }
 
 #[tokio::test]

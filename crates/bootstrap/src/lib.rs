@@ -244,6 +244,8 @@ pub fn mcp_registry_from_config(
     let pool = liberado_mcp::McpPoolSettings {
         enabled: config.tuning.mcp_pooling.enabled,
         idle_ttl: std::time::Duration::from_secs(config.tuning.mcp_pooling.idle_ttl_secs),
+        max_in_flight_per_name: config.tuning.mcp_pooling.max_in_flight_per_name,
+        connect_wait: std::time::Duration::from_secs(config.tuning.mcp_pooling.connect_wait_secs),
     };
     let base = McpRegistry::with_pool_settings(pool);
     let base = match health_catalog {

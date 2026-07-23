@@ -54,15 +54,22 @@ namespacing every server's tools `<name>:<tool>`, and **scopes** the result to t
 
 Connections are **pooled by default** (M1): `McpRegistry` checks out a healthy runtime per MCP,
 rebinds execution `WriteProvenance` on acquire, and returns it on drop (idle TTL from
-`tuning.mcp_pooling`). Transport-level invoke failures mark the checkout unhealthy so it is
-**not** checked back in (tool `isError` does not kill the pool). Set
-`tuning.mcp_pooling.enabled = false` for connect-per-acquisition.
+`tuning.mcp_pooling`). Idle slots are reaped on pool activity **and** by a background tick so
+peers that are never re-acquired still release stdio children / HTTP sessions.
+`max_in_flight_per_name` (default 4) caps concurrent checkouts/connects per MCP via a semaphore
+held for the runtime lifetime — excess acquires wait up to `connect_wait_secs` then fail.
+Transport-level invoke failures mark the checkout unhealthy so it is **not** checked back in
+(tool `isError` does not kill the pool). Set `tuning.mcp_pooling.enabled = false` for
+connect-per-acquisition.
 
 **M1b degraded-catalog routing (landed):** when composition wires
 `McpRegistry::with_health_catalog` to the shared `CapabilityCatalog`, connect/transport failures
-call `mark_degraded` and successful acquires call `mark_healthy`. Dispatch / chat / daemon build
-`DispatchRequest.catalog` from `CapabilityCatalog::routing_descriptors()` so classifiers never
-see known-dead peers. Full `descriptors()` still lists every registered MCP for zone/authority.
+call `mark_degraded`. Successful **fresh connects** and **successful tool invokes** call
+`mark_healthy` (pool checkout alone does not — an idle connection may already be dead).
+Degraded entries half-open after a TTL (default 60s) so routing can retry without an accidental
+out-of-band acquire. Dispatch / chat / daemon build `DispatchRequest.catalog` from
+`CapabilityCatalog::routing_descriptors()` so classifiers never see known-dead peers. Full
+`descriptors()` still lists every registered MCP for zone/authority.
 **Registry UX** (editing topology beyond hand-edited TOML) remains open.
 
 ## Dependencies

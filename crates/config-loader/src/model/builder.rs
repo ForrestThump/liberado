@@ -229,6 +229,8 @@ mod tests {
         assert!(t.coder.is_none(), "no [tuning.coder] section by default");
         assert!(t.mcp_pooling.enabled, "MCP pooling defaults on");
         assert_eq!(t.mcp_pooling.idle_ttl_secs, 300);
+        assert_eq!(t.mcp_pooling.max_in_flight_per_name, 4);
+        assert_eq!(t.mcp_pooling.connect_wait_secs, 60);
     }
 
     // Typed `[tuning.coder]` parsing/validation tests moved to `liberado_coder_core::tuning`

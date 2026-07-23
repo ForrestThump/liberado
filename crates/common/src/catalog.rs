@@ -14,6 +14,11 @@
 //! still lists every registered MCP for zone/authority checks. Success
 //! [`mark_healthy`](CapabilityCatalog::mark_healthy) clears the flag (recovery).
 //!
+//! Degraded entries carry a timestamp and **half-open** after
+//! [`DEFAULT_DEGRADED_HALF_OPEN`](DEFAULT_DEGRADED_HALF_OPEN) (configurable via
+//! [`set_degraded_half_open_ttl`](CapabilityCatalog::set_degraded_half_open_ttl)): the peer is
+//! re-offered to classifiers so a transient outage can recover without an out-of-band acquire.
+//!
 //! # Concurrency model
 //!
 //! *Readers* (the `descriptors()` / `get()` / `is_empty()` / `len()` accessors) acquire
@@ -26,9 +31,13 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::{Consequence, WriteClass};
+
+/// Default time a peer stays out of [`CapabilityCatalog::routing_descriptors`] after
+/// [`mark_degraded`](CapabilityCatalog::mark_degraded) before half-open re-inclusion.
+pub const DEFAULT_DEGRADED_HALF_OPEN: Duration = Duration::from_secs(60);
 
 /// A catalog entry: describes one MCP server that the system can route to.
 ///
@@ -190,9 +199,13 @@ pub struct CapabilityCatalog {
 
 struct CatalogState {
     mcps: HashMap<String, McpDescriptor>,
-    /// MCP names currently known-unhealthy for **routing** (connect/transport failure class).
-    /// Cleared by [`CapabilityCatalog::mark_healthy`]. Authority/zone catalogs still list them.
+    /// MCP names currently known-unhealthy for **routing** (connect/transport failure class),
+    /// mapped to the instant they were marked. Cleared by
+    /// [`CapabilityCatalog::mark_healthy`] or by half-open expiry
+    /// ([`CatalogState::degraded_ttl`]). Authority/zone catalogs still list them.
     degraded: HashMap<String, Instant>,
+    /// After this duration past the mark Instant, the peer is half-open again (routing eligible).
+    degraded_ttl: Duration,
     last_updated: Instant,
 }
 
@@ -204,10 +217,19 @@ impl CapabilityCatalog {
             inner: Arc::new(RwLock::new(CatalogState {
                 mcps: HashMap::new(),
                 degraded: HashMap::new(),
+                degraded_ttl: DEFAULT_DEGRADED_HALF_OPEN,
                 last_updated: Instant::now(),
             })),
             updated: tx,
         }
+    }
+
+    /// Override the M1b half-open window (default [`DEFAULT_DEGRADED_HALF_OPEN`]).
+    ///
+    /// Tests may set `Duration::ZERO` so the next [`is_degraded`](Self::is_degraded) /
+    /// [`routing_descriptors`](Self::routing_descriptors) call expires every mark immediately.
+    pub fn set_degraded_half_open_ttl(&self, ttl: Duration) {
+        self.inner.write().unwrap().degraded_ttl = ttl;
     }
 
     /// Register (or update) an MCP descriptor. Notifies subscribers on change.
@@ -230,6 +252,9 @@ impl CapabilityCatalog {
 
     /// Mark `name` degraded for routing after a connect/transport-class failure (M1b).
     /// No-op if the name is not registered. Notifies subscribers.
+    ///
+    /// The peer is omitted from [`routing_descriptors`](Self::routing_descriptors) until
+    /// [`mark_healthy`](Self::mark_healthy) or half-open expiry of the stored mark Instant.
     pub fn mark_degraded(&self, name: &str) {
         let mut state = self.inner.write().unwrap();
         if !state.mcps.contains_key(name) {
@@ -240,7 +265,7 @@ impl CapabilityCatalog {
         let _ = self.updated.send(());
     }
 
-    /// Clear degraded status after a successful connect/acquire (recovery).
+    /// Clear degraded status after a successful connect or successful tool invoke (recovery).
     pub fn mark_healthy(&self, name: &str) {
         let mut state = self.inner.write().unwrap();
         if state.degraded.remove(name).is_some() {
@@ -249,8 +274,38 @@ impl CapabilityCatalog {
         }
     }
 
-    /// Whether `name` is currently marked degraded for routing.
+    /// Drop degraded entries whose mark Instant is older than `degraded_ttl` (half-open).
+    /// Returns whether any entry was removed (and subscribers were notified).
+    fn purge_expired_degraded(&self) -> bool {
+        let now = Instant::now();
+        {
+            let state = self.inner.read().unwrap();
+            let any_expired = state
+                .degraded
+                .values()
+                .any(|at| now.saturating_duration_since(*at) >= state.degraded_ttl);
+            if !any_expired {
+                return false;
+            }
+        }
+        let mut state = self.inner.write().unwrap();
+        let ttl = state.degraded_ttl;
+        let before = state.degraded.len();
+        state
+            .degraded
+            .retain(|_, at| now.saturating_duration_since(*at) < ttl);
+        if state.degraded.len() != before {
+            state.last_updated = Instant::now();
+            let _ = self.updated.send(());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Whether `name` is currently marked degraded for routing (after half-open expiry purge).
     pub fn is_degraded(&self, name: &str) -> bool {
+        self.purge_expired_degraded();
         self.inner.read().unwrap().degraded.contains_key(name)
     }
 
@@ -265,8 +320,10 @@ impl CapabilityCatalog {
     /// Descriptors eligible for dispatcher / classifier routing — **excludes** degraded peers.
     ///
     /// This is the M1b production filter: a peer marked degraded after connect/transport failure
-    /// must not appear as a healthy routing target until [`mark_healthy`](Self::mark_healthy).
+    /// must not appear as a healthy routing target until [`mark_healthy`](Self::mark_healthy)
+    /// or half-open expiry of the stored mark Instant.
     pub fn routing_descriptors(&self) -> Vec<McpDescriptor> {
+        self.purge_expired_degraded();
         let state = self.inner.read().unwrap();
         state
             .mcps
@@ -471,6 +528,35 @@ mod tests {
         catalog.mark_degraded("ghost");
         assert!(!catalog.is_degraded("ghost"));
         assert!(catalog.routing_descriptors().is_empty());
+    }
+
+    #[test]
+    fn half_open_ttl_reincludes_peer_in_routing() {
+        let catalog = CapabilityCatalog::new();
+        catalog.register(sample_descriptor("weather"));
+        catalog.mark_degraded("weather");
+        assert!(catalog.is_degraded("weather"));
+        assert!(
+            catalog.routing_descriptors().is_empty(),
+            "still hard-closed within half-open window"
+        );
+
+        // Zero TTL: any mark is already expired on the next purge.
+        catalog.set_degraded_half_open_ttl(Duration::ZERO);
+        assert!(
+            !catalog.is_degraded("weather"),
+            "half-open must clear degraded after TTL"
+        );
+        let routing: Vec<_> = catalog
+            .routing_descriptors()
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        assert_eq!(
+            routing,
+            vec!["weather".to_string()],
+            "half-open peer must re-enter routing so recovery is designed, not accidental"
+        );
     }
 
     // ── zone_write_restriction ────────────────────────────────────────────

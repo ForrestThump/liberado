@@ -2,7 +2,11 @@
 //!
 //! Entries are checked out exclusively, rebound to the **current** execution's
 //! [`WriteProvenance`] on acquire, and returned on drop. Concurrent acquisitions of the same
-//! MCP while one is checked out fall back to a fresh connect (no wait queue).
+//! MCP are limited by a per-name semaphore (`max_in_flight_per_name`); when the pool slot is
+//! already out, additional holders connect fresh (still under that cap).
+//!
+//! Idle slots are reaped both eagerly (on pool activity) and by a background tick so infrequently
+//! used stdio/HTTP children do not pin forever after check-in.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,8 +15,9 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use liberado_common::{CapabilityCatalog, WriteProvenance};
-use liberado_executor::ToolRuntime;
+use liberado_executor::{RuntimeSetupError, ToolRuntime};
 use liberado_provider::{ToolDef, ToolInvocation};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// A [`ToolRuntime`] that can accept a new execution's write provenance without reconnecting.
 ///
@@ -28,11 +33,16 @@ pub trait RebindableRuntime: ToolRuntime {
     }
 }
 
-/// Pool policy: enable/disable + idle TTL. Constructed from config at composition time.
+/// Pool policy: enable/disable, idle TTL, and per-name concurrency. Constructed from config at
+/// composition time.
 #[derive(Debug, Clone)]
 pub struct PoolPolicy {
     pub enabled: bool,
     pub idle_ttl: Duration,
+    /// Max simultaneous live checkouts/connects for one MCP name (including exclusive holders).
+    pub max_in_flight_per_name: usize,
+    /// How long an acquire waits for a concurrency permit before failing.
+    pub connect_wait: Duration,
 }
 
 impl Default for PoolPolicy {
@@ -40,6 +50,8 @@ impl Default for PoolPolicy {
         Self {
             enabled: true,
             idle_ttl: Duration::from_secs(300),
+            max_in_flight_per_name: 4,
+            connect_wait: Duration::from_secs(60),
         }
     }
 }
@@ -55,6 +67,8 @@ struct PoolSlot {
 /// reuse on the next acquisition without racing a spawned task).
 pub(crate) struct ConnectionPool {
     slots: Mutex<HashMap<String, PoolSlot>>,
+    /// Per-name connect/checkout concurrency limits.
+    semaphores: Mutex<HashMap<String, Arc<Semaphore>>>,
     policy: PoolPolicy,
     /// Test hook: override "now" for idle TTL without sleeping.
     clock: Arc<dyn Fn() -> Instant + Send + Sync>,
@@ -64,6 +78,7 @@ impl ConnectionPool {
     pub(crate) fn new(policy: PoolPolicy) -> Self {
         Self {
             slots: Mutex::new(HashMap::new()),
+            semaphores: Mutex::new(HashMap::new()),
             policy,
             clock: Arc::new(Instant::now),
         }
@@ -75,6 +90,7 @@ impl ConnectionPool {
     ) -> Self {
         Self {
             slots: Mutex::new(HashMap::new()),
+            semaphores: Mutex::new(HashMap::new()),
             policy,
             clock,
         }
@@ -88,7 +104,78 @@ impl ConnectionPool {
         (self.clock)()
     }
 
+    /// Drop all slots idle longer than [`PoolPolicy::idle_ttl`]. Returns how many were removed.
+    ///
+    /// Called on pool activity and by the background reaper so peers that are never re-acquired
+    /// still release their child processes / HTTP sessions.
+    pub(crate) fn reap_idle(&self) -> usize {
+        if !self.policy.enabled {
+            return 0;
+        }
+        let now = self.now();
+        let ttl = self.policy.idle_ttl;
+        let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+        let before = slots.len();
+        slots.retain(|_, slot| now.saturating_duration_since(slot.last_used) <= ttl);
+        before.saturating_sub(slots.len())
+    }
+
+    /// Spawn a background task that periodically calls [`reap_idle`](Self::reap_idle).
+    ///
+    /// No-op when pooling is disabled or there is no current Tokio runtime (sync unit tests still
+    /// reap on the next checkout via [`try_checkout`](Self::try_checkout)).
+    pub(crate) fn spawn_reaper(self: &Arc<Self>) {
+        if !self.policy.enabled {
+            return;
+        }
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let pool = Arc::clone(self);
+        handle.spawn(async move {
+            // Tick often enough to honor idle_ttl without spinning: half TTL, clamped.
+            let period = (pool.policy.idle_ttl / 2).clamp(Duration::from_secs(1), Duration::from_secs(60));
+            let mut interval = tokio::time::interval(period);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // First tick completes immediately; skip so we do not reap at t=0.
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                let n = pool.reap_idle();
+                if n > 0 {
+                    tracing::debug!(reaped = n, "MCP connection pool dropped idle connections");
+                }
+            }
+        });
+    }
+
+    /// Wait for a per-name concurrency permit (held for the life of the checkout/runtime).
+    pub(crate) async fn acquire_permit(
+        self: &Arc<Self>,
+        name: &str,
+    ) -> Result<OwnedSemaphorePermit, RuntimeSetupError> {
+        let max = self.policy.max_in_flight_per_name.max(1);
+        let wait = self.policy.connect_wait;
+        let sem = {
+            let mut map = self.semaphores.lock().unwrap_or_else(|e| e.into_inner());
+            map.entry(name.to_string())
+                .or_insert_with(|| Arc::new(Semaphore::new(max)))
+                .clone()
+        };
+        match tokio::time::timeout(wait, sem.acquire_owned()).await {
+            Ok(Ok(permit)) => Ok(permit),
+            Ok(Err(_)) => Err(RuntimeSetupError(format!(
+                "MCP '{name}' concurrency semaphore closed"
+            ))),
+            Err(_) => Err(RuntimeSetupError(format!(
+                "MCP '{name}' hit max concurrent connections ({max}); timed out after {wait:?}"
+            ))),
+        }
+    }
+
     /// Try to check out a healthy, non-expired slot. On hit, rebinds provenance.
+    ///
+    /// Always reaps expired slots first so idle peers are not pinned until *their* next acquire.
     pub(crate) fn try_checkout(
         self: &Arc<Self>,
         name: &str,
@@ -97,11 +184,13 @@ impl ConnectionPool {
         if !self.policy.enabled {
             return None;
         }
+        // Eager reaping: any pool activity drops *all* expired slots (not only `name`).
+        self.reap_idle();
         let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
         let slot = slots.remove(name)?;
+        // Slot passed reap_idle; still guard in case of clock skew between reap and remove.
         let idle = self.now().saturating_duration_since(slot.last_used);
         if idle > self.policy.idle_ttl {
-            // Expired — drop connection; caller will connect fresh.
             return None;
         }
         let mut runtime = slot.runtime;
@@ -112,6 +201,7 @@ impl ConnectionPool {
             pool: Arc::clone(self),
             healthy: AtomicBool::new(true),
             health: None,
+            _permit: None,
         })
     }
 
@@ -120,7 +210,10 @@ impl ConnectionPool {
         if !self.policy.enabled {
             return;
         }
+        // Reap others while we hold the lock path; cheap and keeps idle set small.
+        let _ = self.reap_idle();
         let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+        // Re-check enabled not needed; insert may overwrite a concurrent check-in's slot (last wins).
         slots.insert(
             name,
             PoolSlot {
@@ -147,6 +240,8 @@ pub struct PooledCheckout {
     healthy: AtomicBool,
     /// Optional live catalog for M1b: transport death marks the peer degraded for routing.
     health: Option<Arc<CapabilityCatalog>>,
+    /// Concurrency permit held for the lifetime of this checkout.
+    _permit: Option<OwnedSemaphorePermit>,
 }
 
 impl PooledCheckout {
@@ -164,12 +259,19 @@ impl PooledCheckout {
             pool,
             healthy: AtomicBool::new(true),
             health: None,
+            _permit: None,
         }
     }
 
     /// Attach the shared capability catalog so transport death publishes M1b degraded state.
     pub(crate) fn with_health_catalog(mut self, catalog: Option<Arc<CapabilityCatalog>>) -> Self {
         self.health = catalog;
+        self
+    }
+
+    /// Hold a per-name concurrency permit until this checkout drops.
+    pub(crate) fn with_permit(mut self, permit: OwnedSemaphorePermit) -> Self {
+        self._permit = Some(permit);
         self
     }
 
@@ -183,6 +285,13 @@ impl PooledCheckout {
         self.healthy.store(false, Ordering::SeqCst);
         if let Some(cat) = &self.health {
             cat.mark_degraded(&self.name);
+        }
+    }
+
+    fn publish_healthy_after_success(&self) {
+        if let Some(cat) = &self.health {
+            // Only notifies watchers when the name was actually degraded.
+            cat.mark_healthy(&self.name);
         }
     }
 }
@@ -210,6 +319,9 @@ impl ToolRuntime for PooledCheckout {
         // Transport death (not tool isError) must not re-enter the pool.
         if result.is_err() && self.runtime().connection_is_dead() {
             self.mark_unhealthy();
+        } else if result.is_ok() {
+            // Clear M1b degraded only after observed success — never on bare checkout.
+            self.publish_healthy_after_success();
         }
         result
     }
@@ -225,5 +337,33 @@ impl ToolRuntime for AsToolRuntime {
     }
     async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
         self.0.invoke(call).await
+    }
+}
+
+/// [`AsToolRuntime`] plus a concurrency permit (pooling disabled path).
+pub(crate) struct PermittedRuntime {
+    pub inner: AsToolRuntime,
+    pub _permit: OwnedSemaphorePermit,
+    pub name: String,
+    pub health: Option<Arc<CapabilityCatalog>>,
+}
+
+#[async_trait]
+impl ToolRuntime for PermittedRuntime {
+    fn catalog(&self) -> Vec<ToolDef> {
+        self.inner.catalog()
+    }
+    async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
+        let result = self.inner.invoke(call).await;
+        if result.is_ok() {
+            if let Some(cat) = &self.health {
+                cat.mark_healthy(&self.name);
+            }
+        } else if self.inner.0.connection_is_dead()
+            && let Some(cat) = &self.health
+        {
+            cat.mark_degraded(&self.name);
+        }
+        result
     }
 }

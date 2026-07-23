@@ -253,18 +253,19 @@ async fn a4_park_answer_resume_pack_sees_prior_turns_on_both_stores() {
     for_each_hub_store(|name, mut _hub| async move {
         // Build store + hub with a resumable pack; plant a parked session with transcript.
         // We construct the store explicitly so insert/append_turn use the same engine as the hub.
-        let (hub, saw, sid) = match name {
+        // Keep TempDir in this async block so SessionStore's path lives for the whole body
+        // (do not mem::forget — drop order is explicit when `_dir_guard` goes out of scope).
+        let (_dir_guard, hub, saw, sid) = match name {
             "GoalSessionStore" => {
                 let store = GoalSessionStore::new();
-                plant_parked_and_hub(store, name).await
+                let (hub, saw, sid) = plant_parked_and_hub(store, name).await;
+                (None, hub, saw, sid)
             }
             "SessionStore" => {
                 let dir = TempDir::new().unwrap();
                 let store = SessionStore::open(dir.path()).await;
-                let out = plant_parked_and_hub(store, name).await;
-                // Leak dir for duration of test body via forget on the TempDir? keep alive:
-                std::mem::forget(dir);
-                out
+                let (hub, saw, sid) = plant_parked_and_hub(store, name).await;
+                (Some(dir), hub, saw, sid)
             }
             _ => unreachable!(),
         };
@@ -299,6 +300,8 @@ async fn a4_park_answer_resume_pack_sees_prior_turns_on_both_stores() {
                 .contains("A4-Resume-Answer"),
             "{name}: result summary must use the answer"
         );
+        // `_dir_guard` drops here after hub work completes.
+        drop(_dir_guard);
     })
     .await;
 }

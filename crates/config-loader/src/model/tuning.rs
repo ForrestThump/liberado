@@ -273,17 +273,22 @@ impl Default for CronDeliveryTuning {
 /// sessions, and a fresh handshake per execution was the primary unattended latency tax.
 ///
 /// Set `enabled = false` to restore connect-per-acquisition (useful for debugging flaky peers).
-/// `idle_ttl_secs` drops a pooled connection that has not been checked out for that long so
-/// idle child processes / HTTP sessions do not pin forever.
+/// `idle_ttl_secs` is enforced both on the next acquire **and** by a background reaper so idle
+/// child processes / HTTP sessions do not pin forever when a peer is never re-acquired.
+/// `max_in_flight_per_name` caps concurrent checkouts/connects for one MCP (parallel goals).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct McpPoolingTuning {
     /// When `true` (default), `McpRegistry` reuses healthy connections across
     /// `RuntimeFactory::runtime_for` acquisitions. When `false`, every acquisition connects fresh.
     pub enabled: bool,
-    /// Idle time after which a returned pooled connection is discarded on the next acquire
-    /// (and a new connect is performed). Default 300s (5 minutes).
+    /// Idle time after which a returned pooled connection is discarded (eagerly on pool activity
+    /// and by the background reaper). Default 300s (5 minutes).
     pub idle_ttl_secs: u64,
+    /// Max simultaneous live checkouts/connects for one MCP name. Default 4.
+    pub max_in_flight_per_name: usize,
+    /// How long an acquire waits for a concurrency permit before failing. Default 60s.
+    pub connect_wait_secs: u64,
 }
 
 impl Default for McpPoolingTuning {
@@ -291,6 +296,8 @@ impl Default for McpPoolingTuning {
         Self {
             enabled: true,
             idle_ttl_secs: 300,
+            max_in_flight_per_name: 4,
+            connect_wait_secs: 60,
         }
     }
 }

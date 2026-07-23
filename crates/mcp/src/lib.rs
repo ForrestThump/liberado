@@ -15,7 +15,8 @@
 //!
 //! Connection **pooling** (M1) is owned by [`McpRegistry`]: healthy connections are checked out
 //! exclusively, rebound to the *current* execution's [`WriteProvenance`] on acquire, and returned
-//! on drop (subject to idle TTL / health). Disable via `tuning.mcp_pooling.enabled = false`.
+//! on drop (subject to idle TTL / background reaper / health / per-name concurrency). Disable via
+//! `tuning.mcp_pooling.enabled = false`.
 
 mod connector;
 mod factory;
