@@ -235,8 +235,12 @@ fn docker_argv(
 /// tool-less chat). This shares ONE source (topology.mcps) with the dispatcher catalog, so a name the
 /// dispatcher routes to is a name the runtime can actually connect to.
 pub fn mcp_registry_from_config(config: &Config) -> Option<McpRegistry> {
+    let pool = liberado_mcp::McpPoolSettings {
+        enabled: config.tuning.mcp_pooling.enabled,
+        idle_ttl: std::time::Duration::from_secs(config.tuning.mcp_pooling.idle_ttl_secs),
+    };
     let registry = config.topology.mcps.iter().filter(|m| m.enabled).fold(
-        McpRegistry::new(),
+        McpRegistry::with_pool_settings(pool),
         |registry, m| match &m.transport {
             McpTransport::Stdio { command, args } => {
                 registry.register(&m.name, StdioConnector::new(command.clone(), args.clone()))

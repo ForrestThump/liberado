@@ -13,17 +13,20 @@
 //!    attribution suppresses it (Decision 5 loop-breaking, validated end-to-end in
 //!    `liberado-vault`'s `provenance_e2e`).
 //!
-//! The runtime is constructed per execution (per dispatch correlation): the `WriteProvenance` it
-//! carries is fixed for its lifetime, so every tool call in that execution shares one correlation.
+//! Connection **pooling** (M1) is owned by [`McpRegistry`]: healthy connections are checked out
+//! exclusively, rebound to the *current* execution's [`WriteProvenance`] on acquire, and returned
+//! on drop (subject to idle TTL / health). Disable via `tuning.mcp_pooling.enabled = false`.
 
 mod connector;
 mod factory;
 mod multi;
+mod pool;
 mod scoped;
 
 pub use connector::{HttpConnector, McpConnector, StdioConnector};
-pub use factory::McpRegistry;
+pub use factory::{McpPoolSettings, McpRegistry};
 pub use multi::MultiMcpRuntime;
+pub use pool::{PoolPolicy, RebindableRuntime};
 pub use scoped::ScopedRuntime;
 
 use async_trait::async_trait;
@@ -44,18 +47,22 @@ pub enum McpRuntimeError {
     ListTools(String),
 }
 
-/// A [`ToolRuntime`] backed by a connected `turbomcp-client` [`Client`], scoped to one execution's
-/// write provenance.
+/// A [`ToolRuntime`] backed by a connected `turbomcp-client` [`Client`]. Provenance is rebindable
+/// so a pooled connection can serve sequential executions without reusing a stale correlation id.
 pub struct TurbomcpRuntime<T: Transport + 'static> {
     client: Client<T>,
     catalog: Vec<ToolDef>,
     /// Pre-rendered `_meta` payload (`{ "_liberado_provenance": { … } }`) injected into every call.
+    /// Updated via [`RebindableRuntime::rebind_provenance`] on pool checkout.
     provenance_meta: Value,
+    /// Set when `call_tool_with_meta` fails at the client/transport layer (not tool `isError`).
+    /// Pool checkouts consult this so dead peers are discarded.
+    transport_dead: std::sync::atomic::AtomicBool,
 }
 
 impl<T: Transport + 'static> TurbomcpRuntime<T> {
     /// Initialize the MCP session, fetch + map the tool catalog, and bind the provenance that every
-    /// call in this execution will carry.
+    /// call in this execution will carry (until rebound on the next checkout).
     pub async fn connect(
         client: Client<T>,
         provenance: WriteProvenance,
@@ -79,6 +86,7 @@ impl<T: Transport + 'static> TurbomcpRuntime<T> {
             client,
             catalog,
             provenance_meta: provenance.to_audit_metadata(),
+            transport_dead: std::sync::atomic::AtomicBool::new(false),
         })
     }
 }
@@ -91,20 +99,42 @@ impl<T: Transport + 'static> ToolRuntime for TurbomcpRuntime<T> {
 
     async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
         let args = arguments_to_map(&call.arguments);
-        let result = self
+        let result = match self
             .client
             .call_tool_with_meta(&call.name, args, Some(self.provenance_meta.clone()))
             .await
-            .map_err(|e| e.to_string())?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                // Client/transport failure — pooled peers must not be re-handed out.
+                self.transport_dead
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                return Err(e.to_string());
+            }
+        };
 
         let text = result_text(&result);
         // MCP's idiomatic tool failure: `isError` true means the content is error info. Surface it
-        // as `Err` so the executor feeds it back in-band (it prefixes "tool error:").
+        // as `Err` so the executor feeds it back in-band (it prefixes "tool error:"). This is *not*
+        // a connection death — the session remains poolable.
         if result.is_error == Some(true) {
             Err(text)
         } else {
             Ok(text)
         }
+    }
+}
+
+impl<T: Transport + 'static> RebindableRuntime for TurbomcpRuntime<T> {
+    fn rebind_provenance(&mut self, provenance: WriteProvenance) {
+        self.provenance_meta = provenance.to_audit_metadata();
+        self.transport_dead
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn connection_is_dead(&self) -> bool {
+        self.transport_dead
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 

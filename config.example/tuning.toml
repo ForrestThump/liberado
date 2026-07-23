@@ -87,3 +87,8 @@
 # args = ["check"]
 # timeout_secs = 300
 # network = false
+
+# MCP connection pooling (M1). Defaults: enabled = true, idle_ttl_secs = 300.
+# [mcp_pooling]
+# enabled = true
+# idle_ttl_secs = 300

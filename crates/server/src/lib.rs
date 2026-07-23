@@ -14,6 +14,9 @@ mod state;
 mod sticky;
 mod telegram;
 
+#[cfg(test)]
+mod t1_conformance;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

@@ -230,13 +230,8 @@ impl ApprovalBot {
                     .await
             }
             "everywhere" => {
-                self.set_permission_scope(
-                    event_id,
-                    message_ref,
-                    stem,
-                    Some(GrantScope::Everywhere),
-                )
-                .await
+                self.set_permission_scope(event_id, message_ref, stem, Some(GrantScope::Everywhere))
+                    .await
             }
             _ => tracing::warn!(action, "unknown messaging action"),
         }
@@ -342,8 +337,11 @@ impl ApprovalBot {
             Some(GrantScope::Everywhere) => ("♾️", "Approved everywhere"),
         };
         self.ack(event_id, verb).await;
-        self.receipt(message_ref, &format!("{icon} {verb} — {}", proposal.rationale))
-            .await;
+        self.receipt(
+            message_ref,
+            &format!("{icon} {verb} — {}", proposal.rationale),
+        )
+        .await;
     }
 
     /// Read `proposals/{stem}.md`, and — only if it is currently `Pending` and not expired — set
@@ -405,8 +403,11 @@ impl ApprovalBot {
             _ => ("✏️", "Updated"),
         };
         self.ack(event_id, verb).await;
-        self.receipt(message_ref, &format!("{icon} {verb} — {}", proposal.rationale))
-            .await;
+        self.receipt(
+            message_ref,
+            &format!("{icon} {verb} — {}", proposal.rationale),
+        )
+        .await;
     }
 
     /// Tapped Revise: prompt for a free-text note and remember which proposal it belongs to.
@@ -864,7 +865,10 @@ mod tests {
         let edits = channel.edits.lock().unwrap();
         assert_eq!(edits.len(), 1, "the tapped message should be edited once");
         assert_eq!(edits[0].0, "777", "edits the message the button was on");
-        assert!(edits[0].1.contains("Approved"), "receipt says what was tapped");
+        assert!(
+            edits[0].1.contains("Approved"),
+            "receipt says what was tapped"
+        );
         assert!(
             channel.sends.lock().unwrap().is_empty(),
             "no fresh message when we can edit in place"

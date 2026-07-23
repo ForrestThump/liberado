@@ -1,6 +1,9 @@
 # The live conformance suite
 
-**Status**: planned, 2026-07-14. Not built.
+**Status**: Tier-1 partial — **L2 / L5 / L6 / L8 / L10** in
+`crates/server/src/t1_conformance.rs` (in-process production-shaped goals surface, durable
+`SessionStore`, `MockProvider`; L6 via `RiskGatedToolRuntime` + spy write tool). Remaining
+L1, L3–L4, L7, L9 still open.
 **Why**: [`../architecture/failure-modes.md`](../architecture/failure-modes.md) — the meta-lesson.
 
 ## The case

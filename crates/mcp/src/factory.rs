@@ -1,8 +1,11 @@
 //! The [`RuntimeFactory`] over a set of MCP servers: select the servers an execution is allowed to
-//! see, connect to each, and present them as one [`ToolRuntime`] whose tools are namespaced
-//! `<server>:<tool>` (Decision 4 narrowing is "which servers," routing is by namespace).
+//! see, acquire a (possibly pooled) runtime for each, and present them as one [`ToolRuntime`]
+//! whose tools are namespaced `<server>:<tool>` (Decision 4 narrowing is "which servers," routing
+//! is by namespace).
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use liberado_common::WriteProvenance;
@@ -10,18 +13,72 @@ use liberado_executor::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
 
 use crate::MultiMcpRuntime;
 use crate::connector::McpConnector;
+use crate::pool::{AsToolRuntime, ConnectionPool, PoolPolicy, PooledCheckout};
 
-/// A named set of MCP servers. Implements `RuntimeFactory`: each `runtime_for`
-/// connects (v1: a fresh connection per execution — no pooling) to the selected servers and unions
-/// their tools.
-#[derive(Default)]
+/// Pooling knobs passed into [`McpRegistry`] at construction (from `tuning.mcp_pooling`).
+#[derive(Debug, Clone)]
+pub struct McpPoolSettings {
+    /// When `true`, reuse healthy connections across acquisitions.
+    pub enabled: bool,
+    /// Idle TTL for checked-in connections.
+    pub idle_ttl: Duration,
+}
+
+impl Default for McpPoolSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            idle_ttl: Duration::from_secs(300),
+        }
+    }
+}
+
+impl From<McpPoolSettings> for PoolPolicy {
+    fn from(s: McpPoolSettings) -> Self {
+        PoolPolicy {
+            enabled: s.enabled,
+            idle_ttl: s.idle_ttl,
+        }
+    }
+}
+
+/// A named set of MCP servers. Implements `RuntimeFactory`: each `runtime_for` acquires a runtime
+/// for the selected servers (pooled by default) and unions their tools.
 pub struct McpRegistry {
     connectors: HashMap<String, Box<dyn McpConnector>>,
+    pool: Arc<ConnectionPool>,
+}
+
+impl Default for McpRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl McpRegistry {
+    /// Registry with default pooling (**on**, 300s idle TTL).
     pub fn new() -> Self {
-        Self::default()
+        Self::with_pool_settings(McpPoolSettings::default())
+    }
+
+    /// Registry with explicit pooling policy (composition root wires config here).
+    pub fn with_pool_settings(settings: McpPoolSettings) -> Self {
+        Self {
+            connectors: HashMap::new(),
+            pool: Arc::new(ConnectionPool::new(settings.into())),
+        }
+    }
+
+    /// Custom pool clock for idle-TTL tests (inject "now" without sleeping).
+    /// Not used in production wiring.
+    pub fn with_pool_and_clock(
+        settings: McpPoolSettings,
+        clock: Arc<dyn Fn() -> std::time::Instant + Send + Sync>,
+    ) -> Self {
+        Self {
+            connectors: HashMap::new(),
+            pool: Arc::new(ConnectionPool::with_clock(settings.into(), clock)),
+        }
     }
 
     /// Register a server under `name` (the namespace its tools are exposed under). Chainable.
@@ -48,6 +105,39 @@ impl McpRegistry {
         self.connectors.len()
     }
 
+    /// Whether pooling is enabled for this registry.
+    pub fn pooling_enabled(&self) -> bool {
+        self.pool.policy().enabled
+    }
+
+    /// Acquire one server's runtime: pool checkout (with provenance rebind) or fresh connect.
+    async fn acquire(
+        &self,
+        name: &str,
+        provenance: WriteProvenance,
+    ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+        if let Some(checkout) = self.pool.try_checkout(name, provenance.clone()) {
+            return Ok(Box::new(checkout));
+        }
+
+        let connector = self
+            .connectors
+            .get(name)
+            .ok_or_else(|| RuntimeSetupError(format!("MCP '{name}' is not registered")))?;
+
+        let runtime = connector.connect(provenance.clone()).await?;
+        if self.pool.policy().enabled {
+            Ok(Box::new(PooledCheckout::from_fresh(
+                name.to_string(),
+                runtime,
+                provenance,
+                Arc::clone(&self.pool),
+            )))
+        } else {
+            Ok(Box::new(AsToolRuntime(runtime)))
+        }
+    }
+
     /// Connect to every registered MCP independently and in parallel, tolerating individual
     /// failures instead of aborting the whole batch — the "best effort" counterpart to
     /// `RuntimeFactory::runtime_for`'s strict, all-required semantics (used by dispatch-routed
@@ -58,12 +148,13 @@ impl McpRegistry {
         &self,
         provenance: WriteProvenance,
     ) -> (Box<dyn ToolRuntime>, Vec<String>) {
-        let attempts = self.connectors.iter().map(|(name, connector)| {
+        let names: Vec<String> = self.connectors.keys().cloned().collect();
+        let attempts = names.into_iter().map(|name| {
             let provenance = provenance.clone();
             async move {
-                match connector.connect(provenance).await {
-                    Ok(runtime) => Ok((name.clone(), runtime)),
-                    Err(e) => Err((name.clone(), e)),
+                match self.acquire(&name, provenance).await {
+                    Ok(runtime) => Ok((name, runtime)),
+                    Err(e) => Err((name, e)),
                 }
             }
         });
@@ -76,6 +167,8 @@ impl McpRegistry {
                 Ok(entry) => servers.push(entry),
                 Err((name, e)) => {
                     tracing::warn!(mcp = %name, error = %e, "MCP failed to connect — continuing without it");
+                    // Ensure a bad pool slot is not retained.
+                    self.pool.invalidate(&name);
                     failed.push(name);
                 }
             }
@@ -93,23 +186,20 @@ impl RuntimeFactory for McpRegistry {
     ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
         // Empty allow-list = every registered server; otherwise the named (known) ones. Narrowing
         // selects *which servers* the execution may reach (a subagent's disjoint slice).
-        let selected: Vec<&String> = if allowed_mcps.is_empty() {
-            self.connectors.keys().collect()
+        let selected: Vec<String> = if allowed_mcps.is_empty() {
+            self.connectors.keys().cloned().collect()
         } else {
             allowed_mcps
                 .iter()
                 .filter(|name| self.connectors.contains_key(name.as_str()))
+                .cloned()
                 .collect()
         };
 
         let mut servers = Vec::with_capacity(selected.len());
         for name in selected {
-            let connector = self
-                .connectors
-                .get(name)
-                .expect("name came from the registry's own keys");
-            let runtime = connector.connect(provenance.clone()).await?;
-            servers.push((name.clone(), runtime));
+            let runtime = self.acquire(&name, provenance.clone()).await?;
+            servers.push((name, runtime));
         }
         Ok(Box::new(MultiMcpRuntime::new(servers)))
     }

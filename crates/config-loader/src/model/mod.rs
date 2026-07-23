@@ -1,0 +1,27 @@
+//! The typed config model (Decision 14), split by section for maintainability.
+//!
+//! - [`config`]: top-level [`Config`]
+//! - [`topology`]: vault, providers, pools, profiles, schedules, hooks, MCPs
+//! - [`policy`]: zones and grants
+//! - [`tuning`]: dispatch/context/concurrency and surface tunables
+//! - [`builder`]: [`ConfigBuilder`] for tests
+
+mod builder;
+mod config;
+mod policy;
+mod topology;
+mod tuning;
+
+pub use builder::ConfigBuilder;
+pub use config::Config;
+pub use policy::{Grant, Policy, ZonePolicy};
+pub use topology::{
+    CronSchedule, HookConfig, MainAgentConfig, McpConfig, McpTransport, PoolConfig,
+    ProviderProfile, RoleOverride, SessionProfile, ToolImpact, Topology, managed_binary_path,
+    resolve_declared_zone,
+};
+pub use tuning::{
+    CURRENT_SCHEMA_VERSION, CaptureTuning, ConcurrencyTuning, ContextTuning, CronDeliveryTuning,
+    DispatchTuning, MaintenanceTuning, McpPoolingTuning, SubagentIsolation,
+    TelegramApprovalsTuning, Tuning,
+};
