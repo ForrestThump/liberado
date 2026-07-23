@@ -43,7 +43,7 @@ Per-crate detail: generated [crate map](reference/crate-map.md) + each crate’s
 
 Liberado is sequenced **daemon (life-ops) → chat surface → coding pack**, not “three products at once.” Positioning and replacement priority: [architecture/positioning.md](architecture/positioning.md).
 
-**Recently hardened (2026-07-23):** module splits in hot-path crates; Tier-1 live conformance (L1–L6/L8/L10; L7/L9 open); MCP connection pooling (`tuning.mcp_pooling`, default on). Details in [roadmap/current.md](roadmap/current.md) and [research/archive/grok-architecture-analysis-2026-07-22.md](research/archive/grok-architecture-analysis-2026-07-22.md).
+**Recently hardened (2026-07-23):** module splits in hot-path crates; Tier-1 live conformance **L1–L10**; MCP connection pooling (`tuning.mcp_pooling`, default on). Details in [roadmap/current.md](roadmap/current.md) and [research/archive/grok-architecture-analysis-2026-07-22.md](research/archive/grok-architecture-analysis-2026-07-22.md).
 
 ---
 

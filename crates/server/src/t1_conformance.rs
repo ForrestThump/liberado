@@ -6,7 +6,9 @@
 //!
 //! Landed checks: **L1** (ask → answer → pack continued with answer), **L2** (durable reopen),
 //! **L3** (parked resume + prior turns), **L4** (irreversible pack refuses resume), **L5**
-//! (AskHuman 403), **L6** (Write both-arms), **L8** (cancel → Cancelled), **L10** (fork prefix).
+//! (AskHuman 403), **L6** (Write both-arms), **L7** (alert dual-arm), **L8** (cancel → Cancelled),
+//! **L9** (cron/webhook → joinable Dispatched session — see `liberado-daemon` `l9_*` tests),
+//! **L10** (fork prefix).
 
 #![cfg(test)]
 
@@ -25,9 +27,9 @@ use liberado_conversation_store::{Author, ConversationStore, NewNode, Ulid};
 use liberado_executor::{RiskGatedToolRuntime, ToolRuntime};
 use liberado_provider::{Message, MockProvider, ToolDef, ToolInvocation};
 use liberado_session::{
-    DomainHint, DomainPackRunner, GoalResult, GoalSessionHub, GoalSpec, LifeOpsDemoRunner,
-    PackContext, PackError, SessionEvent, SessionEventKind, SessionGrant, SessionSnapshot,
-    SessionStatus, TerminalKind,
+    DomainHint, DomainPackRunner, GoalResult, GoalSessionHub, GoalSpec, InputOutcome, LifeOpsDemoRunner,
+    PackContext, PackError, SessionAlert, SessionEvent, SessionEventKind, SessionGrant,
+    SessionSnapshot, SessionStatus, TerminalKind, TurnAuthor,
 };
 use liberado_session_store::{NewSession, SessionStore};
 use tower::ServiceExt;
@@ -50,7 +52,7 @@ struct T1Harness {
 impl T1Harness {
     /// Life-ops pack on a durable store (production wiring: hub over `SessionStore`).
     async fn with_life_pack() -> Self {
-        Self::build(Arc::new(LifeOpsDemoRunner), life_config_with_ask_human()).await
+        Self::build(Arc::new(LifeOpsDemoRunner), life_config_with_ask_human(), None).await
     }
 
     /// Custom pack (e.g. never-ending for L8 cancel).
@@ -58,7 +60,16 @@ impl T1Harness {
         pack: Arc<dyn DomainPackRunner>,
         config: liberado_bootstrap::Config,
     ) -> Self {
-        Self::build(pack, config).await
+        Self::build(pack, config, None).await
+    }
+
+    /// Custom pack + optional `SessionAlert` (L7).
+    async fn with_pack_and_alert(
+        pack: Arc<dyn DomainPackRunner>,
+        config: liberado_bootstrap::Config,
+        alert: Arc<dyn SessionAlert>,
+    ) -> Self {
+        Self::build(pack, config, Some(alert)).await
     }
 
     /// Re-open an existing durable root (daemon-restart shape for L3/L4).
@@ -67,23 +78,31 @@ impl T1Harness {
         pack: Arc<dyn DomainPackRunner>,
         config: liberado_bootstrap::Config,
     ) -> Self {
-        Self::build_at(root, pack, config).await
+        Self::build_at(root, pack, config, None).await
     }
 
-    async fn build(pack: Arc<dyn DomainPackRunner>, config: liberado_bootstrap::Config) -> Self {
+    async fn build(
+        pack: Arc<dyn DomainPackRunner>,
+        config: liberado_bootstrap::Config,
+        alert: Option<Arc<dyn SessionAlert>>,
+    ) -> Self {
         let root = std::env::temp_dir().join(format!("liberado-t1-{}", Ulid::new()));
-        Self::build_at(root, pack, config).await
+        Self::build_at(root, pack, config, alert).await
     }
 
     async fn build_at(
         root: PathBuf,
         pack: Arc<dyn DomainPackRunner>,
         config: liberado_bootstrap::Config,
+        alert: Option<Arc<dyn SessionAlert>>,
     ) -> Self {
         let sessions = Arc::new(SessionStore::open(&root).await);
 
         // Production shape: hub shares the converged store (lib.rs `run`).
         let mut hub = GoalSessionHub::new(SessionStore::clone(&sessions));
+        if let Some(alert) = alert {
+            hub = hub.with_alert(alert);
+        }
         hub.register_pack(pack);
         let goals = Arc::new(hub);
 
@@ -206,6 +225,214 @@ async fn wait_status(
         }
     }
     panic!("session {id} never matched wait predicate");
+}
+
+// ── L7 — alert fires iff no live subscriber (dual-arm) ───────────────────────
+
+/// Spy `SessionAlert`: ground truth for whether E5's unwatched-awaiting ping ran.
+struct SpySessionAlert {
+    calls: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+#[async_trait]
+impl SessionAlert for SpySessionAlert {
+    async fn session_needs_you(&self, session_id: &str, prompt: &str) {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((session_id.to_string(), prompt.to_string()));
+    }
+}
+
+/// Pack that only emits `AwaitingInput` after an external release — so L7 can attach a live
+/// store subscriber **before** the alert gate runs (avoids a race with a free-running pack).
+struct GatedAskPack {
+    release: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl DomainPackRunner for GatedAskPack {
+    fn domain_id(&self) -> &str {
+        "life"
+    }
+
+    async fn run(
+        &self,
+        session_id: &str,
+        _goal: &GoalSpec,
+        ctx: &PackContext<'_>,
+        events: tokio::sync::mpsc::Sender<SessionEvent>,
+        mut inputs: liberado_session::InputChannel,
+        mut cancel: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<GoalResult, PackError> {
+        // Wait until the test has subscribed (or decided not to).
+        tokio::select! {
+            _ = self.release.notified() => {}
+            _ = cancel.changed() => return Err(PackError::Cancelled),
+        }
+        if *cancel.borrow() {
+            return Err(PackError::Cancelled);
+        }
+
+        const QUESTION: &str = "L7: what should I title the note?";
+        ctx.record_turn(TurnAuthor::Assistant, QUESTION).await;
+        let _ = events
+            .send(SessionEvent::new(
+                session_id,
+                SessionEventKind::AwaitingInput {
+                    prompt: QUESTION.into(),
+                    options: Vec::new(),
+                },
+            ))
+            .await;
+
+        // Park until cancel/answer so the session stays awaiting for the assert window.
+        let outcome = tokio::select! {
+            o = inputs.recv() => o,
+            _ = cancel.changed() => InputOutcome::Closed,
+        };
+        match outcome {
+            InputOutcome::Received(input) => Ok(GoalResult {
+                terminal: TerminalKind::Succeeded,
+                summary: format!("answered: {}", input.text),
+                artifacts: vec![],
+                diagnostics: serde_json::Value::Null,
+            }),
+            InputOutcome::IdleExpired(d) => Ok(GoalResult {
+                terminal: TerminalKind::BudgetExhausted,
+                summary: format!("idle {}", d.as_secs()),
+                artifacts: vec![],
+                diagnostics: serde_json::Value::Null,
+            }),
+            InputOutcome::Closed => Err(PackError::Cancelled),
+        }
+    }
+}
+
+/// L7 refuse-suppress arm (positive control): a **live** store subscriber means alert must **not** fire.
+#[tokio::test]
+async fn l7_awaiting_with_live_subscriber_does_not_alert() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let alert = Arc::new(SpySessionAlert {
+        calls: calls.clone(),
+    });
+    let release = Arc::new(tokio::sync::Notify::new());
+    let harness = T1Harness::with_pack_and_alert(
+        Arc::new(GatedAskPack {
+            release: release.clone(),
+        }),
+        life_config_with_ask_human(),
+        alert,
+    )
+    .await;
+
+    let (status, body) = harness
+        .post_json(
+            "/api/goals",
+            r#"{"description":"L7 watched session","domain":"life","payload":{"interactive":true},"success_criteria":[]}"#,
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Session must exist on the durable store before subscribe is meaningful.
+    wait_status(&harness.goals, &id, |s| {
+        s.session.status == SessionStatus::Running
+    })
+    .await;
+
+    // Real production bus: subscribe increments live_subscriber_count (session-store).
+    let sub = harness
+        .goals
+        .store()
+        .subscribe(&id)
+        .await
+        .expect("subscribe must work on a live session");
+    let (_history, _rx) = sub;
+    assert!(
+        harness.goals.store().live_subscriber_count(&id).await >= 1,
+        "L7 positive control requires a real live subscriber on the store bus"
+    );
+
+    // Now let the pack ask — alert gate runs with subscriber_count > 0.
+    release.notify_one();
+    wait_status(&harness.goals, &id, |s| s.session.awaiting_input).await;
+
+    // Give the event pump a beat to process AwaitingInput.
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(
+        calls.lock().unwrap().is_empty(),
+        "L7: live subscriber must suppress session_needs_you — got {:?}",
+        calls.lock().unwrap()
+    );
+}
+
+/// L7 fire arm: no live subscriber → `SessionAlert::session_needs_you` **does** fire.
+#[tokio::test]
+async fn l7_awaiting_without_subscriber_fires_alert() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let alert = Arc::new(SpySessionAlert {
+        calls: calls.clone(),
+    });
+    let release = Arc::new(tokio::sync::Notify::new());
+    let harness = T1Harness::with_pack_and_alert(
+        Arc::new(GatedAskPack {
+            release: release.clone(),
+        }),
+        life_config_with_ask_human(),
+        alert,
+    )
+    .await;
+
+    let (status, body) = harness
+        .post_json(
+            "/api/goals",
+            r#"{"description":"L7 unwatched session","domain":"life","payload":{"interactive":true},"success_criteria":[]}"#,
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    wait_status(&harness.goals, &id, |s| {
+        s.session.status == SessionStatus::Running
+    })
+    .await;
+    assert_eq!(
+        harness.goals.store().live_subscriber_count(&id).await,
+        0,
+        "L7 fire arm: no subscriber attached"
+    );
+
+    release.notify_one();
+    wait_status(&harness.goals, &id, |s| s.session.awaiting_input).await;
+
+    // Poll until the alert path has run (pump is async).
+    let mut fired = false;
+    for _ in 0..100 {
+        if !calls.lock().unwrap().is_empty() {
+            fired = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(
+        fired,
+        "L7: unwatched AwaitingInput must call session_needs_you"
+    );
+    let log = calls.lock().unwrap().clone();
+    assert_eq!(log.len(), 1, "exactly one alert for one ask: {log:?}");
+    assert_eq!(log[0].0, id);
+    assert!(
+        log[0].1.contains("L7") || log[0].1.contains("title"),
+        "alert should carry the pack prompt: {:?}",
+        log[0].1
+    );
 }
 
 // ── L1 — ask → answer over POST /message → pack continued with the answer ───
