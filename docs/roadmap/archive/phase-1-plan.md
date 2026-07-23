@@ -511,7 +511,7 @@ Decision 18. Create a minimal `EventBus` trait (`post()` + `subscribe()`) in `li
 have the chat path post a `GoalEvent` that the dispatcher consumes, rather than calling
 `dispatcher.dispatch()` directly.
 
-**Rationale:** This is the smallest step toward the [mesh vision](../../ideas/meshify.md). It's one
+**Rationale:** This is the smallest step toward the [mesh vision](../../ideas/archive/meshify.md). It's one
 trait with one implementation (the `tokio::sync::broadcast` in-process bus), and it immediately
 proves the pattern: chat is a producer, dispatcher is a consumer, neither holds a direct reference
 to the other. The daemon's watch loop can join the same bus in a follow-up (it currently calls

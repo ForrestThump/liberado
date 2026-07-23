@@ -8,8 +8,8 @@
 **Hygiene audit**: [`agentic-mesh-hygiene-audit-2026-07-10.md`](archive/agentic-mesh-hygiene-audit-2026-07-10.md)  
 **Modularity**: [`docs/architecture/modularity.md`](../architecture/modularity.md)  
 **Design inputs**:
-[`loop_architecture_reference_article.md`](../ideas/loop_architecture_reference_article.md),
-[`doomloop_research.md`](../ideas/doomloop_research.md),
+[`loop_architecture_reference_article.md`](../ideas/archive/loop_architecture_reference_article.md),
+[`doomloop_research.md`](../ideas/archive/doomloop_research.md),
 Claude Code / Codex / OpenCode / Grok Build / KiloCode harness patterns.
 
 **We are not wrapping VTCode.** VTCode does not work reliably as a coding harness. The product is a

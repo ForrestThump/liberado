@@ -53,7 +53,7 @@ amount of ceremony:
 - **An A2A bridge, outbound direction** (`docs/ideas/a2a-protocol-idea.md`) — Liberado *delegating*
   a goal to a remote peer agent is model-invoked, capability-gated (Decision 8's subagent-narrowing
   logic, but for a strictly-less-trusted peer), external-effect. Note: A2A itself is a full
-  protocol, not "an MCP" — per the saved conversation (`docs/ideas/mcp_acp_protocol_difference_conversation.md`),
+  protocol, not "an MCP" — per the saved conversation (`docs/ideas/archive/mcp_acp_protocol_difference_conversation.md`),
   this should be its own sibling crate (e.g. `turbo-a2a`), not folded into `turbomcp` or shoehorned
   into the MCP transport. The *outbound-delegate* capability the dispatcher sees, though, can still
   be exposed to the model the same way any other capability is.
@@ -77,7 +77,7 @@ central":
   — same shape as `submit_report`: it's the executor watching its own `call_history` and adjusting
   its own next turn. Nothing about it is a capability an agent invokes.
 - **A task/scratchpad-tracking mechanism**, if built (deferred per the doom-loop finding doc's
-  "what works best" research, `docs/ideas/doomloop_research.md`'s "external working memory" point)
+  "what works best" research, `docs/ideas/archive/doomloop_research.md`'s "external working memory" point)
   — fails test 2 the same way `call_history` does: it's bookkeeping about *this* execution's own
   progress, tightly coupled to the loop that produces it, zero external consequence. Could
   technically be built as an MCP (plenty of real systems do this) but the connection/discovery
@@ -112,9 +112,9 @@ central":
 ## Companion to
 
 - `docs/ideas/a2a-protocol-idea.md` — the A2A interop design, seams already in place, open questions.
-- `docs/ideas/mcp_acp_protocol_difference_conversation.md` — the MCP/ACP/A2A protocol comparison
+- `docs/ideas/archive/mcp_acp_protocol_difference_conversation.md` — the MCP/ACP/A2A protocol comparison
   this backlog's sorting test is grounded in.
-- `docs/ideas/doomloop_research.md` — the "external working memory" research point behind the
+- `docs/ideas/archive/doomloop_research.md` — the "external working memory" research point behind the
   task-tracking entry above.
 - `docs/roadmap/current.md` — Phase 3 (cron, vault-decoupling) and the general phased sequence.
 - `crates/mcp-forge/ARCHITECTURE.md` — the actual mechanism ("wire in via mcp-forge" means this).

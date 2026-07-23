@@ -1,6 +1,16 @@
 # Handoff — Liberado is the daily-driver life OS (Telegram + TurboVault plugins)
 
-## 2026-07-19 update (read this first)
+Docs map: [`README.md`](README.md) · open work: [`roadmap/current.md`](roadmap/current.md).
+
+## 2026-07-23 update (engineering — read with 07-19)
+
+- **Architecture hardening landed** on branch `architecture-hardening` (commit message: module splits, T1, MCP pooling):
+  - **Module splits:** server API route groups, daemon lifecycle modules, config-loader model sections, executor budget module.
+  - **MCP pooling (M1) + M1b degraded routing:** default-on pool via `tuning.mcp_pooling`; transport failure invalidates peers and marks them **degraded** on the shared catalog so `routing_descriptors()` omits them from dispatch. **Registry UX** (beyond hand-edited TOML) still open.
+  - **T1 live conformance L1–L10:** L1–L8/L10 in `crates/server/src/t1_conformance.rs`; L9 in `liberado-daemon` (`l9_cron_event_becomes_joinable_dispatched_session`).
+- Homelab **ops status** below is still the 2026-07-19 dogfood baseline unless you redeploy this branch.
+
+## 2026-07-19 update (ops / dogfood)
 
 - **Liberado is LIVE on the homelab** and is the chat surface for life ops:
   - API: `http://192.168.0.144:4201`
@@ -119,10 +129,10 @@ bar; they do not replace it. Full table: [`roadmap/current.md`](roadmap/current.
    commands, not arguments).
 2. **C1 remaining — interactive crons.** Delivery + OpenClaw cutover are done. Next is
    AskHuman-capable schedules ("run this every morning, **ask me if unsure**") via session profiles.
-3. **M1 — MCP connection pooling + multi-server registry UX.** Breadth is wired in topology; still
-   one fresh connection per execution, and the registration surface is hand-edited TOML.
+3. **M1b — MCP registry UX** (pooling + **degraded-catalog routing** landed 2026-07-23). Remaining:
+   registration UX beyond hand-edited TOML only.
 4. **T1 — Live conformance suite** ([`live-conformance-suite.md`](roadmap/live-conformance-suite.md)).
-   Reliability for unattended life ops; most checks need a real daemon + `MockProvider` only.
+   **L1–L10 landed** (server suite + daemon L9). **Open:** Tier 2 only.
 5. **W1 later — mobile WebUI session view.** Homespun browser UI when Telegram's flat chat is no
    longer enough. **Not** deep-linking background sessions into Telegram (E5-b deprioritized).
 

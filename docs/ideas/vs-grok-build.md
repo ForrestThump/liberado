@@ -3,7 +3,7 @@
 **Status**: research note, 2026-07-21 (updated same day: `/goal` harness + `/loop`/cron).  
 **Scope**: highest-leverage gaps if Liberado’s TUI is to be a *daily-driver agentic coding surface*, not a product-market comparison of “who wins coding agents.” Also covers **goal-achievement harness robustness** (Grok `/goal`) and **recurring work** (Grok `/loop` vs Liberado cron + series-loops plan).  
 **Sources**: [xai-org/grok-build](https://github.com/xai-org/grok-build), [docs.x.ai/build](https://docs.x.ai/build/overview), [Background Tasks](https://docs.x.ai/build/features/background-tasks) (`/loop`), public writeups on goal mode (June 2026), Liberado architecture (`agentic-loops.md`, `session-surface-contract.md`, `positioning.md`, `current.md`, `verifiers.md`, [`loops-plan.md`](../roadmap/loops-plan.md)), coding pack crates (`coder-*`), `liberado-cron`, TUI client (`crates/tui`).  
-**Related**: [`vs-hermes.md`](vs-hermes.md) (life-OS / skills / cron gaps), [`../architecture/positioning.md`](../architecture/positioning.md) (coding is P3: *good enough + integrated*, not best-in-class), [`loop_architecture_reference_article.md`](loop_architecture_reference_article.md).
+**Related**: [`vs-hermes.md`](vs-hermes.md) (life-OS / skills / cron gaps), [`../architecture/positioning.md`](../architecture/positioning.md) (coding is P3: *good enough + integrated*, not best-in-class), [`loop_architecture_reference_article.md`](archive/loop_architecture_reference_article.md).
 
 ---
 

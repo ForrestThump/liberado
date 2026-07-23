@@ -87,3 +87,13 @@
 # args = ["check"]
 # timeout_secs = 300
 # network = false
+
+# MCP connection pooling (M1). Defaults: enabled = true, idle_ttl_secs = 300,
+# max_in_flight_per_name = 4, connect_wait_secs = 60.
+# Idle connections are reaped by a background tick (and on pool activity), not only on re-acquire.
+# Escape hatch for flaky peers / debugging: enabled = false (connect-per-acquisition).
+# [mcp_pooling]
+# enabled = true
+# idle_ttl_secs = 300
+# max_in_flight_per_name = 4
+# connect_wait_secs = 60

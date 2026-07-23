@@ -117,5 +117,5 @@ these are dev-machine caveats, not production concerns:
   config round-trip tests for the new TOML shape (minimal and fully-populated), a validation test
   rejecting a blank `image`, and a `mcp_registry_from_config` test confirming a Docker-transport MCP
   registers under its name.
-- Live end-to-end smoke test: see `docs/roadmap/human-todo.md` — needs Docker Desktop running on
+- Live end-to-end smoke test: see `docs/roadmap/archive/human-todo.md` — needs Docker Desktop running on
   this Windows dev machine, which this session doesn't have set up yet.

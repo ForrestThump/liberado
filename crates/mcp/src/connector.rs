@@ -1,31 +1,32 @@
 //! How to connect to one MCP server. A connector is **transport-erased** — it returns a boxed
-//! [`ToolRuntime`], not a typed client — so servers of different transports (a `npx` stdio server, a
-//! remote HTTP server) can sit side by side in one [`McpRegistry`](crate::McpRegistry).
+//! [`RebindableRuntime`], not a typed client — so servers of different transports (a `npx` stdio
+//! server, a remote HTTP server) can sit side by side in one [`McpRegistry`](crate::McpRegistry).
 //!
 //! Each connector exposes its server's tools under their **bare** names; the registry namespaces
 //! them by the name the server is registered under.
 
 use async_trait::async_trait;
 use liberado_common::WriteProvenance;
-use liberado_executor::{RuntimeSetupError, ToolRuntime};
+use liberado_executor::RuntimeSetupError;
 use turbomcp_client::Client;
 use turbomcp_transport::{ChildProcessConfig, ChildProcessTransport};
 
 use crate::TurbomcpRuntime;
+use crate::pool::RebindableRuntime;
 
 /// Connect to one MCP server and return a runtime bound to `provenance` (injected into every call's
-/// `_meta`). Connection/handshake failures surface here.
+/// `_meta`, rebindable on pool checkout). Connection/handshake failures surface here.
 #[async_trait]
 pub trait McpConnector: Send + Sync {
     async fn connect(
         &self,
         provenance: WriteProvenance,
-    ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError>;
+    ) -> Result<Box<dyn RebindableRuntime>, RuntimeSetupError>;
 }
 
 /// Run an MCP server as a child process and speak MCP over its stdin/stdout — the standard way to
 /// host npm/`npx` servers (`StdioConnector::new("npx", vec!["-y", "@scope/server"])`) and Rust
-/// server binaries alike. The process is spawned lazily on first connect.
+/// server binaries alike. The process is spawned lazily on first connect (and may be pooled).
 #[derive(Debug, Clone)]
 pub struct StdioConnector {
     config: ChildProcessConfig,
@@ -53,7 +54,7 @@ impl McpConnector for StdioConnector {
     async fn connect(
         &self,
         provenance: WriteProvenance,
-    ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+    ) -> Result<Box<dyn RebindableRuntime>, RuntimeSetupError> {
         let client = Client::new(ChildProcessTransport::new(self.config.clone()));
         let runtime = TurbomcpRuntime::connect(client, provenance)
             .await
@@ -83,7 +84,7 @@ impl McpConnector for HttpConnector {
     async fn connect(
         &self,
         provenance: WriteProvenance,
-    ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+    ) -> Result<Box<dyn RebindableRuntime>, RuntimeSetupError> {
         // `connect_http` performs the initialize handshake itself; `TurbomcpRuntime::connect` then
         // skips re-initializing (it checks `is_initialized`).
         let client = Client::connect_http(self.url.clone())

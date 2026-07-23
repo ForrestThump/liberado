@@ -1,41 +1,39 @@
-# Liberado Wiki
+# Liberado
 
-Welcome to the Liberado documentation wiki — single source of truth for humans and agents.
+Rust-native **personal AI Life OS** and **agentic orchestration** substrate: one daemon watches a vault, reasons with an LLM, and acts through MCP tools under capability/zone containment — without reacting to its own writes (provenance loop-break). Surfaces (TUI, WebUI, CLI, Telegram) are clients; they do not own the loop.
 
-## Quick Start
-New users should begin here:
+## Documentation hub
 
-- [Getting Started → Quickstart](docs/getting-started/quickstart.md)
+**All product docs live under [`docs/`](docs/README.md).** Start there.
 
-## High-Level
-- [Overview & Architecture](docs/architecture/overview.md) — system pillars, loop, safety model, and the kernel · domain packs · stores · surfaces vocabulary
-- [Sessions](docs/architecture/sessions.md) — **everything is a `Session`** (D7): one type, one store, one list. Chats, goal sessions, cron runs and subagents differ by *attributes*, not subtypes — `goal: Option` is the whole difference. Start here; it is the load-bearing abstraction.
-- [Contracts](docs/architecture/contracts.md) — the narrow-waist inventory: the frozen seams that *are* the architecture
-- [Crate map](docs/reference/crate-map.md) — generated per-crate layer/deps/description table (`scripts/gen-crate-map.ps1`)
-- [Agentic Loops](docs/architecture/agentic-loops.md) — kernel vs domain packs; goal sessions, verifiers, subagents
-- [Verifiers & completeness gates](docs/architecture/verifiers.md) — CI-in-the-loop schema/trait sketch (domain-agnostic)
-- [Positioning](docs/architecture/positioning.md) — the thesis and how Liberado is grounded against the free alternatives
-- [Roadmap (current)](docs/roadmap/current.md) — **what's next** (W1 session WebUI first) and what recently landed
-- [Handoff](docs/handoff.md) — live homelab / Telegram / TurboVault plugin status for agents
-- [TurboVault modules](docs/roadmap/turbovault-modules-integration-roadmap.md) — plugin verticals (`vector` live, `tasks` on branch, `vault_events` next)
-- [Session focus plan](docs/roadmap/archive/session-focus-plan.md) — *how* the Session model was built, slice by slice (S1–S7, store convergence, forking). History; the model itself is in [Sessions](docs/architecture/sessions.md).
-- [Loops plan](docs/roadmap/loops-plan.md) — scheduled recurrence over goals (loop = scheduler + series memory, not a fourth engine); vocabulary: turn loop ⊂ goal ⊂ loop ⊂ meta-loop
-- [Agentic orchestration plan](docs/roadmap/rust-native-agentic-coder-plan.md) — implementation roadmap (coding pack first)
-- [Agentic mesh hygiene audit](docs/roadmap/archive/agentic-mesh-hygiene-audit-2026-07-10.md) — coupling, duplication, generality
-- [Architecture alignment audit](docs/roadmap/archive/architecture-alignment-audit-2026-07-11.md) — dependency-graph verification, the "mesh" framing verdict, complexity-management plan
-- [Interface / API Reference](docs/reference/api.md) — only public contract (HTTP + SSE)
-- [Delegate dogfood notes](docs/roadmap/archive/delegate_dogfood_issues.md) — face/delegation capability, journals, hot-swap lessons
+| For… | Go to… |
+|------|--------|
+| First run | [docs/getting-started/quickstart.md](docs/getting-started/quickstart.md) |
+| How it works | [docs/architecture/overview.md](docs/architecture/overview.md) |
+| Sessions model | [docs/architecture/sessions.md](docs/architecture/sessions.md) |
+| Frozen seams | [docs/architecture/contracts.md](docs/architecture/contracts.md) |
+| What to build next | [docs/roadmap/current.md](docs/roadmap/current.md) |
+| Live homelab status | [docs/handoff.md](docs/handoff.md) |
+| HTTP/SSE API | [docs/reference/api.md](docs/reference/api.md) |
+| Crate inventory | [docs/reference/crate-map.md](docs/reference/crate-map.md) |
+| Failure-modes checklist | [docs/architecture/failure-modes.md](docs/architecture/failure-modes.md) |
+| Open design questions | [docs/design_questions_for_the_user.md](docs/design_questions_for_the_user.md) |
 
-## Deep Dive
-- [Architecture Components](docs/architecture/) — per-crate `ARCHITECTURE.md` pages
-- [Modularity — the seam plan](docs/architecture/modularity.md) — the per-crate "could someone use just this?" test and the seam moves
-- [Specifications & Decisions](docs/specs/) — detailed design specs and architecture decisions
-- [Ideas & Experiments](docs/ideas/) — competitive analysis (Hermes, mesh), concurrency thoughts, future directions
-- [Contributing](docs/contributing/agents.md) — build/run instructions and agent guide
+## Strategy (short)
 
-## Philosophy
-Everything here is meant to be **navigable by agents and humans alike**. Each page links to its neighbors; no orphan files at the root.
+**Daemon (life-ops) first → chat surface → coding pack.** Sequencing and competitive framing: [docs/architecture/positioning.md](docs/architecture/positioning.md).
 
----
+## Development
 
-**Last updated**: 2026-07-19 — Liberado live on homelab via Telegram; TurboVault `vector` + tasks reachable from the agent; OpenClaw briefings cut over. **Next:** dogfood Telegram for friction, then C1/M1/T1; mobile WebUI session view is later (not Telegram session multiplexing).
+- Workspace: Cargo crates under [`crates/`](crates/)
+- Agent build/run notes: [docs/contributing/agents.md](docs/contributing/agents.md)
+- Layer rules (mechanical): `crates/test-support/tests/layer_rules.rs`
+- Example config: [`config.example/`](config.example/)
+
+Nested MCP checkouts (`liberado-*-mcp/`, `turbovault/`, …) may appear for co-dev; they are **not** the Liberado workspace product docs.
+
+## License
+
+See [LICENSE](LICENSE).
+
+**Last updated:** 2026-07-23 — docs hub reorg; architecture hardening (module splits, T1 partial, MCP pooling) on branch.

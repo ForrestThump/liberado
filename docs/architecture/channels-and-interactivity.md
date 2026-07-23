@@ -7,7 +7,7 @@
 **Related**: [`agentic-loops.md`](agentic-loops.md) · [`contracts.md`](contracts.md)
 (`EventSource`, `CapabilitySet`, `DomainPackRunner`) ·
 [`session-focus-plan.md`](../roadmap/archive/session-focus-plan.md) (D7 unified `Session`, S1–S5) ·
-[`meshify.md`](../ideas/meshify.md) (partially-superseded event-bus idea) ·
+[`meshify.md`](../ideas/archive/meshify.md) (partially-superseded event-bus idea) ·
 [`architecture-alignment-audit-2026-07-11.md`](../roadmap/archive/architecture-alignment-audit-2026-07-11.md).
 
 ---
@@ -112,7 +112,7 @@ bus only when there is a real case where "A finishes ⇒ this should reactively 
 through **facts + centralized spawn** (A publishes; the dispatcher spawns B on match; they never
 talk), or through **delegation** (needs another agent's work) or the **human-input channel** (needs a
 human's answer). There is no fourth case requiring A and B to hold a conversation. This is consistent
-with [`meshify.md`](../ideas/meshify.md)'s rejected step 5 (no peer mesh; the runtime is a hub around
+with [`meshify.md`](../ideas/archive/meshify.md)'s rejected step 5 (no peer mesh; the runtime is a hub around
 one daemon) and the agent-pools verdict.
 
 ---

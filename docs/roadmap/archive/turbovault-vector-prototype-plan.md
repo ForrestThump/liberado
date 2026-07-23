@@ -1,10 +1,10 @@
-# TurboVault `vector` module — end-to-end prototype plan (fork)
+﻿# TurboVault `vector` module â€” end-to-end prototype plan (fork)
 
-Status: **Phases 1–4 DONE; LIVE on Liberado homelab (2026-07-19).**
+Status: **Phases 1â€“4 DONE; LIVE on Liberado homelab (2026-07-19).**
 
 Merged onto fork **`develop`** (was `prototype/vector-e2e`, stacked on the engine
 + read_config). Working end-to-end: `vector_search` over a real vault returns
-sensible semantic results (query "deliberation and reasoning" → the
+sensible semantic results (query "deliberation and reasoning" â†’ the
 `deliberation/*.md` notes at 0.717). **Liberado's live Telegram agent** reaches
 these tools through the homelab TurboVault peer (`http://turbovault:3001`,
 image built with `--features vector`). All prototype goal conditions met; fmt +
@@ -13,27 +13,27 @@ clippy clean; feature-off tree excludes the module.
 **Phase 5 (update upstream issues/PRs) is still pending** manual review per the
 autonomy boundary. Commits of record:
 - `#42` per-vault `plugin_state_dir` (+ per-plugin VaultApi refactor)
-- `#43` watcher→HookBus bridge + `list_notes_meta`
+- `#43` watcherâ†’HookBus bridge + `list_notes_meta`
 - `turbovault-plugin-vector` module (`vector_search/reindex/status/config`)
 - Phase-4 tests + a real chunking bug fix (char-boundary overlap, found by the
   live search).
 
 Architecture/decisions live in `turbovault-vector-module-plan.md`; Liberado-side
-"what's next" in [`current.md`](current.md) and the modules
-[umbrella](turbovault-modules-integration-roadmap.md).
+"what's next" in [`current.md`](../current.md) and the modules
+[umbrella](../turbovault-modules-integration-roadmap.md).
 
 ## Goal
 
-A **working, end-to-end `vector` semantic-search module** on the fork —
+A **working, end-to-end `vector` semantic-search module** on the fork â€”
 engine + the two proposed host capabilities (#42 state dir, #43 change-feed) +
-the plugin — so that:
+the plugin â€” so that:
 
 1. A user can enable a default-off `vector` feature, and the daemon indexes the
    active vault, keeps the index current as notes change (incrementally,
    chunk-level), and answers `vector_search` queries.
 2. The **working branch is proof**: we update issues #42/#43 and the PRs with
    links to it, demonstrating the proposed API shapes are real and usable
-   (dogfooding — a real consumer is the strongest argument the shapes are right).
+   (dogfooding â€” a real consumer is the strongest argument the shapes are right).
 
 We have the whole fork to work with, so we prototype *everything* rather than
 stubbing against hypothetical APIs.
@@ -41,8 +41,8 @@ stubbing against hypothetical APIs.
 ## Approach & branch strategy
 
 - Prototype the entire thing on one integration branch, stacked on the engine:
-  - `feat/vector-engine-crate` — **the engine crate (done).**
-  - `prototype/vector-e2e` — stacked on it; adds #42, #43, and the plugin. This
+  - `feat/vector-engine-crate` â€” **the engine crate (done).**
+  - `prototype/vector-e2e` â€” stacked on it; adds #42, #43, and the plugin. This
     is the working demo / proof branch.
 - **Upstream PRs stay split and clean.** Once shapes are validated, cut focused
   branches from the prototype (`feat/plugin-state-dir`, `feat/hookbus-changefeed`,
@@ -55,13 +55,13 @@ stubbing against hypothetical APIs.
   debounce/platform edge-cases, HookBus backpressure tuning, and multi-vault
   handle lifecycle may be rough and clearly marked `// prototype:`.
 - Final upstream PRs will be split/cleaned to Nick's preferences; API shapes may
-  change in review — expected, and exactly what dogfooding surfaces.
+  change in review â€” expected, and exactly what dogfooding surfaces.
 - Model download (fastembed ONNX) happens on first real embed; tests account for
   it and stay fail-closed.
 
 ---
 
-## Phase 0 — Engine crate ✅ DONE
+## Phase 0 â€” Engine crate âœ… DONE
 
 `feat/vector-engine-crate` (commit `7e47097`).
 
@@ -74,7 +74,7 @@ stubbing against hypothetical APIs.
 
 ---
 
-## Phase 1 — Capability: per-vault plugin state dir (#42)
+## Phase 1 â€” Capability: per-vault plugin state dir (#42)
 
 **Goal:** the host hands the plugin a writable, per-vault, plugin-private
 directory to persist its index.
@@ -96,18 +96,18 @@ directory to persist its index.
 
 ---
 
-## Phase 2 — Capability: change-feed (#43, option C)
+## Phase 2 â€” Capability: change-feed (#43, option C)
 
 **Goal:** the plugin learns of every note change (external edits, core-tool
 writes, plugin writes) in real time, with a reconcile fallback for correctness.
 
 **Key simplification:** the `VaultWatcher` watches the **filesystem**, so it
 already sees all three change sources (everything lands on disk). The prototype
-wires the watcher → `HookBus` and adds an mtime accessor for reconcile — no
+wires the watcher â†’ `HookBus` and adds an mtime accessor for reconcile â€” no
 separate core-write hooks needed for the demo (so no dedup problem).
 
 **Work:**
-- Start a `VaultWatcher` for the active vault; forward `VaultEvent` →
+- Start a `VaultWatcher` for the active vault; forward `VaultEvent` â†’
   `HookEvent` onto the `HookBus` (reuse its `should_emit_event` filtering).
 - `VaultHost::list_notes_meta() -> [(rel_path, mtime)]` (+ `VaultApi`
   passthrough) for the reconcile scan.
@@ -121,7 +121,7 @@ separate core-write hooks needed for the demo (so no dedup problem).
 
 ---
 
-## Phase 3 — The `vector` plugin module
+## Phase 3 â€” The `vector` plugin module
 
 **Goal:** `turbovault-plugin-vector`, default-off, drives the engine over the
 plugin boundary.
@@ -132,15 +132,15 @@ plugin boundary.
 - **Construction (lazy `OnceCell`):** open `VectorIndex` + `ChunkStore` under
   `plugin_state_dir()`; build `FastembedEngine` from `read_config` (model, chunk
   size/overlap, hybrid weight, rerank); `SearchRouter` (+ reranker if enabled).
-- **Change handling:** subscribe to `HookBus` → `Created/Modified/Renamed`:
-  `read_note` → `update_note`; `Deleted`: `remove_note`. Debounce per path.
+- **Change handling:** subscribe to `HookBus` â†’ `Created/Modified/Renamed`:
+  `read_note` â†’ `update_note`; `Deleted`: `remove_note`. Debounce per path.
 - **Reconcile:** on first use, periodically, and on `Lagged`: `list_notes_meta`
-  → diff vs `ChunkStore` mtimes → `update_note` the changed ones.
+  â†’ diff vs `ChunkStore` mtimes â†’ `update_note` the changed ones.
 - **Tools (namespaced `vector_*`):**
-  - `vector_search` (query, k) → ranked `{path, score, preview}` (hybrid + rerank)
-  - `vector_reindex` → explicit full rebuild
-  - `vector_status` → indexed notes/chunks, model, dims, last reconcile
-  - `vector_config` → resolved settings + source (like `tasks_config`)
+  - `vector_search` (query, k) â†’ ranked `{path, score, preview}` (hybrid + rerank)
+  - `vector_reindex` â†’ explicit full rebuild
+  - `vector_status` â†’ indexed notes/chunks, model, dims, last reconcile
+  - `vector_config` â†’ resolved settings + source (like `tasks_config`)
 
 **Goal conditions (done when):**
 - [ ] With `--features vector`, `vector_*` tools are advertised namespaced; absent
@@ -152,13 +152,13 @@ plugin boundary.
 
 ---
 
-## Phase 4 — End-to-end verification
+## Phase 4 â€” End-to-end verification
 
 **Goal:** prove it works, on synthetic fixtures and a real vault.
 
 **Work:**
 - Host integration tests (feature-matrix like `tasks`): tools present/namespaced;
-  feature-off catalog parity; a seed → index → search → edit → incremental-update
+  feature-off catalog parity; a seed â†’ index â†’ search â†’ edit â†’ incremental-update
   round trip.
 - Fail-closed, ignored, env-gated **live-vault test** over `~/Obsidian/Main`: real
   `fastembed` embeddings, index the vault, `vector_search` a known query and
@@ -173,7 +173,7 @@ plugin boundary.
 
 ---
 
-## Phase 5 — Dogfood the proposals & close out
+## Phase 5 â€” Dogfood the proposals & close out
 
 **Goal:** turn the working prototype into evidence on the issues/PRs.
 
@@ -196,7 +196,7 @@ plugin boundary.
 
 ## Feasibility & autonomy notes (verified)
 
-Checked the two things most likely to stall an autonomous run — both tractable,
+Checked the two things most likely to stall an autonomous run â€” both tractable,
 no user decision required:
 
 - **Phase 1 / `plugin_state_dir`:** the plugin `VaultApi` is currently **shared**
@@ -207,7 +207,7 @@ no user decision required:
   mechanical refactor.
 - **Phase 2 / watcher:** `VaultWatcher::new(path, config) -> (Self, Receiver<VaultEvent>)`
   needs only the vault root, which `plugin_host` already reaches via
-  `get_active_vault_manager().vault_path()`. Bridge its `mpsc` receiver → `HookBus`
+  `get_active_vault_manager().vault_path()`. Bridge its `mpsc` receiver â†’ `HookBus`
   in a spawned task. Feasible; lifecycle (when to start) is a prototype choice.
 
 **Autonomy boundaries for a `/goal` run:**
@@ -215,19 +215,19 @@ no user decision required:
   outward-facing** (posting to public issues/PRs) and stays a **manual review
   gate**, consistent with how we've handled every upstream artifact.
 - **Live-vault assertion (Phase 4):** default to a **generic** check (search
-  returns results with sane scores). A specific `query → expected note` assertion
+  returns results with sane scores). A specific `query â†’ expected note` assertion
   needs a pair from the user; not required to proceed.
 - **Environmental:** the live/real-embedding steps need `fastembed` to **download
   an ONNX model** (network + disk) on first run. Synthetic tests use a fake
-  embedder (no download), so Phases 1–3 and most of 4 don't need it; the live test
+  embedder (no download), so Phases 1â€“3 and most of 4 don't need it; the live test
   stays fail-closed if the model/vault is absent.
 
-**Not blockers:** API shape churn (fork prototype — we control it; rework is the
+**Not blockers:** API shape churn (fork prototype â€” we control it; rework is the
 point of dogfooding).
 
 ## Risks & mitigations
 
-- **API shape churn** if Nick revises #42/#43 → rework the plugin's wiring.
+- **API shape churn** if Nick revises #42/#43 â†’ rework the plugin's wiring.
   *Mitigation:* keep capability code isolated and thin; the prototype's value is
   validating shapes, so churn is acceptable/expected.
 - **Watcher reliability** across platforms (notify noise, rename semantics).

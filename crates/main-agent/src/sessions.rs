@@ -608,7 +608,8 @@ impl ChatSessions {
         };
         let req = DispatchRequest {
             goal: user.to_string(),
-            catalog: self.dispatch_catalog.descriptors(),
+            // M1b: routing excludes peers marked degraded after connect/transport failure.
+            catalog: self.dispatch_catalog.routing_descriptors(),
             capabilities: dispatch_caps.clone(),
             reaction_depth: 0, // user-initiated, not a background reaction
             zone_write_classes: self.zone_write_classes.clone(),

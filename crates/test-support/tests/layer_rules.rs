@@ -214,3 +214,46 @@ fn only_composition_roots_go_wide() {
         );
     }
 }
+
+#[test]
+fn god_modules_are_partitioned_into_lifecycle_files() {
+    // Architectural hardening (2026-07-23): api / daemon / config model / executor budget
+    // must stay multi-file so complexity does not re-accumulate in single god modules.
+    let crates = workspace_crates_dir();
+    let must_exist = [
+        "server/src/api/mod.rs",
+        "server/src/api/chat.rs",
+        "server/src/api/goals.rs",
+        "server/src/api/status.rs",
+        "server/src/api/sessions.rs",
+        "server/src/api/search.rs",
+        "daemon/src/types.rs",
+        "daemon/src/react.rs",
+        "daemon/src/proposals.rs",
+        "daemon/src/helpers.rs",
+        "executor/src/budget.rs",
+        "config-loader/src/model/mod.rs",
+        "config-loader/src/model/topology.rs",
+        "config-loader/src/model/policy.rs",
+        "config-loader/src/model/tuning.rs",
+        "config-loader/src/model/config.rs",
+        "config-loader/src/model/builder.rs",
+    ];
+    for rel in must_exist {
+        let path = crates.join(rel);
+        assert!(
+            path.is_file(),
+            "expected partitioned module file missing: {} — do not re-monolith without updating this gate",
+            path.display()
+        );
+    }
+    // Former monolith files must not return.
+    for rel in ["server/src/api.rs", "config-loader/src/model.rs"] {
+        let path = crates.join(rel);
+        assert!(
+            !path.exists(),
+            "god-module path returned: {} — keep the multi-file split",
+            path.display()
+        );
+    }
+}

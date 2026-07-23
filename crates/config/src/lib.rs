@@ -32,9 +32,9 @@ use thiserror::Error;
 pub use liberado_config_loader::{
     CURRENT_SCHEMA_VERSION, CaptureTuning, ConcurrencyTuning, Config, ConfigBuilder, ContextTuning,
     CronSchedule, DEFAULT_POOL, DispatchTuning, Grant, HookConfig, MainAgentConfig,
-    MaintenanceTuning, McpConfig, McpTransport, Policy, PoolConfig, ProviderProfile, RoleOverride,
-    SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning, ZonePolicy,
-    managed_binary_path, resolve_declared_zone,
+    MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport, Policy, PoolConfig,
+    ProviderProfile, RoleOverride, SubagentIsolation, TelegramApprovalsTuning, ToolImpact,
+    Topology, Tuning, ZonePolicy, managed_binary_path, resolve_declared_zone,
 };
 
 /// Records which source file contributed each section of a loaded [`Config`],

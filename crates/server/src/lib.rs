@@ -14,6 +14,9 @@ mod state;
 mod sticky;
 mod telegram;
 
+#[cfg(test)]
+mod t1_conformance;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -83,7 +86,10 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     let provider = providers.primary.clone();
     let dispatcher_attached = provider.is_some();
     let model_name = provider.as_ref().map(|p| p.model().to_string());
-    let mcp = liberado_bootstrap::mcp_registry_from_config(&config);
+    let mcp = liberado_bootstrap::mcp_registry_from_config(
+        &config,
+        Some(capability_catalog.clone()),
+    );
     let orchestrator_attached = dispatcher_attached && mcp.is_some();
 
     let guidance = dispatcher_guidance_source(&vault_path).await;

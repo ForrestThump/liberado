@@ -28,6 +28,13 @@ Deleting `JsonlStore` and re-pointing its suite at `SessionStore` immediately ex
 defects the chat tests could never have found. The coding-pack double hid a seam that made the ask
 unreachable from the case that most needed it. **Three separate defects, one root cause.**
 
+**A4 (2026-07-23):** load-bearing `GoalSessionHub` behaviors (list, cancel, park→answer→resume,
+durable rehydrate) are dualled against production `SessionStore` in
+`crates/session-store/tests/hub_dual_store.rs` (plus the store-lens suite in `record_lens.rs`).
+The in-memory `GoalSessionStore` remains for pack unit tests; it is no longer the *only* place
+cancel/list/resume are proven. Tier-1 live conformance (`t1_conformance`) also drives the durable
+store for HTTP-shaped goals paths — same doctrine, different surface.
+
 > **The rule.** A test double that produces the shape you *expect* is worthless — it agrees with you.
 > Ask: *what shape does reality actually produce?* If your double has never returned an `Err`, or
 > never withheld a capability, or never used the words the domain is made of, it is decoration.

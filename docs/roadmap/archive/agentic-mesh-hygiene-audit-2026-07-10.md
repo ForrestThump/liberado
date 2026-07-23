@@ -8,7 +8,7 @@ the plan does not pigeonhole Liberado into a coding-only product.
 Related: [`agentic-loops.md`](../../architecture/agentic-loops.md),
 [`modularity.md`](../../architecture/modularity.md),
 [`rust-native-agentic-coder-plan.md`](../rust-native-agentic-coder-plan.md),
-[`meshify.md`](../../ideas/meshify.md).
+[`meshify.md`](../../ideas/archive/meshify.md).
 
 ---
 

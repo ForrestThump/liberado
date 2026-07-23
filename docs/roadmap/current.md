@@ -1,212 +1,69 @@
 # Liberado — Roadmap
 
-**What is not done yet.** Forward-looking work only: open debt, known-broken things, and what to
-build next. What *is* built is described in [`../architecture/overview.md`](../architecture/overview.md);
-finished plans and closed audits are in [`archive/`](archive/README.md).
+**What is not done yet.** Forward-looking work only. What *is* built is described in [`../architecture/overview.md`](../architecture/overview.md); finished plans and closed audits are in [`archive/`](archive/README.md). Index of this folder: [`README.md`](README.md).
 
-Before starting anything, read [`../architecture/failure-modes.md`](../architecture/failure-modes.md) —
-five bug classes this codebase produces over and over, distilled from twelve audits. Every one of them
-shipped with a green test suite.
+Before starting anything, read [`../architecture/failure-modes.md`](../architecture/failure-modes.md) — five bug classes this codebase produces over and over. Every one of them shipped with a green test suite.
 
 ## Open now — in priority order
 
-The order is deliberate and strategic, not a to-do list: **automation daemon → chat → coding.** The
-*why* — and why sequencing effort this way is what makes the full "replace all three" goal reachable
-rather than abandoning it — is in [`../architecture/positioning.md`](../architecture/positioning.md).
-Short version: get **one** thing over the daily-driver line, dogfood it hard (dogfooding is what has
-found every real bug so far), and let the shared substrate it hardens carry the other two.
+The order is deliberate: **automation daemon → chat → coding.** Why: [`../architecture/positioning.md`](../architecture/positioning.md).
 
-### Priority 1 — the autonomous life-OS daemon (replace OpenClaw / Hermes)
+### Priority 1 — the autonomous life-OS daemon
 
-*Already in hand (2026-07-19): TurboVault storage **plus** live plugin modules (vector search + tasks)
-on the homelab peer; cron substrate; Telegram free-form chat + sticky cron delivery; capability
-boundary; OpenClaw briefing cutover with `Succeeded` briefs.* What remains is the **interfacing loop
-on a phone-grade surface** — see, answer, and steer background sessions without a laptop — plus
-hardening (conformance) and MCP ops maturity.
+*Already in hand:* TurboVault storage + live plugins (vector + tasks); cron; Telegram free-form sticky chat + cron delivery; capability boundary; OpenClaw briefing cutover with `Succeeded` briefs; **MCP connection pooling (M1)** default-on; **Tier-1 live conformance L1–L10** (server T1 suite + daemon L9).
 
 | # | What | Why it matters |
 |---|---|---|
-| **Dogfood** | **Lean on Telegram harder** | Free-form sticky chat + cron delivery is the current phone surface and feels solid enough to daily-drive. The near-term product loop is **use it, collect friction, fix real pain** — not invent session multiplexing in a flat chat. Friction notes go here / handoff as they show up. |
-| **C1** | **Interactive crons (AskHuman)** | **Delivery + OpenClaw cutover + briefing reliability landed 2026-07-18** (see below). What remains is the *interactive* payoff — "run this every morning, **ask me if you're unsure**" (AskHuman-capable cron via session profiles). |
-| **M1** | **MCP ops maturity** | Homelab topology already wires a broad HTTP peer set (TurboVault, weather, CalDAV, search-orchestrator, qdrant, spider, …). Two remaining gaps: connection **pooling/reuse** (fresh connection per execution today), and **registry UX** beyond hand-edited TOML. |
-| **T1** | **The live conformance suite** — [`live-conformance-suite.md`](live-conformance-suite.md) | **Reliability is not optional for a daemon meant to run your life unattended.** Every defect found on 2026-07-13/14 passed the test suite and died on first contact with a running daemon. Most checks need a real daemon but only a `MockProvider` — CI-able. |
-| **W1** | **Goal-session view in a mobile WebUI** (browser) | **Down the road**, not the next Telegram feature. Homespun phone UI beats stuffing session multiplexing into one flat Telegram chat (operator call, 2026-07-19). WebUI still has `chat.rs` and **no session view** — when we build phone interfacing beyond Telegram, this is the surface. See [`session-surface-contract.md`](../architecture/session-surface-contract.md). |
-| **E5-b** | ~~Telegram deep-link into a specific session~~ | **Deprioritized.** Operator preference: don't multiplex background sessions inside Telegram; prefer a real mobile WebUI later. Free-form sticky chat is enough for the current use case. |
+| **Dogfood** | **Lean on Telegram harder** | Collect friction → fix real pain. Free-form sticky chat is the phone surface. |
+| **C1** | **Interactive crons (AskHuman)** | Delivery landed; remaining is “ask me if unsure” via session profiles. |
+| **M1b** | **MCP registry UX** | Pooling **landed**; **degraded-catalog routing landed** (`CapabilityCatalog::routing_descriptors` + registry health publish). Remaining: **registry UX** beyond hand-edited TOML. |
+| **T1** | **Live conformance suite** — [`live-conformance-suite.md`](live-conformance-suite.md) | **L1–L10 landed** (`crates/server/src/t1_conformance.rs` L1–L8/L10; daemon `l9_*` for L9). **Open:** Tier 2 only. |
+| **W1** | **Goal-session view in mobile WebUI** | Later phone surface beyond Telegram. See [`../architecture/session-surface-contract.md`](../architecture/session-surface-contract.md). |
+| **E5-b** | ~~Telegram session deep-link~~ | **Deprioritized** (prefer WebUI later). |
 
-### Priority 2 — a lean chat surface (replace LibreChat)
+### Priority 2 — lean chat surface
 
-Gated on the WebUI maturing past the P1 session view. The goal is a self-hosted, single-binary chat
-that is *yours* and light enough to run — not to out-feature LibreChat.
-
-| # | What | Why it matters |
+| # | What | Why |
 |---|---|---|
-| **CH1** | **WebUI chat maturity** | Beyond the session view: model/provider switching, a daily-usable surface. The provider layer is already agnostic (Decision 13); this is surface work. |
-| **CH2** | **Chat history search (Tier 1)** — [`chat-search-plan.md`](chat-search-plan.md) | Lexical/ripgrep search over history, near-free given the deliberately greppable per-conversation JSONL layout. Later tiers (BM25/`tantivy`, vector) only if Tier 1 proves insufficient. |
+| **CH1** | WebUI chat maturity | Model switch, daily usable chat beyond session view |
+| **CH2** | Chat history search Tier 1 | [`chat-search-plan.md`](chat-search-plan.md) |
 
-### Priority 3 — coding, good enough and integrated (NOT replacing Claude Code / Grok / Kilo)
+### Priority 3 — coding pack (integration parity, not best-in-class)
 
-The bar here is *integration parity for the author's workflow*, not best-in-class. A coding session is
-just another `Session` on the same daemon; that it is joinable, capability-scoped and waits for you is
-the whole value, not raw coding skill.
-
-| # | What | Why it matters |
+| # | What | Why |
 |---|---|---|
-| **E6-c(b)** | **Resume a session parked *mid-build*** | Intake resume shipped (E6-c(a)); the build loop cannot, because re-running redoes filesystem work. The workspace is a git repo, so a commit is the obvious suspend point. A design pass, not a line of code. |
-| — | [`pr-dispatch-vtcode-no-write-finding.md`](pr-dispatch-vtcode-no-write-finding.md) | **Root cause still not found.** The one genuinely open bug carried over. |
-| — | [`coder-eval-curriculum.md`](coder-eval-curriculum.md) | Measures coding quality on an instrument. Only matters once P1/P2 are not the bottleneck. |
+| **E6-c(b)** | Resume mid-build coding session | Design pass (git suspend point) |
+| — | [`pr-dispatch-vtcode-no-write-finding.md`](pr-dispatch-vtcode-no-write-finding.md) | Open bug |
+| — | [`coder-eval-curriculum.md`](coder-eval-curriculum.md) | After P1/P2 not bottleneck |
 
-### Cross-cutting — the enabler, modules, and the move-on bar
+### Cross-cutting
 
-- **Modularity and dedup are the load-bearing enabler**, not neatness: they are what let effort go to
-  P1 without foreclosing P2 and P3 (see [`../architecture/positioning.md`](../architecture/positioning.md)
-  and [`../architecture/modularity.md`](../architecture/modularity.md)). The dogfooding dividend lands
-  on the **shared substrate** — kernel, session model, capability boundary, store — so the larger that
-  shared share stays, the more P1's polish transfers to the others. Keep it large.
-- **TurboVault modules** — curated, default-off verticals on the plugin boundary (we maintain, Nick
-  curates). Sequence was `tasks → vault_events → vector`; **vector and tasks are already paying back
-  into the live daemon** (semantic search + life-OS todos over MCP). Remaining: merge/curate
-  upstream, then **`vault_events`**. Not P1-blocking; do not let module polish derail W1/E5-b.
-  Umbrella: [`turbovault-modules-integration-roadmap.md`](turbovault-modules-integration-roadmap.md).
-- **The move-on bar (set it consciously, don't drift):** leave P1 when you **daily-drive it without
-  wincing** — not when it is polished. Sequencing's failure mode is gold-plating category 1 forever
-  while chat and coding never get their turn; the dogfooding itself is the signal — when you reach for
-  it without friction, that is the bell.
+- **Modularity** remains the enabler: [`../architecture/modularity.md`](../architecture/modularity.md). Hot-path **module splits** landed (server API, daemon, config-loader model, executor budget).
+- **A4 dual-store hub tests** (2026-07-23): list / cancel / park→resume / rehydrate via real `GoalSessionHub` on production `SessionStore` — `crates/session-store/tests/hub_dual_store.rs` (see [`../architecture/failure-modes.md`](../architecture/failure-modes.md) §1).
+- **TurboVault modules**: vector + tasks paying back; remaining **`vault_events`** and upstream merge. Umbrella: [`turbovault-modules-integration-roadmap.md`](turbovault-modules-integration-roadmap.md).
+- **Move-on bar:** leave P1 when you daily-drive without wincing — not when polished.
 
-## What's next (one-screen summary)
+## What's next (one screen)
 
 ```
-  P1 daily-driver ──►  dogfood Telegram (collect friction → fix)
+  P1 daily-driver ──►  dogfood Telegram
                    ├── C1 AskHuman crons
-                   ├── M1 MCP pool / registry UX
-                   └── T1 live conformance suite
+                   ├── M1b registry UX (degraded-catalog routing done)
+                   └── T1 Tier-1 done (Tier 2 optional)
 
-  Later (not Telegram multiplexing) ──► W1 mobile WebUI session view
-
-  TurboVault (parallel, not blocking) ──► land tasks on develop / upstream
-                                       ──► vault_events module
-                                       ──► #42/#43/#vector curation PRs
-
-  Move-on bar: daily-drive via Telegram without wincing → then chat/WebUI maturity.
+  Later ──► W1 mobile WebUI session view
+  TurboVault (parallel) ──► vault_events · upstream land
 ```
-
-### Known Telegram friction (dogfood notes)
-
-| Friction | Verdict |
-|---|---|
-| `/model` dumps the catalog; no typeahead for model ids while typing | **API limit.** Telegram only autocompletes **top-level** bot commands (`setMyCommands` — already used). There is no Discord-style argument autocomplete for `/model <id>`. Workarounds (inline keyboards, filtered dump on prefix) are optional UX polish — skip unless dogfood says it hurts often. Type `/model <id>` once you know the slug. |
 
 ## Recently landed
 
-Read [`../architecture/sessions.md`](../architecture/sessions.md) for the model itself; these are
-just pointers to how it got here.
+| When | What |
+|------|------|
+| **2026-07-23** | **Architecture hardening:** god-module splits; **MCP pooling** (M1); **M1b degraded-catalog routing**; **T1** L1–L10; **A4** dual-store hub tests |
+| **2026-07-19** | TurboVault plugins live (vector + tasks); Telegram dogfood baseline |
+| **2026-07-18** | Cron → Telegram delivery; OpenClaw brief cutover; sticky session persistence |
+| **Earlier** | Unified Session (D7); one execution engine; `Write` at MCP boundary (F1); etc. |
 
-- **TurboVault plugins live on the homelab (2026-07-19).** Liberado (Telegram + API) talks to the
-  TurboVault peer with the **plugin boundary** in play: **`vector_*` semantic search** (prototype
-  Phases 1–4 on fork `develop` — engine + `plugin_state_dir` + change-feed helpers + module) and
-  **tasks** (plugin extraction on `feat/plugin-tasks`; core task tools + agent-driven task lists
-  already in production briefs). This is the modules roadmap paying off as capability, not plan
-  paper. Detail: [`turbovault-modules-integration-roadmap.md`](turbovault-modules-integration-roadmap.md),
-  [`turbovault-vector-prototype-plan.md`](turbovault-vector-prototype-plan.md).
-- **Cron → Telegram delivery, and the first OpenClaw cutover (2026-07-18).** A `cron:`-sourced
-  session's summary is delivered to Telegram (`daemon::maybe_deliver_cron_result`). The three OpenClaw
-  briefings (daily-planning, evening-debrief, weekly-review) were ported to `[[schedules]]`, enabled,
-  and their OpenClaw originals disabled — Liberado owns them. Same era shipped the Telegram
-  **free-form chat surface** (typed replies answer the sticky session). **Dogfood paid off:** first
-  real briefs came back `PartiallySucceeded` (weather geocode + CalDAV relative-href/datetime bugs)
-  — both fixed; live briefs return **`Succeeded`** with weather, calendar, turbovault tasks, and news.
-- **Cron briefs fold into the sticky Telegram conversation (2026-07-18).** A `deliver_cron` seam on the
-  `Notifier` lets a chat-aware notifier (`server/src/cron_delivery.rs`) `append_note` each brief into
-  the sticky Telegram chat session and **defer the push around your activity** — quiet-delay (default
-  5 min idle) with a hard cap (default 45 min), so a reply to a brief carries it in context and a brief
-  never barges into an active chat. Design + the deferred reply-to-threading follow-on:
-  [`../ideas/cron-delivery-timing-idea.md`](../ideas/cron-delivery-timing-idea.md). **The sticky id now
-  persists across restarts** (`server/src/sticky.rs`, `<data_dir>/telegram-sticky-session`): a restart
-  no longer forces an implicit `/new` (restored id validated against the chat store, stale pointer
-  discarded). Live-verified across a restart 2026-07-18.
-- **The unified Session model (D7).** Everything is a `Session`; `goal: Option<_>` is the only
-  difference between a chat and a run-to-terminal session. One store, one id space, one list.
-  Session profiles + `Capability::AskHuman`; intake-first coding sessions; forking from any message.
-  History: [`archive/session-focus-plan.md`](archive/session-focus-plan.md).
-- **One execution engine (E1–E7).** `/spawn`, cron, webhooks and `delegate` all run on the one
-  `GoalSessionHub` — the dispatcher/orchestrator pair is now the `dispatch` pack, so a daemon
-  reaction is a session you can join, watch and cancel. `BackgroundRun` deleted.
-  History: [`archive/one-execution-engine-plan.md`](archive/one-execution-engine-plan.md).
-- **Sessions that wait for you (E5, E6).** A coding session asks mid-build, pings you when nobody is
-  watching, waits for a profile-configured idle budget measured in hours, and folds your answer into
-  the next attempt. Parked sessions survive a restart and — since E6-c(a) — **answering one resumes
-  it**, with the pack rebuilding the negotiation from its own transcript.
-- **F1 — `Capability::Write` is now enforced at the MCP boundary.** It never was: a profile granted
-  `Read` and explicitly denied `Write` wrote to the vault, live. Declaring an MCP now means saying
-  **what it touches**, and the daemon refuses to boot until you do.
-- **V1 — the outcome vocabulary.** Investigating "five overlapping ways to say how it ended" found
-  that **three of the five are not duplicates**: `Disposition` carries payloads, `VerdictStatus`'s
-  `Error` (the check broke) is not `Fail` (the code is wrong), and `Outcome` is an *execution*, a level
-  below a session. Each now documents why, so the next person to spot the "duplication" finds the
-  reasoning rather than a tidy-up opportunity. The one real duplication — `TerminalKind` vs
-  `SessionStatus`, converted by a hand-written match — is now a `From` impl plus its inverse, with
-  `is_terminal()` *defined* as `terminal_kind().is_some()` so the two cannot disagree by construction.
-- **S7-c — a contract that contradicts itself never reaches you.** And, after it killed a session by
-  crying wolf, a machine check may now **defer to** a human but never **overrule** one.
+See [`../architecture/sessions.md`](../architecture/sessions.md) for the session model history pointers.
 
-**The lessons from all of the above are distilled in
-[`../architecture/failure-modes.md`](../architecture/failure-modes.md).** That file is worth more
-than this section.
-
-## The phased roadmap (Phases 1–4) — done
-
-All four phases are substantially complete. The sequence, the completion notes, and what each phase
-deliberately deferred now live in
-[`archive/phased-roadmap-2026-07.md`](archive/phased-roadmap-2026-07.md).
-
-What is *built* is described where it belongs — in
-[`../architecture/overview.md`](../architecture/overview.md), which is generated-adjacent and stays
-current — rather than duplicated here as a growing list. This file is for **what is not done yet**.
-
-## Nice to haves
-
-### Independent safety rater (the "second opinion" model)
-
-A separate, **cheap, completion-unbiased** model that rates an incoming goal for **danger** (and
-optionally ambiguity), independent of the dispatcher/executor. Motivation: a model in a task-oriented
-role carries a "get it done" pull that can subtly under-rate danger; an independent judge with no
-stake in completing the task rates more conservatively.
-
-Design constraints if/when built:
-- **Downgrade-only** — like the deterministic guards, it can force `Clarify`/propose, never
-  *authorize* action. It joins the "can only reduce autonomy" layer.
-- **Actually independent** — ideally a *different model family* than the executor (a DeepSeek rating
-  a DeepSeek shares failure modes; the value is in *decorrelated* judgments). We're provider-agnostic
-  (Decision 13), so a different vendor for the "safety" role is a config change.
-- **Danger > ambiguity** — danger is separable from routing and worth an independent signal;
-  ambiguity requires understanding the goal to route it *anyway*, so a separate ambiguity rater is
-  mostly redundant with the dispatcher.
-- **Best placement** — a cheap **pre-dispatch triage**: rate danger first, short-circuit to
-  `Clarify`/propose on a high score *before* paying for the dispatcher/executor. Improves safety and
-  saves cost.
-
-**Why it's deferred (not skipped):** the deterministic guards are strictly better for *enumerable*
-danger (can't be talked out of it, free, exact) — that's the first line and the architecture's thesis.
-The rater earns its place only on the *non-enumerable long tail*, and only if it **measurably** lifts
-the safe-default / safety-regression metrics in `liberado-eval` (A/B "dispatcher alone" vs "rater +
-dispatcher" on adversarial danger scenarios). Prove it on the instrument before adding it to the hot
-path; don't add it on intuition.
-
-### Other
-
-*(MCP breadth and chat history search moved up into the priority tiers above — they are named
-capabilities now, not someday-maybes.)*
-
-- **Turn-budget "battery"** — captured as an idea, not scheduled:
-  [`turn-budget-battery-idea.md`](../ideas/turn-budget-battery-idea.md). A graduated, agent-visible
-  budget signal (3–4 states) plus a reserved wrap-up phase, so a cron that exhausts its turns degrades
-  into a useful partial brief instead of a diagnostic dump — and a passively-adaptive per-schedule
-  ceiling from session history. Motivated by the 2026-07-18 briefing that hit the budget wall
-  mid-flail. P1 (unattended-cron reliability).
-- **A2A (Agent2Agent) interop** — captured as an idea, not scheduled:
-  [`a2a-protocol-idea.md`](../ideas/a2a-protocol-idea.md). The conversation-store seams
-  (`author`, conversation lineage — Decision 17) and the mesh direction (Decision 18) already
-  carry most of what this needs; the real gap is a new inbound protocol surface (AgentCard +
-  Task lifecycle) and an outbound peer-delegation capability. Same category of work as
-  vault-decoupling and cron (another event-source in, another external capability out).
-
-
+**Last updated:** 2026-07-23.

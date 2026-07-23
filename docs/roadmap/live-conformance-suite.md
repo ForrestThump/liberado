@@ -1,6 +1,13 @@
 # The live conformance suite
 
-**Status**: planned, 2026-07-14. Not built.
+**Status**: Tier-1 **complete** (levels L1–L10) — **L1–L8 / L10** in
+`crates/server/src/t1_conformance.rs` (in-process production-shaped goals surface, durable
+`SessionStore`, `MockProvider`; L6 via `RiskGatedToolRuntime` + spy write tool; L3/L4 via
+parked reopen + production `POST .../message` → resume; L7 via spy `SessionAlert` + real
+`live_subscriber_count` dual-arm). **L9** lives on the shipped daemon reaction path:
+`liberado-daemon` test `l9_cron_event_becomes_joinable_dispatched_session` (cron/webhook-class
+event → `ReactionOutcome::Dispatched { session_id }` + joinable hub session). Tier 2
+(model-in-the-loop) remains optional / `#[ignore]`d.
 **Why**: [`../architecture/failure-modes.md`](../architecture/failure-modes.md) — the meta-lesson.
 
 ## The case

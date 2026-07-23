@@ -1,16 +1,16 @@
-# Loop architecture — reference article (external ideas)
+﻿# Loop architecture â€” reference article (external ideas)
 
 **Role in Liberado**: design-input scrapbook, not project law. The authoritative synthesis of these
 ideas into Liberado's architecture is
-[`docs/architecture/agentic-loops.md`](../architecture/agentic-loops.md). Implementation roadmap:
-[`docs/roadmap/rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md).
+[`docs/architecture/agentic-loops.md`](../../architecture/agentic-loops.md). Implementation roadmap:
+[`docs/roadmap/rust-native-agentic-coder-plan.md`](../../roadmap/rust-native-agentic-coder-plan.md).
 
 Captured concepts used by Liberado:
 
 - **Verifier + state + stop conditions** as the three non-negotiables of a real loop
-- **Maker ≠ checker** (sub-agents / critics) and **skills** as durable project knowledge
+- **Maker â‰  checker** (sub-agents / critics) and **skills** as durable project knowledge
 - **Connectors** into the real environment (PR factory, MCP, notify)
-- **Bilevel / meta loop** — improve the search process from traces (maps to heuristics-tuner + draft PRs)
+- **Bilevel / meta loop** â€” improve the search process from traces (maps to heuristics-tuner + draft PRs)
 - Honest limits: comprehension debt, cognitive surrender, when a heavy loop is the wrong tool
 
 ---
@@ -34,7 +34,7 @@ This article will explain:
 3 -  then describe a method to improve this approach by a factor of 5
 
 4 - and provide tips for getting started.
-Part 1 · The Basics
+Part 1 Â· The Basics
 1.1 - What a loop actually is ? 
 A prompt is one instruction. You ask, you get an answer, you decide what to do next.
 A loop is a goal the AI keeps working toward until it gets there - without you sitting in the chair prompting every step
@@ -56,7 +56,7 @@ Your token budget can absorb the waste - loops re-read context, retry, explore. 
 The agent has real tools - logs, a reproduction environment, the ability to run the code it writes and see what breaks. Without that, the loop iterates blind.
 
 The honest take: loop engineering is real, and most people do not need the heavy version yet. If you are on a consumer plan with limited tokens, a heavy loop will hit your rate limit or your wallet before the productivity gain arrives.
-Part 2 · The Karpathy Loop
+Part 2 Â· The Karpathy Loop
 How Karpathy stopped prompting and started looping
 
 In March 2026, Andrej Karpathy released a GitHub repo called AutoResearch.
@@ -70,7 +70,7 @@ program.md - the instructions that tell the agent what to explore and what const
 
 
 The agent runs in a loop:
-Read the code → propose a change → train for five minutes → check if the result improved → commit if it did, roll back if it did not → repeat.
+Read the code â†’ propose a change â†’ train for five minutes â†’ check if the result improved â†’ commit if it did, roll back if it did not â†’ repeat.
 You go to sleep. You wake up to a log of experiments and hopefully a better model.
 The human never touches train.py. You write program.md. - the agent handles execution.
 
@@ -88,7 +88,7 @@ A smaller model beating a bigger one - because the agent optimized for the hardw
 The Karpathy Loop Fortune
 
 Karpathy's core insight: if you have an objective metric, you should not be the one running the experiments. You are the bottleneck. Remove yourself from the loop and let it run.
-Part 3 · The Building Blocks
+Part 3 Â· The Building Blocks
 Five pieces that make a loop work
 Every working loop - whether you build it in Claude Code, Codex, or bash scripts - is assembled from five pieces. 
 Both Claude Code and Codex ship all five now.
@@ -113,7 +113,7 @@ A verifier - the gate. The test, type check, or build that automatically rejects
 Everything else is plumbing. 
 
 This is the part that makes the loop real. Without it you are paying for an agent to agree with itself all night
-Part 4 · What Comes After Karpathy
+Part 4 Â· What Comes After Karpathy
 The Bilevel - a Loop on top of the Loop
 
 - this is where it gets interesting, hehe xD
@@ -133,7 +133,7 @@ Both loops used the same LLM - you do not need a smarter model for the meta leve
 The improvement comes from the architecture, not from raw intelligence
 What the outer loop actually found: the inner loop kept falling into the same search patterns. The LLM has priors about what optimizations to try, and it keeps going back to those priors even when they stopped working. The outer loop broke those patterns by forcing exploration in directions the model's instincts avoided.
 The paper ends with a line worth sitting with: "If autoresearch can meta-autoresearch itself, it can in principle meta-autoresearch anything with a measurable objective."
-Part 5 · Try It Yourself
+Part 5 Â· Try It Yourself
 Run a loop right now - no tools needed
 
 You do not need Claude Code or Codex to feel how this works. Paste this into any LLM and watch what happens:
@@ -167,7 +167,7 @@ The model drafts, grades its own work against your criteria, finds the weak spot
 That is a loop. You just built one with a paragraph.
 
 It is limited - you are still the trigger, there is no schedule, no persistent state, close the tab and it is gone. But it shows the core mechanic. The jump from this to a full autonomous loop is adding the automation, the state file, and the gate.
-Part 6 · The Honest Part
+Part 6 Â· The Honest Part
 What the loop does not fix
 Loops change the work. They do not delete you from it.
 And two problems get sharper as the loop gets better - not easier:

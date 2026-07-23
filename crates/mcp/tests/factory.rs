@@ -4,7 +4,9 @@
 use core::future::Future;
 use liberado_common::WriteProvenance;
 use liberado_executor::{RuntimeFactory, RuntimeSetupError};
-use liberado_mcp::{McpConnector, McpRegistry, TurbomcpRuntime};
+use liberado_mcp::{
+    McpConnector, McpPoolSettings, McpRegistry, RebindableRuntime, TurbomcpRuntime,
+};
 use liberado_provider::ToolInvocation;
 use serde_json::Value;
 use turbomcp_client::Client;
@@ -82,7 +84,7 @@ impl McpConnector for ChannelConnector {
     async fn connect(
         &self,
         provenance: WriteProvenance,
-    ) -> Result<Box<dyn liberado_executor::ToolRuntime>, RuntimeSetupError> {
+    ) -> Result<Box<dyn RebindableRuntime>, RuntimeSetupError> {
         let (transport, _server) =
             turbomcp_server::transport::channel::run_in_process(&self.server)
                 .await
@@ -103,7 +105,7 @@ impl McpConnector for FailingConnector {
     async fn connect(
         &self,
         _provenance: WriteProvenance,
-    ) -> Result<Box<dyn liberado_executor::ToolRuntime>, RuntimeSetupError> {
+    ) -> Result<Box<dyn RebindableRuntime>, RuntimeSetupError> {
         Err(RuntimeSetupError("deliberate failure".into()))
     }
 }
@@ -120,7 +122,7 @@ impl McpConnector for SlowConnector {
     async fn connect(
         &self,
         provenance: WriteProvenance,
-    ) -> Result<Box<dyn liberado_executor::ToolRuntime>, RuntimeSetupError> {
+    ) -> Result<Box<dyn RebindableRuntime>, RuntimeSetupError> {
         tokio::time::sleep(self.delay).await;
         let (transport, _server) =
             turbomcp_server::transport::channel::run_in_process(&self.server)
@@ -292,4 +294,541 @@ async fn best_effort_connects_concurrently_not_sequentially() {
         elapsed < delay * 2,
         "expected ~{delay:?} (parallel), took {elapsed:?} — looks sequential"
     );
+}
+
+// ── M1 pooling ──────────────────────────────────────────────────────────────
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
+
+/// Counts how many times `connect` is called — ground truth for pool reuse.
+struct CountingConnector {
+    connects: Arc<AtomicUsize>,
+    server: EchoServer,
+    /// When true, fail the Nth connect (1-based) then succeed.
+    fail_on: Option<usize>,
+}
+
+#[async_trait::async_trait]
+impl McpConnector for CountingConnector {
+    async fn connect(
+        &self,
+        provenance: WriteProvenance,
+    ) -> Result<Box<dyn RebindableRuntime>, RuntimeSetupError> {
+        let n = self.connects.fetch_add(1, Ordering::SeqCst) + 1;
+        if self.fail_on == Some(n) {
+            return Err(RuntimeSetupError("injected connect failure".into()));
+        }
+        let (transport, _server) =
+            turbomcp_server::transport::channel::run_in_process(&self.server)
+                .await
+                .map_err(|e| RuntimeSetupError(e.to_string()))?;
+        let runtime = TurbomcpRuntime::connect(Client::new(transport), provenance)
+            .await
+            .map_err(|e| RuntimeSetupError(e.to_string()))?;
+        Ok(Box::new(runtime))
+    }
+}
+
+fn counting_registry(settings: McpPoolSettings, connects: Arc<AtomicUsize>) -> McpRegistry {
+    McpRegistry::with_pool_settings(settings).register(
+        "tasks",
+        CountingConnector {
+            connects,
+            server: EchoServer {
+                tool: "add",
+                reply: "added",
+            },
+            fail_on: None,
+        },
+    )
+}
+
+#[tokio::test]
+async fn pooling_on_reuses_connection_across_acquisitions() {
+    let connects = Arc::new(AtomicUsize::new(0));
+    let registry = counting_registry(McpPoolSettings::default(), connects.clone());
+
+    {
+        let rt = registry.runtime_for(&[], prov()).await.unwrap();
+        assert_eq!(rt.invoke(&call("tasks:add")).await.unwrap(), "added");
+        drop(rt); // check in
+    }
+    {
+        let rt = registry.runtime_for(&[], prov()).await.unwrap();
+        assert_eq!(rt.invoke(&call("tasks:add")).await.unwrap(), "added");
+        drop(rt);
+    }
+
+    assert_eq!(
+        connects.load(Ordering::SeqCst),
+        1,
+        "healthy second acquisition must reuse the pooled connection"
+    );
+}
+
+#[tokio::test]
+async fn pooling_disabled_connects_every_acquisition() {
+    let connects = Arc::new(AtomicUsize::new(0));
+    let settings = McpPoolSettings {
+        enabled: false,
+        idle_ttl: Duration::from_secs(300),
+        ..Default::default()
+    };
+    let registry = counting_registry(settings, connects.clone());
+
+    {
+        let rt = registry.runtime_for(&[], prov()).await.unwrap();
+        drop(rt);
+    }
+    {
+        let rt = registry.runtime_for(&[], prov()).await.unwrap();
+        drop(rt);
+    }
+
+    assert_eq!(
+        connects.load(Ordering::SeqCst),
+        2,
+        "with pooling off, each acquisition must connect fresh"
+    );
+}
+
+#[tokio::test]
+async fn reconnect_after_connect_failure_on_next_acquisition() {
+    // First connect fails; second succeeds; third reuses the successful pool entry.
+    let connects = Arc::new(AtomicUsize::new(0));
+    let registry = McpRegistry::with_pool_settings(McpPoolSettings::default()).register(
+        "tasks",
+        CountingConnector {
+            connects: connects.clone(),
+            server: EchoServer {
+                tool: "add",
+                reply: "added",
+            },
+            fail_on: Some(1),
+        },
+    );
+
+    let err = match registry.runtime_for(&[], prov()).await {
+        Ok(_) => panic!("first connect should fail"),
+        Err(e) => e,
+    };
+    assert!(err.to_string().contains("injected"), "{err}");
+
+    {
+        let rt = registry.runtime_for(&[], prov()).await.unwrap();
+        assert_eq!(rt.invoke(&call("tasks:add")).await.unwrap(), "added");
+        drop(rt);
+    }
+    {
+        let rt = registry.runtime_for(&[], prov()).await.unwrap();
+        drop(rt);
+    }
+
+    // fail attempt + success + reuse = 2 connects
+    assert_eq!(connects.load(Ordering::SeqCst), 2);
+}
+
+/// Runtime that can inject a **connection-level** invoke failure (sets `connection_is_dead`).
+/// Distinguishes pool invalidation from in-band tool isError.
+struct PoisonableRuntime {
+    poison_next: Arc<AtomicBool>,
+    transport_dead: AtomicBool,
+    tools: Vec<liberado_provider::ToolDef>,
+}
+
+#[async_trait::async_trait]
+impl liberado_executor::ToolRuntime for PoisonableRuntime {
+    fn catalog(&self) -> Vec<liberado_provider::ToolDef> {
+        self.tools.clone()
+    }
+    async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
+        if self.poison_next.swap(false, Ordering::SeqCst) {
+            self.transport_dead.store(true, Ordering::SeqCst);
+            return Err("connection reset by peer".into());
+        }
+        Ok(format!("ok:{}", call.name))
+    }
+}
+
+impl RebindableRuntime for PoisonableRuntime {
+    fn rebind_provenance(&mut self, _provenance: WriteProvenance) {
+        self.transport_dead.store(false, Ordering::SeqCst);
+    }
+    fn connection_is_dead(&self) -> bool {
+        self.transport_dead.load(Ordering::SeqCst)
+    }
+}
+
+struct PoisonableConnector {
+    connects: Arc<AtomicUsize>,
+    poison_next: Arc<AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl McpConnector for PoisonableConnector {
+    async fn connect(
+        &self,
+        _provenance: WriteProvenance,
+    ) -> Result<Box<dyn RebindableRuntime>, RuntimeSetupError> {
+        self.connects.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(PoisonableRuntime {
+            poison_next: self.poison_next.clone(),
+            transport_dead: AtomicBool::new(false),
+            tools: vec![liberado_provider::ToolDef::new(
+                "add",
+                "t",
+                serde_json::json!({"type": "object"}),
+            )],
+        }))
+    }
+}
+
+#[tokio::test]
+async fn pooled_connection_transport_failure_invalidates_and_reconnects() {
+    // AC2 post-checkout path: connect once → pool → checkout → connection-level invoke Err →
+    // drop must NOT checkin → next acquire connects again.
+    let connects = Arc::new(AtomicUsize::new(0));
+    let poison = Arc::new(AtomicBool::new(false));
+    let registry = McpRegistry::with_pool_settings(McpPoolSettings::default()).register(
+        "tasks",
+        PoisonableConnector {
+            connects: connects.clone(),
+            poison_next: poison.clone(),
+        },
+    );
+
+    {
+        let rt = registry.runtime_for(&[], prov()).await.unwrap();
+        assert!(rt.invoke(&call("tasks:add")).await.is_ok());
+        drop(rt); // healthy checkin
+    }
+    assert_eq!(connects.load(Ordering::SeqCst), 1);
+
+    {
+        let rt = registry.runtime_for(&[], prov()).await.unwrap(); // reuse
+        assert_eq!(connects.load(Ordering::SeqCst), 1);
+        poison.store(true, Ordering::SeqCst);
+        let err = rt.invoke(&call("tasks:add")).await.unwrap_err();
+        assert!(err.contains("connection reset"), "{err}");
+        drop(rt); // must discard dead peer
+    }
+
+    {
+        let rt = registry.runtime_for(&[], prov()).await.unwrap();
+        assert!(rt.invoke(&call("tasks:add")).await.is_ok());
+        drop(rt);
+    }
+    assert_eq!(
+        connects.load(Ordering::SeqCst),
+        2,
+        "after transport death on a pooled checkout, next acquire must reconnect"
+    );
+}
+
+#[tokio::test]
+async fn idle_ttl_expiry_forces_new_connect() {
+    let connects = Arc::new(AtomicUsize::new(0));
+    let now = Arc::new(std::sync::Mutex::new(Instant::now()));
+    let clock_now = Arc::clone(&now);
+    let settings = McpPoolSettings {
+        enabled: true,
+        idle_ttl: Duration::from_secs(10),
+        ..Default::default()
+    };
+    let registry =
+        McpRegistry::with_pool_and_clock(settings, Arc::new(move || *clock_now.lock().unwrap()))
+            .register(
+                "tasks",
+                CountingConnector {
+                    connects: connects.clone(),
+                    server: EchoServer {
+                        tool: "add",
+                        reply: "added",
+                    },
+                    fail_on: None,
+                },
+            );
+
+    {
+        let rt = registry.runtime_for(&[], prov()).await.unwrap();
+        drop(rt);
+    }
+    // Advance past idle TTL.
+    *now.lock().unwrap() += Duration::from_secs(11);
+    {
+        let rt = registry.runtime_for(&[], prov()).await.unwrap();
+        drop(rt);
+    }
+
+    assert_eq!(
+        connects.load(Ordering::SeqCst),
+        2,
+        "after idle TTL, pool entry must expire and reconnect"
+    );
+}
+
+#[tokio::test]
+async fn idle_ttl_reaped_when_another_peer_is_acquired() {
+    // Regression: idle TTL must not wait for the *same* name to be re-acquired (eager reap on
+    // any pool activity + background reaper). Peer "weather" idles out while "tasks" is used.
+    let weather_connects = Arc::new(AtomicUsize::new(0));
+    let tasks_connects = Arc::new(AtomicUsize::new(0));
+    let now = Arc::new(std::sync::Mutex::new(Instant::now()));
+    let clock_now = Arc::clone(&now);
+    let settings = McpPoolSettings {
+        enabled: true,
+        idle_ttl: Duration::from_secs(10),
+        ..Default::default()
+    };
+    let registry =
+        McpRegistry::with_pool_and_clock(settings, Arc::new(move || *clock_now.lock().unwrap()))
+            .register(
+                "weather",
+                CountingConnector {
+                    connects: weather_connects.clone(),
+                    server: EchoServer {
+                        tool: "forecast",
+                        reply: "sunny",
+                    },
+                    fail_on: None,
+                },
+            )
+            .register(
+                "tasks",
+                CountingConnector {
+                    connects: tasks_connects.clone(),
+                    server: EchoServer {
+                        tool: "add",
+                        reply: "added",
+                    },
+                    fail_on: None,
+                },
+            );
+
+    {
+        let rt = registry
+            .runtime_for(&["weather".into()], prov())
+            .await
+            .unwrap();
+        drop(rt); // weather checked in
+    }
+    assert_eq!(weather_connects.load(Ordering::SeqCst), 1);
+
+    *now.lock().unwrap() += Duration::from_secs(11);
+
+    // Activity on a *different* peer must reap weather's expired slot.
+    {
+        let rt = registry
+            .runtime_for(&["tasks".into()], prov())
+            .await
+            .unwrap();
+        drop(rt);
+    }
+    assert_eq!(tasks_connects.load(Ordering::SeqCst), 1);
+
+    {
+        let rt = registry
+            .runtime_for(&["weather".into()], prov())
+            .await
+            .unwrap();
+        drop(rt);
+    }
+    assert_eq!(
+        weather_connects.load(Ordering::SeqCst),
+        2,
+        "weather must reconnect after idle TTL even though it was never re-checked-out until now"
+    );
+}
+
+#[tokio::test]
+async fn concurrent_connect_cap_times_out_when_permits_exhausted() {
+    // max_in_flight=1: second acquire while first is still live must wait, then time out.
+    let connects = Arc::new(AtomicUsize::new(0));
+    let settings = McpPoolSettings {
+        enabled: true,
+        max_in_flight_per_name: 1,
+        connect_wait: Duration::from_millis(50),
+        ..Default::default()
+    };
+    let registry = counting_registry(settings, connects.clone());
+
+    let first = registry.runtime_for(&[], prov()).await.unwrap();
+    let second = registry.runtime_for(&[], prov()).await;
+    let err = match second {
+        Ok(_) => panic!(
+            "second concurrent acquire must fail when max_in_flight=1 and wait expires"
+        ),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        err.contains("max concurrent") || err.contains("timed out"),
+        "{err}"
+    );
+    drop(first);
+    // After release, acquire works again.
+    let third = registry.runtime_for(&[], prov()).await.unwrap();
+    drop(third);
+}
+
+#[tokio::test]
+async fn pool_checkout_does_not_clear_degraded_until_successful_invoke() {
+    use liberado_common::{CapabilityCatalog, Consequence, McpDescriptor};
+
+    let catalog = Arc::new(CapabilityCatalog::new());
+    catalog.register(McpDescriptor {
+        name: "tasks".into(),
+        description: "tasks".into(),
+        consequence: Consequence::Reversible,
+        provenance: None,
+        ..Default::default()
+    });
+
+    let connects = Arc::new(AtomicUsize::new(0));
+    let registry = counting_registry(McpPoolSettings::default(), connects.clone())
+        .with_health_catalog(catalog.clone());
+
+    // Prime the pool with a healthy connection.
+    {
+        let rt = registry.runtime_for(&[], prov()).await.unwrap();
+        assert!(rt.invoke(&call("tasks:add")).await.is_ok());
+        drop(rt);
+    }
+    assert_eq!(connects.load(Ordering::SeqCst), 1);
+
+    // Simulate an external mark (e.g. earlier transport failure path) while a pool slot remains.
+    catalog.mark_degraded("tasks");
+    assert!(catalog.is_degraded("tasks"));
+
+    // Pool hit must not mark_healthy before any successful work.
+    let rt = registry.runtime_for(&[], prov()).await.unwrap();
+    assert_eq!(connects.load(Ordering::SeqCst), 1, "must reuse pool slot");
+    assert!(
+        catalog.is_degraded("tasks"),
+        "pool checkout alone must not clear degraded"
+    );
+    assert!(rt.invoke(&call("tasks:add")).await.is_ok());
+    assert!(
+        !catalog.is_degraded("tasks"),
+        "successful invoke must clear degraded"
+    );
+    drop(rt);
+}
+
+#[tokio::test]
+async fn pool_settings_default_is_enabled() {
+    assert!(McpPoolSettings::default().enabled);
+    assert!(McpRegistry::new().pooling_enabled());
+    let off = McpPoolSettings {
+        enabled: false,
+        ..Default::default()
+    };
+    assert!(!McpRegistry::with_pool_settings(off).pooling_enabled());
+}
+
+// ── M1b: degraded peer health on shared CapabilityCatalog ───────────────────
+
+#[tokio::test]
+async fn m1b_connect_failure_marks_peer_degraded_on_routing_catalog() {
+    use liberado_common::{CapabilityCatalog, Consequence, McpDescriptor};
+    use std::sync::Arc;
+
+    let catalog = Arc::new(CapabilityCatalog::new());
+    catalog.register(McpDescriptor {
+        name: "weather".into(),
+        description: "flaky weather".into(),
+        consequence: Consequence::ReadOnly,
+        provenance: None,
+        ..Default::default()
+    });
+    catalog.register(McpDescriptor {
+        name: "tasks".into(),
+        description: "tasks".into(),
+        consequence: Consequence::Reversible,
+        provenance: None,
+        ..Default::default()
+    });
+
+    let registry = McpRegistry::new()
+        .with_health_catalog(catalog.clone())
+        .register("weather", FailingConnector)
+        .register(
+            "tasks",
+            ChannelConnector {
+                server: EchoServer {
+                    tool: "add",
+                    reply: "added",
+                },
+            },
+        );
+
+    let (runtime, failed) = registry.connect_all_best_effort(prov()).await;
+    assert_eq!(failed, vec!["weather".to_string()]);
+    assert!(runtime.invoke(&call("tasks:add")).await.is_ok());
+
+    // Ground truth: shipped catalog path — degraded peer omitted from routing view.
+    assert!(
+        catalog.is_degraded("weather"),
+        "failed connect must mark peer degraded"
+    );
+    assert!(!catalog.is_degraded("tasks"));
+    let routing: Vec<_> = catalog
+        .routing_descriptors()
+        .into_iter()
+        .map(|d| d.name)
+        .collect();
+    assert!(
+        !routing.contains(&"weather".into()),
+        "routing catalog must exclude degraded peer: {routing:?}"
+    );
+    assert!(
+        routing.contains(&"tasks".into()),
+        "healthy peer must remain routable: {routing:?}"
+    );
+    // Full descriptors still include both (zone/authority).
+    let full: Vec<_> = catalog.descriptors().into_iter().map(|d| d.name).collect();
+    assert!(full.contains(&"weather".into()) && full.contains(&"tasks".into()));
+}
+
+#[tokio::test]
+async fn m1b_successful_connect_clears_degraded_and_restores_routing() {
+    use liberado_common::{CapabilityCatalog, Consequence, McpDescriptor};
+    use std::sync::Arc;
+
+    let catalog = Arc::new(CapabilityCatalog::new());
+    catalog.register(McpDescriptor {
+        name: "tasks".into(),
+        description: "tasks".into(),
+        consequence: Consequence::Reversible,
+        provenance: None,
+        ..Default::default()
+    });
+    catalog.mark_degraded("tasks");
+    assert!(catalog.routing_descriptors().is_empty());
+
+    let registry = McpRegistry::new()
+        .with_health_catalog(catalog.clone())
+        .register(
+            "tasks",
+            ChannelConnector {
+                server: EchoServer {
+                    tool: "add",
+                    reply: "added",
+                },
+            },
+        );
+
+    let rt = registry.runtime_for(&[], prov()).await.unwrap();
+    assert!(rt.invoke(&call("tasks:add")).await.is_ok());
+    assert!(
+        !catalog.is_degraded("tasks"),
+        "successful acquire must mark_healthy"
+    );
+    let routing: Vec<_> = catalog
+        .routing_descriptors()
+        .into_iter()
+        .map(|d| d.name)
+        .collect();
+    assert_eq!(routing, vec!["tasks".to_string()]);
 }

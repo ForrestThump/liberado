@@ -1,4 +1,4 @@
-﻿# Liberado — Architecture
+# Liberado — Architecture
 
 Liberado is a **Rust-native personal AI Life OS**: a daemon that watches your Obsidian vault, reasons
 about changes with an LLM, and acts on your behalf through tools — safely, and without reacting to its
@@ -35,9 +35,12 @@ For how these pillars position Liberado against the free alternatives, see
 The **general agentic orchestration kernel** (goal sessions, verifiers, subagents, session/events) is
 **built** — D7's unified Session model and the one converged execution engine (see
 [`sessions.md`](sessions.md)). As of 2026-07-19 the **homelab daemon is live** (Telegram sticky chat,
-OpenClaw briefings cut over, TurboVault peer with **vector search + tasks**). Effort still follows a
-deliberate **replacement priority**: **autonomous life-OS daemon → chat → coding** — the remaining
-P1 gap is the **phone-grade interfacing loop** (session WebUI + deep-link multiplexing), not storage
+OpenClaw briefings cut over, TurboVault peer with **vector search + tasks**). As of 2026-07-23
+engineering hardened **module boundaries**, **MCP connection pooling** (default on), and a **partial
+Tier-1 live conformance suite** (see [`../roadmap/current.md`](../roadmap/current.md)). Effort still
+follows a deliberate **replacement priority**: **autonomous life-OS daemon → chat → coding** — the
+remaining P1 gap is the **phone-grade interfacing loop** (session WebUI later; not Telegram multiplexing),
+not storage
 or basic MCP reach. The order and its rationale are in [`positioning.md`](positioning.md); the
 concrete work items, in priority order, are in [`../roadmap/current.md`](../roadmap/current.md).
 Coding is a **domain pack** on a domain-neutral kernel, not the product identity, and explicitly
@@ -215,7 +218,7 @@ daily-driver line rather than three half-built. The order and rationale are in
 11. ✅ **Phase 1 — the general MCP agent** — chat now routes every turn through `Dispatcher::dispatch` before executing (the "main-agent depth" item below is done); the three independently-static capability catalogs (daemon/chat/API) are one live, shared `Arc<CapabilityCatalog>`; `Grant.component` narrows both dispatch routing and runtime tool surfacing. Full writeups: [`chat-dispatcher-and-component-scoping.md`](../roadmap/archive/chat-dispatcher-and-component-scoping.md), [`live-catalog-and-dispatcher-narrowed-tools.md`](../roadmap/archive/live-catalog-and-dispatcher-narrowed-tools.md).
 12. ✅ **Phase 2 — the self-improvement moat** — `riggers/` (`liberado-pr-dispatch-mcp`) registered as `code-dispatch` (reversible, human-approved draft PRs only), with a greenfield mode to scaffold brand-new MCPs from scratch. Full report: [`phase-2-implementation-report.md`](../roadmap/archive/phase-2-implementation-report.md). **Updated direction, 2026-07-09:** the PR factory workflow stays, but `vtcode` is no longer the strategic coding engine; see [`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md).
 13. ✅ **`crates/tui`** — a ratatui TUI client hitting the same chat/SSE contract as the browser web UI and `liberado chat`; shares its SSE decoder and slash-command dispatcher with the other clients (`chat-client-contract`, `liberado-commands`) rather than hand-rolling its own.
-14. ✅ **Web UI flesh-out** — sidebar, MCP capability panel, Markdown rendering, and slash commands landed in `liberado-webui`. Design reference: [`webui-flesh-out-plan.md`](../roadmap/webui-flesh-out-plan.md).
+14. ✅ **Web UI flesh-out** — sidebar, MCP capability panel, Markdown rendering, and slash commands landed in `liberado-webui`. Design reference: [`webui-flesh-out-plan.md`](../roadmap/archive/webui-flesh-out-plan.md).
 15. ✅ **Pre-Phase-3 hardening pass** — the heuristics tuning engine (`liberado-heuristics-tuner`, now tuning the dispatcher, executor, and subagent layers), the zone-write-class guard (§6 #2), resource-budget bounds (`ResourceLimit`, wall-clock + token-count), and two-way Telegram proposal approval (`liberado-notify` + `liberado-telegram-approvals`: Approve/Reject are pure code, Revise is the one LLM-touching path and can only redraft content, never grant approval). Also found and fixed, via the tuner: a multi-step tool-chaining doom-loop bug (was the "Known limitations" entry below). Full detail: [`current.md`](../roadmap/current.md)'s "Before Phase 3" section.
 16. ✅ **Phase 3, slice 1 — the event-source trait + cron (Decision 18/19)** — a new `EventSource` trait (`liberado-common`) the daemon fans into one channel; the *existing* vault-watch loop was refactored into its first conformer (`VaultEventSource`, moved not rewritten — the daemon's whole prior test suite passed unchanged) before cron, the second conformer, was added (new `liberado-cron` crate, deliberately vault-agnostic). Config surface: `Topology.schedules`, fail-fast validated. Live-verified: a daemon integration test proves a cron firing and a real vault change both produce reactions over the same channel — Decision 18 checkpoint #3, literally.
 17. ✅ **Phase 3, slice 2 — the external webhook hook receiver** — `POST /api/hooks/{name}` (`crates/server/src/hooks.rs`), the *push*-style counterpart to cron's *pull*-style `EventSource`: arbitrary software that can `curl` an endpoint triggers a reaction the same way. Required `Daemon::event_tx`/`event_rx` to become daemon-owned fields (built once in `open()`) plus a new `Daemon::event_sender()` accessor, so a same-process external producer can inject an `Event` without its own `EventSource` loop. Auth is a per-hook shared secret (`X-Liberado-Hook-Secret`, constant-time compared) — chosen explicitly over HMAC signing for "trivially `curl`-able." `Topology.hooks`'s old `ComponentConfig` stub was replaced in place with `HookConfig` (name/secret_ref/goal). Verified via 11 HTTP-level integration tests against a real `axum::Router`; a live `curl` smoke test was attempted but skipped after a test-harness config-directory mixup (caught before any request was sent) — deemed unnecessary given the integration-test coverage. **Deferred, documented**: in-process rate limiting (reverse-proxy recommendation instead), HMAC signing as an available upgrade path, and per-hook capability scoping beyond the pool mechanism below.
@@ -230,7 +233,7 @@ daily-driver line rather than three half-built. The order and rationale are in
     on that, and `--rm` removes it). `cargo build`/`cargo clippy`/all new unit tests are clean; the
     **live Docker-daemon smoke test is still outstanding** (Docker Desktop's CLI is installed on the
     dev machine but its daemon wasn't running) — see
-    [`human-todo.md`](../roadmap/human-todo.md#phase-4-docker-mcp-transport--needs-a-live-smoke-test--2026-07-07).
+    [`human-todo.md`](../roadmap/archive/human-todo.md) (archived operator checklist; Docker smoke still open if not yet run).
     Deferred, not built: serverless hibernation (no MCP has an idle-cost problem that justifies the
     integration cost yet). Full design: [`phase-4-docker-transport.md`](../roadmap/archive/phase-4-docker-transport.md).
 20. ✅ **Face-agent chat + delegation dogfood (2026-07-10/11)** — default main agent is a thin human
@@ -244,7 +247,12 @@ daily-driver line rather than three half-built. The order and rationale are in
 **Not yet built (next slice):**
 - Rust-native agentic coder crates and PR-factory integration; see
   [`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md).
-- Multi-MCP registry UX, connection pooling.
+- Multi-MCP **registry UX** (beyond hand-edited topology TOML). **Connection pooling (M1)** and
+  **degraded-catalog routing (M1b)** landed 2026-07-23 — pool via `tuning.mcp_pooling`;
+  `CapabilityCatalog::routing_descriptors` omits peers marked degraded after connect/transport
+  failure. See [`../roadmap/current.md`](../roadmap/current.md).
+- Tier-1 live conformance **L1–L10 landed** (`crates/server/src/t1_conformance.rs` + daemon L9);
+  Tier 2 (model-in-the-loop) remains optional — [`../roadmap/live-conformance-suite.md`](../roadmap/live-conformance-suite.md).
 - Splitting `liberado-common`'s grab-bag along its natural boundaries — partially underway (`config`
   and `config-loader` have already been carved off into their own crates), but `common` still has
   eight modules (`provenance`, `capability`, `catalog`, `dispatch`, `event`, `model`,

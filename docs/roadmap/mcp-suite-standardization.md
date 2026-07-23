@@ -202,7 +202,7 @@ docker logs liberado --tail 60 | grep -E "MCP failed|SSE connection established"
 2. **`spider-mcp`** — ✅ **RESOLVED, but NOT via turbomcp.** The turbomcp swap **breaks scraping**
    (response-processing hang in the unified binary — not a version conflict, not fixable by feature
    toggles in one process). Full diagnosis + test matrix:
-   [`../research/spider-mcp-turbomcp-incompatibility.md`](../research/spider-mcp-turbomcp-incompatibility.md).
+   [`../research/archive/spider-mcp-turbomcp-incompatibility.md`](../research/archive/spider-mcp-turbomcp-incompatibility.md).
    spider stays **hand-rolled**; the real "401" was an empty-`SPIDER_MCP_TOKEN` compose footgun, now
    fixed → Liberado connects to the working scraper.
 3. **`subagent-manager-mcp`** — after the name decision.

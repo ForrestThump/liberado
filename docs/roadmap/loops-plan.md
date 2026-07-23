@@ -10,7 +10,7 @@ and the kernel never grows a second lifecycle.
 **Related**: [`session-focus-plan.md`](archive/session-focus-plan.md) ·
 [`verifiers.md`](../architecture/verifiers.md) · cron/`EventSource` (Decision 18/19) ·
 external reference: the `/goal` vs `/loop` convention
-([`loop_architecture_reference_article.md`](../ideas/loop_architecture_reference_article.md)).
+([`loop_architecture_reference_article.md`](../ideas/archive/loop_architecture_reference_article.md)).
 
 ---
 
