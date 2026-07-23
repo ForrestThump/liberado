@@ -250,7 +250,7 @@ daily-driver line rather than three half-built. The order and rationale are in
 - Multi-MCP **registry UX** (beyond hand-edited topology TOML) and optional degraded-peer catalog
   routing. **Connection pooling (M1) landed** 2026-07-23 — default-on via `tuning.mcp_pooling`;
   see [`../roadmap/current.md`](../roadmap/current.md).
-- Remaining Tier-1 live conformance levels (L1, L3–L4, L7, L9); partial suite L2/L5/L6/L8/L10 is in
+- Remaining Tier-1 live conformance levels (**L7, L9**); partial suite L1–L6/L8/L10 is in
   `crates/server/src/t1_conformance.rs` — [`../roadmap/live-conformance-suite.md`](../roadmap/live-conformance-suite.md).
 - Splitting `liberado-common`'s grab-bag along its natural boundaries — partially underway (`config`
   and `config-loader` have already been carved off into their own crates), but `common` still has

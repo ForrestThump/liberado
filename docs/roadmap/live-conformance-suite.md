@@ -1,9 +1,9 @@
 # The live conformance suite
 
-**Status**: Tier-1 partial — **L2 / L5 / L6 / L8 / L10** in
+**Status**: Tier-1 partial — **L1 / L2 / L3 / L4 / L5 / L6 / L8 / L10** in
 `crates/server/src/t1_conformance.rs` (in-process production-shaped goals surface, durable
-`SessionStore`, `MockProvider`; L6 via `RiskGatedToolRuntime` + spy write tool). Remaining
-L1, L3–L4, L7, L9 still open.
+`SessionStore`, `MockProvider`; L6 via `RiskGatedToolRuntime` + spy write tool; L3/L4 via
+parked reopen + production `POST .../message` → resume). Remaining **L7, L9** still open.
 **Why**: [`../architecture/failure-modes.md`](../architecture/failure-modes.md) — the meta-lesson.
 
 ## The case

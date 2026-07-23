@@ -3,7 +3,7 @@
 | Doc | Role |
 |-----|------|
 | **[current.md](current.md)** | **Living scoreboard** — open work in priority order, recently landed |
-| [live-conformance-suite.md](live-conformance-suite.md) | T1 reliability suite (partial: L2/L5/L6/L8/L10 landed) |
+| [live-conformance-suite.md](live-conformance-suite.md) | T1 reliability suite (partial: L1–L6/L8/L10 landed; L7/L9 open) |
 | Active plans below | Still drive near-term work (status in each file header when set) |
 | [archive/](archive/README.md) | Finished plans, closed audits — **not current truth** |
 
