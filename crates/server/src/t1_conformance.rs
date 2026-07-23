@@ -27,9 +27,9 @@ use liberado_conversation_store::{Author, ConversationStore, NewNode, Ulid};
 use liberado_executor::{RiskGatedToolRuntime, ToolRuntime};
 use liberado_provider::{Message, MockProvider, ToolDef, ToolInvocation};
 use liberado_session::{
-    DomainHint, DomainPackRunner, GoalResult, GoalSessionHub, GoalSpec, InputOutcome, LifeOpsDemoRunner,
-    PackContext, PackError, SessionAlert, SessionEvent, SessionEventKind, SessionGrant,
-    SessionSnapshot, SessionStatus, TerminalKind, TurnAuthor,
+    DomainHint, DomainPackRunner, GoalResult, GoalSessionHub, GoalSpec, InputOutcome,
+    LifeOpsDemoRunner, PackContext, PackError, SessionAlert, SessionEvent, SessionEventKind,
+    SessionGrant, SessionSnapshot, SessionStatus, TerminalKind, TurnAuthor,
 };
 use liberado_session_store::{NewSession, SessionStore};
 use tower::ServiceExt;
@@ -52,7 +52,12 @@ struct T1Harness {
 impl T1Harness {
     /// Life-ops pack on a durable store (production wiring: hub over `SessionStore`).
     async fn with_life_pack() -> Self {
-        Self::build(Arc::new(LifeOpsDemoRunner), life_config_with_ask_human(), None).await
+        Self::build(
+            Arc::new(LifeOpsDemoRunner),
+            life_config_with_ask_human(),
+            None,
+        )
+        .await
     }
 
     /// Custom pack (e.g. never-ending for L8 cancel).
@@ -618,7 +623,10 @@ async fn l3_answer_parked_session_resumes_and_pack_sees_prior_turns() {
         "L3 resume via goals_message must accept: {msg_body}"
     );
 
-    let snap = wait_status(&harness.goals, &session_id, |s| s.session.status.is_terminal()).await;
+    let snap = wait_status(&harness.goals, &session_id, |s| {
+        s.session.status.is_terminal()
+    })
+    .await;
     assert_eq!(
         snap.session.status,
         SessionStatus::Succeeded,

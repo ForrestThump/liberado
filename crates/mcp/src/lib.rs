@@ -178,3 +178,32 @@ fn result_text(result: &CallToolResult) -> String {
         String::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arguments_to_map_with_object() {
+        let args = serde_json::json!({"a": 1, "b": "two"});
+        let map = arguments_to_map(&args).expect("should produce a map");
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get("a").unwrap(), &serde_json::json!(1));
+        assert_eq!(map.get("b").unwrap(), &serde_json::json!("two"));
+    }
+
+    #[test]
+    fn arguments_to_map_with_non_object() {
+        assert!(arguments_to_map(&serde_json::Value::Null).is_none());
+        assert!(arguments_to_map(&serde_json::json!("string")).is_none());
+        assert!(arguments_to_map(&serde_json::json!(42)).is_none());
+        assert!(arguments_to_map(&serde_json::json!([])).is_none());
+    }
+
+    #[test]
+    fn arguments_to_map_with_empty_object() {
+        let map =
+            arguments_to_map(&serde_json::json!({})).expect("empty object is still a valid map");
+        assert!(map.is_empty());
+    }
+}

@@ -90,3 +90,48 @@ impl RuntimeFactory for InvocationRecordingFactory {
         Ok(Box::new(self.runtime.clone()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    #[test]
+    fn noop_catalog_is_empty() {
+        let rt = NoopRuntime;
+        assert!(rt.catalog().is_empty());
+    }
+
+    #[tokio::test]
+    async fn noop_invoke_returns_ok() {
+        let rt = NoopRuntime;
+        let call = ToolInvocation {
+            id: "t1".into(),
+            name: "test".into(),
+            arguments: Value::Null,
+        };
+        let result = rt.invoke(&call).await;
+        assert_eq!(result, Ok("ok".to_string()));
+    }
+
+    #[test]
+    fn recording_catalog_is_empty() {
+        let rt = InvocationRecordingRuntime::default();
+        assert!(rt.catalog().is_empty());
+    }
+
+    #[tokio::test]
+    async fn recording_invoke_stores_call_and_returns_ok() {
+        let rt = InvocationRecordingRuntime::default();
+        let call = ToolInvocation {
+            id: "t2".into(),
+            name: "test".into(),
+            arguments: Value::Null,
+        };
+        let result = rt.invoke(&call).await;
+        assert_eq!(result, Ok("ok".to_string()));
+        let recorded = rt.invoked.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].name, "test");
+    }
+}

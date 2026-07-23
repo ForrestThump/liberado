@@ -63,7 +63,10 @@ impl LiveRegistryRuntime {
             }
         };
         if !failed.is_empty() {
-            tracing::warn!(?failed, "LiveRegistryRuntime: some MCPs failed to connect on refresh");
+            tracing::warn!(
+                ?failed,
+                "LiveRegistryRuntime: some MCPs failed to connect on refresh"
+            );
         }
         let rt: Arc<dyn ToolRuntime> = Arc::from(rt);
         guard.names = current;

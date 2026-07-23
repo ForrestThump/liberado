@@ -3977,6 +3977,8 @@ dependencies = [
  "liberado-common",
  "liberado-executor",
  "liberado-provider",
+ "serde_json",
+ "tokio",
  "toml 0.8.23",
 ]
 

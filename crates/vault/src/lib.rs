@@ -186,3 +186,39 @@ impl VaultWatch {
         self.events.recv().await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+
+    #[cfg(test)]
+    impl VaultWatch {
+        fn from_receiver(events: UnboundedReceiver<VaultEvent>) -> Self {
+            let (fake_watcher, _rx) =
+                VaultWatcher::new(std::path::PathBuf::new(), WatcherConfig::default())
+                    .expect("fake watcher creation");
+            Self {
+                _watcher: fake_watcher,
+                events,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn next_event_yields_sent_event() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let event = VaultEvent::FileModified(std::path::PathBuf::from("test.md"));
+        tx.send(event.clone()).unwrap();
+        let mut watch = VaultWatch::from_receiver(rx);
+        assert_eq!(watch.next_event().await, Some(event));
+    }
+
+    #[tokio::test]
+    async fn next_event_returns_none_after_sender_drops() {
+        let (tx, rx) = mpsc::unbounded_channel::<VaultEvent>();
+        drop(tx);
+        let mut watch = VaultWatch::from_receiver(rx);
+        assert_eq!(watch.next_event().await, None);
+    }
+}

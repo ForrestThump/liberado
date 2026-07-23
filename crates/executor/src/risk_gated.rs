@@ -161,17 +161,14 @@ impl RiskGatedToolRuntime {
 
     fn consequence_of(&self, mcp_name: &str) -> Consequence {
         if let Some(cat) = &self.live_catalog {
-            return cat
-                .get(mcp_name)
-                .map(|d| d.consequence)
-                .unwrap_or_else(|| {
-                    tracing::warn!(
-                        mcp = %mcp_name,
-                        "MCP is capability-granted but missing from live catalog — \
-                         defaulting to ReadOnly"
-                    );
-                    Consequence::ReadOnly
-                });
+            return cat.get(mcp_name).map(|d| d.consequence).unwrap_or_else(|| {
+                tracing::warn!(
+                    mcp = %mcp_name,
+                    "MCP is capability-granted but missing from live catalog — \
+                     defaulting to ReadOnly"
+                );
+                Consequence::ReadOnly
+            });
         }
         match self
             .consequence_catalog

@@ -314,10 +314,7 @@ impl Orchestrator {
     }
 
     /// Prefer live catalog lookups in the runtime gate (topology MCP hot-reload).
-    pub fn with_live_catalog(
-        mut self,
-        catalog: Arc<liberado_common::CapabilityCatalog>,
-    ) -> Self {
+    pub fn with_live_catalog(mut self, catalog: Arc<liberado_common::CapabilityCatalog>) -> Self {
         self.live_catalog = Some(catalog);
         self
     }
@@ -842,10 +839,7 @@ impl Orchestrator {
         let (consequences, zones) = if let Some(cat) = &self.live_catalog {
             (cat.consequence_catalog(), cat.descriptors())
         } else {
-            (
-                self.consequence_catalog.clone(),
-                self.zone_catalog.clone(),
-            )
+            (self.consequence_catalog.clone(), self.zone_catalog.clone())
         };
         let mut gated = RiskGatedToolRuntime::new(
             Arc::from(runtime),
@@ -1287,5 +1281,59 @@ mod tests {
 
         assert_eq!(report.outcome, Outcome::Succeeded);
         assert!(report.summary.contains("only task"));
+    }
+
+    #[test]
+    fn terminal_summary_failed_outcome_maps_to_failed_terminal_kind() {
+        let report = Report {
+            outcome: Outcome::Failed,
+            summary: "it broke".into(),
+            artifacts: vec![],
+            new_high_signal_facts: vec![],
+            follow_up: None,
+            deferred_to_human: false,
+        };
+        let (kind, summary) = Disposition::Reported(report).terminal_summary();
+        assert_eq!(kind, TerminalKind::Failed);
+        assert_eq!(summary, "it broke");
+    }
+
+    #[test]
+    fn terminal_summary_partial_success_prefixes_the_summary() {
+        let report = Report {
+            outcome: Outcome::PartiallySucceeded,
+            summary: "one of two passed".into(),
+            artifacts: vec![],
+            new_high_signal_facts: vec![],
+            follow_up: None,
+            deferred_to_human: false,
+        };
+        let (kind, summary) = Disposition::Reported(report).terminal_summary();
+        assert_eq!(kind, TerminalKind::Succeeded);
+        assert_eq!(summary, "partially succeeded: one of two passed");
+    }
+
+    #[test]
+    fn deferred_flag_of_reads_the_atomic() {
+        let false_flag = Arc::new(AtomicBool::new(false));
+        assert!(!deferred_flag_of(&false_flag));
+
+        let true_flag = Arc::new(AtomicBool::new(true));
+        assert!(deferred_flag_of(&true_flag));
+    }
+
+    #[test]
+    fn no_mcp_runtime_catalog_is_empty() {
+        let rt = NoMcpRuntime;
+        assert!(rt.catalog().is_empty());
+    }
+
+    #[tokio::test]
+    async fn no_mcp_runtime_invoke_returns_error() {
+        let rt = NoMcpRuntime;
+        let call = ToolInvocation::new("id", "some_tool", serde_json::Value::Null);
+        let result = rt.invoke(&call).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no MCP"));
     }
 }

@@ -85,6 +85,7 @@ pub struct AppState {
 }
 
 /// A tool runtime with no tools — chat still works (just conversation) when no MCP is configured.
+#[allow(dead_code)]
 pub struct NoTools;
 
 #[async_trait::async_trait]

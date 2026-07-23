@@ -268,8 +268,8 @@ pub fn live_mcp_from_config(
     health_catalog: Option<Arc<CapabilityCatalog>>,
 ) -> LiveMcpController {
     let catalog = health_catalog.unwrap_or_else(|| Arc::new(CapabilityCatalog::new()));
-    let registry =
-        McpRegistry::with_pool_settings(pool_settings_from_config(config)).with_health_catalog(catalog.clone());
+    let registry = McpRegistry::with_pool_settings(pool_settings_from_config(config))
+        .with_health_catalog(catalog.clone());
     let controller = LiveMcpController::new(catalog, registry);
     // Boot apply: empty → desired. Reject is unexpected after Config::validate; log and leave empty.
     if let Err(e) = controller.apply_config(config) {
@@ -667,8 +667,7 @@ mod tests {
             ),
         ];
 
-        let registry =
-            mcp_registry_from_config(&config, None).expect("two enabled MCPs => Some");
+        let registry = mcp_registry_from_config(&config, None).expect("two enabled MCPs => Some");
         let mut names = registry.names();
         names.sort_unstable();
         assert_eq!(names, vec!["tasks-mcp".to_string(), "wiki-mcp".to_string()]);
@@ -679,8 +678,7 @@ mod tests {
         let mut config = Config::default();
         config.topology.mcps = vec![mcp("weather-mcp", true, McpTransport::Managed)];
 
-        let registry =
-            mcp_registry_from_config(&config, None).expect("one enabled MCP => Some");
+        let registry = mcp_registry_from_config(&config, None).expect("one enabled MCP => Some");
         let names = registry.names();
         assert_eq!(names, vec!["weather-mcp".to_string()]);
     }
@@ -700,8 +698,7 @@ mod tests {
             },
         )];
 
-        let registry =
-            mcp_registry_from_config(&config, None).expect("one enabled MCP => Some");
+        let registry = mcp_registry_from_config(&config, None).expect("one enabled MCP => Some");
         let names = registry.names();
         assert_eq!(names, vec!["tasks-mcp-docker".to_string()]);
     }

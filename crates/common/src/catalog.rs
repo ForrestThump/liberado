@@ -483,11 +483,7 @@ mod tests {
         assert!(catalog.is_degraded("weather"));
         assert!(!catalog.is_degraded("tasks"));
 
-        let full: Vec<_> = catalog
-            .descriptors()
-            .into_iter()
-            .map(|d| d.name)
-            .collect();
+        let full: Vec<_> = catalog.descriptors().into_iter().map(|d| d.name).collect();
         assert!(full.contains(&"weather".into()) && full.contains(&"tasks".into()));
 
         let routing: Vec<_> = catalog

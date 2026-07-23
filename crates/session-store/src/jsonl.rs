@@ -463,7 +463,9 @@ impl ConversationStore for SessionStore {
                 goal: None, // a conversation is a goal-less session — that is the whole of D7
                 parent_session: new.parent_conversation,
                 spawned_by: new.spawned_by,
-                ..Default::default()
+                correlation_id: None,
+                visibility: Default::default(),
+                grant: Default::default(),
             })
             .await;
         Ok(header.to_conversation_header())

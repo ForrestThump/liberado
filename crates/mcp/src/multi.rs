@@ -209,4 +209,22 @@ mod tests {
         let multi = MultiMcpRuntime::new(vec![("alpha".into(), Box::new(rt))]);
         assert_eq!(multi.names(), vec!["alpha"]);
     }
+
+    #[test]
+    fn is_empty_false_when_runtimes_registered() {
+        let rt = MockRuntime::new(&["a"], Ok("ok".into()));
+        let multi = MultiMcpRuntime::new(vec![("alpha".into(), Box::new(rt))]);
+        assert!(!multi.is_empty());
+    }
+
+    #[test]
+    fn len_reflects_registered_count() {
+        let rt1 = MockRuntime::new(&["a"], Ok("ok".into()));
+        let rt2 = MockRuntime::new(&["b"], Ok("ok".into()));
+        let multi = MultiMcpRuntime::new(vec![
+            ("alpha".into(), Box::new(rt1)),
+            ("beta".into(), Box::new(rt2)),
+        ]);
+        assert_eq!(multi.len(), 2);
+    }
 }

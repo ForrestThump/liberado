@@ -930,3 +930,196 @@ async fn per_run_capabilities_narrow_the_pool_ceiling_and_never_widen() {
         );
     }
 }
+
+use async_trait::async_trait;
+use liberado_executor::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
+use liberado_provider::ToolDef;
+
+struct FailingRuntime;
+
+#[async_trait]
+impl ToolRuntime for FailingRuntime {
+    fn catalog(&self) -> Vec<ToolDef> {
+        Vec::new()
+    }
+    async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+        Err("simulated failure".into())
+    }
+}
+
+struct FailingFactory;
+
+#[async_trait]
+impl RuntimeFactory for FailingFactory {
+    async fn runtime_for(
+        &self,
+        _allowed_mcps: &[String],
+        _provenance: WriteProvenance,
+    ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+        Ok(Box::new(FailingRuntime))
+    }
+}
+
+#[tokio::test]
+async fn execute_approved_tool_calls_dedup_mcp_names() {
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        Vec::<CompletionResponse>::new(),
+    ));
+    let factory = CallRecordingFactory::default();
+    let calls = factory.calls.clone();
+    let signer = ProposalSigner::random();
+    let orch = Orchestrator::new(
+        provider,
+        factory,
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        signer.clone(),
+        "default",
+    );
+
+    let call = ToolCall {
+        tool: "email:send".into(),
+        args: serde_json::json!({}),
+    };
+    let proposal = Proposal::pending(
+        "hash1",
+        "hash1",
+        "liberado",
+        ProposedAction::ToolCalls(vec![call.clone(), call.clone()]),
+        "duplicate calls",
+    );
+    let mut proposal = signer.sign(proposal).into_proposal();
+    proposal.status = ProposalStatus::Approved;
+
+    let report = orch.execute_approved(&proposal).await.expect("execute");
+    assert_eq!(report.outcome, Outcome::Succeeded);
+
+    let recorded = calls.lock().unwrap();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].0, vec!["email".to_string()]);
+}
+
+#[tokio::test]
+async fn execute_approved_tool_calls_all_failed_is_failed_outcome() {
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        Vec::<CompletionResponse>::new(),
+    ));
+    let factory = CallRecordingFactory::default();
+    let calls = factory.calls.clone();
+    let signer = ProposalSigner::random();
+    let orch = Orchestrator::new(
+        provider,
+        FailingFactory,
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        signer.clone(),
+        "default",
+    );
+
+    let call = ToolCall {
+        tool: "email:send".into(),
+        args: serde_json::json!({}),
+    };
+    let proposal = Proposal::pending(
+        "hash1",
+        "hash1",
+        "liberado",
+        ProposedAction::ToolCalls(vec![call]),
+        "failing call",
+    );
+    let mut proposal = signer.sign(proposal).into_proposal();
+    proposal.status = ProposalStatus::Approved;
+
+    let report = orch.execute_approved(&proposal).await.expect("execute");
+    assert_eq!(report.outcome, Outcome::Failed);
+}
+
+#[tokio::test]
+async fn execute_approved_tool_calls_partial_failure_is_partial_outcome() {
+    use liberado_provider::ToolInvocation; // shadow to avoid conflict with FailingRuntime
+
+    struct MixedFactory {
+        fail_on: String,
+    }
+
+    #[async_trait]
+    impl RuntimeFactory for MixedFactory {
+        async fn runtime_for(
+            &self,
+            _allowed_mcps: &[String],
+            _provenance: WriteProvenance,
+        ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+            Ok(Box::new(MixedRuntime {
+                fail_on: self.fail_on.clone(),
+            }))
+        }
+    }
+
+    struct MixedRuntime {
+        fail_on: String,
+    }
+
+    #[async_trait]
+    impl ToolRuntime for MixedRuntime {
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+        async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
+            if call.name == self.fail_on {
+                Err("intentional failure".into())
+            } else {
+                Ok("ok".into())
+            }
+        }
+    }
+
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        Vec::<CompletionResponse>::new(),
+    ));
+    let signer = ProposalSigner::random();
+    let orch = Orchestrator::new(
+        provider,
+        MixedFactory {
+            fail_on: "failing-tool".into(),
+        },
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        signer.clone(),
+        "default",
+    );
+
+    let calls = vec![
+        ToolCall {
+            tool: "ok-tool".into(),
+            args: serde_json::json!({}),
+        },
+        ToolCall {
+            tool: "failing-tool".into(),
+            args: serde_json::json!({}),
+        },
+    ];
+    let proposal = Proposal::pending(
+        "hash1",
+        "hash1",
+        "liberado",
+        ProposedAction::ToolCalls(calls),
+        "mixed results",
+    );
+    let mut proposal = signer.sign(proposal).into_proposal();
+    proposal.status = ProposalStatus::Approved;
+
+    let report = orch.execute_approved(&proposal).await.expect("execute");
+    assert_eq!(report.outcome, Outcome::PartiallySucceeded);
+}

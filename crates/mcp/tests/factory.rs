@@ -657,9 +657,9 @@ async fn concurrent_connect_cap_times_out_when_permits_exhausted() {
     let first = registry.runtime_for(&[], prov()).await.unwrap();
     let second = registry.runtime_for(&[], prov()).await;
     let err = match second {
-        Ok(_) => panic!(
-            "second concurrent acquire must fail when max_in_flight=1 and wait expires"
-        ),
+        Ok(_) => {
+            panic!("second concurrent acquire must fail when max_in_flight=1 and wait expires")
+        }
         Err(e) => e.to_string(),
     };
     assert!(
