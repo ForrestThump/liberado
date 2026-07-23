@@ -39,6 +39,7 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 ### Cross-cutting
 
 - **Modularity** remains the enabler: [`../architecture/modularity.md`](../architecture/modularity.md). Hot-path **module splits** landed (server API, daemon, config-loader model, executor budget).
+- **A4 dual-store hub tests** (2026-07-23): list / cancel / park→resume / rehydrate via real `GoalSessionHub` on production `SessionStore` — `crates/session-store/tests/hub_dual_store.rs` (see [`../architecture/failure-modes.md`](../architecture/failure-modes.md) §1).
 - **TurboVault modules**: vector + tasks paying back; remaining **`vault_events`** and upstream merge. Umbrella: [`turbovault-modules-integration-roadmap.md`](turbovault-modules-integration-roadmap.md).
 - **Move-on bar:** leave P1 when you daily-drive without wincing — not when polished.
 
@@ -58,7 +59,7 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 
 | When | What |
 |------|------|
-| **2026-07-23** | **Architecture hardening:** god-module splits; **MCP pooling** (M1, `tuning.mcp_pooling`); **T1** L1–L10 complete |
+| **2026-07-23** | **Architecture hardening:** god-module splits; **MCP pooling** (M1, `tuning.mcp_pooling`); **T1** L1–L10 complete; **A4** dual-store hub tests |
 | **2026-07-19** | TurboVault plugins live (vector + tasks); Telegram dogfood baseline |
 | **2026-07-18** | Cron → Telegram delivery; OpenClaw brief cutover; sticky session persistence |
 | **Earlier** | Unified Session (D7); one execution engine; `Write` at MCP boundary (F1); etc. |
