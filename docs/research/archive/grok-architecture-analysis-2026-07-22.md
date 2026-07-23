@@ -1,16 +1,16 @@
-# Grok's architecture analysis — Liberado (life-os)
+﻿# Grok's architecture analysis â€” Liberado (life-os)
 
 **Author**: Grok (xAI)  
 **Date**: 2026-07-22  
 **Branch context**: After merging `prototype/turbovault-plugin-integration` into `main`; working tip `dev/post-turbovault-merge` at `1d082f5`.  
-**Scope**: Critical review of Liberado's existing architecture and code shape — not a rewrite plan. Recommendations are ordered by leverage against the stated strategy (**daemon → chat → coding**).  
+**Scope**: Critical review of Liberado's existing architecture and code shape â€” not a rewrite plan. Recommendations are ordered by leverage against the stated strategy (**daemon â†’ chat â†’ coding**).  
 **Primary sources**: `docs/architecture/{overview,contracts,modularity,failure-modes,positioning}.md`, `docs/roadmap/current.md`, `docs/handoff.md`, crate map, `layer_rules.rs`, hot-path crates (`server`, `daemon`, `mcp`, `executor`, `bootstrap`, `config-loader`, `messaging`).
 
 ---
 
 ## 0. Frame
 
-Liberado is a Rust-native personal AI Life OS: one daemon watches a vault, reasons with an LLM, and acts through MCP tools under capability/zone containment — without reacting to its own writes (provenance loop-break). Surfaces (TUI, WebUI, CLI, Telegram) are clients; they do not own the loop.
+Liberado is a Rust-native personal AI Life OS: one daemon watches a vault, reasons with an LLM, and acts through MCP tools under capability/zone containment â€” without reacting to its own writes (provenance loop-break). Surfaces (TUI, WebUI, CLI, Telegram) are clients; they do not own the loop.
 
 This note asks:
 
@@ -43,11 +43,11 @@ It does **not** recommend a peer agent mesh, absorbing every MCP into the worksp
 
 ### 2.1 Narrow-waist contracts are real
 
-Frozen seams in `docs/architecture/contracts.md` — `Provider`, `ToolRuntime`/`RuntimeFactory`, `EventSource`, `DomainPackRunner`, dual session lenses, HTTP/SSE wire contract, `CapabilitySet` narrowing, MCP + `WriteProvenance` — are not slogans. `crates/test-support/tests/layer_rules.rs` mechanically enforces pack containment, surface thinness, client purity, foundation purity, and dependency budgets.
+Frozen seams in `docs/architecture/contracts.md` â€” `Provider`, `ToolRuntime`/`RuntimeFactory`, `EventSource`, `DomainPackRunner`, dual session lenses, HTTP/SSE wire contract, `CapabilitySet` narrowing, MCP + `WriteProvenance` â€” are not slogans. `crates/test-support/tests/layer_rules.rs` mechanically enforces pack containment, surface thinness, client purity, foundation purity, and dependency budgets.
 
 ### 2.2 Safety is engineered, not prompted
 
-Downgrade-only dispatcher guards, provenance loop-break (Decision 5), zone/write gating fail-closed at boot, signed proposal `pool` fields, session grants — this is the differentiator vs OpenClaw/Hermes-class systems. Self-extension cannot widen authority in the capability model.
+Downgrade-only dispatcher guards, provenance loop-break (Decision 5), zone/write gating fail-closed at boot, signed proposal `pool` fields, session grants â€” this is the differentiator vs OpenClaw/Hermes-class systems. Self-extension cannot widen authority in the capability model.
 
 ### 2.3 Daemon-first star topology
 
@@ -67,7 +67,7 @@ Every PR review should still use this checklist.
 
 ### 2.5 Messaging extraction direction
 
-`liberado-messaging` (`MessagingChannel`, `ChatSurface`, `ActionButton`, `InboundEvent`) is the right abstraction for multi-channel without forking Telegram glue forever. Migration is incomplete (see §3.2).
+`liberado-messaging` (`MessagingChannel`, `ChatSurface`, `ActionButton`, `InboundEvent`) is the right abstraction for multi-channel without forking Telegram glue forever. Migration is incomplete (see Â§3.2).
 
 ### 2.6 Live proof on homelab
 
@@ -119,7 +119,7 @@ A second channel (Matrix idea) should be a new adapter, not a second `telegram.r
 
 `crates/config-loader/src/model.rs` is ~2k lines of TOML-shaped types. Everything boots through it; every feature tends to add another struct.
 
-**Recommendation:** Split by config *section* (topology / policy / tuning / schedules+hooks), keep `ChainLoader` thin, keep pack sections opaque (`toml::Value` + pack-owned parse) — that inversion already prevented coding-pack leakage into the config stack.
+**Recommendation:** Split by config *section* (topology / policy / tuning / schedules+hooks), keep `ChainLoader` thin, keep pack sections opaque (`toml::Value` + pack-owned parse) â€” that inversion already prevented coding-pack leakage into the config stack.
 
 ### 3.5 `liberado-common` claims purity it no longer has
 
@@ -146,9 +146,9 @@ Split by **lifecycle phase** (watch / react / proposals / pools; loop / doom / b
 
 ### 3.8 Latency instrumented, not closed-loop
 
-Role-tiered models + JSONL latency journal + dispatcher on flash are good. Missing: policy from measurement — turn/token budgets matching measured brief cost; optional turn-budget "battery" for unattended runs. Without that, `PartiallySucceeded` from budget burn returns when tools flap.
+Role-tiered models + JSONL latency journal + dispatcher on flash are good. Missing: policy from measurement â€” turn/token budgets matching measured brief cost; optional turn-budget "battery" for unattended runs. Without that, `PartiallySucceeded` from budget burn returns when tools flap.
 
-### 3.9 Security boundary — known open holes
+### 3.9 Security boundary â€” known open holes
 
 | Gap | Note |
 |---|---|
@@ -186,18 +186,18 @@ Compatible with P1 order in `docs/roadmap/current.md`.
 
 ## 5. What not to do
 
-1. **Peer agent mesh / A2A** — research already rejected; pools that do not talk is correct.  
-2. **Big-bang rewrite of `common`** — extract catalog when needed.  
-3. **Absorb all MCPs into the Liberado workspace** — path-dep siblings + gitignore is fine; pin revs.  
-4. **Telegram session multiplexing** — deprioritized; sticky chat + later mobile WebUI.  
-5. **New abstraction traits without a second consumer** — `ChatClient` deletion is the cautionary tale.  
-6. **Gold-plate P1 forever** — move-on bar is "daily-drive without wincing," not polish.
+1. **Peer agent mesh / A2A** â€” research already rejected; pools that do not talk is correct.  
+2. **Big-bang rewrite of `common`** â€” extract catalog when needed.  
+3. **Absorb all MCPs into the Liberado workspace** â€” path-dep siblings + gitignore is fine; pin revs.  
+4. **Telegram session multiplexing** â€” deprioritized; sticky chat + later mobile WebUI.  
+5. **New abstraction traits without a second consumer** â€” `ChatClient` deletion is the cautionary tale.  
+6. **Gold-plate P1 forever** â€” move-on bar is "daily-drive without wincing," not polish.
 
 ---
 
 ## 6. Crate / layer snapshot (for orientation)
 
-Layer vocabulary: **foundation → kernel → stores / packs → services / surfaces → composition roots**. Generated inventory: `docs/reference/crate-map.md`.
+Layer vocabulary: **foundation â†’ kernel â†’ stores / packs â†’ services / surfaces â†’ composition roots**. Generated inventory: `docs/reference/crate-map.md`.
 
 Largest source trees observed (approx line counts, 2026-07-22): tui ~9k, heuristics-tuner ~5.6k, coder-agent ~5k, server ~3.6k, executor ~3.6k, config-loader ~2.9k, session ~2.8k, daemon ~2.7k, common ~2.5k.
 
@@ -218,14 +218,14 @@ On 2026-07-22:
 
 ## 8. Related docs
 
-- [`../architecture/overview.md`](../architecture/overview.md) — cold-start map  
-- [`../architecture/contracts.md`](../architecture/contracts.md) — narrow waists  
-- [`../architecture/failure-modes.md`](../architecture/failure-modes.md) — five recurring bug classes  
-- [`../architecture/modularity.md`](../architecture/modularity.md) — seam plan  
-- [`../architecture/positioning.md`](../architecture/positioning.md) — replacement priority  
-- [`../roadmap/current.md`](../roadmap/current.md) — open work order  
-- [`../handoff.md`](../handoff.md) — live ops  
-- [`../ideas/vs-grok-build.md`](../ideas/vs-grok-build.md) — TUI coding gaps (separate product frame)
+- [`../architecture/overview.md`](../../architecture/overview.md) â€” cold-start map  
+- [`../architecture/contracts.md`](../../architecture/contracts.md) â€” narrow waists  
+- [`../architecture/failure-modes.md`](../../architecture/failure-modes.md) â€” five recurring bug classes  
+- [`../architecture/modularity.md`](../../architecture/modularity.md) â€” seam plan  
+- [`../architecture/positioning.md`](../../architecture/positioning.md) â€” replacement priority  
+- [`../roadmap/current.md`](../../roadmap/current.md) â€” open work order  
+- [`../handoff.md`](../../handoff.md) â€” live ops  
+- [`../ideas/vs-grok-build.md`](../../ideas/vs-grok-build.md) â€” TUI coding gaps (separate product frame)
 
 ---
 

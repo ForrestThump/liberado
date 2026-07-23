@@ -116,7 +116,7 @@ reaching the required `vault` call, exhausting the turn budget. Comparison again
 harnesses (asked directly via the deepwiki MCP: `sst/opencode`, `Kilo-Org/kilocode`, `vinhnx/vtcode`)
 confirmed this is a known, named failure mode ("doom loop") that all three defend against with an
 **engine-level repeated/near-duplicate-call detector**, not prompt wording — validated further by
-`docs/ideas/doomloop_research.md` (independent research the user had another LLM do), which found the
+`docs/ideas/archive/doomloop_research.md` (independent research the user had another LLM do), which found the
 same conclusion in the broader literature (MAST study, Anthropic's own multi-agent post-mortems):
 doom loops are a control-flow problem, and "a guard that lives inside the agent's prompt is a
 suggestion; a circuit breaker in the control flow is a law."
@@ -237,7 +237,7 @@ not just on a diff or when samples disagree — read that directly rather than r
 - The live reproduction tool: `crates/heuristics-tuner/examples/debug_multistep.rs`.
 - The scenario definition: `crates/heuristics-tuner/src/tool_scenarios.rs`.
 - Independent research that corroborated the fix direction before it was built:
-  `docs/ideas/doomloop_research.md`.
+  `docs/ideas/archive/doomloop_research.md`.
 - The diagnostic idea for next time: `docs/ideas/model-reasoning-introspection-idea.md` (this
   session's live content-logging test is a direct, partial answer to it — see "What's still open"
   item 4 above).

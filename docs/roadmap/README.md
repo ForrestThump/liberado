@@ -15,7 +15,6 @@
 | [chat-search-plan.md](chat-search-plan.md) | History search tiers |
 | [rust-native-agentic-coder-plan.md](rust-native-agentic-coder-plan.md) | Coding pack roadmap |
 | [tui-maturity-roadmap.md](tui-maturity-roadmap.md) | TUI surface |
-| [webui-flesh-out-plan.md](webui-flesh-out-plan.md) | WebUI surface |
 | [turbovault-modules-integration-roadmap.md](turbovault-modules-integration-roadmap.md) | TurboVault plugins umbrella |
 | [turbovault-vault-events-plugin-plan.md](turbovault-vault-events-plugin-plan.md) | vault_events module |
 | [mcp-forge-backlog.md](mcp-forge-backlog.md) | MCP forge service |

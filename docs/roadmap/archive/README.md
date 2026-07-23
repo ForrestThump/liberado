@@ -35,6 +35,7 @@ Everything here is in git history regardless; the archive just keeps it reachabl
 | [turbovault-vector-module-plan.md](turbovault-vector-module-plan.md) | Vector module notes — superseded by modules umbrella |
 | [mcp-homelab-wire-plan.md](mcp-homelab-wire-plan.md) | Homelab MCP wire-up — largely landed |
 | [human-todo.md](human-todo.md) | Operator checklist snapshot |
+| [webui-flesh-out-plan.md](webui-flesh-out-plan.md) | WebUI flesh-out — all 5 phases implemented; design reference only |
 | *Other hygiene/hardening audits and phase reports* | Same directory — treat as historical |
 
 Living roadmap: [`../current.md`](../current.md) · roadmap index: [`../README.md`](../README.md).

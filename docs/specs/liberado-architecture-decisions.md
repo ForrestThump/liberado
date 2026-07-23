@@ -514,7 +514,7 @@ dispatchers/executors, cron, partial deploys, self-improvement-as-a-service — 
 publish/subscribe events rather than calling each other directly. *How* we get there determines
 whether the substrate ships at all.
 
-**Decision**: Adopt [`meshify.md`](../ideas/meshify.md)'s direction — components publish/subscribe
+**Decision**: Adopt [`meshify.md`](../ideas/archive/meshify.md)'s direction — components publish/subscribe
 events rather than calling each other — but **incrementally**, NOT as a big-bang refactor. Wrap seams
 behind an `EventBus` trait **as they are touched**; **new components are bus-native from day one**;
 old ones migrate when next touched (the chat -> dispatcher wiring in roadmap Phase 1 is the first

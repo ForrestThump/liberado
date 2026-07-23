@@ -29,7 +29,7 @@ the `docs/` wiki (see `docs/README.md`).
 - `docs/contributing/agents.md` — build / run / extend guide (the `liberado` binary, env vars, endpoints).
 - `docs/roadmap/current.md` — forward work + nice-to-haves.
 - `docs/reference/api.md` — the chat HTTP/SSE contract + interface roadmap.
-- `docs/ideas/handoff.md` — the current-state handoff.
+- `docs/handoff.md` — the current-state handoff (historical snapshot: `docs/ideas/archive/handoff.md`).
 
 **Secondary** — scan for staleness, but do **not** wholesale-rewrite (these are stable design specs):
 - `docs/specs/liberado-*-spec.md` (conversation-store, dispatch-logic, context-policy, config,

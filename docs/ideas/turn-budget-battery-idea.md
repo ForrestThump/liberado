@@ -1,6 +1,6 @@
 # Idea: a turn-budget "battery" — a soft, agent-visible budget signal
 
-**Status:** idea, captured 2026-07-18. Not scheduled. Related: [`doomloop_research.md`](doomloop_research.md)
+**Status:** idea, captured 2026-07-18. Not scheduled. Related: [`doomloop_research.md`](archive/doomloop_research.md)
 (the retry-loop failure this mitigates), and the P1 automation-daemon reliability story in
 [`../roadmap/current.md`](../roadmap/current.md) (C1 — crons that run your life unattended).
 

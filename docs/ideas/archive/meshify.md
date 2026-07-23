@@ -1,20 +1,20 @@
-# meshify-idea.md — Loosening Liberado into a True Mesh
+﻿# meshify-idea.md â€” Loosening Liberado into a True Mesh
 
-> **[audit note, 2026-07-11]** Partially superseded — keep for history, but read with these
+> **[audit note, 2026-07-11]** Partially superseded â€” keep for history, but read with these
 > corrections:
 > - "The Problem Today" is stale: the hard-coded flow is gone. `EventSource` (vault-watch + cron),
 >   `POST /api/hooks/{name}`, and named dispatcher/executor pools (`[[pools]]` in `topology.toml`)
->   all landed — steps 1–4 here happened in spirit, via traits + config rather than a broadcast bus.
+>   all landed â€” steps 1â€“4 here happened in spirit, via traits + config rather than a broadcast bus.
 > - Step 5's "no component holds a direct pointer to another" was deliberately **not** adopted: the
 >   agent-pools research (2026-07, four passes) found peer-agent coordination unproven; pools never
 >   talk to each other, and the runtime is a hub around one daemon, not a peer mesh.
 > - The live capability catalog (step 3) landed as the shared `Arc<CapabilityCatalog>`.
 > - Verdict on the "mesh" framing overall:
->   [`architecture-alignment-audit-2026-07-11.md`](../roadmap/archive/architecture-alignment-audit-2026-07-11.md).
+>   [`architecture-alignment-audit-2026-07-11.md`](../../roadmap/archive/architecture-alignment-audit-2026-07-11.md).
 
-**Goal**: Turn the current tight pipeline (watch → dispatch → execute) into a set of independent, swappable services that talk through events instead of direct calls.
+**Goal**: Turn the current tight pipeline (watch â†’ dispatch â†’ execute) into a set of independent, swappable services that talk through events instead of direct calls.
 
-This makes the system easier to extend, test, run partially, or move to other machines later — while keeping every safety guarantee intact.
+This makes the system easier to extend, test, run partially, or move to other machines later â€” while keeping every safety guarantee intact.
 
 ---
 
@@ -23,7 +23,7 @@ This makes the system easier to extend, test, run partially, or move to other ma
 Right now the flow is hard-coded:
 
 ```
-daemon → dispatcher → orchestrator → executor
+daemon â†’ dispatcher â†’ orchestrator â†’ executor
 ```
 
 Every piece knows about the next one. Adding cron, a second dispatcher, or a remote executor means touching multiple crates.
@@ -34,9 +34,9 @@ Every piece knows about the next one. Adding cron, a second dispatcher, or a rem
 
 Think of Liberado as a small internal message board.
 
-- The daemon posts “vault changed” notes.
+- The daemon posts â€œvault changedâ€ notes.
 - The dispatcher, cron, and chat services each watch the board and post their own decisions.
-- The executor pool watches for “please run this” notes and posts results back.
+- The executor pool watches for â€œplease run thisâ€ notes and posts results back.
 
 No component holds a direct pointer to another. You can unplug or duplicate any service without breaking the rest.
 
@@ -70,17 +70,17 @@ kind = "scheduler"
 enabled = false          # turn on when ready
 ```
 
-Only enabled services start. Missing ones are simply absent — zero code changes elsewhere.
+Only enabled services start. Missing ones are simply absent â€” zero code changes elsewhere.
 
 ### 3. Live Capability Catalog
-Instead of a static list, let every MCP server register itself at runtime. The dispatcher asks the catalog “what tools exist right now?” on every decision. This is the same registry the web UI and TUI will query.
+Instead of a static list, let every MCP server register itself at runtime. The dispatcher asks the catalog â€œwhat tools exist right now?â€ on every decision. This is the same registry the web UI and TUI will query.
 
 ### 4. Multiple Dispatchers & Executors at Once
 Want a cautious dispatcher + a fast one? Two executor pools (local + Docker)?  
 Just declare two `[[service]]` blocks of the same kind. The bus fans the work out; results merge by correlation ID.
 
 ### 5. Safety Stays in the Bus Layer
-All narrowing, zone checks, provenance stamping, and magnitude gates live on the bus. Individual services never get to widen capabilities — they only consume or produce events the bus has already validated.
+All narrowing, zone checks, provenance stamping, and magnitude gates live on the bus. Individual services never get to widen capabilities â€” they only consume or produce events the bus has already validated.
 
 ---
 
@@ -104,6 +104,6 @@ All narrowing, zone checks, provenance stamping, and magnitude gates live on the
 
 ## One-Sentence Summary
 
-Replace “A calls B” with “A posts an event that any interested B can consume” — and declare the Bs in a config file instead of hard-coding them.
+Replace â€œA calls Bâ€ with â€œA posts an event that any interested B can consumeâ€ â€” and declare the Bs in a config file instead of hard-coding them.
 
 That single change makes Liberado a true, extensible mesh while preserving every safety property it already has.

@@ -11,7 +11,7 @@ are actually picked up.
 Grew out of a live design conversation (2026-07-04) prompted by comparing Liberado's own internal
 tooling (a wake-up scheduler, task tracking, a proposal mechanism) against MCP and A2A. Two
 independent conversations with other LLM instances — saved verbatim at
-`docs/ideas/mcp_acp_protocol_difference_conversation.md` and `docs/ideas/grok_take_on_hooks.md` —
+`docs/ideas/archive/mcp_acp_protocol_difference_conversation.md` and `docs/ideas/archive/grok_take_on_hooks.md` —
 converged on the same conclusion: **no standard protocol exists for "an external, non-agent event
 (cron tick, webhook) wakes/activates an LLM/agent, with a defined contract for new-session-vs-resume
 and default capabilities."** MCP is capability-exposure (client calls, server responds) — a cron
@@ -135,9 +135,9 @@ while the daemon-originated (vault-watch) path can populate the richer conventio
 ## Companion to
 
 - `crates/common/src/event.rs` — the current `Event`/`EventPayload` this design replaces.
-- `docs/ideas/mcp_acp_protocol_difference_conversation.md` — the MCP/ACP/A2A protocol comparison
+- `docs/ideas/archive/mcp_acp_protocol_difference_conversation.md` — the MCP/ACP/A2A protocol comparison
   that started this thread.
-- `docs/ideas/grok_take_on_hooks.md` — independent corroboration (different LLM) of the same
+- `docs/ideas/archive/grok_take_on_hooks.md` — independent corroboration (different LLM) of the same
   conclusion: no wake-protocol standard exists, CloudEvents is the right foundation layer.
 - `docs/roadmap/mcp-forge-backlog.md` — where hooks/cron's inbound-vs-outbound, core-vs-mcp-forge
   split is sorted; this doc is the envelope shape for whichever pieces of that get built.

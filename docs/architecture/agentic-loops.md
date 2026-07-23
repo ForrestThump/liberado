@@ -8,8 +8,8 @@
 **Channels & interactivity** (authority vs information graph; interactivity as a capability, not a subtype): [`channels-and-interactivity.md`](channels-and-interactivity.md)
 
 Design inputs:
-[`loop_architecture_reference_article.md`](../ideas/loop_architecture_reference_article.md),
-[`doomloop_research.md`](../ideas/doomloop_research.md),
+[`loop_architecture_reference_article.md`](../ideas/archive/loop_architecture_reference_article.md),
+[`doomloop_research.md`](../ideas/archive/doomloop_research.md),
 Claude Code / Codex / OpenCode / Grok Build harness patterns, Liberado's
 `Provider` + `Executor` + `ToolRuntime` substrate.
 
@@ -160,7 +160,7 @@ watch pipeline).
 | **Stop conditions** | Infinite spend or silent stall |
 
 Doom loops are a **control-flow** problem. Guards live in the harness. See
-[`doomloop_research.md`](../ideas/doomloop_research.md).
+[`doomloop_research.md`](../ideas/archive/doomloop_research.md).
 
 ### Maker ≠ checker
 
