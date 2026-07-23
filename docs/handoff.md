@@ -1,6 +1,16 @@
 # Handoff — Liberado is the daily-driver life OS (Telegram + TurboVault plugins)
 
-## 2026-07-19 update (read this first)
+Docs map: [`README.md`](README.md) · open work: [`roadmap/current.md`](roadmap/current.md).
+
+## 2026-07-23 update (engineering — read with 07-19)
+
+- **Architecture hardening landed** on branch `architecture-hardening` (commit message: module splits, T1, MCP pooling):
+  - **Module splits:** server API route groups, daemon lifecycle modules, config-loader model sections, executor budget module.
+  - **MCP pooling (M1):** default-on connection reuse via `tuning.mcp_pooling` (`enabled`, `idle_ttl_secs`); transport-level failure invalidates pooled peers. Registry UX still open.
+  - **T1 live conformance (partial):** L2, L5, L6, L8, L10 in `crates/server/src/t1_conformance.rs` — remaining L1/L3/L4/L7/L9.
+- Homelab **ops status** below is still the 2026-07-19 dogfood baseline unless you redeploy this branch.
+
+## 2026-07-19 update (ops / dogfood)
 
 - **Liberado is LIVE on the homelab** and is the chat surface for life ops:
   - API: `http://192.168.0.144:4201`
@@ -119,10 +129,10 @@ bar; they do not replace it. Full table: [`roadmap/current.md`](roadmap/current.
    commands, not arguments).
 2. **C1 remaining — interactive crons.** Delivery + OpenClaw cutover are done. Next is
    AskHuman-capable schedules ("run this every morning, **ask me if unsure**") via session profiles.
-3. **M1 — MCP connection pooling + multi-server registry UX.** Breadth is wired in topology; still
-   one fresh connection per execution, and the registration surface is hand-edited TOML.
+3. **M1b — MCP registry UX** (pooling landed 2026-07-23: `tuning.mcp_pooling`, default on). Remaining:
+   registration UX beyond hand-edited TOML; optional degraded-catalog routing.
 4. **T1 — Live conformance suite** ([`live-conformance-suite.md`](roadmap/live-conformance-suite.md)).
-   Reliability for unattended life ops; most checks need a real daemon + `MockProvider` only.
+   **Partial:** L2/L5/L6/L8/L10 in `crates/server/src/t1_conformance.rs`. **Open:** L1, L3–L4, L7, L9.
 5. **W1 later — mobile WebUI session view.** Homespun browser UI when Telegram's flat chat is no
    longer enough. **Not** deep-linking background sessions into Telegram (E5-b deprioritized).
 

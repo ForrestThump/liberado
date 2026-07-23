@@ -506,7 +506,7 @@ every later feature builds on. See the three pillars in
 [`docs/architecture/overview.md`](../architecture/overview.md), the thesis in
 [`docs/architecture/positioning.md`](../architecture/positioning.md), the seam plan in
 [`docs/architecture/modularity.md`](../architecture/modularity.md), and the mesh source in
-[`docs/ideas/meshify.md`](../ideas/meshify.md).
+[`docs/ideas/archive/meshify.md`](../ideas/archive/meshify.md).
 
 ### 18. Incremental Event-Bus Mesh (with checkpoints)
 **Why it matters**: The single enabler for the whole modularity vision — vault-optional, multiple

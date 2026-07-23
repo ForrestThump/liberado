@@ -1,4 +1,4 @@
-﻿# Liberado — Architecture
+# Liberado — Architecture
 
 Liberado is a **Rust-native personal AI Life OS**: a daemon that watches your Obsidian vault, reasons
 about changes with an LLM, and acts on your behalf through tools — safely, and without reacting to its
@@ -35,9 +35,12 @@ For how these pillars position Liberado against the free alternatives, see
 The **general agentic orchestration kernel** (goal sessions, verifiers, subagents, session/events) is
 **built** — D7's unified Session model and the one converged execution engine (see
 [`sessions.md`](sessions.md)). As of 2026-07-19 the **homelab daemon is live** (Telegram sticky chat,
-OpenClaw briefings cut over, TurboVault peer with **vector search + tasks**). Effort still follows a
-deliberate **replacement priority**: **autonomous life-OS daemon → chat → coding** — the remaining
-P1 gap is the **phone-grade interfacing loop** (session WebUI + deep-link multiplexing), not storage
+OpenClaw briefings cut over, TurboVault peer with **vector search + tasks**). As of 2026-07-23
+engineering hardened **module boundaries**, **MCP connection pooling** (default on), and a **partial
+Tier-1 live conformance suite** (see [`../roadmap/current.md`](../roadmap/current.md)). Effort still
+follows a deliberate **replacement priority**: **autonomous life-OS daemon → chat → coding** — the
+remaining P1 gap is the **phone-grade interfacing loop** (session WebUI later; not Telegram multiplexing),
+not storage
 or basic MCP reach. The order and its rationale are in [`positioning.md`](positioning.md); the
 concrete work items, in priority order, are in [`../roadmap/current.md`](../roadmap/current.md).
 Coding is a **domain pack** on a domain-neutral kernel, not the product identity, and explicitly
@@ -230,7 +233,7 @@ daily-driver line rather than three half-built. The order and rationale are in
     on that, and `--rm` removes it). `cargo build`/`cargo clippy`/all new unit tests are clean; the
     **live Docker-daemon smoke test is still outstanding** (Docker Desktop's CLI is installed on the
     dev machine but its daemon wasn't running) — see
-    [`human-todo.md`](../roadmap/human-todo.md#phase-4-docker-mcp-transport--needs-a-live-smoke-test--2026-07-07).
+    [`human-todo.md`](../roadmap/archive/human-todo.md) (archived operator checklist; Docker smoke still open if not yet run).
     Deferred, not built: serverless hibernation (no MCP has an idle-cost problem that justifies the
     integration cost yet). Full design: [`phase-4-docker-transport.md`](../roadmap/archive/phase-4-docker-transport.md).
 20. ✅ **Face-agent chat + delegation dogfood (2026-07-10/11)** — default main agent is a thin human
@@ -244,7 +247,11 @@ daily-driver line rather than three half-built. The order and rationale are in
 **Not yet built (next slice):**
 - Rust-native agentic coder crates and PR-factory integration; see
   [`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md).
-- Multi-MCP registry UX, connection pooling.
+- Multi-MCP **registry UX** (beyond hand-edited topology TOML) and optional degraded-peer catalog
+  routing. **Connection pooling (M1) landed** 2026-07-23 — default-on via `tuning.mcp_pooling`;
+  see [`../roadmap/current.md`](../roadmap/current.md).
+- Remaining Tier-1 live conformance levels (L1, L3–L4, L7, L9); partial suite L2/L5/L6/L8/L10 is in
+  `crates/server/src/t1_conformance.rs` — [`../roadmap/live-conformance-suite.md`](../roadmap/live-conformance-suite.md).
 - Splitting `liberado-common`'s grab-bag along its natural boundaries — partially underway (`config`
   and `config-loader` have already been carved off into their own crates), but `common` still has
   eight modules (`provenance`, `capability`, `catalog`, `dispatch`, `event`, `model`,

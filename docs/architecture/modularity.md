@@ -3,7 +3,7 @@
 This page records the concrete moves that turn the three pillars' "modular MCP/hook substrate" into
 reality. It is the engineering companion to [contracts.md](contracts.md) (the narrow-waist
 inventory) and the [roadmap's modularity checkpoints](../roadmap/current.md). (The original
-[meshify idea](../ideas/meshify.md) is annotated — partly landed via traits + config, partly
+[meshify idea](../ideas/archive/meshify.md) is annotated — partly landed via traits + config, partly
 rejected; the canonical vocabulary is now kernel · domain packs · stores · surfaces.)
 
 ## The test that keeps loose coupling honest

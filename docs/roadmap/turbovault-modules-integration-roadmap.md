@@ -202,8 +202,8 @@ daemon lacks today.
 
 **Status (2026-07-19):** **prototype Phases 1–4 DONE on fork `develop` and live on the homelab.**
 Liberado (Telegram) can call `vector_search` / related tools against the real vault. Detail and
-goal conditions: [`turbovault-vector-prototype-plan.md`](turbovault-vector-prototype-plan.md);
-architecture decisions: [`turbovault-vector-module-plan.md`](turbovault-vector-module-plan.md).
+goal conditions: [`archive/turbovault-vector-prototype-plan.md`](archive/turbovault-vector-prototype-plan.md);
+architecture decisions: [`archive/turbovault-vector-module-plan.md`](archive/turbovault-vector-module-plan.md).
 
 **What we actually built** (decision flipped from the original "depend on `lqm-core`" lean):
 

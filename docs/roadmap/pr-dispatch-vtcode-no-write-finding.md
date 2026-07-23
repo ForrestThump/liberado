@@ -321,6 +321,6 @@ tests: it says the remaining gap is very unlikely to be in request-level paramet
 
 ## Related docs
 
-- [`docs/ideas/handoff.md`](../ideas/handoff.md) — current-state summary, updated after each session arc.
-- [`docs/roadmap/human-todo.md`](human-todo.md) — action items blocked on the user (uncommitted work,
+- [`docs/handoff.md`](../handoff.md) — live ops handoff (not the archived ideas/handoff snapshot).
+- [`docs/roadmap/archive/human-todo.md`](archive/human-todo.md) — archived operator checklist (uncommitted work,
   PR review, etc.).
