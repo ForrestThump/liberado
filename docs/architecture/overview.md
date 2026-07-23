@@ -247,9 +247,10 @@ daily-driver line rather than three half-built. The order and rationale are in
 **Not yet built (next slice):**
 - Rust-native agentic coder crates and PR-factory integration; see
   [`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md).
-- Multi-MCP **registry UX** (beyond hand-edited topology TOML) and optional degraded-peer catalog
-  routing. **Connection pooling (M1) landed** 2026-07-23 — default-on via `tuning.mcp_pooling`;
-  see [`../roadmap/current.md`](../roadmap/current.md).
+- Multi-MCP **registry UX** (beyond hand-edited topology TOML). **Connection pooling (M1)** and
+  **degraded-catalog routing (M1b)** landed 2026-07-23 — pool via `tuning.mcp_pooling`;
+  `CapabilityCatalog::routing_descriptors` omits peers marked degraded after connect/transport
+  failure. See [`../roadmap/current.md`](../roadmap/current.md).
 - Tier-1 live conformance **L1–L10 landed** (`crates/server/src/t1_conformance.rs` + daemon L9);
   Tier 2 (model-in-the-loop) remains optional — [`../roadmap/live-conformance-suite.md`](../roadmap/live-conformance-suite.md).
 - Splitting `liberado-common`'s grab-bag along its natural boundaries — partially underway (`config`
