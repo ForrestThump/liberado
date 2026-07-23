@@ -234,13 +234,24 @@ fn docker_argv(
 /// `name` with a connector from its transport. `None` when no MCP is enabled (decide-only daemon,
 /// tool-less chat). This shares ONE source (topology.mcps) with the dispatcher catalog, so a name the
 /// dispatcher routes to is a name the runtime can actually connect to.
-pub fn mcp_registry_from_config(config: &Config) -> Option<McpRegistry> {
+///
+/// When `health_catalog` is provided (the same `Arc` used for dispatcher routing), connect/transport
+/// failures publish M1b **degraded** peer state so `routing_descriptors()` omits dead peers.
+pub fn mcp_registry_from_config(
+    config: &Config,
+    health_catalog: Option<std::sync::Arc<CapabilityCatalog>>,
+) -> Option<McpRegistry> {
     let pool = liberado_mcp::McpPoolSettings {
         enabled: config.tuning.mcp_pooling.enabled,
         idle_ttl: std::time::Duration::from_secs(config.tuning.mcp_pooling.idle_ttl_secs),
     };
+    let base = McpRegistry::with_pool_settings(pool);
+    let base = match health_catalog {
+        Some(cat) => base.with_health_catalog(cat),
+        None => base,
+    };
     let registry = config.topology.mcps.iter().filter(|m| m.enabled).fold(
-        McpRegistry::with_pool_settings(pool),
+        base,
         |registry, m| match &m.transport {
             McpTransport::Stdio { command, args } => {
                 registry.register(&m.name, StdioConnector::new(command.clone(), args.clone()))
@@ -407,7 +418,7 @@ pub fn configure_daemon(
             daemon
         }
     };
-    let daemon = match mcp_registry_from_config(config) {
+    let daemon = match mcp_registry_from_config(config, Some(catalog.clone())) {
         Some(factory) => {
             tracing::info!("orchestrator enabled (MCP execution)");
             let orchestrator = orchestrator_infra.for_pool(factory, capabilities, DEFAULT_POOL);
@@ -461,7 +472,7 @@ pub fn configure_daemon(
             // from `config.topology.mcps` N times. Cheap in absolute terms (this reads the same
             // small, already-in-memory `config`, not a file or network round-trip), so not worth
             // caching or restructuring around.
-            match mcp_registry_from_config(config) {
+            match mcp_registry_from_config(config, Some(catalog.clone())) {
                 Some(factory) => {
                     let orchestrator =
                         orchestrator_infra.for_pool(factory, pool_capabilities, pool.name.clone());
@@ -534,7 +545,7 @@ pub fn build_dispatch_pack(
     }
 
     // Default pool.
-    match mcp_registry_from_config(config) {
+    match mcp_registry_from_config(config, Some(catalog.clone())) {
         Some(factory) => {
             let orchestrator = orchestrator_infra.for_pool(factory, capabilities, DEFAULT_POOL);
             let orchestrator = match &notifier {
@@ -566,7 +577,7 @@ pub fn build_dispatch_pack(
         if let Some(g) = &guidance {
             pool_dispatcher = pool_dispatcher.with_guidance(g.clone());
         }
-        match mcp_registry_from_config(config) {
+        match mcp_registry_from_config(config, Some(catalog.clone())) {
             Some(factory) => {
                 let orchestrator =
                     orchestrator_infra.for_pool(factory, pool_capabilities, pool_cfg.name.clone());
@@ -712,7 +723,8 @@ mod tests {
             ),
         ];
 
-        let registry = mcp_registry_from_config(&config).expect("two enabled MCPs => Some");
+        let registry =
+            mcp_registry_from_config(&config, None).expect("two enabled MCPs => Some");
         let mut names: Vec<&str> = registry.names().collect();
         names.sort_unstable();
         assert_eq!(names, vec!["tasks-mcp", "wiki-mcp"]);
@@ -723,7 +735,8 @@ mod tests {
         let mut config = Config::default();
         config.topology.mcps = vec![mcp("weather-mcp", true, McpTransport::Managed)];
 
-        let registry = mcp_registry_from_config(&config).expect("one enabled MCP => Some");
+        let registry =
+            mcp_registry_from_config(&config, None).expect("one enabled MCP => Some");
         let names: Vec<&str> = registry.names().collect();
         assert_eq!(names, vec!["weather-mcp"]);
     }
@@ -743,7 +756,8 @@ mod tests {
             },
         )];
 
-        let registry = mcp_registry_from_config(&config).expect("one enabled MCP => Some");
+        let registry =
+            mcp_registry_from_config(&config, None).expect("one enabled MCP => Some");
         let names: Vec<&str> = registry.names().collect();
         assert_eq!(names, vec!["tasks-mcp-docker"]);
     }
@@ -840,7 +854,7 @@ mod tests {
                 args: vec![],
             },
         )];
-        assert!(mcp_registry_from_config(&config).is_none());
+        assert!(mcp_registry_from_config(&config, None).is_none());
     }
 
     fn cron_schedule(name: &str, enabled: bool) -> liberado_config::CronSchedule {

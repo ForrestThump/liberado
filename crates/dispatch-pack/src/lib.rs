@@ -165,7 +165,8 @@ impl DomainPackRunner for DispatchPack {
         // the orchestrator still intersects with its pool ceiling so a grant can never widen.
         let request = DispatchRequest {
             goal: goal.description.clone(),
-            catalog: self.catalog.descriptors(),
+            // M1b: do not offer degraded MCP peers to the classifier.
+            catalog: self.catalog.routing_descriptors(),
             capabilities: ctx.grant.capabilities.clone(),
             reaction_depth: self.reaction_depth,
             zone_write_classes: self.zone_write_classes.clone(),

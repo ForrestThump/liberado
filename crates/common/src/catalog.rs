@@ -5,11 +5,20 @@
 //! changes without polling. The catalog is populated at boot from the config's
 //! `topology.mcps` and updated at runtime as MCPs come and go.
 //!
+//! # M1b — degraded peers
+//!
+//! Connect/transport failures (the same class pooling already discards) can
+//! [`mark_degraded`](CapabilityCatalog::mark_degraded). **Routing** consumers must use
+//! [`routing_descriptors`](CapabilityCatalog::routing_descriptors) so the dispatcher never
+//! steers the model at a peer already known dead. Full [`descriptors`](CapabilityCatalog::descriptors)
+//! still lists every registered MCP for zone/authority checks. Success
+//! [`mark_healthy`](CapabilityCatalog::mark_healthy) clears the flag (recovery).
+//!
 //! # Concurrency model
 //!
 //! *Readers* (the `descriptors()` / `get()` / `is_empty()` / `len()` accessors) acquire
-//! a read lock that is uncontended in practice — the only writer is the server's
-//! boot/reload path.
+//! a read lock that is uncontended in practice — writers are the server's boot/reload path
+//! and the MCP registry's health updates.
 //!
 //! *Watchers* call [`subscribe()`](CapabilityCatalog::subscribe) to get a
 //! `watch::Receiver` that fires `()` every time the catalog changes. This lets long-lived
@@ -181,6 +190,9 @@ pub struct CapabilityCatalog {
 
 struct CatalogState {
     mcps: HashMap<String, McpDescriptor>,
+    /// MCP names currently known-unhealthy for **routing** (connect/transport failure class).
+    /// Cleared by [`CapabilityCatalog::mark_healthy`]. Authority/zone catalogs still list them.
+    degraded: HashMap<String, Instant>,
     last_updated: Instant,
 }
 
@@ -191,6 +203,7 @@ impl CapabilityCatalog {
         Self {
             inner: Arc::new(RwLock::new(CatalogState {
                 mcps: HashMap::new(),
+                degraded: HashMap::new(),
                 last_updated: Instant::now(),
             })),
             updated: tx,
@@ -210,13 +223,57 @@ impl CapabilityCatalog {
     pub fn deregister(&self, name: &str) {
         let mut state = self.inner.write().unwrap();
         state.mcps.remove(name);
+        state.degraded.remove(name);
         state.last_updated = Instant::now();
         let _ = self.updated.send(());
     }
 
-    /// Return a snapshot of all registered descriptors.
+    /// Mark `name` degraded for routing after a connect/transport-class failure (M1b).
+    /// No-op if the name is not registered. Notifies subscribers.
+    pub fn mark_degraded(&self, name: &str) {
+        let mut state = self.inner.write().unwrap();
+        if !state.mcps.contains_key(name) {
+            return;
+        }
+        state.degraded.insert(name.to_string(), Instant::now());
+        state.last_updated = Instant::now();
+        let _ = self.updated.send(());
+    }
+
+    /// Clear degraded status after a successful connect/acquire (recovery).
+    pub fn mark_healthy(&self, name: &str) {
+        let mut state = self.inner.write().unwrap();
+        if state.degraded.remove(name).is_some() {
+            state.last_updated = Instant::now();
+            let _ = self.updated.send(());
+        }
+    }
+
+    /// Whether `name` is currently marked degraded for routing.
+    pub fn is_degraded(&self, name: &str) -> bool {
+        self.inner.read().unwrap().degraded.contains_key(name)
+    }
+
+    /// Return a snapshot of all registered descriptors (including degraded peers).
+    ///
+    /// Use for zone/authority checks. For **dispatcher routing**, prefer
+    /// [`routing_descriptors`](Self::routing_descriptors).
     pub fn descriptors(&self) -> Vec<McpDescriptor> {
         self.inner.read().unwrap().mcps.values().cloned().collect()
+    }
+
+    /// Descriptors eligible for dispatcher / classifier routing — **excludes** degraded peers.
+    ///
+    /// This is the M1b production filter: a peer marked degraded after connect/transport failure
+    /// must not appear as a healthy routing target until [`mark_healthy`](Self::mark_healthy).
+    pub fn routing_descriptors(&self) -> Vec<McpDescriptor> {
+        let state = self.inner.read().unwrap();
+        state
+            .mcps
+            .values()
+            .filter(|d| !state.degraded.contains_key(&d.name))
+            .cloned()
+            .collect()
     }
 
     /// Look up a single descriptor by name.
@@ -355,6 +412,65 @@ mod tests {
         let desc = catalog.get("mcp").unwrap();
         assert_eq!(desc.description, "v2");
         assert_eq!(desc.consequence, Consequence::External);
+    }
+
+    // ── M1b degraded / routing_descriptors ────────────────────────────────
+
+    #[test]
+    fn degraded_peer_is_omitted_from_routing_but_stays_in_full_descriptors() {
+        let catalog = CapabilityCatalog::new();
+        catalog.register(sample_descriptor("weather"));
+        catalog.register(sample_descriptor("tasks"));
+
+        catalog.mark_degraded("weather");
+        assert!(catalog.is_degraded("weather"));
+        assert!(!catalog.is_degraded("tasks"));
+
+        let full: Vec<_> = catalog
+            .descriptors()
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        assert!(full.contains(&"weather".into()) && full.contains(&"tasks".into()));
+
+        let routing: Vec<_> = catalog
+            .routing_descriptors()
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        assert!(
+            !routing.contains(&"weather".into()),
+            "degraded peer must not be a routing target: {routing:?}"
+        );
+        assert!(
+            routing.contains(&"tasks".into()),
+            "healthy peer must remain routable: {routing:?}"
+        );
+    }
+
+    #[test]
+    fn mark_healthy_restores_routing_eligibility() {
+        let catalog = CapabilityCatalog::new();
+        catalog.register(sample_descriptor("weather"));
+        catalog.mark_degraded("weather");
+        assert!(catalog.routing_descriptors().is_empty());
+
+        catalog.mark_healthy("weather");
+        assert!(!catalog.is_degraded("weather"));
+        let routing: Vec<_> = catalog
+            .routing_descriptors()
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        assert_eq!(routing, vec!["weather".to_string()]);
+    }
+
+    #[test]
+    fn mark_degraded_unknown_name_is_noop() {
+        let catalog = CapabilityCatalog::new();
+        catalog.mark_degraded("ghost");
+        assert!(!catalog.is_degraded("ghost"));
+        assert!(catalog.routing_descriptors().is_empty());
     }
 
     // ── zone_write_restriction ────────────────────────────────────────────

@@ -577,3 +577,109 @@ async fn pool_settings_default_is_enabled() {
     };
     assert!(!McpRegistry::with_pool_settings(off).pooling_enabled());
 }
+
+// ── M1b: degraded peer health on shared CapabilityCatalog ───────────────────
+
+#[tokio::test]
+async fn m1b_connect_failure_marks_peer_degraded_on_routing_catalog() {
+    use liberado_common::{CapabilityCatalog, Consequence, McpDescriptor};
+    use std::sync::Arc;
+
+    let catalog = Arc::new(CapabilityCatalog::new());
+    catalog.register(McpDescriptor {
+        name: "weather".into(),
+        description: "flaky weather".into(),
+        consequence: Consequence::ReadOnly,
+        provenance: None,
+        ..Default::default()
+    });
+    catalog.register(McpDescriptor {
+        name: "tasks".into(),
+        description: "tasks".into(),
+        consequence: Consequence::Reversible,
+        provenance: None,
+        ..Default::default()
+    });
+
+    let registry = McpRegistry::new()
+        .with_health_catalog(catalog.clone())
+        .register("weather", FailingConnector)
+        .register(
+            "tasks",
+            ChannelConnector {
+                server: EchoServer {
+                    tool: "add",
+                    reply: "added",
+                },
+            },
+        );
+
+    let (runtime, failed) = registry.connect_all_best_effort(prov()).await;
+    assert_eq!(failed, vec!["weather".to_string()]);
+    assert!(runtime.invoke(&call("tasks:add")).await.is_ok());
+
+    // Ground truth: shipped catalog path — degraded peer omitted from routing view.
+    assert!(
+        catalog.is_degraded("weather"),
+        "failed connect must mark peer degraded"
+    );
+    assert!(!catalog.is_degraded("tasks"));
+    let routing: Vec<_> = catalog
+        .routing_descriptors()
+        .into_iter()
+        .map(|d| d.name)
+        .collect();
+    assert!(
+        !routing.contains(&"weather".into()),
+        "routing catalog must exclude degraded peer: {routing:?}"
+    );
+    assert!(
+        routing.contains(&"tasks".into()),
+        "healthy peer must remain routable: {routing:?}"
+    );
+    // Full descriptors still include both (zone/authority).
+    let full: Vec<_> = catalog.descriptors().into_iter().map(|d| d.name).collect();
+    assert!(full.contains(&"weather".into()) && full.contains(&"tasks".into()));
+}
+
+#[tokio::test]
+async fn m1b_successful_connect_clears_degraded_and_restores_routing() {
+    use liberado_common::{CapabilityCatalog, Consequence, McpDescriptor};
+    use std::sync::Arc;
+
+    let catalog = Arc::new(CapabilityCatalog::new());
+    catalog.register(McpDescriptor {
+        name: "tasks".into(),
+        description: "tasks".into(),
+        consequence: Consequence::Reversible,
+        provenance: None,
+        ..Default::default()
+    });
+    catalog.mark_degraded("tasks");
+    assert!(catalog.routing_descriptors().is_empty());
+
+    let registry = McpRegistry::new()
+        .with_health_catalog(catalog.clone())
+        .register(
+            "tasks",
+            ChannelConnector {
+                server: EchoServer {
+                    tool: "add",
+                    reply: "added",
+                },
+            },
+        );
+
+    let rt = registry.runtime_for(&[], prov()).await.unwrap();
+    assert!(rt.invoke(&call("tasks:add")).await.is_ok());
+    assert!(
+        !catalog.is_degraded("tasks"),
+        "successful acquire must mark_healthy"
+    );
+    let routing: Vec<_> = catalog
+        .routing_descriptors()
+        .into_iter()
+        .map(|d| d.name)
+        .collect();
+    assert_eq!(routing, vec!["tasks".to_string()]);
+}

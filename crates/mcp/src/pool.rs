@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use liberado_common::WriteProvenance;
+use liberado_common::{CapabilityCatalog, WriteProvenance};
 use liberado_executor::ToolRuntime;
 use liberado_provider::{ToolDef, ToolInvocation};
 
@@ -111,6 +111,7 @@ impl ConnectionPool {
             runtime: Some(runtime),
             pool: Arc::clone(self),
             healthy: AtomicBool::new(true),
+            health: None,
         })
     }
 
@@ -144,6 +145,8 @@ pub struct PooledCheckout {
     pool: Arc<ConnectionPool>,
     /// Cleared when a connection-level invoke failure is observed (see [`RebindableRuntime::connection_is_dead`]).
     healthy: AtomicBool,
+    /// Optional live catalog for M1b: transport death marks the peer degraded for routing.
+    health: Option<Arc<CapabilityCatalog>>,
 }
 
 impl PooledCheckout {
@@ -160,7 +163,14 @@ impl PooledCheckout {
             runtime: Some(runtime),
             pool,
             healthy: AtomicBool::new(true),
+            health: None,
         }
+    }
+
+    /// Attach the shared capability catalog so transport death publishes M1b degraded state.
+    pub(crate) fn with_health_catalog(mut self, catalog: Option<Arc<CapabilityCatalog>>) -> Self {
+        self.health = catalog;
+        self
     }
 
     fn runtime(&self) -> &dyn RebindableRuntime {
@@ -171,6 +181,9 @@ impl PooledCheckout {
 
     fn mark_unhealthy(&self) {
         self.healthy.store(false, Ordering::SeqCst);
+        if let Some(cat) = &self.health {
+            cat.mark_degraded(&self.name);
+        }
     }
 }
 

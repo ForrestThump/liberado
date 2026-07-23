@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use liberado_common::WriteProvenance;
+use liberado_common::{CapabilityCatalog, WriteProvenance};
 use liberado_executor::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
 
 use crate::MultiMcpRuntime;
@@ -47,6 +47,8 @@ impl From<McpPoolSettings> for PoolPolicy {
 pub struct McpRegistry {
     connectors: HashMap<String, Box<dyn McpConnector>>,
     pool: Arc<ConnectionPool>,
+    /// Optional shared catalog for M1b peer health (degraded after connect/transport failure).
+    health: Option<Arc<CapabilityCatalog>>,
 }
 
 impl Default for McpRegistry {
@@ -66,6 +68,7 @@ impl McpRegistry {
         Self {
             connectors: HashMap::new(),
             pool: Arc::new(ConnectionPool::new(settings.into())),
+            health: None,
         }
     }
 
@@ -78,7 +81,17 @@ impl McpRegistry {
         Self {
             connectors: HashMap::new(),
             pool: Arc::new(ConnectionPool::with_clock(settings.into(), clock)),
+            health: None,
         }
+    }
+
+    /// Publish connect/transport health into the live [`CapabilityCatalog`] (M1b).
+    ///
+    /// Composition roots pass the same `Arc` used for dispatcher routing so
+    /// `routing_descriptors()` excludes peers this registry marks degraded.
+    pub fn with_health_catalog(mut self, catalog: Arc<CapabilityCatalog>) -> Self {
+        self.health = Some(catalog);
+        self
     }
 
     /// Register a server under `name` (the namespace its tools are exposed under). Chainable.
@@ -89,6 +102,18 @@ impl McpRegistry {
     ) -> Self {
         self.connectors.insert(name.into(), Box::new(connector));
         self
+    }
+
+    fn publish_healthy(&self, name: &str) {
+        if let Some(cat) = &self.health {
+            cat.mark_healthy(name);
+        }
+    }
+
+    fn publish_degraded(&self, name: &str) {
+        if let Some(cat) = &self.health {
+            cat.mark_degraded(name);
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -117,7 +142,9 @@ impl McpRegistry {
         provenance: WriteProvenance,
     ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
         if let Some(checkout) = self.pool.try_checkout(name, provenance.clone()) {
-            return Ok(Box::new(checkout));
+            // Reusing a pooled peer implies it was healthy when checked in.
+            self.publish_healthy(name);
+            return Ok(Box::new(checkout.with_health_catalog(self.health.clone())));
         }
 
         let connector = self
@@ -125,16 +152,28 @@ impl McpRegistry {
             .get(name)
             .ok_or_else(|| RuntimeSetupError(format!("MCP '{name}' is not registered")))?;
 
-        let runtime = connector.connect(provenance.clone()).await?;
-        if self.pool.policy().enabled {
-            Ok(Box::new(PooledCheckout::from_fresh(
-                name.to_string(),
-                runtime,
-                provenance,
-                Arc::clone(&self.pool),
-            )))
-        } else {
-            Ok(Box::new(AsToolRuntime(runtime)))
+        match connector.connect(provenance.clone()).await {
+            Ok(runtime) => {
+                self.publish_healthy(name);
+                if self.pool.policy().enabled {
+                    Ok(Box::new(
+                        PooledCheckout::from_fresh(
+                            name.to_string(),
+                            runtime,
+                            provenance,
+                            Arc::clone(&self.pool),
+                        )
+                        .with_health_catalog(self.health.clone()),
+                    ))
+                } else {
+                    Ok(Box::new(AsToolRuntime(runtime)))
+                }
+            }
+            Err(e) => {
+                self.pool.invalidate(name);
+                self.publish_degraded(name);
+                Err(e)
+            }
         }
     }
 
@@ -167,7 +206,7 @@ impl McpRegistry {
                 Ok(entry) => servers.push(entry),
                 Err((name, e)) => {
                     tracing::warn!(mcp = %name, error = %e, "MCP failed to connect — continuing without it");
-                    // Ensure a bad pool slot is not retained.
+                    // Ensure a bad pool slot is not retained; health already marked degraded in acquire.
                     self.pool.invalidate(&name);
                     failed.push(name);
                 }

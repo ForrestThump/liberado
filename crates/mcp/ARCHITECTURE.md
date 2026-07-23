@@ -58,6 +58,13 @@ rebinds execution `WriteProvenance` on acquire, and returns it on drop (idle TTL
 **not** checked back in (tool `isError` does not kill the pool). Set
 `tuning.mcp_pooling.enabled = false` for connect-per-acquisition.
 
+**M1b degraded-catalog routing (landed):** when composition wires
+`McpRegistry::with_health_catalog` to the shared `CapabilityCatalog`, connect/transport failures
+call `mark_degraded` and successful acquires call `mark_healthy`. Dispatch / chat / daemon build
+`DispatchRequest.catalog` from `CapabilityCatalog::routing_descriptors()` so classifiers never
+see known-dead peers. Full `descriptors()` still lists every registered MCP for zone/authority.
+**Registry UX** (editing topology beyond hand-edited TOML) remains open.
+
 ## Dependencies
 
 - Depends on: `liberado-executor` (`ToolRuntime`, and `RuntimeFactory`/`RuntimeSetupError` — moved here

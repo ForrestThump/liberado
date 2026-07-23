@@ -111,7 +111,8 @@ impl DispatcherContext {
         };
         DispatchRequest {
             goal,
-            catalog: self.catalog.descriptors(),
+            // M1b: routing catalog excludes peers marked degraded after connect/transport failure.
+            catalog: self.catalog.routing_descriptors(),
             capabilities: self.capabilities.clone(),
             reaction_depth: self.reaction_depth,
             zone_write_classes: self.zone_write_classes.clone(),

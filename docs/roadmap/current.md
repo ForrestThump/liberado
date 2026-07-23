@@ -16,7 +16,7 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 |---|---|---|
 | **Dogfood** | **Lean on Telegram harder** | Collect friction → fix real pain. Free-form sticky chat is the phone surface. |
 | **C1** | **Interactive crons (AskHuman)** | Delivery landed; remaining is “ask me if unsure” via session profiles. |
-| **M1b** | **MCP registry UX** | Pooling/reuse **landed** (`tuning.mcp_pooling`). Remaining: registry UX beyond hand-edited TOML; optional degraded-catalog routing. |
+| **M1b** | **MCP registry UX** | Pooling **landed**; **degraded-catalog routing landed** (`CapabilityCatalog::routing_descriptors` + registry health publish). Remaining: **registry UX** beyond hand-edited TOML. |
 | **T1** | **Live conformance suite** — [`live-conformance-suite.md`](live-conformance-suite.md) | **L1–L10 landed** (`crates/server/src/t1_conformance.rs` L1–L8/L10; daemon `l9_*` for L9). **Open:** Tier 2 only. |
 | **W1** | **Goal-session view in mobile WebUI** | Later phone surface beyond Telegram. See [`../architecture/session-surface-contract.md`](../architecture/session-surface-contract.md). |
 | **E5-b** | ~~Telegram session deep-link~~ | **Deprioritized** (prefer WebUI later). |
@@ -48,7 +48,7 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 ```
   P1 daily-driver ──►  dogfood Telegram
                    ├── C1 AskHuman crons
-                   ├── M1b registry UX (+ optional degraded catalog)
+                   ├── M1b registry UX (degraded-catalog routing done)
                    └── T1 Tier-1 done (Tier 2 optional)
 
   Later ──► W1 mobile WebUI session view
@@ -59,7 +59,7 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 
 | When | What |
 |------|------|
-| **2026-07-23** | **Architecture hardening:** god-module splits; **MCP pooling** (M1, `tuning.mcp_pooling`); **T1** L1–L10 complete; **A4** dual-store hub tests |
+| **2026-07-23** | **Architecture hardening:** god-module splits; **MCP pooling** (M1); **M1b degraded-catalog routing**; **T1** L1–L10; **A4** dual-store hub tests |
 | **2026-07-19** | TurboVault plugins live (vector + tasks); Telegram dogfood baseline |
 | **2026-07-18** | Cron → Telegram delivery; OpenClaw brief cutover; sticky session persistence |
 | **Earlier** | Unified Session (D7); one execution engine; `Write` at MCP boundary (F1); etc. |
