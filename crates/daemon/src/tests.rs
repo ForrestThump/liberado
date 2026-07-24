@@ -1486,6 +1486,136 @@ async fn daemon_archives_a_rejected_proposal() {
 }
 
 #[tokio::test]
+async fn handle_proposal_change_expires_and_archives_past_deadline_pending() {
+    // A human touch of a still-Pending note past `expires` must not wait for the reaper: flip
+    // status to Expired and archive under archive/expired/.
+    use chrono::{Duration as ChronoDuration, Utc};
+    use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall};
+
+    let signer = ProposalSigner::random();
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon.with_proposal_signer(signer.clone());
+
+    let proposals_dir = dir.path().join("proposals");
+    std::fs::create_dir_all(&proposals_dir).unwrap();
+
+    let mut proposal = Proposal::pending(
+        "vault-change:stale-pending:1",
+        "vault-change:stale-pending:1",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "too late" }),
+        }]),
+        "expired pending proposal",
+    );
+    proposal.expires = Some(Utc::now() - ChronoDuration::hours(1));
+    let proposal = signer.sign(proposal);
+    let rel = Path::new("proposals/stale-pending.md");
+    let prov = WriteProvenance::agent("test", "c1");
+    daemon
+        .vault
+        .write(rel, &proposal.to_note(), None, &prov)
+        .await
+        .unwrap();
+
+    let outcome = daemon.handle_proposal_change(rel).await.unwrap();
+    assert!(
+        matches!(outcome, ReactionOutcome::Observed),
+        "past-deadline notes are observed, never executed"
+    );
+
+    assert!(
+        daemon.vault.read(rel).await.is_err(),
+        "expired proposal must leave the active proposals/ dir"
+    );
+    let archived = daemon
+        .vault
+        .read("proposals/archive/expired/stale-pending.md")
+        .await
+        .expect("must land under archive/expired/");
+    assert_eq!(
+        Proposal::from_note(&archived).unwrap().status,
+        ProposalStatus::Expired
+    );
+}
+
+#[tokio::test]
+async fn handle_proposal_change_does_not_execute_approved_past_deadline() {
+    // Late approve after `expires` must not run tools — only expire + archive.
+    use chrono::{Duration as ChronoDuration, Utc};
+    use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall};
+    use liberado_orchestrator::Orchestrator;
+    use liberado_provider::MockProvider;
+    use liberado_test_support::{InvocationRecordingFactory, InvocationRecordingRuntime};
+
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let signer = ProposalSigner::random();
+    let orch = Orchestrator::new(
+        Arc::new(MockProvider::with_script(
+            "mock",
+            Vec::<liberado_provider::CompletionResponse>::new(),
+        )),
+        InvocationRecordingFactory { runtime },
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        signer.clone(),
+        "default",
+    );
+
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon
+        .with_orchestrator(orch)
+        .with_proposal_signer(signer.clone());
+
+    let proposals_dir = dir.path().join("proposals");
+    std::fs::create_dir_all(&proposals_dir).unwrap();
+
+    let mut proposal = Proposal::pending(
+        "vault-change:late-approve:1",
+        "vault-change:late-approve:1",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "should never run" }),
+        }]),
+        "approved after expiry",
+    );
+    proposal.expires = Some(Utc::now() - ChronoDuration::hours(1));
+    let mut proposal = signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+    let rel = Path::new("proposals/late-approve.md");
+    let prov = WriteProvenance::agent("test", "c1");
+    daemon
+        .vault
+        .write(rel, &proposal.to_note(), None, &prov)
+        .await
+        .unwrap();
+
+    let outcome = daemon.handle_proposal_change(rel).await.unwrap();
+    assert!(matches!(outcome, ReactionOutcome::Observed));
+
+    assert!(
+        invoked.lock().unwrap().is_empty(),
+        "past-deadline approved proposal must never invoke tools"
+    );
+    assert!(daemon.vault.read(rel).await.is_err());
+    let archived = daemon
+        .vault
+        .read("proposals/archive/expired/late-approve.md")
+        .await
+        .expect("late approve must archive as expired, not approved");
+    assert_eq!(
+        Proposal::from_note(&archived).unwrap().status,
+        ProposalStatus::Expired
+    );
+}
+
+#[tokio::test]
 async fn daemon_does_not_execute_a_pending_proposal() {
     use liberado_common::{Proposal, ProposalStatus, ProposedAction, ToolCall};
     use liberado_orchestrator::Orchestrator;

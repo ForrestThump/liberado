@@ -1076,7 +1076,8 @@ mod tests {
     #[tokio::test]
     async fn ack_calls_channel_acknowledge() {
         let signer = ProposalSigner::random();
-        let (vault, _dir, stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let (vault, _dir, _stem) =
+            temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
         let channel = Arc::new(RecordingChannel::default());
         let bot = ApprovalBot::new(
             channel.clone(),
@@ -1496,12 +1497,14 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         handle.abort();
 
-        let registered = channel.registered.lock().unwrap();
-        assert!(
-            !registered.is_empty(),
-            "register_commands should have been called"
-        );
-        assert_eq!(registered[0][0].0, "start");
+        {
+            let registered = channel.registered.lock().unwrap();
+            assert!(
+                !registered.is_empty(),
+                "register_commands should have been called"
+            );
+            assert_eq!(registered[0][0].0, "start");
+        }
 
         let content = vault.read("proposals/prop-1.md").await.unwrap();
         let proposal = Proposal::from_note(&content).unwrap();

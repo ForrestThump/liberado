@@ -1009,8 +1009,6 @@ async fn execute_approved_tool_calls_all_failed_is_failed_outcome() {
         "mock",
         Vec::<CompletionResponse>::new(),
     ));
-    let factory = CallRecordingFactory::default();
-    let calls = factory.calls.clone();
     let signer = ProposalSigner::random();
     let orch = Orchestrator::new(
         provider,
