@@ -47,7 +47,9 @@ pub struct CompactionConfig {
     /// recall).
     pub enabled: bool,
     /// Fire when the estimated tokens of history + the incoming user message exceed this.
-    /// Set ≈ your model's context window − reserve (tools + reply + slack).
+    /// Absolute estimated tokens only — config-tier resolution (per-model `trigger_pct` /
+    /// `trigger_tokens` overrides → face model window) happens in `liberado-server` before
+    /// `ChatSessions::with_compaction`.
     pub trigger_tokens: u32,
     /// User turns (a user message and everything up to the next one) kept **verbatim** after the
     /// summary. Anchored on user messages so tool-call/result pairs can never be split (OpenClaw's

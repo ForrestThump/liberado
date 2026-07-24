@@ -96,9 +96,9 @@ turns (default 3). Interim mitigations (incomplete-marker non-elision) and the p
 
 - `estimate_tokens = ceil(chars / 4 × 1.3)` over message contents + tool-call JSON (Kilo's factor;
   no tokenizer dependency).
-- Fire when `estimate(history + incoming user message) > trigger_tokens` (default **48_000** —
-  sized for a 64k-context model: ~16k reserve covers tool schemas, the reply, and estimate slack;
-  configurable for larger windows).
+- Fire when `estimate(history + incoming user message) >` the **resolved** trigger for the face
+  model (default path: `trigger_pct` 0.75 × declared `context_window`, else absolute
+  `trigger_tokens`, else fallback **48_000** for undeclared models).
 - Checked **once per turn, at the turn boundary** (after `load`, before dispatch/execution).
   Mid-turn growth (a tool loop inflating one turn) is the executor's `Budget::TokenLimit`'s job
   today; a mid-turn precheck is a captured follow-up, not v1.
@@ -122,20 +122,41 @@ turns (default 3). Interim mitigations (incomplete-marker non-elision) and the p
 
 ### Configuration
 
-`[main_agent.compaction]` in `topology.toml` (all optional; defaults shown):
+`[main_agent.compaction]` in `topology.toml` (all optional; defaults shown). The **trigger** is
+resolved per **face model** at chat configure time (no rebuild — edit TOML + restart):
+
+1. Per-model absolute: `[main_agent.compaction.models."<name>"].trigger_tokens`
+2. Per-model pct × that model's `[[models]].context_window`
+3. Global absolute: `trigger_tokens` when set
+4. Global `trigger_pct` × face model's `context_window`
+5. Fallback `48_000` when the face model has no declared window
 
 ```toml
 [main_agent.compaction]
 enabled = true              # default ON — a reliability guard that is opt-in is off (failure-modes §2)
-trigger_tokens = 48000      # estimated; set ≈ your model's context window − reserve
+trigger_pct = 0.75          # default: 75% of the face model's declared context_window
+# trigger_tokens = 48000    # optional global absolute — overrides trigger_pct when set
 keep_recent_turns = 3       # user turns kept verbatim (OpenClaw's number; OpenCode/Kilo use 2)
 summary_max_tokens = 1024
 tool_result_max_chars = 2000
+
+# Per-model overrides (keys match [[models]].name / live provider model slug):
+# [main_agent.compaction.models."deepseek-chat"]
+# trigger_pct = 0.70
+# # trigger_tokens = 40000  # absolute wins over pct for this model
+
+# [[models]]
+# name = "deepseek-chat"
+# context_window = 64000
+# tool_calling = true
+# structured_output = false
+# tier = "work_plane"
 ```
 
-`CompactionSettings` lives in `config-loader` (config tier); the runtime `CompactionConfig` lives
-in `liberado-main-agent` (kernel — does not sit on the config stack); `liberado-server` maps one
-to the other in `configure_chat`, exactly like every other `ChatSessions::with_*` knob.
+`CompactionSettings` lives in `config-loader` (config tier) and owns resolution
+(`resolve_trigger_tokens`). The runtime `CompactionConfig` in `liberado-main-agent` still takes a
+single absolute `trigger_tokens` (kernel stays model-agnostic); `liberado-server` resolves then
+maps in `configure_chat`.
 
 ## Deliberately not built (follow-ups, unscheduled)
 

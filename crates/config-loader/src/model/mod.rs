@@ -16,7 +16,8 @@ pub use builder::ConfigBuilder;
 pub use config::Config;
 pub use policy::{Grant, Policy, ZonePolicy};
 pub use topology::{
-    CompactionSettings, CronSchedule, HookConfig, MainAgentConfig, McpConfig, McpTransport,
+    COMPACTION_TRIGGER_PCT_DEFAULT, COMPACTION_TRIGGER_TOKENS_FALLBACK, CompactionSettings,
+    CronSchedule, HookConfig, MainAgentConfig, McpConfig, McpTransport, ModelCompactionSettings,
     PoolConfig, ProviderProfile, RoleOverride, SessionProfile, ToolImpact, Topology,
     managed_binary_path, resolve_declared_zone,
 };

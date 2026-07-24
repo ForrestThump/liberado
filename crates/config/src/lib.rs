@@ -30,9 +30,10 @@ use liberado_common::{Capability, CapabilityCatalog, WriteClass, Zone};
 use thiserror::Error;
 
 pub use liberado_config_loader::{
-    CURRENT_SCHEMA_VERSION, CaptureTuning, CompactionSettings, ConcurrencyTuning, Config,
-    ConfigBuilder, ContextTuning, CronSchedule, DEFAULT_POOL, DispatchTuning, Grant, HookConfig,
-    MainAgentConfig, MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport, Policy,
+    COMPACTION_TRIGGER_PCT_DEFAULT, COMPACTION_TRIGGER_TOKENS_FALLBACK, CURRENT_SCHEMA_VERSION,
+    CaptureTuning, CompactionSettings, ConcurrencyTuning, Config, ConfigBuilder, ContextTuning,
+    CronSchedule, DEFAULT_POOL, DispatchTuning, Grant, HookConfig, MainAgentConfig,
+    MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport, ModelCompactionSettings, Policy,
     PoolConfig, ProviderProfile, RoleOverride, SubagentIsolation, TelegramApprovalsTuning,
     ToolImpact, Topology, Tuning, ZonePolicy, managed_binary_path, resolve_declared_zone,
 };
