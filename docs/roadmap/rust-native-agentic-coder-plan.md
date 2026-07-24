@@ -485,6 +485,10 @@ the multi-role machinery. Until then, coding config is enough.
 
 ### Phase 8: Session API for TUI / WebUI
 
+> **Superseded as a phase, scheduled as a plan (2026-07-24):** the surface track is now
+> [`coding-tui-plan.md`](coding-tui-plan.md) — `/goal` + kernel completion gate + `/loop` on the
+> existing TUI. This section stays for the architectural record (surfaces are clients only).
+
 - Expose goal/coder sessions over daemon/server (HTTP/SSE style aligned with chat API).
 - TUI and WebUI render sessions as **clients only**.
 - Session replay from trace files without rerunning the model.

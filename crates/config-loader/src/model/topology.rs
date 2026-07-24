@@ -113,6 +113,44 @@ pub struct MainAgentConfig {
     /// Optional full override of the main-agent system prompt. When unset, uses the built-in
     /// human-interfacer prompt (if `delegation_mode`) or the short legacy prompt otherwise.
     pub system_prompt: Option<String>,
+    /// Automatic context compaction for long conversations (CH3 — see
+    /// `docs/roadmap/context-compaction-plan.md`). All fields defaulted; an absent table is the
+    /// shipped behavior (compaction on).
+    pub compaction: CompactionSettings,
+}
+
+/// Automatic context-compaction knobs (`[main_agent.compaction]`). Mirrored 1:1 into
+/// `liberado_main_agent::CompactionConfig` by the server — this is the *config-tier* shape; the
+/// kernel crate owns the runtime semantics (and its own doc comments).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CompactionSettings {
+    /// Master switch, default ON — a reliability guard that is opt-in is off in practice.
+    pub enabled: bool,
+    /// Estimated tokens (chars/4 × 1.3, over message contents + tool-call JSON) of history + the
+    /// incoming message above which a turn compacts first. Default 48_000 suits a 64k-context
+    /// model (≈16k reserve for tool schemas, the reply, and estimate slack); raise for larger
+    /// windows.
+    pub trigger_tokens: u32,
+    /// User turns kept verbatim after the summary (boundary anchored on user messages so
+    /// tool-call/result pairs never split). 0 = keep nothing but the summary.
+    pub keep_recent_turns: u32,
+    /// Hard cap on the rolling summary's own length.
+    pub summary_max_tokens: u32,
+    /// Per-tool-result truncation in the transcript shown to the summarizer.
+    pub tool_result_max_chars: u32,
+}
+
+impl Default for CompactionSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            trigger_tokens: 48_000,
+            keep_recent_turns: 3,
+            summary_max_tokens: 1_024,
+            tool_result_max_chars: 2_000,
+        }
+    }
 }
 
 impl Default for MainAgentConfig {
@@ -120,6 +158,7 @@ impl Default for MainAgentConfig {
         Self {
             delegation_mode: true,
             system_prompt: None,
+            compaction: CompactionSettings::default(),
         }
     }
 }

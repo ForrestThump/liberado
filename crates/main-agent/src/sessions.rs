@@ -50,16 +50,20 @@ use liberado_common::{
     ProposalSigner, WriteClass,
 };
 use liberado_conversation_store::{
-    Author, ConversationHeader, ConversationStore, NewConversation, NewNode, StoreError, Ulid,
+    Author, ConversationHeader, ConversationStore, MessageNode, NewConversation, NewNode,
+    StoreError, Ulid,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_executor::{AgentEvent, ExecError, Executor, RiskGatedToolRuntime, ToolRuntime};
 use liberado_mcp::ScopedRuntime;
-use liberado_provider::{Message, Role};
+use liberado_provider::{Message, Provider, Role};
 use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
 use thiserror::Error;
 use tokio::sync::mpsc::Sender;
 
+use crate::compaction::{
+    self, COMPACTION_AUTHOR, CompactionConfig,
+};
 use crate::face::{DispatchBridge, FaceRuntime};
 use crate::{Conversation, DEFAULT_SYSTEM_PROMPT, HUMAN_INTERFACE_SYSTEM_PROMPT};
 
@@ -172,6 +176,17 @@ pub struct ChatSessions {
     delegation_mode: bool,
     /// Shared bridge for the face agent's `delegate` tool (when hub + delegation_mode).
     face_bridge: Option<Arc<DispatchBridge>>,
+    /// Automatic context compaction (CH3) — config + the provider that writes summaries.
+    /// `None` = never compact (tests, and hosts that never wired it).
+    compaction: Option<CompactionEngine>,
+}
+
+/// The moving parts of automatic compaction: the tunables, plus the provider used for the one
+/// summarization completion per compaction (the chat face's own provider in production — see
+/// `docs/roadmap/context-compaction-plan.md` for why no dedicated summarizer model yet).
+struct CompactionEngine {
+    config: CompactionConfig,
+    provider: Arc<dyn Provider>,
 }
 
 impl ChatSessions {
@@ -202,7 +217,19 @@ impl ChatSessions {
             dispatcher_capabilities: CapabilitySet::empty(),
             delegation_mode: false,
             face_bridge: None,
+            compaction: None,
         }
+    }
+
+    /// Enable automatic context compaction (CH3) with `config`; `provider` runs the one
+    /// summarization completion per compaction. Per turn, when the estimated size of history +
+    /// the incoming message exceeds `config.trigger_tokens`, everything older than the last
+    /// `keep_recent_turns` user turns is rolled into a persisted summary marker
+    /// ([`COMPACTION_AUTHOR`]) and the model-visible history resumes from it. A failed summary
+    /// never fails the turn — it runs uncompacted instead.
+    pub fn with_compaction(mut self, config: CompactionConfig, provider: Arc<dyn Provider>) -> Self {
+        self.compaction = Some(CompactionEngine { config, provider });
+        self
     }
 
     /// Override the system prompt written as the root node of new conversations.
@@ -396,7 +423,8 @@ impl ChatSessions {
         let lock = self.session_lock(session);
         let _guard = lock.lock().await;
         self.maybe_seed_default_title(session, user).await?;
-        let (mut convo, parent_leaf) = self.load(session).await?;
+        let (nodes, parent_leaf) = self.load(session).await?;
+        let (mut convo, parent_leaf) = self.maybe_compact(session, nodes, parent_leaf, user).await;
         let before = convo.len();
 
         let reply = if self.uses_face_agent() {
@@ -447,7 +475,8 @@ impl ChatSessions {
         let lock = self.session_lock(session);
         let _guard = lock.lock().await;
         self.maybe_seed_default_title(session, user).await?;
-        let (mut convo, parent_leaf) = self.load(session).await?;
+        let (nodes, parent_leaf) = self.load(session).await?;
+        let (mut convo, parent_leaf) = self.maybe_compact(session, nodes, parent_leaf, user).await;
         let before = convo.len();
 
         if self.uses_face_agent() {
@@ -791,13 +820,156 @@ impl ChatSessions {
             .clone()
     }
 
-    /// Rehydrate a [`Conversation`] from the store's current leaf path, returning it alongside the
+    /// Rehydrate a session's current leaf path as the **model-visible** node view, alongside the
     /// id of the leaf node — the parent the turn's first new message will hang off of.
-    async fn load(&self, session: Ulid) -> SessionResult<(Conversation, Option<Ulid>)> {
+    ///
+    /// Applies the compaction elision rule: everything strictly between the system root and the
+    /// *latest* [`COMPACTION_AUTHOR`] marker is dropped from the view (it stays on disk — rendered
+    /// history via [`history`](Self::history) and `chat-search` see the full transcript). The leaf
+    /// id is unaffected: elision only drops middle nodes, never the suffix.
+    async fn load(&self, session: Ulid) -> SessionResult<(Vec<MessageNode>, Option<Ulid>)> {
         let nodes = self.store.leaf_path(session, None).await?;
         let parent_leaf = nodes.last().map(|n| n.id);
-        let messages = nodes.into_iter().map(|n| n.message).collect();
-        Ok((Conversation::from_history(messages), parent_leaf))
+        Ok((elide_before_latest_marker(nodes), parent_leaf))
+    }
+
+    /// Compact `nodes` if warranted, returning the [`Conversation`] to run the turn over and the
+    /// parent the turn's first new message hangs off of. Unchanged inputs pass through untouched.
+    ///
+    /// The full sequence (estimation, boundary selection, summarization, persistence) is described
+    /// in `docs/roadmap/context-compaction-plan.md`. Every failure mode degrades to *running
+    /// uncompacted* — a missing summary must never cost the human their turn.
+    async fn maybe_compact(
+        &self,
+        session: Ulid,
+        nodes: Vec<MessageNode>,
+        parent_leaf: Option<Ulid>,
+        incoming_user: &str,
+    ) -> (Conversation, Option<Ulid>) {
+        let messages: Vec<Message> = nodes.iter().map(|n| n.message.clone()).collect();
+        let pass_through = || (Conversation::from_history(messages.clone()), parent_leaf);
+
+        let Some(engine) = &self.compaction else {
+            return pass_through();
+        };
+        if !engine.config.enabled {
+            return pass_through();
+        }
+
+        let estimate = compaction::estimate_tokens(&messages)
+            + compaction::estimate_tokens(&[Message::user(incoming_user)]);
+        if estimate <= engine.config.trigger_tokens {
+            return pass_through();
+        }
+
+        let Some(boundary) =
+            compaction::elision_boundary(&messages, engine.config.keep_recent_turns)
+        else {
+            // Over the trigger but nothing elidable (e.g. one enormous turn): compaction can't
+            // help — proceed and let the provider/budget surface the real limit.
+            tracing::debug!(
+                estimate,
+                trigger = engine.config.trigger_tokens,
+                "chat compaction: over trigger but nothing elidable"
+            );
+            return pass_through();
+        };
+
+        let elided: Vec<Message> = messages[1..boundary].to_vec(); // skip the system root at 0
+        let tail: &[MessageNode] = &nodes[boundary..];
+        let request = compaction::summary_request(&elided, &engine.config);
+        let summary = match engine.provider.complete(request).await {
+            Ok(resp) => match resp.content.filter(|c| !c.trim().is_empty()) {
+                Some(text) => text,
+                None => {
+                    tracing::warn!("chat compaction: summarizer returned empty — running uncompacted");
+                    return pass_through();
+                }
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, "chat compaction: summarizer failed — running uncompacted");
+                return pass_through();
+            }
+        };
+
+        // Persist the compacted view: marker off the pre-compaction leaf, then the tail re-appended
+        // verbatim (original authors/content, fresh ids) so the view is a contiguous log suffix —
+        // see the plan doc's "persisted-marker model" for why the tail is copied, not referenced.
+        let marker = compaction::marker_message(&summary);
+        let mut parent = match self
+            .store
+            .append(
+                session,
+                NewNode {
+                    parent_id: parent_leaf,
+                    author: Author::Named(COMPACTION_AUTHOR.into()),
+                    message: marker.clone(),
+                },
+            )
+            .await
+        {
+            Ok(node) => Some(node.id),
+            Err(e) => {
+                tracing::warn!(error = %e, "chat compaction: marker append failed — running uncompacted");
+                return pass_through();
+            }
+        };
+        // The marker is already durable. Re-append the kept tail best-effort so the compacted
+        // view is a contiguous log suffix. Two invariants on partial failure:
+        //
+        // 1. **This turn's model view is always complete.** We push every tail message into
+        //    `view` regardless of whether its append succeeded — a store blip must never strip
+        //    the kept tail from the conversation the model is about to run.
+        // 2. **Do not stop re-appending after the first failure.** Parent stays at the last
+        //    successful node, so later successes still form a linear chain. Breaking early used
+        //    to permanently drop the rest of the suffix on every subsequent load (elision hides
+        //    the pre-marker originals).
+        //
+        // Without a transactional multi-node append, a durable half-written suffix remains
+        // possible; operators see the error log. The next load then resumes from marker +
+        // whatever re-appended.
+        let mut view: Vec<Message> = vec![messages[0].clone(), marker];
+        let mut tail_persist_failures: usize = 0;
+        for tail_node in tail {
+            match self
+                .store
+                .append(
+                    session,
+                    NewNode {
+                        parent_id: parent,
+                        author: tail_node.author.clone(),
+                        message: tail_node.message.clone(),
+                    },
+                )
+                .await
+            {
+                Ok(node) => parent = Some(node.id),
+                Err(e) => {
+                    tail_persist_failures += 1;
+                    tracing::error!(
+                        error = %e,
+                        failures = tail_persist_failures,
+                        "chat compaction: tail re-append failed — keeping full in-memory tail for this turn and continuing remaining appends"
+                    );
+                }
+            }
+            view.push(tail_node.message.clone());
+        }
+        if tail_persist_failures > 0 {
+            tracing::error!(
+                failures = tail_persist_failures,
+                tail_messages = tail.len(),
+                "chat compaction: incomplete persisted tail after marker write; this turn's view is complete but the next load may miss unpersisted tail messages"
+            );
+        }
+
+        tracing::info!(
+            estimate_before = estimate,
+            elided_messages = elided.len(),
+            tail_messages = tail.len(),
+            "chat context compacted"
+        );
+        (Conversation::from_history(view), parent)
     }
 
     /// Append a turn's new messages as a linear chain off `parent`, threading each appended node's
@@ -823,6 +995,29 @@ impl ChatSessions {
             parent = Some(node.id);
         }
         Ok(())
+    }
+}
+
+/// The model-visible view of a leaf path: the system root plus everything from the **latest**
+/// compaction marker onward. Everything strictly between them was summarized into that marker and
+/// would otherwise be paid for, in tokens, on every single turn forever. Identity when no marker
+/// exists. The marker node itself is kept — it carries the rolling summary.
+///
+/// Root handling: the path's first node is the conversation root (the system prompt `create`
+/// wrote). A marker at index 0 is impossible (the root is authored `System`, never
+/// [`COMPACTION_AUTHOR`]), so keeping `nodes[0]` never keeps a marker by accident.
+fn elide_before_latest_marker(nodes: Vec<MessageNode>) -> Vec<MessageNode> {
+    let marker = nodes.iter().rposition(|n| {
+        matches!(&n.author, Author::Named(name) if name == COMPACTION_AUTHOR)
+    });
+    match marker {
+        Some(c) if c > 0 => {
+            let mut view = Vec::with_capacity(nodes.len() - c + 1);
+            view.push(nodes[0].clone());
+            view.extend_from_slice(&nodes[c..]);
+            view
+        }
+        _ => nodes,
     }
 }
 

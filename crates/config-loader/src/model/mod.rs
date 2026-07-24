@@ -16,9 +16,9 @@ pub use builder::ConfigBuilder;
 pub use config::Config;
 pub use policy::{Grant, Policy, ZonePolicy};
 pub use topology::{
-    CronSchedule, HookConfig, MainAgentConfig, McpConfig, McpTransport, PoolConfig,
-    ProviderProfile, RoleOverride, SessionProfile, ToolImpact, Topology, managed_binary_path,
-    resolve_declared_zone,
+    CompactionSettings, CronSchedule, HookConfig, MainAgentConfig, McpConfig, McpTransport,
+    PoolConfig, ProviderProfile, RoleOverride, SessionProfile, ToolImpact, Topology,
+    managed_binary_path, resolve_declared_zone,
 };
 pub use tuning::{
     CURRENT_SCHEMA_VERSION, CaptureTuning, ConcurrencyTuning, ContextTuning, CronDeliveryTuning,

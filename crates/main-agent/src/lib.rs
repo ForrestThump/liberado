@@ -11,16 +11,22 @@
 //! the `delegate` tool result footer by correlation id + parent chat session). Not model context.
 //!
 //! [`Conversation`] is the in-memory primitive — one history, no I/O. Durability and per-session
-//! routing layer on top via [`ChatSessions`].
+//! routing layer on top via [`ChatSessions`]. Long histories are compacted at the turn boundary
+//! ([`CompactionConfig`], module [`compaction`]): older turns are rolled into a persisted summary
+//! marker so the model-visible context stays under the context window.
 
 use liberado_executor::{AgentEvent, ExecError, Executor, ToolRuntime};
 use liberado_provider::Message;
 use tokio::sync::mpsc::Sender;
 
+mod compaction;
 mod dispatch_journal;
 mod face;
 mod sessions;
 
+pub use compaction::{
+    COMPACTION_AUTHOR, CompactionConfig, SUMMARY_HEADER, estimate_tokens,
+};
 pub use dispatch_journal::{dispatches_dir, journal_path};
 pub use face::{DELEGATE_TOOL_NAME, DispatchBridge, FaceRuntime};
 pub use sessions::{ChatSessions, SessionError, SessionResult, default_conversation_title};

@@ -142,7 +142,7 @@ path was never wired to the same check.
 
 **Every defect above passed the test suite and died on first contact with a running daemon.**
 
-That is not an argument for fewer tests — the suite (1,175 and counting) catches regressions
+That is not an argument for fewer tests — the suite (1,342 and counting) catches regressions
 constantly. It is an argument about *what unit tests can see*: they see the shapes you gave them.
 The bugs live in the shapes you didn't.
 
