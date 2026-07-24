@@ -19,6 +19,9 @@ use tokio::sync::mpsc::UnboundedSender;
 /// Default debounce window: long enough to coalesce a `notify` burst, short enough to feel live.
 pub(crate) const DEFAULT_DEBOUNCE: Duration = Duration::from_millis(400);
 
+/// Default proposal reaper interval: sweep `proposals/` for expired entries every 10 minutes.
+pub(crate) const DEFAULT_PROPOSAL_REAP_INTERVAL: Duration = Duration::from_secs(600);
+
 /// Depth assigned to a daemon-originated reaction. It is the first agent step reacting to an
 /// external change, so it starts the correlation chain at 1 (the depth cap halts longer cascades).
 pub(crate) const DEFAULT_REACTION_DEPTH: u32 = 1;
@@ -147,6 +150,9 @@ pub(crate) struct DaemonPool {
 pub struct Daemon {
     pub(crate) vault: Vault,
     pub(crate) debounce: Duration,
+    /// How often (seconds) the background reaper sweeps `proposals/` for expired proposals.
+    /// 0 disables the reaper. Defaults to 600 (10 minutes).
+    pub(crate) proposal_reap_interval: Duration,
     /// Named dispatcher/executor pools, keyed by name. The `"default"` pool (`DEFAULT_POOL`) is
     /// what every event routed to before pools existed — `with_dispatcher`/`with_orchestrator`
     /// populate it and no other call site needs to change. Additional named pools are opt-in via

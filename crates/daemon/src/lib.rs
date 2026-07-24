@@ -37,7 +37,10 @@ use liberado_vault::Vault;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use vault_source::VaultEventSource;
 
-use types::{DEFAULT_DEBOUNCE, DEFAULT_REACTION_DEPTH, DispatcherContext};
+use proposals::proposal_reap_loop;
+use types::{
+    DEFAULT_DEBOUNCE, DEFAULT_PROPOSAL_REAP_INTERVAL, DEFAULT_REACTION_DEPTH, DispatcherContext,
+};
 
 impl Daemon {
     /// Open the daemon over the vault at `vault_path` (enables the audit log).
@@ -49,6 +52,7 @@ impl Daemon {
         Ok(Self {
             vault: Vault::open(name, vault_path).await?,
             debounce: DEFAULT_DEBOUNCE,
+            proposal_reap_interval: DEFAULT_PROPOSAL_REAP_INTERVAL,
             pools: HashMap::new(),
             signer: ProposalSigner::random(),
             notifier: None,
@@ -64,6 +68,13 @@ impl Daemon {
     /// Production wiring: `config.topology.user_timezone()` via bootstrap.
     pub fn with_user_timezone(mut self, tz: UserTimezone) -> Self {
         self.user_timezone = Some(tz);
+        self
+    }
+
+    /// How often the background reaper sweeps `proposals/` for expired proposals. 0 disables.
+    /// Default is 600s (10 minutes). Set in `tuning.toml` via `proposals.reap_interval_secs`.
+    pub fn with_proposal_reap_interval(mut self, secs: u64) -> Self {
+        self.proposal_reap_interval = Duration::from_secs(secs);
         self
     }
 
@@ -249,6 +260,18 @@ impl Daemon {
                 "starting additional event source"
             );
             tokio::spawn(cron_source.run(event_tx.clone()));
+        }
+
+        if !self.proposal_reap_interval.is_zero() {
+            let reap_interval = self.proposal_reap_interval;
+            let reap_vault = self.vault.clone();
+            tracing::info!(
+                interval_secs = reap_interval.as_secs(),
+                "starting proposal expiry reaper"
+            );
+            tokio::spawn(async move {
+                proposal_reap_loop(reap_vault, reap_interval).await;
+            });
         }
 
         // Drop our own clone so the channel closes once every spawned source — and any external

@@ -403,7 +403,8 @@ pub fn configure_daemon(
             capabilities.clone(),
             guard.zone_write_classes.clone(),
         )
-        .with_proposal_signer(guard.signer.clone());
+        .with_proposal_signer(guard.signer.clone())
+        .with_proposal_reap_interval(config.tuning.proposals.reap_interval_secs);
     let daemon = match &notifier {
         Some(n) => daemon.with_notifier(n.clone()),
         None => daemon,

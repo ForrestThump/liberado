@@ -136,3 +136,48 @@ async fn to_relative_nonexistent_path_returns_none() {
     let nowhere = dir.path().parent().unwrap().join("does-not-exist.md");
     assert!(vault.to_relative(&nowhere).is_none());
 }
+
+#[tokio::test]
+async fn write_rejects_parent_dir_traversal() {
+    let (vault, _dir) = temp_vault().await;
+    let prov = WriteProvenance::agent("a", "c1");
+    let err = vault
+        .write("../escape.md", "boo", None, &prov)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, VaultError::PathTraversal(_)));
+    assert!(format!("{err}").contains(".."));
+}
+
+#[tokio::test]
+async fn read_rejects_parent_dir_traversal() {
+    let (vault, _dir) = temp_vault().await;
+    let err = vault.read("../escape.md").await.unwrap_err();
+    assert!(matches!(err, VaultError::PathTraversal(_)));
+}
+
+#[tokio::test]
+async fn delete_rejects_parent_dir_traversal() {
+    let (vault, _dir) = temp_vault().await;
+    let prov = WriteProvenance::agent("a", "c1");
+    let err = vault.delete("../escape.md", None, &prov).await.unwrap_err();
+    assert!(matches!(err, VaultError::PathTraversal(_)));
+}
+
+#[tokio::test]
+async fn move_note_rejects_traversal_on_either_path() {
+    let (vault, _dir) = temp_vault().await;
+    let prov = WriteProvenance::agent("a", "c1");
+    // `from` traversal
+    let err = vault
+        .move_note("../from.md", "to.md", None, &prov)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, VaultError::PathTraversal(_)));
+    // `to` traversal
+    let err = vault
+        .move_note("from.md", "../to.md", None, &prov)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, VaultError::PathTraversal(_)));
+}

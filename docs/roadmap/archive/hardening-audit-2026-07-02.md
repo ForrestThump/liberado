@@ -122,10 +122,19 @@ start the daemon, confirm it actually executes.
    `status: approved` since the done-write hasn't landed yet. Low probability under normal conditions,
    architecturally unguarded.
 5. **Expiry enforced reactively only** (Low/operational). `Proposal::is_expired_at` **is** checked in
-   `handle_proposal_change` (`crates/daemon/src/lib.rs:~327-330`) — a late approval on an expired
+   `handle_proposal_change` (`crates/daemon/src/proposals.rs:~327-330`) — a late approval on an expired
    proposal is correctly rejected. But there's no background reaper: an expired-but-untouched `Pending`
    proposal just sits there forever with no status change, since the check only runs when a new vault
    edit arrives. Not a security issue, just an operational loose end (stale proposal notes accumulate).
+
+**Resolution (2026-07-23):** Background `proposal_reap_loop` spawned in `Daemon::run()` as a
+`tokio::time::interval` task (default 600s, 0 to disable). On each tick, scans `proposals/` via
+`tokio::fs::read_dir`, reads each `.md` file, checks `is_expired_at(Utc::now())`, and — if the
+status isn't already terminal — writes `status: expired` using `DAEMON_SOURCE` provenance. The
+existing `handle_proposal_change` pipeline then picks up the write, recognizes the terminal status,
+and archives the note to `proposals/archive/expired/`. Configurable via `tuning.toml`:
+`[tuning.proposals] reap_interval_secs = 600`. 3 unit tests cover the reaper's core logic (expired
+→ flipped, still-valid → untouched, non-md/archive → skipped, already-terminal → skipped).
 6. **`liberado-mcp-forge` flag-injection surface** (Low realistic severity). `crates/mcp-forge/src/build.rs`
    uses `std::process::Command` directly (no shell — command/argument injection via shell metacharacters
    is not possible), but the `package` field (`~lines 84-86`) and the `git` URL field are passed as raw
@@ -135,15 +144,12 @@ start the daemon, confirm it actually executes.
    single-user system — but there's no defense-in-depth against a supply-chain edit to that file (e.g. a
    compromised dependency's install script, or your own future automation writing to it).
 7. **No path-traversal validation at the Liberado layer for vault writes** (worth tracking, severity
-   depends on Turbovault internals which are outside this workspace). `Vault::write`
-   (`crates/vault/src/lib.rs:~91-107`) passes a tool-supplied `rel_path` straight to
-   `VaultManager::write_file_with_metadata` with no `..`/absolute-path check on Liberado's side.
-   `Vault::to_relative` (`~lines 148-152`) *does* correctly canonicalize+strip-prefix, but it's only used
-   for watcher-delivered paths, not tool-call-argument paths headed for a write. Since tool call
-   arguments ultimately come from an LLM (which could itself be manipulated via prompt injection from
-   untrusted content it reads — a fetched webpage, an email), an unvalidated path argument reaching
-   Turbovault unvalidated is a real theoretical vector; whether it's actually exploitable depends on
-   protections inside the external Turbovault dependency, not audited here.
+   depends on Turbovault internals which are outside this workspace).
+
+**Resolution (2026-07-23):** Added `Vault::validate_rel_path` — cross-platform component walk that
+rejects `ParentDir` (`..`), `Prefix` (Windows `\\?\`), `RootDir`, and absolute paths. Called at the
+top of every public entry point (`read`, `write`, `delete`, `move_note`). Defense-in-depth
+`starts_with` check after joining with `vault_root`. 4 new `PathTraversal` integration tests.
 8. **Unbounded resource growth** (Low, slow-burn).
    - Proposal files: no archiving/rotation/deletion anywhere in `main-agent`/`daemon`/`orchestrator` —
      `<data_dir>/proposals/` and the vault's `proposals/` both grow forever across a long-running

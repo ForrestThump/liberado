@@ -27,6 +27,7 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 |---|---|---|
 | **CH1** | WebUI chat maturity | Model switch, daily usable chat beyond session view |
 | **CH2** | Chat history search Tier 1 | [`chat-search-plan.md`](chat-search-plan.md) |
+| **CH3** | Context compaction system | Summarize/compress long conversations to stay under model context windows without losing key facts |
 
 ### Priority 3 — coding pack (integration parity, not best-in-class)
 
@@ -38,6 +39,7 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 
 ### Cross-cutting
 
+- **External dependency audit** — audit all `Cargo.toml` entries across crates for unnecessary duplication, unused deps, version drift, and opportunities to share/slim. Goal: reduce compile wall-clock without breaking anything.
 - **Modularity** remains the enabler: [`../architecture/modularity.md`](../architecture/modularity.md). Hot-path **module splits** landed (server API, daemon, config-loader model, executor budget).
 - **A4 dual-store hub tests** (2026-07-23): list / cancel / park→resume / rehydrate via real `GoalSessionHub` on production `SessionStore` — `crates/session-store/tests/hub_dual_store.rs` (see [`../architecture/failure-modes.md`](../architecture/failure-modes.md) §1).
 - **TurboVault modules**: vector + tasks paying back; remaining **`vault_events`** and upstream merge. Umbrella: [`turbovault-modules-integration-roadmap.md`](turbovault-modules-integration-roadmap.md).

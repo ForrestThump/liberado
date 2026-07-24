@@ -18,6 +18,8 @@ use turbomcp_types::{
     Prompt, PromptResult, Resource, ResourceResult, ServerInfo, Tool, ToolResult,
 };
 
+mod common;
+
 /// A one-tool server (bare tool name + canned reply), so a registry can namespace it.
 #[derive(Clone)]
 struct EchoServer {
@@ -32,12 +34,7 @@ impl McpHandler for EchoServer {
     fn list_tools(&self) -> Vec<Tool> {
         vec![Tool::new(self.tool, "echo tool")]
     }
-    fn list_resources(&self) -> Vec<Resource> {
-        Vec::new()
-    }
-    fn list_prompts(&self) -> Vec<Prompt> {
-        Vec::new()
-    }
+    mcp_handler_stubs!();
     fn call_tool<'a>(
         &'a self,
         name: &'a str,
@@ -54,23 +51,6 @@ impl McpHandler for EchoServer {
                 Err(McpError::tool_not_found(&name))
             }
         }
-    }
-    fn read_resource<'a>(
-        &'a self,
-        uri: &'a str,
-        _ctx: &'a RequestContext,
-    ) -> impl Future<Output = McpResult<ResourceResult>> + MaybeSend + 'a {
-        let uri = uri.to_string();
-        async move { Err(McpError::resource_not_found(&uri)) }
-    }
-    fn get_prompt<'a>(
-        &'a self,
-        name: &'a str,
-        _args: Option<Value>,
-        _ctx: &'a RequestContext,
-    ) -> impl Future<Output = McpResult<PromptResult>> + MaybeSend + 'a {
-        let name = name.to_string();
-        async move { Err(McpError::prompt_not_found(&name)) }
     }
 }
 

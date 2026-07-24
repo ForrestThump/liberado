@@ -1,9 +1,15 @@
 //! Proposal write, approval handling, archive, and grant application.
 
 use std::path::Path;
+use std::time::Duration;
 
-use liberado_common::{DEFAULT_POOL, SignedProposal};
+use chrono::Utc;
+use liberado_common::{
+    DEFAULT_POOL, PROPOSALS_DIR, Proposal, ProposalStatus, SignedProposal, WriteProvenance,
+};
 use liberado_orchestrator::Disposition;
+use liberado_vault::{Vault, VaultError};
+use tokio::fs;
 
 use crate::helpers::{archive_outcome_subdir, grant_component_for_pool, slugify};
 use crate::types::{DAEMON_SOURCE, Daemon, DaemonError, PROPOSALS_ARCHIVE_DIR, ReactionOutcome};
@@ -265,5 +271,229 @@ impl Daemon {
             }
             Some(liberado_common::GrantScope::Once) | None => {}
         }
+    }
+}
+
+/// Background loop: every `interval`, scan `proposals/` for `.md` files whose `expires` date has
+/// passed and flip `status: expired` + archive. A zero `interval` is a no-op (disabled).
+pub(crate) async fn proposal_reap_loop(vault: Vault, interval: Duration) {
+    if interval.is_zero() {
+        return;
+    }
+    let mut tick = tokio::time::interval(interval);
+    // Skip immediate fire — let the daemon run for one interval before the first periodic sweep.
+    tick.tick().await;
+    loop {
+        tick.tick().await;
+        if let Err(e) = reap_expired_proposals(&vault).await {
+            tracing::warn!(error = %e, "proposal reaper sweep failed");
+        }
+    }
+}
+
+/// Sweep `proposals/` once: read every `.md` file (excluding the archive subtree), check
+/// `is_expired_at(Utc::now())`, and if so write `status: expired` + archive.
+pub(crate) async fn reap_expired_proposals(vault: &Vault) -> Result<(), DaemonError> {
+    let proposals_path = vault.root().join(PROPOSALS_DIR);
+
+    let mut reader = match fs::read_dir(&proposals_path).await {
+        Ok(r) => r,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(DaemonError::from(VaultError::Backend(e.to_string()))),
+    };
+
+    let now = Utc::now();
+
+    while let Some(entry) = reader
+        .next_entry()
+        .await
+        .map_err(|e| DaemonError::from(VaultError::Backend(e.to_string())))?
+    {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+
+        // Convert the absolute filesystem path to a vault-relative one.
+        let rel_path = match vault.to_relative(&path) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        // Skip the archive subtree — archived entries are already terminal.
+        if rel_path.starts_with(PROPOSALS_ARCHIVE_DIR) {
+            continue;
+        }
+
+        let content = match vault.read(&rel_path).await {
+            Ok(c) => c,
+            Err(_) => continue, // vanished between listing and read
+        };
+
+        let mut proposal = match Proposal::from_note(&content) {
+            Ok(p) => p,
+            Err(_) => continue, // not a parseable proposal
+        };
+
+        if !proposal.is_expired_at(now) {
+            continue;
+        }
+        if proposal.status.is_terminal() {
+            continue; // already handled by handle_proposal_change
+        }
+
+        let provenance = WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
+        proposal.status = ProposalStatus::Expired;
+        vault
+            .write(&rel_path, &proposal.to_note(), None, &provenance)
+            .await?;
+
+        tracing::info!(
+            proposal_id = %proposal.id,
+            "marked proposal expired (reaper)"
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration as ChronoDuration, Utc};
+    use liberado_common::{Proposal, ProposalStatus, ProposedAction, ToolCall, WriteProvenance};
+    use liberado_vault::Vault;
+    use tempfile::TempDir;
+
+    fn expired_proposal() -> Proposal {
+        let mut p = Proposal::pending(
+            "test-reap",
+            "corr-reap-1",
+            "test-agent",
+            ProposedAction::ToolCalls(vec![ToolCall {
+                tool: "noop".to_string(),
+                args: serde_json::json!({}),
+            }]),
+            "Expired test proposal",
+        );
+        p.expires = Some(Utc::now() - ChronoDuration::hours(1));
+        p.created = Utc::now() - ChronoDuration::hours(2);
+        p
+    }
+
+    fn live_proposal() -> Proposal {
+        let mut p = Proposal::pending(
+            "test-live",
+            "corr-live-1",
+            "test-agent",
+            ProposedAction::ToolCalls(vec![ToolCall {
+                tool: "noop".to_string(),
+                args: serde_json::json!({}),
+            }]),
+            "Still-valid test proposal",
+        );
+        p.expires = Some(Utc::now() + ChronoDuration::hours(1));
+        p
+    }
+
+    #[tokio::test]
+    async fn reap_flips_expired_pending_to_expired() {
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open("test", dir.path()).await.unwrap();
+        let prov = WriteProvenance::agent("test", "c1");
+
+        let proposals_dir = dir.path().join(PROPOSALS_DIR);
+        tokio::fs::create_dir_all(&proposals_dir).await.unwrap();
+        vault
+            .write(
+                "proposals/old-one.md",
+                &expired_proposal().to_note(),
+                None,
+                &prov,
+            )
+            .await
+            .unwrap();
+        vault
+            .write(
+                "proposals/still-valid.md",
+                &live_proposal().to_note(),
+                None,
+                &prov,
+            )
+            .await
+            .unwrap();
+
+        reap_expired_proposals(&vault).await.unwrap();
+
+        let old = vault.read("proposals/old-one.md").await.unwrap();
+        let parsed = Proposal::from_note(&old).unwrap();
+        assert_eq!(parsed.status, ProposalStatus::Expired);
+
+        let live = vault.read("proposals/still-valid.md").await.unwrap();
+        let parsed = Proposal::from_note(&live).unwrap();
+        assert_eq!(parsed.status, ProposalStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn reap_skips_non_md_files_and_archive_subtree() {
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open("test", dir.path()).await.unwrap();
+        let prov = WriteProvenance::agent("test", "c1");
+
+        // Bare proposals/ dir might not exist → reaper must not crash.
+        reap_expired_proposals(&vault).await.unwrap();
+
+        let proposals_dir = dir.path().join(PROPOSALS_DIR);
+        tokio::fs::create_dir_all(&proposals_dir).await.unwrap();
+        tokio::fs::write(proposals_dir.join("notes.txt"), "Not a proposal")
+            .await
+            .unwrap();
+
+        let archive_dir = proposals_dir.join("archive").join("expired");
+        tokio::fs::create_dir_all(&archive_dir).await.unwrap();
+        vault
+            .write(
+                "proposals/archive/expired/already-archived.md",
+                &expired_proposal().to_note(),
+                None,
+                &prov,
+            )
+            .await
+            .unwrap();
+
+        reap_expired_proposals(&vault).await.unwrap();
+
+        let content = vault
+            .read("proposals/archive/expired/already-archived.md")
+            .await
+            .unwrap();
+        let parsed = Proposal::from_note(&content).unwrap();
+        assert_ne!(
+            parsed.status,
+            ProposalStatus::Expired,
+            "archived proposals must be skipped"
+        );
+    }
+
+    #[tokio::test]
+    async fn reap_skips_already_terminal_proposals() {
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open("test", dir.path()).await.unwrap();
+        let prov = WriteProvenance::agent("test", "c1");
+
+        let proposals_dir = dir.path().join(PROPOSALS_DIR);
+        tokio::fs::create_dir_all(&proposals_dir).await.unwrap();
+        let mut p = expired_proposal();
+        p.status = ProposalStatus::Rejected;
+        vault
+            .write("proposals/rejected.md", &p.to_note(), None, &prov)
+            .await
+            .unwrap();
+
+        reap_expired_proposals(&vault).await.unwrap();
+
+        let content = vault.read("proposals/rejected.md").await.unwrap();
+        let parsed = Proposal::from_note(&content).unwrap();
+        assert_eq!(parsed.status, ProposalStatus::Rejected);
     }
 }
