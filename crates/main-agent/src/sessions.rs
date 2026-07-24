@@ -914,7 +914,22 @@ impl ChatSessions {
                 return pass_through();
             }
         };
+        // The marker is already durable. Re-append the kept tail best-effort so the compacted
+        // view is a contiguous log suffix. Two invariants on partial failure:
+        //
+        // 1. **This turn's model view is always complete.** We push every tail message into
+        //    `view` regardless of whether its append succeeded — a store blip must never strip
+        //    the kept tail from the conversation the model is about to run.
+        // 2. **Do not stop re-appending after the first failure.** Parent stays at the last
+        //    successful node, so later successes still form a linear chain. Breaking early used
+        //    to permanently drop the rest of the suffix on every subsequent load (elision hides
+        //    the pre-marker originals).
+        //
+        // Without a transactional multi-node append, a durable half-written suffix remains
+        // possible; operators see the error log. The next load then resumes from marker +
+        // whatever re-appended.
         let mut view: Vec<Message> = vec![messages[0].clone(), marker];
+        let mut tail_persist_failures: usize = 0;
         for tail_node in tail {
             match self
                 .store
@@ -930,14 +945,22 @@ impl ChatSessions {
             {
                 Ok(node) => parent = Some(node.id),
                 Err(e) => {
-                    // Partial tail re-append: originals survive pre-marker on disk (and render
-                    // there), the in-memory view below is still complete — continuity degrades on
-                    // the *next* load, never this turn. Log loudly and keep going.
-                    tracing::error!(error = %e, "chat compaction: tail re-append failed — continuing with a partial persisted tail");
-                    break;
+                    tail_persist_failures += 1;
+                    tracing::error!(
+                        error = %e,
+                        failures = tail_persist_failures,
+                        "chat compaction: tail re-append failed — keeping full in-memory tail for this turn and continuing remaining appends"
+                    );
                 }
             }
             view.push(tail_node.message.clone());
+        }
+        if tail_persist_failures > 0 {
+            tracing::error!(
+                failures = tail_persist_failures,
+                tail_messages = tail.len(),
+                "chat compaction: incomplete persisted tail after marker write; this turn's view is complete but the next load may miss unpersisted tail messages"
+            );
         }
 
         tracing::info!(
