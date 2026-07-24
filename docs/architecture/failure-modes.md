@@ -127,6 +127,15 @@ could ever do.
 > **The smell.** An interface with a writer and no reader (or a reader and no writer). It usually
 > means one direction was never imagined, not that it was rejected.
 
+Related: the **path-traversal check that only went one way.** `Vault::to_relative` had correct
+canonicalize+strip-prefix logic, but it was only called on watcher-delivered paths — not
+tool-call-argument paths headed for `write`/`delete`/`move_note`. `Vault::write` passed a
+tool-supplied `rel_path` straight to Turbovault with no `..`/absolute-path validation. The
+`Vault::validate_rel_path` component-walk guard (2026-07-23) closed this by running before every
+public entry point. The bug class: **a boundary that validates one entry path but not another** —
+the code says "this is a secure boundary" and it's true for the path you looked at, but the other
+path was never wired to the same check.
+
 ---
 
 ## The meta-lesson

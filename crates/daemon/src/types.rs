@@ -191,4 +191,10 @@ pub struct Daemon {
     /// "Local time: …" line prepended to the goal text so the model knows wall-clock without
     /// putting time in every system prompt. Vault-watch reactions are left alone.
     pub(crate) user_timezone: Option<UserTimezone>,
+    /// Pre-resolved capability grants keyed by session profile name. When an event carries a
+    /// `profile` in its `payload.data`, the reactor narrows the session grant from the pool
+    /// ceiling to this set — so a cron can elect `AskHuman` by naming a profile whose component
+    /// includes it, while unattended/default crons stay structurally non-interactive (D-d).
+    /// Populated by bootstrap from `config.resolve_session_profile()`.
+    pub(crate) session_profile_caps: HashMap<String, CapabilitySet>,
 }

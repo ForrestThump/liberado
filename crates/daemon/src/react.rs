@@ -85,11 +85,16 @@ impl Daemon {
         // concurrently with each other — no more awaiting one orchestrator before the next event.
         if let Some(hub) = &self.goals {
             let goal = reaction_goal(event, &request.goal, pool_name);
+            let capabilities = match goal.profile.as_deref() {
+                Some(name) => self
+                    .session_profile_caps
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| ctx.capabilities.clone()),
+                None => ctx.capabilities.clone(),
+            };
             let grant = SessionGrant {
-                // Pool capabilities are the session's authority ceiling for this reaction. A
-                // profile-narrowed cron (E7) would resolve a narrower grant here; without a profile
-                // the pool is the grant. Crons default to no AskHuman via policy (D-d).
-                capabilities: ctx.capabilities.clone(),
+                capabilities,
                 profile: goal.profile.clone(),
                 overrides: serde_json::Value::Null,
             };

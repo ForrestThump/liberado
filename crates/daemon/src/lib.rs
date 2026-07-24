@@ -53,6 +53,7 @@ impl Daemon {
             vault: Vault::open(name, vault_path).await?,
             debounce: DEFAULT_DEBOUNCE,
             proposal_reap_interval: DEFAULT_PROPOSAL_REAP_INTERVAL,
+            session_profile_caps: HashMap::new(),
             pools: HashMap::new(),
             signer: ProposalSigner::random(),
             notifier: None,
@@ -75,6 +76,14 @@ impl Daemon {
     /// Default is 600s (10 minutes). Set in `tuning.toml` via `proposals.reap_interval_secs`.
     pub fn with_proposal_reap_interval(mut self, secs: u64) -> Self {
         self.proposal_reap_interval = Duration::from_secs(secs);
+        self
+    }
+
+    /// Pre-resolved capability grants keyed by session profile name (from
+    /// `config.resolve_session_profile()`). When an event carries a `profile`, the reactor
+    /// narrows the session's authority from the pool ceiling to the profile's component grant.
+    pub fn with_session_profile_caps(mut self, caps: HashMap<String, CapabilitySet>) -> Self {
+        self.session_profile_caps = caps;
         self
     }
 

@@ -24,10 +24,13 @@ pub use liberado_config::{
 mod mcp_apply;
 pub use mcp_apply::{LiveMcpController, McpApplyError, McpApplyReport, apply_mcp_peer_set};
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use liberado_common::{CapabilityCatalog, DEFAULT_POOL, ModelRole, ToolGuidanceSource};
+use liberado_common::{
+    CapabilityCatalog, CapabilitySet, DEFAULT_POOL, ModelRole, ToolGuidanceSource,
+};
 use liberado_config::{ProviderProfile, RoleOverride};
 use liberado_daemon::Daemon;
 use liberado_dispatch_pack::DispatchPack;
@@ -257,6 +260,25 @@ fn pool_settings_from_config(config: &Config) -> McpPoolSettings {
     }
 }
 
+/// Pre-resolve every enabled `[[session_profiles]]` entry into a `(profile_name → CapabilitySet)`
+/// map the daemon uses at reaction time to narrow a session's authority from the pool ceiling to
+/// the profile's component grant. The server path resolves profiles dynamically via
+/// `state.config`; the daemon path resolves eagerly at boot because the daemon doesn't hold a
+/// config reference.
+fn session_profile_caps(config: &Config) -> HashMap<String, CapabilitySet> {
+    config
+        .topology
+        .session_profiles
+        .iter()
+        .filter(|p| p.enabled)
+        .map(|p| {
+            let component = p.component_key();
+            let caps = config.policy.capabilities_for(component);
+            (p.name.clone(), caps)
+        })
+        .collect()
+}
+
 /// Construct the live MCP controller: shared [`CapabilityCatalog`] + cloneable [`McpRegistry`],
 /// peers applied from `config.topology.mcps` (boot = first apply). Prefer this over
 /// [`mcp_registry_from_config`] when hot-reload must remain possible even if the initial set is empty.
@@ -404,7 +426,8 @@ pub fn configure_daemon(
             guard.zone_write_classes.clone(),
         )
         .with_proposal_signer(guard.signer.clone())
-        .with_proposal_reap_interval(config.tuning.proposals.reap_interval_secs);
+        .with_proposal_reap_interval(config.tuning.proposals.reap_interval_secs)
+        .with_session_profile_caps(session_profile_caps(config));
     let daemon = match &notifier {
         Some(n) => daemon.with_notifier(n.clone()),
         None => daemon,

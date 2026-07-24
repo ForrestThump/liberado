@@ -10,14 +10,12 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 
 ### Priority 1 — the autonomous life-OS daemon
 
-*Already in hand:* TurboVault storage + live plugins (vector + tasks); cron; Telegram free-form sticky chat + cron delivery; capability boundary; OpenClaw briefing cutover with `Succeeded` briefs; **MCP connection pooling (M1)** default-on; **Tier-1 live conformance L1–L10** (server T1 suite + daemon L9).
+*Already in hand:* TurboVault storage + live plugins (vector + tasks); cron; Telegram free-form sticky chat + cron delivery; **C1 interactive crons (AskHuman)**; capability boundary; OpenClaw briefing cutover with `Succeeded` briefs; **MCP connection pooling (M1)** default-on; **M1b hot-reload**; **degraded-catalog routing**; **Tier-1 live conformance L1–L10**; **proposal expiry reaper**; **vault path-traversal guard**.
 
 | # | What | Why it matters |
 |---|---|---|
 | **Dogfood** | **Lean on Telegram harder** | Collect friction → fix real pain. Free-form sticky chat is the phone surface. |
-| **C1** | **Interactive crons (AskHuman)** | Delivery landed; remaining is “ask me if unsure” via session profiles. |
-| **M1b** | MCP live peers + hot-reload | Pooling + **degraded-catalog routing** landed. **Hot-reload** of the hand-edited topology MCP slice via `apply_mcp_peer_set` / `POST /api/mcp/reload` (no process restart; no agent self-registration; no admin UI). |
-| **T1** | **Live conformance suite** — [`live-conformance-suite.md`](live-conformance-suite.md) | **L1–L10 landed** (`crates/server/src/t1_conformance.rs` L1–L8/L10; daemon `l9_*` for L9). **Open:** Tier 2 only. |
+| **T1** | **Live conformance suite** — [`live-conformance-suite.md`](live-conformance-suite.md) | **L1–L10 landed.** **Open:** Tier 2 only. |
 | **W1** | **Goal-session view in mobile WebUI** | Later phone surface beyond Telegram. See [`../architecture/session-surface-contract.md`](../architecture/session-surface-contract.md). |
 | **E5-b** | ~~Telegram session deep-link~~ | **Deprioritized** (prefer WebUI later). |
 
@@ -49,7 +47,7 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 
 ```
   P1 daily-driver ──►  dogfood Telegram
-                   ├── C1 AskHuman crons
+                   ├── C1 done (interactive crons → AskHuman via session profiles)
                    ├── M1b done (pool + degraded routing + topology MCP hot-reload)
                    └── T1 Tier-1 done (Tier 2 optional)
 
@@ -61,6 +59,8 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 
 | When | What |
 |------|------|
+| **2026-07-23** | **C1 interactive crons (AskHuman):** profile-narrowed session grants — a cron schedule naming a `[[session_profiles]]` entry whose component includes `AskHuman` gets an open input channel; unattended crons stay structurally non-interactive (D-d). |
+| **2026-07-23** | **M1b hot-reload** (`apply_mcp_peer_set` / `POST /api/mcp/reload`); **lock-poisoning recovery** (sessions + catalog); **proposal expiry reaper** (configurable, background); **vault path-traversal validation** (cross-platform); **MCP test double dedup** |
 | **2026-07-23** | **Architecture hardening:** god-module splits; **MCP pooling** (M1); **M1b degraded-catalog routing**; **T1** L1–L10; **A4** dual-store hub tests |
 | **2026-07-19** | TurboVault plugins live (vector + tasks); Telegram dogfood baseline |
 | **2026-07-18** | Cron → Telegram delivery; OpenClaw brief cutover; sticky session persistence |

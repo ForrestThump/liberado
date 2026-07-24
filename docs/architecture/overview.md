@@ -109,12 +109,12 @@ Bottom-up (each depends roughly on those above it):
 | Config | [`config-loader`](../../crates/config-loader/Cargo.toml) | The layer beneath `config`: `ConfigSource` trait + `ChainLoader` merging TOML sources in precedence order. |
 | Inference | [`provider`](../../crates/provider/ARCHITECTURE.md) | The `Provider` narrow waist + `MockProvider`. `model()` / `set_model()` / `list_models()`. No HTTP. |
 | Inference | [`provider-openai-compat`](../../crates/provider-openai-compat) | One config-driven OpenAI-compatible backend. Model id is interior-mutable (`RwLock`) for hot-swap. Implements `GET /models` listing. |
-| Vault | [`vault`](../../crates/vault/ARCHITECTURE.md) | Turbovault adapter: provenance writes + hash-join attribution (loop-breaking). |
+| Vault | [`vault`](../../crates/vault/ARCHITECTURE.md) | Turbovault adapter: provenance writes, hash-join attribution (loop-breaking), and path-traversal validation (rejects `..`/absolute/prefix on every entry point). |
 | Perceive | [`cron`](../../crates/cron/Cargo.toml) | `EventSource` (from `common`) that fires on a schedule instead of a file change — cron and vault-watch are interchangeable event-sources (Decision 18 checkpoint #3). Deliberately vault-agnostic: no `liberado-vault` dependency. |
 | Decide | [`dispatcher`](../../crates/dispatcher/ARCHITECTURE.md) | classify (LLM) → guards (deterministic, downgrade-only) → `DispatchDecision`. |
 | Act | [`executor`](../../crates/executor/ARCHITECTURE.md) | The agent loop: drive a `Provider` over a `ToolRuntime` to a `Report`. MCP-agnostic. |
 | Act | [`scratchpad`](../../crates/scratchpad/Cargo.toml) | Per-execution todo-list tool for the executor's report-mode loop — "external working memory" (a doom-loop mitigation), implemented as engine state rather than a standalone MCP. |
-| Act | [`mcp`](../../crates/mcp/ARCHITECTURE.md) | `TurbomcpRuntime`: the `ToolRuntime` over real MCP tools; injects provenance into `_meta`. |
+| Act | [`mcp`](../../crates/mcp/ARCHITECTURE.md) | MCP runtime: `TurbomcpRuntime` (the `ToolRuntime` over real MCP tools; injects provenance into `_meta`), connection pooling (M1), degraded-catalog routing, and hot-reload (`POST /api/mcp/reload` — no process restart). |
 | Act | [`orchestrator`](../../crates/orchestrator/ARCHITECTURE.md) | Bridges a `DispatchDecision` to an execution; chooses the provenance correlation. |
 | Notify | [`notify`](../../crates/notify/Cargo.toml) | `Notifier` trait for events a human should know about even unattended (the cron/Phase-3 case); `TelegramNotifier` is the first implementation. `notify_proposal` sends Approve/Revise/Reject buttons on channels that support them. |
 | Notify | [`telegram-approvals`](../../crates/telegram-approvals/Cargo.toml) | `ApprovalBot`: answers those buttons. Approve/Reject are pure code (no LLM) — flip `status` in `proposals/{stem}.md`, tagged `WriteProvenance::human()` so the daemon's own attribution reacts to it like an Obsidian edit. Revise is the one LLM-touching path, and it can only redraft content, never grant approval — see `current.md`'s "Before Phase 3" section. |
@@ -126,7 +126,7 @@ Bottom-up (each depends roughly on those above it):
 | Store | [`memory-store`](../../crates/memory-store/Cargo.toml) | Vault-backed general + procedural memory (cleartext Markdown as source of truth; semantic recall via `turbovault-vector`) for `memory-mcp` and the dispatcher. |
 | Store | [`memory-mcp`](../../crates/memory-mcp/Cargo.toml) | MCP exposing `memory-store` to agents. |
 | Kernel | [`session`](../../crates/session/ARCHITECTURE.md) | Domain-neutral goal-session kernel: `GoalSpec`, `SessionEvent`, store/hub, `DomainPackRunner`; `LifeOpsDemoRunner` is the second-domain proof. Served as `/api/goals*`. |
-| Core | [`daemon`](../../crates/daemon/ARCHITECTURE.md) | The long-running watch→debounce→attribute→dispatch loop. |
+| Core | [`daemon`](../../crates/daemon/ARCHITECTURE.md) | The long-running watch→debounce→attribute→react loop: vault-watch + cron + hooks fan into one channel; proposal handling (approve/execute, expiry reaper, archive); session profile narrowing for interactive crons (C1). |
 | Compose | [`bootstrap`](../../crates/bootstrap/Cargo.toml) | Builds provider/dispatcher/orchestrator from the environment — the shared composition logic for the `cli` and server binaries. |
 | Client | [`chat-client-contract`](../../crates/chat-client-contract/Cargo.toml) | Shared HTTP/SSE wire types + the `SseDecoder` incremental parser, so TUI/WebUI/CLI don't each hand-roll their own (a `ChatClient` trait was tried and deleted 2026-07-05 — TUI/CLI's transport needs diverged too much to share one). |
 | Client | [`liberado-commands`](../../crates/liberado-commands/Cargo.toml) | Shared slash-command parser + handlers (`/help`, `/new`, `/model`, ...) for all chat clients via a `CommandContext` trait. |
@@ -191,8 +191,11 @@ Both siblings build from the fork's `develop` branch (the vector-db work landed 
 The reactive backbone, the web UI, a **streaming conversational chat loop**, and **persisted,
 session-keyed conversations** (Decision 17) are complete, all hosted by **one `liberado` binary**
 (daemon-first, Decision 2 — `serve` hosts everything; `chat` is a client). The pre-Phase-3 hardening
-pass (item 15 below) is done, Phase 3 is fully landed (cron, the external webhook hook receiver, and
-named dispatcher/executor pools, items 16-18 below, completing Decision 18 checkpoint #3), and
+pass (item 15 below) is done, Phase 3 is fully landed (cron, the external webhook hook receiver,
+named dispatcher/executor pools, and **C1 interactive crons** — a `CronSchedule` naming a
+`[[session_profiles]]` entry whose component includes `AskHuman` gets an open input channel, so an
+unattended cron that hits ambiguity can pause and ask), items 16-18 below, completing Decision 18
+checkpoint #3), and
 Phase 4 v1 (Docker MCP transport, item 19 below) is built and unit-tested, pending only its live
 Docker-daemon smoke test. Rust-native agentic orchestration is now **built**, not next: home-spun
 Liberado goal-session crates replaced `vtcode`, and the unified Session model (D7) plus the one
@@ -214,7 +217,18 @@ daily-driver line rather than three half-built. The order and rationale are in
 8. ✅ **`liberado chat` CLI client** — a `reqwest`/SSE terminal REPL (`crates/cli/chat_client.rs`), the first native (non-browser) client of the shared chat API.
 9. ✅ **Config-driven substrate** — the daemon boots on one validated `Config` (Decision 14, `crates/bootstrap`): the dispatcher holds `policy.toml`'s grants as its base authority, and `topology.mcps` is now the **single source** for both the dispatcher's catalog AND the runtime's MCP connection. Each `[[mcps]]` entry declares a required `description` (routing), `consequence` (the risk gate), and `transport` (`stdio` command/args or `http` url — how the runtime reaches it); the dispatcher routes over the enabled MCPs and the orchestrator connects to those same names by transport, so a routed name is always a name the runtime can reach (slice 2b done — no env path remains).
 
-10. ✅ **Proposal workflow (Decision 11, emit AND approve→execute)** — the full propose→approve→execute loop is closed. The EMIT path writes a `proposals/<id>.md` artifact for high-consequence concrete actions (YAML frontmatter with `status: pending`); the APPROVE→EXECUTE half picks up a human `status: approved` edit via the watch loop, calls `orchestrator.execute_approved()` with the proposal's `correlation_id` as provenance (no re-dispatch, no guards — the edit is the authorization), and flips `status` to `done` (loop-broken, idempotent). As of 2026-07-02 every proposal also carries an HMAC-SHA256 integrity signature (tamper detection) and runtime-gated proposals (adaptive, non-seed tool calls) land in the vault too, not a data-dir dead end — see [`hardening-audit-2026-07-02.md`](../roadmap/archive/hardening-audit-2026-07-02.md). As of 2026-07-22, once a proposal goes terminal (`done`/`rejected`/`expired`) the daemon archives the note into `proposals/archive/<outcome>/` (agent-provenance move, suppressed; `react()` excludes the archive subtree) so the active `proposals/` dir shows only what still needs a human.
+10. ✅ **Proposal workflow (Decision 11, emit AND approve→execute)** — the full propose→approve→execute loop is closed. The EMIT path writes a `proposals/<id>.md` artifact for high-consequence concrete actions (YAML frontmatter with `status: pending`); the APPROVE→EXECUTE half picks up a human `status: approved` edit via the watch loop, calls `orchestrator.execute_approved()` with the proposal's `correlation_id` as provenance (no re-dispatch, no guards — the edit is the authorization), and flips `status` to `done` (loop-broken, idempotent). As of 2026-07-02 every proposal also carries an HMAC-SHA256 integrity
+signature (tamper detection) and runtime-gated proposals (adaptive, non-seed tool calls) land in the
+vault too, not a data-dir dead end — see
+[`hardening-audit-2026-07-02.md`](../roadmap/archive/hardening-audit-2026-07-02.md). As of
+2026-07-22, once a proposal goes terminal (`done`/`rejected`/`expired`) the daemon archives the note
+into `proposals/archive/<outcome>/` (agent-provenance move, suppressed; `react()` excludes the
+archive subtree) so the active `proposals/` dir shows only what still needs a human. As of
+2026-07-23, a **background expiry reaper** (configurable `tokio::time::interval`, defaults
+600s, 0 to disable) scans `proposals/` for `.md` files past their `expires` date, flips
+`status: expired` using `DAEMON_SOURCE` provenance, and the normal `handle_proposal_change`
+pipeline picks up the write and archives it — closed the gap where an expired-but-untouched
+`Pending` proposal would sit forever with no status change.
 11. ✅ **Phase 1 — the general MCP agent** — chat now routes every turn through `Dispatcher::dispatch` before executing (the "main-agent depth" item below is done); the three independently-static capability catalogs (daemon/chat/API) are one live, shared `Arc<CapabilityCatalog>`; `Grant.component` narrows both dispatch routing and runtime tool surfacing. Full writeups: [`chat-dispatcher-and-component-scoping.md`](../roadmap/archive/chat-dispatcher-and-component-scoping.md), [`live-catalog-and-dispatcher-narrowed-tools.md`](../roadmap/archive/live-catalog-and-dispatcher-narrowed-tools.md).
 12. ✅ **Phase 2 — the self-improvement moat** — `riggers/` (`liberado-pr-dispatch-mcp`) registered as `code-dispatch` (reversible, human-approved draft PRs only), with a greenfield mode to scaffold brand-new MCPs from scratch. Full report: [`phase-2-implementation-report.md`](../roadmap/archive/phase-2-implementation-report.md). **Updated direction, 2026-07-09:** the PR factory workflow stays, but `vtcode` is no longer the strategic coding engine; see [`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md).
 13. ✅ **`crates/tui`** — a ratatui TUI client hitting the same chat/SSE contract as the browser web UI and `liberado chat`; shares its SSE decoder and slash-command dispatcher with the other clients (`chat-client-contract`, `liberado-commands`) rather than hand-rolling its own.
@@ -247,13 +261,8 @@ daily-driver line rather than three half-built. The order and rationale are in
 **Not yet built (next slice):**
 - Rust-native agentic coder crates and PR-factory integration; see
   [`rust-native-agentic-coder-plan.md`](../roadmap/rust-native-agentic-coder-plan.md).
-- MCP peers: hand-edited `topology.toml` + **hot-reload** (`LiveMcpController` /
-  `POST /api/mcp/reload`) without process restart. **Not** agent self-registration or admin UI.
-  **Connection pooling (M1)** and **degraded-catalog routing (M1b)** — pool via
-  `tuning.mcp_pooling`; `CapabilityCatalog::routing_descriptors` omits degraded peers.
-  See [`../roadmap/current.md`](../roadmap/current.md).
-- Tier-1 live conformance **L1–L10 landed** (`crates/server/src/t1_conformance.rs` + daemon L9);
-  Tier 2 (model-in-the-loop) remains optional — [`../roadmap/live-conformance-suite.md`](../roadmap/live-conformance-suite.md).
+- Tier 2 live conformance (model-in-the-loop) — optional;
+  [`../roadmap/live-conformance-suite.md`](../roadmap/live-conformance-suite.md).
 - Splitting `liberado-common`'s grab-bag along its natural boundaries — partially underway (`config`
   and `config-loader` have already been carved off into their own crates), but `common` still has
   eight modules (`provenance`, `capability`, `catalog`, `dispatch`, `event`, `model`,
