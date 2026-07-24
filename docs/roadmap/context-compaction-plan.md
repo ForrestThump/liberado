@@ -73,6 +73,25 @@ previous marker's summary (rolling update, per the research). One honest cosmeti
 re-appended tail duplicates those messages on disk, so `chat-search` can report the same text
 twice *within one conversation* — harmless at this tier, worth a dedup only if it ever annoys.
 
+### Known residual gap (marker-before-tail partial failure)
+
+**Status: accepted residual of Tier 1; closed by construction in the CH3.1 viewport re-architecture
+— see [`../plans/context-compaction-viewport-rearchitecture.md`](../plans/context-compaction-viewport-rearchitecture.md).**
+
+Failure modes **before** the marker is durable fail open (run uncompacted): summarizer empty/error,
+marker append failure. After the marker is durable, tail re-append is best-effort:
+
+- **This turn** is always complete in memory (every kept tail message is pushed into the model view
+  even if a given append fails). Test:
+  `partial_tail_reappend_failure_keeps_full_view_for_this_turn`.
+- **Next load** applies elision from the latest marker: any tail message that never re-appended is
+  **gone from model-visible context**, while the pre-marker originals remain on disk for history /
+  search. Operators see `tracing::error` on incomplete tail; there is no automatic repair.
+
+Likelihood is low if `SessionStore` appends are reliable; blast radius is up to the last K user
+turns (default 3). Interim mitigations (incomplete-marker non-elision) and the preferred end state
+(side summary + `continue_from` viewport, no tail re-append) are spelled out in the CH3.1 plan.
+
 ### Trigger
 
 - `estimate_tokens = ceil(chars / 4 × 1.3)` over message contents + tool-call JSON (Kilo's factor;
@@ -120,6 +139,10 @@ to the other in `configure_chat`, exactly like every other `ChatSessions::with_*
 
 ## Deliberately not built (follow-ups, unscheduled)
 
+- **CH3.1 viewport / side-summary re-architecture** — full conversation stays one append-only
+  spine; summary is a separate node; session viewport points at summary + `continue_from` for
+  model context only. Removes tail re-append and the partial-failure residual above. Plan:
+  [`../plans/context-compaction-viewport-rearchitecture.md`](../plans/context-compaction-viewport-rearchitecture.md).
 - **Mid-turn precheck** (OpenClaw-style: re-check pressure after each tool result inside the
   executor loop). Needs the executor to own compaction awareness; bigger intrusion, and chat turns
   in face-agent mode rarely loop enough to need it. Revisit if thick-mode chats overflow mid-turn.
