@@ -2,8 +2,8 @@ use super::*;
 use async_trait::async_trait;
 use liberado_executor::Budget;
 use liberado_provider::{
-    CompletionRequest, CompletionResponse, MockProvider, Provider, ProviderResult, Role, ToolDef,
-    ToolInvocation,
+    CompletionRequest, CompletionResponse, MockProvider, Provider, ProviderError, ProviderResult,
+    Role, ToolDef, ToolInvocation,
 };
 use liberado_session_store::SessionStore;
 
@@ -1008,3 +1008,361 @@ async fn live_catalog_without_grants_does_not_pass_through_all_registry_tools() 
         "empty grants + live catalog must not surface peer tools unscoped; got {offered:?}"
     );
 }
+
+// ── CH3: context compaction ─────────────────────────────────────────────────
+//
+// Every test here runs against the **real** `SessionStore` (the store production constructs) and
+// asserts on what the *provider actually received* — the two doctrine points of
+// `docs/architecture/failure-modes.md` §1. The load-bearing assertion of the first test (raw
+// elided content ABSENT from the post-compaction request) fails if compaction is neutered to a
+// no-op — break the code, watch the test fail.
+
+/// A `ChatSessions` with compaction wired, over the real session store. One `MockProvider` serves
+/// **both** the executor and the summarizer, so the script interleaves in call order (a
+/// compaction's summary request consumes the next scripted response before the turn's reply).
+async fn compacting_sessions_at(
+    root: &std::path::Path,
+    config: CompactionConfig,
+    replies: Vec<CompletionResponse>,
+) -> (ChatSessions, Arc<MockProvider>) {
+    let store = Arc::new(SessionStore::open(root).await);
+    let provider = Arc::new(MockProvider::with_script("mock", replies));
+    let executor = Executor::new(provider.clone(), Budget::default());
+    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools))
+        .with_compaction(config, provider.clone());
+    (sessions, provider)
+}
+
+/// Append user/assistant pairs directly to the store (bypassing turns, so seeding never consumes
+/// scripted replies nor trips the compaction trigger mid-seed).
+async fn seed_turns(sessions: &ChatSessions, id: Ulid, pairs: &[(&str, &str)]) {
+    let mut parent = sessions
+        .store
+        .leaf_path(id, None)
+        .await
+        .unwrap()
+        .last()
+        .map(|n| n.id);
+    for (u, a) in pairs {
+        for (author, msg) in [
+            (Author::User, Message::user(*u)),
+            (Author::Assistant, Message::assistant(*a)),
+        ] {
+            let node = sessions
+                .store
+                .append(
+                    id,
+                    NewNode {
+                        parent_id: parent,
+                        author,
+                        message: msg,
+                    },
+                )
+                .await
+                .unwrap();
+            parent = Some(node.id);
+        }
+    }
+}
+
+#[tokio::test]
+async fn compacts_over_trigger_and_the_next_turn_sees_the_summary_not_the_raw_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let summary = "SUMMARY: earlier chit-chat about squirrels".to_string();
+
+    // Sized so the seeded history (four ~600-char messages) far exceeds it, while the
+    // post-compaction view (system + marker + short tail + short first turn + the next incoming
+    // question) lands exactly AT it — so turn 1 compacts and turn 2 provably does not.
+    let trigger = compaction::estimate_tokens(&[
+        Message::system(DEFAULT_SYSTEM_PROMPT),
+        compaction::marker_message(&summary),
+        Message::user("tail question"),
+        Message::assistant("tail answer"),
+        Message::user("fresh question"),
+        Message::assistant("fresh answer"),
+        Message::user("second question"),
+    ]);
+    let config = CompactionConfig {
+        enabled: true,
+        trigger_tokens: trigger,
+        keep_recent_turns: 1,
+        summary_max_tokens: 512,
+        tool_result_max_chars: 2_000,
+    };
+    let (sessions, provider) = compacting_sessions_at(
+        dir.path(),
+        config,
+        vec![
+            CompletionResponse::text(summary.clone()),
+            CompletionResponse::text("fresh answer"),
+            CompletionResponse::text("second answer"),
+        ],
+    )
+    .await;
+    let id = sessions.create(None).await.unwrap();
+    let secret = format!("SECRET-ELIDED-{}", "x".repeat(600));
+    seed_turns(
+        &sessions,
+        id,
+        &[
+            (&secret, &format!("A1 {}", "y".repeat(600))),
+            (&format!("u2 {}", "z".repeat(600)), &format!("A2 {}", "w".repeat(600))),
+            ("tail question", "tail answer"),
+        ],
+    )
+    .await;
+
+    // Turn 1: over the trigger → summarize, persist the marker, run on the compacted view.
+    let reply = sessions.turn(id, "fresh question").await.unwrap();
+    assert_eq!(reply, "fresh answer");
+
+    let requests = provider.received_requests();
+    assert_eq!(requests.len(), 2, "summarizer + one turn completion");
+    // The summarizer's input is where the elided content legitimately goes…
+    assert!(
+        requests[0]
+            .messages
+            .iter()
+            .any(|m| m.content.contains("SECRET-ELIDED")),
+        "the elided region must reach the summarizer's transcript"
+    );
+    // …and the turn request is where it must NOT go. This is the assertion that fails if
+    // compaction is broken into a no-op: the raw history would ride every request forever.
+    let turn_req = &requests[1];
+    assert!(
+        turn_req
+            .messages
+            .iter()
+            .any(|m| m.content.contains("SUMMARY: earlier chit-chat about squirrels")),
+        "the compacted view must carry the rolling summary"
+    );
+    assert!(
+        !turn_req
+            .messages
+            .iter()
+            .any(|m| m.content.contains("SECRET-ELIDED")),
+        "elided history must not reach the model after compaction"
+    );
+    assert!(
+        turn_req.messages.iter().any(|m| m.content == "tail question")
+            && turn_req.messages.iter().any(|m| m.content == "fresh question"),
+        "the kept tail and the incoming message must survive verbatim"
+    );
+
+    // The full rendered history keeps EVERYTHING — marker included, raw elided content intact
+    // (compaction never deletes; it only changes what the model sees).
+    let history = sessions.history(id).await.unwrap();
+    assert!(history.iter().any(|m| m.content.contains("SECRET-ELIDED")));
+    assert!(
+        history
+            .iter()
+            .any(|m| m.content.starts_with(compaction::SUMMARY_HEADER)),
+        "rendered history must show the compaction marker"
+    );
+
+    // Turn 2: under the trigger now, so no second summarization — and the marker persisted, so
+    // the next load still resumes from the summary, not the raw history.
+    let reply2 = sessions.turn(id, "second question").await.unwrap();
+    assert_eq!(reply2, "second answer");
+    let requests = provider.received_requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "no second summarization should have run (view is under the trigger)"
+    );
+    let turn2 = &requests[2];
+    assert!(
+        turn2
+            .messages
+            .iter()
+            .any(|m| m.content.contains("SUMMARY: earlier chit-chat about squirrels")),
+        "the marker must persist across loads"
+    );
+    assert!(
+        !turn2
+            .messages
+            .iter()
+            .any(|m| m.content.contains("SECRET-ELIDED")),
+        "the elision rule must hold on the next load too"
+    );
+}
+
+#[tokio::test]
+async fn stream_turn_also_compacts() {
+    // The streaming path (webui/TUI/CLI) shares `maybe_compact` with `turn` — prove it.
+    let dir = tempfile::tempdir().unwrap();
+    let config = CompactionConfig {
+        enabled: true,
+        trigger_tokens: 1, // always fires
+        keep_recent_turns: 1,
+        ..CompactionConfig::default()
+    };
+    let (sessions, _provider) = compacting_sessions_at(
+        dir.path(),
+        config,
+        vec![
+            CompletionResponse::text("SUMMARY: old stuff"),
+            CompletionResponse::text("streamed answer"),
+        ],
+    )
+    .await;
+    let id = sessions.create(None).await.unwrap();
+    seed_turns(
+        &sessions,
+        id,
+        &[("u1", "a1"), ("u2", "a2"), ("tail q", "tail a")],
+    )
+    .await;
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    sessions.turn_stream(id, "stream me", &tx).await.unwrap();
+    drop(tx);
+    let mut tokens = String::new();
+    while let Some(ev) = rx.recv().await {
+        if let AgentEvent::Token(t) = ev {
+            tokens.push_str(&t);
+        }
+    }
+    assert_eq!(tokens, "streamed answer");
+    let history = sessions.history(id).await.unwrap();
+    assert!(
+        history
+            .iter()
+            .any(|m| m.content.starts_with(compaction::SUMMARY_HEADER)),
+        "the streaming path must persist the marker too"
+    );
+}
+
+#[tokio::test]
+async fn no_compaction_under_trigger() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = CompactionConfig {
+        enabled: true,
+        trigger_tokens: 1_000_000,
+        ..CompactionConfig::default()
+    };
+    let (sessions, provider) = compacting_sessions_at(
+        dir.path(),
+        config,
+        vec![
+            CompletionResponse::text("r1"),
+            CompletionResponse::text("r2"),
+        ],
+    )
+    .await;
+    let id = sessions.create(None).await.unwrap();
+    sessions.turn(id, "first thing").await.unwrap();
+    sessions.turn(id, "second thing").await.unwrap();
+
+    let history = sessions.history(id).await.unwrap();
+    assert!(
+        !history
+            .iter()
+            .any(|m| m.content.starts_with(compaction::SUMMARY_HEADER)),
+        "no marker without a compaction"
+    );
+    // Ordinary rehydration: turn 2's request still carries turn 1 verbatim.
+    let requests = provider.received_requests();
+    assert_eq!(requests.len(), 2, "no summarizer call under the trigger");
+    assert!(
+        requests[1]
+            .messages
+            .iter()
+            .any(|m| m.content == "first thing"),
+        "under-trigger history must ride along untouched"
+    );
+}
+
+#[tokio::test]
+async fn disabled_config_never_compacts() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = CompactionConfig {
+        enabled: false,
+        trigger_tokens: 1, // would always fire if enabled
+        ..CompactionConfig::default()
+    };
+    let (sessions, provider) = compacting_sessions_at(
+        dir.path(),
+        config,
+        vec![
+            CompletionResponse::text("r1"),
+            CompletionResponse::text("r2"),
+        ],
+    )
+    .await;
+    let id = sessions.create(None).await.unwrap();
+    seed_turns(&sessions, id, &[("u1", "a1"), ("u2", "a2")]).await;
+    sessions.turn(id, "third thing").await.unwrap();
+
+    let history = sessions.history(id).await.unwrap();
+    assert!(
+        !history
+            .iter()
+            .any(|m| m.content.starts_with(compaction::SUMMARY_HEADER)),
+        "a disabled config must never write markers"
+    );
+    assert_eq!(provider.received_requests().len(), 1);
+    assert!(
+        provider.received_requests()[0]
+            .messages
+            .iter()
+            .any(|m| m.content == "u1"),
+        "disabled compaction passes history through untouched"
+    );
+}
+
+/// A provider that fails its first completion (the summarizer) and delegates the rest to an inner
+/// mock — the summarizer-failure path must degrade to running the turn uncompacted.
+struct FailOnceProvider {
+    inner: MockProvider,
+    failed: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait]
+impl Provider for FailOnceProvider {
+    fn model(&self) -> String {
+        self.inner.model()
+    }
+    async fn complete(&self, request: CompletionRequest) -> ProviderResult<CompletionResponse> {
+        if !self.failed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return Err(ProviderError::Transport("summarizer boom".into()));
+        }
+        self.inner.complete(request).await
+    }
+}
+
+#[tokio::test]
+async fn summarizer_failure_runs_the_turn_uncompacted() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let provider = Arc::new(FailOnceProvider {
+        inner: MockProvider::with_script("mock", [CompletionResponse::text("uncompacted answer")]),
+        failed: std::sync::atomic::AtomicBool::new(false),
+    });
+    let executor = Executor::new(provider.clone(), Budget::default());
+    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools)).with_compaction(
+        CompactionConfig {
+            enabled: true,
+            trigger_tokens: 1, // always fires
+            keep_recent_turns: 1,
+            ..CompactionConfig::default()
+        },
+        provider.clone(),
+    );
+    let id = sessions.create(None).await.unwrap();
+    seed_turns(&sessions, id, &[("u1 secret", "a1"), ("u2", "a2")]).await;
+
+    // The turn must SUCCEED despite the summarizer failing — compaction may never cost the human
+    // their turn.
+    let reply = sessions.turn(id, "still answer me").await.unwrap();
+    assert_eq!(reply, "uncompacted answer");
+
+    let history = sessions.history(id).await.unwrap();
+    assert!(
+        !history
+            .iter()
+            .any(|m| m.content.starts_with(compaction::SUMMARY_HEADER)),
+        "a failed summarization must not persist a marker"
+    );
+}
+

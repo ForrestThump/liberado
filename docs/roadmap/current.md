@@ -24,8 +24,6 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 | # | What | Why |
 |---|---|---|
 | **CH1** | WebUI chat maturity | Model switch, daily usable chat beyond session view |
-| **CH2** | Chat history search Tier 1 | [`chat-search-plan.md`](chat-search-plan.md) |
-| **CH3** | Context compaction system | Summarize/compress long conversations to stay under model context windows without losing key facts |
 
 ### Priority 3 — coding pack (integration parity, not best-in-class)
 
@@ -59,6 +57,8 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 
 | When | What |
 |------|------|
+| **2026-07-23** | **CH3 context compaction:** long chats roll older history into a persisted summary marker (`Author::Named("compaction")` in the session DAG) — the model resumes from the summary + a verbatim tail of the last K user turns; the full transcript stays on disk, rendered and searchable. `[main_agent.compaction]` knobs, default on. Plan + 4-project research (OpenCode/Kilo/LibreChat/OpenClaw): [`context-compaction-plan.md`](context-compaction-plan.md). |
+| **2026-07-05** | **CH2 chat history search Tier 1** *(landed then, recorded now — the entry sat open here by mistake)*: lexical AND/regex over the session JSONL logs behind `GET /api/conversations/search`, the webui sidebar search box, and the `chat-search` MCP for the dispatcher. [`chat-search-plan.md`](chat-search-plan.md). |
 | **2026-07-23** | **C1 interactive crons (AskHuman):** profile-narrowed session grants — a cron schedule naming a `[[session_profiles]]` entry whose component includes `AskHuman` gets an open input channel; unattended crons stay structurally non-interactive (D-d). |
 | **2026-07-23** | **M1b hot-reload** (`apply_mcp_peer_set` / `POST /api/mcp/reload`); **lock-poisoning recovery** (sessions + catalog); **proposal expiry reaper** (configurable, background); **vault path-traversal validation** (cross-platform); **MCP test double dedup** |
 | **2026-07-23** | **Architecture hardening:** god-module splits; **MCP pooling** (M1); **M1b degraded-catalog routing**; **T1** L1–L10; **A4** dual-store hub tests |

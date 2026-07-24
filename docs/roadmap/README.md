@@ -13,6 +13,7 @@
 |------|--------|
 | [loops-plan.md](loops-plan.md) | Scheduled recurrence over goals |
 | [chat-search-plan.md](chat-search-plan.md) | History search tiers |
+| [context-compaction-plan.md](context-compaction-plan.md) | Chat context compaction (CH3 — Tier 1 landed) |
 | [rust-native-agentic-coder-plan.md](rust-native-agentic-coder-plan.md) | Coding pack roadmap |
 | [tui-maturity-roadmap.md](tui-maturity-roadmap.md) | TUI surface |
 | [turbovault-modules-integration-roadmap.md](turbovault-modules-integration-roadmap.md) | TurboVault plugins umbrella |

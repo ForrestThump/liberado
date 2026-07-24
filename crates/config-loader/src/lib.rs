@@ -37,11 +37,11 @@ pub use chain::ChainLoader;
 pub use file_source::FileSource;
 pub use liberado_common::DEFAULT_POOL;
 pub use model::{
-    CURRENT_SCHEMA_VERSION, CaptureTuning, ConcurrencyTuning, Config, ConfigBuilder, ContextTuning,
-    CronDeliveryTuning, CronSchedule, DispatchTuning, Grant, HookConfig, MainAgentConfig,
-    MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport, Policy, PoolConfig,
-    ProviderProfile, RoleOverride, SubagentIsolation, TelegramApprovalsTuning, ToolImpact,
-    Topology, Tuning, ZonePolicy, managed_binary_path, resolve_declared_zone,
+    CURRENT_SCHEMA_VERSION, CaptureTuning, CompactionSettings, ConcurrencyTuning, Config,
+    ConfigBuilder, ContextTuning, CronDeliveryTuning, CronSchedule, DispatchTuning, Grant,
+    HookConfig, MainAgentConfig, MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport,
+    Policy, PoolConfig, ProviderProfile, RoleOverride, SubagentIsolation, TelegramApprovalsTuning,
+    ToolImpact, Topology, Tuning, ZonePolicy, managed_binary_path, resolve_declared_zone,
 };
 pub use source::{ConfigLoadError, ConfigSource};
 pub use validation::validate_merged_config;
