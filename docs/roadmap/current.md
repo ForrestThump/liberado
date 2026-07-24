@@ -27,8 +27,13 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 
 ### Priority 3 — coding pack (integration parity, not best-in-class)
 
+> **Pulled forward by owner decision (2026-07-24):** the agentic coding TUI track is now active
+> alongside P1/P2 — plan: [`coding-tui-plan.md`](coding-tui-plan.md) (goal-driven TUI surface +
+> kernel completion gate, Grok Build-style disputed-claim completion, slices S1–S7).
+
 | # | What | Why |
 |---|---|---|
+| **CT1** | **Agentic coding TUI** — [`coding-tui-plan.md`](coding-tui-plan.md) | `/goal` + critic-gated completion + `/loop`, on the existing TUI/hub/coding pack; loosely coupled kernel machinery |
 | **E6-c(b)** | Resume mid-build coding session | Design pass (git suspend point) |
 | — | [`pr-dispatch-vtcode-no-write-finding.md`](pr-dispatch-vtcode-no-write-finding.md) | Open bug |
 | — | [`coder-eval-curriculum.md`](coder-eval-curriculum.md) | After P1/P2 not bottleneck |
