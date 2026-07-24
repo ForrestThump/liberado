@@ -85,13 +85,21 @@ impl Daemon {
         // concurrently with each other — no more awaiting one orchestrator before the next event.
         if let Some(hub) = &self.goals {
             let goal = reaction_goal(event, &request.goal, pool_name);
+            // Named profile must resolve to a boot-time grant. Fail closed on unknown /
+            // disabled / typo'd names — never silently widen to the full pool ceiling.
             let capabilities = match goal.profile.as_deref() {
-                Some(name) => self
-                    .session_profile_caps
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_else(|| ctx.capabilities.clone()),
                 None => ctx.capabilities.clone(),
+                Some(name) => match self.session_profile_caps.get(name) {
+                    Some(caps) => caps.clone(),
+                    None => {
+                        tracing::warn!(
+                            profile = name,
+                            pool = pool_name,
+                            "event names unknown or disabled session profile — not starting session"
+                        );
+                        return ReactionOutcome::Observed;
+                    }
+                },
             };
             let grant = SessionGrant {
                 capabilities,

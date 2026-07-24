@@ -79,9 +79,9 @@ impl Daemon {
         self
     }
 
-    /// Pre-resolved capability grants keyed by session profile name (from
-    /// `config.resolve_session_profile()`). When an event carries a `profile`, the reactor
-    /// narrows the session's authority from the pool ceiling to the profile's component grant.
+    /// Pre-resolved capability grants keyed by session profile name (enabled
+    /// `[[session_profiles]]` → `policy.capabilities_for` at bootstrap). When an event carries a
+    /// `profile`, the reactor uses that grant; an unknown name is fail-closed (no session).
     pub fn with_session_profile_caps(mut self, caps: HashMap<String, CapabilitySet>) -> Self {
         self.session_profile_caps = caps;
         self

@@ -1871,6 +1871,235 @@ async fn runtime_gated_downgrade_lands_in_the_vault_and_executes_once_approved()
     handle.abort();
 }
 
+/// An event that names a session profile missing from the boot map must not start a hosted
+/// session (fail closed — never silent full-pool fallback).
+#[tokio::test]
+async fn unknown_session_profile_does_not_start_session() {
+    use liberado_common::{Capability, CapabilitySet, EventPayload};
+    use liberado_config_loader::DispatchTuning;
+    use liberado_dispatch_pack::DispatchPack;
+    use liberado_provider::{CompletionResponse, MockProvider};
+    use liberado_session::{GoalSessionHub, GoalSessionStore};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let (daemon, _dir) = temp_daemon().await;
+    let grant_dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "unused",
+            Vec::<CompletionResponse>::new(),
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    // Hub present so the profile branch runs (no hub → inline path, no profile grant).
+    let pack = DispatchPack::new(
+        Arc::new(CapabilityCatalog::new()),
+        Vec::new(),
+        1,
+        std::env::temp_dir(),
+    );
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(Arc::new(pack));
+    let hub = Arc::new(hub);
+
+    let mut known = HashMap::new();
+    known.insert(
+        "interactive-cron".into(),
+        CapabilitySet::from_iter([Capability::AskHuman]),
+    );
+
+    let daemon = daemon
+        .with_dispatcher(
+            grant_dispatcher,
+            Arc::new(CapabilityCatalog::new()),
+            CapabilitySet::empty(),
+            Vec::new(),
+        )
+        .with_session_profile_caps(known)
+        .with_goal_hub(hub.clone());
+
+    let sender = daemon.event_sender();
+    let (tx, mut rx) = unbounded_channel();
+    let handle = tokio::spawn(daemon.run(tx));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    sender
+        .send(Event::trigger(
+            "CronFired",
+            "cron:bad-profile",
+            "cron:bad-profile:1",
+            EventPayload {
+                summary: Some("should not run".into()),
+                data: serde_json::json!({ "profile": "typo-not-in-map" }),
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+
+    let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for reaction")
+        .expect("reaction channel closed");
+    assert!(
+        matches!(reaction.outcome, ReactionOutcome::Observed),
+        "unknown profile must be Observed, not Dispatched; got {}",
+        reaction.outcome.label()
+    );
+    assert!(
+        hub.list().await.is_empty(),
+        "no hosted session may be created for an unknown profile"
+    );
+
+    handle.abort();
+}
+
+/// A known profile name resolves and still dispatches a hosted session.
+#[tokio::test]
+async fn known_session_profile_still_dispatches() {
+    use liberado_common::{
+        Capability, CapabilitySet, DispatchAction, DispatchDecision, EventPayload,
+    };
+    use liberado_config_loader::DispatchTuning;
+    use liberado_dispatch_pack::DispatchPack;
+    use liberado_executor::{RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime};
+    use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
+    use liberado_session::{GoalSessionHub, GoalSessionStore};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    struct NoopRuntime;
+    #[async_trait::async_trait]
+    impl ToolRuntime for NoopRuntime {
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".into())
+        }
+    }
+    struct NoopFactory;
+    #[async_trait::async_trait]
+    impl RuntimeFactory for NoopFactory {
+        async fn runtime_for(
+            &self,
+            _allowed_mcps: &[String],
+            _provenance: WriteProvenance,
+        ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+            Ok(Box::new(NoopRuntime))
+        }
+    }
+
+    let (daemon, _dir) = temp_daemon().await;
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: Vec::new(),
+        },
+        confidence: 0.95,
+        rationale: "profile ok".into(),
+    };
+    let dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "dispatch",
+            [CompletionResponse::text(
+                serde_json::to_string(&decision).unwrap(),
+            )],
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    let orchestrator = Orchestrator::new(
+        Arc::new(MockProvider::with_script(
+            "exec",
+            [CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "c",
+                SUBMIT_REPORT_TOOL,
+                serde_json::json!({ "outcome": "succeeded", "summary": "ok" }),
+            )])],
+        )),
+        NoopFactory,
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        liberado_common::ProposalSigner::random(),
+        "default",
+    );
+    let pack = DispatchPack::new(
+        Arc::new(CapabilityCatalog::new()),
+        Vec::new(),
+        1,
+        std::env::temp_dir(),
+    )
+    .with_pool("default", dispatcher, orchestrator);
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(Arc::new(pack));
+    let hub = Arc::new(hub);
+
+    let grant_dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "unused",
+            Vec::<CompletionResponse>::new(),
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    let mut known = HashMap::new();
+    known.insert(
+        "interactive-cron".into(),
+        CapabilitySet::from_iter([Capability::AskHuman]),
+    );
+
+    let daemon = daemon
+        .with_dispatcher(
+            grant_dispatcher,
+            Arc::new(CapabilityCatalog::new()),
+            CapabilitySet::empty(),
+            Vec::new(),
+        )
+        .with_session_profile_caps(known)
+        .with_goal_hub(hub.clone());
+
+    let sender = daemon.event_sender();
+    let (tx, mut rx) = unbounded_channel();
+    let handle = tokio::spawn(daemon.run(tx));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    sender
+        .send(Event::trigger(
+            "CronFired",
+            "cron:good-profile",
+            "cron:good-profile:1",
+            EventPayload {
+                summary: Some("profile-gated goal".into()),
+                data: serde_json::json!({ "profile": "interactive-cron" }),
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+
+    let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for reaction")
+        .expect("reaction channel closed");
+    let session_id = match reaction.outcome {
+        ReactionOutcome::Dispatched { session_id } => session_id,
+        other => panic!("known profile must dispatch, got {}", other.label()),
+    };
+    let snap = hub
+        .snapshot(&session_id)
+        .await
+        .expect("session must exist on hub");
+    assert_eq!(
+        snap.session.goal.profile.as_deref(),
+        Some("interactive-cron")
+    );
+
+    handle.abort();
+}
+
 // ── L9 — cron/webhook-class event → joinable Dispatched session (T1 suite) ──
 
 /// L9 (docs/roadmap/live-conformance-suite.md): a cron/webhook-class event on the **shipped**

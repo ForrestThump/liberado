@@ -192,9 +192,12 @@ pub struct Daemon {
     /// putting time in every system prompt. Vault-watch reactions are left alone.
     pub(crate) user_timezone: Option<UserTimezone>,
     /// Pre-resolved capability grants keyed by session profile name. When an event carries a
-    /// `profile` in its `payload.data`, the reactor narrows the session grant from the pool
-    /// ceiling to this set — so a cron can elect `AskHuman` by naming a profile whose component
-    /// includes it, while unattended/default crons stay structurally non-interactive (D-d).
-    /// Populated by bootstrap from `config.resolve_session_profile()`.
+    /// `profile` in its `payload.data`, the reactor uses this grant (narrower or specialized
+    /// vs the pool ceiling) — e.g. a cron electing `AskHuman` via a profile whose component
+    /// includes it. Unattended crons omit `profile` and keep the pool grant (D-d).
+    ///
+    /// Populated by bootstrap from enabled `[[session_profiles]]` → `policy.capabilities_for`.
+    /// An unknown / disabled profile name is **fail-closed**: the reaction is observed and no
+    /// session is started (never silently falls back to full pool caps).
     pub(crate) session_profile_caps: HashMap<String, CapabilitySet>,
 }
