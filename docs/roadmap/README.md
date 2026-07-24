@@ -14,6 +14,7 @@
 | [loops-plan.md](loops-plan.md) | Scheduled recurrence over goals |
 | [chat-search-plan.md](chat-search-plan.md) | History search tiers |
 | [context-compaction-plan.md](context-compaction-plan.md) | Chat context compaction (CH3 — Tier 1 landed; known residual documented) |
+| [current.md](current.md) **CH4** | Mid-session / per-conversation model switching (open; process-wide hot-swap already exists) |
 | [../plans/context-compaction-viewport-rearchitecture.md](../plans/context-compaction-viewport-rearchitecture.md) | CH3.1 proposed: side-summary + viewport (not shipped) |
 | [coding-tui-plan.md](coding-tui-plan.md) | Agentic coding TUI: goal surface + kernel completion gate (S1–S7) |
 | [rust-native-agentic-coder-plan.md](rust-native-agentic-coder-plan.md) | Coding pack roadmap |

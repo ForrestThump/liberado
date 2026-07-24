@@ -158,6 +158,11 @@ tool_result_max_chars = 2000
 single absolute `trigger_tokens` (kernel stays model-agnostic); `liberado-server` resolves then
 maps in `configure_chat`.
 
+**Note:** trigger resolution runs at chat configure (boot). Process-wide `POST /api/models/select`
+does **not** re-resolve the compaction threshold today. True mid-session / per-conversation model
+switching (roadmap **CH4** in [`current.md`](current.md)) should re-resolve when the face model
+for a conversation changes.
+
 ## Deliberately not built (follow-ups, unscheduled)
 
 - **CH3.1 viewport / side-summary re-architecture** — full conversation stays one append-only

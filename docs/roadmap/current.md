@@ -23,7 +23,26 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 
 | # | What | Why |
 |---|---|---|
-| **CH1** | WebUI chat maturity | Model switch, daily usable chat beyond session view |
+| **CH1** | WebUI chat maturity | Daily usable chat beyond session view (history, UX) |
+| **CH4** | **Mid-session / per-conversation model switching** | See below — not the same as process-wide hot-swap |
+
+**CH4 — mid-session model switching (open)**
+
+*What we already have (process-wide, not per chat):* `GET /api/models` + `POST /api/models/select` (and TUI `/model`, Telegram model select) call `Provider::set_model` on the shared face provider. That hot-swaps the **daemon-wide** active model for *subsequent* completions — no restart. Every conversation shares that one current model; there is no per-session binding.
+
+*What we do not have yet:*
+
+| Gap | Why it matters |
+|-----|----------------|
+| **Per-conversation model** | Switch model for *this* chat only; other chats keep theirs |
+| **Sticky preference** | Persist chosen model on the conversation (or session header) across reloads / restarts |
+| **Surface UX** | Explicit mid-chat “use model X for this thread” in WebUI (CH1) and consistent TUI/Telegram semantics |
+| **Dependent re-resolve** | On switch: recompute CH3 compaction trigger (`trigger_pct` × new model’s `context_window` / per-model overrides), status `model_name`, any role display — today resolve is boot-time for compaction |
+| **Role clarity** | Face vs dispatcher/subagent: mid-session switch is about the **chat face** unless we later add per-role runtime swap |
+
+*Not a substitute:* boot-time `[roles.main_agent] model = "…"` in `topology.toml` (edit + restart). That is fixed wiring, not mid-session.
+
+*Suggested acceptance (when scheduled):* pick model mid-chat → only that conversation’s next turns use it; other conversations unchanged; preference survives reopen; compaction/status track the active face model for that chat.
 
 ### Priority 3 — coding pack (integration parity, not best-in-class)
 
@@ -73,4 +92,4 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 
 See [`../architecture/sessions.md`](../architecture/sessions.md) for the session model history pointers.
 
-**Last updated:** 2026-07-23.
+**Last updated:** 2026-07-24.
