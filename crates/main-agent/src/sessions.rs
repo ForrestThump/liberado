@@ -61,9 +61,7 @@ use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, Sessi
 use thiserror::Error;
 use tokio::sync::mpsc::Sender;
 
-use crate::compaction::{
-    self, COMPACTION_AUTHOR, CompactionConfig,
-};
+use crate::compaction::{self, COMPACTION_AUTHOR, CompactionConfig};
 use crate::face::{DispatchBridge, FaceRuntime};
 use crate::{Conversation, DEFAULT_SYSTEM_PROMPT, HUMAN_INTERFACE_SYSTEM_PROMPT};
 
@@ -227,7 +225,11 @@ impl ChatSessions {
     /// `keep_recent_turns` user turns is rolled into a persisted summary marker
     /// ([`COMPACTION_AUTHOR`]) and the model-visible history resumes from it. A failed summary
     /// never fails the turn — it runs uncompacted instead.
-    pub fn with_compaction(mut self, config: CompactionConfig, provider: Arc<dyn Provider>) -> Self {
+    pub fn with_compaction(
+        mut self,
+        config: CompactionConfig,
+        provider: Arc<dyn Provider>,
+    ) -> Self {
         self.compaction = Some(CompactionEngine { config, provider });
         self
     }
@@ -882,7 +884,9 @@ impl ChatSessions {
             Ok(resp) => match resp.content.filter(|c| !c.trim().is_empty()) {
                 Some(text) => text,
                 None => {
-                    tracing::warn!("chat compaction: summarizer returned empty — running uncompacted");
+                    tracing::warn!(
+                        "chat compaction: summarizer returned empty — running uncompacted"
+                    );
                     return pass_through();
                 }
             },
@@ -1007,9 +1011,9 @@ impl ChatSessions {
 /// wrote). A marker at index 0 is impossible (the root is authored `System`, never
 /// [`COMPACTION_AUTHOR`]), so keeping `nodes[0]` never keeps a marker by accident.
 fn elide_before_latest_marker(nodes: Vec<MessageNode>) -> Vec<MessageNode> {
-    let marker = nodes.iter().rposition(|n| {
-        matches!(&n.author, Author::Named(name) if name == COMPACTION_AUTHOR)
-    });
+    let marker = nodes
+        .iter()
+        .rposition(|n| matches!(&n.author, Author::Named(name) if name == COMPACTION_AUTHOR));
     match marker {
         Some(c) if c > 0 => {
             let mut view = Vec::with_capacity(nodes.len() - c + 1);

@@ -1,11 +1,11 @@
 use super::*;
 use async_trait::async_trait;
+use liberado_conversation_store::{ConversationStore, StoreError};
 use liberado_executor::Budget;
 use liberado_provider::{
     CompletionRequest, CompletionResponse, MockProvider, Provider, ProviderError, ProviderResult,
     Role, ToolDef, ToolInvocation,
 };
-use liberado_conversation_store::{ConversationStore, StoreError};
 use liberado_session_store::SessionStore;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
@@ -1108,7 +1108,10 @@ async fn compacts_over_trigger_and_the_next_turn_sees_the_summary_not_the_raw_hi
         id,
         &[
             (&secret, &format!("A1 {}", "y".repeat(600))),
-            (&format!("u2 {}", "z".repeat(600)), &format!("A2 {}", "w".repeat(600))),
+            (
+                &format!("u2 {}", "z".repeat(600)),
+                &format!("A2 {}", "w".repeat(600)),
+            ),
             ("tail question", "tail answer"),
         ],
     )
@@ -1132,10 +1135,9 @@ async fn compacts_over_trigger_and_the_next_turn_sees_the_summary_not_the_raw_hi
     // compaction is broken into a no-op: the raw history would ride every request forever.
     let turn_req = &requests[1];
     assert!(
-        turn_req
-            .messages
-            .iter()
-            .any(|m| m.content.contains("SUMMARY: earlier chit-chat about squirrels")),
+        turn_req.messages.iter().any(|m| m
+            .content
+            .contains("SUMMARY: earlier chit-chat about squirrels")),
         "the compacted view must carry the rolling summary"
     );
     assert!(
@@ -1146,8 +1148,14 @@ async fn compacts_over_trigger_and_the_next_turn_sees_the_summary_not_the_raw_hi
         "elided history must not reach the model after compaction"
     );
     assert!(
-        turn_req.messages.iter().any(|m| m.content == "tail question")
-            && turn_req.messages.iter().any(|m| m.content == "fresh question"),
+        turn_req
+            .messages
+            .iter()
+            .any(|m| m.content == "tail question")
+            && turn_req
+                .messages
+                .iter()
+                .any(|m| m.content == "fresh question"),
         "the kept tail and the incoming message must survive verbatim"
     );
 
@@ -1174,10 +1182,9 @@ async fn compacts_over_trigger_and_the_next_turn_sees_the_summary_not_the_raw_hi
     );
     let turn2 = &requests[2];
     assert!(
-        turn2
-            .messages
-            .iter()
-            .any(|m| m.content.contains("SUMMARY: earlier chit-chat about squirrels")),
+        turn2.messages.iter().any(|m| m
+            .content
+            .contains("SUMMARY: earlier chit-chat about squirrels")),
         "the marker must persist across loads"
     );
     assert!(
@@ -1278,10 +1285,9 @@ async fn second_compaction_rolls_prior_summary_forward() {
 
     let turn2 = &requests[3];
     assert!(
-        turn2
-            .messages
-            .iter()
-            .any(|m| m.content.contains("SUMMARY-B: code word is ALPHA; later topic is BETA")),
+        turn2.messages.iter().any(|m| m
+            .content
+            .contains("SUMMARY-B: code word is ALPHA; later topic is BETA")),
         "second compacted view must carry the new rolling summary"
     );
     assert!(
@@ -1319,7 +1325,10 @@ async fn second_compaction_rolls_prior_summary_forward() {
         .iter()
         .filter(|m| m.content.starts_with(compaction::SUMMARY_HEADER))
         .count();
-    assert_eq!(markers, 2, "each compaction must leave a durable marker node");
+    assert_eq!(
+        markers, 2,
+        "each compaction must leave a durable marker node"
+    );
 }
 
 /// Store that injects a single `append` failure for a node whose content equals `fail_once_content`,
@@ -1389,8 +1398,9 @@ impl ConversationStore for FailOnceContentStore {
 
     async fn list(
         &self,
-    ) -> liberado_conversation_store::StoreResult<Vec<liberado_conversation_store::ConversationHeader>>
-    {
+    ) -> liberado_conversation_store::StoreResult<
+        Vec<liberado_conversation_store::ConversationHeader>,
+    > {
         self.inner.list().await
     }
 
@@ -1446,7 +1456,11 @@ async fn partial_tail_reappend_failure_keeps_full_view_for_this_turn() {
     seed_turns(
         &sessions,
         id,
-        &[("u1 secret", "a1"), ("u2", "a2"), ("tail question", "tail answer")],
+        &[
+            ("u1 secret", "a1"),
+            ("u2", "a2"),
+            ("tail question", "tail answer"),
+        ],
     )
     .await;
     // Fail the re-append of the assistant half of the kept tail (keep_recent_turns=1 →
@@ -1465,9 +1479,15 @@ async fn partial_tail_reappend_failure_keeps_full_view_for_this_turn() {
     assert_eq!(requests.len(), 2, "summarizer + turn");
     let turn_req = &requests[1];
     assert!(
-        turn_req.messages.iter().any(|m| m.content == "tail question")
+        turn_req
+            .messages
+            .iter()
+            .any(|m| m.content == "tail question")
             && turn_req.messages.iter().any(|m| m.content == "tail answer")
-            && turn_req.messages.iter().any(|m| m.content == "fresh question"),
+            && turn_req
+                .messages
+                .iter()
+                .any(|m| m.content == "fresh question"),
         "this turn's model view must include the full kept tail even when one re-append failed; got: {:?}",
         turn_req
             .messages
@@ -1662,4 +1682,3 @@ async fn summarizer_failure_runs_the_turn_uncompacted() {
         "a failed summarization must not persist a marker"
     );
 }
-

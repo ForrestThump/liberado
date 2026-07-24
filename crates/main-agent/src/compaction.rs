@@ -259,7 +259,11 @@ mod tests {
         let with_call = estimate_tokens(&[Message {
             role: Role::Assistant,
             content: "abcd".into(),
-            tool_calls: vec![ToolInvocation::new("t1", "some_tool", serde_json::json!({"a": 1}))],
+            tool_calls: vec![ToolInvocation::new(
+                "t1",
+                "some_tool",
+                serde_json::json!({"a": 1}),
+            )],
             tool_call_id: None,
         }]);
         assert!(with_call > plain, "tool-call JSON must add to the estimate");
@@ -314,15 +318,15 @@ mod tests {
     #[test]
     fn transcript_labels_roles_and_truncates_tool_results() {
         let long_result = "r".repeat(100);
-        let h = vec![
-            user("hello"),
-            Message::tool_result("t1", &long_result),
-        ];
+        let h = vec![user("hello"), Message::tool_result("t1", &long_result)];
         let t = render_transcript(&h, 10);
         assert!(t.contains("[user]\nhello"));
         assert!(t.contains("[tool result]\n"));
         assert!(t.contains("… [truncated]"));
-        assert!(!t.contains(&long_result), "full tool dump must not reach the summarizer");
+        assert!(
+            !t.contains(&long_result),
+            "full tool dump must not reach the summarizer"
+        );
     }
 
     #[test]
