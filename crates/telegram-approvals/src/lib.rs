@@ -1076,8 +1076,7 @@ mod tests {
     #[tokio::test]
     async fn ack_calls_channel_acknowledge() {
         let signer = ProposalSigner::random();
-        let (vault, _dir, _stem) =
-            temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let (vault, _dir, _stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
         let channel = Arc::new(RecordingChannel::default());
         let bot = ApprovalBot::new(
             channel.clone(),
