@@ -255,7 +255,7 @@ impl SessionStore {
             .values()
             .map(|l| l.header.clone())
             .collect();
-        rows.sort_by(|a, b| b.id.cmp(&a.id));
+        rows.sort_by_key(|row| std::cmp::Reverse(row.id));
         rows
     }
 
@@ -666,7 +666,7 @@ impl SessionRecordStore for SessionStore {
             // see them, which is what the unified `list_sessions` is for.
             .filter_map(|l| l.header.to_goal_record(l.events.len()))
             .collect();
-        rows.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        rows.sort_by_key(|row| std::cmp::Reverse(row.created_at));
         rows
     }
 
