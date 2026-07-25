@@ -569,8 +569,11 @@ mod tests {
         p
     }
 
-    /// Restore write permission so TempDir cleanup succeeds (Windows needs the read-only bit
-    /// cleared; Unix gets a normal 0o644 mode rather than the world-writable `set_readonly(false)`).
+    /// Restore write permission so TempDir cleanup succeeds after the read-only-file test.
+    ///
+    /// Gated with its only caller: that test is Windows-only, so on Unix this would be dead code
+    /// and `-D warnings` would fail the build.
+    #[cfg(windows)]
     fn clear_readonly(path: &std::path::Path) {
         let Ok(meta) = fs::metadata(path) else {
             return;
@@ -637,6 +640,15 @@ mod tests {
         assert_eq!(parsed.status, ProposalStatus::Pending);
     }
 
+    /// Windows only, because of how the failure is injected.
+    ///
+    /// turbovault writes temp-then-rename. Windows refuses to rename over a read-only
+    /// destination, so marking the file read-only does fail the write. On Unix, rename permission
+    /// comes from the *directory*, not the target file — the read-only bit is inert there, the
+    /// rename succeeds, and the note is archived instead of being left behind. This test asserted
+    /// a Windows filesystem behaviour and silently passed here while being wrong on Linux; ubuntu
+    /// had never reached the test step to say so. See the Unix counterpart below.
+    #[cfg(windows)]
     #[tokio::test]
     async fn reap_continues_sweep_when_one_write_fails() {
         let dir = TempDir::new().unwrap();
@@ -702,6 +714,57 @@ mod tests {
         );
 
         clear_readonly(&stuck_abs);
+    }
+
+    /// Unix counterpart to the test above.
+    ///
+    /// Without root there is no way to make one file un-replaceable while its siblings stay
+    /// writable — atomic rename only consults the directory — so this cannot also show a sibling
+    /// note being archived in the same sweep. It pins the other half of the invariant: a failed
+    /// rewrite is survivable (the sweep returns Ok rather than aborting) and does not partially
+    /// mutate the note, which stays Pending rather than becoming Expired-in-place.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reap_survives_a_failing_write() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open("test", dir.path()).await.unwrap();
+        let prov = WriteProvenance::agent("test", "c1");
+
+        let proposals_dir = dir.path().join(PROPOSALS_DIR);
+        tokio::fs::create_dir_all(&proposals_dir).await.unwrap();
+        vault
+            .write(
+                "proposals/stuck.md",
+                &expired_proposal_named("stuck", "corr-stuck").to_note(),
+                None,
+                &prov,
+            )
+            .await
+            .unwrap();
+
+        // r-x: the reaper can still list the directory and read the note, but cannot create the
+        // temp file its write needs.
+        fs::set_permissions(&proposals_dir, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let swept = reap_expired_proposals(&vault).await;
+
+        // Restore before asserting — a read-only directory would otherwise defeat TempDir cleanup
+        // even if an assertion below fails.
+        fs::set_permissions(&proposals_dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+        swept.expect("sweep must not abort on per-file write failure");
+
+        let stuck = vault
+            .read("proposals/stuck.md")
+            .await
+            .expect("unwritable note stays in active dir");
+        assert_eq!(
+            Proposal::from_note(&stuck).unwrap().status,
+            ProposalStatus::Pending,
+            "failed write must not partially mutate status"
+        );
     }
 
     #[tokio::test]
