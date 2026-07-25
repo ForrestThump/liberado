@@ -121,8 +121,28 @@ writes_vault = false
 [[mcps]]
 name = "liberado-spider-mcp"
 description = "Web scraping and crawling: single-page scrape with extraction, and multi-page crawl"
-consequence = "external"
+# read_only, not external (corrected 2026-07-25). `External` means an outbound call WITH SIDE
+# EFFECTS; a scrape fetches a public page and changes nothing. Marked `external` it tripped two
+# gates at once: the dispatch guard downgraded any subagent whose allowed_mcps merely CONTAINED
+# it, and RiskGatedToolRuntime raised a proposal per scrape call — one read-only deep search
+# produced 5 approval requests. liberado-search-orchestrator-mcp makes the same kind of outbound
+# web call and is read_only; these two now agree. Crawl load/cost is a Magnitude/budget concern,
+# not a Consequence one.
+consequence = "read_only"
 transport = { kind = "http", url = "http://liberado-spider-mcp:8080" }
+writes_vault = false
+
+# --- Python interpreter -------------------------------------------------------
+# Persistent sandboxed Python REPL: arithmetic, data wrangling, ad-hoc scripts, scratch files.
+#
+# `reversible`, not `external`: its state is a throwaway workspace volume, it mounts no vault and
+# holds no credentials, so a bad call costs a container restart. Note that it does have network
+# egress (pip needs it) — raise this to `external` if that ever stops being acceptable.
+[[mcps]]
+name = "liberado-python-interpreter-mcp"
+description = "Run Python in a persistent REPL: calculations, data work, scratch files, pip packages"
+consequence = "reversible"
+transport = { kind = "http", url = "http://liberado-python-interpreter-mcp:8000" }
 writes_vault = false
 
 # --- RAG store (Qdrant) ------------------------------------------------------
