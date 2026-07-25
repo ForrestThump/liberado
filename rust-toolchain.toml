@@ -1,0 +1,21 @@
+# The compiler this project is built and linted with — CI and the dev machine, one version.
+#
+# CI previously tracked floating `stable`, so any Rust release could turn it red with no code
+# change. Worse, those failures were not reproducible here: this machine's Rust is an MSI install
+# at `C:\Program Files\Rust stable MSVC 1.94` which shadows rustup, so `cargo`/`clippy-driver`
+# resolve to 1.94 regardless of which toolchain is requested. CI ran 1.97 lints that simply do not
+# exist locally ("unknown lint: clippy::useless_borrows_in_formatting"), which is why every red run
+# had to be diagnosed by pushing.
+#
+# 1.94.1 is what that MSI install provides, so pinning here makes the two agree by construction.
+#
+# Note this file only governs rustup-managed toolchains. The MSI `cargo` ignores it — it happens to
+# already be this version, which is the point. If you remove the MSI install so rustup governs the
+# machine, this pin starts doing real work locally too, and can then track a newer release.
+#
+# Bumping: raise `channel`, run the CI commands locally, fix whatever the newer lints find, and
+# commit the bump together with the fixes. `rust-version` in Cargo.toml (1.91) is a separate thing —
+# the minimum a consumer needs, not the one we build with.
+[toolchain]
+channel = "1.94.1"
+components = ["rustfmt", "clippy"]

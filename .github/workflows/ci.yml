@@ -7,6 +7,10 @@
 #
 # The layer-rules test (crates/test-support/tests/layer_rules.rs) runs as part of the normal
 # test suite — a dependency-layering violation fails CI, not just an audit.
+#
+# Toolchain: pinned by `rust-toolchain.toml`, not named here. Tracking floating `stable` meant a
+# Rust release could redden CI with no code change, and the resulting lint failures could not be
+# reproduced on the dev machine at all. See that file for the details.
 
 name: CI
 
@@ -49,10 +53,15 @@ jobs:
           path: turbomcp
           token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
 
-      - name: Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # No version here on purpose: `rust-toolchain.toml` is the single source of truth, and
+      # rustup installs what it names (plus its components) on first use. Naming a toolchain in
+      # both places is how CI and the dev machine drift apart again.
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: |
+          rustup show
+          rustc --version
+          cargo clippy --version
+          cargo fmt --version
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
