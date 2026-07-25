@@ -125,6 +125,19 @@ consequence = "external"
 transport = { kind = "http", url = "http://liberado-spider-mcp:8080" }
 writes_vault = false
 
+# --- Python interpreter -------------------------------------------------------
+# Persistent sandboxed Python REPL: arithmetic, data wrangling, ad-hoc scripts, scratch files.
+#
+# `reversible`, not `external`: its state is a throwaway workspace volume, it mounts no vault and
+# holds no credentials, so a bad call costs a container restart. Note that it does have network
+# egress (pip needs it) — raise this to `external` if that ever stops being acceptable.
+[[mcps]]
+name = "liberado-python-interpreter-mcp"
+description = "Run Python in a persistent REPL: calculations, data work, scratch files, pip packages"
+consequence = "reversible"
+transport = { kind = "http", url = "http://liberado-python-interpreter-mcp:8000" }
+writes_vault = false
+
 # --- RAG store (Qdrant) ------------------------------------------------------
 # Its own corpus, embedded LOCALLY (fastembed ONNX, 384-dim) — no API key, no external service.
 # NOTE: it shares the `qdrant` container with AnythingLLM, whose collections are 1024-dim and
