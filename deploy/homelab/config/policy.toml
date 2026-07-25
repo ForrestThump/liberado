@@ -136,6 +136,7 @@ capabilities = [
     { ExecuteMcp = "liberado-actual-mcp" },
     { ExecuteMcp = "liberado-spider-mcp" },
     { ExecuteMcp = "liberado-qdrant-mcp" },
+    { ExecuteMcp = "liberado-python-interpreter-mcp" },
     { ExecuteMcp = "deepwiki" },
 ]
 
@@ -179,6 +180,7 @@ capabilities = [
     { Read = { Vault = "Projects" } },
     { Read = { Vault = "Work" } },
     { ExecuteMcp = "deepwiki" },
+    { ExecuteMcp = "liberado-python-interpreter-mcp" },
     { ExecuteMcp = "liberado-search-orchestrator-mcp" },
     "AskHuman",
 ]
