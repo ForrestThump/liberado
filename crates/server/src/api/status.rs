@@ -91,9 +91,10 @@ pub async fn models(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     }
 }
 
-/// `POST /api/models/select` â€” hot-swap the active model for subsequent completions without
-/// restarting the daemon. Body: `{"model":"â€¦"}`. Same base URL / credentials; only the model
-/// field of the next chat-completions request changes.
+/// `POST /api/models/select` — hot-swap the active model for subsequent completions without
+/// restarting the daemon. Body: `{"model":"…"}`. Same base URL / credentials; only the model
+/// field of the next chat-completions request changes. Also re-resolves the chat compaction
+/// trigger for the new face model.
 pub async fn select_model(
     State(state): State<Arc<AppState>>,
     Json(body): Json<SelectModelRequest>,
@@ -125,6 +126,7 @@ pub async fn select_model(
 
     let previous = provider.model();
     provider.set_model(model.clone());
+    crate::state::resync_compaction_trigger_for_face_model(&state, provider.model().as_str());
     tracing::info!(%previous, current = %model, "hot-swapped active model");
 
     (

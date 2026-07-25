@@ -113,6 +113,166 @@ pub struct MainAgentConfig {
     /// Optional full override of the main-agent system prompt. When unset, uses the built-in
     /// human-interfacer prompt (if `delegation_mode`) or the short legacy prompt otherwise.
     pub system_prompt: Option<String>,
+    /// Automatic context compaction for long conversations (CH3 — see
+    /// `docs/roadmap/context-compaction-plan.md`). All fields defaulted; an absent table is the
+    /// shipped behavior (compaction on).
+    pub compaction: CompactionSettings,
+}
+
+/// Absolute estimated-token trigger used when no model window / percentage can be resolved
+/// (no matching `[[models]]` entry, or empty models list). Matches the historical CH3 default
+/// (≈ 64k window − 16k reserve).
+pub const COMPACTION_TRIGGER_TOKENS_FALLBACK: u32 = 48_000;
+
+/// Default fraction of a model's declared [`ModelProfile::context_window`] at which compaction
+/// fires when no absolute `trigger_tokens` override is set (0.75 ≈ 48k on a 64k window).
+pub const COMPACTION_TRIGGER_PCT_DEFAULT: f32 = 0.75;
+
+/// Automatic context-compaction knobs (`[main_agent.compaction]`). The server resolves an effective
+/// absolute `trigger_tokens` for the **face** model via
+/// [`CompactionSettings::resolve_trigger_tokens`], then mirrors the rest into
+/// `liberado_main_agent::CompactionConfig`.
+///
+/// Trigger resolution (first match wins):
+/// 1. Per-model absolute: `[main_agent.compaction.models."<name>"].trigger_tokens`
+/// 2. Per-model pct × that model's `[[models]].context_window`
+/// 3. Global absolute: `[main_agent.compaction].trigger_tokens` (when set)
+/// 4. Global `trigger_pct` × face model's `context_window`
+/// 5. [`COMPACTION_TRIGGER_TOKENS_FALLBACK`] when the face model has no declared window
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CompactionSettings {
+    /// Master switch, default ON — a reliability guard that is opt-in is off in practice.
+    pub enabled: bool,
+    /// Default fraction of the face model's declared `context_window` at which compaction fires.
+    /// Overridden by absolute `trigger_tokens` (global or per-model) when those are set.
+    /// Clamped to `[0.0, 1.0]` at resolve time. Default [`COMPACTION_TRIGGER_PCT_DEFAULT`].
+    pub trigger_pct: f32,
+    /// Global absolute trigger in estimated tokens (chars/4 × 1.3). When set, overrides
+    /// `trigger_pct` for any model without a more specific per-model absolute. When unset,
+    /// percentage-of-window is used for models that declare `context_window`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_tokens: Option<u32>,
+    /// Per-model trigger overrides, keyed by model name (same string as `[[models]].name` and/or
+    /// the live face provider model slug). Absolute tokens win over pct for that model.
+    #[serde(default)]
+    pub models: HashMap<String, ModelCompactionSettings>,
+    /// User turns kept verbatim after the summary (boundary anchored on user messages so
+    /// tool-call/result pairs never split). 0 = keep nothing but the summary.
+    pub keep_recent_turns: u32,
+    /// Hard cap on the rolling summary's own length.
+    pub summary_max_tokens: u32,
+    /// Per-tool-result truncation in the transcript shown to the summarizer.
+    pub tool_result_max_chars: u32,
+}
+
+/// Per-model compaction trigger overrides under `[main_agent.compaction.models."<name>"]`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelCompactionSettings {
+    /// Fraction of this model's `context_window`. Ignored when `trigger_tokens` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_pct: Option<f32>,
+    /// Absolute estimated-token trigger for this model only. Wins over any percentage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_tokens: Option<u32>,
+}
+
+impl Default for CompactionSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            trigger_pct: COMPACTION_TRIGGER_PCT_DEFAULT,
+            trigger_tokens: None,
+            models: HashMap::new(),
+            keep_recent_turns: 3,
+            summary_max_tokens: 1_024,
+            tool_result_max_chars: 2_000,
+        }
+    }
+}
+
+/// How [`CompactionSettings::resolve_trigger_tokens`] obtained the absolute threshold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionTriggerSource {
+    PerModelAbsolute,
+    PerModelPct,
+    GlobalAbsolute,
+    GlobalPct,
+    /// Hard 48k path — face model had no matching `[[models]]` window and no absolute override.
+    Fallback,
+}
+
+impl CompactionSettings {
+    /// Resolve the absolute estimated-token trigger for the chat face model.
+    ///
+    /// `face_model` is the live provider model slug (e.g. from `Provider::model()`). `models` is
+    /// `topology.models` — used for `context_window` when applying a percentage.
+    ///
+    /// When `models` is non-empty and resolution hits [`CompactionTriggerSource::Fallback`]
+    /// (slug mismatch / missing profile), emits a `tracing::warn` so operators notice that
+    /// declared windows were not used.
+    pub fn resolve_trigger_tokens(&self, face_model: Option<&str>, models: &[ModelProfile]) -> u32 {
+        let (tokens, source) = self.resolve_trigger_tokens_with_source(face_model, models);
+        if source == CompactionTriggerSource::Fallback && !models.is_empty() && face_model.is_some()
+        {
+            tracing::warn!(
+                face_model = face_model.unwrap_or(""),
+                models_configured = models.len(),
+                fallback = COMPACTION_TRIGGER_TOKENS_FALLBACK,
+                "face model has no matching [[models]] entry (exact name); compaction trigger \
+                 using hard fallback — declare the slug under [[models]] or set trigger_tokens"
+            );
+        }
+        tokens
+    }
+
+    /// Same as [`Self::resolve_trigger_tokens`] but returns how the value was chosen (for tests
+    /// and callers that need to distinguish fallback from an intentional absolute).
+    pub fn resolve_trigger_tokens_with_source(
+        &self,
+        face_model: Option<&str>,
+        models: &[ModelProfile],
+    ) -> (u32, CompactionTriggerSource) {
+        let profile = face_model.and_then(|name| models.iter().find(|m| m.name == name));
+        let per = face_model.and_then(|name| self.models.get(name));
+
+        // 1. Per-model absolute
+        if let Some(t) = per.and_then(|p| p.trigger_tokens) {
+            return (t, CompactionTriggerSource::PerModelAbsolute);
+        }
+        // 2. Per-model pct × window
+        if let (Some(pct), Some(p)) = (per.and_then(|m| m.trigger_pct), profile) {
+            return (
+                pct_of_window(p.context_window, pct),
+                CompactionTriggerSource::PerModelPct,
+            );
+        }
+        // 3. Global absolute
+        if let Some(t) = self.trigger_tokens {
+            return (t, CompactionTriggerSource::GlobalAbsolute);
+        }
+        // 4. Global pct × window
+        if let Some(p) = profile {
+            return (
+                pct_of_window(p.context_window, self.trigger_pct),
+                CompactionTriggerSource::GlobalPct,
+            );
+        }
+        // 5. Hard fallback
+        (
+            COMPACTION_TRIGGER_TOKENS_FALLBACK,
+            CompactionTriggerSource::Fallback,
+        )
+    }
+}
+
+fn pct_of_window(context_window: u32, pct: f32) -> u32 {
+    let pct = pct.clamp(0.0, 1.0);
+    let n = (context_window as f64 * f64::from(pct)).floor() as u32;
+    // A zero window or zero pct would fire every turn; keep a one-token floor so the math is
+    // defined. Operators who want "always compact" can set `trigger_tokens = 1`.
+    n.max(1)
 }
 
 impl Default for MainAgentConfig {
@@ -120,6 +280,7 @@ impl Default for MainAgentConfig {
         Self {
             delegation_mode: true,
             system_prompt: None,
+            compaction: CompactionSettings::default(),
         }
     }
 }
@@ -559,5 +720,170 @@ mod managed_binary_path_tests {
                 std::env::consts::EXE_SUFFIX
             ));
         assert_eq!(path, expected);
+    }
+}
+
+#[cfg(test)]
+mod compaction_trigger_resolve_tests {
+    use super::*;
+    use liberado_common::ModelTier;
+
+    fn model(name: &str, window: u32) -> ModelProfile {
+        ModelProfile {
+            name: name.into(),
+            tool_calling: true,
+            structured_output: false,
+            context_window: window,
+            tier: ModelTier::WorkPlane,
+            cost: None,
+        }
+    }
+
+    #[test]
+    fn fallback_when_no_model_and_no_absolute() {
+        let c = CompactionSettings::default();
+        assert_eq!(
+            c.resolve_trigger_tokens(Some("unknown"), &[]),
+            COMPACTION_TRIGGER_TOKENS_FALLBACK
+        );
+        assert_eq!(
+            c.resolve_trigger_tokens(None, &[]),
+            COMPACTION_TRIGGER_TOKENS_FALLBACK
+        );
+    }
+
+    #[test]
+    fn global_pct_times_declared_window() {
+        let c = CompactionSettings {
+            trigger_pct: 0.75,
+            ..CompactionSettings::default()
+        };
+        let models = vec![model("deepseek-chat", 64_000)];
+        assert_eq!(
+            c.resolve_trigger_tokens(Some("deepseek-chat"), &models),
+            48_000
+        );
+    }
+
+    #[test]
+    fn global_absolute_overrides_pct() {
+        let c = CompactionSettings {
+            trigger_pct: 0.75,
+            trigger_tokens: Some(12_000),
+            ..CompactionSettings::default()
+        };
+        let models = vec![model("deepseek-chat", 64_000)];
+        assert_eq!(
+            c.resolve_trigger_tokens(Some("deepseek-chat"), &models),
+            12_000
+        );
+    }
+
+    #[test]
+    fn per_model_pct_overrides_global_pct() {
+        let mut c = CompactionSettings {
+            trigger_pct: 0.75,
+            ..CompactionSettings::default()
+        };
+        c.models.insert(
+            "big".into(),
+            ModelCompactionSettings {
+                trigger_pct: Some(0.5),
+                trigger_tokens: None,
+            },
+        );
+        let models = vec![model("big", 128_000), model("small", 32_000)];
+        assert_eq!(c.resolve_trigger_tokens(Some("big"), &models), 64_000);
+        // Unlisted model still uses global pct.
+        assert_eq!(c.resolve_trigger_tokens(Some("small"), &models), 24_000);
+    }
+
+    #[test]
+    fn per_model_absolute_wins_over_everything() {
+        let mut c = CompactionSettings {
+            trigger_pct: 0.9,
+            trigger_tokens: Some(99_000),
+            ..CompactionSettings::default()
+        };
+        c.models.insert(
+            "face".into(),
+            ModelCompactionSettings {
+                trigger_pct: Some(0.1),
+                trigger_tokens: Some(7_777),
+            },
+        );
+        let models = vec![model("face", 200_000)];
+        assert_eq!(c.resolve_trigger_tokens(Some("face"), &models), 7_777);
+    }
+
+    #[test]
+    fn different_models_resolve_independently() {
+        let mut c = CompactionSettings::default();
+        c.models.insert(
+            "a".into(),
+            ModelCompactionSettings {
+                trigger_tokens: Some(10_000),
+                trigger_pct: None,
+            },
+        );
+        c.models.insert(
+            "b".into(),
+            ModelCompactionSettings {
+                trigger_pct: Some(0.5),
+                trigger_tokens: None,
+            },
+        );
+        let models = vec![model("a", 64_000), model("b", 100_000)];
+        assert_eq!(c.resolve_trigger_tokens(Some("a"), &models), 10_000);
+        assert_eq!(c.resolve_trigger_tokens(Some("b"), &models), 50_000);
+    }
+
+    #[test]
+    fn toml_round_trip_per_model_table() {
+        let raw = r#"
+enabled = true
+trigger_pct = 0.8
+trigger_tokens = 50000
+
+[models."deepseek-chat"]
+trigger_pct = 0.7
+
+[models."openai/gpt-4o"]
+trigger_tokens = 100000
+"#;
+        let c: CompactionSettings = toml::from_str(raw).expect("parse");
+        assert!((c.trigger_pct - 0.8).abs() < f32::EPSILON);
+        assert_eq!(c.trigger_tokens, Some(50_000));
+        assert_eq!(
+            c.models.get("deepseek-chat").and_then(|m| m.trigger_pct),
+            Some(0.7)
+        );
+        assert_eq!(
+            c.models.get("openai/gpt-4o").and_then(|m| m.trigger_tokens),
+            Some(100_000)
+        );
+    }
+
+    #[test]
+    fn slug_mismatch_with_configured_models_is_fallback_source() {
+        let c = CompactionSettings::default();
+        let models = vec![model("deepseek-chat", 64_000)];
+        // Live provider often returns a prefixed slug that does not equal [[models]].name.
+        let (tokens, source) =
+            c.resolve_trigger_tokens_with_source(Some("deepseek/deepseek-chat"), &models);
+        assert_eq!(tokens, COMPACTION_TRIGGER_TOKENS_FALLBACK);
+        assert_eq!(source, CompactionTriggerSource::Fallback);
+    }
+
+    #[test]
+    fn matching_slug_is_global_pct_not_fallback() {
+        let c = CompactionSettings {
+            trigger_pct: 0.75,
+            ..CompactionSettings::default()
+        };
+        let models = vec![model("deepseek-chat", 64_000)];
+        let (tokens, source) = c.resolve_trigger_tokens_with_source(Some("deepseek-chat"), &models);
+        assert_eq!(tokens, 48_000);
+        assert_eq!(source, CompactionTriggerSource::GlobalPct);
     }
 }

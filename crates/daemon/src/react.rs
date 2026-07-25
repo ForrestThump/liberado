@@ -85,11 +85,24 @@ impl Daemon {
         // concurrently with each other — no more awaiting one orchestrator before the next event.
         if let Some(hub) = &self.goals {
             let goal = reaction_goal(event, &request.goal, pool_name);
+            // Named profile must resolve to a boot-time grant. Fail closed on unknown /
+            // disabled / typo'd names — never silently widen to the full pool ceiling.
+            let capabilities = match goal.profile.as_deref() {
+                None => ctx.capabilities.clone(),
+                Some(name) => match self.session_profile_caps.get(name) {
+                    Some(caps) => caps.clone(),
+                    None => {
+                        tracing::warn!(
+                            profile = name,
+                            pool = pool_name,
+                            "event names unknown or disabled session profile — not starting session"
+                        );
+                        return ReactionOutcome::Observed;
+                    }
+                },
+            };
             let grant = SessionGrant {
-                // Pool capabilities are the session's authority ceiling for this reaction. A
-                // profile-narrowed cron (E7) would resolve a narrower grant here; without a profile
-                // the pool is the grant. Crons default to no AskHuman via policy (D-d).
-                capabilities: ctx.capabilities.clone(),
+                capabilities,
                 profile: goal.profile.clone(),
                 overrides: serde_json::Value::Null,
             };

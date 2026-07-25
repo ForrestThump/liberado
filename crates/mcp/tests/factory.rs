@@ -18,6 +18,8 @@ use turbomcp_types::{
     Prompt, PromptResult, Resource, ResourceResult, ServerInfo, Tool, ToolResult,
 };
 
+mod common;
+
 /// A one-tool server (bare tool name + canned reply), so a registry can namespace it.
 #[derive(Clone)]
 struct EchoServer {
@@ -32,12 +34,7 @@ impl McpHandler for EchoServer {
     fn list_tools(&self) -> Vec<Tool> {
         vec![Tool::new(self.tool, "echo tool")]
     }
-    fn list_resources(&self) -> Vec<Resource> {
-        Vec::new()
-    }
-    fn list_prompts(&self) -> Vec<Prompt> {
-        Vec::new()
-    }
+    mcp_handler_stubs!();
     fn call_tool<'a>(
         &'a self,
         name: &'a str,
@@ -54,23 +51,6 @@ impl McpHandler for EchoServer {
                 Err(McpError::tool_not_found(&name))
             }
         }
-    }
-    fn read_resource<'a>(
-        &'a self,
-        uri: &'a str,
-        _ctx: &'a RequestContext,
-    ) -> impl Future<Output = McpResult<ResourceResult>> + MaybeSend + 'a {
-        let uri = uri.to_string();
-        async move { Err(McpError::resource_not_found(&uri)) }
-    }
-    fn get_prompt<'a>(
-        &'a self,
-        name: &'a str,
-        _args: Option<Value>,
-        _ctx: &'a RequestContext,
-    ) -> impl Future<Output = McpResult<PromptResult>> + MaybeSend + 'a {
-        let name = name.to_string();
-        async move { Err(McpError::prompt_not_found(&name)) }
     }
 }
 
@@ -657,9 +637,9 @@ async fn concurrent_connect_cap_times_out_when_permits_exhausted() {
     let first = registry.runtime_for(&[], prov()).await.unwrap();
     let second = registry.runtime_for(&[], prov()).await;
     let err = match second {
-        Ok(_) => panic!(
-            "second concurrent acquire must fail when max_in_flight=1 and wait expires"
-        ),
+        Ok(_) => {
+            panic!("second concurrent acquire must fail when max_in_flight=1 and wait expires")
+        }
         Err(e) => e.to_string(),
     };
     assert!(

@@ -134,7 +134,8 @@ impl ConnectionPool {
         let pool = Arc::clone(self);
         handle.spawn(async move {
             // Tick often enough to honor idle_ttl without spinning: half TTL, clamped.
-            let period = (pool.policy.idle_ttl / 2).clamp(Duration::from_secs(1), Duration::from_secs(60));
+            let period =
+                (pool.policy.idle_ttl / 2).clamp(Duration::from_secs(1), Duration::from_secs(60));
             let mut interval = tokio::time::interval(period);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             // First tick completes immediately; skip so we do not reap at t=0.

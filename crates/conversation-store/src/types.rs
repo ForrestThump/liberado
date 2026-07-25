@@ -32,7 +32,33 @@ pub enum Author {
     Named(String),
 }
 
+/// [`Author::Named`] identity of a **context-compaction marker** node: the rolling summary that
+/// stands in for the history before it. The kernel's chat loader resumes the model-visible view
+/// from the latest one.
+pub const COMPACTION_AUTHOR: &str = "compaction";
+
+/// [`Author::Named`] identity of the **re-appended tail copies** that follow a compaction marker.
+///
+/// A compaction writes `[marker] → [verbatim copies of the last K turns]` so the model-visible
+/// view is a contiguous suffix of the log. The originals of those copies are still on the log
+/// *before* the marker, which makes these the only nodes that duplicate another node's content.
+///
+/// This constant lives here, in the store vocabulary, rather than with the kernel's compaction
+/// logic, because it is a **read contract**: every reader that walks a raw leaf path to present or
+/// count messages — rendered history, `Author::User` turn indexing for fork/rewind, search
+/// indexing — must skip these or it double-counts. See [`Author::is_compaction_tail_copy`].
+pub const COMPACTION_TAIL_AUTHOR: &str = "compaction-tail";
+
 impl Author {
+    /// Whether this is one of compaction's re-appended tail copies
+    /// ([`COMPACTION_TAIL_AUTHOR`]) — content that already appears earlier on the log.
+    ///
+    /// Readers presenting or counting conversation messages should skip these. The
+    /// *model-visible* view must not: the copies are exactly what makes it a contiguous suffix.
+    pub fn is_compaction_tail_copy(&self) -> bool {
+        matches!(self, Author::Named(name) if name == COMPACTION_TAIL_AUTHOR)
+    }
+
     /// The identity that corresponds one-to-one to a provider [`Role`]. The fallback any caller can
     /// use when all it has is the role; [`Author::Named`] is never produced here because a role
     /// carries no name.

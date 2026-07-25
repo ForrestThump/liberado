@@ -27,6 +27,8 @@ pub struct Tuning {
     pub cron_delivery: CronDeliveryTuning,
     /// MCP connection pooling (M1) — reuse healthy peer connections across executions.
     pub mcp_pooling: McpPoolingTuning,
+    /// Proposal lifecycle: expiry reaper interval, etc.
+    pub proposals: ProposalTuning,
     /// The `[tuning.coder]` section, kept **opaque** here — the coding pack owns its own config
     /// vocabulary (`liberado_coder_core::CoderTuning::from_value` parses + validates it at
     /// composition time). The config stack stays pack-agnostic: it knows a pack section exists,
@@ -298,6 +300,23 @@ impl Default for McpPoolingTuning {
             idle_ttl_secs: 300,
             max_in_flight_per_name: 4,
             connect_wait_secs: 60,
+        }
+    }
+}
+
+/// Proposal lifecycle tunables: expiry reaper stroke interval, etc.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProposalTuning {
+    /// How often (seconds) the background reaper sweeps `proposals/` for expired proposals and
+    /// flips them to `status: expired`. 0 disables the reaper entirely.
+    pub reap_interval_secs: u64,
+}
+
+impl Default for ProposalTuning {
+    fn default() -> Self {
+        Self {
+            reap_interval_secs: 600,
         }
     }
 }

@@ -51,3 +51,5 @@ tmp-liberado-*.log.prev
 
 # cargo-mutants working dir (mutation testing scratch)
 mutants.out/
+
+*.secret

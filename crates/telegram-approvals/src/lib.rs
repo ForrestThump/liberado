@@ -631,6 +631,7 @@ fn revision_schema() -> serde_json::Value {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use liberado_common::Capability;
     use liberado_messaging::MessagingError;
     use liberado_provider::{CompletionResponse, MockProvider};
     use tempfile::TempDir;
@@ -669,6 +670,7 @@ mod tests {
     struct RecordingChannel {
         edits: std::sync::Mutex<Vec<(String, String)>>,
         sends: std::sync::Mutex<Vec<String>>,
+        acks: std::sync::Mutex<Vec<(String, String)>>,
     }
 
     #[async_trait]
@@ -690,7 +692,11 @@ mod tests {
         async fn request_reply(&self, _: &str) -> Result<String, MessagingError> {
             Ok("prompt-1".into())
         }
-        async fn acknowledge(&self, _: &str, _: &str) -> Result<(), MessagingError> {
+        async fn acknowledge(&self, event_id: &str, text: &str) -> Result<(), MessagingError> {
+            self.acks
+                .lock()
+                .unwrap()
+                .push((event_id.to_string(), text.to_string()));
             Ok(())
         }
         async fn edit_message(&self, message_ref: &str, text: &str) -> Result<(), MessagingError> {
@@ -961,6 +967,545 @@ mod tests {
         let bot = test_bot(vault.clone(), signer, provider);
 
         bot.apply_revision(&stem, "some change").await;
+
+        let content = vault.read("proposals/prop-1.md").await.unwrap();
+        let proposal = Proposal::from_note(&content).unwrap();
+        assert_eq!(proposal.status, ProposalStatus::Approved);
+    }
+
+    #[tokio::test]
+    async fn handle_action_approve_calls_set_status_approved() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let bot = test_bot(vault.clone(), signer, Arc::new(MockProvider::new("mock")));
+
+        bot.handle_action("approve", &stem, "evt-1", None).await;
+
+        let content = vault.read("proposals/prop-1.md").await.unwrap();
+        let proposal = Proposal::from_note(&content).unwrap();
+        assert_eq!(proposal.status, ProposalStatus::Approved);
+    }
+
+    #[tokio::test]
+    async fn handle_action_reject_calls_set_status_rejected() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let bot = test_bot(vault.clone(), signer, Arc::new(MockProvider::new("mock")));
+
+        bot.handle_action("reject", &stem, "evt-2", None).await;
+
+        let content = vault.read("proposals/prop-1.md").await.unwrap();
+        let proposal = Proposal::from_note(&content).unwrap();
+        assert_eq!(proposal.status, ProposalStatus::Rejected);
+    }
+
+    #[tokio::test]
+    async fn handle_action_revise_calls_begin_revision() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let bot = test_bot(vault.clone(), signer, Arc::new(MockProvider::new("mock")));
+
+        bot.handle_action("revise", &stem, "evt-3", None).await;
+
+        let revisions = bot.pending_revisions.lock().await;
+        assert!(
+            revisions.values().any(|s| s == &stem),
+            "revision for stem should be registered"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_action_deny_calls_set_permission_scope_none() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, stem) =
+            temp_vault_with_permission_request(&signer, ProposalStatus::Pending).await;
+        let bot = test_bot(vault.clone(), signer, Arc::new(MockProvider::new("mock")));
+
+        bot.handle_action("deny", &stem, "evt-4", None).await;
+
+        let content = vault.read("proposals/prop-1.md").await.unwrap();
+        let proposal = Proposal::from_note(&content).unwrap();
+        assert_eq!(proposal.status, ProposalStatus::Rejected);
+    }
+
+    #[tokio::test]
+    async fn handle_action_once_calls_set_permission_scope_once() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, stem) =
+            temp_vault_with_permission_request(&signer, ProposalStatus::Pending).await;
+        let bot = test_bot(vault.clone(), signer, Arc::new(MockProvider::new("mock")));
+
+        bot.handle_action("once", &stem, "evt-5", None).await;
+
+        let content = vault.read("proposals/prop-1.md").await.unwrap();
+        let proposal = Proposal::from_note(&content).unwrap();
+        assert_eq!(proposal.status, ProposalStatus::Approved);
+        assert_eq!(proposal.approved_scope, Some(GrantScope::Once));
+    }
+
+    #[tokio::test]
+    async fn handle_action_session_calls_set_permission_scope_session() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, stem) =
+            temp_vault_with_permission_request(&signer, ProposalStatus::Pending).await;
+        let bot = test_bot(vault.clone(), signer, Arc::new(MockProvider::new("mock")));
+
+        bot.handle_action("session", &stem, "evt-6", None).await;
+
+        let content = vault.read("proposals/prop-1.md").await.unwrap();
+        let proposal = Proposal::from_note(&content).unwrap();
+        assert_eq!(proposal.status, ProposalStatus::Approved);
+        assert_eq!(proposal.approved_scope, Some(GrantScope::Session));
+    }
+
+    #[tokio::test]
+    async fn handle_action_everywhere_calls_set_permission_scope_everywhere() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, stem) =
+            temp_vault_with_permission_request(&signer, ProposalStatus::Pending).await;
+        let bot = test_bot(vault.clone(), signer, Arc::new(MockProvider::new("mock")));
+
+        bot.handle_action("everywhere", &stem, "evt-7", None).await;
+
+        let content = vault.read("proposals/prop-1.md").await.unwrap();
+        let proposal = Proposal::from_note(&content).unwrap();
+        assert_eq!(proposal.status, ProposalStatus::Approved);
+        assert_eq!(proposal.approved_scope, Some(GrantScope::Everywhere));
+    }
+
+    #[tokio::test]
+    async fn ack_calls_channel_acknowledge() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, _stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let channel = Arc::new(RecordingChannel::default());
+        let bot = ApprovalBot::new(
+            channel.clone(),
+            vault,
+            signer,
+            Arc::new(MockProvider::new("mock")),
+            TelegramApprovalsTuning::default(),
+        );
+
+        bot.ack("evt-8", "testing ack").await;
+
+        let acks = channel.acks.lock().unwrap();
+        assert_eq!(acks.len(), 1);
+        assert_eq!(acks[0].1, "testing ack");
+    }
+
+    #[tokio::test]
+    async fn handle_event_dispatches_actions() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let bot = test_bot(vault.clone(), signer, Arc::new(MockProvider::new("mock")));
+
+        bot.handle_event(InboundEvent::Action {
+            action: "approve".into(),
+            correlation_id: stem.clone(),
+            event_id: "evt-action".into(),
+            message_ref: None,
+        })
+        .await;
+
+        let content = vault.read("proposals/prop-1.md").await.unwrap();
+        let proposal = Proposal::from_note(&content).unwrap();
+        assert_eq!(proposal.status, ProposalStatus::Approved);
+    }
+
+    #[tokio::test]
+    async fn handle_event_ignores_bot_messages() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, _stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let channel = Arc::new(RecordingChannel::default());
+        let bot = ApprovalBot::new(
+            channel.clone(),
+            vault,
+            signer,
+            Arc::new(MockProvider::new("mock")),
+            TelegramApprovalsTuning::default(),
+        );
+
+        bot.handle_event(InboundEvent::Message {
+            text: "bot message".into(),
+            reply_to_prompt: None,
+            from_bot: true,
+        })
+        .await;
+
+        // No sends — bot messages are filtered out entirely.
+        assert!(channel.sends.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn handle_message_revision_reply_is_routed() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let channel = Arc::new(RecordingChannel::default());
+        let bot = ApprovalBot::new(
+            channel.clone(),
+            vault,
+            signer.clone(),
+            Arc::new(MockProvider::new("mock")),
+            TelegramApprovalsTuning::default(),
+        );
+
+        bot.begin_revision("evt-rev", &stem).await;
+
+        // The channel sends a revision prompt which gets mapped in pending_revisions.
+        // Simulate a message that is a reply to that prompt.
+        bot.handle_message("new rationale please", Some("prompt-1".into()))
+            .await;
+
+        // After handling, pending_revisions should have been consumed.
+        let revisions = bot.pending_revisions.lock().await;
+        assert!(
+            !revisions.contains_key("prompt-1"),
+            "revision prompt should be consumed"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_message_non_revision_ignores_when_no_chat_surface() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, _stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let channel = Arc::new(RecordingChannel::default());
+        let bot = ApprovalBot::new(
+            channel.clone(),
+            vault,
+            signer,
+            Arc::new(MockProvider::new("mock")),
+            TelegramApprovalsTuning::default(),
+        );
+
+        // No chat surface attached — text messages should be ignored (no send).
+        bot.handle_message("hello there", None).await;
+
+        assert!(channel.sends.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    /// Empty and whitespace-only input is answered with the "text messages" hint rather than
+    /// silently dropped — a blank send should tell the human what the bot accepts, not look dead.
+    async fn handle_message_empty_text_replies_with_the_text_only_hint() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, _stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let channel = Arc::new(RecordingChannel::default());
+        let bot = ApprovalBot::new(
+            channel.clone(),
+            vault,
+            signer,
+            Arc::new(MockProvider::new("mock")),
+            TelegramApprovalsTuning::default(),
+        );
+
+        bot.handle_message("", None).await;
+        bot.handle_message("   ", None).await;
+
+        let sends = channel.sends.lock().unwrap();
+        assert_eq!(sends.len(), 2);
+        assert!(sends[0].contains("text messages"));
+        assert!(sends[1].contains("text messages"));
+    }
+
+    #[tokio::test]
+    async fn begin_revision_records_prompt_stem_mapping() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let bot = test_bot(vault, signer, Arc::new(MockProvider::new("mock")));
+
+        bot.begin_revision("evt-br", &stem).await;
+
+        let revisions = bot.pending_revisions.lock().await;
+        assert_eq!(revisions.get("prompt-1"), Some(&stem));
+    }
+
+    #[tokio::test]
+    async fn handle_message_slash_commands_when_no_chat_surface() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, _stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let channel = Arc::new(RecordingChannel::default());
+
+        struct DummyChat;
+        #[async_trait]
+        impl ChatSurface for DummyChat {
+            async fn reply(&self, _: &str) -> Result<String, String> {
+                Ok("chat reply".into())
+            }
+        }
+
+        let bot = ApprovalBot::new(
+            channel.clone(),
+            vault,
+            signer,
+            Arc::new(MockProvider::new("mock")),
+            TelegramApprovalsTuning::default(),
+        )
+        .with_chat(Arc::new(DummyChat));
+
+        bot.handle_message("/start", None).await;
+
+        let sends = channel.sends.lock().unwrap();
+        assert_eq!(sends.len(), 1);
+        assert!(sends[0].contains("Liberado is online"));
+    }
+
+    #[tokio::test]
+    async fn handle_event_with_message_ref_is_forwarded() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let bot = test_bot(vault.clone(), signer, Arc::new(MockProvider::new("mock")));
+
+        bot.handle_event(InboundEvent::Action {
+            action: "reject".into(),
+            correlation_id: stem.clone(),
+            event_id: "evt-with-ref".into(),
+            message_ref: Some("msg-42".into()),
+        })
+        .await;
+
+        let content = vault.read("proposals/prop-1.md").await.unwrap();
+        let proposal = Proposal::from_note(&content).unwrap();
+        assert_eq!(proposal.status, ProposalStatus::Rejected);
+    }
+
+    async fn temp_vault_with_permission_request(
+        signer: &ProposalSigner,
+        status: ProposalStatus,
+    ) -> (Vault, TempDir, String) {
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open("test", dir.path()).await.unwrap();
+        let stem = "prop-1";
+        let mut proposal = Proposal::pending(
+            stem,
+            "corr-1",
+            "liberado",
+            ProposedAction::External {
+                description: "do something privileged".into(),
+            },
+            "needs permission",
+        );
+        proposal.requested_grant = Some(Capability::AskHuman);
+        let mut proposal = signer.sign(proposal);
+        proposal.set_status(status);
+        vault
+            .write(
+                "proposals/prop-1.md",
+                &proposal.to_note(),
+                None,
+                &WriteProvenance::human(),
+            )
+            .await
+            .unwrap();
+        (vault, dir, stem.to_string())
+    }
+
+    #[tokio::test]
+    async fn handle_message_help_slash_command_is_recognized() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, _stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let channel = Arc::new(RecordingChannel::default());
+
+        struct DummyChat;
+        #[async_trait]
+        impl ChatSurface for DummyChat {
+            async fn reply(&self, _: &str) -> Result<String, String> {
+                Ok("chat reply".into())
+            }
+        }
+
+        let bot = ApprovalBot::new(
+            channel.clone(),
+            vault,
+            signer,
+            Arc::new(MockProvider::new("mock")),
+            TelegramApprovalsTuning::default(),
+        )
+        .with_chat(Arc::new(DummyChat));
+
+        bot.handle_message("/help", None).await;
+
+        let sends = channel.sends.lock().unwrap();
+        assert_eq!(sends.len(), 1);
+        assert!(sends[0].contains("Liberado is online"));
+    }
+
+    #[tokio::test]
+    async fn set_permission_scope_refuses_non_pending_proposal() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, stem) =
+            temp_vault_with_permission_request(&signer, ProposalStatus::Approved).await;
+        let channel = Arc::new(RecordingChannel::default());
+        let bot = ApprovalBot::new(
+            channel.clone(),
+            vault.clone(),
+            signer,
+            Arc::new(MockProvider::new("mock")),
+            TelegramApprovalsTuning::default(),
+        );
+
+        bot.handle_action("once", &stem, "evt-np", None).await;
+
+        // The proposal should NOT have been modified — it was already Approved.
+        let acks = channel.acks.lock().unwrap();
+        assert!(
+            acks.iter()
+                .any(|(_, text)| text.contains("Already decided")),
+            "expected already-decided ack, got {:?}",
+            *acks
+        );
+    }
+
+    async fn temp_vault_only() -> (Vault, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open("test", dir.path()).await.unwrap();
+        (vault, dir)
+    }
+
+    #[tokio::test]
+    async fn from_env_respects_env_vars() {
+        let old_token = std::env::var("LIBERADO_TELEGRAM_BOT_TOKEN").ok();
+        let old_chat_id = std::env::var("LIBERADO_TELEGRAM_CHAT_ID").ok();
+
+        // Unset → None
+        unsafe {
+            std::env::remove_var("LIBERADO_TELEGRAM_BOT_TOKEN");
+            std::env::remove_var("LIBERADO_TELEGRAM_CHAT_ID");
+        }
+        let result = ApprovalBot::from_env(
+            temp_vault_only().await.0,
+            ProposalSigner::random(),
+            Arc::new(MockProvider::new("mock")),
+            TelegramApprovalsTuning::default(),
+        );
+        assert!(result.is_none(), "None when env vars unset");
+
+        // Set → Some
+        unsafe {
+            std::env::set_var("LIBERADO_TELEGRAM_BOT_TOKEN", "dummy_token");
+            std::env::set_var("LIBERADO_TELEGRAM_CHAT_ID", "dummy_chat");
+        }
+        let result = ApprovalBot::from_env(
+            temp_vault_only().await.0,
+            ProposalSigner::random(),
+            Arc::new(MockProvider::new("mock")),
+            TelegramApprovalsTuning::default(),
+        );
+        assert!(result.is_some(), "Some when env vars set");
+
+        // Restore original state
+        unsafe {
+            match old_token {
+                Some(v) => std::env::set_var("LIBERADO_TELEGRAM_BOT_TOKEN", v),
+                None => std::env::remove_var("LIBERADO_TELEGRAM_BOT_TOKEN"),
+            };
+            match old_chat_id {
+                Some(v) => std::env::set_var("LIBERADO_TELEGRAM_CHAT_ID", v),
+                None => std::env::remove_var("LIBERADO_TELEGRAM_CHAT_ID"),
+            };
+        }
+    }
+
+    struct RunTrackingChannel {
+        registered: std::sync::Mutex<Vec<Vec<(String, String)>>>,
+        receive_events: std::sync::Mutex<Vec<Vec<InboundEvent>>>,
+    }
+
+    impl RunTrackingChannel {
+        fn new() -> Self {
+            Self {
+                registered: std::sync::Mutex::new(Vec::new()),
+                receive_events: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn push_receive(&self, events: Vec<InboundEvent>) {
+            self.receive_events.lock().unwrap().push(events);
+        }
+    }
+
+    #[async_trait]
+    impl MessagingChannel for RunTrackingChannel {
+        fn name(&self) -> &str {
+            "run-tracking"
+        }
+        async fn send_text(&self, _: &str) -> Result<(), MessagingError> {
+            Ok(())
+        }
+        async fn send_with_actions(
+            &self,
+            _: &str,
+            _: &[Vec<liberado_messaging::ActionButton>],
+        ) -> Result<(), MessagingError> {
+            Ok(())
+        }
+        async fn request_reply(&self, _: &str) -> Result<String, MessagingError> {
+            Ok("prompt-1".into())
+        }
+        async fn acknowledge(&self, _: &str, _: &str) -> Result<(), MessagingError> {
+            Ok(())
+        }
+        async fn edit_message(&self, _: &str, _: &str) -> Result<(), MessagingError> {
+            Ok(())
+        }
+        async fn register_commands(
+            &self,
+            commands: &[(String, String)],
+        ) -> Result<(), MessagingError> {
+            self.registered.lock().unwrap().push(commands.to_vec());
+            Ok(())
+        }
+        async fn receive(&self, _: &mut String) -> Result<Vec<InboundEvent>, MessagingError> {
+            let batch = {
+                let mut q = self.receive_events.lock().unwrap();
+                if q.is_empty() {
+                    None
+                } else {
+                    Some(q.drain(..).collect::<Vec<_>>().concat())
+                }
+            };
+            match batch {
+                Some(events) => Ok(events),
+                None => {
+                    std::future::pending::<()>().await;
+                    unreachable!()
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn run_registers_commands_and_processes_events() {
+        let signer = ProposalSigner::random();
+        let (vault, _dir, stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
+        let channel = Arc::new(RunTrackingChannel::new());
+        channel.push_receive(vec![InboundEvent::Action {
+            action: "approve".into(),
+            correlation_id: stem.clone(),
+            event_id: "run-ev".into(),
+            message_ref: None,
+        }]);
+
+        let bot = ApprovalBot::new(
+            channel.clone(),
+            vault.clone(),
+            signer,
+            Arc::new(MockProvider::new("mock")),
+            TelegramApprovalsTuning::default(),
+        )
+        .with_command_menu(vec![("start".into(), "Start".into())]);
+
+        let handle = tokio::spawn(async move { bot.run().await });
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        handle.abort();
+
+        {
+            let registered = channel.registered.lock().unwrap();
+            assert!(
+                !registered.is_empty(),
+                "register_commands should have been called"
+            );
+            assert_eq!(registered[0][0].0, "start");
+        }
 
         let content = vault.read("proposals/prop-1.md").await.unwrap();
         let proposal = Proposal::from_note(&content).unwrap();

@@ -27,6 +27,8 @@ tracing = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
+liberado-vault = { workspace = true }
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)

@@ -24,10 +24,13 @@ pub use liberado_config::{
 mod mcp_apply;
 pub use mcp_apply::{LiveMcpController, McpApplyError, McpApplyReport, apply_mcp_peer_set};
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use liberado_common::{CapabilityCatalog, DEFAULT_POOL, ModelRole, ToolGuidanceSource};
+use liberado_common::{
+    CapabilityCatalog, CapabilitySet, DEFAULT_POOL, ModelRole, ToolGuidanceSource,
+};
 use liberado_config::{ProviderProfile, RoleOverride};
 use liberado_daemon::Daemon;
 use liberado_dispatch_pack::DispatchPack;
@@ -136,7 +139,8 @@ impl RoleProviders {
         self.primary.is_some()
     }
 
-    fn none() -> Self {
+    /// Watch-only composition: no inference backends attached.
+    pub fn none() -> Self {
         Self {
             primary: None,
             face: None,
@@ -257,6 +261,25 @@ fn pool_settings_from_config(config: &Config) -> McpPoolSettings {
     }
 }
 
+/// Pre-resolve every enabled `[[session_profiles]]` entry into a `(profile_name → CapabilitySet)`
+/// map the daemon uses at reaction time to narrow a session's authority from the pool ceiling to
+/// the profile's component grant. The server path resolves profiles dynamically via
+/// `state.config`; the daemon path resolves eagerly at boot because the daemon doesn't hold a
+/// config reference.
+fn session_profile_caps(config: &Config) -> HashMap<String, CapabilitySet> {
+    config
+        .topology
+        .session_profiles
+        .iter()
+        .filter(|p| p.enabled)
+        .map(|p| {
+            let component = p.component_key();
+            let caps = config.policy.capabilities_for(component);
+            (p.name.clone(), caps)
+        })
+        .collect()
+}
+
 /// Construct the live MCP controller: shared [`CapabilityCatalog`] + cloneable [`McpRegistry`],
 /// peers applied from `config.topology.mcps` (boot = first apply). Prefer this over
 /// [`mcp_registry_from_config`] when hot-reload must remain possible even if the initial set is empty.
@@ -268,8 +291,8 @@ pub fn live_mcp_from_config(
     health_catalog: Option<Arc<CapabilityCatalog>>,
 ) -> LiveMcpController {
     let catalog = health_catalog.unwrap_or_else(|| Arc::new(CapabilityCatalog::new()));
-    let registry =
-        McpRegistry::with_pool_settings(pool_settings_from_config(config)).with_health_catalog(catalog.clone());
+    let registry = McpRegistry::with_pool_settings(pool_settings_from_config(config))
+        .with_health_catalog(catalog.clone());
     let controller = LiveMcpController::new(catalog, registry);
     // Boot apply: empty → desired. Reject is unexpected after Config::validate; log and leave empty.
     if let Err(e) = controller.apply_config(config) {
@@ -351,6 +374,14 @@ pub fn configure_daemon(
         }
     };
 
+    // Provider-independent knobs: proposal reaper and session-profile grants still matter in
+    // watch-only mode (leftover proposals in the vault; fail-closed profile map if a source
+    // injects events without a full dispatcher stack). Apply before the provider early-return so
+    // `reap_interval_secs = 0` actually disables the reaper when no API key is set.
+    let daemon = daemon
+        .with_proposal_reap_interval(config.tuning.proposals.reap_interval_secs)
+        .with_session_profile_caps(session_profile_caps(config));
+
     let (Some(dispatcher_provider), Some(subagent_provider)) =
         (providers.dispatcher.as_ref(), providers.subagent.as_ref())
     else {
@@ -396,6 +427,7 @@ pub fn configure_daemon(
         liberado_notify::TelegramNotifier::from_env().map(|n| Arc::new(n) as Arc<dyn Notifier>);
     tracing::info!(enabled = notifier.is_some(), "proposal notifications");
 
+    // Reaper interval + profile caps already applied above (watch-only-safe path).
     let daemon = daemon
         .with_dispatcher(
             dispatcher,
@@ -667,8 +699,7 @@ mod tests {
             ),
         ];
 
-        let registry =
-            mcp_registry_from_config(&config, None).expect("two enabled MCPs => Some");
+        let registry = mcp_registry_from_config(&config, None).expect("two enabled MCPs => Some");
         let mut names = registry.names();
         names.sort_unstable();
         assert_eq!(names, vec!["tasks-mcp".to_string(), "wiki-mcp".to_string()]);
@@ -679,8 +710,7 @@ mod tests {
         let mut config = Config::default();
         config.topology.mcps = vec![mcp("weather-mcp", true, McpTransport::Managed)];
 
-        let registry =
-            mcp_registry_from_config(&config, None).expect("one enabled MCP => Some");
+        let registry = mcp_registry_from_config(&config, None).expect("one enabled MCP => Some");
         let names = registry.names();
         assert_eq!(names, vec!["weather-mcp".to_string()]);
     }
@@ -700,8 +730,7 @@ mod tests {
             },
         )];
 
-        let registry =
-            mcp_registry_from_config(&config, None).expect("one enabled MCP => Some");
+        let registry = mcp_registry_from_config(&config, None).expect("one enabled MCP => Some");
         let names = registry.names();
         assert_eq!(names, vec!["tasks-mcp-docker".to_string()]);
     }
@@ -830,5 +859,67 @@ mod tests {
         let mut config = Config::default();
         config.topology.schedules = vec![cron_schedule("nightly", true)];
         assert!(cron_source_from_config(&config).unwrap().is_some());
+    }
+
+    /// Watch-only (no API key / no providers): reaper tuning and session-profile caps still apply.
+    #[tokio::test]
+    async fn watch_only_configure_honors_zero_reap_interval() {
+        use liberado_common::CapabilityCatalog;
+        use liberado_daemon::Daemon;
+        use liberado_mcp::McpRegistry;
+        use std::sync::Arc;
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let daemon = Daemon::open("test", dir.path()).await.unwrap();
+        // Default open() uses 600s — prove configure overwrites it even without a provider.
+        assert_eq!(daemon.proposal_reap_interval(), Duration::from_secs(600));
+
+        let mut config = Config::default();
+        config.topology.vault_path = dir.path().to_path_buf();
+        config.tuning.proposals.reap_interval_secs = 0;
+
+        let configured = configure_daemon(
+            daemon,
+            &RoleProviders::none(),
+            &config,
+            Arc::new(CapabilityCatalog::new()),
+            McpRegistry::new(),
+            dir.path(),
+            None,
+        );
+        assert_eq!(
+            configured.proposal_reap_interval(),
+            Duration::ZERO,
+            "reap_interval_secs = 0 must disable the reaper in watch-only mode"
+        );
+    }
+
+    #[tokio::test]
+    async fn watch_only_configure_honors_custom_reap_interval() {
+        use liberado_common::CapabilityCatalog;
+        use liberado_daemon::Daemon;
+        use liberado_mcp::McpRegistry;
+        use std::sync::Arc;
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let daemon = Daemon::open("test", dir.path()).await.unwrap();
+        let mut config = Config::default();
+        config.topology.vault_path = dir.path().to_path_buf();
+        config.tuning.proposals.reap_interval_secs = 42;
+
+        let configured = configure_daemon(
+            daemon,
+            &RoleProviders::none(),
+            &config,
+            Arc::new(CapabilityCatalog::new()),
+            McpRegistry::new(),
+            dir.path(),
+            None,
+        );
+        assert_eq!(configured.proposal_reap_interval(), Duration::from_secs(42));
     }
 }

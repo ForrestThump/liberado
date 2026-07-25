@@ -16,9 +16,7 @@ use liberado_executor::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
 
 use crate::MultiMcpRuntime;
 use crate::connector::McpConnector;
-use crate::pool::{
-    AsToolRuntime, ConnectionPool, PermittedRuntime, PoolPolicy, PooledCheckout,
-};
+use crate::pool::{AsToolRuntime, ConnectionPool, PermittedRuntime, PoolPolicy, PooledCheckout};
 
 /// Pooling knobs passed into [`McpRegistry`] at construction (from `tuning.mcp_pooling`).
 #[derive(Debug, Clone)]
@@ -124,11 +122,7 @@ impl McpRegistry {
     }
 
     /// Register a server under `name` (the namespace its tools are exposed under). Chainable.
-    pub fn register(
-        self,
-        name: impl Into<String>,
-        connector: impl McpConnector + 'static,
-    ) -> Self {
+    pub fn register(self, name: impl Into<String>, connector: impl McpConnector + 'static) -> Self {
         self.inner
             .connectors
             .write()
@@ -235,9 +229,10 @@ impl McpRegistry {
                 .connectors
                 .read()
                 .unwrap_or_else(|e| e.into_inner());
-            guard.get(name).cloned().ok_or_else(|| {
-                RuntimeSetupError(format!("MCP '{name}' is not registered"))
-            })?
+            guard
+                .get(name)
+                .cloned()
+                .ok_or_else(|| RuntimeSetupError(format!("MCP '{name}' is not registered")))?
         };
 
         match connector.connect(provenance.clone()).await {
@@ -329,5 +324,41 @@ impl RuntimeFactory for McpRegistry {
             servers.push((name, runtime));
         }
         Ok(Box::new(MultiMcpRuntime::new(servers)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connector::McpConnector;
+
+    struct NoopConnector;
+    #[async_trait]
+    impl McpConnector for NoopConnector {
+        async fn connect(
+            &self,
+            _provenance: WriteProvenance,
+        ) -> Result<Box<dyn crate::RebindableRuntime>, RuntimeSetupError> {
+            Err(RuntimeSetupError("noop".into()))
+        }
+    }
+
+    #[test]
+    fn is_empty_true_when_no_connectors() {
+        let reg = McpRegistry::new();
+        assert!(reg.is_empty());
+        assert_eq!(reg.len(), 0);
+    }
+
+    #[test]
+    fn is_empty_false_and_len_reflects_count() {
+        let reg = McpRegistry::new()
+            .register("a", NoopConnector)
+            .register("b", NoopConnector);
+        assert!(!reg.is_empty());
+        assert_eq!(reg.len(), 2);
+        let mut names = reg.names();
+        names.sort();
+        assert_eq!(names, vec!["a".to_string(), "b".to_string()]);
     }
 }

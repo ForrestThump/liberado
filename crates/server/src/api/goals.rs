@@ -53,9 +53,23 @@ pub async fn goals_start(
     // profile picks the pack, the capability grant, and the pack's opaque overrides; no profile
     // falls back to the bare domain, keyed by the domain name (the pool rule). Whether this session
     // may interrupt a human is decided *here*, by the grant â€” not by the caller asserting it.
-    let (domain, capabilities, overrides, profile_idle) = state
+    // A named profile that resolves to nothing is refused, not silently downgraded to the domain
+    // grant — that would run the session with authority the caller never asked for.
+    let (domain, capabilities, overrides, profile_idle) = match state
         .config
-        .resolve_session_profile(goal.profile.as_deref(), goal.domain.as_str());
+        .resolve_session_profile(goal.profile.as_deref(), goal.domain.as_str())
+    {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: e.to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
     if domain.as_str() != goal.domain.as_str() {
         goal.domain = liberado_session::DomainHint::from(domain.as_str());
     }

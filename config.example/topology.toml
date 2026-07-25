@@ -15,12 +15,6 @@ vault_path = "/home/shiloh/vault"
 # anywhere else you want to inject local now into agent context.
 # timezone = "America/Chicago"
 
-# Main chat agent = human interfacer. Specialist work goes through the built-in `delegate` tool
-# to the dispatcher mesh (grant ExecuteMcp specialists to component `dispatcher` in policy.toml).
-[main_agent]
-delegation_mode = true
-# system_prompt = """optional full override of the human-interface system prompt"""
-
 # Unix domain socket the daemon listens on for client attach (optional; has a default).
 # daemon_socket = "/run/liberado/daemon.sock"
 
@@ -29,6 +23,17 @@ delegation_mode = true
 # is never set here. Defaults live in code (`crates/config-loader/src/model.rs`); this file only
 # needs to hold *deltas* — you don't have to redeclare deepseek/openrouter just to select one.
 # provider = "deepseek"
+
+# Main chat agent = human interfacer. Specialist work goes through the built-in `delegate` tool
+# to the dispatcher mesh (grant ExecuteMcp specialists to component `dispatcher` in policy.toml).
+#
+# Everything from here down is inside a table. `vault_path`, `timezone`, `daemon_socket`, and
+# `provider` are TOP-LEVEL keys and must stay above this line — a TOML table owns every key that
+# follows it, so a top-level key written below would silently become `main_agent.<key>` and be
+# ignored. Compaction settings live in [main_agent.compaction] at the end of this file.
+[main_agent]
+delegation_mode = true
+# system_prompt = """optional full override of the human-interface system prompt"""
 
 # Declared inference backends — every one is built by the single, generic
 # `liberado-provider-openai-compat` crate, which speaks any OpenAI-compatible chat-completions API.
@@ -289,3 +294,41 @@ transport = { kind = "stdio", command = "riggers-mcp", args = ["--config", "rigg
 #
 # [session_profiles.overrides]
 # role = "researcher"      # opaque to the config stack; the life pack reads it
+
+# --- Automatic context compaction for long chats (CH3) -----------------------------------------
+# docs/roadmap/context-compaction-plan.md. When a turn's estimated size (chars/4 × 1.3, history +
+# incoming message) exceeds the *resolved* trigger, older history is rolled into a persisted
+# summary. Trigger resolution (first match wins):
+#   1. [main_agent.compaction.models."<face-model>"].trigger_tokens   (absolute, per-model)
+#   2. that table's trigger_pct × matching [[models]].context_window
+#   3. [main_agent.compaction].trigger_tokens                        (absolute, global)
+#   4. trigger_pct × face model's [[models]].context_window
+#   5. 48000 fallback when the face model has no declared context_window
+#
+# NOTE: step 5 is the one to watch. A face model with no [[models]] entry compacts at 48000 no
+# matter how large its real window is — on a 128k model that pays for summaries, and discards
+# context, tens of thousands of tokens early. Declare the face model below.
+#
+# Kept at the end of this file on purpose: a TOML table owns every key after it, so these tables
+# must not sit above the top-level keys (vault_path, daemon_socket, provider, …).
+# Edit + restart; no rebuild.
+# [main_agent.compaction]
+# enabled = true                # default ON — set false only with a reason
+# trigger_pct = 0.75            # default: compact at 75% of the face model's context_window
+# # trigger_tokens = 48000      # optional global absolute — overrides trigger_pct when set
+# keep_recent_turns = 3
+# summary_max_tokens = 1024
+# tool_result_max_chars = 2000
+
+# Per-model overrides (keys = model slug / [[models]].name):
+# [main_agent.compaction.models."deepseek-chat"]
+# trigger_pct = 0.70
+# # trigger_tokens = 40000      # absolute wins over pct for this model only
+
+# Declared model windows — what percentage-based triggers resolve against.
+# [[models]]
+# name = "deepseek-chat"
+# tool_calling = true
+# structured_output = false
+# context_window = 64000
+# tier = "work_plane"

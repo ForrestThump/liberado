@@ -284,7 +284,9 @@ async fn a4_park_answer_resume_pack_sees_prior_turns_on_both_stores() {
         let seen = saw.lock().unwrap().clone();
         let texts: Vec<&str> = seen.iter().map(|(_, t)| t.as_str()).collect();
         assert!(
-            texts.iter().any(|t| t.contains("title") || t.contains("What")),
+            texts
+                .iter()
+                .any(|t| t.contains("title") || t.contains("What")),
             "{name}: pack must see prior assistant question: {texts:?}"
         );
         assert!(

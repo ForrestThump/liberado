@@ -1486,6 +1486,243 @@ async fn daemon_archives_a_rejected_proposal() {
 }
 
 #[tokio::test]
+async fn handle_proposal_change_expires_and_archives_past_deadline_pending() {
+    // A human touch of a still-Pending note past `expires` must not wait for the reaper: flip
+    // status to Expired and archive under archive/expired/.
+    use chrono::{Duration as ChronoDuration, Utc};
+    use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall};
+
+    let signer = ProposalSigner::random();
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon.with_proposal_signer(signer.clone());
+
+    let proposals_dir = dir.path().join("proposals");
+    std::fs::create_dir_all(&proposals_dir).unwrap();
+
+    let mut proposal = Proposal::pending(
+        "vault-change:stale-pending:1",
+        "vault-change:stale-pending:1",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "too late" }),
+        }]),
+        "expired pending proposal",
+    );
+    proposal.expires = Some(Utc::now() - ChronoDuration::hours(1));
+    let proposal = signer.sign(proposal);
+    let rel = Path::new("proposals/stale-pending.md");
+    let prov = WriteProvenance::agent("test", "c1");
+    daemon
+        .vault
+        .write(rel, &proposal.to_note(), None, &prov)
+        .await
+        .unwrap();
+
+    let outcome = daemon.handle_proposal_change(rel).await.unwrap();
+    assert!(
+        matches!(outcome, ReactionOutcome::Observed),
+        "past-deadline notes are observed, never executed"
+    );
+
+    assert!(
+        daemon.vault.read(rel).await.is_err(),
+        "expired proposal must leave the active proposals/ dir"
+    );
+    let archived = daemon
+        .vault
+        .read("proposals/archive/expired/stale-pending.md")
+        .await
+        .expect("must land under archive/expired/");
+    assert_eq!(
+        Proposal::from_note(&archived).unwrap().status,
+        ProposalStatus::Expired
+    );
+}
+
+/// Free-form Failed summaries that merely mention "expired" must not be treated as the
+/// orchestrator's preflight refuse signal (exact `EXPIRED_PROPOSAL_REFUSAL_SUMMARY` only).
+#[test]
+fn expired_refusal_matches_exact_orchestrator_summary_only() {
+    use liberado_orchestrator::EXPIRED_PROPOSAL_REFUSAL_SUMMARY;
+    assert_eq!(
+        EXPIRED_PROPOSAL_REFUSAL_SUMMARY,
+        "proposal expired — not executed"
+    );
+    // Substring traps would mis-handle free-form executor text:
+    assert!(
+        "subagent said the lease expired mid-run".contains("expired")
+            && "subagent said the lease expired mid-run" != EXPIRED_PROPOSAL_REFUSAL_SUMMARY
+    );
+}
+
+#[tokio::test]
+async fn handle_proposal_change_expired_refuse_does_not_apply_session_grant() {
+    // Permission request past deadline: execute_approved refuses without tools — must not
+    // persist a Session grant (apply_approved_grant only after a real execute path).
+    use chrono::{Duration as ChronoDuration, Utc};
+    use liberado_common::{
+        Capability, CapabilitySet, GrantScope, Proposal, ProposalSigner, ProposalStatus,
+        ProposedAction, ToolCall, WriteProvenance, session_grants,
+    };
+    use liberado_orchestrator::Orchestrator;
+    use liberado_provider::MockProvider;
+    use liberado_test_support::{InvocationRecordingFactory, InvocationRecordingRuntime};
+    use std::path::Path;
+    use std::sync::Arc;
+
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let signer = ProposalSigner::random();
+    let orch = Orchestrator::new(
+        Arc::new(MockProvider::with_script(
+            "mock",
+            Vec::<liberado_provider::CompletionResponse>::new(),
+        )),
+        InvocationRecordingFactory { runtime },
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        signer.clone(),
+        "default",
+    );
+
+    let pool = format!("grant-expire-test-{:?}", std::thread::current().id());
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon
+        .with_orchestrator(orch)
+        .with_proposal_signer(signer.clone());
+
+    let proposals_dir = dir.path().join("proposals");
+    std::fs::create_dir_all(&proposals_dir).unwrap();
+
+    let mut proposal = Proposal::pending(
+        "vault-change:expired-grant:1",
+        "vault-change:expired-grant:1",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "no" }),
+        }]),
+        "permission request past deadline",
+    )
+    .with_requested_grant(Capability::Write(liberado_common::Zone::vault("sandbox")));
+    proposal.pool = Some(pool.clone());
+    proposal.expires = Some(Utc::now() - ChronoDuration::hours(1));
+    // Session scope is part of the signed payload (set before sign).
+    proposal.approved_scope = Some(GrantScope::Session);
+    let mut proposal = signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+
+    let rel = Path::new("proposals/expired-grant.md");
+    let prov = WriteProvenance::agent("test", "c1");
+    daemon
+        .vault
+        .write(rel, &proposal.to_note(), None, &prov)
+        .await
+        .unwrap();
+
+    let outcome = daemon.handle_proposal_change(rel).await.unwrap();
+    assert!(matches!(outcome, ReactionOutcome::Observed));
+    assert!(
+        invoked.lock().unwrap().is_empty(),
+        "tools must not run on expired refuse"
+    );
+    assert!(
+        session_grants::session_grant(&pool).capabilities.is_empty(),
+        "session grant must not persist when execute was refused as expired"
+    );
+    // Lifecycle: expired + archived
+    assert!(daemon.vault.read(rel).await.is_err());
+    let archived = daemon
+        .vault
+        .read("proposals/archive/expired/expired-grant.md")
+        .await
+        .expect("must archive as expired");
+    assert_eq!(
+        Proposal::from_note(&archived).unwrap().status,
+        ProposalStatus::Expired
+    );
+}
+
+#[tokio::test]
+async fn handle_proposal_change_does_not_execute_approved_past_deadline() {
+    // Late approve after `expires` must not run tools — only expire + archive.
+    use chrono::{Duration as ChronoDuration, Utc};
+    use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall};
+    use liberado_orchestrator::Orchestrator;
+    use liberado_provider::MockProvider;
+    use liberado_test_support::{InvocationRecordingFactory, InvocationRecordingRuntime};
+
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let signer = ProposalSigner::random();
+    let orch = Orchestrator::new(
+        Arc::new(MockProvider::with_script(
+            "mock",
+            Vec::<liberado_provider::CompletionResponse>::new(),
+        )),
+        InvocationRecordingFactory { runtime },
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        signer.clone(),
+        "default",
+    );
+
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon
+        .with_orchestrator(orch)
+        .with_proposal_signer(signer.clone());
+
+    let proposals_dir = dir.path().join("proposals");
+    std::fs::create_dir_all(&proposals_dir).unwrap();
+
+    let mut proposal = Proposal::pending(
+        "vault-change:late-approve:1",
+        "vault-change:late-approve:1",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "should never run" }),
+        }]),
+        "approved after expiry",
+    );
+    proposal.expires = Some(Utc::now() - ChronoDuration::hours(1));
+    let mut proposal = signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+    let rel = Path::new("proposals/late-approve.md");
+    let prov = WriteProvenance::agent("test", "c1");
+    daemon
+        .vault
+        .write(rel, &proposal.to_note(), None, &prov)
+        .await
+        .unwrap();
+
+    let outcome = daemon.handle_proposal_change(rel).await.unwrap();
+    assert!(matches!(outcome, ReactionOutcome::Observed));
+
+    assert!(
+        invoked.lock().unwrap().is_empty(),
+        "past-deadline approved proposal must never invoke tools"
+    );
+    assert!(daemon.vault.read(rel).await.is_err());
+    let archived = daemon
+        .vault
+        .read("proposals/archive/expired/late-approve.md")
+        .await
+        .expect("late approve must archive as expired, not approved");
+    assert_eq!(
+        Proposal::from_note(&archived).unwrap().status,
+        ProposalStatus::Expired
+    );
+}
+
+#[tokio::test]
 async fn daemon_does_not_execute_a_pending_proposal() {
     use liberado_common::{Proposal, ProposalStatus, ProposedAction, ToolCall};
     use liberado_orchestrator::Orchestrator;
@@ -1737,6 +1974,235 @@ async fn runtime_gated_downgrade_lands_in_the_vault_and_executes_once_approved()
         "approving the runtime-gated proposal must actually execute it"
     );
     assert_eq!(recorded[0].name, "dangerous-mcp:wipe");
+
+    handle.abort();
+}
+
+/// An event that names a session profile missing from the boot map must not start a hosted
+/// session (fail closed — never silent full-pool fallback).
+#[tokio::test]
+async fn unknown_session_profile_does_not_start_session() {
+    use liberado_common::{Capability, CapabilitySet, EventPayload};
+    use liberado_config_loader::DispatchTuning;
+    use liberado_dispatch_pack::DispatchPack;
+    use liberado_provider::{CompletionResponse, MockProvider};
+    use liberado_session::{GoalSessionHub, GoalSessionStore};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let (daemon, _dir) = temp_daemon().await;
+    let grant_dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "unused",
+            Vec::<CompletionResponse>::new(),
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    // Hub present so the profile branch runs (no hub → inline path, no profile grant).
+    let pack = DispatchPack::new(
+        Arc::new(CapabilityCatalog::new()),
+        Vec::new(),
+        1,
+        std::env::temp_dir(),
+    );
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(Arc::new(pack));
+    let hub = Arc::new(hub);
+
+    let mut known = HashMap::new();
+    known.insert(
+        "interactive-cron".into(),
+        CapabilitySet::from_iter([Capability::AskHuman]),
+    );
+
+    let daemon = daemon
+        .with_dispatcher(
+            grant_dispatcher,
+            Arc::new(CapabilityCatalog::new()),
+            CapabilitySet::empty(),
+            Vec::new(),
+        )
+        .with_session_profile_caps(known)
+        .with_goal_hub(hub.clone());
+
+    let sender = daemon.event_sender();
+    let (tx, mut rx) = unbounded_channel();
+    let handle = tokio::spawn(daemon.run(tx));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    sender
+        .send(Event::trigger(
+            "CronFired",
+            "cron:bad-profile",
+            "cron:bad-profile:1",
+            EventPayload {
+                summary: Some("should not run".into()),
+                data: serde_json::json!({ "profile": "typo-not-in-map" }),
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+
+    let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for reaction")
+        .expect("reaction channel closed");
+    assert!(
+        matches!(reaction.outcome, ReactionOutcome::Observed),
+        "unknown profile must be Observed, not Dispatched; got {}",
+        reaction.outcome.label()
+    );
+    assert!(
+        hub.list().await.is_empty(),
+        "no hosted session may be created for an unknown profile"
+    );
+
+    handle.abort();
+}
+
+/// A known profile name resolves and still dispatches a hosted session.
+#[tokio::test]
+async fn known_session_profile_still_dispatches() {
+    use liberado_common::{
+        Capability, CapabilitySet, DispatchAction, DispatchDecision, EventPayload,
+    };
+    use liberado_config_loader::DispatchTuning;
+    use liberado_dispatch_pack::DispatchPack;
+    use liberado_executor::{RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime};
+    use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
+    use liberado_session::{GoalSessionHub, GoalSessionStore};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    struct NoopRuntime;
+    #[async_trait::async_trait]
+    impl ToolRuntime for NoopRuntime {
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".into())
+        }
+    }
+    struct NoopFactory;
+    #[async_trait::async_trait]
+    impl RuntimeFactory for NoopFactory {
+        async fn runtime_for(
+            &self,
+            _allowed_mcps: &[String],
+            _provenance: WriteProvenance,
+        ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+            Ok(Box::new(NoopRuntime))
+        }
+    }
+
+    let (daemon, _dir) = temp_daemon().await;
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: Vec::new(),
+        },
+        confidence: 0.95,
+        rationale: "profile ok".into(),
+    };
+    let dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "dispatch",
+            [CompletionResponse::text(
+                serde_json::to_string(&decision).unwrap(),
+            )],
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    let orchestrator = Orchestrator::new(
+        Arc::new(MockProvider::with_script(
+            "exec",
+            [CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "c",
+                SUBMIT_REPORT_TOOL,
+                serde_json::json!({ "outcome": "succeeded", "summary": "ok" }),
+            )])],
+        )),
+        NoopFactory,
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        liberado_common::ProposalSigner::random(),
+        "default",
+    );
+    let pack = DispatchPack::new(
+        Arc::new(CapabilityCatalog::new()),
+        Vec::new(),
+        1,
+        std::env::temp_dir(),
+    )
+    .with_pool("default", dispatcher, orchestrator);
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(Arc::new(pack));
+    let hub = Arc::new(hub);
+
+    let grant_dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "unused",
+            Vec::<CompletionResponse>::new(),
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    let mut known = HashMap::new();
+    known.insert(
+        "interactive-cron".into(),
+        CapabilitySet::from_iter([Capability::AskHuman]),
+    );
+
+    let daemon = daemon
+        .with_dispatcher(
+            grant_dispatcher,
+            Arc::new(CapabilityCatalog::new()),
+            CapabilitySet::empty(),
+            Vec::new(),
+        )
+        .with_session_profile_caps(known)
+        .with_goal_hub(hub.clone());
+
+    let sender = daemon.event_sender();
+    let (tx, mut rx) = unbounded_channel();
+    let handle = tokio::spawn(daemon.run(tx));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    sender
+        .send(Event::trigger(
+            "CronFired",
+            "cron:good-profile",
+            "cron:good-profile:1",
+            EventPayload {
+                summary: Some("profile-gated goal".into()),
+                data: serde_json::json!({ "profile": "interactive-cron" }),
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+
+    let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for reaction")
+        .expect("reaction channel closed");
+    let session_id = match reaction.outcome {
+        ReactionOutcome::Dispatched { session_id } => session_id,
+        other => panic!("known profile must dispatch, got {}", other.label()),
+    };
+    let snap = hub
+        .snapshot(&session_id)
+        .await
+        .expect("session must exist on hub");
+    assert_eq!(
+        snap.session.goal.profile.as_deref(),
+        Some("interactive-cron")
+    );
 
     handle.abort();
 }

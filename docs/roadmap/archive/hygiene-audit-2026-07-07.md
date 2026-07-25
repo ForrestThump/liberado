@@ -55,12 +55,11 @@ async fn build_event(vault: &Vault, rel_path: &Path) -> Event {
     ...
 ```
 
-If the read fails (permissions, the file disappearing between `attribute()` and this call, a
-transient I/O error), `content` becomes `""`, a real `VaultNoteChanged` event fires with a
-correlation ID derived from the empty-content hash, and the rest of the pipeline (dispatcher,
-executor) reasons about a phantom empty note as if that's genuinely the file's content — not "we
-don't know what changed." Fix: propagate the read error (skip this change and log, matching
-`poll_tick`-style patterns elsewhere in this codebase) rather than substituting a default.
+**Resolution (2026-07-23):** Changed `build_event` from `-> Event` to `-> Result<Event, VaultError>`,
+replaced `unwrap_or_default()` with `?`, and updated the sole caller (`attribute_and_build_event`) to
+log the error at `tracing::warn!` level and return `Ok(None)` — which skips the change entirely rather
+than fabricating a phantom empty-note event. The watch loop already handles `Ok(None)` gracefully (it's
+the same path as "our own write — suppressed").
 
 ## Priority 2 — real, worth doing when nearby
 
@@ -78,6 +77,17 @@ But "unlikely" isn't "impossible," and the blast radius (the whole catalog or se
 until process restart) is total. `parking_lot`'s non-poisoning locks, or an explicit
 `.unwrap_or_else(|poisoned| poisoned.into_inner())` recovery at each site, would remove the failure
 mode entirely rather than just making it rare.
+
+**Resolution (2026-07-23):** Replaced bare `.unwrap()` with
+`.unwrap_or_else(|poisoned| poisoned.into_inner())` at every site: `sessions.rs:784` (the `std::sync::Mutex`
+guarding the session-lock map) and all 13 read/write sites on `catalog.rs`'s `RwLock`
+(`set_degraded_half_open_ttl`, `register`, `deregister`, `mark_degraded`, `mark_healthy`,
+`purge_expired_degraded`×2, `is_degraded`, `descriptors`, `routing_descriptors`, `get`, `is_empty`,
+`len`). The double-execution race flagged in
+[`hardening-audit-2026-07-02.md`](hardening-audit-2026-07-02.md) item 4 was also checked — no longer
+a real issue: `Daemon::run`'s event loop (`lib.rs:259`) processes events sequentially
+(`self.react(&event).await` awaited inline), and `handle_proposal_change` writes `status: Done` before
+returning, so no concurrent execution path exists for the same proposal.
 
 ### `crates/executor/src/lib.rs` (2171 lines) is a decomposition candidate, not yet flagged elsewhere
 

@@ -1,3 +1,6 @@
+// WIP Dioxus scaffold — many component helpers are wired into planned features but
+// not yet called from the render tree. Allow dead code crate-wide until wiring is complete.
+#![allow(dead_code)]
 use dioxus::prelude::*;
 
 mod components;

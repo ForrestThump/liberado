@@ -58,9 +58,18 @@ impl Config {
 
     /// Resolve what a goal session should run as (session-focus S6).
     ///
-    /// `profile` names a `[[session_profiles]]` entry; when absent (or naming no enabled profile),
-    /// the session falls back to `domain_fallback` with the grant keyed by the domain itself — the
-    /// pool rule, so `[[grants]] component = "coding"` bounds an unprofiled coding session.
+    /// `profile` names a `[[session_profiles]]` entry. When it is `None`, the session falls back to
+    /// `domain_fallback` with the grant keyed by the domain itself — the pool rule, so
+    /// `[[grants]] component = "coding"` bounds an unprofiled coding session.
+    ///
+    /// **Fail-closed on a named profile that does not resolve.** A `Some(name)` matching no
+    /// *enabled* entry is an error, never a fallback: the caller asked for a specific hat, and
+    /// quietly handing back the domain's grant instead would widen a session past what the profile
+    /// was written to allow — the exact hazard on a typo'd or newly-disabled profile. This mirrors
+    /// the daemon's reactor (`liberado_daemon`'s `react`), which refuses to start a session on an
+    /// unknown profile, and [`validate`](Self::validate), which rejects the same mistake in
+    /// `topology.schedules` at load time. Runtime-created goals (HTTP `POST /api/goals`, Telegram
+    /// `/spawn`) can only be caught here.
     ///
     /// Returns `(domain, capabilities, overrides, max_idle_secs)`. The capability set is **the**
     /// authority boundary for the session and can only ever be narrowed from here (Decision 4).
@@ -70,26 +79,31 @@ impl Config {
         &self,
         profile: Option<&str>,
         domain_fallback: &str,
-    ) -> (String, CapabilitySet, toml::Value, Option<u64>) {
-        let found = profile.and_then(|name| {
-            self.topology
-                .session_profiles
-                .iter()
-                .find(|p| p.enabled && p.name == name)
-        });
-        match found {
-            Some(p) => (
-                p.domain.clone(),
-                self.policy.capabilities_for(p.component_key()),
-                p.overrides.clone(),
-                p.max_idle_secs,
-            ),
-            None => (
+    ) -> Result<(String, CapabilitySet, toml::Value, Option<u64>)> {
+        let Some(name) = profile else {
+            return Ok((
                 domain_fallback.to_string(),
                 self.policy.capabilities_for(domain_fallback),
                 empty_table(),
                 None,
-            ),
+            ));
+        };
+        let found = self
+            .topology
+            .session_profiles
+            .iter()
+            .find(|p| p.enabled && p.name == name);
+        match found {
+            Some(p) => Ok((
+                p.domain.clone(),
+                self.policy.capabilities_for(p.component_key()),
+                p.overrides.clone(),
+                p.max_idle_secs,
+            )),
+            None => Err(Error::Config(format!(
+                "session profile '{name}' does not name an enabled \
+                 topology.session_profiles entry"
+            ))),
         }
     }
 
@@ -327,6 +341,26 @@ impl Config {
                     "topology.session_profiles['{}'].component '{component}' names no \
                      policy.toml [[grants]] entry — the session would run with zero authority",
                     profile.name
+                )));
+            }
+        }
+
+        // Schedules that name a profile must match an *enabled* session profile — same fail-fast
+        // style as pool names (daemon fail-closed is the runtime backstop; load-time catches typos).
+        let profile_exists = |name: &str| {
+            self.topology
+                .session_profiles
+                .iter()
+                .any(|p| p.enabled && p.name == name)
+        };
+        for schedule in &self.topology.schedules {
+            if let Some(profile) = &schedule.profile
+                && !profile_exists(profile)
+            {
+                return Err(Error::Config(format!(
+                    "topology.schedules['{}'].profile '{profile}' does not name an enabled \
+                     topology.session_profiles entry",
+                    schedule.name
                 )));
             }
         }

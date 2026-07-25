@@ -82,10 +82,9 @@ impl LiveMcpController {
     /// config, then apply only the MCP peer set. Other config sections are re-read for validation
     /// but not hot-applied (out of scope).
     pub fn reload_from_config_dir(&self) -> Result<McpApplyReport, McpApplyError> {
-        let (config, _prov) =
-            liberado_config::load_config(None).map_err(|e| McpApplyError {
-                message: format!("reload: failed to load config: {e}"),
-            })?;
+        let (config, _prov) = liberado_config::load_config(None).map_err(|e| McpApplyError {
+            message: format!("reload: failed to load config: {e}"),
+        })?;
         config.validate().map_err(|e| McpApplyError {
             message: format!("reload: config validation failed: {e}"),
         })?;
@@ -151,10 +150,7 @@ fn validate_desired_mcps(mcps: &[McpConfig]) -> Result<(), McpApplyError> {
         }
         if !seen.insert(m.name.clone()) {
             return Err(McpApplyError {
-                message: format!(
-                    "MCP peer set rejected: duplicate MCP name '{}'",
-                    m.name
-                ),
+                message: format!("MCP peer set rejected: duplicate MCP name '{}'", m.name),
             });
         }
         if m.enabled {
@@ -287,8 +283,14 @@ mod tests {
 
         let first = vec![stdio("tasks", true), stdio("weather", true)];
         let report = apply_mcp_peer_set(&catalog, &registry, &first).unwrap();
-        assert_eq!(report.enabled, vec!["tasks".to_string(), "weather".to_string()]);
-        assert_eq!(report.added, vec!["tasks".to_string(), "weather".to_string()]);
+        assert_eq!(
+            report.enabled,
+            vec!["tasks".to_string(), "weather".to_string()]
+        );
+        assert_eq!(
+            report.added,
+            vec!["tasks".to_string(), "weather".to_string()]
+        );
         assert!(report.removed.is_empty());
 
         let mut routing: Vec<_> = catalog
@@ -309,7 +311,10 @@ mod tests {
             stdio("memory", true),
         ];
         let report = apply_mcp_peer_set(&catalog, &registry, &second).unwrap();
-        assert_eq!(report.enabled, vec!["memory".to_string(), "tasks".to_string()]);
+        assert_eq!(
+            report.enabled,
+            vec!["memory".to_string(), "tasks".to_string()]
+        );
         assert_eq!(report.added, vec!["memory".to_string()]);
         assert_eq!(report.removed, vec!["weather".to_string()]);
 

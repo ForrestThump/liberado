@@ -463,7 +463,9 @@ impl ConversationStore for SessionStore {
                 goal: None, // a conversation is a goal-less session — that is the whole of D7
                 parent_session: new.parent_conversation,
                 spawned_by: new.spawned_by,
-                ..Default::default()
+                correlation_id: None,
+                visibility: Default::default(),
+                grant: Default::default(),
             })
             .await;
         Ok(header.to_conversation_header())
@@ -773,6 +775,9 @@ impl SessionRecordStore for SessionStore {
         };
         nodes
             .into_iter()
+            // A compaction's re-appended tail copy repeats text that is already earlier on this
+            // path as the original — emitting both would show the last kept turns twice.
+            .filter(|n| !n.author.is_compaction_tail_copy())
             .filter_map(|n| {
                 let author = match n.author {
                     Author::System => TurnAuthor::System,

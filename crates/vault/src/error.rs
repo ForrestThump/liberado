@@ -16,6 +16,11 @@ pub enum VaultError {
     #[error("optimistic concurrency conflict: {0}")]
     Conflict(String),
 
+    /// A path argument attempted to escape the vault root (e.g. via `..` or an absolute path).
+    /// Rejected before any filesystem operation.
+    #[error("path traversal rejected: {0}")]
+    PathTraversal(String),
+
     /// Any other failure from the Turbovault backend.
     #[error("vault backend error: {0}")]
     Backend(String),

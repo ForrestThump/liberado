@@ -437,3 +437,49 @@ async fn renaming_appends_a_new_header_rather_than_rewriting_the_log() {
         "the node survived the rename"
     );
 }
+
+#[tokio::test]
+async fn create_stores_parent_conversation_lineage() {
+    let dir = tempdir().unwrap();
+    let store = store_at(dir.path()).await;
+
+    let parent = store.create(new_convo("parent")).await.unwrap();
+
+    let child = store
+        .create(NewConversation {
+            title: Some("child".into()),
+            parent_conversation: Some(parent.id),
+            spawned_by: None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(child.parent_conversation, Some(parent.id));
+
+    let listed = store.list().await.unwrap();
+    assert!(listed.iter().any(|h| h.id == parent.id));
+    assert!(listed.iter().any(|h| h.id == child.id));
+}
+
+#[tokio::test]
+async fn create_stores_spawned_by_lineage() {
+    let dir = tempdir().unwrap();
+    let store = store_at(dir.path()).await;
+
+    let parent_convo = store.create(new_convo("parent")).await.unwrap();
+    let node = store
+        .append(parent_convo.id, user_node(None, "spawning message"))
+        .await
+        .unwrap();
+
+    let spawned = store
+        .create(NewConversation {
+            title: Some("spawned".into()),
+            parent_conversation: None,
+            spawned_by: Some(node.id),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(spawned.spawned_by, Some(node.id));
+}

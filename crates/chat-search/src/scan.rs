@@ -141,6 +141,12 @@ fn scan_file(path: &Path, query: &ParsedQuery) -> Result<Option<ConversationMatc
                 if content.is_empty() {
                     continue; // tool-call-only node, nothing to search
                 }
+                if node.author.is_compaction_tail_copy() {
+                    // A compaction's re-appended tail copy — the same text already appears
+                    // earlier in this file as the original. Indexing both would report one
+                    // message as two hits.
+                    continue;
+                }
                 if query.matches(content) {
                     message_matches.push(MessageMatch {
                         node_id: node.id.to_string(),

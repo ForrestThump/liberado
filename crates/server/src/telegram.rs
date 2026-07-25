@@ -149,6 +149,10 @@ impl TelegramChatBridge {
         };
         let previous = provider.model();
         provider.set_model(model.to_string());
+        crate::state::resync_compaction_trigger_for_face_model(
+            &self.state,
+            provider.model().as_str(),
+        );
         Ok(format!(
             "Model switched: {previous} → {}\n(hot-swap; no restart)",
             provider.model()
@@ -307,10 +311,28 @@ impl TelegramChatBridge {
                     Some(domain.clone())
                 };
                 let domain_fallback = profile.as_deref().unwrap_or(domain.as_str());
-                let (resolved_domain, capabilities, overrides, profile_idle) = self
+                // An unrecognized token was read as a profile name above. If it names no enabled
+                // profile, say so instead of starting a session under a grant the human never
+                // chose — a typo'd `/spawn` should be a correction, not a silent mis-scoped run.
+                let resolved = self
                     .state
                     .config
                     .resolve_session_profile(profile.as_deref(), domain_fallback);
+                let (resolved_domain, capabilities, overrides, profile_idle) = match resolved {
+                    Ok(resolved) => resolved,
+                    Err(e) => {
+                        tracing::warn!(
+                            profile = ?profile,
+                            error = %e,
+                            "/spawn named an unknown session profile — not starting a session"
+                        );
+                        return Some(format!(
+                            "Unknown session profile '{}'. Use a configured profile, or one of: \
+                             life, coding, dispatch.",
+                            profile.as_deref().unwrap_or(domain.as_str())
+                        ));
+                    }
+                };
 
                 let mut spec = GoalSpec {
                     id: None,

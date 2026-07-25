@@ -20,7 +20,7 @@ mod error;
 pub use attribution::Attribution;
 pub use error::{VaultError, VaultResult};
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -74,8 +74,73 @@ impl Vault {
         &self.vault_root
     }
 
+    /// Reject relative paths that attempt to escape the vault root — `..` components, absolute
+    /// paths, and Windows path prefixes. Cross-platform: uses `std::path::Component` which
+    /// correctly identifies `ParentDir` and `Prefix` on both Windows and Linux.
+    ///
+    /// The **component filter is the defense**; the `starts_with` at the end is a belt-and-braces
+    /// restatement, not load-bearing (a lexical `join` cannot escape once `..` is already gone).
+    ///
+    /// # Scope
+    ///
+    /// In scope: every path argument reaching this type's `read` / `write` / `delete` /
+    /// `move_note`, which is the whole in-process surface — the daemon (proposal + reaper paths),
+    /// `liberado-memory-store`, and `liberado-telegram-approvals` all go through here, and none
+    /// construct absolute paths.
+    ///
+    /// Explicitly **not** in scope:
+    ///
+    /// - **Symlinks inside the vault that point outside it.** These checks are lexical, so a
+    ///   symlink is followed by the OS after validation passes. The vault is an Obsidian
+    ///   directory the operator owns; an attacker who can plant a symlink in it already has write
+    ///   access to the source of truth. Closing this would need `canonicalize` on every call —
+    ///   a syscall per operation, and still TOCTOU-racy.
+    /// - **Agent-facing vault tools.** Those are MCP calls to the turbovault server, which does
+    ///   its own path handling in its own process; they never pass through this wrapper. This
+    ///   guard hardens *our* callers, and is not the sandbox for tool-driven writes.
+    fn validate_rel_path(&self, rel_path: &Path) -> VaultResult<()> {
+        if rel_path.is_absolute() {
+            return Err(VaultError::PathTraversal(format!(
+                "absolute path rejected: {}",
+                rel_path.display()
+            )));
+        }
+        for component in rel_path.components() {
+            match component {
+                Component::ParentDir => {
+                    return Err(VaultError::PathTraversal(format!(
+                        "path traversal '..' rejected in: {}",
+                        rel_path.display()
+                    )));
+                }
+                Component::Prefix(_) => {
+                    return Err(VaultError::PathTraversal(format!(
+                        "Windows path prefix rejected in: {}",
+                        rel_path.display()
+                    )));
+                }
+                Component::RootDir => {
+                    return Err(VaultError::PathTraversal(format!(
+                        "rooted path rejected: {}",
+                        rel_path.display()
+                    )));
+                }
+                Component::Normal(_) | Component::CurDir => {}
+            }
+        }
+        let resolved = self.vault_root.join(rel_path);
+        if !resolved.starts_with(&self.vault_root) {
+            return Err(VaultError::PathTraversal(format!(
+                "resolved path outside vault: {}",
+                rel_path.display()
+            )));
+        }
+        Ok(())
+    }
+
     /// Read a note's raw content (including frontmatter).
     pub async fn read(&self, rel_path: impl AsRef<Path>) -> VaultResult<String> {
+        self.validate_rel_path(rel_path.as_ref())?;
         Ok(self.manager.read_file(rel_path.as_ref()).await?)
     }
 
@@ -95,6 +160,7 @@ impl Vault {
         expected_hash: Option<&str>,
         provenance: &WriteProvenance,
     ) -> VaultResult<()> {
+        self.validate_rel_path(rel_path.as_ref())?;
         self.manager
             .write_file_with_metadata(
                 rel_path.as_ref(),
@@ -113,6 +179,7 @@ impl Vault {
         expected_hash: Option<&str>,
         provenance: &WriteProvenance,
     ) -> VaultResult<()> {
+        self.validate_rel_path(rel_path.as_ref())?;
         self.manager
             .delete_file_with_metadata(
                 rel_path.as_ref(),
@@ -131,6 +198,8 @@ impl Vault {
         expected_hash: Option<&str>,
         provenance: &WriteProvenance,
     ) -> VaultResult<()> {
+        self.validate_rel_path(from.as_ref())?;
+        self.validate_rel_path(to.as_ref())?;
         self.manager
             .move_file_with_metadata(
                 from.as_ref(),
@@ -184,5 +253,108 @@ impl VaultWatch {
     /// Await the next vault change event, or `None` once the watcher has shut down.
     pub async fn next_event(&mut self) -> Option<VaultEvent> {
         self.events.recv().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+    use tokio::sync::mpsc;
+
+    #[cfg(test)]
+    impl VaultWatch {
+        fn from_receiver(events: UnboundedReceiver<VaultEvent>) -> Self {
+            let (fake_watcher, _rx) =
+                VaultWatcher::new(std::path::PathBuf::new(), WatcherConfig::default())
+                    .expect("fake watcher creation");
+            Self {
+                _watcher: fake_watcher,
+                events,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn next_event_yields_sent_event() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let event = VaultEvent::FileModified(std::path::PathBuf::from("test.md"));
+        tx.send(event.clone()).unwrap();
+        let mut watch = VaultWatch::from_receiver(rx);
+        assert_eq!(watch.next_event().await, Some(event));
+    }
+
+    #[tokio::test]
+    async fn next_event_returns_none_after_sender_drops() {
+        let (tx, rx) = mpsc::unbounded_channel::<VaultEvent>();
+        drop(tx);
+        let mut watch = VaultWatch::from_receiver(rx);
+        assert_eq!(watch.next_event().await, None);
+    }
+
+    #[tokio::test]
+    async fn validate_rel_path_rejects_traversal_out_of_the_vault() {
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open("test", dir.path()).await.unwrap();
+
+        for escape in [
+            "../etc/passwd",
+            "notes/../../../etc/passwd",
+            "notes/sub/../../etc/passwd",
+            "notes/../..",
+            "..",
+        ] {
+            assert!(
+                matches!(
+                    vault.validate_rel_path(Path::new(escape)),
+                    Err(VaultError::PathTraversal(_))
+                ),
+                "must reject traversal: {escape}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn validate_rel_path_allows_normal_relative_paths() {
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open("test", dir.path()).await.unwrap();
+
+        for ok in [
+            "notes/hello.md",
+            "proposals/abc-123.md",
+            "hello.md",
+            "sub/dir/file.md",
+            "./notes/hello.md", // a CurDir component is not an escape
+        ] {
+            assert!(
+                vault.validate_rel_path(Path::new(ok)).is_ok(),
+                "must allow ordinary relative path: {ok}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn validate_rel_path_rejects_rooted_and_absolute_paths() {
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open("test", dir.path()).await.unwrap();
+
+        // Unix-absolute; on Windows this is a RootDir component rather than `is_absolute`, and
+        // both arms reject — which is the point of matching on `Component`, not string prefixes.
+        assert!(matches!(
+            vault.validate_rel_path(Path::new("/etc/passwd")),
+            Err(VaultError::PathTraversal(_))
+        ));
+        #[cfg(windows)]
+        {
+            // A Windows Prefix component (drive or UNC) must be rejected too.
+            assert!(matches!(
+                vault.validate_rel_path(Path::new(r"C:\Windows\System32\config\SAM")),
+                Err(VaultError::PathTraversal(_))
+            ));
+            assert!(matches!(
+                vault.validate_rel_path(Path::new(r"\\server\share\file.md")),
+                Err(VaultError::PathTraversal(_))
+            ));
+        }
     }
 }

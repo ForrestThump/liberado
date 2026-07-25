@@ -16,6 +16,8 @@ use turbomcp_types::{
     Prompt, PromptResult, Resource, ResourceResult, ServerInfo, Tool, ToolResult,
 };
 
+mod common;
+
 /// A handler exposing two tools: `search` (so the catalog has something to map) and `echo_meta`
 /// (returns the request `_meta` it received, so a test can prove provenance reached the server).
 #[derive(Clone)]
@@ -33,13 +35,7 @@ impl McpHandler for TestServer {
         ]
     }
 
-    fn list_resources(&self) -> Vec<Resource> {
-        Vec::new()
-    }
-
-    fn list_prompts(&self) -> Vec<Prompt> {
-        Vec::new()
-    }
+    mcp_handler_stubs!();
 
     fn call_tool<'a>(
         &'a self,
@@ -59,25 +55,6 @@ impl McpHandler for TestServer {
                 _ => Err(McpError::tool_not_found(&name)),
             }
         }
-    }
-
-    fn read_resource<'a>(
-        &'a self,
-        uri: &'a str,
-        _ctx: &'a RequestContext,
-    ) -> impl Future<Output = McpResult<ResourceResult>> + MaybeSend + 'a {
-        let uri = uri.to_string();
-        async move { Err(McpError::resource_not_found(&uri)) }
-    }
-
-    fn get_prompt<'a>(
-        &'a self,
-        name: &'a str,
-        _args: Option<Value>,
-        _ctx: &'a RequestContext,
-    ) -> impl Future<Output = McpResult<PromptResult>> + MaybeSend + 'a {
-        let name = name.to_string();
-        async move { Err(McpError::prompt_not_found(&name)) }
     }
 }
 

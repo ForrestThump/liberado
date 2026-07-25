@@ -14,6 +14,7 @@ If you are an agent: start at [Getting started](getting-started/quickstart.md) â
 | **Architecture** | [architecture/](architecture/README.md) | How the system works *now* (contracts, sessions, modularity) |
 | **Reference** | [reference/](reference/README.md) | HTTP/SSE API, generated crate map |
 | **Roadmap** | [roadmap/current.md](roadmap/current.md) | **What is open next** (thin living surface) |
+| **Plans** | [plans/](plans/README.md) | Forward re-architecture designs (not current truth until landed) |
 | **Specs** | [specs/](specs/README.md) | Frozen decisions and detailed design specs |
 | **Handoff / ops** | [handoff.md](handoff.md) | Homelab, Telegram, live dogfood state |
 | **Contributing** | [contributing/](contributing/agents.md) | Build/run, agent workflow |

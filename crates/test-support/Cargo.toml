@@ -15,6 +15,8 @@ liberado-executor = { workspace = true }
 liberado-provider = { workspace = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros"] }
 toml = { workspace = true }
 
 [package.metadata.liberado]
