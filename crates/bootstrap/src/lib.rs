@@ -37,7 +37,7 @@ use liberado_dispatch_pack::DispatchPack;
 use liberado_dispatcher::Dispatcher;
 use liberado_mcp::{McpPoolSettings, McpRegistry};
 use liberado_notify::Notifier;
-use liberado_orchestrator::OrchestratorInfra;
+use liberado_orchestrator::{OrchestratorInfra, ReportSink};
 use liberado_provider::{AgentRole, LatencyRecorder, MeteredProvider, Provider};
 use liberado_provider_openai_compat::OpenAiCompatibleProvider;
 
@@ -261,6 +261,22 @@ fn pool_settings_from_config(config: &Config) -> McpPoolSettings {
     }
 }
 
+/// Translate the declared `[topology.report_sink]` into the orchestrator's [`ReportSink`].
+///
+/// A plain shape conversion — every check that could reject it (MCP exists, is enabled, is not
+/// read-only, and the tool really writes) already ran in `validate_merged_config`, so by the time
+/// we are here the sink is known good. `None` simply means the deployment never declared one, and
+/// vault delivery stays unavailable.
+fn report_sink(topology: &liberado_config::Topology) -> Option<ReportSink> {
+    let sink = topology.report_sink.as_ref()?;
+    Some(ReportSink::new(
+        &sink.mcp,
+        &sink.tool,
+        &sink.path_arg,
+        &sink.content_arg,
+    ))
+}
+
 /// Pre-resolve every enabled `[[session_profiles]]` entry into a `(profile_name → CapabilitySet)`
 /// map the daemon uses at reaction time to narrow a session's authority from the pool ceiling to
 /// the profile's component grant. The server path resolves profiles dynamically via
@@ -422,6 +438,9 @@ pub fn configure_daemon(
     if let Some(max_turns) = config.topology.research_max_turns {
         orchestrator_infra = orchestrator_infra.with_research_max_turns(max_turns);
     }
+    if let Some(sink) = report_sink(&config.topology) {
+        orchestrator_infra = orchestrator_infra.with_report_sink(sink);
+    }
 
     // Optional — a daemon/orchestrator with no LIBERADO_TELEGRAM_* vars set just never
     // sends anything, same as before this existed. The motivating case is exactly this daemon
@@ -540,6 +559,9 @@ pub fn build_dispatch_pack(
     );
     if let Some(max_turns) = config.topology.research_max_turns {
         orchestrator_infra = orchestrator_infra.with_research_max_turns(max_turns);
+    }
+    if let Some(sink) = report_sink(&config.topology) {
+        orchestrator_infra = orchestrator_infra.with_report_sink(sink);
     }
     let notifier: Option<Arc<dyn Notifier>> =
         liberado_notify::TelegramNotifier::from_env().map(|n| Arc::new(n) as Arc<dyn Notifier>);

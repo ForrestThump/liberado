@@ -64,6 +64,11 @@ pub enum DispatchAction {
         /// Target zone for any produced artifact (e.g. `"reviews/"`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact_target: Option<String>,
+        /// Where this subagent's terminal [`Report`] should go — see [`Delivery`]. Defaults to
+        /// [`Delivery::Summarize`] (the pre-existing behaviour), so an omitted field is the safe
+        /// value and every persisted decision round-trips unchanged.
+        #[serde(default, skip_serializing_if = "Delivery::is_summarize")]
+        delivery: Delivery,
         /// Model for this subagent; may differ from dispatcher/main.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<ModelChoice>,
@@ -105,6 +110,66 @@ impl DispatchAction {
 impl std::fmt::Display for DispatchAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.label())
+    }
+}
+
+/// Where a subagent's terminal [`Report`] goes.
+///
+/// # Why this is a routing decision and not a formatting one
+///
+/// A subagent's findings reach the human by being *restated* by the main agent: the orchestrator
+/// hands back a `Report`, the face agent ingests the body and writes its own prose version. For an
+/// action ("book the appointment") that is exactly right — the face agent is the one that can
+/// re-dispatch, ask a follow-up question, or explain what went wrong. For a **retrieval** ("what
+/// does the vault say about X", "research Y") it is pure loss: the body is paid for twice (once
+/// ingested, once re-emitted) and the re-emission is lossy, because a summary of a summary drops
+/// detail the human asked for. Decoding is sequential, so that second pass is also the slow one.
+///
+/// So delivery is chosen **per dispatch**, and the choice is guarded, not trusted:
+///
+/// * Only a dispatch that can exclusively *read* may use a non-[`Summarize`](Self::Summarize) sink.
+///   If something happened out in the world, the main agent narrates it — full stop. That guard is
+///   a checkable property (every allowed MCP is [`Consequence::ReadOnly`](crate::Consequence)), not
+///   a judgement call about what "kind" of task this is.
+/// * A run that did not cleanly succeed falls back to `Summarize` regardless of what was asked for,
+///   because a failed or half-finished run is precisely when the main agent needs to see the detail
+///   in order to react to it.
+///
+/// Those two rules are what make an imperfect choice cheap. Mis-routing a *successful* retrieval
+/// only means the human reads it unfiltered; mis-routing a *failure* is caught by construction.
+///
+/// This governs the terminal report only. Mid-run clarification is a separate channel (the
+/// `AskHuman` capability) and is unaffected.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Delivery {
+    /// Return the `Report` to the main agent, which reads it and narrates the result. The default,
+    /// and the only delivery available to a dispatch that can act on the world.
+    #[default]
+    Summarize,
+    /// Write the report body to `path` in the vault, and return only a **receipt** to the main
+    /// agent (what was written, and where). The write is performed by the orchestrator as a single
+    /// deterministic tool call — no model reads the body on the way there.
+    ///
+    /// `path` is zone-qualified and relative to the vault root (e.g. `"research/2026-07-25-x.md"`).
+    /// A bare filename names no zone and is rejected, the same way a path-addressed write with no
+    /// resolvable zone is (see [`write_target`](crate::catalog::write_target)).
+    Vault { path: String },
+}
+
+impl Delivery {
+    /// `true` for the default sink. Used as serde's `skip_serializing_if` so an unset delivery is
+    /// absent from the JSON entirely, keeping already-persisted decisions byte-identical.
+    pub fn is_summarize(&self) -> bool {
+        matches!(self, Delivery::Summarize)
+    }
+
+    /// The variant's stable kind-label, for tracing and metrics (mirrors
+    /// [`DispatchAction::label`], and for the same reason: one definition, no drift).
+    pub fn label(&self) -> &'static str {
+        match self {
+            Delivery::Summarize => "summarize",
+            Delivery::Vault { .. } => "vault",
+        }
     }
 }
 
@@ -243,6 +308,9 @@ mod tests {
                 artifact_target: Some("reviews/".into()),
                 model: Some(ModelChoice::new("deepseek-chat")),
                 correlation_id: "review-2026-06-21".into(),
+                delivery: Delivery::Vault {
+                    path: "reviews/2026-06-21.md".into(),
+                },
             },
             confidence: 0.82,
             rationale: "Open-ended, multi-step, produces an artifact".into(),

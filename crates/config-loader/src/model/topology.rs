@@ -83,6 +83,44 @@ pub struct Topology {
     /// tokens. Tunable here rather than compiled in, like the per-role model settings above.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub research_max_turns: Option<u32>,
+
+    /// Which MCP tool writes a `Delivery::Vault` report. `None` → vault delivery is unavailable and
+    /// every report is summarized by the main agent (exactly the behaviour before this existed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_sink: Option<ReportSinkConfig>,
+}
+
+/// The one tool call that lands a `Delivery::Vault` report.
+///
+/// Declared rather than inferred. The orchestrator is kernel-layer and cannot depend on
+/// `liberado-vault`, so it reaches the vault the same way everything else does — through an MCP
+/// tool — and it therefore has to be told *which* tool, and what the argument is called. Guessing
+/// `write_note(path, content)` would work for TurboVault today and fail silently the moment the
+/// vault MCP is swapped, which is the failure mode Decision 14 exists to prevent: a declared,
+/// boot-validated sink turns "the report vanished" into "the daemon refused to start".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReportSinkConfig {
+    /// The `[[mcps]]` entry (by `name`) that owns the write tool. Must exist, and must not be
+    /// `read_only` — validated at load.
+    pub mcp: String,
+    /// Bare tool name on that MCP (e.g. `"write_note"`). When the MCP declares `write_tools`, this
+    /// must be one of them — otherwise the "sink" would be a read, and the report would go nowhere
+    /// while reporting success.
+    pub tool: String,
+    /// Argument carrying the destination path. Defaults to `"path"`.
+    #[serde(default = "default_path_arg")]
+    pub path_arg: String,
+    /// Argument carrying the report body. Defaults to `"content"`.
+    #[serde(default = "default_content_arg")]
+    pub content_arg: String,
+}
+
+fn default_path_arg() -> String {
+    "path".to_string()
+}
+
+fn default_content_arg() -> String {
+    "content".to_string()
 }
 
 /// Per-role overrides for the execution path. All fields optional; unset = inherit the global
@@ -299,6 +337,7 @@ impl Default for Topology {
     fn default() -> Self {
         Self {
             research_max_turns: None,
+            report_sink: None,
             vault_path: PathBuf::new(),
             timezone: DEFAULT_TIMEZONE.to_string(),
             daemon_socket: PathBuf::from("/run/liberado/daemon.sock"),
