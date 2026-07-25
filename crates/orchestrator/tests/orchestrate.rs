@@ -1080,10 +1080,10 @@ async fn execute_approved_refuses_past_deadline_without_invoking_tools() {
 
     let report = orch.execute_approved(&proposal).await.expect("execute");
     assert_eq!(report.outcome, Outcome::Failed);
-    assert!(
-        report.summary.contains("expired"),
-        "summary should mention expiry: {}",
-        report.summary
+    assert_eq!(
+        report.summary,
+        liberado_orchestrator::EXPIRED_PROPOSAL_REFUSAL_SUMMARY,
+        "must use the exact refusal summary for daemon matching"
     );
     assert!(
         calls.lock().unwrap().is_empty(),

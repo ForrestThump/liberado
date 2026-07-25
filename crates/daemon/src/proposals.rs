@@ -7,7 +7,7 @@ use chrono::Utc;
 use liberado_common::{
     DEFAULT_POOL, PROPOSALS_DIR, Proposal, ProposalStatus, SignedProposal, WriteProvenance,
 };
-use liberado_orchestrator::Disposition;
+use liberado_orchestrator::{Disposition, EXPIRED_PROPOSAL_REFUSAL_SUMMARY};
 use liberado_vault::{Vault, VaultError};
 use tokio::fs;
 
@@ -177,15 +177,12 @@ impl Daemon {
         };
         let report = orch.execute_approved(&proposal).await?;
 
-        // 6.5. If this was a permission request, apply the grant the human chose. The call itself
-        //     already ran (step 6, human tap = gate); this is only about whether FUTURE calls need
-        //     to ask again. Best-effort — a persistence failure never fails the reaction.
-        self.apply_approved_grant(&proposal);
-
-        // 7. Mark done and persist. The write carries agent provenance (DAEMON_SOURCE) so
-        //    attribution suppresses it — no self-reaction (loop-break, Decision 5).
-        //    If the orchestrator refused as expired (race), do not stamp Done.
-        if report.outcome == liberado_common::Outcome::Failed && report.summary.contains("expired")
+        // 6.5. Orchestrator pre-execution refuse (wall-clock expiry race): tools never ran —
+        //     complete the expiry lifecycle without applying permission grants or marking Done.
+        //     Match the refusal summary **exactly** (not substring) so free-form Failed reports
+        //     that mention "expired" are not misclassified.
+        if report.outcome == liberado_common::Outcome::Failed
+            && report.summary == EXPIRED_PROPOSAL_REFUSAL_SUMMARY
         {
             tracing::info!(
                 proposal_id = %proposal.id,
@@ -202,6 +199,15 @@ impl Daemon {
             return Ok(ReactionOutcome::Observed);
         }
 
+        // 6.6. Permission grant only after tools were allowed to run (human tap was the gate).
+        //     Pre-execution refuses (expiry above; integrity/pool refuse still returns Failed with
+        //     a different summary and must not grant either — those still reach Done historically
+        //     only when mis-routed; we do not grant when outcome is a pure preflight refuse).
+        //     Best-effort: a persistence failure never fails the reaction.
+        self.apply_approved_grant(&proposal);
+
+        // 7. Mark done and persist. The write carries agent provenance (DAEMON_SOURCE) so
+        //    attribution suppresses it — no self-reaction (loop-break, Decision 5).
         proposal.status = liberado_common::ProposalStatus::Done;
         let provenance =
             liberado_common::WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);

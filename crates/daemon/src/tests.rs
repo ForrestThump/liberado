@@ -1540,6 +1540,113 @@ async fn handle_proposal_change_expires_and_archives_past_deadline_pending() {
     );
 }
 
+/// Free-form Failed summaries that merely mention "expired" must not be treated as the
+/// orchestrator's preflight refuse signal (exact `EXPIRED_PROPOSAL_REFUSAL_SUMMARY` only).
+#[test]
+fn expired_refusal_matches_exact_orchestrator_summary_only() {
+    use liberado_orchestrator::EXPIRED_PROPOSAL_REFUSAL_SUMMARY;
+    assert_eq!(
+        EXPIRED_PROPOSAL_REFUSAL_SUMMARY,
+        "proposal expired — not executed"
+    );
+    // Substring traps would mis-handle free-form executor text:
+    assert!(
+        "subagent said the lease expired mid-run".contains("expired")
+            && "subagent said the lease expired mid-run" != EXPIRED_PROPOSAL_REFUSAL_SUMMARY
+    );
+}
+
+#[tokio::test]
+async fn handle_proposal_change_expired_refuse_does_not_apply_session_grant() {
+    // Permission request past deadline: execute_approved refuses without tools — must not
+    // persist a Session grant (apply_approved_grant only after a real execute path).
+    use chrono::{Duration as ChronoDuration, Utc};
+    use liberado_common::{
+        Capability, CapabilitySet, GrantScope, Proposal, ProposalSigner, ProposalStatus,
+        ProposedAction, ToolCall, WriteProvenance, session_grants,
+    };
+    use liberado_orchestrator::Orchestrator;
+    use liberado_provider::MockProvider;
+    use liberado_test_support::{InvocationRecordingFactory, InvocationRecordingRuntime};
+    use std::path::Path;
+    use std::sync::Arc;
+
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let signer = ProposalSigner::random();
+    let orch = Orchestrator::new(
+        Arc::new(MockProvider::with_script(
+            "mock",
+            Vec::<liberado_provider::CompletionResponse>::new(),
+        )),
+        InvocationRecordingFactory { runtime },
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        signer.clone(),
+        "default",
+    );
+
+    let pool = format!("grant-expire-test-{:?}", std::thread::current().id());
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon
+        .with_orchestrator(orch)
+        .with_proposal_signer(signer.clone());
+
+    let proposals_dir = dir.path().join("proposals");
+    std::fs::create_dir_all(&proposals_dir).unwrap();
+
+    let mut proposal = Proposal::pending(
+        "vault-change:expired-grant:1",
+        "vault-change:expired-grant:1",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "no" }),
+        }]),
+        "permission request past deadline",
+    )
+    .with_requested_grant(Capability::Write(liberado_common::Zone::vault("sandbox")));
+    proposal.pool = Some(pool.clone());
+    proposal.expires = Some(Utc::now() - ChronoDuration::hours(1));
+    // Session scope is part of the signed payload (set before sign).
+    proposal.approved_scope = Some(GrantScope::Session);
+    let mut proposal = signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+
+    let rel = Path::new("proposals/expired-grant.md");
+    let prov = WriteProvenance::agent("test", "c1");
+    daemon
+        .vault
+        .write(rel, &proposal.to_note(), None, &prov)
+        .await
+        .unwrap();
+
+    let outcome = daemon.handle_proposal_change(rel).await.unwrap();
+    assert!(matches!(outcome, ReactionOutcome::Observed));
+    assert!(
+        invoked.lock().unwrap().is_empty(),
+        "tools must not run on expired refuse"
+    );
+    assert!(
+        session_grants::session_grant(&pool).capabilities.is_empty(),
+        "session grant must not persist when execute was refused as expired"
+    );
+    // Lifecycle: expired + archived
+    assert!(daemon.vault.read(rel).await.is_err());
+    let archived = daemon
+        .vault
+        .read("proposals/archive/expired/expired-grant.md")
+        .await
+        .expect("must archive as expired");
+    assert_eq!(
+        Proposal::from_note(&archived).unwrap().status,
+        ProposalStatus::Expired
+    );
+}
+
 #[tokio::test]
 async fn handle_proposal_change_does_not_execute_approved_past_deadline() {
     // Late approve after `expires` must not run tools — only expire + archive.

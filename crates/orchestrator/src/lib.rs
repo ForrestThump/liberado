@@ -41,6 +41,11 @@ use tracing::Instrument;
 /// Default `source` recorded in write provenance for orchestrated executions.
 pub const DEFAULT_SOURCE: &str = "liberado-executor";
 
+/// Exact [`Report::summary`] when [`Orchestrator::execute_approved`] refuses a past-deadline
+/// proposal without running tools. Callers (daemon) must match this string exactly — do not use
+/// substring checks against free-form executor summaries.
+pub const EXPIRED_PROPOSAL_REFUSAL_SUMMARY: &str = "proposal expired — not executed";
+
 /// Turn budget for an `ExecuteDirect` (kept tight — it is the "few steps clearly suffice" path).
 pub const DIRECT_MAX_TURNS: u32 = 4;
 
@@ -541,7 +546,7 @@ impl Orchestrator {
                 );
                 return Ok(Report {
                     outcome: Outcome::Failed,
-                    summary: "proposal expired — not executed".into(),
+                    summary: EXPIRED_PROPOSAL_REFUSAL_SUMMARY.into(),
                     artifacts: Vec::new(),
                     new_high_signal_facts: Vec::new(),
                     deferred_to_human: false,
