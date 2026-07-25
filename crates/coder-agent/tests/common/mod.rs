@@ -129,6 +129,7 @@ pub fn base_request(root: &Path) -> CoderRunRequest {
         },
         attempt: 0,
         prior_feedback: Vec::new(),
+        strategist_directive: None,
     }
 }
 

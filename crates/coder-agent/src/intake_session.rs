@@ -195,6 +195,7 @@ mod tests {
             },
             attempt: 0,
             prior_feedback: Vec::new(),
+            strategist_directive: None,
         }
     }
 

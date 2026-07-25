@@ -419,6 +419,7 @@ fn build_request(
         },
         attempt: 0,
         prior_feedback: Vec::new(),
+        strategist_directive: None,
     }
 }
 

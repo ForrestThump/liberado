@@ -324,6 +324,16 @@ pub struct CoderRunRequest {
     pub attempt: u32,
     #[serde(default)]
     pub prior_feedback: Vec<String>,
+    /// One structural change proposed by the completion gate's strategist after repeated
+    /// refutations (`CoderGateConfig::strategist_after`).
+    ///
+    /// A first-class field rather than another `prior_feedback` entry on purpose: prior feedback is
+    /// rendered on retries through `repair_focus_block`, which shows only the *last* entry in full
+    /// and truncates the rest to one line each. A directive pushed in there would be either
+    /// mislabelled as "Latest failure detail" or silently clipped — and a structural instruction
+    /// that arrives clipped is worse than none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategist_directive: Option<String>,
 }
 
 /// Terminal output from a coding backend before the PR factory commits/pushes/opens a PR.
@@ -537,6 +547,7 @@ mod tests {
             },
             attempt: 0,
             prior_feedback: Vec::new(),
+            strategist_directive: None,
         };
 
         let json = serde_json::to_string_pretty(&request).unwrap();

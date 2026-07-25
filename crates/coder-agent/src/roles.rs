@@ -63,6 +63,20 @@ pub fn coder_goal(request: &CoderRunRequest) -> String {
             goal.push('\n');
         }
     }
+    // A strategist directive outranks everything below it. It only exists because several
+    // attempts already failed the same way, so the tactical repair hints have demonstrably not
+    // worked — burying it under them would reproduce the loop it exists to break. Rendered on
+    // every attempt that carries one, never routed through `repair_focus_block`.
+    if let Some(directive) = &request.strategist_directive {
+        goal.push_str("\n\n## Structural directive (read this first)\n");
+        goal.push_str(
+            "Earlier attempts were refused repeatedly for the same reasons. A strategist reviewed \
+             the goal and the rejection history and proposes ONE structural change. Apply it. It \
+             does not relax the success criteria above — those still hold in full.\n\n",
+        );
+        goal.push_str(directive);
+        goal.push('\n');
+    }
     // Repair attempts: put failure-signature routing first so the model prioritizes it.
     if request.attempt > 0 {
         if let Some(focus) = crate::repair_feedback::repair_focus_block(&request.prior_feedback) {

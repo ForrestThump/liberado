@@ -117,7 +117,7 @@ impl CoderTuning {
             ("gate.strategist", self.gate.strategist.as_ref()),
         ] {
             if let Some(role) = role {
-                validate_coder_role(name, role)?;
+                validate_single_shot_role(name, role)?;
             }
         }
         if self.command_policy.timeout_secs == 0 {
@@ -225,7 +225,26 @@ fn coder_role(model: &str, prompt_path: &str, max_turns: Option<u32>) -> CoderRo
     }
 }
 
+/// Validate a role that makes exactly **one completion call** — the completion gate's reviewers and
+/// strategist. Identical to [`validate_coder_role`] minus the `max_turns` requirement: these roles
+/// never enter the executor's agent loop, so a turn limit is meaningless for them and demanding one
+/// would make the documented `[coder.gate.*]` config fail at boot.
+fn validate_single_shot_role(name: &str, role: &CoderRoleConfig) -> Result<()> {
+    validate_role_identity(name, role)
+}
+
 fn validate_coder_role(name: &str, role: &CoderRoleConfig) -> Result<()> {
+    validate_role_identity(name, role)?;
+    if role.max_turns.unwrap_or(0) == 0 {
+        return Err(Error::Config(format!(
+            "tuning.coder.{name}.max_turns must be >= 1"
+        )));
+    }
+    Ok(())
+}
+
+/// Model + prompt requirements shared by every role.
+fn validate_role_identity(name: &str, role: &CoderRoleConfig) -> Result<()> {
     if role.model.trim().is_empty() {
         return Err(Error::Config(format!(
             "tuning.coder.{name}.model must not be empty"
@@ -244,11 +263,6 @@ fn validate_coder_role(name: &str, role: &CoderRoleConfig) -> Result<()> {
     if prompt_path_empty && prompt_empty {
         return Err(Error::Config(format!(
             "tuning.coder.{name} requires prompt_path or prompt"
-        )));
-    }
-    if role.max_turns.unwrap_or(0) == 0 {
-        return Err(Error::Config(format!(
-            "tuning.coder.{name}.max_turns must be >= 1"
         )));
     }
     Ok(())

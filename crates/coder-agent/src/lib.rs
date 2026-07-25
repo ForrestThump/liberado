@@ -95,10 +95,24 @@ impl CoderBackend for LiberadoLoopBackend {
         let mut feedback = request.prior_feedback.clone();
         let mut last_retryable: Option<CoderError> = None;
 
+        // Completion-gate strategist state. `refutations` is the *consecutive* count the gate's
+        // threshold is defined against; `directive` carries a proposed structural change into the
+        // next attempt (and every attempt after it, until a fresh one replaces it — a structural
+        // change stays true while it is being worked on).
+        //
+        // A retryable error (NoChanges / Validation) neither increments nor resets the count.
+        // Incrementing would let environmental flakiness summon a strategist that has no
+        // refutations to reason about; resetting would let a run alternating error/refute/error
+        // never reach the threshold at all, which is precisely the non-convergence the strategist
+        // exists to break.
+        let mut consecutive_refutations: u32 = 0;
+        let mut strategist_directive = request.strategist_directive.clone();
+
         for attempt_offset in 0..max_attempts {
             let mut attempt_request = request.clone();
             attempt_request.attempt = request.attempt.saturating_add(attempt_offset);
             attempt_request.prior_feedback = feedback.clone();
+            attempt_request.strategist_directive = strategist_directive.clone();
 
             match self.run_attempt(attempt_request).await {
                 Ok(result) => {
@@ -117,6 +131,46 @@ impl CoderBackend for LiberadoLoopBackend {
                             ));
                             feedback.push(repair_feedback::format_error_feedback(&err));
                             last_retryable = Some(err);
+
+                            // Non-convergence check. Consult the strategist only once the same
+                            // kind of refusal has repeated `strategist_after` times — a run that
+                            // is still absorbing feedback does not need its approach rethought,
+                            // and asking too early spends a model call to be told what the
+                            // reviewers already said.
+                            consecutive_refutations += 1;
+                            let gate = liberado_session::CompletionGate {
+                                fresh_reviewers: request.config.gate.fresh_reviewers,
+                                quorum: liberado_session::Quorum::StrictMajorityOfFresh,
+                                strategist_after: request.config.gate.strategist_after,
+                            };
+                            if request.config.gate.enabled
+                                && gate.should_consult_strategist(consecutive_refutations)
+                            {
+                                // `attempt_request` was moved into `run_attempt`; rebuild just
+                                // what the strategist reads, and only on the rare path where it
+                                // actually runs rather than cloning on every attempt.
+                                let mut strategist_request = request.clone();
+                                strategist_request.attempt =
+                                    request.attempt.saturating_add(attempt_offset);
+
+                                // Best-effort: `run_strategist` swallows its own failures and
+                                // returns None, so a strategist outage costs a directive, never
+                                // the run.
+                                if let Ok(Some(directive)) = completion_gate::run_strategist(
+                                    self.providers.as_ref(),
+                                    &strategist_request,
+                                    &feedback,
+                                )
+                                .await
+                                {
+                                    strategist_directive = Some(directive);
+                                    // The directive answers the refutations counted so far, so the
+                                    // threshold restarts. Without this the strategist would fire on
+                                    // every subsequent attempt, re-proposing against a history it
+                                    // has already addressed.
+                                    consecutive_refutations = 0;
+                                }
+                            }
                             continue;
                         }
                         Some(issues) => {
@@ -497,6 +551,7 @@ mod tests {
             },
             attempt: 0,
             prior_feedback: Vec::new(),
+            strategist_directive: None,
         }
     }
 

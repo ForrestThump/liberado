@@ -433,6 +433,106 @@ async fn workspace_diff(workspace_root: &str) -> Result<String, CoderError> {
     Ok(diff)
 }
 
+/// The strategist's system prompt. Deliberately narrow: it may change the *approach*, never the
+/// bar. A role that can rewrite acceptance criteria when the work is hard is not a strategist, it
+/// is a way to lose.
+const STRATEGIST_SYSTEM_PROMPT: &str = "\
+You are a strategist on a stuck software goal. Several implementation attempts have been refused by \
+independent reviewers for substantially the same reasons, which means the approach — not the effort \
+— is wrong.
+
+Read the goal, its acceptance criteria, and the rejection history. Propose EXACTLY ONE structural \
+change to how the work is being approached: a different decomposition, a different place to make \
+the change, a dependency or abstraction to introduce or remove, an ordering change.
+
+Hard rules:
+- You may NOT weaken, reinterpret, or drop any acceptance criterion. They are frozen. If the \
+criteria seem impossible, say so plainly and explain why — do not quietly lower the bar.
+- Propose ONE change, not a list. The value here is focus.
+- Be concrete and actionable. \"Refactor for clarity\" is useless; \"move the retry logic out of \
+the request builder into the caller so the timeout is testable\" is useful.
+- Do not write the implementation. Describe the change and why the previous approach kept failing.
+
+Answer in under 200 words, as plain prose. No preamble, no JSON.";
+
+/// Consult the strategist after repeated refutations. Returns the directive to inject into the next
+/// attempt, or `None` when it produced nothing usable.
+///
+/// **Best-effort by contract.** Every failure path returns `Ok(None)` rather than an error: this
+/// runs after work that already exists, and a strategist outage must not destroy a run that is
+/// merely struggling. The next attempt simply proceeds without a directive, exactly as it would
+/// have before this role existed.
+pub async fn run_strategist(
+    providers: &dyn CoderProviderFactory,
+    request: &CoderRunRequest,
+    refutation_history: &[String],
+) -> Result<Option<String>, CoderError> {
+    let cfg = &request.config.gate;
+    let role = cfg
+        .strategist
+        .clone()
+        .unwrap_or_else(|| request.config.critic.clone());
+
+    let provider = match providers.provider_for("critic", &role) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "strategist provider unavailable — continuing without a directive");
+            return Ok(None);
+        }
+    };
+
+    let history = if refutation_history.is_empty() {
+        "(none recorded)".to_string()
+    } else {
+        refutation_history
+            .iter()
+            .rev()
+            .take(PRIOR_REFUTATIONS_MAX)
+            .rev()
+            .map(|r| format!("- {r}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let user = format!(
+        "{}\n\nAttempts so far: {}\n\nWhy each attempt was refused:\n{history}",
+        contract_summary(request),
+        request.attempt.saturating_add(1),
+    );
+
+    let mut completion = CompletionRequest::new(vec![
+        Message::system(STRATEGIST_SYSTEM_PROMPT),
+        Message::user(user),
+    ]);
+    if let Some(max_tokens) = role.max_tokens {
+        completion = completion.with_max_tokens(max_tokens);
+    }
+
+    match provider.complete(completion).await {
+        Ok(response) => {
+            let directive = response
+                .content
+                .map(|c| c.trim().to_string())
+                .filter(|c| !c.is_empty());
+            match &directive {
+                Some(d) => tracing::info!(
+                    attempt = request.attempt,
+                    directive = %truncate_chars(d, 200),
+                    "strategist proposed a structural change"
+                ),
+                None => {
+                    tracing::warn!("strategist returned empty — continuing without a directive")
+                }
+            }
+            Ok(directive)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "strategist call failed — continuing without a directive");
+            Ok(None)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -159,6 +159,7 @@ impl CodingSessionPack {
             },
             attempt: 0,
             prior_feedback: Vec::new(),
+            strategist_directive: None,
         };
 
         // The frozen contract overwrites description, success criteria, and — the point of the

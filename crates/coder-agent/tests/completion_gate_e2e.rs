@@ -323,3 +323,144 @@ async fn a_coerced_vote_is_marked_as_such_on_the_result() {
     assert_eq!(coerced.len(), 1, "the failed reviewer must be flagged");
     assert!(!coerced[0].approved);
 }
+
+// ── strategist (non-convergence) ──────────────────────────────────────────────────────
+
+/// Directive text the scripted strategist returns. Distinctive so we can find it in prompts.
+const DIRECTIVE: &str = "Move validation out of the request builder into the caller.";
+
+#[tokio::test]
+async fn the_strategist_fires_after_repeated_refutations_and_its_directive_reaches_the_worker() {
+    // The strategist exists for the case where feedback has stopped working: same refusal, again.
+    // Proving it fired is not enough — the directive has to actually arrive in the next attempt's
+    // worker prompt, or the role is an expensive no-op.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let mut script = write_todo_scaffold_then_report(); // attempt 0
+    script.push(refute("same defect")); //            attempt 0 gatekeeper veto
+    script.push(CompletionResponse::text(DIRECTIVE)); // strategist (threshold 1)
+    script.extend(write_todo_scaffold_then_report()); // attempt 1
+    script.extend([approve(), approve()]); //           attempt 1 gate passes
+
+    let provider = common::mock_provider(script);
+    let backend = liberado_coder_agent::LiberadoLoopBackend::new(provider.clone());
+
+    let mut request = gated_request(dir.path(), 1);
+    request.config.progress.max_attempts = 2;
+    request.config.gate.strategist_after = 1; // fire after the first refutation
+
+    let result = backend.run(request).await.unwrap();
+    assert_eq!(result.outcome, Outcome::Succeeded, "{}", result.summary);
+
+    let prompts: Vec<String> = provider
+        .received_requests()
+        .iter()
+        .flat_map(|r| r.messages.iter().map(|m| m.content.clone()))
+        .collect();
+
+    assert!(
+        prompts.iter().any(|p| p.contains("You are a strategist")),
+        "the strategist was never consulted"
+    );
+    assert!(
+        prompts
+            .iter()
+            .any(|p| p.contains(DIRECTIVE) && p.contains("Structural directive")),
+        "the directive never reached the worker's goal prompt"
+    );
+}
+
+#[tokio::test]
+async fn the_strategist_stays_quiet_below_the_threshold() {
+    // One refusal is not non-convergence. Firing on it would spend a model call to repeat what the
+    // reviewers already said.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let mut script = write_todo_scaffold_then_report();
+    script.push(refute("first refusal"));
+    script.extend(write_todo_scaffold_then_report());
+    script.extend([approve(), approve()]);
+
+    let provider = common::mock_provider(script);
+    let backend = liberado_coder_agent::LiberadoLoopBackend::new(provider.clone());
+
+    let mut request = gated_request(dir.path(), 1);
+    request.config.progress.max_attempts = 2;
+    request.config.gate.strategist_after = 3; // needs three, gets one
+
+    backend.run(request).await.unwrap();
+
+    assert!(
+        !provider
+            .received_requests()
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .any(|m| m.content.contains("You are a strategist")),
+        "the strategist fired on a single refutation"
+    );
+}
+
+#[tokio::test]
+async fn a_failing_strategist_does_not_break_the_run() {
+    // Best-effort by contract: this role runs on top of work that already exists, so its outage
+    // must cost a directive and nothing else.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let mut script = write_todo_scaffold_then_report();
+    script.push(refute("same defect"));
+    // No strategist response scripted — the call errors.
+    script.extend(write_todo_scaffold_then_report());
+    script.extend([approve(), approve()]);
+
+    let mut request = gated_request(dir.path(), 1);
+    request.config.progress.max_attempts = 2;
+    request.config.gate.strategist_after = 1;
+
+    let result = mock_backend(script).run(request).await;
+
+    assert!(
+        result.is_ok(),
+        "a strategist failure must not propagate as a run error"
+    );
+}
+
+#[tokio::test]
+async fn the_strategist_is_told_it_may_not_weaken_the_criteria() {
+    // The one instruction that makes this role safe. A strategist that can relax acceptance
+    // criteria when work is hard converts every stuck goal into a passing one.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let mut script = write_todo_scaffold_then_report();
+    script.push(refute("same defect"));
+    script.push(CompletionResponse::text(DIRECTIVE));
+    script.extend(write_todo_scaffold_then_report());
+    script.extend([approve(), approve()]);
+
+    let provider = common::mock_provider(script);
+    let backend = liberado_coder_agent::LiberadoLoopBackend::new(provider.clone());
+
+    let mut request = gated_request(dir.path(), 1);
+    request.config.progress.max_attempts = 2;
+    request.config.gate.strategist_after = 1;
+    backend.run(request).await.unwrap();
+
+    let system = provider
+        .received_requests()
+        .iter()
+        .flat_map(|r| r.messages.iter().map(|m| m.content.clone()))
+        .find(|c| c.contains("You are a strategist"))
+        .expect("strategist prompt");
+
+    assert!(
+        system.contains("may NOT weaken"),
+        "the strategist must be forbidden from lowering the bar"
+    );
+    assert!(
+        system.contains("EXACTLY ONE"),
+        "the strategist must be constrained to one structural change"
+    );
+}
