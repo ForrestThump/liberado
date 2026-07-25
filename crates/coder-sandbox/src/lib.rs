@@ -354,11 +354,27 @@ mod tests {
         assert!(matches!(err, SandboxError::PathEscape(_)));
     }
 
+    /// What counts as absolute is platform-specific, and the guard is `Path::is_absolute`, so the
+    /// test has to speak the host's dialect. `C:/Windows` is absolute on Windows but an ordinary
+    /// relative name on Unix — hardcoding it passed here and failed on Linux, where the path was
+    /// simply joined onto the root instead of refused.
     #[test]
     fn resolve_path_rejects_absolute_path() {
         let (_dir, ws) = workspace();
-        let err = ws.resolve_path("C:/Windows").unwrap_err();
+        let absolute = if cfg!(windows) { "C:/Windows" } else { "/etc" };
+        let err = ws.resolve_path(absolute).unwrap_err();
         assert!(matches!(err, SandboxError::AbsolutePath(_)));
+    }
+
+    /// The other half of that asymmetry: on Unix a drive-letter path is not absolute, so it is
+    /// treated as an ordinary relative name. That is safe — it still lands inside the root — but
+    /// pinning it keeps the behaviour deliberate rather than incidental.
+    #[cfg(unix)]
+    #[test]
+    fn drive_letter_path_is_contained_on_unix() {
+        let (_dir, ws) = workspace();
+        let path = ws.resolve_path("C:/Windows").unwrap();
+        assert!(path.starts_with(ws.root()));
     }
 
     #[test]

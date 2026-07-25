@@ -393,7 +393,7 @@ mod tests {
                 assert_eq!(language.as_deref(), Some("rust"));
                 assert_eq!(code, &["fn main() {}"]);
             }
-            _ => panic!("expected CodeBlock, got {:?}", &lines[1]),
+            _ => panic!("expected CodeBlock, got {:?}", lines[1]),
         }
         assert!(matches!(&lines[0], MarkdownLine::Paragraph(_)));
         assert!(matches!(&lines[2], MarkdownLine::Paragraph(_)));
