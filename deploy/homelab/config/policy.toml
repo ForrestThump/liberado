@@ -4,12 +4,49 @@
 # so they reach the model only via dispatch-routed execution.
 
 # --- Zones (write classes) ---------------------------------------------------------------------
+#
+# A zone is the LEADING PATH SEGMENT of a vault write, verbatim and CASE-SENSITIVE:
+#   `Work/RTX/Onboarding.md` -> zone `Work`
+#   `Tasks/inbox.md`         -> zone `Tasks`   (capital T — `tasks` would not match)
+#
+# An UNDECLARED zone is proposal-only by fail-safe, so these names must match real directories
+# in the vault or every write to them is silently gated into a proposal.
+#
+# Corrected 2026-07-25. The previous list was `tasks` / `decisions` / `proposals` / `inbox` /
+# `finance`; of those only `proposals` existed as a directory, and `tasks` differed from the real
+# `Tasks` by case. The result was that essentially every real vault write failed its capability
+# check and fell back to a proposal — which then also failed, because the vault was mounted `:ro`.
+
 [[zones]]
-zone = "tasks"
+zone = "Work"
 write_class = "agent_writable"
 
 [[zones]]
-zone = "decisions"
+zone = "Tasks"
+write_class = "agent_writable"
+
+[[zones]]
+zone = "Life"
+write_class = "agent_writable"
+
+[[zones]]
+zone = "Projects"
+write_class = "agent_writable"
+
+[[zones]]
+zone = "Journal"
+write_class = "agent_writable"
+
+[[zones]]
+zone = "Learning"
+write_class = "agent_writable"
+
+[[zones]]
+zone = "Temp"
+write_class = "agent_writable"
+
+[[zones]]
+zone = "sandbox"
 write_class = "agent_writable"
 
 [[zones]]
@@ -17,21 +54,47 @@ zone = "proposals"
 write_class = "agent_writable"
 
 [[zones]]
-zone = "inbox"
-write_class = "shared"
+zone = "wakeups"
+write_class = "agent_writable"
 
+# Records the agent must never edit unattended. Readable, but a write needs a human-approved
+# proposal — these are the ones where a wrong edit is expensive or hard to notice.
+
+[[zones]]
+zone = "Legal"
+write_class = "human_only"
+
+[[zones]]
+zone = "Archive"
+write_class = "human_only"
+
+[[zones]]
+zone = "00 - Meta"
+write_class = "human_only"
+
+# A LOGICAL zone, not a directory: it backs `ReadSummary { Named = "finance" }` (aggregate figures
+# via actual-mcp), never a vault path. Declared because a grant may not reference an undeclared
+# zone — the loader fail-fasts on that, which is how this was caught.
 [[zones]]
 zone = "finance"
 write_class = "human_only"
 
+# Deliberately UNDECLARED, so they stay proposal-only by fail-safe: Entertainment, deliberation,
+# plugins, zImages. Add a [[zones]] block if the agent should write them directly.
+
 # --- Capability grants -------------------------------------------------------------------------
 
-# Face: human interfacer + built-in delegate. No ExecuteMcp — specialists stay on dispatcher.
+# Face: human interfacer + built-in delegate. Reads so it can answer directly; no writes — real
+# work goes through `delegate` to the dispatcher. No ExecuteMcp: specialists stay on dispatcher.
 [[grants]]
 component = "main-agent"
 capabilities = [
-    { Read = { Vault = "tasks" } },
-    { Read = { Vault = "decisions" } },
+    { Read = { Vault = "Work" } },
+    { Read = { Vault = "Tasks" } },
+    { Read = { Vault = "Life" } },
+    { Read = { Vault = "Projects" } },
+    { Read = { Vault = "Journal" } },
+    { Read = { Vault = "Learning" } },
     "AskHuman",
 ]
 
@@ -39,14 +102,29 @@ capabilities = [
 [[grants]]
 component = "dispatcher"
 capabilities = [
-    { Read = { Vault = "tasks" } },
-    { Write = { Vault = "tasks" } },
-    { Read = { Vault = "decisions" } },
-    { Write = { Vault = "decisions" } },
+    { Read = { Vault = "Work" } },
+    { Write = { Vault = "Work" } },
+    { Read = { Vault = "Tasks" } },
+    { Write = { Vault = "Tasks" } },
+    { Read = { Vault = "Life" } },
+    { Write = { Vault = "Life" } },
+    { Read = { Vault = "Projects" } },
+    { Write = { Vault = "Projects" } },
+    { Read = { Vault = "Journal" } },
+    { Write = { Vault = "Journal" } },
+    { Read = { Vault = "Learning" } },
+    { Write = { Vault = "Learning" } },
+    { Read = { Vault = "Temp" } },
+    { Write = { Vault = "Temp" } },
+    { Read = { Vault = "sandbox" } },
+    { Write = { Vault = "sandbox" } },
     { Read = { Vault = "proposals" } },
     { Write = { Vault = "proposals" } },
-    { Read = { Vault = "inbox" } },
-    { Write = { Vault = "inbox" } },
+    { Read = { Vault = "wakeups" } },
+    { Write = { Vault = "wakeups" } },
+    { Read = { Vault = "Legal" } },
+    { Read = { Vault = "Archive" } },
+    { Read = { Vault = "00 - Meta" } },
     { ReadSummary = { Named = "finance" } },
     { ExecuteMcp = "turbovault" },
     { ExecuteMcp = "liberado-search-orchestrator-mcp" },
@@ -65,12 +143,28 @@ capabilities = [
 [[grants]]
 component = "life"
 capabilities = [
-    { Read = { Vault = "tasks" } },
-    { Write = { Vault = "tasks" } },
-    { Read = { Vault = "decisions" } },
-    { Write = { Vault = "decisions" } },
-    { Read = { Vault = "inbox" } },
-    { Write = { Vault = "inbox" } },
+    { Read = { Vault = "Work" } },
+    { Write = { Vault = "Work" } },
+    { Read = { Vault = "Tasks" } },
+    { Write = { Vault = "Tasks" } },
+    { Read = { Vault = "Life" } },
+    { Write = { Vault = "Life" } },
+    { Read = { Vault = "Projects" } },
+    { Write = { Vault = "Projects" } },
+    { Read = { Vault = "Journal" } },
+    { Write = { Vault = "Journal" } },
+    { Read = { Vault = "Learning" } },
+    { Write = { Vault = "Learning" } },
+    { Read = { Vault = "Temp" } },
+    { Write = { Vault = "Temp" } },
+    { Read = { Vault = "sandbox" } },
+    { Write = { Vault = "sandbox" } },
+    { Read = { Vault = "proposals" } },
+    { Write = { Vault = "proposals" } },
+    { Read = { Vault = "wakeups" } },
+    { Write = { Vault = "wakeups" } },
+    { Read = { Vault = "Legal" } },
+    { Read = { Vault = "Archive" } },
     { ExecuteMcp = "turbovault" },
     { ExecuteMcp = "liberado-search-orchestrator-mcp" },
     { ExecuteMcp = "liberado-caldav-mcp" },
@@ -82,7 +176,8 @@ capabilities = [
 [[grants]]
 component = "coding"
 capabilities = [
-    { Read = { Vault = "decisions" } },
+    { Read = { Vault = "Projects" } },
+    { Read = { Vault = "Work" } },
     { ExecuteMcp = "deepwiki" },
     { ExecuteMcp = "liberado-search-orchestrator-mcp" },
     "AskHuman",

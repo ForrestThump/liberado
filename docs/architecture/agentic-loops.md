@@ -169,6 +169,66 @@ artifacts). Never critic alone for success.
 
 ---
 
+## Concurrency: what exists, what is reachable, and the ordering rule
+
+**Audited 2026-07-24.** Prompted by the graph-engineering framing (fan out where work is
+independent). The pieces for width exist; almost none of them are connected, and the order in
+which they get connected matters more than the connecting does.
+
+### Current state
+
+| Capability | Machinery | Reachable by an agent? |
+|---|---|---|
+| Bounded-concurrent fan-out | `Orchestrator::dispatch_parallel` — semaphore over `tuning.dispatch.max_concurrent_subagents`, per-subagent capability narrowing, merged `Report` | **No.** Only its own tests call it. Nothing in production constructs a `SubDispatch`. |
+| Expressing "these are independent" | — | **No.** `DispatchAction` is `{ExecuteDirect, DispatchSubagent, Clarify, Propose}`; `DispatchSubagent` is singular. A classifier cannot say *fan out*. |
+| Background session + later callback | `hub.start_background` + `spawn_return_handoff` + `ChatSessions::append_note` | **No.** Wired to the human `/spawn` path (`POST /api/goals` with an `origin`), not to any tool. |
+| Several tool calls in one turn | executor's tool loop | **Yes, but serialized** — `for call in &response.tool_calls { … runtime.invoke(call).await }` (`liberado-executor` `src/lib.rs`, both the streaming and non-streaming paths). No `JoinSet`, no `join_all`. |
+
+Consequences worth stating plainly, because each is easy to assume otherwise:
+
+- **An agent cannot run two subagents at once.** The model may emit two `delegate` calls in one
+  turn, but the executor awaits each in sequence, so they are two consecutive waits.
+- **`delegate` is synchronous by construction**, not by omission: it is `start_background`
+  immediately followed by `await_terminal`. A chat turn needs the summary before it can reply, and
+  delegated sessions have `AskHuman` stripped (D-e) precisely so a turn cannot become an unbounded
+  wait on a human the face agent has no way to relay to mid-turn.
+- **The async-with-callback pattern already works one layer up.** A human `/spawn` returns
+  immediately and the summary folds into the parent conversation on terminal. Exposing that to
+  agents is a non-blocking `delegate` variant, not new machinery.
+
+### The ordering rule: isolation before parallelism
+
+> **Do not make dispatch concurrent until workers are isolated.** Two agents writing one workspace
+> race, and the failure is silent corruption of each other's work rather than an error.
+
+This is not hypothetical and not fixable with prompting. Bun's Zig-to-Rust port fanned across many
+agents sharing one git workspace; agents ran overlapping git commands and overwrote each other. The
+fix was structural — forbid the unsafe commands, give each worker its own worktree.
+
+Liberado is currently *protected by accident*: nothing can fan out, so nothing can collide. That
+protection disappears the moment any of the three gaps above is closed. Today `coder-sandbox` ships
+`HostWorkspace` and `DockerWorkspace`; there is **no** `WorktreeWorkspace`, and the coding pack's
+default workspace is a single directory per session.
+
+So the sequence is fixed:
+
+1. **`WorktreeWorkspace`** in `coder-sandbox` — per-worker isolation and a defined merge-back.
+   (`coding-tui-plan.md` G7/S6.)
+2. **A fan-out `DispatchAction`** — the missing vocabulary; `dispatch_parallel` is already built and
+   tested behind it.
+3. **Decomposition in the classifier** — deciding *what* is independent, which is the genuinely hard
+   part and the one worth doing last.
+
+Before fanning out, the three questions that must have answers: where does each worker work, how do
+results merge, and what happens when two disagree. A design that cannot answer all three is not
+ready to be made concurrent.
+
+**Also note:** making the executor's tool loop concurrent is not a `delegate` change — it affects
+*every* tool. Tool concurrency and subagent concurrency are separate decisions with separate
+blast radii, and conflating them would make a narrow feature into a workspace-wide one.
+
+---
+
 ## Terminal states (kernel vocabulary)
 
 Map to `liberado_common::Outcome` at kernel boundaries.
@@ -251,5 +311,7 @@ architecture.
 8. **Meta-loop proposes; humans dispose.**  
 9. **Could someone use just this crate?** — modularity test applies to packs and kernel.  
 10. **Second-domain test is the pigeonhole detector** — if only coding can use it, it is not kernel.
+11. **Isolation before parallelism** — no concurrent workers until each has its own workspace and a
+    defined merge-back. See §Concurrency; today only the *absence* of fan-out prevents the race.
 
 Criteria intake and frozen verifier contracts: [`verifiers.md`](verifiers.md) §3.

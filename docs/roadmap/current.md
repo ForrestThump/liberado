@@ -63,6 +63,10 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
 - **Gate votes reach the wire batched at attempt end, not live per vote.** The kernel's
   `GateObserver` supports live emission; `CoderBackend::run` has no `SessionEvent` sender to plumb
   it through. Wiring one is the remaining half of "watch the quorum vote".
+- **No agent can fan out, and that is currently the only thing preventing a workspace race.**
+  `dispatch_parallel` is built but unreachable; `delegate` is synchronous; the executor runs tool
+  calls serially. `WorktreeWorkspace` does not exist yet, so isolation must land before any of those
+  change — [`agentic-loops.md`](../architecture/agentic-loops.md) §Concurrency, design rule 11.
 - **Compaction tail copies still exist on disk** (CH3.1 territory) — any *new* reader that walks a
   raw leaf path must skip `Author::is_compaction_tail_copy()`.
 

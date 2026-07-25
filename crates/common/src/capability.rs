@@ -192,6 +192,45 @@ pub fn is_sweeping_destructive(text: &str) -> bool {
     assess_magnitude(text) == Magnitude::Sweeping && mentions_destructive(text)
 }
 
+/// Line-start markers that begin an explanatory section rather than an instruction.
+const CONTEXT_MARKERS: &[&str] = &[
+    "context:",
+    "background:",
+    "note:",
+    "notes:",
+    "fyi:",
+    "previously:",
+    "history:",
+    "for reference:",
+];
+
+/// The part of a goal that is an **instruction**, with any trailing explanatory section removed.
+///
+/// Risk heuristics read a goal as a bag of words, so a sentence *describing* a dangerous action
+/// scores identically to one *ordering* it. That is not hypothetical: a delegated goal reading
+/// "Mark all 5 tasks complete … Context: earlier, deleting the X task required a permission grant"
+/// tripped the sweeping-destructive gate on the word "deleting" — in context the face agent had
+/// helpfully added about a *past* action — and the whole request was downgraded to a proposal
+/// (homelab, session `01KYD06MT7GFBSHDRVAHC5RYM1`, 2026-07-25).
+///
+/// Cutting at a line-start marker keeps the guard's real target intact: "Delete all my notes"
+/// still gates, with or without a context section after it. What stops gating is *narration*.
+///
+/// Only a marker at the start of a line counts — "clarify the context: …" mid-sentence is prose,
+/// not a section header, and truncating there would silently shrink what the guard inspects.
+pub fn instruction_scope(goal: &str) -> &str {
+    let mut offset = 0usize;
+    for line in goal.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        let lead = trimmed.to_ascii_lowercase();
+        if CONTEXT_MARKERS.iter().any(|m| lead.starts_with(m)) {
+            return goal[..offset].trim_end();
+        }
+        offset += line.len();
+    }
+    goal.trim_end()
+}
+
 /// An explicit permission within a zone (or to invoke a specific MCP).
 ///
 /// There is no ambient authority: if a `Capability` is not present in the active
@@ -383,5 +422,84 @@ mod tests {
         assert_eq!(WriteClass::default(), WriteClass::ProposalOnly);
         assert!(!WriteClass::default().allows_direct_agent_write());
         assert!(WriteClass::AgentWritable.allows_direct_agent_write());
+    }
+}
+
+#[cfg(test)]
+mod instruction_scope_tests {
+    use super::*;
+
+    /// The verbatim goal from homelab session `01KYD06MT7GFBSHDRVAHC5RYM1`, which was downgraded
+    /// to a proposal because the word "deleting" appears in the face agent's trailing context.
+    const REAL_GOAL: &str = "Mark all 5 of these RTX onboarding tasks as complete (set done_date to 2026-07-24):\n\n1. Understand MPD team workflow end-to-end\n2. Complete security & compliance training\n\nThese are all in Work/RTX/Onboarding.md.\n\nContext:\nEarlier, deleting the \"Update address\" task from Work/RTX/Onboarding.md required a permission grant for the Work zone (perm-1784692954895166502). That proposal may or may not have been approved. If write access to Work is still blocked, file the necessary permission request.";
+
+    #[test]
+    fn the_real_false_positive_no_longer_gates() {
+        assert!(
+            is_sweeping_destructive(REAL_GOAL),
+            "precondition: the unscoped goal really did trip the gate"
+        );
+        assert!(
+            !is_sweeping_destructive(instruction_scope(REAL_GOAL)),
+            "marking tasks complete must not read as a sweeping deletion just because the \
+             context section mentions a past one"
+        );
+    }
+
+    /// The guard must keep its teeth. Narration is what stops gating, not destruction.
+    #[test]
+    fn a_real_sweeping_deletion_still_gates_with_or_without_context() {
+        for goal in [
+            "Delete all my notes",
+            "Delete all my notes\n\nContext: I already backed them up.",
+            "Remove every file in the archive\n\nNote: discussed yesterday.",
+        ] {
+            assert!(
+                is_sweeping_destructive(instruction_scope(goal)),
+                "must still gate: {goal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_line_start_marker_truncates() {
+        // Mid-sentence "context:" is prose. Truncating there would silently shrink what the guard
+        // inspects — the opposite failure, and a much worse one.
+        let goal = "Delete all notes to clarify the context: they are stale";
+        assert_eq!(instruction_scope(goal), goal);
+        assert!(is_sweeping_destructive(instruction_scope(goal)));
+    }
+
+    #[test]
+    fn markers_are_recognized_case_insensitively_and_indented() {
+        for marker in [
+            "Context:",
+            "context:",
+            "  NOTE:",
+            "Background:",
+            "FYI:",
+            "Previously:",
+        ] {
+            let goal = format!("Mark all tasks done\n\n{marker} we deleted one earlier");
+            assert_eq!(instruction_scope(&goal), "Mark all tasks done");
+            assert!(
+                !is_sweeping_destructive(instruction_scope(&goal)),
+                "{marker}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_goal_with_no_marker_is_returned_whole() {
+        let goal = "Mark all 5 tasks complete";
+        assert_eq!(instruction_scope(goal), goal);
+        assert_eq!(instruction_scope("  "), "");
+    }
+
+    #[test]
+    fn a_goal_that_is_only_context_scopes_to_empty_and_cannot_gate() {
+        let goal = "Context: we deleted all the notes";
+        assert_eq!(instruction_scope(goal), "");
+        assert!(!is_sweeping_destructive(instruction_scope(goal)));
     }
 }

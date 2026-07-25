@@ -22,7 +22,7 @@
 //! runtime equivalent, and vice versa.
 
 use liberado_common::{
-    BlockReason, Consequence, DispatchAction, DispatchDecision, bare_tool_name,
+    BlockReason, Consequence, DispatchAction, DispatchDecision, bare_tool_name, instruction_scope,
     is_sweeping_destructive, mcp_of, zone_write_restriction,
 };
 use liberado_config_loader::DispatchTuning;
@@ -86,7 +86,10 @@ pub(crate) fn evaluate(
     // the tool-independent signal available pre-execution, and (unlike a specific tool name) it
     // survives the model routing the work to a subagent. Liberado owns this classification because
     // MCP tools don't declare their own risk. Per-call, args-aware enforcement is a later layer.
-    if is_sweeping_destructive(&req.goal) {
+    // Scoped to the *instruction* — a goal that merely narrates a past deletion in a trailing
+    // `Context:` section is not asking for one. See `instruction_scope`'s doc comment for the
+    // live false positive that motivated this.
+    if is_sweeping_destructive(instruction_scope(&req.goal)) {
         return Some(BlockReason::HighConsequence);
     }
 
