@@ -83,6 +83,47 @@ pub async fn changed_files(workspace_root: &str) -> Result<Vec<String>, CoderErr
     Ok(stdout.lines().filter_map(parse_status_path).collect())
 }
 
+/// Like [`changed_files`], but each entry carries how the file changed
+/// (`added` | `modified` | `deleted`) for the `file_changed` wire event.
+pub async fn changed_files_detailed(
+    workspace_root: &str,
+) -> Result<Vec<(String, &'static str)>, CoderError> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain", "-uall", "--", "."])
+        .current_dir(workspace_root)
+        .output()
+        .await
+        .map_err(|e| CoderError::Backend(format!("git status: {e}")))?;
+    if !output.status.success() {
+        return Err(CoderError::Backend(format!(
+            "git status exited {:?}: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .filter_map(|line| parse_status_path(line).map(|p| (p, parse_status_change(line))))
+        .collect())
+}
+
+/// Classify a porcelain status line's XY code.
+///
+/// Deliberately coarse — three buckets, because that is all a surface renders. A rename reports as
+/// `added`: `parse_status_path` already resolves `old -> new` to the new path, so from the reader's
+/// point of view that path is new. Anything unrecognized falls back to `modified`, the safest
+/// wrong answer: it says "this file was touched" without claiming it appeared or vanished.
+pub fn parse_status_change(line: &str) -> &'static str {
+    let code = line.get(..2).unwrap_or("");
+    match code {
+        "??" => "added",
+        c if c.starts_with('D') || c.ends_with('D') => "deleted",
+        c if c.starts_with('A') || c.starts_with('R') || c.starts_with('C') => "added",
+        _ => "modified",
+    }
+}
+
 pub fn parse_status_path(line: &str) -> Option<String> {
     if line.len() < 4 {
         return None;
@@ -162,5 +203,30 @@ mod changed_files_tests {
         );
 
         let _ = std::fs::remove_dir_all(&ws);
+    }
+}
+
+#[cfg(test)]
+mod status_change_tests {
+    use super::parse_status_change;
+
+    #[test]
+    fn classifies_porcelain_codes() {
+        assert_eq!(parse_status_change("?? src/new.rs"), "added");
+        assert_eq!(parse_status_change("A  src/new.rs"), "added");
+        assert_eq!(parse_status_change(" M src/lib.rs"), "modified");
+        assert_eq!(parse_status_change("M  src/lib.rs"), "modified");
+        assert_eq!(parse_status_change("MM src/lib.rs"), "modified");
+        assert_eq!(parse_status_change(" D src/gone.rs"), "deleted");
+        assert_eq!(parse_status_change("D  src/gone.rs"), "deleted");
+        // A rename resolves to its new path, so it reads as an addition to a surface.
+        assert_eq!(parse_status_change("R  old.rs -> new.rs"), "added");
+    }
+
+    #[test]
+    fn unknown_codes_fall_back_to_modified() {
+        // "touched" is the safe wrong answer — it never claims a file appeared or vanished.
+        assert_eq!(parse_status_change("XY weird.rs"), "modified");
+        assert_eq!(parse_status_change(""), "modified");
     }
 }

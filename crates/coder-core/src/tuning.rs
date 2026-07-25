@@ -11,8 +11,8 @@
 use liberado_common::{Error, Result};
 
 use crate::{
-    CoderCommandConfig, CoderRoleConfig, CoderRunConfig, CommandPolicy, LIBERADO_LOOP_BACKEND,
-    PathPolicy, PipelinePolicy, ProgressPolicy, SandboxSpec, VerifierSpec,
+    CoderCommandConfig, CoderGateConfig, CoderRoleConfig, CoderRunConfig, CommandPolicy,
+    LIBERADO_LOOP_BACKEND, PathPolicy, PipelinePolicy, ProgressPolicy, SandboxSpec, VerifierSpec,
 };
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +35,9 @@ pub struct CoderTuning {
     pub coder: CoderRoleConfig,
     #[serde(default = "default_coder_critic")]
     pub critic: CoderRoleConfig,
+    /// `[tuning.coder.gate]` — the completion gate (S1). Absent table = off, single-critic path.
+    #[serde(default)]
+    pub gate: CoderGateConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repair: Option<CoderRoleConfig>,
     pub sandbox: SandboxSpec,
@@ -73,6 +76,7 @@ impl CoderTuning {
             planner: self.planner.clone(),
             coder: self.coder.clone(),
             critic: self.critic.clone(),
+            gate: self.gate.clone(),
             repair: self.repair.clone(),
             sandbox: self.sandbox.clone(),
             command_policy: self.command_policy.clone(),
@@ -95,6 +99,26 @@ impl CoderTuning {
         validate_coder_role("critic", &self.critic)?;
         if let Some(repair) = &self.repair {
             validate_coder_role("repair", repair)?;
+        }
+        // An enabled gate with no fresh reviewers can never reach a strict majority, so *every*
+        // attempt would be refuted and no coding goal could ever finish. That is fail-closed
+        // working as designed, but as a config it is only ever a mistake — reject it at load
+        // time rather than at 3am on attempt 5.
+        if self.gate.enabled && self.gate.fresh_reviewers == 0 {
+            return Err(Error::Config(
+                "tuning.coder.gate.fresh_reviewers must be >= 1 when the gate is enabled \
+                 (a gate with no reviewers can never approve)"
+                    .into(),
+            ));
+        }
+        for (name, role) in [
+            ("gate.gatekeeper", self.gate.gatekeeper.as_ref()),
+            ("gate.fresh", self.gate.fresh.as_ref()),
+            ("gate.strategist", self.gate.strategist.as_ref()),
+        ] {
+            if let Some(role) = role {
+                validate_single_shot_role(name, role)?;
+            }
         }
         if self.command_policy.timeout_secs == 0 {
             return Err(Error::Config(
@@ -145,6 +169,7 @@ impl Default for CoderTuning {
             planner: default_coder_planner(),
             coder: default_coder_role(),
             critic: default_coder_critic(),
+            gate: CoderGateConfig::default(),
             repair: None,
             sandbox: SandboxSpec::HostLocal,
             command_policy: CommandPolicy::default(),
@@ -200,7 +225,26 @@ fn coder_role(model: &str, prompt_path: &str, max_turns: Option<u32>) -> CoderRo
     }
 }
 
+/// Validate a role that makes exactly **one completion call** — the completion gate's reviewers and
+/// strategist. Identical to [`validate_coder_role`] minus the `max_turns` requirement: these roles
+/// never enter the executor's agent loop, so a turn limit is meaningless for them and demanding one
+/// would make the documented `[coder.gate.*]` config fail at boot.
+fn validate_single_shot_role(name: &str, role: &CoderRoleConfig) -> Result<()> {
+    validate_role_identity(name, role)
+}
+
 fn validate_coder_role(name: &str, role: &CoderRoleConfig) -> Result<()> {
+    validate_role_identity(name, role)?;
+    if role.max_turns.unwrap_or(0) == 0 {
+        return Err(Error::Config(format!(
+            "tuning.coder.{name}.max_turns must be >= 1"
+        )));
+    }
+    Ok(())
+}
+
+/// Model + prompt requirements shared by every role.
+fn validate_role_identity(name: &str, role: &CoderRoleConfig) -> Result<()> {
     if role.model.trim().is_empty() {
         return Err(Error::Config(format!(
             "tuning.coder.{name}.model must not be empty"
@@ -219,11 +263,6 @@ fn validate_coder_role(name: &str, role: &CoderRoleConfig) -> Result<()> {
     if prompt_path_empty && prompt_empty {
         return Err(Error::Config(format!(
             "tuning.coder.{name} requires prompt_path or prompt"
-        )));
-    }
-    if role.max_turns.unwrap_or(0) == 0 {
-        return Err(Error::Config(format!(
-            "tuning.coder.{name}.max_turns must be >= 1"
         )));
     }
     Ok(())

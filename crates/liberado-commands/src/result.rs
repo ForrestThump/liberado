@@ -48,6 +48,26 @@ pub enum CommandResult {
         domain: String,
         goal: String,
     },
+    /// Start a **coding** goal session (`/goal <text>`). Distinct from `SpawnGoalSession`: that one
+    /// takes a domain/profile token from the human, while this one is always the coding pack and
+    /// carries a project instead. `project` is `None` when the surface should use its current
+    /// project context.
+    StartCodingGoal {
+        project: Option<String>,
+        text: String,
+    },
+    /// Open the goal view for the focused session (bare `/goal`).
+    OpenGoalView,
+    /// Snapshot the focused goal session inline (`/goal status`).
+    GoalStatus,
+    /// Park the focused goal session — graceful and resumable (`/goal pause`).
+    ParkGoalSession,
+    /// Resume a parked session, optionally answering its outstanding question (`/goal resume`).
+    ResumeGoalSession {
+        answer: String,
+    },
+    /// Cancel the focused goal session — terminal (`/goal clear`).
+    CancelGoalSession,
     /// Branch `parent_id`, keeping the original. The surface POSTs `/api/sessions/{id}/fork`, then
     /// switches to the new conversation — you carry on in the branch, and the original is still
     /// there in the switcher, exactly as you left it.

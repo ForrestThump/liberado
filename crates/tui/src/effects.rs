@@ -89,6 +89,17 @@ impl EffectRunner {
                 self.spawn_goal_session(domain, goal, origin_conversation)
                     .await
             }
+            Effect::StartCodingGoal {
+                project,
+                text,
+                origin_conversation,
+            } => {
+                self.start_coding_goal(project, text, origin_conversation)
+                    .await
+            }
+            Effect::ParkGoalSession(id) => self.goal_action(id, "park", "parked").await,
+            Effect::CancelGoalSession(id) => self.goal_action(id, "cancel", "cancelled").await,
+            Effect::ResumeGoalSession { id, answer } => self.resume_goal_session(id, answer).await,
             Effect::LeaveGoalSession => self.leave_goal_session(),
             Effect::Quit => self.quit(),
             Effect::None => {}
@@ -207,6 +218,68 @@ impl EffectRunner {
 
     /// `/spawn` — `POST /api/goals` to create an interactive session, then hand the id back as
     /// `GoalSpawned` (the App focuses it and opens its stream). `GoalSpawnFailed` on error.
+    /// `/goal <text>` — start a coding goal and focus it. Reuses the spawn actions so the new
+    /// session lands in the same joined pane a `/spawn` would.
+    async fn start_coding_goal(
+        &self,
+        project: Option<String>,
+        text: String,
+        origin_conversation: Option<String>,
+    ) {
+        let client = self.client.clone();
+        let tx = self.action_tx.clone();
+        let server = self.server_url();
+        tokio::spawn(async move {
+            let action = match api::start_coding_goal(
+                &client,
+                &server,
+                project.as_deref(),
+                &text,
+                origin_conversation.as_deref(),
+            )
+            .await
+            {
+                Ok(session_id) => Action::GoalSpawned {
+                    session_id,
+                    domain: "coding".to_string(),
+                    description: text,
+                },
+                Err(e) => Action::GoalSpawnFailed(e),
+            };
+            if tx.try_send(action).is_err() {
+                tracing::warn!("action channel full, dropping coding-goal result");
+            }
+        });
+    }
+
+    /// `park` / `cancel` — bodiless lifecycle verbs. Reports through the same system-message
+    /// channel either way, because "I asked and it refused" has to be as visible as success.
+    async fn goal_action(&self, id: String, action: &'static str, past_tense: &'static str) {
+        let client = self.client.clone();
+        let tx = self.action_tx.clone();
+        let server = self.server_url();
+        tokio::spawn(async move {
+            let msg = match api::post_goal_action(&client, &server, &id, action).await {
+                Ok(()) => format!("Session {id} {past_tense}."),
+                Err(e) => format!("Could not {action} session {id}: {e}"),
+            };
+            if tx.try_send(Action::SystemMessage(msg)).is_err() {
+                tracing::warn!("action channel full, dropping goal-action result");
+            }
+        });
+    }
+
+    /// `/goal resume [answer]` — deliver the answer a parked session is waiting for.
+    async fn resume_goal_session(&self, id: String, answer: String) {
+        if answer.is_empty() {
+            let _ = self.action_tx.try_send(Action::SystemMessage(
+                "Usage: /goal resume <your answer to the question the session is holding>".into(),
+            ));
+            return;
+        }
+        self.send_goal_message(id, answer).await;
+    }
+
     async fn spawn_goal_session(
         &self,
         domain: String,

@@ -8,6 +8,7 @@
 //!
 //! See `docs/architecture/agentic-loops.md` and `docs/architecture/modularity.md`.
 
+mod completion_gate;
 mod event;
 mod goal;
 mod hub;
@@ -16,6 +17,10 @@ mod record_store;
 mod runner;
 mod store;
 
+pub use completion_gate::{
+    CompletionGate, GateError, GateEvidence, GateObserver, GateOutcome, GateVerdict, Quorum,
+    RecordedVote, ReviewVote, Reviewer, ReviewerKind, VerifierStatus, VerifierVerdict,
+};
 pub use event::{SessionEvent, SessionEventKind};
 pub use goal::{
     DomainHint, GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionOrigin,

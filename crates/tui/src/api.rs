@@ -256,6 +256,67 @@ pub async fn post_goal_message(
 /// Note `payload.interactive` is only a *request*: whether the session may actually ask the human is
 /// decided by its grant (`AskHuman`), not by this flag. Spawning a profile without that capability
 /// yields a session that runs to completion without ever prompting.
+/// `POST /api/goals` for a **coding** goal. Domain is always `coding`; `project` rides in the
+/// payload where the coding pack reads it (and where G4's project authorization will check it).
+pub async fn start_coding_goal(
+    client: &Client,
+    server: &str,
+    project: Option<&str>,
+    text: &str,
+    origin_conversation: Option<&str>,
+) -> Result<String, String> {
+    let mut payload = serde_json::json!({ "interactive": true });
+    if let Some(project) = project {
+        payload["project"] = serde_json::json!(project);
+    }
+    let mut body = serde_json::json!({
+        "description": text,
+        "domain": "coding",
+        "payload": payload,
+    });
+    if let Some(conv) = origin_conversation {
+        body["origin"] = serde_json::json!({ "conversation_id": conv });
+    }
+    let resp = client
+        .post(format!("{server}/api/goals"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("could not reach daemon: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("server returned {status}: {text}"));
+    }
+    let value: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    value
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| "server response had no session_id".to_string())
+}
+
+/// `POST /api/goals/{id}/{action}` for the bodiless lifecycle verbs (`park`, `cancel`).
+pub async fn post_goal_action(
+    client: &Client,
+    server: &str,
+    id: &str,
+    action: &str,
+) -> Result<(), String> {
+    let resp = client
+        .post(format!("{server}/api/goals/{id}/{action}"))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .map_err(|e| format!("could not reach daemon: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("server returned {status}: {text}"));
+    }
+    Ok(())
+}
+
 pub async fn spawn_goal(
     client: &Client,
     server: &str,

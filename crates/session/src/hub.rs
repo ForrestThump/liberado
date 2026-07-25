@@ -95,6 +95,13 @@ pub struct GoalSessionHub {
     /// Live sessions' inbound-input senders, keyed by id. Present only while a session runs;
     /// removed at teardown (like `cancels`), so `send_input` to a finished session fails cleanly.
     inputs: tokio::sync::Mutex<HashMap<String, mpsc::Sender<HumanInput>>>,
+    /// Sessions whose cooperative stop was requested as a **park**, not a cancel.
+    ///
+    /// Park and cancel use the same stop signal — a pack has one way to be asked to wind down, and
+    /// giving it two would mean every pack has to handle both correctly. What differs is the
+    /// *disposition* the hub records when the pack returns, and this set is that intent. Cleared at
+    /// teardown alongside `cancels`.
+    park_requests: tokio::sync::Mutex<std::collections::HashSet<String>>,
     /// Optional out-of-band alert when a session awaits input with no live subscribers (E5).
     alert: Option<Arc<dyn SessionAlert>>,
 }
@@ -108,6 +115,7 @@ impl GoalSessionHub {
             packs: HashMap::new(),
             cancels: tokio::sync::Mutex::new(HashMap::new()),
             inputs: tokio::sync::Mutex::new(HashMap::new()),
+            park_requests: tokio::sync::Mutex::new(std::collections::HashSet::new()),
             alert: None,
         }
     }
@@ -282,6 +290,40 @@ impl GoalSessionHub {
         let tx = map
             .get(id)
             .ok_or_else(|| format!("session '{id}' not found or already finished"))?;
+        let _ = tx.send(true);
+        Ok(())
+    }
+
+    /// Ask a running session to **park**: wind down gracefully and land in
+    /// [`SessionStatus::Parked`] rather than `Cancelled`.
+    ///
+    /// The difference from [`cancel`](Self::cancel) is entirely in what it *means*, not in how the
+    /// pack is stopped. Both send the same cooperative stop signal, so the pack finishes its
+    /// in-flight turn and exits at its own next checkpoint — packs need no new code path, and there
+    /// is no second way to be interrupted that a pack could handle incorrectly. The hub then records
+    /// `Parked` instead of `Cancelled`, and — unlike a terminal finish — **preserves
+    /// `awaiting_input`**, so a session parked while holding a question still shows that question
+    /// when you come back to it.
+    ///
+    /// Parking is a claim that the work is worth continuing. Whether it actually *can* continue is
+    /// [`resume`](Self::resume)'s call, via [`DomainPackRunner::can_resume`]: the coding pack
+    /// refuses once a build has started, because re-running it would redo real filesystem work with
+    /// no checkpoint. That refusal happens at resume time rather than here because "can this be
+    /// rebuilt from its transcript" depends on where the pack actually stopped, which is not
+    /// knowable at the moment you ask it to.
+    pub async fn park(&self, id: &str) -> Result<(), String> {
+        // Clone the sender and release `cancels` before touching `park_requests`. Holding both at
+        // once would establish a lock order that teardown (which takes them in the other order)
+        // could deadlock against.
+        let tx = {
+            let map = self.cancels.lock().await;
+            map.get(id)
+                .cloned()
+                .ok_or_else(|| format!("session '{id}' is not running (cannot park)"))?
+        };
+        // Record the intent BEFORE signalling. The pack may return almost immediately, and if the
+        // stop landed first the hub would file a deliberate park as a cancel.
+        self.park_requests.lock().await.insert(id.to_string());
         let _ = tx.send(true);
         Ok(())
     }
@@ -503,10 +545,23 @@ impl GoalSessionHub {
             .run(&session_id, &goal, &ctx, tx.clone(), inputs, cancel)
             .await;
 
+        // Was this cooperative stop a park or a cancel? Same signal, different disposition — see
+        // `park()`. Taken (and removed) here so a later run of the same id cannot inherit it.
+        let parked = self.park_requests.lock().await.remove(&session_id);
+
         let (status, goal_result) = match result {
             // Was a hand-written four-arm match. A fifth `TerminalKind` would have compiled here
             // *and* silently gone missing, because nothing tied the two enums together.
             Ok(r) => (SessionStatus::from(r.terminal), r),
+            Err(PackError::Cancelled) if parked => (
+                SessionStatus::Parked,
+                GoalResult {
+                    terminal: TerminalKind::Cancelled, // unused: parked sessions never `finish()`
+                    summary: "parked by client".into(),
+                    artifacts: vec![],
+                    diagnostics: serde_json::json!({}),
+                },
+            ),
             Err(PackError::Cancelled) => (
                 SessionStatus::Cancelled,
                 GoalResult {
@@ -552,7 +607,14 @@ impl GoalSessionHub {
         drop(tx);
         let _ = pump.await;
 
-        self.store.finish(&session_id, status, goal_result).await;
+        // A parked session has NOT finished, and `finish()` would say it had: it stamps
+        // `finished_at` and clears `awaiting_input`, erasing the very question the human is coming
+        // back to answer. `set_status` records the status and leaves both alone.
+        if status == SessionStatus::Parked {
+            self.store.set_status(&session_id, status).await;
+        } else {
+            self.store.finish(&session_id, status, goal_result).await;
+        }
         self.cancels.lock().await.remove(&session_id);
         // Drop the input sender so any late `send_input` fails cleanly instead of blocking.
         self.inputs.lock().await.remove(&session_id);

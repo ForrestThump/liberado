@@ -86,6 +86,20 @@ pub enum GoalUiEvent {
         ok: bool,
         summary: String,
     },
+    /// One completion-gate reviewer vote. `coerced` = the gate substituted a refusal because the
+    /// reviewer was unavailable, which reads very differently to a human than a real rejection.
+    CriticVerdict {
+        reviewer: String,
+        kind: String,
+        approved: bool,
+        issues: Vec<String>,
+        coerced: bool,
+    },
+    /// A workspace file changed. Accumulated into the session's changed-file list.
+    FileChanged {
+        path: String,
+        change: String,
+    },
     LoopGuard(String),
     Awaiting {
         prompt: String,
@@ -542,6 +556,43 @@ impl App {
                 j.messages
                     .push(Message::System(format!("{mark} {summary}")));
             }
+            GoalUiEvent::CriticVerdict {
+                reviewer,
+                kind,
+                approved,
+                issues,
+                coerced,
+            } => {
+                Self::flush_joined_buf(j);
+                // "?" rather than "✗" when coerced: the reviewer produced no opinion, and showing
+                // that as a rejection would make an outage look like the work being wrong.
+                let mark = if coerced {
+                    "?"
+                } else if approved {
+                    "✓"
+                } else {
+                    "✗"
+                };
+                let detail = if coerced {
+                    " unavailable → counted as refuting".to_string()
+                } else if issues.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {}", issues.join("; "))
+                };
+                j.messages.push(Message::System(format!(
+                    "{mark} gate[{kind}] {reviewer}{detail}"
+                )));
+            }
+            GoalUiEvent::FileChanged { path, change } => {
+                Self::flush_joined_buf(j);
+                let mark = match change.as_str() {
+                    "added" => "+",
+                    "deleted" => "-",
+                    _ => "~",
+                };
+                j.messages.push(Message::System(format!("{mark} {path}")));
+            }
             GoalUiEvent::LoopGuard(m) => {
                 Self::flush_joined_buf(j);
                 j.messages.push(Message::System(format!("loop-guard: {m}")));
@@ -837,6 +888,73 @@ impl App {
                         after_turn: *after_turn,
                     });
                 }
+                liberado_commands::CommandResult::StartCodingGoal { project, text } => {
+                    if self.joined.as_ref().map(|j| j.finished).unwrap_or(false) {
+                        self.joined = None;
+                    }
+                    effects.push(Effect::StartCodingGoal {
+                        project: project.clone(),
+                        text: text.clone(),
+                        origin_conversation: self.session.clone(),
+                    });
+                }
+                liberado_commands::CommandResult::OpenGoalView => match &self.joined {
+                    Some(j) => {
+                        let id = j.id.clone();
+                        self.messages.push(Message::System(format!(
+                            "Goal view: {id} (you are already joined — the pane below is the view)"
+                        )));
+                    }
+                    None => self.messages.push(Message::System(
+                        "No session focused. Use /goal <text> to start one, or /sessions to join."
+                            .into(),
+                    )),
+                },
+                liberado_commands::CommandResult::GoalStatus => match &self.joined {
+                    Some(j) => {
+                        let line = format!(
+                            "{} · {} · {} message(s){}",
+                            j.id,
+                            j.status,
+                            j.messages.len(),
+                            match &j.awaiting {
+                                Some(a) => format!(" · awaiting: {}", a.prompt),
+                                None => String::new(),
+                            }
+                        );
+                        self.messages.push(Message::System(line));
+                    }
+                    None => self
+                        .messages
+                        .push(Message::System("No goal session focused.".into())),
+                },
+                liberado_commands::CommandResult::ParkGoalSession => {
+                    match self.joined.as_ref().map(|j| j.id.clone()) {
+                        Some(id) => effects.push(Effect::ParkGoalSession(id)),
+                        None => self
+                            .messages
+                            .push(Message::System("No goal session to park.".into())),
+                    }
+                }
+                liberado_commands::CommandResult::ResumeGoalSession { answer } => {
+                    match self.joined.as_ref().map(|j| j.id.clone()) {
+                        Some(id) => effects.push(Effect::ResumeGoalSession {
+                            id,
+                            answer: answer.clone(),
+                        }),
+                        None => self
+                            .messages
+                            .push(Message::System("No goal session to resume.".into())),
+                    }
+                }
+                liberado_commands::CommandResult::CancelGoalSession => {
+                    match self.joined.as_ref().map(|j| j.id.clone()) {
+                        Some(id) => effects.push(Effect::CancelGoalSession(id)),
+                        None => self
+                            .messages
+                            .push(Message::System("No goal session to cancel.".into())),
+                    }
+                }
                 liberado_commands::CommandResult::ShowOptions { title, options } => {
                     let mut text = format!("{title}:\n");
                     for (label, _id) in options {
@@ -1010,6 +1128,10 @@ pub enum Action {
     },
     /// `/spawn` failed (couldn't start the session).
     GoalSpawnFailed(String),
+    /// A background effect finished and has something to tell the human (goal park/cancel results).
+    /// Routed as an action rather than written directly so all scrollback mutation stays on the
+    /// reducer, which is what the reducer tests exercise.
+    SystemMessage(String),
     /// Daemon connectivity transition (true = connected, false = lost).
     ConnectionStatus(bool),
     /// Periodic heartbeat from the poller (currently a no-op in `update()`).
@@ -1055,6 +1177,22 @@ pub enum Effect {
         goal: String,
         origin_conversation: Option<String>,
     },
+    /// Start a **coding** goal (`/goal <text>`): `POST /api/goals` with domain `coding`, then focus
+    /// it. Separate from `SpawnGoalSession` because the coding pack takes a project, not a profile.
+    StartCodingGoal {
+        project: Option<String>,
+        text: String,
+        origin_conversation: Option<String>,
+    },
+    /// Park the joined session (`POST /api/goals/{id}/park`) — graceful, resumable.
+    ParkGoalSession(String),
+    /// Resume a parked session (`POST /api/goals/{id}/message`), optionally answering it.
+    ResumeGoalSession {
+        id: String,
+        answer: String,
+    },
+    /// Cancel the joined session (`POST /api/goals/{id}/cancel`) — terminal.
+    CancelGoalSession(String),
     /// Abort the joined session's SSE stream (on `/back`).
     LeaveGoalSession,
     Quit,
@@ -1269,6 +1407,12 @@ impl App {
                 let kind = kind_from_domain_str(&domain);
                 self.join_session_with(session_id.clone(), Some(kind), Some(description));
                 vec![Effect::JoinGoalSession(session_id)]
+            }
+            Action::SystemMessage(text) => {
+                self.messages.push(Message::System(text));
+                self.scroll_offset = 0;
+                self.mark_dirty();
+                vec![Effect::None]
             }
             Action::GoalSpawnFailed(err) => {
                 self.messages

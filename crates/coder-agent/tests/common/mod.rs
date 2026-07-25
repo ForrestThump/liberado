@@ -114,6 +114,7 @@ pub fn base_request(root: &Path) -> CoderRunRequest {
                 8,
             ),
             critic: disabled_role(),
+            gate: liberado_coder_core::CoderGateConfig::default(),
             repair: None,
             sandbox: SandboxSpec::HostLocal,
             command_policy: CommandPolicy::default(),
@@ -128,6 +129,7 @@ pub fn base_request(root: &Path) -> CoderRunRequest {
         },
         attempt: 0,
         prior_feedback: Vec::new(),
+        strategist_directive: None,
     }
 }
 

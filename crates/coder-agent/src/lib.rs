@@ -5,6 +5,7 @@
 //! specialization — not the center of Liberado. See
 //! `docs/architecture/agentic-loops.md` and `docs/roadmap/agentic-mesh-hygiene-audit-2026-07-10.md`.
 
+mod completion_gate;
 mod critic;
 mod gates;
 mod intake_session;
@@ -94,10 +95,24 @@ impl CoderBackend for LiberadoLoopBackend {
         let mut feedback = request.prior_feedback.clone();
         let mut last_retryable: Option<CoderError> = None;
 
+        // Completion-gate strategist state. `refutations` is the *consecutive* count the gate's
+        // threshold is defined against; `directive` carries a proposed structural change into the
+        // next attempt (and every attempt after it, until a fresh one replaces it — a structural
+        // change stays true while it is being worked on).
+        //
+        // A retryable error (NoChanges / Validation) neither increments nor resets the count.
+        // Incrementing would let environmental flakiness summon a strategist that has no
+        // refutations to reason about; resetting would let a run alternating error/refute/error
+        // never reach the threshold at all, which is precisely the non-convergence the strategist
+        // exists to break.
+        let mut consecutive_refutations: u32 = 0;
+        let mut strategist_directive = request.strategist_directive.clone();
+
         for attempt_offset in 0..max_attempts {
             let mut attempt_request = request.clone();
             attempt_request.attempt = request.attempt.saturating_add(attempt_offset);
             attempt_request.prior_feedback = feedback.clone();
+            attempt_request.strategist_directive = strategist_directive.clone();
 
             match self.run_attempt(attempt_request).await {
                 Ok(result) => {
@@ -116,6 +131,46 @@ impl CoderBackend for LiberadoLoopBackend {
                             ));
                             feedback.push(repair_feedback::format_error_feedback(&err));
                             last_retryable = Some(err);
+
+                            // Non-convergence check. Consult the strategist only once the same
+                            // kind of refusal has repeated `strategist_after` times — a run that
+                            // is still absorbing feedback does not need its approach rethought,
+                            // and asking too early spends a model call to be told what the
+                            // reviewers already said.
+                            consecutive_refutations += 1;
+                            let gate = liberado_session::CompletionGate {
+                                fresh_reviewers: request.config.gate.fresh_reviewers,
+                                quorum: liberado_session::Quorum::StrictMajorityOfFresh,
+                                strategist_after: request.config.gate.strategist_after,
+                            };
+                            if request.config.gate.enabled
+                                && gate.should_consult_strategist(consecutive_refutations)
+                            {
+                                // `attempt_request` was moved into `run_attempt`; rebuild just
+                                // what the strategist reads, and only on the rare path where it
+                                // actually runs rather than cloning on every attempt.
+                                let mut strategist_request = request.clone();
+                                strategist_request.attempt =
+                                    request.attempt.saturating_add(attempt_offset);
+
+                                // Best-effort: `run_strategist` swallows its own failures and
+                                // returns None, so a strategist outage costs a directive, never
+                                // the run.
+                                if let Ok(Some(directive)) = completion_gate::run_strategist(
+                                    self.providers.as_ref(),
+                                    &strategist_request,
+                                    &feedback,
+                                )
+                                .await
+                                {
+                                    strategist_directive = Some(directive);
+                                    // The directive answers the refutations counted so far, so the
+                                    // threshold restarts. Without this the strategist would fire on
+                                    // every subsequent attempt, re-proposing against a history it
+                                    // has already addressed.
+                                    consecutive_refutations = 0;
+                                }
+                            }
                             continue;
                         }
                         Some(issues) => {
@@ -251,7 +306,16 @@ impl LiberadoLoopBackend {
             );
         }
 
-        let files_changed = gates::changed_files(&request.workspace.root).await?;
+        let file_changes: Vec<liberado_coder_core::FileChangeRecord> =
+            gates::changed_files_detailed(&request.workspace.root)
+                .await?
+                .into_iter()
+                .map(|(path, change)| liberado_coder_core::FileChangeRecord {
+                    path,
+                    change: change.to_string(),
+                })
+                .collect();
+        let files_changed: Vec<String> = file_changes.iter().map(|c| c.path.clone()).collect();
         if files_changed.is_empty() && report.outcome != Outcome::Failed {
             trace::push_event(
                 &events,
@@ -288,6 +352,9 @@ impl LiberadoLoopBackend {
         let mut validation_notes = None;
         let mut outcome = report.outcome;
         let mut summary = report.summary;
+        // Verifier results outlive the pipeline block: the completion gate shows them to reviewers
+        // as the deterministic floor they may not override.
+        let mut verifier_results: Vec<liberado_coder_core::NamedVerdict> = Vec::new();
         if outcome != Outcome::Failed {
             let specs = resolve_verifier_specs(
                 &request.config.verifiers,
@@ -336,14 +403,57 @@ impl LiberadoLoopBackend {
                         .collect::<Vec<_>>()
                         .join("; "),
                 );
+                verifier_results = pipeline.results.clone();
             }
         }
 
+        // The judgment layer, on top of the deterministic verifiers above. Two shapes:
+        //
+        // * gate enabled  — a remembered gatekeeper plus a quorum of cold reviewers, adjudicated
+        //   by the kernel (`liberado_session::CompletionGate`). Fail-closed.
+        // * gate disabled — the legacy single critic, unchanged.
+        //
+        // Both are skipped when the worker already failed or changed nothing: there is no claim to
+        // dispute, and asking a reviewer to bless an empty diff only burns tokens.
         let mut critic_verdict = None;
-        if outcome != Outcome::Failed
-            && !files_changed.is_empty()
-            && roles::critic_enabled(&request)
-        {
+        let mut gate_votes = Vec::new();
+        let reviewable = outcome != Outcome::Failed && !files_changed.is_empty();
+        if reviewable && request.config.gate.enabled {
+            let gate_outcome = completion_gate::run_gate(
+                self.providers.as_ref(),
+                &request,
+                &verifier_results,
+                &events,
+            )
+            .await?;
+            gate_votes = completion_gate::flatten_votes(&gate_outcome);
+            let verdict = match &gate_outcome.verdict {
+                liberado_session::GateVerdict::Approved => CriticVerdict::Acceptable,
+                liberado_session::GateVerdict::Refuted { issues } => {
+                    // Belt and braces: `run`'s attempt loop also derives Failed from a
+                    // `NeedsRevision` verdict, so this assignment is not the only thing standing
+                    // between a refutation and a Succeeded result. It is kept so `run_attempt`'s
+                    // own return value is self-consistent — a caller reading it directly (evals,
+                    // future single-attempt callers) must never see Succeeded next to a refuted
+                    // verdict. `critic_verdict`, not `outcome`, is the signal that drives retry.
+                    outcome = Outcome::Failed;
+                    summary = format!(
+                        "{summary}; completion gate refused ({} of {} votes refuting): {}",
+                        gate_outcome
+                            .votes
+                            .iter()
+                            .filter(|v| !v.vote.is_approve())
+                            .count(),
+                        gate_outcome.votes.len(),
+                        issues.join("; ")
+                    );
+                    CriticVerdict::NeedsRevision {
+                        issues: issues.clone(),
+                    }
+                }
+            };
+            critic_verdict = Some(verdict);
+        } else if reviewable && roles::critic_enabled(&request) {
             let verdict = critic::run_critic(self.providers.as_ref(), &request, &events).await?;
             trace::push_event(
                 &events,
@@ -375,8 +485,10 @@ impl LiberadoLoopBackend {
             outcome,
             summary,
             files_changed,
+            file_changes,
             validation_notes,
             critic_verdict,
+            gate_votes,
             trace_path: None,
             diagnostics: json!({
                 "artifacts_reported": report.artifacts,
@@ -437,6 +549,7 @@ mod tests {
                 planner: disabled_role(),
                 coder: role(),
                 critic: disabled_role(),
+                gate: liberado_coder_core::CoderGateConfig::default(),
                 repair: None,
                 sandbox: SandboxSpec::HostLocal,
                 command_policy: CommandPolicy::default(),
@@ -448,6 +561,7 @@ mod tests {
             },
             attempt: 0,
             prior_feedback: Vec::new(),
+            strategist_directive: None,
         }
     }
 

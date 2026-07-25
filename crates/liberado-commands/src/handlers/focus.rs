@@ -4,6 +4,7 @@
 //! its own focus machinery (open the switcher, subscribe to a goal-session stream, or return to the
 //! primary chat). No shared state changes here — focus is a per-surface concern.
 
+use crate::commands::GoalCmd;
 use crate::context::CommandContext;
 use crate::result::CommandResult;
 
@@ -52,4 +53,40 @@ pub fn spawn(domain: &str, goal: &str, ctx: &mut dyn CommandContext) -> Vec<Comm
         domain: domain.to_string(),
         goal: goal.to_string(),
     }]
+}
+
+/// `/goal …` — the coding-goal surface (S2/G2).
+///
+/// Every arm returns a `CommandResult` for the surface to act on rather than doing HTTP here: this
+/// crate is shared by the TUI and Telegram, and only the surface knows its own client and its
+/// current project/session context.
+pub fn goal(cmd: &GoalCmd, ctx: &mut dyn CommandContext) -> Vec<CommandResult> {
+    ctx.clear_input();
+    match cmd {
+        GoalCmd::Start { project, text } => {
+            let text = text.trim();
+            if text.is_empty() {
+                ctx.push_system_message(
+                    "Usage: /goal <what you want built>
+                     e.g. /goal add a --version flag to the CLI
+                     e.g. /goal in liberado add a --version flag   (explicit project)
+                     
+                     Also: /goal status | /goal pause | /goal resume [answer] | /goal clear"
+                        .into(),
+                );
+                return vec![CommandResult::None];
+            }
+            vec![CommandResult::StartCodingGoal {
+                project: project.clone().filter(|p| !p.trim().is_empty()),
+                text: text.to_string(),
+            }]
+        }
+        GoalCmd::View => vec![CommandResult::OpenGoalView],
+        GoalCmd::Status => vec![CommandResult::GoalStatus],
+        GoalCmd::Pause => vec![CommandResult::ParkGoalSession],
+        GoalCmd::Resume(answer) => vec![CommandResult::ResumeGoalSession {
+            answer: answer.trim().to_string(),
+        }],
+        GoalCmd::Clear => vec![CommandResult::CancelGoalSession],
+    }
 }

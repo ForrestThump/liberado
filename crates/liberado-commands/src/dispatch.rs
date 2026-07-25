@@ -1,4 +1,4 @@
-use crate::commands::{SessionCmd, SlashCommand, ThemeCmd};
+use crate::commands::{GoalCmd, SessionCmd, SlashCommand, ThemeCmd};
 use crate::context::CommandContext;
 use crate::handlers;
 use crate::result::CommandResult;
@@ -30,6 +30,11 @@ pub fn parse(input: &str) -> Option<SlashCommand> {
             domain: parts.get(1).copied().unwrap_or("").to_string(),
             goal: parts.get(2).copied().unwrap_or("").to_string(),
         }),
+        // Parsed from the raw remainder rather than `parts`, because `/goal in <project> <text>`
+        // needs four fields and `parts` is capped at three.
+        "/goal" => Some(parse_goal(
+            trimmed.strip_prefix("/goal").unwrap_or("").trim(),
+        )),
         "/back" => Some(SlashCommand::Back),
         // `/fork 3` branches after your 3rd turn; a bare `/fork` takes the whole conversation.
         // A non-numeric argument is a typo, not a turn — fall back to the whole conversation rather
@@ -39,6 +44,39 @@ pub fn parse(input: &str) -> Option<SlashCommand> {
         }),
         _ => None,
     }
+}
+
+/// `/goal …`. Lifecycle words are reserved only as the FIRST word; everything else is goal text.
+fn parse_goal(rest: &str) -> SlashCommand {
+    let (first, tail) = match rest.split_once(char::is_whitespace) {
+        Some((f, t)) => (f, t.trim()),
+        None => (rest, ""),
+    };
+    let cmd = match first {
+        "" => GoalCmd::View,
+        "status" => GoalCmd::Status,
+        "pause" => GoalCmd::Pause,
+        "resume" => GoalCmd::Resume(tail.to_string()),
+        "clear" => GoalCmd::Clear,
+        // `/goal in <project> <text>` — an explicit project overrides surface context.
+        "in" => {
+            let (project, text) = match tail.split_once(char::is_whitespace) {
+                Some((p, t)) => (p.trim(), t.trim()),
+                // `/goal in <project>` with no text: the project is not goal text, so this is
+                // incomplete rather than a goal named after a project.
+                None => (tail, ""),
+            };
+            GoalCmd::Start {
+                project: Some(project.to_string()),
+                text: text.to_string(),
+            }
+        }
+        _ => GoalCmd::Start {
+            project: None,
+            text: rest.to_string(),
+        },
+    };
+    SlashCommand::Goal(cmd)
 }
 
 fn parse_theme(sub: Option<&str>, extra: Option<&str>) -> SlashCommand {
@@ -76,5 +114,6 @@ pub fn dispatch(cmd: &SlashCommand, ctx: &mut dyn CommandContext) -> Vec<Command
         SlashCommand::Spawn { domain, goal } => handlers::focus::spawn(domain, goal, ctx),
         SlashCommand::Back => handlers::focus::back(ctx),
         SlashCommand::Fork { after_turn } => handlers::fork::handle(ctx, *after_turn),
+        SlashCommand::Goal(cmd) => handlers::focus::goal(cmd, ctx),
     }
 }

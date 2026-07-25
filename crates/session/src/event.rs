@@ -67,6 +67,31 @@ pub enum SessionEventKind {
         ok: bool,
         summary: String,
     },
+    /// One reviewer's vote in the completion gate (`completion_gate`). Emitted per vote, as it is
+    /// cast, so a surface can render the gate deliberating instead of waiting for a single verdict.
+    ///
+    /// `kind` is `gatekeeper` | `fresh` | `strategist`. `coerced` marks a vote the gate
+    /// *substituted* because the reviewer failed — surfaces should show it differently from a
+    /// genuine rejection, since it means "we could not get an opinion", not "the work is wrong".
+    CriticVerdict {
+        reviewer: String,
+        kind: String,
+        approved: bool,
+        #[serde(default)]
+        issues: Vec<String>,
+        #[serde(default)]
+        coerced: bool,
+    },
+    /// A file in the session's workspace was created, modified, or deleted. Surfaces accumulate
+    /// these into a changed-file list; `change` is `added` | `modified` | `deleted`.
+    ///
+    /// Paths are **workspace-relative**. An absolute host path would leak the daemon's filesystem
+    /// layout to every connected client and would not mean anything on a machine that is not the
+    /// one running the pack.
+    FileChanged {
+        path: String,
+        change: String,
+    },
     LoopGuard {
         guard: String,
         action: String,

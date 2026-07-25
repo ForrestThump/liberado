@@ -11,7 +11,8 @@ pub use chat::{
     patch_conversation_title,
 };
 pub use goals::{
-    goals_cancel, goals_domains, goals_get, goals_list, goals_message, goals_start, goals_stream,
+    goals_cancel, goals_domains, goals_get, goals_list, goals_message, goals_park, goals_start,
+    goals_stream,
 };
 pub use search::search_conversations;
 pub use sessions::{session_fork, sessions_list};

@@ -397,6 +397,7 @@ fn build_request(
             planner: disabled.clone(),
             coder: role.clone(),
             critic: disabled,
+            gate: liberado_coder_core::CoderGateConfig::default(),
             repair: Some(role),
             sandbox: SandboxSpec::HostLocal,
             command_policy: CommandPolicy::default(),
@@ -418,6 +419,7 @@ fn build_request(
         },
         attempt: 0,
         prior_feedback: Vec::new(),
+        strategist_directive: None,
     }
 }
 

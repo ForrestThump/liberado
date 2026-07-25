@@ -144,6 +144,7 @@ impl CodingSessionPack {
                 planner: disabled.clone(),
                 coder: role.clone(),
                 critic: disabled,
+                gate: liberado_coder_core::CoderGateConfig::default(),
                 repair: Some(role),
                 sandbox: SandboxSpec::HostLocal,
                 command_policy: CommandPolicy::default(),
@@ -158,6 +159,7 @@ impl CodingSessionPack {
             },
             attempt: 0,
             prior_feedback: Vec::new(),
+            strategist_directive: None,
         };
 
         // The frozen contract overwrites description, success criteria, and — the point of the
@@ -255,6 +257,40 @@ impl CodingSessionPack {
             let (ok, summary, artifacts, diagnostics) = match result {
                 Ok(r) => {
                     let ok = r.outcome == Outcome::Succeeded;
+                    // Completion-gate votes, before the validation summary, so a surface reading
+                    // the stream top-to-bottom sees the reasoning that produced the outcome and
+                    // then the outcome. These arrive as a batch at attempt end rather than live
+                    // per vote: `CoderBackend::run` takes a request and returns a result, with no
+                    // SessionEvent sender of its own. Streaming them as they are cast means
+                    // plumbing the channel into the backend — S2's goal-view work, where a surface
+                    // exists that can actually show a gate deliberating.
+                    // Changed files first: they are the evidence the gate votes are about, so a
+                    // surface reading the stream in order has the diff list before the ballots.
+                    for change in &r.file_changes {
+                        let _ = events
+                            .send(SessionEvent::new(
+                                session_id,
+                                SessionEventKind::FileChanged {
+                                    path: change.path.clone(),
+                                    change: change.change.clone(),
+                                },
+                            ))
+                            .await;
+                    }
+                    for vote in &r.gate_votes {
+                        let _ = events
+                            .send(SessionEvent::new(
+                                session_id,
+                                SessionEventKind::CriticVerdict {
+                                    reviewer: vote.reviewer.clone(),
+                                    kind: vote.kind.clone(),
+                                    approved: vote.approved,
+                                    issues: vote.issues.clone(),
+                                    coerced: vote.coerced,
+                                },
+                            ))
+                            .await;
+                    }
                     let _ = events
                         .send(SessionEvent::new(
                             session_id,
