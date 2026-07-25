@@ -145,6 +145,55 @@ const DOOM_LOOP_THRESHOLD: usize = 3;
 /// legitimately varied, on-track work.
 const ARG_SIMILARITY_THRESHOLD: f32 = 0.2;
 
+/// How strictly two consecutive same-tool calls must resemble each other to count as a repeat.
+///
+/// The semantic bar is right for acting work, where re-issuing a nearly-identical call is almost
+/// always thrash. It is wrong for **search**: "orchestration anti-patterns" and "agentic AI
+/// failure modes" are different queries that a bag-of-words comparison scores as near-duplicates,
+/// and a live deep-research run was stopped three times for exactly that — legitimate query
+/// variation read as a loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ArgMatch {
+    /// Near-duplicate arguments count as a repeat ([`ARG_SIMILARITY_THRESHOLD`]).
+    #[default]
+    Semantic,
+    /// Only byte-identical arguments count. Re-running the *same* query still trips the guard —
+    /// that is real thrash — but varied queries never do.
+    Exact,
+}
+
+/// The per-run behaviour `run_loop` needs from its [`Task`]: how repeats are judged, and whether
+/// partial work is worth filing. Grouped rather than passed as loose arguments — they travel
+/// together and always come from the same place.
+#[derive(Debug, Clone, Copy, Default)]
+struct RunPolicy {
+    salvageable: bool,
+    loop_profile: LoopProfile,
+}
+
+/// Per-task loop-detection settings. Separate from [`Budget`] because it tunes what counts as a
+/// problem, not how much of the resource is left.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LoopProfile {
+    pub arg_match: ArgMatch,
+}
+
+impl LoopProfile {
+    /// The default: near-duplicate arguments count as a repeat.
+    pub fn semantic() -> Self {
+        Self {
+            arg_match: ArgMatch::Semantic,
+        }
+    }
+
+    /// For search-shaped work, where varied queries are the job rather than a symptom.
+    pub fn exact() -> Self {
+        Self {
+            arg_match: ArgMatch::Exact,
+        }
+    }
+}
+
 /// A small, one-time top-up to the turn budget, granted only when the tool-removal escalation step
 /// (strike 2, see the guard block in `run_loop`) actually fires — not a general "loops are free"
 /// refund. opencode/kilocode/VTCode were all checked directly and none of them refund or extend the
@@ -308,6 +357,8 @@ pub struct Task {
     /// Only affects what happens at budget exhaustion — a salvageable run gets
     /// [`WRAP_UP_TURNS`] to file what it has; everything else fails exactly as before.
     pub salvageable: bool,
+    /// How strictly repeated tool calls are judged — see [`LoopProfile`].
+    pub loop_profile: LoopProfile,
 }
 
 impl Task {
@@ -317,6 +368,7 @@ impl Task {
             goal: goal.into(),
             seed_calls: Vec::new(),
             salvageable: false,
+            loop_profile: LoopProfile::default(),
         }
     }
 
@@ -329,6 +381,12 @@ impl Task {
     /// Mark partial results worth returning — see [`Task::salvageable`].
     pub fn salvageable(mut self, salvageable: bool) -> Self {
         self.salvageable = salvageable;
+        self
+    }
+
+    /// Choose how strictly repeated tool calls are judged — see [`LoopProfile`].
+    pub fn loop_profile(mut self, profile: LoopProfile) -> Self {
+        self.loop_profile = profile;
         self
     }
 }
@@ -481,7 +539,10 @@ impl Executor {
             &mut tools,
             mode,
             &mut scratchpad,
-            task.salvageable,
+            RunPolicy {
+                salvageable: task.salvageable,
+                loop_profile: task.loop_profile,
+            },
         )
         .await
     }
@@ -517,7 +578,7 @@ impl Executor {
                     &mut scratchpad,
                     // Never salvageable: there is no report to file early, and the human on the
                     // other end gets whatever prose the loop produced either way.
-                    false,
+                    RunPolicy::default(),
                 )
                 .await?
             {
@@ -614,7 +675,7 @@ impl Executor {
         tools: &mut Vec<ToolDef>,
         mode: Mode,
         scratchpad: &mut Option<Scratchpad>,
-        salvageable: bool,
+        policy: RunPolicy,
     ) -> Result<Terminal, ExecError> {
         let mut nudged = false;
         // (tool name, arguments, result) of every real invocation, in call order, across the whole
@@ -663,7 +724,7 @@ impl Executor {
             if let Some(name) = exhausted {
                 // All-or-nothing work fails here exactly as it always has: a half-applied change
                 // is not partial credit, and reporting it as such would misstate the world.
-                if wrapping_up || !salvageable || !matches!(mode, Mode::Report) {
+                if wrapping_up || !policy.salvageable || !matches!(mode, Mode::Report) {
                     break 'turn_loop name;
                 }
                 wrapping_up = true;
@@ -798,7 +859,7 @@ impl Executor {
                 call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
                 messages.push(Message::tool_result(&call.id, result));
 
-                if doom_hit.is_none() && is_doom_loop(&call_history) {
+                if doom_hit.is_none() && is_doom_loop(&call_history, policy.loop_profile) {
                     doom_hit = Some(call.name.clone());
                 }
                 if cycle_hit.is_none()
@@ -1105,7 +1166,7 @@ fn budget_failed_report_with_progress(
 /// Whether the last [`DOOM_LOOP_THRESHOLD`] invocations are consecutively the same tool, called
 /// with near-duplicate arguments (see `args_similarity`) — see [`DOOM_LOOP_THRESHOLD`]'s doc
 /// comment for why near-duplicate, not just byte-identical, is the right bar.
-fn is_doom_loop(history: &[(String, serde_json::Value, String)]) -> bool {
+fn is_doom_loop(history: &[(String, serde_json::Value, String)], profile: LoopProfile) -> bool {
     let Some((last_name, ..)) = history.last() else {
         return false;
     };
@@ -1121,7 +1182,10 @@ fn is_doom_loop(history: &[(String, serde_json::Value, String)]) -> bool {
     }
     streak[..DOOM_LOOP_THRESHOLD]
         .windows(2)
-        .all(|pair| args_similarity(pair[0], pair[1]) >= ARG_SIMILARITY_THRESHOLD)
+        .all(|pair| match profile.arg_match {
+            ArgMatch::Exact => pair[0] == pair[1],
+            ArgMatch::Semantic => args_similarity(pair[0], pair[1]) >= ARG_SIMILARITY_THRESHOLD,
+        })
 }
 
 /// Whether the tool-name sequence at the tail of `history` is a short repeating cycle (period 2 or
@@ -2103,7 +2167,7 @@ mod tests {
             ),
         ]);
         assert!(
-            !is_doom_loop(&h),
+            !is_doom_loop(&h, LoopProfile::semantic()),
             "distinct paths must not look like near-duplicate args"
         );
         assert!(detect_short_cycle(&h).is_none());
@@ -2119,6 +2183,54 @@ mod tests {
         }
     }
 
+    /// The live regression: a research subagent was stopped three times for "near-duplicate
+    /// arguments" while issuing genuinely different search queries. Bag-of-words scores them as
+    /// similar because they share the topic vocabulary — which is exactly what varied queries on
+    /// one subject look like.
+    #[test]
+    fn varied_search_queries_trip_the_semantic_profile_but_not_the_exact_one() {
+        let h = hist(&[
+            (
+                "search:search_web",
+                serde_json::json!({"query": "agentic AI orchestration anti-patterns"}),
+            ),
+            (
+                "search:search_web",
+                serde_json::json!({"query": "agentic AI orchestration failure modes"}),
+            ),
+            (
+                "search:search_web",
+                serde_json::json!({"query": "agentic AI orchestration token waste"}),
+            ),
+        ]);
+
+        assert!(
+            is_doom_loop(&h, LoopProfile::semantic()),
+            "precondition: this is the false positive the exact profile exists to avoid"
+        );
+        assert!(
+            !is_doom_loop(&h, LoopProfile::exact()),
+            "distinct queries are the work, not a loop"
+        );
+    }
+
+    /// Relaxing the bar must not disable the guard: re-running the *same* query is still thrash.
+    #[test]
+    fn the_exact_profile_still_catches_a_literally_repeated_call() {
+        let q = serde_json::json!({"query": "agentic AI orchestration"});
+        let h = hist(&[
+            ("search:search_web", q.clone()),
+            ("search:search_web", q.clone()),
+            ("search:search_web", q),
+        ]);
+        assert!(is_doom_loop(&h, LoopProfile::exact()));
+    }
+
+    #[test]
+    fn semantic_is_the_default_profile() {
+        assert_eq!(LoopProfile::default().arg_match, ArgMatch::Semantic);
+    }
+
     #[test]
     fn same_path_read_note_three_times_is_a_doom_loop() {
         // Mono-tool thrash: same tool + same args — doom-loop's job, not short-cycle.
@@ -2128,7 +2240,10 @@ mod tests {
             ("turbovault:read_note", path.clone()),
             ("turbovault:read_note", path),
         ]);
-        assert!(is_doom_loop(&h), "identical path ×3 must trip doom-loop");
+        assert!(
+            is_doom_loop(&h, LoopProfile::semantic()),
+            "identical path ×3 must trip doom-loop"
+        );
         assert!(
             detect_short_cycle(&h).is_none(),
             "mono-tool must not also be classified as short-cycle"
@@ -2143,7 +2258,7 @@ mod tests {
             ("search", empty.clone()),
             ("search", empty),
         ]);
-        assert!(is_doom_loop(&h));
+        assert!(is_doom_loop(&h, LoopProfile::semantic()));
         assert!(detect_short_cycle(&h).is_none());
     }
 
@@ -2158,7 +2273,7 @@ mod tests {
         let cycling = detect_short_cycle(&h).expect("A,B,A,B should cycle");
         assert_eq!(cycling, vec!["tool-a".to_string(), "tool-b".to_string()]);
         // Multi-tool name thrash is not a mono-tool doom loop.
-        assert!(!is_doom_loop(&h));
+        assert!(!is_doom_loop(&h, LoopProfile::semantic()));
     }
 
     #[test]
@@ -2187,7 +2302,7 @@ mod tests {
             ("turbovault:read_note", path.clone()),
             ("turbovault:read_note", path),
         ]);
-        assert!(!is_doom_loop(&h));
+        assert!(!is_doom_loop(&h, LoopProfile::semantic()));
     }
 
     #[test]
@@ -2212,7 +2327,7 @@ mod tests {
             ),
         ]);
         assert!(
-            is_doom_loop(&h),
+            is_doom_loop(&h, LoopProfile::semantic()),
             "rephrased same question must still trip doom-loop"
         );
     }
