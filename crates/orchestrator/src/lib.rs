@@ -28,8 +28,8 @@ use liberado_common::{
     ToolCall, WriteClass, WriteProvenance, mcp_of,
 };
 use liberado_executor::{
-    Budget, ExecError, Executor, RiskGatedToolRuntime, RuntimeFactory, RuntimeSetupError, Task,
-    ToolRuntime,
+    Budget, ExecError, Executor, LoopProfile, RiskGatedToolRuntime, RuntimeFactory,
+    RuntimeSetupError, Task, ToolRuntime,
 };
 use liberado_notify::Notifier;
 use liberado_provider::{Provider, ToolDef, ToolInvocation};
@@ -555,8 +555,26 @@ impl Orchestrator {
                         max_turns = budget.max_turns,
                         "building subagent task"
                     );
+                    // Search is the one place where varied arguments are the *work*: two
+                    // different queries read as near-duplicates by a bag-of-words comparison, and
+                    // a live research run was stopped three times for exactly that. Research
+                    // therefore judges repeats byte-exactly — re-running the same query is still
+                    // thrash and still trips the guard.
                     let task = Task::new(subagent_instructions(&success_criteria), subgoal)
-                        .salvageable(research);
+                        .salvageable(research)
+                        .loop_profile(if research {
+                            LoopProfile::exact()
+                        } else {
+                            LoopProfile::semantic()
+                        });
+                    // At info, not debug: with the budget as the only other signal, a research
+                    // misclassification was previously invisible without raising the log level.
+                    tracing::info!(
+                        research,
+                        max_turns = budget.max_turns,
+                        mcps = allowed_mcps.len(),
+                        "dispatching subagent"
+                    );
                     let mut report = self.execute(budget, &*runtime, task).await?;
                     // Out-of-band deferral mid-run → mark it so a chat surface drops the redundant
                     // reply (Gap 2). This is the primary path for a delegated subagent's permission
@@ -780,7 +798,18 @@ impl Orchestrator {
         } else {
             &self.subagent_budget
         };
-        let task = Task::new(subagent_instructions(success_criteria), goal).salvageable(research);
+        let task = Task::new(subagent_instructions(success_criteria), goal)
+            .salvageable(research)
+            .loop_profile(if research {
+                LoopProfile::exact()
+            } else {
+                LoopProfile::semantic()
+            });
+        tracing::info!(
+            research,
+            max_turns = budget.max_turns,
+            "executing approved subagent proposal"
+        );
         let mut report = self.execute(budget, &*runtime, task).await?;
         report.deferred_to_human = deferred_flag_of(&deferral);
         tracing::info!(outcome = ?report.outcome, research, "executed approved subagent proposal");
