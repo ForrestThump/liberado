@@ -674,3 +674,111 @@ mod tests {
         assert_eq!(crate::format::format_uptime(0), "0m 0s");
     }
 }
+
+// ── /goal parsing (S2/G2) ───────────────────────────────────────────────────
+
+#[cfg(test)]
+mod goal_command_tests {
+    use crate::commands::{GoalCmd, SlashCommand};
+    use crate::dispatch::parse;
+
+    fn goal(input: &str) -> GoalCmd {
+        match parse(input) {
+            Some(SlashCommand::Goal(g)) => g,
+            other => panic!("{input:?} did not parse as /goal: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bare_goal_opens_the_view() {
+        assert_eq!(goal("/goal"), GoalCmd::View);
+        assert_eq!(goal("/goal   "), GoalCmd::View);
+    }
+
+    #[test]
+    fn lifecycle_subcommands_parse() {
+        assert_eq!(goal("/goal status"), GoalCmd::Status);
+        assert_eq!(goal("/goal pause"), GoalCmd::Pause);
+        assert_eq!(goal("/goal clear"), GoalCmd::Clear);
+        assert_eq!(goal("/goal resume"), GoalCmd::Resume(String::new()));
+        assert_eq!(
+            goal("/goal resume use postgres"),
+            GoalCmd::Resume("use postgres".into())
+        );
+    }
+
+    #[test]
+    fn free_text_starts_a_goal() {
+        assert_eq!(
+            goal("/goal add a --version flag to the CLI"),
+            GoalCmd::Start {
+                project: None,
+                text: "add a --version flag to the CLI".into()
+            }
+        );
+    }
+
+    #[test]
+    fn in_names_an_explicit_project() {
+        assert_eq!(
+            goal("/goal in liberado add a --version flag"),
+            GoalCmd::Start {
+                project: Some("liberado".into()),
+                text: "add a --version flag".into()
+            }
+        );
+    }
+
+    /// The reserved words are reserved as the FIRST word only. Refusing to start a goal because
+    /// its text happens to begin with "status" would be a worse failure than the ambiguity.
+    #[test]
+    fn lifecycle_words_are_only_reserved_in_first_position() {
+        assert_eq!(
+            goal("/goal add a status endpoint"),
+            GoalCmd::Start {
+                project: None,
+                text: "add a status endpoint".into()
+            }
+        );
+        assert_eq!(
+            goal("/goal in api clear the stale cache"),
+            GoalCmd::Start {
+                project: Some("api".into()),
+                text: "clear the stale cache".into()
+            }
+        );
+    }
+
+    /// `/goal in <project>` with nothing after it is incomplete, not a goal named after a project.
+    /// The handler prints usage for empty text rather than starting an empty goal.
+    #[test]
+    fn in_without_text_yields_empty_text_not_a_goal_named_after_the_project() {
+        assert_eq!(
+            goal("/goal in liberado"),
+            GoalCmd::Start {
+                project: Some("liberado".into()),
+                text: String::new()
+            }
+        );
+    }
+
+    #[test]
+    fn display_round_trips_through_parse() {
+        for input in [
+            "/goal",
+            "/goal status",
+            "/goal pause",
+            "/goal clear",
+            "/goal resume use postgres",
+            "/goal add a --version flag",
+            "/goal in liberado add a --version flag",
+        ] {
+            let parsed = parse(input).expect("parses");
+            assert_eq!(
+                parsed.to_string(),
+                input,
+                "Display must round-trip {input:?}"
+            );
+        }
+    }
+}

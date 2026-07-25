@@ -363,6 +363,19 @@ impl TelegramChatBridge {
                 }
             }
 
+            // The coding-goal surface is a TUI view (role timeline, gate ballots, diffs). Telegram
+            // has no place to render it, and a half-rendered gate is worse than an honest pointer:
+            // the whole value of watching a quorum vote is seeing all of it.
+            CommandResult::StartCodingGoal { .. }
+            | CommandResult::OpenGoalView
+            | CommandResult::GoalStatus
+            | CommandResult::ParkGoalSession
+            | CommandResult::ResumeGoalSession { .. }
+            | CommandResult::CancelGoalSession => Some(
+                "Coding goals run in the TUI, which can show the role timeline, the completion                  gate's ballots, and diffs. Use /spawn here to start a non-coding session."
+                    .into(),
+            ),
+
             CommandResult::ForkRequested {
                 parent_id,
                 after_turn,

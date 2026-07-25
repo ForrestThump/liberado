@@ -85,6 +85,11 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
         description: "start an interactive session: /spawn <profile|domain> <goal>",
     },
     CommandSpec {
+        insert: "/goal ",
+        name: "/goal",
+        description: "coding goal: /goal <text> | in <project> <text> | status|pause|resume|clear",
+    },
+    CommandSpec {
         insert: "/join ",
         name: "/join",
         description: "join a goal session by id (focus its input)",
@@ -143,6 +148,7 @@ pub fn telegram_commands() -> Vec<(&'static str, &'static str)> {
         "/status",
         "/sessions",
         "/spawn",
+        "/goal",
         "/join",
         "/model",
         "/fork",

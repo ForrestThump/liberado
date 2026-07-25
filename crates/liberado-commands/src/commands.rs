@@ -28,6 +28,36 @@ pub enum SlashCommand {
     Fork {
         after_turn: Option<u32>,
     },
+    /// Coding-goal surface (S2/G2): `/goal <text>`, `/goal in <project> <text>`, and the
+    /// lifecycle subcommands.
+    Goal(GoalCmd),
+}
+
+/// `/goal` subcommands.
+///
+/// `Start` is the default reading of a bare argument, so `/goal add a --version flag` works
+/// without ceremony. The lifecycle words (`status`, `pause`, `resume`, `clear`) are reserved
+/// first-words; an unrecognized first word is goal *text*, not an error — refusing to start a goal
+/// because it happened to begin with an unknown verb would be worse than occasionally
+/// misinterpreting one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GoalCmd {
+    /// Start a coding goal. `project` comes from `/goal in <project> …`; `None` uses the surface's
+    /// current project context.
+    Start {
+        project: Option<String>,
+        text: String,
+    },
+    /// Bare `/goal` — open the goal view for the focused session.
+    View,
+    /// Snapshot of the focused goal session.
+    Status,
+    /// Ask the focused session to park (graceful; resumable).
+    Pause,
+    /// Resume a parked session, optionally answering the question it holds.
+    Resume(String),
+    /// Cancel the focused session (terminal, not resumable).
+    Clear,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +102,22 @@ impl std::fmt::Display for SlashCommand {
             SlashCommand::Sessions => write!(f, "/sessions"),
             SlashCommand::Join(id) => write!(f, "/join {id}"),
             SlashCommand::Spawn { domain, goal } => write!(f, "/spawn {domain} {goal}"),
+            SlashCommand::Goal(g) => match g {
+                GoalCmd::Start {
+                    project: Some(p),
+                    text,
+                } => write!(f, "/goal in {p} {text}"),
+                GoalCmd::Start {
+                    project: None,
+                    text,
+                } => write!(f, "/goal {text}"),
+                GoalCmd::View => write!(f, "/goal"),
+                GoalCmd::Status => write!(f, "/goal status"),
+                GoalCmd::Pause => write!(f, "/goal pause"),
+                GoalCmd::Resume(a) if a.is_empty() => write!(f, "/goal resume"),
+                GoalCmd::Resume(a) => write!(f, "/goal resume {a}"),
+                GoalCmd::Clear => write!(f, "/goal clear"),
+            },
             SlashCommand::Back => write!(f, "/back"),
             SlashCommand::Fork { after_turn: None } => write!(f, "/fork"),
             SlashCommand::Fork {
