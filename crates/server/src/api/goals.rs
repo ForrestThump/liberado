@@ -113,12 +113,21 @@ fn spawn_return_handoff(
         let Some((history, mut rx)) = state.goals.store().subscribe(&session_id).await else {
             return;
         };
+        // A park is not a finish. `SessionFinished { status: "parked" }` closes the *stream*, but
+        // the session is coming back — folding a summary into the parent now would announce an
+        // ending that has not happened, and the terminal-settle wait below would spin for a second
+        // and then log a spurious warning.
+        let is_park = |e: &liberado_session::SessionEvent| matches!(&e.kind, K::SessionFinished { status, .. } if status == "parked");
+        if history.iter().any(is_park) {
+            return;
+        }
         let already_done = history
             .iter()
             .any(|e| matches!(e.kind, K::SessionFinished { .. }));
         if !already_done {
             loop {
                 match rx.recv().await {
+                    Ok(ev) if is_park(&ev) => return,
                     Ok(ev) if matches!(ev.kind, K::SessionFinished { .. }) => break,
                     Ok(_) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -237,6 +246,23 @@ pub struct GoalMessageRequest {
 /// when it has already finished (a terminal session accepts no input); `403` when the session's
 /// grant omits `AskHuman` and so may *never* receive human input (S6) â€” an authority answer, not a
 /// timing one.
+/// `POST /api/goals/{id}/park` — ask a running session to wind down and land in `Parked`
+/// (S2/G2). Cooperative, like cancel: it returns once the request is *accepted*, not once the pack
+/// has stopped. Unlike cancel, the session keeps its awaiting-input state and can be resumed.
+pub async fn goals_park(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.goals.park(&id).await {
+        Ok(()) => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({ "session_id": id, "status": "parking" })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, Json(ApiError { error: e })).into_response(),
+    }
+}
+
 pub async fn goals_message(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,

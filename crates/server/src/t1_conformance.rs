@@ -34,7 +34,7 @@ use liberado_session::{
 use liberado_session_store::{NewSession, SessionStore};
 use tower::ServiceExt;
 
-use crate::api::{goals_cancel, goals_message, goals_start, session_fork};
+use crate::api::{goals_cancel, goals_message, goals_park, goals_start, session_fork};
 use crate::state::AppState;
 
 // ── Harness ─────────────────────────────────────────────────────────────────
@@ -148,6 +148,7 @@ impl T1Harness {
             )
             .route("/api/goals/{id}", axum::routing::get(crate::api::goals_get))
             .route("/api/goals/{id}/cancel", axum::routing::post(goals_cancel))
+            .route("/api/goals/{id}/park", axum::routing::post(goals_park))
             .route(
                 "/api/goals/{id}/message",
                 axum::routing::post(goals_message),
@@ -1226,4 +1227,157 @@ async fn l6_with_write_allows_and_spy_tool_runs() {
         vec!["vault:write_note".to_string()],
         "positive control: the write tool must actually have run"
     );
+}
+
+// ── L11 — park lands Parked (not Cancelled) and stays answerable ────────────
+
+/// Pack that announces a question, then blocks until the cooperative stop arrives — the shape a
+/// park is actually for: a session holding something it needs from you.
+struct AwaitingForeverPack;
+
+#[async_trait::async_trait]
+impl DomainPackRunner for AwaitingForeverPack {
+    fn domain_id(&self) -> &str {
+        "life"
+    }
+
+    async fn run(
+        &self,
+        id: &str,
+        _goal: &GoalSpec,
+        _ctx: &PackContext<'_>,
+        events: tokio::sync::mpsc::Sender<SessionEvent>,
+        _inputs: liberado_session::InputChannel,
+        mut cancel: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<GoalResult, PackError> {
+        let _ = events
+            .send(SessionEvent::new(
+                id,
+                liberado_session::SessionEventKind::AwaitingInput {
+                    prompt: "which database should I use?".into(),
+                    options: vec![],
+                },
+            ))
+            .await;
+        loop {
+            if *cancel.borrow() {
+                return Err(PackError::Cancelled);
+            }
+            if cancel.changed().await.is_err() {
+                return Err(PackError::Cancelled);
+            }
+        }
+    }
+}
+
+async fn start_life_goal(harness: &T1Harness, description: &str) -> String {
+    let (status, body) = harness
+        .post_json(
+            "/api/goals",
+            &format!(r#"{{"description":"{description}","domain":"life","success_criteria":[]}}"#),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    serde_json::from_str::<serde_json::Value>(&body).unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// L11a: `POST /api/goals/{id}/park` must leave `Parked` on hub ground truth — **not** `Cancelled`,
+/// and not terminal. Park and cancel share a stop signal, so the only thing distinguishing them is
+/// the disposition the hub records; if that is wrong, "pause" silently becomes "destroy".
+#[tokio::test]
+async fn l11_park_reaches_parked_not_cancelled() {
+    let harness =
+        T1Harness::with_pack(Arc::new(NeverEndingPack), life_config_with_ask_human()).await;
+    let id = start_life_goal(&harness, "work until parked").await;
+    wait_status(&harness.goals, &id, |s| {
+        s.session.status == SessionStatus::Running
+    })
+    .await;
+
+    let (park_status, park_body) = harness
+        .post_json(&format!("/api/goals/{id}/park"), "{}")
+        .await;
+    assert_eq!(park_status, StatusCode::ACCEPTED, "park HTTP: {park_body}");
+
+    let snap = wait_status(&harness.goals, &id, |s| {
+        s.session.status == SessionStatus::Parked
+    })
+    .await;
+    assert_eq!(snap.session.status, SessionStatus::Parked);
+    assert!(
+        !snap.session.status.is_terminal(),
+        "a parked session has not ended — calling it finished is the difference between \
+         'start over' and 'wait'"
+    );
+
+    let record = harness.goals.store().get(&id).await.expect("in store");
+    assert_eq!(record.status, SessionStatus::Parked, "store lens agrees");
+}
+
+/// L11b: parking a session that is holding a question must keep the question. `finish()` clears
+/// `awaiting_input`; a park that routed through it would erase the very thing the human is coming
+/// back to answer.
+#[tokio::test]
+async fn l11_park_preserves_the_awaiting_question() {
+    let harness =
+        T1Harness::with_pack(Arc::new(AwaitingForeverPack), life_config_with_ask_human()).await;
+    let id = start_life_goal(&harness, "ask then wait").await;
+    wait_status(&harness.goals, &id, |s| s.session.awaiting_input).await;
+
+    let (park_status, _) = harness
+        .post_json(&format!("/api/goals/{id}/park"), "{}")
+        .await;
+    assert_eq!(park_status, StatusCode::ACCEPTED);
+
+    let snap = wait_status(&harness.goals, &id, |s| {
+        s.session.status == SessionStatus::Parked
+    })
+    .await;
+    assert!(
+        snap.session.awaiting_input,
+        "the parked session must still show that it is waiting on you"
+    );
+    assert!(
+        snap.events.iter().any(|e| matches!(
+            &e.kind,
+            liberado_session::SessionEventKind::AwaitingInput { prompt, .. }
+                if prompt.contains("database")
+        )),
+        "the question itself must still be visible in the transcript"
+    );
+}
+
+/// L11c: park must not have broken cancel. Same signal, and a regression that made every stop a
+/// park would make `cancel` un-terminal — sessions you meant to kill would linger as resumable.
+#[tokio::test]
+async fn l11_cancel_is_still_cancelled_after_park_exists() {
+    let harness =
+        T1Harness::with_pack(Arc::new(NeverEndingPack), life_config_with_ask_human()).await;
+    let id = start_life_goal(&harness, "work until cancelled").await;
+    wait_status(&harness.goals, &id, |s| {
+        s.session.status == SessionStatus::Running
+    })
+    .await;
+
+    let (status, _) = harness
+        .post_json(&format!("/api/goals/{id}/cancel"), "{}")
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let snap = wait_status(&harness.goals, &id, |s| s.session.status.is_terminal()).await;
+    assert_eq!(snap.session.status, SessionStatus::Cancelled);
+}
+
+/// L11d: parking something that is not running is an honest 404, not a silent success.
+#[tokio::test]
+async fn l11_parking_an_unknown_session_is_refused() {
+    let harness =
+        T1Harness::with_pack(Arc::new(NeverEndingPack), life_config_with_ask_human()).await;
+    let (status, _) = harness
+        .post_json("/api/goals/01JQZZZZZZZZZZZZZZZZZZZZZZ/park", "{}")
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
