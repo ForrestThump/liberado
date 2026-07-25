@@ -82,6 +82,16 @@ pub enum SessionEventKind {
         #[serde(default)]
         coerced: bool,
     },
+    /// A file in the session's workspace was created, modified, or deleted. Surfaces accumulate
+    /// these into a changed-file list; `change` is `added` | `modified` | `deleted`.
+    ///
+    /// Paths are **workspace-relative**. An absolute host path would leak the daemon's filesystem
+    /// layout to every connected client and would not mean anything on a machine that is not the
+    /// one running the pack.
+    FileChanged {
+        path: String,
+        change: String,
+    },
     LoopGuard {
         guard: String,
         action: String,

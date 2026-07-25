@@ -344,6 +344,11 @@ pub struct CoderRunResult {
     pub summary: String,
     #[serde(default)]
     pub files_changed: Vec<String>,
+    /// The same files with their change kind, for the `file_changed` wire event. Kept alongside
+    /// `files_changed` rather than replacing it: that field is the session's *artifact* list and
+    /// several callers treat it as plain paths.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_changes: Vec<FileChangeRecord>,
     #[serde(default)]
     pub validation_notes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -370,6 +375,14 @@ impl CoderRunResult {
             deferred_to_human: false,
         }
     }
+}
+
+/// One changed workspace file and how it changed (`added` | `modified` | `deleted`).
+/// Workspace-relative path — never an absolute host path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileChangeRecord {
+    pub path: String,
+    pub change: String,
 }
 
 /// One completion-gate reviewer's vote, flattened for transport.
@@ -562,6 +575,7 @@ mod tests {
             outcome: Outcome::Succeeded,
             summary: "Added copy button".to_string(),
             files_changed: vec!["crates/webui/src/components/chat.rs".to_string()],
+            file_changes: Vec::new(),
             validation_notes: Some("cargo check passed".to_string()),
             critic_verdict: Some(CriticVerdict::Acceptable),
             gate_votes: Vec::new(),

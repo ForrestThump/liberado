@@ -154,6 +154,7 @@ impl CoderBackend for ScriptedBackend {
                 "green".into()
             },
             files_changed: vec![],
+            file_changes: Vec::new(),
             validation_notes: None,
             critic_verdict: None,
             gate_votes: Vec::new(),
@@ -263,6 +264,7 @@ impl CoderBackend for StuckBackend {
             outcome: Outcome::Succeeded,
             summary: "green".into(),
             files_changed: vec![],
+            file_changes: Vec::new(),
             validation_notes: None,
             critic_verdict: None,
             gate_votes: Vec::new(),

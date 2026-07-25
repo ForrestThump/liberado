@@ -264,6 +264,19 @@ impl CodingSessionPack {
                     // SessionEvent sender of its own. Streaming them as they are cast means
                     // plumbing the channel into the backend — S2's goal-view work, where a surface
                     // exists that can actually show a gate deliberating.
+                    // Changed files first: they are the evidence the gate votes are about, so a
+                    // surface reading the stream in order has the diff list before the ballots.
+                    for change in &r.file_changes {
+                        let _ = events
+                            .send(SessionEvent::new(
+                                session_id,
+                                SessionEventKind::FileChanged {
+                                    path: change.path.clone(),
+                                    change: change.change.clone(),
+                                },
+                            ))
+                            .await;
+                    }
                     for vote in &r.gate_votes {
                         let _ = events
                             .send(SessionEvent::new(

@@ -306,7 +306,16 @@ impl LiberadoLoopBackend {
             );
         }
 
-        let files_changed = gates::changed_files(&request.workspace.root).await?;
+        let file_changes: Vec<liberado_coder_core::FileChangeRecord> =
+            gates::changed_files_detailed(&request.workspace.root)
+                .await?
+                .into_iter()
+                .map(|(path, change)| liberado_coder_core::FileChangeRecord {
+                    path,
+                    change: change.to_string(),
+                })
+                .collect();
+        let files_changed: Vec<String> = file_changes.iter().map(|c| c.path.clone()).collect();
         if files_changed.is_empty() && report.outcome != Outcome::Failed {
             trace::push_event(
                 &events,
@@ -476,6 +485,7 @@ impl LiberadoLoopBackend {
             outcome,
             summary,
             files_changed,
+            file_changes,
             validation_notes,
             critic_verdict,
             gate_votes,

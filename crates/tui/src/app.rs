@@ -95,6 +95,11 @@ pub enum GoalUiEvent {
         issues: Vec<String>,
         coerced: bool,
     },
+    /// A workspace file changed. Accumulated into the session's changed-file list.
+    FileChanged {
+        path: String,
+        change: String,
+    },
     LoopGuard(String),
     Awaiting {
         prompt: String,
@@ -578,6 +583,15 @@ impl App {
                 j.messages.push(Message::System(format!(
                     "{mark} gate[{kind}] {reviewer}{detail}"
                 )));
+            }
+            GoalUiEvent::FileChanged { path, change } => {
+                Self::flush_joined_buf(j);
+                let mark = match change.as_str() {
+                    "added" => "+",
+                    "deleted" => "-",
+                    _ => "~",
+                };
+                j.messages.push(Message::System(format!("{mark} {path}")));
             }
             GoalUiEvent::LoopGuard(m) => {
                 Self::flush_joined_buf(j);

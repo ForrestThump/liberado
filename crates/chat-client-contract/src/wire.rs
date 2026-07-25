@@ -83,6 +83,9 @@ pub enum SessionEventKind {
         #[serde(default)]
         coerced: bool,
     },
+    /// A workspace file was created, modified, or deleted. `path` is workspace-relative;
+    /// `change` is `added` | `modified` | `deleted`.
+    FileChanged { path: String, change: String },
     /// A harness guard fired (doom-loop, no-progress, …).
     LoopGuard { guard: String, action: String },
     /// The turn / goal session completed. Chat turns finish with `status: "done"`.
@@ -138,6 +141,7 @@ impl SessionEvent {
             | "human_input"
             | "validation_finished"
             | "critic_verdict"
+            | "file_changed"
             | "loop_guard"
             | "session_finished"
             | "session_offered"
@@ -1035,6 +1039,23 @@ mod completion_gate_wire_tests {
             other => panic!(
                 "critic_verdict decoded as {other:?} — it is missing from from_sse_data's \
                  known-type list, so every client silently ignores it"
+            ),
+        }
+    }
+
+    /// Same allowlist hazard as `critic_verdict`: an event missing from `from_sse_data`'s known
+    /// types is silently swallowed into an empty Token on every client.
+    #[test]
+    fn file_changed_decodes_from_an_sse_frame() {
+        let data = r#"{"path":"src/main.rs","change":"added"}"#;
+        let decoded = SessionEvent::from_sse_data("file_changed", data).expect("must decode");
+        match decoded.kind {
+            SessionEventKind::FileChanged { path, change } => {
+                assert_eq!(path, "src/main.rs");
+                assert_eq!(change, "added");
+            }
+            other => panic!(
+                "file_changed decoded as {other:?} — it is missing from from_sse_data's                  known-type list, so every client silently ignores it"
             ),
         }
     }

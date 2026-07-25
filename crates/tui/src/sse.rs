@@ -70,6 +70,7 @@ impl ToAction for SseEvent {
                 | SessionEventKind::HumanInput { .. }
                 | SessionEventKind::ValidationFinished { .. }
                 | SessionEventKind::CriticVerdict { .. }
+                | SessionEventKind::FileChanged { .. }
                 | SessionEventKind::LoopGuard { .. } => Action::SseToken(String::new()),
             }),
             Err(e) => Err(format!("malformed SSE data ({e}): {}", self.data)),
@@ -128,6 +129,9 @@ pub fn to_goal_event(event: &SseEvent) -> Result<Option<GoalUiEvent>, String> {
             issues,
             coerced,
         }),
+        SessionEventKind::FileChanged { path, change } => {
+            Some(GoalUiEvent::FileChanged { path, change })
+        }
         SessionEventKind::LoopGuard { guard, action } => {
             Some(GoalUiEvent::LoopGuard(format!("{guard} → {action}")))
         }
