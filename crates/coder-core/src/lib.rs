@@ -217,6 +217,52 @@ pub struct CoderRoleConfig {
     pub max_turns: Option<u32>,
 }
 
+/// Completion-gate settings for a coder run (S1 of `docs/roadmap/coding-tui-plan.md`).
+///
+/// The gate replaces the single-critic check with a remembered gatekeeper plus a quorum of cold
+/// reviewers, adjudicated by `liberado_session::CompletionGate`. Every reviewer reuses the
+/// `[critic]` role config unless overridden here, so turning the gate on does not require
+/// re-declaring a model.
+///
+/// **Default off.** Unlike chat compaction — where an opt-in reliability guard is off in practice
+/// and that was the argument for defaulting it on — this one multiplies review cost by
+/// `1 + fresh_reviewers` model calls per attempt, on every attempt. It stays opt-in until the eval
+/// curriculum has run against it (S7 in the plan), which is what turns "seems stricter" into a
+/// measured accuracy number worth paying for.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CoderGateConfig {
+    /// Master switch. When false the legacy single-critic path runs unchanged.
+    pub enabled: bool,
+    /// Cold reviewers in the quorum. A strict majority must approve.
+    pub fresh_reviewers: u8,
+    /// Consecutive refuted attempts before the strategist proposes a structural change.
+    /// 0 disables the strategist.
+    pub strategist_after: u32,
+    /// Role override for the remembered gatekeeper. Falls back to `[critic]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gatekeeper: Option<CoderRoleConfig>,
+    /// Role override shared by every cold reviewer. Falls back to `[critic]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fresh: Option<CoderRoleConfig>,
+    /// Role override for the strategist. Falls back to `[critic]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strategist: Option<CoderRoleConfig>,
+}
+
+impl Default for CoderGateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            fresh_reviewers: 2,
+            strategist_after: 3,
+            gatekeeper: None,
+            fresh: None,
+            strategist: None,
+        }
+    }
+}
+
 /// Progress-loop thresholds. Values come from config; these defaults are only code-owned fallbacks.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProgressPolicy {
@@ -248,6 +294,9 @@ pub struct CoderRunConfig {
     pub planner: CoderRoleConfig,
     pub coder: CoderRoleConfig,
     pub critic: CoderRoleConfig,
+    /// Completion gate (S1). Absent table = off; the single-critic path runs.
+    #[serde(default)]
+    pub gate: CoderGateConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repair: Option<CoderRoleConfig>,
     #[serde(default)]
@@ -452,6 +501,7 @@ mod tests {
                 planner: role("deepseek/deepseek-v4-pro"),
                 coder: role("deepseek/deepseek-v4-pro"),
                 critic: role("deepseek/deepseek-v4-flash"),
+                gate: CoderGateConfig::default(),
                 repair: None,
                 sandbox: SandboxSpec::HostLocal,
                 command_policy: CommandPolicy::default(),

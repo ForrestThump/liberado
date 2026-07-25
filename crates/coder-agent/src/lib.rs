@@ -5,6 +5,7 @@
 //! specialization — not the center of Liberado. See
 //! `docs/architecture/agentic-loops.md` and `docs/roadmap/agentic-mesh-hygiene-audit-2026-07-10.md`.
 
+mod completion_gate;
 mod critic;
 mod gates;
 mod intake_session;
@@ -288,6 +289,9 @@ impl LiberadoLoopBackend {
         let mut validation_notes = None;
         let mut outcome = report.outcome;
         let mut summary = report.summary;
+        // Verifier results outlive the pipeline block: the completion gate shows them to reviewers
+        // as the deterministic floor they may not override.
+        let mut verifier_results: Vec<liberado_coder_core::NamedVerdict> = Vec::new();
         if outcome != Outcome::Failed {
             let specs = resolve_verifier_specs(
                 &request.config.verifiers,
@@ -336,14 +340,55 @@ impl LiberadoLoopBackend {
                         .collect::<Vec<_>>()
                         .join("; "),
                 );
+                verifier_results = pipeline.results.clone();
             }
         }
 
+        // The judgment layer, on top of the deterministic verifiers above. Two shapes:
+        //
+        // * gate enabled  — a remembered gatekeeper plus a quorum of cold reviewers, adjudicated
+        //   by the kernel (`liberado_session::CompletionGate`). Fail-closed.
+        // * gate disabled — the legacy single critic, unchanged.
+        //
+        // Both are skipped when the worker already failed or changed nothing: there is no claim to
+        // dispute, and asking a reviewer to bless an empty diff only burns tokens.
         let mut critic_verdict = None;
-        if outcome != Outcome::Failed
-            && !files_changed.is_empty()
-            && roles::critic_enabled(&request)
-        {
+        let reviewable = outcome != Outcome::Failed && !files_changed.is_empty();
+        if reviewable && request.config.gate.enabled {
+            let gate_outcome = completion_gate::run_gate(
+                self.providers.as_ref(),
+                &request,
+                &verifier_results,
+                &events,
+            )
+            .await?;
+            let verdict = match &gate_outcome.verdict {
+                liberado_session::GateVerdict::Approved => CriticVerdict::Acceptable,
+                liberado_session::GateVerdict::Refuted { issues } => {
+                    // Belt and braces: `run`'s attempt loop also derives Failed from a
+                    // `NeedsRevision` verdict, so this assignment is not the only thing standing
+                    // between a refutation and a Succeeded result. It is kept so `run_attempt`'s
+                    // own return value is self-consistent — a caller reading it directly (evals,
+                    // future single-attempt callers) must never see Succeeded next to a refuted
+                    // verdict. `critic_verdict`, not `outcome`, is the signal that drives retry.
+                    outcome = Outcome::Failed;
+                    summary = format!(
+                        "{summary}; completion gate refused ({} of {} votes refuting): {}",
+                        gate_outcome
+                            .votes
+                            .iter()
+                            .filter(|v| !v.vote.is_approve())
+                            .count(),
+                        gate_outcome.votes.len(),
+                        issues.join("; ")
+                    );
+                    CriticVerdict::NeedsRevision {
+                        issues: issues.clone(),
+                    }
+                }
+            };
+            critic_verdict = Some(verdict);
+        } else if reviewable && roles::critic_enabled(&request) {
             let verdict = critic::run_critic(self.providers.as_ref(), &request, &events).await?;
             trace::push_event(
                 &events,
@@ -437,6 +482,7 @@ mod tests {
                 planner: disabled_role(),
                 coder: role(),
                 critic: disabled_role(),
+                gate: liberado_coder_core::CoderGateConfig::default(),
                 repair: None,
                 sandbox: SandboxSpec::HostLocal,
                 command_policy: CommandPolicy::default(),

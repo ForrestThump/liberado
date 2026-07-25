@@ -183,6 +183,7 @@ mod tests {
                 planner: role(),
                 coder: role(),
                 critic: role(),
+                gate: liberado_coder_core::CoderGateConfig::default(),
                 repair: None,
                 sandbox: SandboxSpec::HostLocal,
                 command_policy: CommandPolicy::default(),

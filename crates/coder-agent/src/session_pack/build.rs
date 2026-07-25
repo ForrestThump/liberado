@@ -144,6 +144,7 @@ impl CodingSessionPack {
                 planner: disabled.clone(),
                 coder: role.clone(),
                 critic: disabled,
+                gate: liberado_coder_core::CoderGateConfig::default(),
                 repair: Some(role),
                 sandbox: SandboxSpec::HostLocal,
                 command_policy: CommandPolicy::default(),
