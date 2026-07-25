@@ -598,6 +598,38 @@ max_turns = 44
     }
 
     #[test]
+    fn a_schedule_naming_enabled_session_profile_passes_validation() {
+        let mut cfg = config_with_profiles();
+        let mut schedule = cron_schedule("morning", "0 0 9 * * * *");
+        schedule.profile = Some("research".into());
+        cfg.topology.schedules = vec![schedule];
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn a_schedule_naming_unknown_session_profile_fails_validation() {
+        let mut cfg = config_with_profiles();
+        let mut schedule = cron_schedule("morning", "0 0 9 * * * *");
+        schedule.profile = Some("typo-not-a-profile".into());
+        cfg.topology.schedules = vec![schedule];
+        let err = cfg.validate().expect_err("unknown profile must fail");
+        assert!(
+            err.to_string().contains("profile"),
+            "error should mention profile: {err}"
+        );
+    }
+
+    #[test]
+    fn a_schedule_naming_disabled_session_profile_fails_validation() {
+        let mut cfg = config_with_profiles();
+        cfg.topology.session_profiles[0].enabled = false;
+        let mut schedule = cron_schedule("morning", "0 0 9 * * * *");
+        schedule.profile = Some("research".into());
+        cfg.topology.schedules = vec![schedule];
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
     fn a_hook_targeting_a_disabled_pool_fails_validation() {
         let mut cfg = Config::default();
         cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");

@@ -532,6 +532,23 @@ impl Orchestrator {
                 });
             }
 
+            // Defense in depth: daemon/Telegram gate wall-clock expiry first; refuse here so any
+            // alternate caller cannot run a past-deadline approved proposal.
+            if proposal.is_expired_at(chrono::Utc::now()) {
+                tracing::warn!(
+                    proposal_id = %proposal.id,
+                    "approved proposal is past expires — refusing to execute"
+                );
+                return Ok(Report {
+                    outcome: Outcome::Failed,
+                    summary: "proposal expired — not executed".into(),
+                    artifacts: Vec::new(),
+                    new_high_signal_facts: Vec::new(),
+                    deferred_to_human: false,
+                    follow_up: None,
+                });
+            }
+
             // Defense in depth (Decision 18 checkpoint #3): the *caller* (`Daemon::handle_proposal_change`)
             // is responsible for routing an approved proposal to the pool's orchestrator it was
             // proposed under, so a restricted pool's proposal never executes with a different

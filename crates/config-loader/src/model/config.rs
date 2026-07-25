@@ -331,6 +331,26 @@ impl Config {
             }
         }
 
+        // Schedules that name a profile must match an *enabled* session profile — same fail-fast
+        // style as pool names (daemon fail-closed is the runtime backstop; load-time catches typos).
+        let profile_exists = |name: &str| {
+            self.topology
+                .session_profiles
+                .iter()
+                .any(|p| p.enabled && p.name == name)
+        };
+        for schedule in &self.topology.schedules {
+            if let Some(profile) = &schedule.profile
+                && !profile_exists(profile)
+            {
+                return Err(Error::Config(format!(
+                    "topology.schedules['{}'].profile '{profile}' does not name an enabled \
+                     topology.session_profiles entry",
+                    schedule.name
+                )));
+            }
+        }
+
         Ok(())
     }
 }

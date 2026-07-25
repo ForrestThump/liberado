@@ -149,6 +149,10 @@ impl TelegramChatBridge {
         };
         let previous = provider.model();
         provider.set_model(model.to_string());
+        crate::state::resync_compaction_trigger_for_face_model(
+            &self.state,
+            provider.model().as_str(),
+        );
         Ok(format!(
             "Model switched: {previous} → {}\n(hot-swap; no restart)",
             provider.model()

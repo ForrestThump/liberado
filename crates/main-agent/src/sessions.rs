@@ -182,8 +182,14 @@ pub struct ChatSessions {
 /// The moving parts of automatic compaction: the tunables, plus the provider used for the one
 /// summarization completion per compaction (the chat face's own provider in production — see
 /// `docs/roadmap/context-compaction-plan.md` for why no dedicated summarizer model yet).
+///
+/// `trigger_tokens` is held under a mutex so face-model hot-swap can re-resolve the threshold
+/// without rebuilding `ChatSessions` (process-wide `POST /api/models/select` / Telegram `/model`).
 struct CompactionEngine {
     config: CompactionConfig,
+    /// Live absolute trigger; starts as `config.trigger_tokens`, updated by
+    /// [`ChatSessions::set_compaction_trigger_tokens`].
+    trigger_tokens: std::sync::Mutex<u32>,
     provider: Arc<dyn Provider>,
 }
 
@@ -230,8 +236,39 @@ impl ChatSessions {
         config: CompactionConfig,
         provider: Arc<dyn Provider>,
     ) -> Self {
-        self.compaction = Some(CompactionEngine { config, provider });
+        let trigger_tokens = std::sync::Mutex::new(config.trigger_tokens);
+        self.compaction = Some(CompactionEngine {
+            config,
+            trigger_tokens,
+            provider,
+        });
         self
+    }
+
+    /// Update the live compaction threshold (absolute estimated tokens) after a face-model
+    /// hot-swap. No-op when compaction was never wired. Concurrent with turns: the next
+    /// `maybe_compact` observes the new value.
+    pub fn set_compaction_trigger_tokens(&self, tokens: u32) {
+        if let Some(engine) = &self.compaction {
+            *engine
+                .trigger_tokens
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) = tokens;
+            tracing::info!(
+                trigger_tokens = tokens,
+                "chat compaction: trigger_tokens updated for face model change"
+            );
+        }
+    }
+
+    /// Current live compaction threshold, if compaction is enabled on this host.
+    pub fn compaction_trigger_tokens(&self) -> Option<u32> {
+        self.compaction.as_ref().map(|engine| {
+            *engine
+                .trigger_tokens
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+        })
     }
 
     /// Override the system prompt written as the root node of new conversations.
@@ -858,9 +895,14 @@ impl ChatSessions {
             return pass_through();
         }
 
+        let trigger_tokens = *engine
+            .trigger_tokens
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+
         let estimate = compaction::estimate_tokens(&messages)
             + compaction::estimate_tokens(&[Message::user(incoming_user)]);
-        if estimate <= engine.config.trigger_tokens {
+        if estimate <= trigger_tokens {
             return pass_through();
         }
 
@@ -871,7 +913,7 @@ impl ChatSessions {
             // help — proceed and let the provider/budget surface the real limit.
             tracing::debug!(
                 estimate,
-                trigger = engine.config.trigger_tokens,
+                trigger = trigger_tokens,
                 "chat compaction: over trigger but nothing elidable"
             );
             return pass_through();

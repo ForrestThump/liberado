@@ -61,9 +61,8 @@ pub struct AppState {
     /// The *server* owns this resolution because the session kernel must stay free of the config
     /// stack: the kernel is handed an already-resolved authority, never a config key to look up.
     pub config: Arc<Config>,
-    /// The active model id, from `Provider::model()` (`None` when no provider is configured).
-    /// Display-only for now — there is no runtime model switch; the model is fixed at daemon
-    /// startup by config/env (`DEEPSEEK_MODEL`).
+    /// Boot-time model id snapshot. Prefer [`Provider::model`] via `state.provider` for the live
+    /// hot-swapped face model (`POST /api/models/select`).
     pub model_name: Option<String>,
     /// Shared inference backend — used by `GET /api/models` to call `Provider::list_models`.
     /// `None` when no provider is configured.
@@ -82,6 +81,17 @@ pub struct AppState {
     /// Shared MCP peer controller (catalog + registry). `POST /api/mcp/reload` re-applies the
     /// hand-edited topology MCP slice without process restart.
     pub live_mcp: LiveMcpController,
+}
+
+/// Re-resolve chat compaction `trigger_tokens` for the live face model after a hot-swap.
+/// Uses config-tier `CompactionSettings::resolve_trigger_tokens` (per-model pct / absolute).
+pub fn resync_compaction_trigger_for_face_model(state: &AppState, face_model: &str) {
+    let Some(chat) = state.chat.as_ref() else {
+        return;
+    };
+    let compact = &state.config.topology.main_agent.compaction;
+    let tokens = compact.resolve_trigger_tokens(Some(face_model), &state.config.topology.models);
+    chat.set_compaction_trigger_tokens(tokens);
 }
 
 /// A tool runtime with no tools — chat still works (just conversation) when no MCP is configured.

@@ -3373,7 +3373,9 @@ dependencies = [
  "liberado-orchestrator",
  "liberado-provider",
  "liberado-provider-openai-compat",
+ "liberado-vault",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
 ]
@@ -3550,6 +3552,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "toml 0.8.23",
+ "tracing",
 ]
 
 [[package]]
@@ -3823,6 +3826,7 @@ name = "liberado-orchestrator"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "liberado-common",
  "liberado-executor",
  "liberado-notify",

@@ -1041,6 +1041,57 @@ async fn execute_approved_tool_calls_all_failed_is_failed_outcome() {
 }
 
 #[tokio::test]
+async fn execute_approved_refuses_past_deadline_without_invoking_tools() {
+    use chrono::{Duration as ChronoDuration, Utc};
+
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        Vec::<CompletionResponse>::new(),
+    ));
+    let factory = CallRecordingFactory::default();
+    let calls = factory.calls.clone();
+    let signer = ProposalSigner::random();
+    let orch = Orchestrator::new(
+        provider,
+        factory,
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        signer.clone(),
+        "default",
+    );
+
+    let call = ToolCall {
+        tool: "email:send".into(),
+        args: serde_json::json!({}),
+    };
+    let mut proposal = Proposal::pending(
+        "hash-expired",
+        "hash-expired",
+        "liberado",
+        ProposedAction::ToolCalls(vec![call]),
+        "too late",
+    );
+    proposal.expires = Some(Utc::now() - ChronoDuration::hours(1));
+    let mut proposal = signer.sign(proposal).into_proposal();
+    proposal.status = ProposalStatus::Approved;
+
+    let report = orch.execute_approved(&proposal).await.expect("execute");
+    assert_eq!(report.outcome, Outcome::Failed);
+    assert!(
+        report.summary.contains("expired"),
+        "summary should mention expiry: {}",
+        report.summary
+    );
+    assert!(
+        calls.lock().unwrap().is_empty(),
+        "expired proposal must not open a tool runtime"
+    );
+}
+
+#[tokio::test]
 async fn execute_approved_tool_calls_partial_failure_is_partial_outcome() {
     use liberado_provider::ToolInvocation; // shadow to avoid conflict with FailingRuntime
 

@@ -1682,3 +1682,57 @@ async fn summarizer_failure_runs_the_turn_uncompacted() {
         "a failed summarization must not persist a marker"
     );
 }
+
+#[tokio::test]
+async fn set_compaction_trigger_tokens_updates_live_threshold() {
+    // Hot-swap path: boot with a high trigger, then lower it as if a smaller-window model was
+    // selected — the next turn must compact under the new threshold.
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        [
+            CompletionResponse::text("SUMMARY: after swap"),
+            CompletionResponse::text("post-compact answer"),
+        ],
+    ));
+    let executor = Executor::new(provider.clone(), Budget::default());
+    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools)).with_compaction(
+        CompactionConfig {
+            enabled: true,
+            // High enough that seed turns alone won't fire until we lower the live threshold.
+            trigger_tokens: 1_000_000,
+            keep_recent_turns: 1,
+            ..CompactionConfig::default()
+        },
+        provider.clone(),
+    );
+    assert_eq!(sessions.compaction_trigger_tokens(), Some(1_000_000));
+
+    let id = sessions.create(None).await.unwrap();
+    seed_turns(
+        &sessions,
+        id,
+        &[
+            ("u1 secret-alpha", "a1"),
+            ("u2 secret-beta", "a2"),
+            ("u3 keep-me", "a3"),
+        ],
+    )
+    .await;
+
+    // Lower the live threshold as select_model / resync_compaction_trigger_for_face_model does.
+    sessions.set_compaction_trigger_tokens(1);
+    assert_eq!(sessions.compaction_trigger_tokens(), Some(1));
+
+    let reply = sessions.turn(id, "after swap").await.unwrap();
+    assert_eq!(reply, "post-compact answer");
+
+    let history = sessions.history(id).await.unwrap();
+    assert!(
+        history
+            .iter()
+            .any(|m| m.content.starts_with(compaction::SUMMARY_HEADER)),
+        "after lowering the live trigger, the next turn must compact"
+    );
+}

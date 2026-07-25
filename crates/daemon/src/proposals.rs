@@ -136,6 +136,33 @@ impl Daemon {
         //    execute_approved` itself defensively re-checks this too (defense in depth).
         //    An orchestration error is an infra failure and propagates (so it can be retried on
         //    the next watch cycle). We do NOT mark done on failure.
+        //
+        // Re-check wall-clock expiry immediately before execute: step 4 may have passed while we
+        // awaited other work, and the reaper deliberately skips Approved notes that may be mid-flight.
+        if proposal.is_expired_at(chrono::Utc::now()) {
+            tracing::info!(
+                proposal_id = %proposal.id,
+                "approved proposal expired before execute — marking expired and archiving"
+            );
+            let provenance =
+                liberado_common::WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
+            proposal.status = liberado_common::ProposalStatus::Expired;
+            if let Err(e) = self
+                .vault
+                .write(rel_path, &proposal.to_note(), None, &provenance)
+                .await
+            {
+                tracing::warn!(
+                    error = %e,
+                    proposal_id = %proposal.id,
+                    "failed to mark late-expired proposal — left in place"
+                );
+                return Ok(ReactionOutcome::Observed);
+            }
+            self.archive_terminal_proposal(rel_path, &proposal).await;
+            return Ok(ReactionOutcome::Observed);
+        }
+
         let pool_name = proposal.pool.as_deref().unwrap_or(DEFAULT_POOL);
         let Some(orch) = self
             .pools
@@ -157,6 +184,24 @@ impl Daemon {
 
         // 7. Mark done and persist. The write carries agent provenance (DAEMON_SOURCE) so
         //    attribution suppresses it — no self-reaction (loop-break, Decision 5).
+        //    If the orchestrator refused as expired (race), do not stamp Done.
+        if report.outcome == liberado_common::Outcome::Failed && report.summary.contains("expired")
+        {
+            tracing::info!(
+                proposal_id = %proposal.id,
+                "execute_approved refused expired proposal — completing expiry lifecycle"
+            );
+            let provenance =
+                liberado_common::WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
+            proposal.status = liberado_common::ProposalStatus::Expired;
+            let _ = self
+                .vault
+                .write(rel_path, &proposal.to_note(), None, &provenance)
+                .await;
+            self.archive_terminal_proposal(rel_path, &proposal).await;
+            return Ok(ReactionOutcome::Observed);
+        }
+
         proposal.status = liberado_common::ProposalStatus::Done;
         let provenance =
             liberado_common::WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
@@ -396,6 +441,12 @@ pub(crate) async fn reap_expired_proposals(vault: &Vault) -> Result<(), DaemonEr
         }
         if proposal.status.is_terminal() {
             continue; // already handled by handle_proposal_change
+        }
+        // Only Pending is reaper-owned. Approved near the deadline may be mid-execute on the
+        // reactive path; reaping it would race the Done write. The reactive path + orchestrator
+        // refuse past-deadline execute as defense in depth.
+        if proposal.status != ProposalStatus::Pending {
+            continue;
         }
 
         let provenance = WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
@@ -679,5 +730,40 @@ mod tests {
         let content = vault.read("proposals/rejected.md").await.unwrap();
         let parsed = Proposal::from_note(&content).unwrap();
         assert_eq!(parsed.status, ProposalStatus::Rejected);
+    }
+
+    #[tokio::test]
+    async fn reap_skips_expired_approved_proposals() {
+        // Approved notes near the deadline may be mid-execute; reaper must not archive them.
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open("test", dir.path()).await.unwrap();
+        let prov = WriteProvenance::agent("test", "c1");
+        let proposals_dir = dir.path().join(PROPOSALS_DIR);
+        tokio::fs::create_dir_all(&proposals_dir).await.unwrap();
+
+        let mut p = expired_proposal_named("approved-late", "corr-approved");
+        p.status = ProposalStatus::Approved;
+        vault
+            .write("proposals/approved-late.md", &p.to_note(), None, &prov)
+            .await
+            .unwrap();
+
+        reap_expired_proposals(&vault).await.unwrap();
+
+        let content = vault
+            .read("proposals/approved-late.md")
+            .await
+            .expect("approved expired note must stay in active dir");
+        assert_eq!(
+            Proposal::from_note(&content).unwrap().status,
+            ProposalStatus::Approved
+        );
+        assert!(
+            vault
+                .read("proposals/archive/expired/approved-late.md")
+                .await
+                .is_err(),
+            "reaper must not archive Approved notes"
+        );
     }
 }

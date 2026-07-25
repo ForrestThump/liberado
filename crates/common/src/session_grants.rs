@@ -71,25 +71,27 @@ mod tests {
 
     #[test]
     fn grant_is_readable_and_idempotent() {
-        clear();
-        let pool = "test-pool-grant-readable";
+        // Unique pool name: process-global store races under `cargo test` parallelism.
+        let pool = format!("test-pool-grant-readable-{:?}", std::thread::current().id());
         let cap = Capability::Write(Zone::vault("sandbox"));
 
-        assert!(session_grant(pool).capabilities.is_empty());
-        assert!(grant_for_session(pool, cap.clone()), "first grant is new");
-        assert!(session_grant(pool).contains(&cap));
+        assert!(session_grant(&pool).capabilities.is_empty());
+        assert!(grant_for_session(&pool, cap.clone()), "first grant is new");
+        assert!(session_grant(&pool).contains(&cap));
         // Repeat approval is a no-op, and doesn't duplicate.
-        assert!(!grant_for_session(pool, cap.clone()));
-        assert_eq!(session_grant(pool).capabilities.len(), 1);
+        assert!(!grant_for_session(&pool, cap.clone()));
+        assert_eq!(session_grant(&pool).capabilities.len(), 1);
     }
 
     #[test]
     fn grants_are_scoped_per_pool() {
-        clear();
+        let id = format!("{:?}", std::thread::current().id());
+        let pool_a = format!("pool-a-scoped-{id}");
+        let pool_b = format!("pool-b-scoped-{id}");
         let cap = Capability::Write(Zone::vault("sandbox"));
-        grant_for_session("pool-a-scoped", cap.clone());
-        assert!(session_grant("pool-a-scoped").contains(&cap));
+        grant_for_session(&pool_a, cap.clone());
+        assert!(session_grant(&pool_a).contains(&cap));
         // A different pool is unaffected.
-        assert!(session_grant("pool-b-scoped").capabilities.is_empty());
+        assert!(session_grant(&pool_b).capabilities.is_empty());
     }
 }

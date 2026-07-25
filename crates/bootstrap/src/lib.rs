@@ -139,7 +139,8 @@ impl RoleProviders {
         self.primary.is_some()
     }
 
-    fn none() -> Self {
+    /// Watch-only composition: no inference backends attached.
+    pub fn none() -> Self {
         Self {
             primary: None,
             face: None,
@@ -373,6 +374,14 @@ pub fn configure_daemon(
         }
     };
 
+    // Provider-independent knobs: proposal reaper and session-profile grants still matter in
+    // watch-only mode (leftover proposals in the vault; fail-closed profile map if a source
+    // injects events without a full dispatcher stack). Apply before the provider early-return so
+    // `reap_interval_secs = 0` actually disables the reaper when no API key is set.
+    let daemon = daemon
+        .with_proposal_reap_interval(config.tuning.proposals.reap_interval_secs)
+        .with_session_profile_caps(session_profile_caps(config));
+
     let (Some(dispatcher_provider), Some(subagent_provider)) =
         (providers.dispatcher.as_ref(), providers.subagent.as_ref())
     else {
@@ -418,6 +427,7 @@ pub fn configure_daemon(
         liberado_notify::TelegramNotifier::from_env().map(|n| Arc::new(n) as Arc<dyn Notifier>);
     tracing::info!(enabled = notifier.is_some(), "proposal notifications");
 
+    // Reaper interval + profile caps already applied above (watch-only-safe path).
     let daemon = daemon
         .with_dispatcher(
             dispatcher,
@@ -425,9 +435,7 @@ pub fn configure_daemon(
             capabilities.clone(),
             guard.zone_write_classes.clone(),
         )
-        .with_proposal_signer(guard.signer.clone())
-        .with_proposal_reap_interval(config.tuning.proposals.reap_interval_secs)
-        .with_session_profile_caps(session_profile_caps(config));
+        .with_proposal_signer(guard.signer.clone());
     let daemon = match &notifier {
         Some(n) => daemon.with_notifier(n.clone()),
         None => daemon,
@@ -851,5 +859,67 @@ mod tests {
         let mut config = Config::default();
         config.topology.schedules = vec![cron_schedule("nightly", true)];
         assert!(cron_source_from_config(&config).unwrap().is_some());
+    }
+
+    /// Watch-only (no API key / no providers): reaper tuning and session-profile caps still apply.
+    #[tokio::test]
+    async fn watch_only_configure_honors_zero_reap_interval() {
+        use liberado_common::CapabilityCatalog;
+        use liberado_daemon::Daemon;
+        use liberado_mcp::McpRegistry;
+        use std::sync::Arc;
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let daemon = Daemon::open("test", dir.path()).await.unwrap();
+        // Default open() uses 600s — prove configure overwrites it even without a provider.
+        assert_eq!(daemon.proposal_reap_interval(), Duration::from_secs(600));
+
+        let mut config = Config::default();
+        config.topology.vault_path = dir.path().to_path_buf();
+        config.tuning.proposals.reap_interval_secs = 0;
+
+        let configured = configure_daemon(
+            daemon,
+            &RoleProviders::none(),
+            &config,
+            Arc::new(CapabilityCatalog::new()),
+            McpRegistry::new(),
+            dir.path(),
+            None,
+        );
+        assert_eq!(
+            configured.proposal_reap_interval(),
+            Duration::ZERO,
+            "reap_interval_secs = 0 must disable the reaper in watch-only mode"
+        );
+    }
+
+    #[tokio::test]
+    async fn watch_only_configure_honors_custom_reap_interval() {
+        use liberado_common::CapabilityCatalog;
+        use liberado_daemon::Daemon;
+        use liberado_mcp::McpRegistry;
+        use std::sync::Arc;
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let daemon = Daemon::open("test", dir.path()).await.unwrap();
+        let mut config = Config::default();
+        config.topology.vault_path = dir.path().to_path_buf();
+        config.tuning.proposals.reap_interval_secs = 42;
+
+        let configured = configure_daemon(
+            daemon,
+            &RoleProviders::none(),
+            &config,
+            Arc::new(CapabilityCatalog::new()),
+            McpRegistry::new(),
+            dir.path(),
+            None,
+        );
+        assert_eq!(configured.proposal_reap_interval(), Duration::from_secs(42));
     }
 }

@@ -79,6 +79,11 @@ impl Daemon {
         self
     }
 
+    /// Configured proposal reaper stroke interval (`Duration::ZERO` means disabled).
+    pub fn proposal_reap_interval(&self) -> Duration {
+        self.proposal_reap_interval
+    }
+
     /// Pre-resolved capability grants keyed by session profile name (enabled
     /// `[[session_profiles]]` → `policy.capabilities_for` at bootstrap). When an event carries a
     /// `profile`, the reactor uses that grant; an unknown name is fail-closed (no session).

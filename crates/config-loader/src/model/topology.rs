@@ -192,33 +192,78 @@ impl Default for CompactionSettings {
     }
 }
 
+/// How [`CompactionSettings::resolve_trigger_tokens`] obtained the absolute threshold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionTriggerSource {
+    PerModelAbsolute,
+    PerModelPct,
+    GlobalAbsolute,
+    GlobalPct,
+    /// Hard 48k path — face model had no matching `[[models]]` window and no absolute override.
+    Fallback,
+}
+
 impl CompactionSettings {
     /// Resolve the absolute estimated-token trigger for the chat face model.
     ///
     /// `face_model` is the live provider model slug (e.g. from `Provider::model()`). `models` is
     /// `topology.models` — used for `context_window` when applying a percentage.
+    ///
+    /// When `models` is non-empty and resolution hits [`CompactionTriggerSource::Fallback`]
+    /// (slug mismatch / missing profile), emits a `tracing::warn` so operators notice that
+    /// declared windows were not used.
     pub fn resolve_trigger_tokens(&self, face_model: Option<&str>, models: &[ModelProfile]) -> u32 {
+        let (tokens, source) = self.resolve_trigger_tokens_with_source(face_model, models);
+        if source == CompactionTriggerSource::Fallback && !models.is_empty() && face_model.is_some()
+        {
+            tracing::warn!(
+                face_model = face_model.unwrap_or(""),
+                models_configured = models.len(),
+                fallback = COMPACTION_TRIGGER_TOKENS_FALLBACK,
+                "face model has no matching [[models]] entry (exact name); compaction trigger \
+                 using hard fallback — declare the slug under [[models]] or set trigger_tokens"
+            );
+        }
+        tokens
+    }
+
+    /// Same as [`Self::resolve_trigger_tokens`] but returns how the value was chosen (for tests
+    /// and callers that need to distinguish fallback from an intentional absolute).
+    pub fn resolve_trigger_tokens_with_source(
+        &self,
+        face_model: Option<&str>,
+        models: &[ModelProfile],
+    ) -> (u32, CompactionTriggerSource) {
         let profile = face_model.and_then(|name| models.iter().find(|m| m.name == name));
         let per = face_model.and_then(|name| self.models.get(name));
 
         // 1. Per-model absolute
         if let Some(t) = per.and_then(|p| p.trigger_tokens) {
-            return t;
+            return (t, CompactionTriggerSource::PerModelAbsolute);
         }
         // 2. Per-model pct × window
         if let (Some(pct), Some(p)) = (per.and_then(|m| m.trigger_pct), profile) {
-            return pct_of_window(p.context_window, pct);
+            return (
+                pct_of_window(p.context_window, pct),
+                CompactionTriggerSource::PerModelPct,
+            );
         }
         // 3. Global absolute
         if let Some(t) = self.trigger_tokens {
-            return t;
+            return (t, CompactionTriggerSource::GlobalAbsolute);
         }
         // 4. Global pct × window
         if let Some(p) = profile {
-            return pct_of_window(p.context_window, self.trigger_pct);
+            return (
+                pct_of_window(p.context_window, self.trigger_pct),
+                CompactionTriggerSource::GlobalPct,
+            );
         }
         // 5. Hard fallback
-        COMPACTION_TRIGGER_TOKENS_FALLBACK
+        (
+            COMPACTION_TRIGGER_TOKENS_FALLBACK,
+            CompactionTriggerSource::Fallback,
+        )
     }
 }
 
@@ -817,5 +862,28 @@ trigger_tokens = 100000
             c.models.get("openai/gpt-4o").and_then(|m| m.trigger_tokens),
             Some(100_000)
         );
+    }
+
+    #[test]
+    fn slug_mismatch_with_configured_models_is_fallback_source() {
+        let c = CompactionSettings::default();
+        let models = vec![model("deepseek-chat", 64_000)];
+        // Live provider often returns a prefixed slug that does not equal [[models]].name.
+        let (tokens, source) =
+            c.resolve_trigger_tokens_with_source(Some("deepseek/deepseek-chat"), &models);
+        assert_eq!(tokens, COMPACTION_TRIGGER_TOKENS_FALLBACK);
+        assert_eq!(source, CompactionTriggerSource::Fallback);
+    }
+
+    #[test]
+    fn matching_slug_is_global_pct_not_fallback() {
+        let c = CompactionSettings {
+            trigger_pct: 0.75,
+            ..CompactionSettings::default()
+        };
+        let models = vec![model("deepseek-chat", 64_000)];
+        let (tokens, source) = c.resolve_trigger_tokens_with_source(Some("deepseek-chat"), &models);
+        assert_eq!(tokens, 48_000);
+        assert_eq!(source, CompactionTriggerSource::GlobalPct);
     }
 }
