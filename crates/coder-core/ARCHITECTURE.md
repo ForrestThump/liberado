@@ -38,8 +38,8 @@ It exists so several surfaces can share one vocabulary:
 
 - **No hardcoded prompts or model assumptions.** `CoderRoleConfig` carries model and prompt path/body;
   config loading/validation lives in a higher crate.
-- **Backend-neutral.** `VTCODE_BACKEND` and `LIBERADO_LOOP_BACKEND` are stable names only. This crate
-  knows no vtcode subprocess details and no Liberado executor wiring.
+- **Backend-neutral.** `LIBERADO_LOOP_BACKEND` is a stable name only. This crate knows no Liberado
+  executor wiring.
 - **PR-factory-neutral.** Branch creation, commits, pushes, draft PRs, approvals, and revisions are
   outside this crate.
 - **Sandbox-neutral.** Docker and host-local are typed specs here; lifecycle and command execution

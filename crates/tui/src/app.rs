@@ -86,6 +86,15 @@ pub enum GoalUiEvent {
         ok: bool,
         summary: String,
     },
+    /// One completion-gate reviewer vote. `coerced` = the gate substituted a refusal because the
+    /// reviewer was unavailable, which reads very differently to a human than a real rejection.
+    CriticVerdict {
+        reviewer: String,
+        kind: String,
+        approved: bool,
+        issues: Vec<String>,
+        coerced: bool,
+    },
     LoopGuard(String),
     Awaiting {
         prompt: String,
@@ -541,6 +550,34 @@ impl App {
                 let mark = if ok { "✓" } else { "✗" };
                 j.messages
                     .push(Message::System(format!("{mark} {summary}")));
+            }
+            GoalUiEvent::CriticVerdict {
+                reviewer,
+                kind,
+                approved,
+                issues,
+                coerced,
+            } => {
+                Self::flush_joined_buf(j);
+                // "?" rather than "✗" when coerced: the reviewer produced no opinion, and showing
+                // that as a rejection would make an outage look like the work being wrong.
+                let mark = if coerced {
+                    "?"
+                } else if approved {
+                    "✓"
+                } else {
+                    "✗"
+                };
+                let detail = if coerced {
+                    " unavailable → counted as refuting".to_string()
+                } else if issues.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {}", issues.join("; "))
+                };
+                j.messages.push(Message::System(format!(
+                    "{mark} gate[{kind}] {reviewer}{detail}"
+                )));
             }
             GoalUiEvent::LoopGuard(m) => {
                 Self::flush_joined_buf(j);

@@ -39,7 +39,7 @@
 # revise_temperature = 0.0      # sampling temperature for the Revise button's LLM edit call
 
 [coder]
-# backend = "liberado-loop"     # vtcode remains a migration backend elsewhere
+# backend = "liberado-loop"     # the only backend; the name is kept for config compatibility
 # trace_dir = "coder-traces"    # durable replay artifacts for PR factory, evals, and future TUI
 
 # [coder.planner]

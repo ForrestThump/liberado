@@ -353,6 +353,7 @@ impl LiberadoLoopBackend {
         // Both are skipped when the worker already failed or changed nothing: there is no claim to
         // dispute, and asking a reviewer to bless an empty diff only burns tokens.
         let mut critic_verdict = None;
+        let mut gate_votes = Vec::new();
         let reviewable = outcome != Outcome::Failed && !files_changed.is_empty();
         if reviewable && request.config.gate.enabled {
             let gate_outcome = completion_gate::run_gate(
@@ -362,6 +363,7 @@ impl LiberadoLoopBackend {
                 &events,
             )
             .await?;
+            gate_votes = completion_gate::flatten_votes(&gate_outcome);
             let verdict = match &gate_outcome.verdict {
                 liberado_session::GateVerdict::Approved => CriticVerdict::Acceptable,
                 liberado_session::GateVerdict::Refuted { issues } => {
@@ -422,6 +424,7 @@ impl LiberadoLoopBackend {
             files_changed,
             validation_notes,
             critic_verdict,
+            gate_votes,
             trace_path: None,
             diagnostics: json!({
                 "artifacts_reported": report.artifacts,

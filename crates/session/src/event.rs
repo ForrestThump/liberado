@@ -67,6 +67,21 @@ pub enum SessionEventKind {
         ok: bool,
         summary: String,
     },
+    /// One reviewer's vote in the completion gate (`completion_gate`). Emitted per vote, as it is
+    /// cast, so a surface can render the gate deliberating instead of waiting for a single verdict.
+    ///
+    /// `kind` is `gatekeeper` | `fresh` | `strategist`. `coerced` marks a vote the gate
+    /// *substituted* because the reviewer failed — surfaces should show it differently from a
+    /// genuine rejection, since it means "we could not get an opinion", not "the work is wrong".
+    CriticVerdict {
+        reviewer: String,
+        kind: String,
+        approved: bool,
+        #[serde(default)]
+        issues: Vec<String>,
+        #[serde(default)]
+        coerced: bool,
+    },
     LoopGuard {
         guard: String,
         action: String,

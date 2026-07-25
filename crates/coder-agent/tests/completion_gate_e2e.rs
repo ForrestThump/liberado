@@ -262,3 +262,64 @@ async fn a_refutation_feeds_the_next_attempt_and_the_gate_can_then_approve() {
         "a fresh reviewer must never receive the refutation history"
     );
 }
+
+#[tokio::test]
+async fn gate_votes_reach_the_result_so_the_pack_can_put_them_on_the_wire() {
+    // The backend has no SessionEvent sender, so votes travel to the surface on the result and the
+    // session pack emits them. If `gate_votes` is left empty, every reviewer vote silently vanishes
+    // from the wire and the gate becomes invisible — which is exactly the bug this test exists for
+    // (an earlier revision shipped the empty vec; clippy's dead-code warning on the flattening
+    // helper was the only thing that noticed).
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let mut script = write_todo_scaffold_then_report();
+    script.extend([
+        approve(),                  // gatekeeper
+        refute("missing rollback"), // fresh-0
+        approve(),                  // fresh-1
+    ]);
+
+    let result = mock_backend(script)
+        .run(gated_request(dir.path(), 2))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.gate_votes.len(),
+        3,
+        "every vote must be carried on the result, not just written to the trace"
+    );
+    assert_eq!(result.gate_votes[0].kind, "gatekeeper");
+    assert!(result.gate_votes[0].approved);
+    assert_eq!(result.gate_votes[1].kind, "fresh");
+    assert!(!result.gate_votes[1].approved);
+    assert_eq!(
+        result.gate_votes[1].issues,
+        vec!["missing rollback".to_string()]
+    );
+    assert!(
+        result.gate_votes.iter().all(|v| !v.coerced),
+        "no reviewer failed here, so nothing should be marked coerced"
+    );
+}
+
+#[tokio::test]
+async fn a_coerced_vote_is_marked_as_such_on_the_result() {
+    // An operator debugging "why did my build stop converging" has to be able to tell a broken
+    // reviewer from a strict one.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let mut script = write_todo_scaffold_then_report();
+    script.extend([approve(), approve()]); // gatekeeper + fresh-0; fresh-1 gets nothing
+
+    let result = mock_backend(script)
+        .run(gated_request(dir.path(), 2))
+        .await
+        .unwrap();
+
+    let coerced: Vec<_> = result.gate_votes.iter().filter(|v| v.coerced).collect();
+    assert_eq!(coerced.len(), 1, "the failed reviewer must be flagged");
+    assert!(!coerced[0].approved);
+}

@@ -344,6 +344,7 @@ fn session_event_to_sse(ev: &liberado_session::SessionEvent) -> Event {
         K::AwaitingInput { .. } => "awaiting_input",
         K::HumanInput { .. } => "human_input",
         K::ValidationFinished { .. } => "validation_finished",
+        K::CriticVerdict { .. } => "critic_verdict",
         K::LoopGuard { .. } => "loop_guard",
         K::SessionFinished { .. } => "session_finished",
         K::Failed { .. } => "failed",

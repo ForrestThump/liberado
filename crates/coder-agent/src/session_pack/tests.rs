@@ -156,6 +156,7 @@ impl CoderBackend for ScriptedBackend {
             files_changed: vec![],
             validation_notes: None,
             critic_verdict: None,
+            gate_votes: Vec::new(),
             trace_path: None,
             diagnostics: serde_json::json!({}),
         })
@@ -264,6 +265,7 @@ impl CoderBackend for StuckBackend {
             files_changed: vec![],
             validation_notes: None,
             critic_verdict: None,
+            gate_votes: Vec::new(),
             trace_path: None,
             diagnostics: serde_json::json!({}),
         })

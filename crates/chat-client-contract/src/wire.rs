@@ -69,6 +69,20 @@ pub enum SessionEventKind {
     HumanInput { text: String },
     /// A verifier/validation pass finished.
     ValidationFinished { ok: bool, summary: String },
+    /// One reviewer's vote in the completion gate, emitted as it is cast.
+    ///
+    /// `kind` is `gatekeeper` | `fresh` | `strategist`. `coerced` means the gate substituted this
+    /// vote because the reviewer failed (error, timeout, unparseable, absent) — render it as "no
+    /// opinion available, counted against", not as a reviewer rejecting the work.
+    CriticVerdict {
+        reviewer: String,
+        kind: String,
+        approved: bool,
+        #[serde(default)]
+        issues: Vec<String>,
+        #[serde(default)]
+        coerced: bool,
+    },
     /// A harness guard fired (doom-loop, no-progress, …).
     LoopGuard { guard: String, action: String },
     /// The turn / goal session completed. Chat turns finish with `status: "done"`.
@@ -123,6 +137,7 @@ impl SessionEvent {
             | "awaiting_input"
             | "human_input"
             | "validation_finished"
+            | "critic_verdict"
             | "loop_guard"
             | "session_finished"
             | "session_offered"
@@ -451,6 +466,20 @@ mod tests {
             SessionEventKind::ValidationFinished {
                 ok: false,
                 summary: "cargo test failed".into(),
+            },
+            SessionEventKind::CriticVerdict {
+                reviewer: "skeptic-0".into(),
+                kind: "gatekeeper".into(),
+                approved: false,
+                issues: vec!["no test covers the error path".into()],
+                coerced: false,
+            },
+            SessionEventKind::CriticVerdict {
+                reviewer: "fresh-1".into(),
+                kind: "fresh".into(),
+                approved: false,
+                issues: vec!["reviewer failed, counted as refuting: timed out".into()],
+                coerced: true,
             },
             SessionEventKind::LoopGuard {
                 guard: "doom_loop".into(),
@@ -973,5 +1002,63 @@ mod tests {
             ],
         };
         assert_eq!(result.matches.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod completion_gate_wire_tests {
+    use super::*;
+
+    /// The event must survive the SSE path, not just serde. `from_sse_data` decodes unknown event
+    /// names into a benign empty `Token` for forward compatibility — which means an event added to
+    /// the enum but forgotten in that allowlist silently becomes a no-op on every client, with no
+    /// error anywhere. This test is the guard for that specific hole.
+    #[test]
+    fn critic_verdict_decodes_from_an_sse_frame() {
+        let data = r#"{"reviewer":"skeptic-0","kind":"gatekeeper","approved":false,"issues":["no test covers the error path"],"coerced":false}"#;
+        let decoded = SessionEvent::from_sse_data("critic_verdict", data).expect("must decode");
+
+        match decoded.kind {
+            SessionEventKind::CriticVerdict {
+                reviewer,
+                kind,
+                approved,
+                issues,
+                coerced,
+            } => {
+                assert_eq!(reviewer, "skeptic-0");
+                assert_eq!(kind, "gatekeeper");
+                assert!(!approved);
+                assert_eq!(issues, vec!["no test covers the error path".to_string()]);
+                assert!(!coerced);
+            }
+            other => panic!(
+                "critic_verdict decoded as {other:?} — it is missing from from_sse_data's \
+                 known-type list, so every client silently ignores it"
+            ),
+        }
+    }
+
+    /// A coerced vote must stay distinguishable across the wire: it means "no opinion available",
+    /// and rendering it as a rejection would make a reviewer outage look like broken work.
+    #[test]
+    fn a_coerced_vote_stays_marked_across_the_wire() {
+        let event = SessionEvent::bare(SessionEventKind::CriticVerdict {
+            reviewer: "fresh-1".into(),
+            kind: "fresh".into(),
+            approved: false,
+            issues: vec!["reviewer failed, counted as refuting: timed out".into()],
+            coerced: true,
+        });
+        let json = serde_json::to_string(&event).unwrap();
+        let back: SessionEvent = serde_json::from_str(&json).unwrap();
+
+        match back.kind {
+            SessionEventKind::CriticVerdict { coerced, kind, .. } => {
+                assert!(coerced, "the coerced flag must survive the round trip");
+                assert_eq!(kind, "fresh");
+            }
+            other => panic!("expected CriticVerdict, got {other:?}"),
+        }
     }
 }

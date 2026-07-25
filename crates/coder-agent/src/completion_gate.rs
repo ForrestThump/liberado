@@ -17,8 +17,8 @@
 
 use chrono::Utc;
 use liberado_coder_core::{
-    CoderError, CoderEvent, CoderRoleConfig, CoderRunRequest, CriticVerdict, NamedVerdict,
-    VerdictStatus,
+    CoderError, CoderEvent, CoderRoleConfig, CoderRunRequest, CriticVerdict, GateVoteRecord,
+    NamedVerdict, VerdictStatus,
 };
 use liberado_provider::{CompletionRequest, Message, Provider};
 use liberado_session::{
@@ -179,6 +179,24 @@ impl Reviewer for ModelReviewer {
             CriticVerdict::NeedsRevision { issues } => ReviewVote::Refute { issues },
         })
     }
+}
+
+/// Flatten kernel votes for transport on `CoderRunResult` (the backend has no SessionEvent sender).
+pub fn flatten_votes(outcome: &GateOutcome) -> Vec<GateVoteRecord> {
+    outcome
+        .votes
+        .iter()
+        .map(|v| GateVoteRecord {
+            reviewer: v.reviewer.clone(),
+            kind: v.kind.to_string(),
+            approved: v.vote.is_approve(),
+            issues: match &v.vote {
+                ReviewVote::Approve => Vec::new(),
+                ReviewVote::Refute { issues } => issues.clone(),
+            },
+            coerced: v.was_coerced(),
+        })
+        .collect()
 }
 
 /// Kind label used in reviewer names and events.

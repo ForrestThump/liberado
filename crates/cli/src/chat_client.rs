@@ -168,6 +168,7 @@ fn dispatch(event: &SseEvent, session: &mut Option<String>) -> bool {
         | SessionEventKind::AwaitingInput { .. }
         | SessionEventKind::HumanInput { .. }
         | SessionEventKind::ValidationFinished { .. }
+        | SessionEventKind::CriticVerdict { .. }
         | SessionEventKind::LoopGuard { .. } => false,
     }
 }

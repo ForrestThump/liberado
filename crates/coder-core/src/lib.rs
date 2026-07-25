@@ -2,9 +2,8 @@
 //!
 //! Provider-agnostic contracts for Liberado's Rust-native coding backend. This crate intentionally
 //! owns no model loop, filesystem mutation, forge API, or sandbox implementation. It is the narrow
-//! waist between PR production, a future TUI/CLI coding surface, eval/tuning harnesses, and concrete
-//! coding engines such as the planned Liberado loop backend or the temporary vtcode migration
-//! backend.
+//! waist between PR production, a future TUI/CLI coding surface, eval/tuning harnesses, and the
+//! Liberado loop backend.
 //!
 //! Also hosts **verifier** and **criteria-intake** DTOs (`verify`, `intake`) — domain-agnostic shapes
 //! first consumed by the coding pack; see `docs/architecture/verifiers.md`.
@@ -42,9 +41,6 @@ use thiserror::Error;
 /// The value is config-visible (`dispatch.yaml`, task DB, `CODING_BACKEND`), so it is kept
 /// unchanged as a legacy identifier rather than breaking deployments over a word.
 pub const LIBERADO_LOOP_BACKEND: &str = "liberado-loop";
-
-/// Stable name for the migration backend that wraps the existing vtcode client.
-pub const VTCODE_BACKEND: &str = "vtcode";
 
 /// A single coding task, independent of any forge or queue implementation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -342,6 +338,11 @@ pub struct CoderRunResult {
     pub validation_notes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub critic_verdict: Option<CriticVerdict>,
+    /// Individual completion-gate reviewer votes behind `critic_verdict`, in casting order.
+    /// Empty when the gate is disabled. Carried on the result so the session pack can put them on
+    /// the wire — the backend has no `SessionEvent` sender of its own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gate_votes: Vec<GateVoteRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_path: Option<String>,
     #[serde(default)]
@@ -359,6 +360,23 @@ impl CoderRunResult {
             deferred_to_human: false,
         }
     }
+}
+
+/// One completion-gate reviewer's vote, flattened for transport.
+///
+/// Plain data on purpose: it mirrors `liberado_session::RecordedVote` without making this crate
+/// depend on the session kernel, so `coder-core` stays the narrow contract waist it claims to be.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GateVoteRecord {
+    pub reviewer: String,
+    /// `gatekeeper` | `fresh` | `strategist`.
+    pub kind: String,
+    pub approved: bool,
+    #[serde(default)]
+    pub issues: Vec<String>,
+    /// The gate substituted this vote because the reviewer failed — not a real rejection.
+    #[serde(default)]
+    pub coerced: bool,
 }
 
 /// A diff-reviewing critic's verdict over the actual workspace diff.
@@ -535,6 +553,7 @@ mod tests {
             files_changed: vec!["crates/webui/src/components/chat.rs".to_string()],
             validation_notes: Some("cargo check passed".to_string()),
             critic_verdict: Some(CriticVerdict::Acceptable),
+            gate_votes: Vec::new(),
             trace_path: Some("traces/task-1.jsonl".to_string()),
             diagnostics: serde_json::json!({"turns": 5}),
         };

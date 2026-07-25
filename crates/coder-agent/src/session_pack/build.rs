@@ -256,6 +256,27 @@ impl CodingSessionPack {
             let (ok, summary, artifacts, diagnostics) = match result {
                 Ok(r) => {
                     let ok = r.outcome == Outcome::Succeeded;
+                    // Completion-gate votes, before the validation summary, so a surface reading
+                    // the stream top-to-bottom sees the reasoning that produced the outcome and
+                    // then the outcome. These arrive as a batch at attempt end rather than live
+                    // per vote: `CoderBackend::run` takes a request and returns a result, with no
+                    // SessionEvent sender of its own. Streaming them as they are cast means
+                    // plumbing the channel into the backend — S2's goal-view work, where a surface
+                    // exists that can actually show a gate deliberating.
+                    for vote in &r.gate_votes {
+                        let _ = events
+                            .send(SessionEvent::new(
+                                session_id,
+                                SessionEventKind::CriticVerdict {
+                                    reviewer: vote.reviewer.clone(),
+                                    kind: vote.kind.clone(),
+                                    approved: vote.approved,
+                                    issues: vote.issues.clone(),
+                                    coerced: vote.coerced,
+                                },
+                            ))
+                            .await;
+                    }
                     let _ = events
                         .send(SessionEvent::new(
                             session_id,
