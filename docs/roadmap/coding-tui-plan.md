@@ -279,6 +279,14 @@ for agent-created loops); whether a human-typed `/loop new …` may also write o
 
 ### G7 — Coding subagents (hub-spawned, worktree-isolated)
 
+> **Ordering constraint (audited 2026-07-24).** Isolation must land before *any* fan-out. Today
+> nothing in production can dispatch two subagents at once — `dispatch_parallel` exists but is
+> unreachable, `DispatchAction` cannot express fan-out, and the executor invokes tool calls
+> serially — so the workspace race is prevented only by the *absence* of concurrency. Closing any
+> one of those gaps without `WorktreeWorkspace` reproduces Bun's failure: agents sharing a git
+> workspace overwrite each other, silently. Full audit and the fixed 3-step sequence:
+> `docs/architecture/agentic-loops.md` §Concurrency.
+
 - `delegate` gains a coding route: when the face agent (or a coding worker, one level deep max)
   delegates with `domain:"coding"`, the hub starts a child coding session with a narrowed grant
   (project zone only, no `AskHuman`, no nested delegate).
@@ -306,7 +314,7 @@ live runs where feasible).
 | **S3** | **Project authorization**: `[[projects]]` config, fail-closed payload validation, `GET /api/projects`, TUI picker. | Config validation tests; API 403/PolicyDenied tests; live: undeclared dir refused by name. |
 | **S4** | **Checkpoints**: shadow-git in `coder-sandbox`, snapshot per attempt + per write-flush, `checkpoint` events, `POST …/rewind`, TUI `/rewind`. | Workspace tests (snapshot→mutate→restore byte-identical, `.gitignore` respected); live: worker breaks a file, `/rewind`, file restored, session continues. |
 | **S5** | **`/loop`**: `loops-plan.md` P1–P4 + `/api/loops*` + TUI loop list/series view. | The loops-plan's own acceptance: a 2-pass loop on the life pack closing on green streak; then a week-long vault-grooming dogfood. |
-| **S6** | **Coding subagents**: delegate → coding domain, narrowed grant, `WorktreeWorkspace`, child diff into parent evidence. | Hub integration test (parent gate sees child diff); live: "split this feature into two subagent tasks" dogfood. |
+| **S6** | **Coding subagents**: delegate → coding domain, narrowed grant, `WorktreeWorkspace`, child diff into parent evidence. **`WorktreeWorkspace` is a hard prerequisite for any concurrency, not a component of it** — see `agentic-loops.md` §Concurrency, design rule 11. | Hub integration test (parent gate sees child diff); live: "split this feature into two subagent tasks" dogfood. |
 | **S7** | **Strategist live + evals gate**: curriculum runs the gate (smoke tier in CI via mock reviewers; live tier opt-in); strategist fires on scripted non-convergence. | Curriculum accuracy stays 1.0 with the gate on; a scripted 3-refutation run shows the strategist directive in attempt 4's context. |
 
 Ordering rationale: S1 first because the gate is the product claim ("the agent may not return
