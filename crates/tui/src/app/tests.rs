@@ -2493,3 +2493,121 @@ fn a_pruned_history_does_not_make_the_fork_point_lie() {
         "the fork point must be the real turn, not the on-screen one"
     );
 }
+
+// ── /goal surface (S2/G2) ───────────────────────────────────────────────────
+//
+// These exist because `handle_command_results` ends in `_ => {}`. A CommandResult the TUI has not
+// wired is therefore not a compile error and not a runtime error — it is silently ignored, which
+// is exactly how the /goal surface first landed. Each test below fails if its arm goes missing.
+
+fn run_slash(app: &mut App, input: &str) -> Vec<Effect> {
+    app.input = input.to_string();
+    app.handle_key(key(KeyCode::Enter))
+}
+
+#[test]
+fn slash_goal_starts_a_coding_goal() {
+    let mut app = test_app();
+    let effects = run_slash(&mut app, "/goal add a --version flag");
+    let started = effects.iter().any(|e| {
+        matches!(
+            e,
+            Effect::StartCodingGoal { project, text, .. }
+                if project.is_none() && text == "add a --version flag"
+        )
+    });
+    assert!(started, "expected StartCodingGoal, got {effects:?}");
+}
+
+#[test]
+fn slash_goal_in_project_carries_the_project() {
+    let mut app = test_app();
+    let effects = run_slash(&mut app, "/goal in liberado add a --version flag");
+    let started = effects.iter().any(|e| {
+        matches!(
+            e,
+            Effect::StartCodingGoal { project: Some(p), text, .. }
+                if p == "liberado" && text == "add a --version flag"
+        )
+    });
+    assert!(started, "expected project-scoped goal, got {effects:?}");
+}
+
+#[test]
+fn slash_goal_pause_parks_the_joined_session() {
+    let mut app = test_app();
+    app.join_session("sess-1".to_string());
+    let effects = run_slash(&mut app, "/goal pause");
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::ParkGoalSession(id) if id == "sess-1")),
+        "expected ParkGoalSession, got {effects:?}"
+    );
+}
+
+#[test]
+fn slash_goal_clear_cancels_the_joined_session() {
+    let mut app = test_app();
+    app.join_session("sess-1".to_string());
+    let effects = run_slash(&mut app, "/goal clear");
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::CancelGoalSession(id) if id == "sess-1")),
+        "expected CancelGoalSession, got {effects:?}"
+    );
+}
+
+/// Lifecycle verbs with nothing focused must say so rather than silently doing nothing — the
+/// failure mode the catch-all produced.
+#[test]
+fn goal_lifecycle_without_a_focused_session_explains_itself() {
+    for (input, expect) in [
+        ("/goal pause", "No goal session to park."),
+        ("/goal clear", "No goal session to cancel."),
+        ("/goal status", "No goal session focused."),
+    ] {
+        let mut app = test_app();
+        let effects = run_slash(&mut app, input);
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, Effect::ParkGoalSession(_) | Effect::CancelGoalSession(_))),
+            "{input} must not act without a focused session"
+        );
+        assert!(
+            app.messages
+                .iter()
+                .any(|m| matches!(m, Message::System(t) if t.contains(expect))),
+            "{input} must explain why nothing happened; wanted {expect:?}"
+        );
+    }
+}
+
+#[test]
+fn slash_goal_resume_delivers_the_answer() {
+    let mut app = test_app();
+    app.join_session("sess-1".to_string());
+    let effects = run_slash(&mut app, "/goal resume use postgres");
+    assert!(
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::ResumeGoalSession { id, answer } if id == "sess-1" && answer == "use postgres"
+        )),
+        "expected ResumeGoalSession, got {effects:?}"
+    );
+}
+
+#[test]
+fn bare_goal_without_a_session_points_somewhere_useful() {
+    let mut app = test_app();
+    run_slash(&mut app, "/goal");
+    assert!(
+        app.messages.iter().any(|m| matches!(
+            m,
+            Message::System(t) if t.contains("/goal <text>") || t.contains("No session focused")
+        )),
+        "bare /goal with nothing focused must say what to do next"
+    );
+}
