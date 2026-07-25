@@ -87,6 +87,21 @@ pub const SUBMIT_REPORT_TOOL: &str = "submit_report";
 /// `small_fanout`.
 pub const DEFAULT_MAX_TURNS: u32 = 8;
 
+/// Turns handed back to a **salvageable** run whose budget ran out, solely so it can file what it
+/// already has.
+///
+/// Live evidence: a deep-research subagent spent all 8 turns on ~28 successful searches and was
+/// cut off before ever calling `submit_report`, so a run that had done the work returned nothing
+/// but a synthesized "ran out of turns". The research was not the failure — the write-up was, and
+/// the model had no way to know it was on its last turn.
+///
+/// This is not a budget increase. Every other tool is withdrawn when the reserve is granted, so
+/// the turns cannot be spent continuing the work they were given to conclude — the same lever the
+/// doom-loop guard pulls at strike 2, for the same reason: a nudge alone did not change model
+/// behaviour in live testing. Granted at most once, so worst-case turns stay bounded by
+/// `max_turns + DOOM_LOOP_RECOVERY_BONUS_TURNS + WRAP_UP_TURNS`.
+pub const WRAP_UP_TURNS: u32 = 3;
+
 /// Appended once if the model answers in prose without filing a `Report`. Deliberately offers
 /// *both* options (keep going, or finish) rather than unconditionally pushing to wrap up — an
 /// earlier wording ("Before finishing, call `submit_report`...") biased a model that paused to
@@ -210,6 +225,21 @@ fn tool_removed_nudge(tool_name: &str) -> String {
 
 /// The second escalation step for a persisting tool-cycle — see [`tool_removed_nudge`]'s doc
 /// comment for why the model is told, not just silently restricted.
+/// Told to a salvageable run when its budget runs out and the wrap-up reserve is granted.
+///
+/// States the withdrawal as fact rather than asking for restraint: the tools really are gone by
+/// the time this is read, so the model is not being asked to resist a temptation it still has.
+fn wrap_up_directive(resource: &str, reserve: u32) -> String {
+    format!(
+        "You have run out of {resource}. Every tool except `{SUBMIT_REPORT_TOOL}` has been \
+         withdrawn, and you have {reserve} turn(s) left.\n\n\
+         Do not start new work — there is no longer any way to. Call `{SUBMIT_REPORT_TOOL}` now \
+         with what you already have: the findings gathered so far, and a plain statement of what \
+         you did not get to. Set `outcome` to `PartiallySucceeded`, or `Failed` if nothing useful \
+         was gathered. An incomplete report is worth far more to the caller than none."
+    )
+}
+
 fn tools_removed_nudge(tool_names: &[String]) -> String {
     let list = tool_names.join("`, `");
     format!(
@@ -268,6 +298,16 @@ pub struct Task {
     /// The classifier's optional opening move (`ExecuteDirect::seed_calls`). Executed verbatim
     /// before the model's first turn, then the loop continues adaptively. Usually empty.
     pub seed_calls: Vec<ToolCall>,
+    /// Is half-finished work still worth returning?
+    ///
+    /// True for gathering tasks — research, summarisation, review — where partial findings have
+    /// real value and nothing was left mutated. False (the default) for work whose deliverable is
+    /// all-or-nothing: a half-applied refactor or a partially written file is not a smaller
+    /// success, it is a mess, and reporting it as partial credit would misrepresent the state.
+    ///
+    /// Only affects what happens at budget exhaustion — a salvageable run gets
+    /// [`WRAP_UP_TURNS`] to file what it has; everything else fails exactly as before.
+    pub salvageable: bool,
 }
 
 impl Task {
@@ -276,12 +316,19 @@ impl Task {
             instructions: instructions.into(),
             goal: goal.into(),
             seed_calls: Vec::new(),
+            salvageable: false,
         }
     }
 
     /// Seed the loop with an opening move (the classifier's pre-planned first calls).
     pub fn with_seed(mut self, seed_calls: Vec<ToolCall>) -> Self {
         self.seed_calls = seed_calls;
+        self
+    }
+
+    /// Mark partial results worth returning — see [`Task::salvageable`].
+    pub fn salvageable(mut self, salvageable: bool) -> Self {
+        self.salvageable = salvageable;
         self
     }
 }
@@ -428,8 +475,15 @@ impl Executor {
         self.run_seed(runtime, &mut messages, &task.seed_calls)
             .await;
 
-        self.run_loop(runtime, &mut messages, &mut tools, mode, &mut scratchpad)
-            .await
+        self.run_loop(
+            runtime,
+            &mut messages,
+            &mut tools,
+            mode,
+            &mut scratchpad,
+            task.salvageable,
+        )
+        .await
     }
 
     /// Run a conversational turn over an existing message history (multi-turn chat). The caller owns
@@ -461,6 +515,9 @@ impl Executor {
                     &mut tools,
                     Mode::Conversational,
                     &mut scratchpad,
+                    // Never salvageable: there is no report to file early, and the human on the
+                    // other end gets whatever prose the loop produced either way.
+                    false,
                 )
                 .await?
             {
@@ -557,6 +614,7 @@ impl Executor {
         tools: &mut Vec<ToolDef>,
         mode: Mode,
         scratchpad: &mut Option<Scratchpad>,
+        salvageable: bool,
     ) -> Result<Terminal, ExecError> {
         let mut nudged = false;
         // (tool name, arguments, result) of every real invocation, in call order, across the whole
@@ -579,20 +637,48 @@ impl Executor {
         // independently-checked bounds layered on top.
         let mut max_turns = self.budget.max_turns;
         let mut bonus_granted = false;
+        // Set once the wrap-up reserve is granted (see `WRAP_UP_TURNS`). Also latches the reserve
+        // to one grant: the second exhaustion ends the run for real.
+        let mut wrapping_up = false;
         let mut turn: u32 = 0;
         let mut usage = ResourceUsage::default();
         let run_started = std::time::Instant::now();
-        let mut exhausted_resource: Option<&str> = None;
-        'turn_loop: loop {
+        // The loop yields the name of whatever ran out, so the exhaustion report below can say
+        // which bound was hit rather than always blaming turns.
+        let exhausted_name: &str = 'turn_loop: loop {
             turn += 1;
             usage.turns = turn;
             usage.elapsed = run_started.elapsed();
-            if turn > max_turns {
-                break;
-            }
-            if let Some(name) = self.budget.exhausted_extra(&usage) {
-                exhausted_resource = Some(name);
-                break;
+            // Once the reserve is running, only its own turn cap applies. The extra limits are
+            // spent by definition at that point, so re-checking them would end the reserve on its
+            // first turn and it could never be used — the same trap that made the doom-loop
+            // guard's tool removal structurally useless before it got a top-up.
+            let exhausted = if turn > max_turns {
+                Some("turns")
+            } else if wrapping_up {
+                None
+            } else {
+                self.budget.exhausted_extra(&usage)
+            };
+            if let Some(name) = exhausted {
+                // All-or-nothing work fails here exactly as it always has: a half-applied change
+                // is not partial credit, and reporting it as such would misstate the world.
+                if wrapping_up || !salvageable || !matches!(mode, Mode::Report) {
+                    break 'turn_loop name;
+                }
+                wrapping_up = true;
+                max_turns = turn + WRAP_UP_TURNS - 1;
+                // Withdraw everything but the finish tool, so the reserve cannot be spent
+                // continuing the work it was granted to conclude.
+                tools.retain(|t| t.name == SUBMIT_REPORT_TOOL);
+                messages.push(Message::user(wrap_up_directive(name, WRAP_UP_TURNS)));
+                tracing::warn!(
+                    turn,
+                    resource = name,
+                    reserve = WRAP_UP_TURNS,
+                    "budget exhausted on salvageable work; granting wrap-up reserve to file a \
+                     partial report"
+                );
             }
             let turn_span = tracing::debug_span!(
                 "turn",
@@ -674,6 +760,23 @@ impl Executor {
                         Ok(report) => submitted_report = Some(report),
                         Err(e) => return Err(ExecError::Decode(e.to_string())),
                     }
+                    continue;
+                }
+                // Withdrawing a tool from the offered catalog only changes what the model is
+                // *shown*; nothing stops it calling a name it still remembers from earlier turns.
+                // During the wrap-up reserve that distinction matters, because the whole point is
+                // that the extra turns cannot buy more work — so refuse the call outright and say
+                // why, rather than quietly running it.
+                if wrapping_up {
+                    tracing::debug!(turn, tool = %call.name, "refused a tool call during wrap-up");
+                    messages.push(Message::tool_result(
+                        &call.id,
+                        format!(
+                            "`{}` is no longer available — you are out of budget. Call `{}` with \
+                             what you have.",
+                            call.name, SUBMIT_REPORT_TOOL
+                        ),
+                    ));
                     continue;
                 }
                 // Engine-injected, like `submit_report` above: handled in-process, never reaches
@@ -781,9 +884,8 @@ impl Executor {
                     }
                 }
             }
-        }
+        };
 
-        let exhausted_name = exhausted_resource.unwrap_or("turns");
         tracing::warn!(
             turns = max_turns,
             resource = exhausted_name,
@@ -1408,6 +1510,125 @@ mod tests {
 
         assert_eq!(report.outcome, Outcome::Failed);
         assert!(report.summary.contains("budget"));
+    }
+
+    /// The live failure this exists for: a research subagent spent every turn searching
+    /// successfully and was cut off before it ever filed, so a run that had done the work returned
+    /// nothing but "ran out of turns". Salvageable work now gets turns back to write it up.
+    #[tokio::test]
+    async fn salvageable_work_gets_a_reserve_to_file_what_it_has() {
+        let (_provider, exec) = executor(
+            vec![
+                call_tool("search"),
+                call_tool("search"),
+                // The reserve turn: only `submit_report` is still offered.
+                submit(serde_json::json!({
+                    "outcome": "partially_succeeded",
+                    "summary": "found 3 of 4 themes",
+                    "artifacts": [],
+                })),
+            ],
+            Budget::new(2),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+
+        let report = exec
+            .execute(
+                &runtime,
+                Task::new("worker", "research everything").salvageable(true),
+            )
+            .await
+            .unwrap();
+
+        // The model's own report, not the synthesized budget one.
+        assert_eq!(report.outcome, Outcome::PartiallySucceeded);
+        assert_eq!(report.summary, "found 3 of 4 themes");
+    }
+
+    /// The reserve is for *filing*, not for more work. Everything else is withdrawn when it is
+    /// granted, so a model that tries to keep going has nothing to call.
+    #[tokio::test]
+    async fn the_reserve_withdraws_every_tool_but_submit_report() {
+        let (_provider, exec) = executor(
+            vec![
+                call_tool("search"),
+                // Tries to keep searching after the reserve is granted.
+                call_tool("search"),
+                submit(serde_json::json!({
+                    "outcome": "partially_succeeded",
+                    "summary": "wrapped up",
+                    "artifacts": [],
+                })),
+            ],
+            Budget::new(1),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+
+        let report = exec
+            .execute(
+                &runtime,
+                Task::new("worker", "research everything").salvageable(true),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(report.summary, "wrapped up");
+        assert_eq!(
+            runtime.invoked().len(),
+            1,
+            "only the pre-reserve search should have run; the reserve must not buy more work"
+        );
+    }
+
+    /// All-or-nothing work is unchanged: a half-applied change is not partial credit, so there is
+    /// no reserve and the run fails exactly as it did before.
+    #[tokio::test]
+    async fn unsalvageable_work_gets_no_reserve() {
+        let (_provider, exec) = executor(
+            vec![
+                call_tool("apply_patch"),
+                call_tool("apply_patch"),
+                submit(valid_report_args()),
+            ],
+            Budget::new(2),
+        );
+        let runtime = MockToolRuntime::new(&["apply_patch"], Ok("applied".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "refactor the module"))
+            .await
+            .unwrap();
+
+        // Synthesized budget report, never reaching the scripted submit.
+        assert!(report.summary.contains("budget"), "{}", report.summary);
+        assert_eq!(runtime.invoked().len(), 2);
+    }
+
+    /// The reserve is granted once. A model that burns it without filing still gets the
+    /// synthesized report rather than looping on fresh grants.
+    #[tokio::test]
+    async fn the_reserve_is_granted_only_once() {
+        // Never files; more scripted turns than budget + reserve so the loop would keep going if
+        // the grant repeated.
+        let script: Vec<_> = std::iter::repeat_with(|| call_tool("search"))
+            .take(12)
+            .collect();
+        let (_provider, exec) = executor(script, Budget::new(2));
+        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+
+        let report = exec
+            .execute(
+                &runtime,
+                Task::new("worker", "research everything").salvageable(true),
+            )
+            .await
+            .unwrap();
+
+        assert!(report.summary.contains("budget"), "{}", report.summary);
+        assert!(
+            runtime.invoked().len() <= 2,
+            "the reserve offers no other tool, so no further searches can land"
+        );
     }
 
     #[tokio::test]

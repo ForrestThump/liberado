@@ -49,6 +49,17 @@ pub const EXPIRED_PROPOSAL_REFUSAL_SUMMARY: &str = "proposal expired — not exe
 /// Turn budget for an `ExecuteDirect` (kept tight — it is the "few steps clearly suffice" path).
 pub const DIRECT_MAX_TURNS: u32 = 4;
 
+/// Turn budget for a **read-only** subagent — research, review, summarisation.
+///
+/// Deliberately far above the general subagent default. Gathering work is turn-hungry in a way
+/// that acting work is not: a live deep-research run spent all 8 of the default turns on ~28
+/// searches and never reached its write-up. Nothing such a run touches can be left half-changed,
+/// so the only cost of a long ceiling is tokens, and the wrap-up reserve
+/// ([`liberado_executor::WRAP_UP_TURNS`]) guarantees the findings come back even at the ceiling.
+///
+/// Override per deployment with [`Orchestrator::with_research_budget`].
+pub const RESEARCH_MAX_TURNS: u32 = 30;
+
 /// The executor's system prompt for an `ExecuteDirect` tool loop. `pub` (like
 /// `Dispatcher::DEFAULT_SYSTEM_PROMPT`) so `liberado-heuristics-tuner` can read it as the seed
 /// baseline for executor-layer prompt tuning — adopting a winning candidate is still a manual
@@ -220,6 +231,8 @@ pub struct Orchestrator {
     source: String,
     direct_budget: Budget,
     subagent_budget: Budget,
+    /// Budget for read-only ("research") subagent work — see [`RESEARCH_MAX_TURNS`].
+    research_budget: Budget,
     /// Told about every proposal a runtime-level `gate` downgrade writes — optional, `None` by
     /// default. Best-effort: a notification failure never blocks the write it's reporting on.
     notifier: Option<Arc<dyn Notifier>>,
@@ -240,6 +253,8 @@ pub struct OrchestratorInfra {
     zone_write_classes: Vec<(String, WriteClass)>,
     proposals_dir: PathBuf,
     signer: ProposalSigner,
+    /// Turn ceiling for read-only subagent work, applied to every pool built from this infra.
+    research_max_turns: u32,
 }
 
 impl OrchestratorInfra {
@@ -256,7 +271,17 @@ impl OrchestratorInfra {
             zone_write_classes,
             proposals_dir,
             signer,
+            research_max_turns: RESEARCH_MAX_TURNS,
         }
+    }
+
+    /// Set the read-only ("research") subagent turn ceiling for every pool built from this infra.
+    ///
+    /// Exists so the deployment can tune it from `topology.toml` without a rebuild — the same
+    /// treatment the per-role model settings get.
+    pub fn with_research_max_turns(mut self, max_turns: u32) -> Self {
+        self.research_max_turns = max_turns;
+        self
     }
 
     /// Build the [`Orchestrator`] for one pool: only what's actually pool-specific — its
@@ -282,6 +307,7 @@ impl OrchestratorInfra {
             source: DEFAULT_SOURCE.to_string(),
             direct_budget: Budget::new(DIRECT_MAX_TURNS),
             subagent_budget: Budget::default(),
+            research_budget: Budget::new(self.research_max_turns),
             notifier: None,
         }
     }
@@ -314,8 +340,41 @@ impl Orchestrator {
             source: DEFAULT_SOURCE.to_string(),
             direct_budget: Budget::new(DIRECT_MAX_TURNS),
             subagent_budget: Budget::default(),
+            research_budget: Budget::new(RESEARCH_MAX_TURNS),
             notifier: None,
         }
+    }
+
+    /// Override the turn budget for read-only subagent work (default [`RESEARCH_MAX_TURNS`]).
+    pub fn with_research_budget(mut self, budget: Budget) -> Self {
+        self.research_budget = budget;
+        self
+    }
+
+    /// Can this dispatch only *read*?
+    ///
+    /// True when every MCP the subagent is allowed to touch is declared `ReadOnly`. Such a run
+    /// cannot leave anything half-written, which is what makes both the long research budget and
+    /// the wrap-up reserve safe to grant.
+    ///
+    /// An **unknown** MCP name is treated as not-read-only. The name should always resolve, but if
+    /// the catalog and the classifier ever disagree, the failure that costs nothing is a research
+    /// run getting the ordinary budget — not an unrecognised writer getting 30 turns and being
+    /// told its partial work is worth reporting.
+    fn is_read_only_dispatch(&self, allowed_mcps: &[String]) -> bool {
+        if allowed_mcps.is_empty() {
+            return false;
+        }
+        let catalog = match &self.live_catalog {
+            Some(cat) => cat.consequence_catalog(),
+            None => self.consequence_catalog.clone(),
+        };
+        allowed_mcps.iter().all(|mcp| {
+            catalog
+                .iter()
+                .find(|(name, _)| name == mcp)
+                .is_some_and(|(_, consequence)| *consequence == Consequence::ReadOnly)
+        })
     }
 
     /// Prefer live catalog lookups in the runtime gate (topology MCP hot-reload).
@@ -478,13 +537,27 @@ impl Orchestrator {
                         subgoal.as_str(),
                         correlation_id.as_str(),
                     );
+                    // Research = a subagent that can only read. Derived rather than declared:
+                    // the classifier has no task-type field, but "every MCP it may touch is
+                    // read_only" is exactly the property that matters here — such a run cannot
+                    // leave anything half-written, so returning what it gathered is always safe,
+                    // and gathering is the work that benefits from a long budget.
+                    let research = self.is_read_only_dispatch(&allowed_mcps);
+                    let budget = if research {
+                        &self.research_budget
+                    } else {
+                        &self.subagent_budget
+                    };
                     tracing::debug!(
                         subagents = allowed_mcps.len(),
                         criteria = success_criteria.len(),
+                        research,
+                        max_turns = budget.max_turns,
                         "building subagent task"
                     );
-                    let task = Task::new(subagent_instructions(&success_criteria), subgoal);
-                    let mut report = self.execute(&self.subagent_budget, &*runtime, task).await?;
+                    let task = Task::new(subagent_instructions(&success_criteria), subgoal)
+                        .salvageable(research);
+                    let mut report = self.execute(budget, &*runtime, task).await?;
                     // Out-of-band deferral mid-run → mark it so a chat surface drops the redundant
                     // reply (Gap 2). This is the primary path for a delegated subagent's permission
                     // request bubbling up through `delegate`.
@@ -699,10 +772,18 @@ impl Orchestrator {
             goal,
             proposal.correlation_id.as_str(),
         );
-        let task = Task::new(subagent_instructions(success_criteria), goal);
-        let mut report = self.execute(&self.subagent_budget, &*runtime, task).await?;
+        // Same derivation as the live dispatch arm: an approved proposal that can only read is
+        // still research, and gets the same budget and the same right to file partial findings.
+        let research = self.is_read_only_dispatch(allowed_mcps);
+        let budget = if research {
+            &self.research_budget
+        } else {
+            &self.subagent_budget
+        };
+        let task = Task::new(subagent_instructions(success_criteria), goal).salvageable(research);
+        let mut report = self.execute(budget, &*runtime, task).await?;
         report.deferred_to_human = deferred_flag_of(&deferral);
-        tracing::info!(outcome = ?report.outcome, "executed approved subagent proposal");
+        tracing::info!(outcome = ?report.outcome, research, "executed approved subagent proposal");
         Ok(report)
     }
 
@@ -1027,6 +1108,79 @@ mod tests {
         let gate = subagent_gate_capabilities(&ceiling, &explicit, &["b".into()]);
         assert!(gate.grants_mcp("a"));
         assert!(!gate.grants_mcp("b"));
+    }
+
+    fn orchestrator_with_catalog(catalog: Vec<(String, Consequence)>) -> Orchestrator {
+        Orchestrator::new(
+            Arc::new(MockProvider::with_script("mock", vec![])),
+            NoopFactory,
+            CapabilitySet::empty(),
+            catalog,
+            Vec::new(),
+            Vec::new(),
+            std::env::temp_dir(),
+            ProposalSigner::random(),
+            "default",
+        )
+    }
+
+    fn web_catalog() -> Vec<(String, Consequence)> {
+        vec![
+            ("search".into(), Consequence::ReadOnly),
+            ("spider".into(), Consequence::ReadOnly),
+            ("vault".into(), Consequence::Reversible),
+            ("email".into(), Consequence::External),
+        ]
+    }
+
+    /// "Research" is derived, not declared: every MCP the subagent may touch is read-only, so
+    /// nothing can be left half-written. This is the condition that earns both the long budget and
+    /// the right to file partial findings.
+    #[test]
+    fn read_only_dispatch_is_research() {
+        let orch = orchestrator_with_catalog(web_catalog());
+        assert!(orch.is_read_only_dispatch(&["search".into()]));
+        assert!(orch.is_read_only_dispatch(&["search".into(), "spider".into()]));
+    }
+
+    #[test]
+    fn any_writer_in_the_set_disqualifies_it() {
+        let orch = orchestrator_with_catalog(web_catalog());
+        // One writer is enough: the run could leave something half-done.
+        assert!(!orch.is_read_only_dispatch(&["search".into(), "vault".into()]));
+        assert!(!orch.is_read_only_dispatch(&["search".into(), "email".into()]));
+    }
+
+    /// Fail toward the ordinary budget. If the catalog and the classifier ever disagree about a
+    /// name, the harmless outcome is research running with 8 turns — not an unrecognised writer
+    /// getting 30 turns and being told its partial work is worth reporting.
+    #[test]
+    fn an_unknown_mcp_is_not_treated_as_read_only() {
+        let orch = orchestrator_with_catalog(web_catalog());
+        assert!(!orch.is_read_only_dispatch(&["search".into(), "who-is-this".into()]));
+    }
+
+    /// An empty set is not research either — there is nothing to have read.
+    #[test]
+    fn an_empty_mcp_set_is_not_research() {
+        let orch = orchestrator_with_catalog(web_catalog());
+        assert!(!orch.is_read_only_dispatch(&[]));
+    }
+
+    #[test]
+    fn research_budget_is_larger_than_the_general_subagent_budget() {
+        let orch = orchestrator_with_catalog(web_catalog());
+        assert!(
+            orch.research_budget.max_turns > orch.subagent_budget.max_turns,
+            "gathering work is turn-hungry in a way acting work is not"
+        );
+        assert_eq!(orch.research_budget.max_turns, RESEARCH_MAX_TURNS);
+    }
+
+    #[test]
+    fn with_research_budget_overrides_the_default() {
+        let orch = orchestrator_with_catalog(Vec::new()).with_research_budget(Budget::new(12));
+        assert_eq!(orch.research_budget.max_turns, 12);
     }
 
     #[test]

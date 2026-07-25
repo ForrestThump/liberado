@@ -412,13 +412,16 @@ pub fn configure_daemon(
     // `OrchestratorInfra`'s doc comment) — built once here, then combined per pool below with just
     // that pool's own factory/capabilities/name.
     // Live catalog Arc — orchestrator gates re-read consequence/zone data after MCP hot-reload.
-    let orchestrator_infra = OrchestratorInfra::new(
+    let mut orchestrator_infra = OrchestratorInfra::new(
         subagent_provider.clone(),
         catalog.clone(),
         guard.zone_write_classes.clone(),
         guard.proposals_dir.clone(),
         guard.signer.clone(),
     );
+    if let Some(max_turns) = config.topology.research_max_turns {
+        orchestrator_infra = orchestrator_infra.with_research_max_turns(max_turns);
+    }
 
     // Optional — a daemon/orchestrator with no LIBERADO_TELEGRAM_* vars set just never
     // sends anything, same as before this existed. The motivating case is exactly this daemon
@@ -528,13 +531,16 @@ pub fn build_dispatch_pack(
     let dispatcher_provider = providers.dispatcher.as_ref()?;
     let subagent_provider = providers.subagent.as_ref()?;
     let guard = guard_context(&catalog, &config.policy, vault_path);
-    let orchestrator_infra = OrchestratorInfra::new(
+    let mut orchestrator_infra = OrchestratorInfra::new(
         subagent_provider.clone(),
         catalog.clone(),
         guard.zone_write_classes.clone(),
         guard.proposals_dir.clone(),
         guard.signer.clone(),
     );
+    if let Some(max_turns) = config.topology.research_max_turns {
+        orchestrator_infra = orchestrator_infra.with_research_max_turns(max_turns);
+    }
     let notifier: Option<Arc<dyn Notifier>> =
         liberado_notify::TelegramNotifier::from_env().map(|n| Arc::new(n) as Arc<dyn Notifier>);
 
