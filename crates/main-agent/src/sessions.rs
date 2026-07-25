@@ -61,7 +61,7 @@ use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, Sessi
 use thiserror::Error;
 use tokio::sync::mpsc::Sender;
 
-use crate::compaction::{self, COMPACTION_AUTHOR, CompactionConfig};
+use crate::compaction::{self, COMPACTION_AUTHOR, COMPACTION_TAIL_AUTHOR, CompactionConfig};
 use crate::face::{DispatchBridge, FaceRuntime};
 use crate::{Conversation, DEFAULT_SYSTEM_PROMPT, HUMAN_INTERFACE_SYSTEM_PROMPT};
 
@@ -636,9 +636,19 @@ impl ChatSessions {
 
     /// The ordered message history of a session (system prompt first), for rendering a reopened
     /// conversation.
+    ///
+    /// Shows the **full** transcript — compaction never deletes, so everything a compaction elided
+    /// from the model's view is still here, marker included. The one thing dropped is compaction's
+    /// re-appended tail *copies* ([`COMPACTION_TAIL_AUTHOR`]): their originals are already on the
+    /// log before the marker, so rendering both would repeat the last `keep_recent_turns` turns
+    /// after every compaction.
     pub async fn history(&self, session: Ulid) -> SessionResult<Vec<Message>> {
         let nodes = self.store.leaf_path(session, None).await?;
-        Ok(nodes.into_iter().map(|n| n.message).collect())
+        Ok(nodes
+            .into_iter()
+            .filter(|n| !n.author.is_compaction_tail_copy())
+            .map(|n| n.message)
+            .collect())
     }
 
     /// Set the title of a conversation. Idempotent — subsequent calls overwrite the same field.
@@ -974,6 +984,11 @@ impl ChatSessions {
         // Without a transactional multi-node append, a durable half-written suffix remains
         // possible; operators see the error log. The next load then resumes from marker +
         // whatever re-appended.
+        //
+        // The copies are authored [`COMPACTION_TAIL_AUTHOR`], not the original author: the
+        // originals are still on the log before the marker, and stamping the copies is what lets
+        // raw-leaf-path readers (rendered history, `Author::User` turn indexing, search) show each
+        // message once. The model view reads `message`, never `author`, so it is unaffected.
         let mut view: Vec<Message> = vec![messages[0].clone(), marker];
         let mut tail_persist_failures: usize = 0;
         for tail_node in tail {
@@ -983,7 +998,7 @@ impl ChatSessions {
                     session,
                     NewNode {
                         parent_id: parent,
-                        author: tail_node.author.clone(),
+                        author: Author::Named(COMPACTION_TAIL_AUTHOR.into()),
                         message: tail_node.message.clone(),
                     },
                 )

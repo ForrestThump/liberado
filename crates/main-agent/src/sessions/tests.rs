@@ -1736,3 +1736,66 @@ async fn set_compaction_trigger_tokens_updates_live_threshold() {
         "after lowering the live trigger, the next turn must compact"
     );
 }
+
+/// Compaction re-appends the kept tail so the model view is a contiguous log suffix. Those copies
+/// must not surface to readers that walk the raw leaf path, or every compaction repeats the last
+/// `keep_recent_turns` turns in rendered history and shifts `Author::User` turn indices (fork /
+/// rewind resolves "turn N" against that count).
+#[tokio::test]
+async fn compaction_tail_copies_are_not_visible_in_rendered_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let summary = "SUMMARY: rolled up".to_string();
+    let config = CompactionConfig {
+        enabled: true,
+        trigger_tokens: 1, // always fire
+        keep_recent_turns: 1,
+        summary_max_tokens: 512,
+        tool_result_max_chars: 2_000,
+    };
+    let (sessions, _provider) = compacting_sessions_at(
+        dir.path(),
+        config,
+        vec![
+            CompletionResponse::text(summary.clone()),
+            CompletionResponse::text("fresh answer"),
+        ],
+    )
+    .await;
+    let id = sessions.create(None).await.unwrap();
+    seed_turns(&sessions, id, &[("u-one", "a-one"), ("TAILMARK", "a-tail")]).await;
+
+    let user_turns_before = sessions
+        .history(id)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|m| m.role == Role::User)
+        .count();
+
+    sessions.turn(id, "fresh question").await.unwrap();
+
+    let history = sessions.history(id).await.unwrap();
+    assert_eq!(
+        history.iter().filter(|m| m.content == "TAILMARK").count(),
+        1,
+        "the kept tail must appear once in rendered history, not once per compaction"
+    );
+    // Compaction never deletes: the elided originals and the marker are both still rendered.
+    assert!(
+        history.iter().any(|m| m.content == "u-one"),
+        "elided originals must still render in full history"
+    );
+    assert!(
+        history
+            .iter()
+            .any(|m| m.content.starts_with(compaction::SUMMARY_HEADER)),
+        "the marker must render as a checkpoint bubble"
+    );
+    // Turn indexing (fork/rewind counts `Author::User` nodes) gained exactly the new turn.
+    let user_turns_after = history.iter().filter(|m| m.role == Role::User).count();
+    assert_eq!(
+        user_turns_after,
+        user_turns_before + 1,
+        "compaction must not inflate the user-turn count that fork/rewind indexes against"
+    );
+}

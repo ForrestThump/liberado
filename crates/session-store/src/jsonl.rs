@@ -775,6 +775,9 @@ impl SessionRecordStore for SessionStore {
         };
         nodes
             .into_iter()
+            // A compaction's re-appended tail copy repeats text that is already earlier on this
+            // path as the original — emitting both would show the last kept turns twice.
+            .filter(|n| !n.author.is_compaction_tail_copy())
             .filter_map(|n| {
                 let author = match n.author {
                     Author::System => TurnAuthor::System,

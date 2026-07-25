@@ -77,6 +77,27 @@ impl Vault {
     /// Reject relative paths that attempt to escape the vault root — `..` components, absolute
     /// paths, and Windows path prefixes. Cross-platform: uses `std::path::Component` which
     /// correctly identifies `ParentDir` and `Prefix` on both Windows and Linux.
+    ///
+    /// The **component filter is the defense**; the `starts_with` at the end is a belt-and-braces
+    /// restatement, not load-bearing (a lexical `join` cannot escape once `..` is already gone).
+    ///
+    /// # Scope
+    ///
+    /// In scope: every path argument reaching this type's `read` / `write` / `delete` /
+    /// `move_note`, which is the whole in-process surface — the daemon (proposal + reaper paths),
+    /// `liberado-memory-store`, and `liberado-telegram-approvals` all go through here, and none
+    /// construct absolute paths.
+    ///
+    /// Explicitly **not** in scope:
+    ///
+    /// - **Symlinks inside the vault that point outside it.** These checks are lexical, so a
+    ///   symlink is followed by the OS after validation passes. The vault is an Obsidian
+    ///   directory the operator owns; an attacker who can plant a symlink in it already has write
+    ///   access to the source of truth. Closing this would need `canonicalize` on every call —
+    ///   a syscall per operation, and still TOCTOU-racy.
+    /// - **Agent-facing vault tools.** Those are MCP calls to the turbovault server, which does
+    ///   its own path handling in its own process; they never pass through this wrapper. This
+    ///   guard hardens *our* callers, and is not the sandbox for tool-driven writes.
     fn validate_rel_path(&self, rel_path: &Path) -> VaultResult<()> {
         if rel_path.is_absolute() {
             return Err(VaultError::PathTraversal(format!(
@@ -238,6 +259,7 @@ impl VaultWatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
     use tokio::sync::mpsc;
 
     #[cfg(test)]
@@ -270,75 +292,69 @@ mod tests {
         assert_eq!(watch.next_event().await, None);
     }
 
-    #[test]
-    fn validate_rel_path_rejects_absolute_paths() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let dir = std::env::temp_dir().join("validate-test-abs");
-        let vault = rt.block_on(Vault::open("test", &dir)).unwrap();
-        let _clean = Cleanup(Some(dir));
+    #[tokio::test]
+    async fn validate_rel_path_rejects_traversal_out_of_the_vault() {
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open("test", dir.path()).await.unwrap();
 
-        assert!(matches!(
-            vault.validate_rel_path(Path::new("../etc/passwd")),
-            Err(VaultError::PathTraversal(_))
-        ));
-        assert!(matches!(
-            vault.validate_rel_path(Path::new("notes/../../../etc/passwd")),
-            Err(VaultError::PathTraversal(_))
-        ));
-        assert!(matches!(
-            vault.validate_rel_path(Path::new("notes/sub/../../etc/passwd")),
-            Err(VaultError::PathTraversal(_))
-        ));
-        assert!(matches!(
-            vault.validate_rel_path(Path::new("notes/../..")),
-            Err(VaultError::PathTraversal(_))
-        ));
-        assert!(matches!(
-            vault.validate_rel_path(Path::new("..")),
-            Err(VaultError::PathTraversal(_))
-        ));
+        for escape in [
+            "../etc/passwd",
+            "notes/../../../etc/passwd",
+            "notes/sub/../../etc/passwd",
+            "notes/../..",
+            "..",
+        ] {
+            assert!(
+                matches!(
+                    vault.validate_rel_path(Path::new(escape)),
+                    Err(VaultError::PathTraversal(_))
+                ),
+                "must reject traversal: {escape}"
+            );
+        }
     }
 
-    #[test]
-    fn validate_rel_path_allows_normal_relative_paths() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let dir = std::env::temp_dir().join("validate-test-ok");
-        let vault = rt.block_on(Vault::open("test", &dir)).unwrap();
-        let _clean = Cleanup(Some(dir));
+    #[tokio::test]
+    async fn validate_rel_path_allows_normal_relative_paths() {
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open("test", dir.path()).await.unwrap();
 
-        assert!(vault.validate_rel_path(Path::new("notes/hello.md")).is_ok());
-        assert!(
-            vault
-                .validate_rel_path(Path::new("proposals/abc-123.md"))
-                .is_ok()
-        );
-        assert!(vault.validate_rel_path(Path::new("hello.md")).is_ok());
-        assert!(
-            vault
-                .validate_rel_path(Path::new("sub/dir/file.md"))
-                .is_ok()
-        );
+        for ok in [
+            "notes/hello.md",
+            "proposals/abc-123.md",
+            "hello.md",
+            "sub/dir/file.md",
+            "./notes/hello.md", // a CurDir component is not an escape
+        ] {
+            assert!(
+                vault.validate_rel_path(Path::new(ok)).is_ok(),
+                "must allow ordinary relative path: {ok}"
+            );
+        }
     }
 
-    #[test]
-    fn validate_rel_path_rejects_absolute_paths_linux() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let dir = std::env::temp_dir().join("validate-test-abs2");
-        let vault = rt.block_on(Vault::open("test", &dir)).unwrap();
-        let _clean = Cleanup(Some(dir));
+    #[tokio::test]
+    async fn validate_rel_path_rejects_rooted_and_absolute_paths() {
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open("test", dir.path()).await.unwrap();
 
+        // Unix-absolute; on Windows this is a RootDir component rather than `is_absolute`, and
+        // both arms reject — which is the point of matching on `Component`, not string prefixes.
         assert!(matches!(
             vault.validate_rel_path(Path::new("/etc/passwd")),
             Err(VaultError::PathTraversal(_))
         ));
-    }
-
-    struct Cleanup(Option<PathBuf>);
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            if let Some(dir) = self.0.take() {
-                let _ = std::fs::remove_dir_all(&dir);
-            }
+        #[cfg(windows)]
+        {
+            // A Windows Prefix component (drive or UNC) must be rejected too.
+            assert!(matches!(
+                vault.validate_rel_path(Path::new(r"C:\Windows\System32\config\SAM")),
+                Err(VaultError::PathTraversal(_))
+            ));
+            assert!(matches!(
+                vault.validate_rel_path(Path::new(r"\\server\share\file.md")),
+                Err(VaultError::PathTraversal(_))
+            ));
         }
     }
 }

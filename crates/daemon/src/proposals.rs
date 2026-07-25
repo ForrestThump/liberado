@@ -380,9 +380,22 @@ pub(crate) async fn proposal_reap_loop(vault: Vault, interval: Duration) {
     }
 }
 
+/// How long past `expires` an **Approved** proposal must sit before the reaper will claim it.
+///
+/// Approved notes are the reactive path's to finish: one may be mid-`execute_approved` right as the
+/// deadline passes, and reaping it would race the Done write. But the reactive path only ever runs
+/// on a human edit, so an Approved note that expires and is never touched again would otherwise sit
+/// in the active dir forever. Waiting this long makes both true: far longer than any execute, far
+/// shorter than "forever".
+const APPROVED_REAP_GRACE: chrono::Duration = chrono::Duration::hours(1);
+
 /// Sweep `proposals/` once: read every `.md` file (excluding the archive subtree), check
 /// `is_expired_at(Utc::now())`, and if so write `status: expired` + archive into
 /// `proposals/archive/expired/`.
+///
+/// Ownership between this and the reactive path (`handle_proposal_change`) is by status:
+/// **Pending** is reaper-owned immediately; **Approved** only after [`APPROVED_REAP_GRACE`] past
+/// the deadline, so an in-flight execute finishes first; terminal statuses are nobody's.
 ///
 /// Per-file failures (read, write, archive) are logged and skipped so one bad note cannot starve
 /// the rest of the directory. Only structural failures (cannot list `proposals/`) abort the sweep.
@@ -448,11 +461,27 @@ pub(crate) async fn reap_expired_proposals(vault: &Vault) -> Result<(), DaemonEr
         if proposal.status.is_terminal() {
             continue; // already handled by handle_proposal_change
         }
-        // Only Pending is reaper-owned. Approved near the deadline may be mid-execute on the
-        // reactive path; reaping it would race the Done write. The reactive path + orchestrator
-        // refuse past-deadline execute as defense in depth.
-        if proposal.status != ProposalStatus::Pending {
-            continue;
+        match proposal.status {
+            // Reaper-owned as soon as the deadline passes — nothing is executing a Pending note.
+            ProposalStatus::Pending => {}
+            // Approved may be mid-execute on the reactive path right at the deadline, so leave it
+            // alone until well past it. Without this arm an Approved note nobody touches again
+            // never leaves the active dir, since the reactive path only runs on a human edit.
+            ProposalStatus::Approved => {
+                let past_deadline = proposal
+                    .expires
+                    .is_some_and(|expires| now - expires >= APPROVED_REAP_GRACE);
+                if !past_deadline {
+                    continue;
+                }
+                tracing::info!(
+                    proposal_id = %proposal.id,
+                    "approved proposal expired over the grace window ago and was never \
+                     resolved — reaping"
+                );
+            }
+            // Anything else is not the reaper's to move.
+            _ => continue,
         }
 
         let provenance = WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
@@ -739,8 +768,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reap_skips_expired_approved_proposals() {
-        // Approved notes near the deadline may be mid-execute; reaper must not archive them.
+    async fn reap_skips_recently_expired_approved_proposals() {
+        // Approved notes near the deadline may be mid-execute on the reactive path; the reaper
+        // must not race the Done write by archiving them out from under it.
         let dir = TempDir::new().unwrap();
         let vault = Vault::open("test", dir.path()).await.unwrap();
         let prov = WriteProvenance::agent("test", "c1");
@@ -749,6 +779,8 @@ mod tests {
 
         let mut p = expired_proposal_named("approved-late", "corr-approved");
         p.status = ProposalStatus::Approved;
+        // Expired, but only just — inside the grace window.
+        p.expires = Some(Utc::now() - ChronoDuration::minutes(1));
         vault
             .write("proposals/approved-late.md", &p.to_note(), None, &prov)
             .await
@@ -759,7 +791,7 @@ mod tests {
         let content = vault
             .read("proposals/approved-late.md")
             .await
-            .expect("approved expired note must stay in active dir");
+            .expect("approved expired note must stay in active dir inside the grace window");
         assert_eq!(
             Proposal::from_note(&content).unwrap().status,
             ProposalStatus::Approved
@@ -769,7 +801,43 @@ mod tests {
                 .read("proposals/archive/expired/approved-late.md")
                 .await
                 .is_err(),
-            "reaper must not archive Approved notes"
+            "reaper must not archive a just-expired Approved note"
+        );
+    }
+
+    #[tokio::test]
+    async fn reap_claims_approved_proposals_left_past_the_grace_window() {
+        // The reactive path only runs on a human edit, so an Approved note that expires and is
+        // never touched again would sit in the active dir forever. Past the grace window no
+        // execute can still be in flight, so the reaper completes the lifecycle.
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open("test", dir.path()).await.unwrap();
+        let prov = WriteProvenance::agent("test", "c1");
+        let proposals_dir = dir.path().join(PROPOSALS_DIR);
+        tokio::fs::create_dir_all(&proposals_dir).await.unwrap();
+
+        let mut p = expired_proposal_named("approved-stranded", "corr-stranded");
+        p.status = ProposalStatus::Approved;
+        p.expires = Some(Utc::now() - APPROVED_REAP_GRACE - ChronoDuration::minutes(1));
+        vault
+            .write("proposals/approved-stranded.md", &p.to_note(), None, &prov)
+            .await
+            .unwrap();
+
+        reap_expired_proposals(&vault).await.unwrap();
+
+        assert!(
+            vault.read("proposals/approved-stranded.md").await.is_err(),
+            "a long-stranded approved note must leave the active dir"
+        );
+        let archived = vault
+            .read("proposals/archive/expired/approved-stranded.md")
+            .await
+            .expect("stranded approved note must be archived under archive/expired/");
+        assert_eq!(
+            Proposal::from_note(&archived).unwrap().status,
+            ProposalStatus::Expired,
+            "it expired without executing — never Done"
         );
     }
 }

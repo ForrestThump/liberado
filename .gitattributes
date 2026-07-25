@@ -1,0 +1,29 @@
+# Line endings are normalized to LF in the repository.
+#
+# Without this file, what lands in a commit depends on each contributor's `core.autocrlf`, so a
+# Windows checkout can silently rewrite every line of a file it barely touched. That happened on
+# the architecture-hardening line: ~60 files were rewritten CRLF -> LF, inflating the diff roughly
+# sixfold (9075/3920 raw vs 5416/261 real) and burying the actual changes for review and blame.
+#
+# `text=auto eol=lf` makes the choice explicit and identical for everyone: git normalizes text
+# files to LF on commit and checks them out as LF on every platform. Rust, Node, and the shells in
+# use here all read LF fine on Windows.
+* text=auto eol=lf
+
+# cmd.exe is the one interpreter here that genuinely needs CRLF. PowerShell reads LF fine, so
+# .ps1 stays on the LF default rather than churning every script in scripts/ for no benefit.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary — never normalize, never diff as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.woff binary
+*.woff2 binary
+*.ttf binary

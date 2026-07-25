@@ -52,9 +52,23 @@ So the marker commits the contract “old history is summarized,” but the verb
 
 **This is a documented residual of CH3, not a day-to-day UX bug.** Acceptable for merge of the architecture-hardening line if operators accept multi-append risk; closed by construction in the design below.
 
-Related cosmetics of the rewrite model:
+Related consequences of the rewrite model:
 
-- Duplicated tail on disk (same text twice within one conversation for search).
+- **Duplicated tail on disk.** The kept tail exists twice within one conversation: the originals
+  before the marker, the re-appended copies after it. This is *not* only a search concern — every
+  reader that walks the raw leaf path sees both. Left unhandled it repeats the last
+  `keep_recent_turns` turns in rendered chat history, doubles search hits, and — because fork /
+  rewind resolves "turn N" by counting `Author::User` nodes — shifts turn indices, so forking at a
+  given turn lands in the wrong place.
+
+  **Mitigated, not removed:** the copies are authored `COMPACTION_TAIL_AUTHOR`
+  (`liberado_conversation_store::COMPACTION_TAIL_AUTHOR`), and raw-path readers skip them via
+  `Author::is_compaction_tail_copy()` — `ChatSessions::history`, `chat-search`'s scanner, and the
+  session store's `turns()`. The model-visible view deliberately keeps them; they are what makes it
+  a contiguous suffix. Guarded by
+  `compaction_tail_copies_are_not_visible_in_rendered_history`. The duplication itself remains on
+  disk until the viewport design below removes the copies by construction — so any *new* raw-path
+  reader must remember to skip them, which is the standing cost this design retires.
 - Multi-append atomicity is not free on an append-only DAG without multi-node transactions.
 
 ---

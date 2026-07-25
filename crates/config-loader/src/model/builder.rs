@@ -469,8 +469,9 @@ max_turns = 44
     #[test]
     fn a_profile_resolves_to_its_pack_and_its_own_narrower_grant() {
         let cfg = config_with_profiles();
-        let (domain, caps, _overrides, _idle) =
-            cfg.resolve_session_profile(Some("research"), "coding");
+        let (domain, caps, _overrides, _idle) = cfg
+            .resolve_session_profile(Some("research"), "coding")
+            .expect("an enabled profile resolves");
 
         // The profile picks the pack — the caller's fallback domain is overridden.
         assert_eq!(domain, "life");
@@ -487,25 +488,38 @@ max_turns = 44
     #[test]
     fn no_profile_falls_back_to_the_grant_keyed_by_the_domain() {
         let cfg = config_with_profiles();
-        let (domain, caps, _, _) = cfg.resolve_session_profile(None, "life");
+        let (domain, caps, _, _) = cfg
+            .resolve_session_profile(None, "life")
+            .expect("no profile is the documented domain-fallback path, not an error");
         assert_eq!(domain, "life");
         assert!(caps.grants_ask_human(), "an attended life session may ask");
         assert!(caps.contains(&Capability::Write(Zone::vault("tasks"))));
     }
 
     #[test]
-    fn an_unknown_profile_name_falls_back_rather_than_inventing_authority() {
+    fn an_unknown_profile_name_is_refused_rather_than_downgraded_to_the_domain_grant() {
         let cfg = config_with_profiles();
-        let (domain, caps, _, _) = cfg.resolve_session_profile(Some("nonexistent"), "life");
-        // Falls back to the domain's own grant — it must never synthesize capabilities.
-        assert_eq!(domain, "life");
-        assert_eq!(caps, cfg.policy.capabilities_for("life"));
+        let err = cfg
+            .resolve_session_profile(Some("nonexistent"), "life")
+            .expect_err("a named profile that resolves to nothing must fail closed");
+        assert!(
+            err.to_string().contains("nonexistent"),
+            "the error must name the offending profile, got: {err}"
+        );
+        // The hazard this guards: silently returning the *domain's* grant would run the session
+        // with authority the caller never asked for, on nothing worse than a typo.
+        assert!(
+            !cfg.policy.capabilities_for("life").capabilities.is_empty(),
+            "precondition: the domain grant is non-empty, so a fallback would have widened"
+        );
     }
 
     #[test]
     fn a_domain_with_no_grant_at_all_resolves_to_zero_authority() {
         let cfg = config_with_profiles();
-        let (_, caps, _, _) = cfg.resolve_session_profile(None, "coding");
+        let (_, caps, _, _) = cfg
+            .resolve_session_profile(None, "coding")
+            .expect("no profile falls back to the domain, even when that domain has no grant");
         assert!(
             caps.capabilities.is_empty(),
             "fail safe: no grant, no authority"

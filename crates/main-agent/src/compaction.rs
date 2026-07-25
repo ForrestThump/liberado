@@ -25,11 +25,16 @@
 
 use liberado_provider::{CompletionRequest, Message, Role};
 
-/// The `Author::Named` identity of a compaction marker node. This is the *only* producer/consumer
-/// contract: `ChatSessions::load` elides everything between the system root and the latest node
-/// with this author. Uses the same pre-existing `Author::Named` seam as `append_note`'s
-/// `"goal-session"` identity — additive, no store schema change.
-pub const COMPACTION_AUTHOR: &str = "compaction";
+/// The `Author::Named` identities compaction writes. Both live in the store crate because they are
+/// a **read contract** shared across layers, not private kernel state: `ChatSessions::load` elides
+/// everything between the system root and the latest [`COMPACTION_AUTHOR`] node, while every reader
+/// that walks a raw leaf path must skip [`COMPACTION_TAIL_AUTHOR`] copies or double-count them.
+/// They use the same pre-existing `Author::Named` seam as `append_note`'s `"goal-session"`
+/// identity — additive, no store schema change.
+///
+/// CH3.1 removes the tail copies entirely (see
+/// `docs/plans/context-compaction-viewport-rearchitecture.md`); until then this is the seam.
+pub use liberado_conversation_store::{COMPACTION_AUTHOR, COMPACTION_TAIL_AUTHOR};
 
 /// First line of every marker message's content — identifies the bubble in rendered history and
 /// tells the *next* summarizer (whose transcript opens with it) that this is a previous rolling

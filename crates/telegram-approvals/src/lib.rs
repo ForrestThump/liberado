@@ -1184,7 +1184,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_message_empty_text_is_ignored() {
+    /// Empty and whitespace-only input is answered with the "text messages" hint rather than
+    /// silently dropped — a blank send should tell the human what the bot accepts, not look dead.
+    async fn handle_message_empty_text_replies_with_the_text_only_hint() {
         let signer = ProposalSigner::random();
         let (vault, _dir, _stem) = temp_vault_with_proposal(&signer, ProposalStatus::Pending).await;
         let channel = Arc::new(RecordingChannel::default());
