@@ -73,6 +73,16 @@ pub struct Topology {
     /// config — no rebuild. See `docs/roadmap/latency-and-routing-observability-plan.md` §3.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub roles: HashMap<ModelRole, RoleOverride>,
+
+    /// Turn ceiling for a **read-only** subagent — research, review, summarisation. `None` →
+    /// [`liberado_orchestrator::RESEARCH_MAX_TURNS`].
+    ///
+    /// Gathering work is turn-hungry in a way acting work is not: a live deep-research run spent
+    /// all 8 of the general subagent turns on ~28 searches and never reached its write-up. A
+    /// read-only run cannot leave anything half-changed, so the only cost of a high ceiling is
+    /// tokens. Tunable here rather than compiled in, like the per-role model settings above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research_max_turns: Option<u32>,
 }
 
 /// Per-role overrides for the execution path. All fields optional; unset = inherit the global
@@ -288,6 +298,7 @@ impl Default for MainAgentConfig {
 impl Default for Topology {
     fn default() -> Self {
         Self {
+            research_max_turns: None,
             vault_path: PathBuf::new(),
             timezone: DEFAULT_TIMEZONE.to_string(),
             daemon_socket: PathBuf::from("/run/liberado/daemon.sock"),
