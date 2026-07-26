@@ -88,5 +88,28 @@ where
 {
     let response = provider.complete(request.with_json_schema(schema)).await?;
     let content = response.content.ok_or(ProviderError::EmptyResponse)?;
-    serde_json::from_str(&content).map_err(|e| ProviderError::Decode(e.to_string()))
+    serde_json::from_str(&content).map_err(|e| {
+        // Carry a prefix of what the model actually said. Without it a decode failure is
+        // unanswerable after the fact: the dispatcher logs "classification produced unusable
+        // output" and the output itself is gone, so "was the prompt wrong, or did the provider
+        // hiccup?" cannot be settled even with the logs in hand. A failed evening-debrief cron
+        // could not be diagnosed for exactly this reason. Truncated, because the point is to see
+        // the *shape* of the reply (prose instead of JSON, a fenced block, a refusal), not to
+        // mirror a large body into the log.
+        ProviderError::Decode(format!(
+            "{e} — model said: {}",
+            truncate_chars(&content, 400)
+        ))
+    })
+}
+
+/// First `max` characters of `s`, with an ellipsis when truncated. Character-based, so a multi-byte
+/// boundary can't be split.
+fn truncate_chars(s: &str, max: usize) -> String {
+    let trimmed = s.trim();
+    if trimmed.chars().count() <= max {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(max).collect();
+    format!("{head}…")
 }

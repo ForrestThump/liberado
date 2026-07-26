@@ -204,8 +204,19 @@ impl Dispatcher {
                     Ok(decision)
                 }
                 // The model responded, but unusably → safe default, don't crash.
-                Err(ProviderError::Decode(_)) | Err(ProviderError::EmptyResponse) => {
-                    tracing::warn!("classification produced unusable output; degrading to Clarify");
+                //
+                // Logged WITH the reason (which now carries a prefix of what the model actually
+                // said). A bare "unusable output" is unactionable: it cannot distinguish a provider
+                // hiccup from a prompt the model refused to answer in JSON, and the difference is
+                // the whole diagnosis. A failed evening-debrief cron was undiagnosable for exactly
+                // this reason — the fallback is deliberately silent about a Clarify nobody can
+                // answer, so this warning is the only trace the run leaves.
+                Err(e @ (ProviderError::Decode(_) | ProviderError::EmptyResponse)) => {
+                    tracing::warn!(
+                        error = %e,
+                        goal = %req.goal.chars().take(120).collect::<String>(),
+                        "classification produced unusable output; degrading to Clarify"
+                    );
                     Ok(clarify_fallback())
                 }
                 // A genuine provider failure — let the caller decide (retry/backoff).
@@ -399,14 +410,13 @@ world. Set \
 to have written down — research write-ups, deep-dive summaries, reports they said to save. The \
 system then files the subagent's report at that path verbatim and tells the human where it is.
 
-IMPORTANT — the SYSTEM performs that write, not the subagent. Do NOT add a vault or file-writing \
-MCP to `allowed_mcps` to \"let it save the file\": the subagent never writes anything, and adding \
-a writer is self-defeating — it makes the dispatch non-read-only, which DISABLES `delivery` \
-entirely and forces the very chat summary the human asked you to avoid. A goal that says \"save \
-this to my vault\" still gets read-only `allowed_mcps` (just the search/lookup MCPs it needs) plus \
-`delivery`. The path must start with one of the vault zones listed below the MCP catalog, spelled \
-exactly (they are case-sensitive; a zone not on that list is refused). When in doubt, omit \
-`delivery`.";
+The SYSTEM performs that write, not the subagent — so `delivery` does not need, and is not helped \
+by, a writing tool in `allowed_mcps`. Scope `allowed_mcps` purely by what the subagent must READ \
+to do the work, exactly as you would without `delivery`: a goal that reads notes or tasks still \
+lists the vault MCP, because reading is what it is there for. Just don't add an MCP whose only \
+purpose would be saving the report — there is nothing for it to do. The path must start with one \
+of the vault zones listed below the MCP catalog, spelled exactly (they are case-sensitive; a zone \
+not on that list is refused). When in doubt, omit `delivery`.";
 
 /// Loose schema for v1 — the prompt carries the shape. A precise JSON Schema (e.g. via `schemars`)
 /// is a follow-up that improves real-provider reliability.
