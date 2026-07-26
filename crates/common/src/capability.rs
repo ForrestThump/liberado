@@ -237,11 +237,42 @@ pub fn instruction_scope(goal: &str) -> &str {
         let trimmed = line.trim_start();
         let lead = trimmed.to_ascii_lowercase();
         if CONTEXT_MARKERS.iter().any(|m| lead.starts_with(m)) {
-            return goal[..offset].trim_end();
+            return truncate_to_instruction(&goal[..offset]);
         }
         offset += line.len();
     }
-    goal.trim_end()
+    truncate_to_instruction(goal)
+}
+
+/// How much of a goal the risk heuristics will read as an *instruction*.
+///
+/// The heuristics are a bag of words, and their target is a short imperative — "delete all my
+/// notes". Past this length a goal is not an instruction, it is an instruction **plus content**,
+/// and every long document contains "all" and "remove" somewhere.
+///
+/// That is not a hypothetical either: a live goal of 10,364 characters — a research report the face
+/// agent pasted inline so a subagent could file it — scored `Sweeping` on 5 quantifier hits and
+/// `destructive` on a stem buried in the prose, and the whole write was downgraded to a proposal the
+/// human had to approve (homelab, `chat-delegate-01KYE9FYWWNANRR864P3SXF07C`, 2026-07-26).
+/// `CONTEXT_MARKERS` did not help: pasted content carries no `Context:` line, so nothing was cut.
+///
+/// Capping is safe because this is a **pre-flight** heuristic, not the boundary. Every actual call
+/// still passes `RiskGatedToolRuntime`, which assesses the concrete arguments of the concrete tool —
+/// a real "delete all" arrives there as arguments, where it is caught regardless of what any goal
+/// text said.
+const INSTRUCTION_SCAN_LIMIT: usize = 600;
+
+/// Trim to [`INSTRUCTION_SCAN_LIMIT`] on a character boundary, then drop trailing whitespace.
+fn truncate_to_instruction(s: &str) -> &str {
+    let s = s.trim_end();
+    if s.len() <= INSTRUCTION_SCAN_LIMIT {
+        return s;
+    }
+    let mut end = INSTRUCTION_SCAN_LIMIT;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].trim_end()
 }
 
 /// An explicit permission within a zone (or to invoke a specific MCP).
@@ -363,6 +394,86 @@ impl FromIterator<Capability> for CapabilitySet {
 
 #[cfg(test)]
 mod tests {
+
+    /// The live false positive that motivated the cap: a 10,364-char report the face agent pasted
+    /// inline as a goal so a subagent could file it. Five quantifier hits and a destructive stem
+    /// buried in prose downgraded a plain vault write to a proposal the human had to approve
+    /// (homelab `chat-delegate-01KYE9FYWWNANRR864P3SXF07C`, 2026-07-26). `CONTEXT_MARKERS` could
+    /// not help — pasted content carries no `Context:` line.
+    ///
+    /// Shaped like the real goal: a one-line instruction, then a document whose incidental
+    /// "all"/"remove" language sits well past the instruction. In the live case the first such word
+    /// appeared beyond 2,000 characters, so the 600-char limit clears it by more than 3x.
+    #[test]
+    fn a_pasted_document_is_not_read_as_a_sweeping_instruction() {
+        let mut goal = String::from(
+            "Write a comprehensive markdown report to the vault at path: Learning/report.md
+
+             Use this synthesized content based on research already conducted.
+
+# Findings
+
+             The ecosystem matured considerably over the period under review, with several              independent implementations reaching production readiness.
+
+",
+        );
+        // Body text, as a real report has, before any incidental risk-shaped language appears.
+        for i in 0..12 {
+            goal.push_str(&format!(
+                "Section {i}: implementations converged on a shared interface definition, and                  adoption followed once the tooling stabilised.
+
+"
+            ));
+        }
+        // Incidental destructive/quantifier language, as any long technical document contains.
+        goal.push_str(
+            "## Operations
+
+The runtime removes all stale entries during compaction, and every              node purges its entire cache on restart.
+",
+        );
+        assert!(goal.len() > INSTRUCTION_SCAN_LIMIT * 2);
+        assert!(
+            !is_sweeping_destructive(instruction_scope(&goal)),
+            "content past the instruction must not gate the write"
+        );
+    }
+
+    /// The cap's honest limit, recorded rather than hidden: a document whose *opening* reads
+    /// destructive still trips the guard. That is acceptable — the failure mode is a proposal (an
+    /// approval tap), not an unsafe write, and the real boundary is `RiskGatedToolRuntime`, which
+    /// reads the concrete arguments of the concrete call.
+    #[test]
+    fn a_document_opening_with_destructive_prose_is_a_known_false_positive() {
+        let goal = format!(
+            "Save this note.
+
+We deleted all the old records last quarter.{}",
+            "x".repeat(INSTRUCTION_SCAN_LIMIT)
+        );
+        assert!(is_sweeping_destructive(instruction_scope(&goal)));
+    }
+
+    #[test]
+    fn a_short_destructive_instruction_still_trips_the_guard() {
+        assert!(is_sweeping_destructive(instruction_scope(
+            "Delete all my notes in the Journal folder"
+        )));
+        // Still caught when a Context: section follows.
+        assert!(is_sweeping_destructive(instruction_scope(
+            "Remove every task from the inbox
+
+Context: the user asked twice."
+        )));
+    }
+
+    #[test]
+    fn instruction_scope_truncates_on_a_character_boundary() {
+        let goal = "🎉".repeat(1000);
+        let scoped = instruction_scope(&goal);
+        assert!(scoped.len() <= INSTRUCTION_SCAN_LIMIT);
+        assert!(goal.starts_with(scoped), "must remain a valid prefix");
+    }
     use super::*;
 
     #[test]

@@ -410,6 +410,10 @@ world. Set \
 to have written down — research write-ups, deep-dive summaries, reports they said to save. The \
 system then files the subagent's report at that path verbatim and tells the human where it is.
 
+Set `depth` to \"deep\" for open-ended gathering — deep research, multi-source synthesis, review \
+across many notes — which needs far more turns than the default. Leave it unset otherwise. Depth is \
+about how much work the goal is, never about which MCPs it uses.
+
 The SYSTEM performs that write, not the subagent — so `delivery` does not need, and is not helped \
 by, a writing tool in `allowed_mcps`. Scope `allowed_mcps` purely by what the subagent must READ \
 to do the work, exactly as you would without `delivery`: a goal that reads notes or tasks still \
@@ -734,7 +738,7 @@ fn enforce_narrow_direct_tools(decision: &mut DispatchDecision, narrow_direct_to
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liberado_common::{Capability, Consequence, Delivery, ToolCall};
+    use liberado_common::{Capability, Consequence, Delivery, Depth, ToolCall};
     use liberado_provider::{CompletionResponse, MockProvider, ResponseFormat};
     use std::sync::Mutex;
 
@@ -1039,6 +1043,7 @@ mod tests {
                 model: None,
                 correlation_id: "c1".into(),
                 delivery: Delivery::Summarize,
+                depth: Depth::Normal,
             },
             confidence: 0.9,
             rationale: "open-ended, touches an external MCP".into(),
@@ -1139,6 +1144,7 @@ mod tests {
                 model: None,
                 correlation_id: "c1".into(),
                 delivery: Delivery::Summarize,
+                depth: Depth::Normal,
             },
             confidence: 0.85,
             rationale: "open-ended".into(),

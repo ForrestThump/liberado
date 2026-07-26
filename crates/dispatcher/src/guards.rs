@@ -56,7 +56,11 @@ pub(crate) fn evaluate(
                 action = %decision.action,
                 "capability gap: action references MCP not in the dispatcher grant"
             );
-            return Some(BlockReason::CapabilityGap);
+            return blocked(
+                "mcp_grant",
+                BlockReason::CapabilityGap,
+                &format!("action references '{mcp}', which the grant does not include"),
+            );
         }
     }
 
@@ -64,8 +68,13 @@ pub(crate) fn evaluate(
     // external (an email/message, an unversioned delete) needs human confirmation, even at high
     // confidence. A git-tracked vault write is `Reversible` and passes; `External`/`Irreversible`
     // does not.
-    if max_consequence(&decision.action, req) >= CONSEQUENCE_GATE {
-        return Some(BlockReason::HighConsequence);
+    let consequence = max_consequence(&decision.action, req);
+    if consequence >= CONSEQUENCE_GATE {
+        return blocked(
+            "consequence",
+            BlockReason::HighConsequence,
+            &format!("an MCP in scope is rated {consequence:?} (gate {CONSEQUENCE_GATE:?})"),
+        );
     }
 
     // (2b) Zone-write-class gate (§6 #2) — a permitted, low-*general*-consequence action can still
@@ -74,7 +83,11 @@ pub(crate) fn evaluate(
     // doc comment); the real, always-enforced boundary for every call including adaptive ones is
     // `RiskGatedToolRuntime`.
     if zone_restricted(&decision.action, req) {
-        return Some(BlockReason::ZoneRestricted);
+        return blocked(
+            "zone_write_class",
+            BlockReason::ZoneRestricted,
+            "a seed call targets a zone that is not directly agent-writable",
+        );
     }
 
     // (3) Magnitude gate — a *sweeping destructive* action is high-stakes by reach even when each
@@ -85,23 +98,56 @@ pub(crate) fn evaluate(
     // Scoped to the *instruction* — a goal that merely narrates a past deletion in a trailing
     // `Context:` section is not asking for one. See `instruction_scope`'s doc comment for the
     // live false positive that motivated this.
-    if is_sweeping_destructive(instruction_scope(&req.goal)) {
-        return Some(BlockReason::HighConsequence);
+    let instruction = instruction_scope(&req.goal);
+    if is_sweeping_destructive(instruction) {
+        return blocked(
+            "magnitude",
+            BlockReason::HighConsequence,
+            &format!(
+                "instruction reads as sweeping+destructive ({} of {} goal chars scanned)",
+                instruction.len(),
+                req.goal.len()
+            ),
+        );
     }
 
     // (4) Reaction-depth guard — halt runaway background cascades.
     if req.reaction_depth >= max_reaction_depth {
-        return Some(BlockReason::DepthLimit);
+        return blocked(
+            "reaction_depth",
+            BlockReason::DepthLimit,
+            &format!("depth {} >= max {max_reaction_depth}", req.reaction_depth),
+        );
     }
 
     // (5) Confidence floor — below the bar, ask rather than act. The write threshold is applied
     // conservatively to any action-taking decision (read/write tiering needs per-tool metadata,
     // deferred); `Clarify` was already excluded above.
     if decision.confidence < tuning.clarify_threshold_write {
-        return Some(BlockReason::LowConfidence);
+        return blocked(
+            "confidence_floor",
+            BlockReason::LowConfidence,
+            &format!(
+                "confidence {:.2} < threshold {:.2}",
+                decision.confidence, tuning.clarify_threshold_write
+            ),
+        );
     }
 
     None
+}
+
+/// Name the guard that just fired, alongside the [`BlockReason`] it produces.
+///
+/// `BlockReason` is a coarse wire type deliberately shared by more than one check: the consequence
+/// gate and the magnitude gate both return `HighConsequence`, and they are different problems with
+/// different fixes. When a live proposal appeared with `downgrade=HighConsequence`, telling the two
+/// apart required re-running the heuristic offline against the goal text — the log could not answer
+/// it. `guard=` closes that, and matches the field name `RiskGatedToolRuntime::authority_decision`
+/// uses on the runtime side, so one grep covers both enforcement points.
+fn blocked(guard: &'static str, reason: BlockReason, detail: &str) -> Option<BlockReason> {
+    tracing::warn!(guard, ?reason, detail = %detail, "pre-flight guard blocked the action");
+    Some(reason)
 }
 
 /// The MCPs an action would invoke. The tool-name convention is `"<mcp>:<tool>"`; a bare name is
@@ -175,7 +221,9 @@ fn zone_restricted(action: &DispatchAction, req: &DispatchRequest) -> bool {
 mod tests {
     use super::*;
     use crate::McpDescriptor;
-    use liberado_common::{Capability, CapabilitySet, Consequence, Delivery, ToolCall, Zone};
+    use liberado_common::{
+        Capability, CapabilitySet, Consequence, Delivery, Depth, ToolCall, Zone,
+    };
 
     fn req(capabilities: CapabilitySet, reaction_depth: u32) -> DispatchRequest {
         DispatchRequest {
@@ -440,6 +488,7 @@ mod tests {
                 model: None,
                 correlation_id: "c1".into(),
                 delivery: Delivery::Summarize,
+                depth: Depth::Normal,
             },
             confidence: 0.95,
             rationale: "test".into(),

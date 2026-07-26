@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use liberado_common::{
-    BlockReason, Capability, CapabilitySet, Consequence, Delivery, DispatchAction,
+    BlockReason, Capability, CapabilitySet, Consequence, Delivery, Depth, DispatchAction,
     DispatchDecision, Outcome, Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall,
     WriteProvenance,
 };
@@ -161,6 +161,7 @@ async fn dispatch_subagent_uses_its_own_correlation_and_allowed_mcps() {
             model: None,
             correlation_id: "subagent-42".into(),
             delivery: Delivery::Summarize,
+            depth: Depth::Normal,
         },
         confidence: 0.8,
         rationale: "multi-step".into(),
@@ -533,6 +534,7 @@ async fn dispatch_subagent_gates_with_the_narrowed_capability_set() {
             model: None,
             correlation_id: "sub-1".into(),
             delivery: Delivery::Summarize,
+            depth: Depth::Normal,
         },
         confidence: 0.8,
         rationale: "multi-step".into(),
@@ -591,6 +593,7 @@ async fn dispatch_subagent_empty_capabilities_derives_gate_from_allowed_mcps() {
             model: None,
             correlation_id: "sub-vault-1".into(),
             delivery: Delivery::Summarize,
+            depth: Depth::Normal,
         },
         confidence: 0.85,
         rationale: "vault work".into(),
@@ -652,6 +655,7 @@ async fn dispatch_subagent_empty_capabilities_still_cannot_widen_past_ceiling() 
             model: None,
             correlation_id: "sub-no-widen".into(),
             delivery: Delivery::Summarize,
+            depth: Depth::Normal,
         },
         confidence: 0.8,
         rationale: "test".into(),
@@ -1241,6 +1245,7 @@ async fn a_read_only_subagent_report_is_written_to_the_vault_by_the_orchestrator
             delivery: Delivery::Vault {
                 path: "Learning/graph-engineering.md".into(),
             },
+            depth: Depth::Deep,
         },
         confidence: 0.9,
         rationale: "read-only research".into(),
@@ -1333,6 +1338,7 @@ async fn delivery_is_refused_when_the_subagent_could_have_acted() {
             delivery: Delivery::Vault {
                 path: "Learning/x.md".into(),
             },
+            depth: Depth::Deep,
         },
         confidence: 0.9,
         rationale: "acts on the world".into(),

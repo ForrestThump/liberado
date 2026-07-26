@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use liberado_common::{
-    BlockReason, CONSEQUENCE_GATE, Capability, CapabilitySet, Consequence, Delivery,
+    BlockReason, CONSEQUENCE_GATE, Capability, CapabilitySet, Consequence, Delivery, Depth,
     DispatchAction, DispatchDecision, McpDescriptor, Outcome, Proposal, ProposalSigner,
     ProposedAction, Report, SignedProposal, ToolCall, WriteClass, WriteProvenance, mcp_of,
 };
@@ -411,6 +411,20 @@ impl Orchestrator {
     pub fn with_report_sink(mut self, sink: ReportSink) -> Self {
         self.report_sink = Some(sink);
         self
+    }
+
+    /// The turn budget for a declared [`Depth`], capped by this pool's configured ceiling.
+    ///
+    /// `Deep` is the research budget — far above the default, because gathering is turn-hungry in a
+    /// way acting is not and a long ceiling costs only tokens. The cap is what makes depth safe to
+    /// let any dispatch source raise: an orchestration agent can ask for room within an envelope the
+    /// operator set, never past it.
+    fn budget_for(&self, depth: Depth) -> &Budget {
+        match depth {
+            Depth::Deep => &self.research_budget,
+            Depth::Normal => &self.subagent_budget,
+            Depth::Shallow => &self.direct_budget,
+        }
     }
 
     /// Apply the two delivery guards and return the sink this run actually gets.
@@ -823,6 +837,7 @@ impl Orchestrator {
                     success_criteria,
                     correlation_id,
                     delivery,
+                    depth,
                     ..
                 } => {
                     let provenance = WriteProvenance::agent(self.source.clone(), &correlation_id);
@@ -843,12 +858,15 @@ impl Orchestrator {
                     // read_only" is exactly the property that matters here — such a run cannot
                     // leave anything half-written, so returning what it gathered is always safe,
                     // and gathering is the work that benefits from a long budget.
-                    let research = self.is_read_only_dispatch(&allowed_mcps);
-                    let budget = if research {
-                        &self.research_budget
-                    } else {
-                        &self.subagent_budget
-                    };
+                    // Depth decides the budget; consequence decides salvage. These used to be one
+                    // predicate (`is_read_only_dispatch`) and the conflation is what made a
+                    // deep-research goal that merely *mentioned* the vault run on 8 turns and fail.
+                    let budget = self.budget_for(depth);
+                    // Salvageable = nothing irreversible could have happened, so returning partial
+                    // findings is safe and honest. That is a consequence question, not a depth one —
+                    // and deliberately still inferred: it is a safety property, not a preference,
+                    // and so not a model's to declare.
+                    let research = self.delivery_consequence_ok(&allowed_mcps);
                     tracing::debug!(
                         subagents = allowed_mcps.len(),
                         criteria = success_criteria.len(),
@@ -870,7 +888,10 @@ impl Orchestrator {
                     }
                     let task = Task::new(instructions, subgoal)
                         .salvageable(research)
-                        .loop_profile(if research {
+                        // Exact matching for deep work: varied search queries read as
+                        // near-duplicates to a bag-of-words comparison, and a live research run was
+                        // stopped three times for exactly that.
+                        .loop_profile(if depth == Depth::Deep {
                             LoopProfile::exact()
                         } else {
                             LoopProfile::semantic()
@@ -878,9 +899,11 @@ impl Orchestrator {
                     // At info, not debug: with the budget as the only other signal, a research
                     // misclassification was previously invisible without raising the log level.
                     tracing::info!(
-                        research,
+                        depth = depth.label(),
+                        salvageable = research,
                         max_turns = budget.max_turns,
                         mcps = allowed_mcps.len(),
+                        delivery = delivery.label(),
                         "dispatching subagent"
                     );
                     let mut report = self.execute(budget, &*runtime, task).await?;
@@ -1745,6 +1768,42 @@ mod tests {
         );
         assert_eq!(effective, Delivery::Summarize);
         assert!(downgrade.is_some_and(|d| d.contains("act outside the vault")));
+    }
+
+    /// The Telegram failure, root cause. A deep-research goal that merely *mentioned* the vault
+    /// got the vault MCP in `allowed_mcps`, which made it "not read-only", which gave it 8 turns
+    /// instead of 30 — and it failed at the budget. Depth is a property of the task, not of which
+    /// MCPs it happens to touch.
+    #[test]
+    fn depth_sets_the_budget_regardless_of_which_mcps_are_in_scope() {
+        let orch = delivering_orchestrator();
+        let with_vault = ["search".to_string(), "vault".to_string()];
+
+        assert_eq!(
+            orch.budget_for(Depth::Deep).max_turns,
+            orch.research_budget.max_turns,
+            "a deep task gets the research budget even though `vault` is Reversible"
+        );
+        assert_eq!(
+            orch.budget_for(Depth::Normal).max_turns,
+            orch.subagent_budget.max_turns
+        );
+        assert!(
+            orch.budget_for(Depth::Shallow).max_turns < orch.budget_for(Depth::Normal).max_turns
+        );
+
+        // The old predicate still says "not read-only" for this list — and no longer decides turns.
+        assert!(!orch.is_read_only_dispatch(&with_vault));
+    }
+
+    /// Salvage stays *inferred*, and from consequence rather than depth: returning partial findings
+    /// is safe when nothing irreversible could have happened. It is a safety property, not a
+    /// preference, so it is not a model's to declare.
+    #[test]
+    fn salvage_follows_consequence_not_depth() {
+        let orch = delivering_orchestrator();
+        assert!(orch.delivery_consequence_ok(&["search".into(), "vault".into()]));
+        assert!(!orch.delivery_consequence_ok(&["search".into(), "email".into()]));
     }
 
     /// The regression that motivated splitting delivery from the budget derivation.

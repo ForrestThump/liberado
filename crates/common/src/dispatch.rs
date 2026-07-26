@@ -69,6 +69,10 @@ pub enum DispatchAction {
         /// value and every persisted decision round-trips unchanged.
         #[serde(default, skip_serializing_if = "Delivery::is_summarize")]
         delivery: Delivery,
+        /// How much room this subagent needs — see [`Depth`]. Defaults to [`Depth::Normal`], so an
+        /// omitted field is the safe value and persisted decisions round-trip unchanged.
+        #[serde(default, skip_serializing_if = "Depth::is_normal")]
+        depth: Depth,
         /// Model for this subagent; may differ from dispatcher/main.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<ModelChoice>,
@@ -110,6 +114,55 @@ impl DispatchAction {
 impl std::fmt::Display for DispatchAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.label())
+    }
+}
+
+/// How much room a subagent gets to work — its turn budget, declared rather than inferred.
+///
+/// # Why this is not derived
+///
+/// It was, and the derivation was wrong in a way that took a live failure to see. "Research" was
+/// inferred from *every allowed MCP being `ReadOnly`*, and that one predicate silently set three
+/// unrelated things: the turn budget, the loop profile, and whether a report could bypass the main
+/// agent. They correlated on web research, which is why it looked clean.
+///
+/// Then a deep-research goal mentioned the vault. The classifier reasonably included the vault MCP,
+/// which is `Reversible`, so the dispatch was "not read-only", so it got 8 turns instead of 30 and
+/// no wrap-up reserve — and failed at the budget with nothing to show. The task's *depth* has
+/// nothing to do with which MCPs it happens to touch, and inferring one from the other means a goal
+/// gets a smaller budget for mentioning where the answer should go.
+///
+/// Declaring it also puts the knob where the knowledge is. Any dispatch source may set it: the
+/// human, the main agent relaying them, or an orchestration agent that discovers mid-run that some
+/// sub-question is load-bearing in a way nobody anticipated when the goal was written. It is capped
+/// by the pool's configured ceiling, so raising it is a request within an envelope the operator set,
+/// never an escalation past it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Depth {
+    /// A lookup or a single hop. Fewer turns than the default.
+    Shallow,
+    /// The default working budget for a scoped subagent.
+    #[default]
+    Normal,
+    /// Open-ended gathering — deep research, multi-source synthesis, review across many notes.
+    /// Turn-hungry in a way acting work is not, and the case the wrap-up reserve exists for.
+    Deep,
+}
+
+impl Depth {
+    /// `true` for the default, so serde can omit it and leave persisted decisions byte-identical.
+    pub fn is_normal(&self) -> bool {
+        matches!(self, Depth::Normal)
+    }
+
+    /// Stable kind-label for tracing (mirrors [`DispatchAction::label`]).
+    pub fn label(&self) -> &'static str {
+        match self {
+            Depth::Shallow => "shallow",
+            Depth::Normal => "normal",
+            Depth::Deep => "deep",
+        }
     }
 }
 
@@ -311,6 +364,7 @@ mod tests {
                 delivery: Delivery::Vault {
                     path: "reviews/2026-06-21.md".into(),
                 },
+                depth: Depth::Deep,
             },
             confidence: 0.82,
             rationale: "Open-ended, multi-step, produces an artifact".into(),

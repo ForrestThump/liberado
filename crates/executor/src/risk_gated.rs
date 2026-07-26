@@ -408,8 +408,22 @@ impl ToolRuntime for RiskGatedToolRuntime {
             }
 
             // 4. Magnitude check: sweeping destructive behavior in args or goal context.
+            //
+            // The goal is read through `instruction_scope`, exactly as the dispatcher's pre-flight
+            // magnitude guard reads it. It previously was not: this side scanned the raw goal while
+            // the pre-flight side trimmed it, so the same goal could pass one guard and trip the
+            // other — and a goal carrying pasted content (a report to file, a note to save) tripped
+            // this one on words from the content rather than the instruction.
+            //
+            // The *arguments* are still scanned in full and deliberately so. That is where a real
+            // "delete all" actually appears at this layer, and it is the reason capping the goal
+            // text upstream stays safe.
             let args_text = call.arguments.to_string();
-            let full_context = format!("{} {}", self.goal_context, call.name);
+            let full_context = format!(
+                "{} {}",
+                liberado_common::instruction_scope(&self.goal_context),
+                call.name
+            );
             if is_sweeping_destructive(&args_text) || is_sweeping_destructive(&full_context) {
                 self.authority_decision(
                     "magnitude",

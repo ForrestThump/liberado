@@ -56,7 +56,7 @@ pub use catalog::{
     zone_write_restriction,
 };
 pub use dispatch::{
-    BlockReason, Delivery, DispatchAction, DispatchDecision, ExecMode, JobHandle, JobStatus,
+    BlockReason, Delivery, Depth, DispatchAction, DispatchDecision, ExecMode, JobHandle, JobStatus,
     Outcome, Report, ToolCall, bare_tool_name, mcp_of,
 };
 pub use error::{Error, Result};
