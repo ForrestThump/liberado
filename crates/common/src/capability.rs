@@ -62,6 +62,19 @@ impl WriteClass {
     }
 }
 
+/// The consequence at or above which an action needs a human in the loop.
+///
+/// `Irreversible`, so anything that cannot be undone — and everything `External` — is gated, while
+/// `Reversible` (git-tracked) writes and `ReadOnly` lookups flow.
+///
+/// Lives here rather than in the dispatcher because it is now read by two independent guards that
+/// must agree: the dispatcher's consequence guard (which downgrades a risky action to a `Clarify`
+/// or `Propose`), and the orchestrator's delivery guard (which decides whether a report may bypass
+/// the main agent). Two copies of this threshold drifting apart would mean an action the dispatcher
+/// considers safe enough to run without asking is simultaneously considered too dangerous to report
+/// directly, or worse, the reverse.
+pub const CONSEQUENCE_GATE: Consequence = Consequence::Irreversible;
+
 /// How reversible and contained an action's effects are — the axis the consequence guard gates on
 /// (dispatch spec §6 #3). Ordered by risk (the derived `Ord` follows declaration order), so the
 /// guard can compare against a threshold.

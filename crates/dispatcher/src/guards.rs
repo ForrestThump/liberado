@@ -21,6 +21,7 @@
 //! good reason — but if you add a **new** guard here, check whether `risk_gated.rs` needs the
 //! runtime equivalent, and vice versa.
 
+use liberado_common::CONSEQUENCE_GATE;
 use liberado_common::{
     BlockReason, Consequence, DispatchAction, DispatchDecision, bare_tool_name, instruction_scope,
     is_sweeping_destructive, mcp_of, zone_write_restriction,
@@ -28,11 +29,6 @@ use liberado_common::{
 use liberado_config_loader::DispatchTuning;
 
 use crate::DispatchRequest;
-
-/// At or above this consequence, a direct action is gated to a `Clarify` for confirmation. Set to
-/// `Irreversible` so anything that can't be undone — and everything `External` — needs a human, while
-/// `Reversible` (git-tracked) writes and `ReadOnly` lookups flow.
-const CONSEQUENCE_GATE: Consequence = Consequence::Irreversible;
 
 /// Evaluate the guards against a classified decision. Returns the [`BlockReason`] of the first
 /// (highest-priority) violation, or `None` if the decision passes unchanged. The caller downgrades

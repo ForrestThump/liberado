@@ -23,9 +23,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use liberado_common::{
-    BlockReason, Capability, CapabilitySet, Consequence, Delivery, DispatchAction,
-    DispatchDecision, McpDescriptor, Outcome, Proposal, ProposalSigner, ProposedAction, Report,
-    SignedProposal, ToolCall, WriteClass, WriteProvenance, mcp_of,
+    BlockReason, CONSEQUENCE_GATE, Capability, CapabilitySet, Consequence, Delivery,
+    DispatchAction, DispatchDecision, McpDescriptor, Outcome, Proposal, ProposalSigner,
+    ProposedAction, Report, SignedProposal, ToolCall, WriteClass, WriteProvenance, mcp_of,
 };
 use liberado_executor::{
     Budget, ExecError, Executor, LoopProfile, RiskGatedToolRuntime, RuntimeFactory,
@@ -433,7 +433,7 @@ impl Orchestrator {
     fn resolve_delivery(
         &self,
         requested: &Delivery,
-        research: bool,
+        allowed_mcps: &[String],
         outcome: Outcome,
     ) -> (Delivery, Option<&'static str>) {
         match requested {
@@ -441,9 +441,12 @@ impl Orchestrator {
             Delivery::Vault { .. } if self.report_sink.is_none() => {
                 (Delivery::Summarize, Some("no report sink configured"))
             }
-            Delivery::Vault { .. } if !research => (
+            Delivery::Vault { .. } if !self.delivery_consequence_ok(allowed_mcps) => (
                 Delivery::Summarize,
-                Some("dispatch is not read-only — the main agent narrates anything that acts"),
+                Some(
+                    "dispatch can act outside the vault — the main agent narrates anything with \
+                      irreversible or external effects",
+                ),
             ),
             Delivery::Vault { .. } if outcome != Outcome::Succeeded => (
                 Delivery::Summarize,
@@ -457,6 +460,48 @@ impl Orchestrator {
                 },
             },
         }
+    }
+
+    /// May a dispatch over these MCPs bypass the main agent?
+    ///
+    /// Gates on **consequence**, deliberately not on [`is_read_only_dispatch`](Self::is_read_only_dispatch).
+    /// Those were the same predicate until a live run showed why they must not be:
+    ///
+    /// "Research X and save the write-up to my vault" is the clearest case there is for direct
+    /// delivery — and it is exactly the phrasing that makes a classifier reach for the vault MCP.
+    /// The vault is `Reversible`, so the dispatch stopped being "read-only", so delivery refused,
+    /// so the report went back through the main agent to be paraphrased. The feature switched
+    /// itself off precisely when the human had asked for it most plainly.
+    ///
+    /// The question delivery actually cares about is narrower than "did this write anything". It is
+    /// **"did something happen that the main agent needs to narrate?"** — a sent email, a booked
+    /// appointment, a filed API call. Those are `Irreversible`/`External`, and for those the main
+    /// agent is the only participant that can re-dispatch, ask a follow-up, or explain a partial
+    /// action. A `Reversible` vault write is not that: it left nothing outside the system, and it
+    /// is a `git revert` away — the same reasoning [`Consequence`] already documents for rating a
+    /// vault write below an email.
+    ///
+    /// Budget and delivery therefore ask different questions of the same MCP list, and get
+    /// different answers. `is_read_only_dispatch` still governs turns and salvage, because *there*
+    /// the question really is "could this have left something half-written".
+    ///
+    /// An unknown MCP fails closed, same as the budget derivation: an unrecognised name is not
+    /// waved through to bypass the main agent.
+    fn delivery_consequence_ok(&self, allowed_mcps: &[String]) -> bool {
+        if allowed_mcps.is_empty() {
+            // Empty means "the full ceiling" — an unbounded scope we cannot rate. Fail closed.
+            return false;
+        }
+        let catalog = match &self.live_catalog {
+            Some(cat) => cat.consequence_catalog(),
+            None => self.consequence_catalog.clone(),
+        };
+        allowed_mcps.iter().all(|mcp| {
+            catalog
+                .iter()
+                .find(|(name, _)| name == mcp)
+                .is_some_and(|(_, consequence)| *consequence < CONSEQUENCE_GATE)
+        })
     }
 
     /// Why this orchestrator may **not** write a delivery to `path`, if it may not.
@@ -510,10 +555,10 @@ impl Orchestrator {
         &self,
         report: &mut Report,
         requested: &Delivery,
-        research: bool,
+        allowed_mcps: &[String],
         correlation_id: &str,
     ) -> Result<(), OrchestratorError> {
-        let (effective, downgrade) = self.resolve_delivery(requested, research, report.outcome);
+        let (effective, downgrade) = self.resolve_delivery(requested, allowed_mcps, report.outcome);
         if let Some(reason) = downgrade {
             tracing::info!(
                 requested = requested.label(),
@@ -814,7 +859,7 @@ impl Orchestrator {
                     // reply (Gap 2). This is the primary path for a delegated subagent's permission
                     // request bubbling up through `delegate`.
                     report.deferred_to_human = deferred_flag_of(&deferral);
-                    self.deliver(&mut report, &delivery, research, &correlation_id)
+                    self.deliver(&mut report, &delivery, &allowed_mcps, &correlation_id)
                         .await?;
                     tracing::Span::current().record("disposition", "reported");
                     tracing::info!(outcome = ?report.outcome, "subagent dispatch completed");
@@ -1499,6 +1544,18 @@ mod tests {
         .with_report_sink(ReportSink::new("vault", "write_note", "path", "content"))
     }
 
+    /// A dispatch whose MCPs cannot reach past the vault: `ReadOnly` lookups and a `Reversible`
+    /// vault write. Both sit below `CONSEQUENCE_GATE`, so nothing happened that the main agent
+    /// must narrate.
+    fn read_only_mcps() -> Vec<String> {
+        vec!["search".into(), "vault".into()]
+    }
+
+    /// A dispatch that can act on the world — `email` is `External`.
+    fn acting_mcps() -> Vec<String> {
+        vec!["search".into(), "email".into()]
+    }
+
     fn vault_to(path: &str) -> Delivery {
         Delivery::Vault { path: path.into() }
     }
@@ -1507,8 +1564,11 @@ mod tests {
     #[test]
     fn a_clean_read_only_run_is_delivered_to_the_vault() {
         let orch = delivering_orchestrator();
-        let (effective, downgrade) =
-            orch.resolve_delivery(&vault_to("Learning/x.md"), true, Outcome::Succeeded);
+        let (effective, downgrade) = orch.resolve_delivery(
+            &vault_to("Learning/x.md"),
+            &read_only_mcps(),
+            Outcome::Succeeded,
+        );
         assert_eq!(effective, vault_to("Learning/x.md"));
         assert_eq!(downgrade, None);
     }
@@ -1519,10 +1579,58 @@ mod tests {
     #[test]
     fn a_dispatch_that_can_act_never_bypasses_the_main_agent() {
         let orch = delivering_orchestrator();
-        let (effective, downgrade) =
-            orch.resolve_delivery(&vault_to("Learning/x.md"), false, Outcome::Succeeded);
+        let (effective, downgrade) = orch.resolve_delivery(
+            &vault_to("Learning/x.md"),
+            &acting_mcps(),
+            Outcome::Succeeded,
+        );
         assert_eq!(effective, Delivery::Summarize);
-        assert!(downgrade.is_some_and(|d| d.contains("not read-only")));
+        assert!(downgrade.is_some_and(|d| d.contains("act outside the vault")));
+    }
+
+    /// The regression that motivated splitting delivery from the budget derivation.
+    ///
+    /// "Research X and save it to my vault" is the clearest case for direct delivery, and it is
+    /// exactly the phrasing that makes a classifier include the vault MCP. Live, that made the
+    /// dispatch non-read-only and delivery refused — the feature switched itself off precisely
+    /// when the human had asked for it most plainly. A `Reversible` vault write left nothing
+    /// outside the system, so there is nothing for the main agent to narrate.
+    #[test]
+    fn a_vault_reading_dispatch_may_still_deliver() {
+        let orch = delivering_orchestrator();
+        let (effective, downgrade) = orch.resolve_delivery(
+            &vault_to("Learning/x.md"),
+            &["search".into(), "vault".into()],
+            Outcome::Succeeded,
+        );
+        assert_eq!(effective, vault_to("Learning/x.md"));
+        assert_eq!(downgrade, None);
+    }
+
+    /// ...but the budget derivation still says "not research" for that same dispatch. The two
+    /// predicates ask different questions of the same list and are *supposed* to disagree: turns
+    /// and salvage care whether anything could be left half-written; delivery cares whether
+    /// something happened out in the world.
+    #[test]
+    fn delivery_and_budget_derivations_are_independent() {
+        let orch = delivering_orchestrator();
+        let vault_read = ["search".to_string(), "vault".to_string()];
+        assert!(
+            !orch.is_read_only_dispatch(&vault_read),
+            "a Reversible MCP is not read-only — the budget derivation is unchanged"
+        );
+        assert!(
+            orch.delivery_consequence_ok(&vault_read),
+            "but nothing irreversible happened, so delivery is still allowed"
+        );
+    }
+
+    /// An unbounded scope (empty = the full ceiling) cannot be rated, so it fails closed.
+    #[test]
+    fn an_unscoped_dispatch_may_not_bypass_the_main_agent() {
+        let orch = delivering_orchestrator();
+        assert!(!orch.delivery_consequence_ok(&[]));
+        assert!(!orch.delivery_consequence_ok(&["who-is-this".into()]));
     }
 
     /// Guard #2. A failed or partial run is exactly when the detail belongs in the conversation —
@@ -1537,7 +1645,7 @@ mod tests {
             Outcome::Proposed,
         ] {
             let (effective, downgrade) =
-                orch.resolve_delivery(&vault_to("Learning/x.md"), true, outcome);
+                orch.resolve_delivery(&vault_to("Learning/x.md"), &read_only_mcps(), outcome);
             assert_eq!(
                 effective,
                 Delivery::Summarize,
@@ -1553,8 +1661,11 @@ mod tests {
     #[test]
     fn a_zone_that_is_not_agent_writable_is_refused_not_proposed() {
         let orch = delivering_orchestrator();
-        let (effective, downgrade) =
-            orch.resolve_delivery(&vault_to("Legal/x.md"), true, Outcome::Succeeded);
+        let (effective, downgrade) = orch.resolve_delivery(
+            &vault_to("Legal/x.md"),
+            &read_only_mcps(),
+            Outcome::Succeeded,
+        );
         assert_eq!(effective, Delivery::Summarize);
         assert!(downgrade.is_some_and(|d| d.contains("agent-writable")));
     }
@@ -1565,8 +1676,11 @@ mod tests {
     #[test]
     fn an_undeclared_zone_is_refused_by_the_fail_safe_default() {
         let orch = delivering_orchestrator();
-        let (effective, _) =
-            orch.resolve_delivery(&vault_to("research/x.md"), true, Outcome::Succeeded);
+        let (effective, _) = orch.resolve_delivery(
+            &vault_to("research/x.md"),
+            &read_only_mcps(),
+            Outcome::Succeeded,
+        );
         assert_eq!(effective, Delivery::Summarize);
     }
 
@@ -1575,8 +1689,11 @@ mod tests {
     fn delivery_requires_write_on_the_target_zone() {
         let mut orch = delivering_orchestrator();
         orch.capabilities = CapabilitySet::empty();
-        let (effective, downgrade) =
-            orch.resolve_delivery(&vault_to("Learning/x.md"), true, Outcome::Succeeded);
+        let (effective, downgrade) = orch.resolve_delivery(
+            &vault_to("Learning/x.md"),
+            &read_only_mcps(),
+            Outcome::Succeeded,
+        );
         assert_eq!(effective, Delivery::Summarize);
         assert!(downgrade.is_some_and(|d| d.contains("Write capability")));
     }
@@ -1586,8 +1703,11 @@ mod tests {
     #[test]
     fn without_a_sink_delivery_quietly_falls_back() {
         let orch = orchestrator_with_catalog(web_catalog());
-        let (effective, downgrade) =
-            orch.resolve_delivery(&vault_to("Learning/x.md"), true, Outcome::Succeeded);
+        let (effective, downgrade) = orch.resolve_delivery(
+            &vault_to("Learning/x.md"),
+            &read_only_mcps(),
+            Outcome::Succeeded,
+        );
         assert_eq!(effective, Delivery::Summarize);
         assert!(downgrade.is_some_and(|d| d.contains("no report sink")));
     }
@@ -1595,9 +1715,11 @@ mod tests {
     #[test]
     fn summarize_is_never_downgraded_and_needs_nothing() {
         let orch = orchestrator_with_catalog(web_catalog());
-        for (research, outcome) in [(true, Outcome::Succeeded), (false, Outcome::Failed)] {
-            let (effective, downgrade) =
-                orch.resolve_delivery(&Delivery::Summarize, research, outcome);
+        for (mcps, outcome) in [
+            (&read_only_mcps(), Outcome::Succeeded),
+            (&acting_mcps(), Outcome::Failed),
+        ] {
+            let (effective, downgrade) = orch.resolve_delivery(&Delivery::Summarize, mcps, outcome);
             assert_eq!(effective, Delivery::Summarize);
             assert_eq!(downgrade, None);
         }

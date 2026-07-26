@@ -46,6 +46,7 @@ pub mod proposal;
 pub mod provenance;
 pub mod session_grants;
 
+pub use capability::CONSEQUENCE_GATE;
 pub use capability::{
     Capability, CapabilitySet, Consequence, Magnitude, WriteClass, Zone, assess_magnitude,
     instruction_scope, is_sweeping_destructive, mentions_destructive,

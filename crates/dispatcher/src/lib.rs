@@ -396,12 +396,17 @@ DispatchSubagent may also set `delivery` to say where the finished result should
 own words — right for anything the human will want to discuss, and for anything that ACTS on the \
 world. Set \
 {\"Vault\":{\"path\":\"<zone>/<name>.md\"}} instead when the result is a document the human asked \
-to have written down — research write-ups, deep-dive summaries, reports they said to save. It is \
-then filed verbatim, unabridged, and the human is told where. Two rules: the path must start with \
-one of the vault zones listed below the MCP catalog, spelled exactly (they are case-sensitive, and \
-a zone not on that list is refused), and only use it when every MCP in allowed_mcps is read-only — \
-a subagent that changes something must report back through the main agent instead. When in doubt, \
-omit it.";
+to have written down — research write-ups, deep-dive summaries, reports they said to save. The \
+system then files the subagent's report at that path verbatim and tells the human where it is.
+
+IMPORTANT — the SYSTEM performs that write, not the subagent. Do NOT add a vault or file-writing \
+MCP to `allowed_mcps` to \"let it save the file\": the subagent never writes anything, and adding \
+a writer is self-defeating — it makes the dispatch non-read-only, which DISABLES `delivery` \
+entirely and forces the very chat summary the human asked you to avoid. A goal that says \"save \
+this to my vault\" still gets read-only `allowed_mcps` (just the search/lookup MCPs it needs) plus \
+`delivery`. The path must start with one of the vault zones listed below the MCP catalog, spelled \
+exactly (they are case-sensitive; a zone not on that list is refused). When in doubt, omit \
+`delivery`.";
 
 /// Loose schema for v1 — the prompt carries the shape. A precise JSON Schema (e.g. via `schemars`)
 /// is a follow-up that improves real-provider reliability.
