@@ -29,7 +29,7 @@ use liberado_common::{
 };
 use liberado_executor::{
     Budget, ExecError, Executor, LoopProfile, RiskGatedToolRuntime, RuntimeFactory,
-    RuntimeSetupError, Task, ToolRuntime,
+    RuntimeSetupError, SUBMIT_REPORT_TOOL, Task, ToolRuntime,
 };
 use liberado_notify::Notifier;
 use liberado_provider::{Provider, ToolDef, ToolInvocation};
@@ -436,29 +436,51 @@ impl Orchestrator {
         allowed_mcps: &[String],
         outcome: Outcome,
     ) -> (Delivery, Option<&'static str>) {
-        match requested {
-            Delivery::Summarize => (Delivery::Summarize, None),
-            Delivery::Vault { .. } if self.report_sink.is_none() => {
-                (Delivery::Summarize, Some("no report sink configured"))
-            }
-            Delivery::Vault { .. } if !self.delivery_consequence_ok(allowed_mcps) => (
-                Delivery::Summarize,
-                Some(
-                    "dispatch can act outside the vault — the main agent narrates anything with \
-                      irreversible or external effects",
-                ),
-            ),
-            Delivery::Vault { .. } if outcome != Outcome::Succeeded => (
+        // Everything except the outcome is knowable before the run — and has to be, because the
+        // subagent must be *told* its report is the deliverable (see `delivery_target`).
+        match self.delivery_target(requested, allowed_mcps) {
+            Err(reason) => (Delivery::Summarize, reason),
+            Ok(_) if outcome != Outcome::Succeeded => (
                 Delivery::Summarize,
                 Some("run did not cleanly succeed — the main agent needs the detail to react"),
             ),
-            Delivery::Vault { path } => match vault_delivery_path(path) {
-                Err(reason) => (Delivery::Summarize, Some(reason)),
-                Ok(clean) => match self.delivery_write_refusal(&clean) {
-                    Some(reason) => (Delivery::Summarize, Some(reason)),
-                    None => (Delivery::Vault { path: clean }, None),
-                },
-            },
+            Ok(path) => (Delivery::Vault { path }, None),
+        }
+    }
+
+    /// Where a requested delivery would land, decided **without** the outcome.
+    ///
+    /// Split out from [`resolve_delivery`](Self::resolve_delivery) because the answer is needed at
+    /// two different times. The outcome check can only run after execution — but the *subagent* has
+    /// to be told before execution that its report will be filed verbatim, or it writes a status
+    /// line and waits for a chance to author the document that never comes. That is not
+    /// hypothetical: the first live run filed 231 bytes reading "I have all the research I need.
+    /// Let me now write the comprehensive report directly to the vault." Every mechanism was
+    /// correct and the artifact was the model's narration of a step we had removed its tools for.
+    ///
+    /// `Err(None)` means "nothing was requested" — not a downgrade, so nothing to log.
+    fn delivery_target(
+        &self,
+        requested: &Delivery,
+        allowed_mcps: &[String],
+    ) -> Result<String, Option<&'static str>> {
+        let path = match requested {
+            Delivery::Summarize => return Err(None),
+            Delivery::Vault { path } => path,
+        };
+        if self.report_sink.is_none() {
+            return Err(Some("no report sink configured"));
+        }
+        if !self.delivery_consequence_ok(allowed_mcps) {
+            return Err(Some(
+                "dispatch can act outside the vault — the main agent narrates anything with \
+                 irreversible or external effects",
+            ));
+        }
+        let clean = vault_delivery_path(path).map_err(Some)?;
+        match self.delivery_write_refusal(&clean) {
+            Some(reason) => Err(Some(reason)),
+            None => Ok(clean),
         }
     }
 
@@ -839,7 +861,14 @@ impl Orchestrator {
                     // a live research run was stopped three times for exactly that. Research
                     // therefore judges repeats byte-exactly — re-running the same query is still
                     // thrash and still trips the guard.
-                    let task = Task::new(subagent_instructions(&success_criteria), subgoal)
+                    // Decided before the run, deliberately: a subagent whose report will be filed
+                    // verbatim has to be told so up front, or it writes a status line and waits to
+                    // author the document with a tool it was never given (see `delivery_directive`).
+                    let mut instructions = subagent_instructions(&success_criteria);
+                    if let Ok(target) = self.delivery_target(&delivery, &allowed_mcps) {
+                        instructions.push_str(&delivery_directive(&target));
+                    }
+                    let task = Task::new(instructions, subgoal)
                         .salvageable(research)
                         .loop_profile(if research {
                             LoopProfile::exact()
@@ -1346,6 +1375,33 @@ fn subagent_instructions(success_criteria: &[String]) -> String {
     format!("{SUBAGENT_PREAMBLE}\n\nYou are done when:\n{criteria}")
 }
 
+/// Told to a subagent whose report will be **filed verbatim** rather than summarised.
+///
+/// Without this the subagent has no way to know its `submit_report` summary is the artifact. The
+/// `Report::summary` contract says "high-signal, short" and every other dispatch treats it that
+/// way, so a research subagent gathers its material, writes a one-line status, and reaches for a
+/// vault tool to author the real document — a tool delivery deliberately withheld, because the
+/// system performs that write. The first live run filed exactly that: 231 bytes reading "I have
+/// all the research I need. Let me now write the comprehensive report directly to the vault."
+///
+/// So this has to do two things: say the report *is* the document, and pre-empt the search for a
+/// writing tool that is not there and is not coming.
+fn delivery_directive(path: &str) -> String {
+    format!(
+        "\n\nOUTPUT CONTRACT — read this before you start.\n\n\
+         Your `{SUBMIT_REPORT_TOOL}` `summary` IS the deliverable. The system files it verbatim at \
+         `{path}` the moment you submit, and the human reads that file — not a summary of it. So \
+         write the summary as the FINISHED DOCUMENT: complete, structured with markdown headings, \
+         as long as the material warrants, carrying the detail, sources and specifics you \
+         gathered. This is the one case where a long report is the correct answer.\n\n\
+         You have no file-writing or vault tool, and you do not need one — do not look for one, and \
+         do not end a turn intending to write the document afterwards. There is no afterwards: \
+         submitting the report IS writing it. A short status line (\"I have what I need, now I will \
+         write it up\") would be filed as the entire document, and the human would receive that \
+         instead of your work."
+    )
+}
+
 /// Validate and normalise a `Delivery::Vault` destination, or say why it can't be used.
 ///
 /// The path comes from a model, and it addresses a **write** — so it gets the same treatment every
@@ -1465,6 +1521,43 @@ mod tests {
                 what_blocked: BlockReason::Ambiguous,
             }
             .deferred_to_human()
+        );
+    }
+
+    /// The 231-byte regression. A subagent whose report is filed verbatim must be told before it
+    /// starts, or it writes a status line and waits to author the document with a tool it never
+    /// had — which is exactly what the first live run filed.
+    #[test]
+    fn a_delivered_subagent_is_told_its_report_is_the_document() {
+        let orch = delivering_orchestrator();
+        let target = orch
+            .delivery_target(&vault_to("Learning/x.md"), &read_only_mcps())
+            .expect("this dispatch can deliver");
+        let directive = delivery_directive(&target);
+        assert!(directive.contains("Learning/x.md"));
+        assert!(
+            directive.contains(SUBMIT_REPORT_TOOL),
+            "it must name the tool whose argument becomes the artifact"
+        );
+        // The two failure modes it exists to prevent, in the model's own words.
+        assert!(directive.contains("no file-writing or vault tool"));
+        assert!(directive.contains("There is no afterwards"));
+    }
+
+    /// The directive is only correct when delivery will actually happen — a downgraded dispatch
+    /// must NOT be told its summary is a document, or it writes a 20KB "summary" into chat.
+    #[test]
+    fn a_dispatch_that_cannot_deliver_gets_no_output_contract() {
+        let orch = delivering_orchestrator();
+        assert!(
+            orch.delivery_target(&vault_to("Learning/x.md"), &acting_mcps())
+                .is_err(),
+            "an acting dispatch cannot deliver, so it must not be given the contract"
+        );
+        assert!(
+            orch.delivery_target(&Delivery::Summarize, &read_only_mcps())
+                .is_err(),
+            "the default sink authors no document"
         );
     }
 
