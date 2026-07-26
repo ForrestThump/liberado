@@ -60,6 +60,20 @@ pub struct ApprovalBot {
     last_activity: Option<Arc<Mutex<Option<std::time::Instant>>>>,
     /// `(command, description)` pairs (no leading `/`) registered with the channel on startup.
     command_menu: Vec<(String, String)>,
+    /// How many chat turns are running right now.
+    ///
+    /// Inbound events are handled concurrently (see [`run`](Self::run)), so a long turn no longer
+    /// blocks the next message — but "the bot answered you while something else is still going" is
+    /// a state the human cannot see, and silently having work in flight is worse than waiting for
+    /// it. Read when a message arrives to say so out loud.
+    in_flight: Arc<std::sync::atomic::AtomicUsize>,
+    /// Sequence number of the most recently *received* chat message.
+    ///
+    /// Concurrency means replies can land out of order: ask for deep research, then ask something
+    /// quick, and the quick answer arrives first with the research following ten minutes later. A
+    /// reply whose sequence is no longer the latest gets an explicit "re: …" marker, because two
+    /// unlabelled answers in the wrong order are worse than a slow one.
+    latest_seq: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl ApprovalBot {
@@ -78,6 +92,8 @@ impl ApprovalBot {
             provider,
             tuning,
             pending_revisions: Mutex::new(HashMap::new()),
+            in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            latest_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             chat: None,
             last_activity: None,
             command_menu: Vec::new(),
@@ -155,21 +171,28 @@ impl ApprovalBot {
             }
         }
 
+        // Handle each event on its own task. Serially awaiting them meant one long turn froze the
+        // whole surface: a deep-research delegate blocks for ~10 minutes, and during that window no
+        // other chat, no /status, and — worst — no proposal Approve/Reject tap was processed, since
+        // actions arrive through this same loop. The approval path being hostage to an unrelated
+        // chat turn is the part that actually mattered.
+        let this = Arc::new(self);
         let mut cursor = String::from("0");
         loop {
-            match self.channel.receive(&mut cursor).await {
+            match this.channel.receive(&mut cursor).await {
                 Ok(events) => {
                     for event in events {
-                        self.handle_event(event).await;
+                        let bot = Arc::clone(&this);
+                        tokio::spawn(async move { bot.handle_event(event).await });
                     }
                 }
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
-                        channel = self.channel.name(),
+                        channel = this.channel.name(),
                         "messaging receive error"
                     );
-                    tokio::time::sleep(Duration::from_secs(self.tuning.poll_retry_backoff_secs))
+                    tokio::time::sleep(Duration::from_secs(this.tuning.poll_retry_backoff_secs))
                         .await;
                 }
             }
@@ -477,27 +500,68 @@ impl ApprovalBot {
             return;
         }
 
+        use std::sync::atomic::Ordering;
+
+        // Claim a sequence number and note how much was already running. Both are read back after
+        // the turn to decide what the human needs told.
+        let seq = self.latest_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        let already_running = self.in_flight.fetch_add(1, Ordering::SeqCst);
+
         tracing::info!(
             channel = self.channel.name(),
             len = text.len(),
+            seq,
+            already_running,
             "chat message received"
         );
+
+        // Say so when work is genuinely in flight — and only then. Turns now run concurrently, so
+        // "I answered you, and something else is still going" is a real state with no outward sign.
+        // Silence there would be the bot looking idle while it is not. In ordinary back-and-forth
+        // `already_running` is 0 and this never fires.
+        if already_running > 0 {
+            self.send_text(&format!(
+                "On it. (Still working on {already_running} earlier request{} — replies may arrive                  out of order.)",
+                if already_running == 1 { "" } else { "s" }
+            ))
+            .await;
+        }
+
         let _ = self.channel.set_typing().await;
         let pulse = self.spawn_typing_pulse();
         let outcome = chat.reply(text).await;
         pulse.abort();
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+
+        // If newer messages arrived while this ran, the answer is landing out of order — say what
+        // it answers. Telegram has native reply-threading but `MessagingChannel` deliberately does
+        // not expose it (it is Telegram-specific), so an inline marker is the portable version.
+        let stale = self.latest_seq.load(Ordering::SeqCst) != seq;
+        let label = |body: &str| {
+            if stale {
+                format!(
+                    "↩ re: \"{}\"
+
+{body}",
+                    preview(text)
+                )
+            } else {
+                body.to_string()
+            }
+        };
+
         match outcome {
             Ok(reply) => {
                 let reply = reply.trim();
                 if reply.is_empty() {
-                    self.send_text("(no reply text)").await;
+                    self.send_text(&label("(no reply text)")).await;
                 } else {
-                    self.send_text(reply).await;
+                    self.send_text(&label(reply)).await;
                 }
             }
             Err(e) => {
-                tracing::warn!(error = %e, "chat turn failed");
-                self.send_text(&format!("Sorry — that turn failed: {e}"))
+                tracing::warn!(error = %e, seq, "chat turn failed");
+                self.send_text(&label(&format!("Sorry — that turn failed: {e}")))
                     .await;
             }
         }
@@ -625,6 +689,19 @@ fn revision_schema() -> serde_json::Value {
         },
         "required": ["rationale", "proposed_action"]
     })
+}
+
+/// A short echo of the message a late reply is answering, for the out-of-order marker.
+///
+/// Character-based truncation so a multi-byte boundary can't be split, and newlines collapsed so a
+/// multi-line request doesn't turn the marker into a wall of quoted text.
+fn preview(text: &str) -> String {
+    const MAX: usize = 60;
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= MAX {
+        return flat;
+    }
+    format!("{}…", flat.chars().take(MAX).collect::<String>())
 }
 
 #[cfg(test)]
@@ -971,6 +1048,27 @@ mod tests {
         let content = vault.read("proposals/prop-1.md").await.unwrap();
         let proposal = Proposal::from_note(&content).unwrap();
         assert_eq!(proposal.status, ProposalStatus::Approved);
+    }
+
+    #[test]
+    fn preview_flattens_and_truncates_for_the_out_of_order_marker() {
+        assert_eq!(preview("short question"), "short question");
+        // Newlines collapse — a multi-line request must not become a wall of quoted text.
+        assert_eq!(
+            preview(
+                "line one
+  line two"
+            ),
+            "line one line two"
+        );
+        let long =
+            "research the current state of the webassembly component model tooling ecosystem";
+        let p = preview(long);
+        assert!(p.ends_with('…'));
+        assert!(p.chars().count() <= 61, "60 chars plus the ellipsis");
+        // Multi-byte input must not panic or split a boundary.
+        let emoji = "🎉".repeat(100);
+        assert!(preview(&emoji).chars().count() <= 61);
     }
 
     #[tokio::test]
