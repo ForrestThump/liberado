@@ -127,3 +127,21 @@ REMOTE
 say "Deployed main @ $SHORT. Verify from anywhere:"
 echo "  curl -fsS $API_BASE/api/status"
 echo "  ssh $SSH_TARGET 'docker exec liberado cat /etc/liberado-build-sha'   # -> $SHORT"
+
+# --- 6. Smoke the deployment ------------------------------------------------
+# The SHA check above proves the BINARY shipped. It says nothing about the config, which is a host
+# mount this script deliberately never overwrites — so a change whose behaviour lives in
+# `topology.toml` can deploy "successfully" and do nothing at all. That happened (2026-07-26): a
+# report sink was added to the repo config, the deploy went green, and vault delivery silently fell
+# back to chat summaries because the box's own config had never been touched.
+#
+# Free (no inference) and a few seconds. Non-fatal to the deploy itself — the code IS live at this
+# point, and pretending otherwise would be its own lie — but it exits non-zero so the failure is
+# impossible to scroll past.
+if [ -f "$(dirname "$0")/smoke.sh" ]; then
+  echo
+  bash "$(dirname "$0")/smoke.sh" "$SHA" || {
+    printf '\033[1;33mNOTE:\033[0m the binary is live, but the smoke check above failed.\n' >&2
+    exit 1
+  }
+fi

@@ -426,6 +426,18 @@ pub fn config_check(dir: Option<&Path>) -> Result<(), Box<dyn std::error::Error>
                 "  mcps:        {}                  [{top_src}]",
                 config.topology.mcps.len()
             );
+            // Printed unconditionally, including the "(none)" case. A silently-absent sink is the
+            // shape of a real incident: the code shipped, `topology.toml` is a host mount the
+            // deploy script does not touch, and a `Delivery::Vault` report quietly downgraded to a
+            // chat summary with nothing but a debug log to say why. A deploy smoke check greps
+            // this line, so "did my config actually reach the box" is one command.
+            match &config.topology.report_sink {
+                Some(sink) => println!(
+                    "  report sink: {}:{}                  [{top_src}]",
+                    sink.mcp, sink.tool
+                ),
+                None => println!("  report sink: (none — vault delivery unavailable)"),
+            }
             Ok(())
         }
         Err(e) => {
