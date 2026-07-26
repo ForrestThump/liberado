@@ -230,7 +230,16 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_json_propagates_a_decode_error() {
-        let mock = MockProvider::with_script("mock", [CompletionResponse::text("not json")]);
+        // Two responses, because `complete_json` retries an undecodable reply once. The error only
+        // propagates when the retry is also exhausted — which is the behaviour under test here:
+        // persistent malformed output still surfaces as `Decode`, it is just no longer instant.
+        let mock = MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::text("not json"),
+                CompletionResponse::text("still not json"),
+            ],
+        );
         let budget = Budget::new(10);
         let err = cold_start(&mock, &budget).await.unwrap_err();
         assert!(matches!(

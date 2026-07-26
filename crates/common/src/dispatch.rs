@@ -266,6 +266,24 @@ pub enum BlockReason {
     ZoneRestricted,
     LowConfidence,
     DepthLimit,
+    /// Classification output could not be decoded at all — malformed JSON, or an empty response.
+    ///
+    /// Split out from [`LowConfidence`](Self::LowConfidence), which it used to share. The two look
+    /// identical downstream and want opposite treatment: low confidence means the model understood
+    /// the goal and is unsure, which is a *goal* problem; unusable output means the model did not
+    /// answer in the required shape at all, which is a transient provider problem worth one retry.
+    /// A failed cron could not be told apart from an ambiguous one without re-running the classifier
+    /// offline (homelab evening-debrief, 2026-07-26).
+    UnusableOutput,
+    /// The action asks a human something, and this actor holds no
+    /// [`AskHuman`](crate::Capability::AskHuman) capability — a cron, a webhook reaction, an
+    /// unattended profile.
+    ///
+    /// `Clarify` presupposes an interlocutor. For an unattended dispatch there is none, so the
+    /// question is not a conservative fallback but a dead end: it is delivered to nobody and the run
+    /// is spent. The capability already declared this ("structurally unable to block on a person who
+    /// isn't there") and the dispatcher simply never consulted it.
+    Unattended,
 }
 
 /// What flows back to the main agent after Execute/Subagent. The main agent's context never

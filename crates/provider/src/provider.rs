@@ -77,6 +77,9 @@ pub trait Provider: Send + Sync {
 /// method would not be). This is the dispatcher's path to a typed `DispatchDecision`: pass the
 /// schema, get back the parsed value, and map [`ProviderError::Decode`] into the
 /// retry/repair/escalate flow (Decision 13).
+/// One retry on an undecodable reply. Not a general retry policy — see [`complete_json`].
+const DECODE_RETRIES: u32 = 1;
+
 pub async fn complete_json<P, T>(
     provider: &P,
     request: CompletionRequest,
@@ -86,7 +89,41 @@ where
     P: Provider + ?Sized,
     T: DeserializeOwned,
 {
-    let response = provider.complete(request.with_json_schema(schema)).await?;
+    let request = request.with_json_schema(schema);
+    let mut attempt = 0;
+    loop {
+        match complete_json_once::<P, T>(provider, request.clone()).await {
+            Ok(value) => return Ok(value),
+            // A reply that isn't the required shape is the one failure here worth re-asking about:
+            // structured-output decoding is close to deterministic, so a malformed or empty reply
+            // is usually a transient provider hiccup rather than a prompt the model refuses. One
+            // extra call is cheap next to what a failure costs — an unattended cron gets no second
+            // chance, and a live evening-debrief burned a whole run on a single bad reply.
+            //
+            // Deliberately narrow. Transport and rate-limit errors are NOT retried here: those have
+            // their own backoff semantics at the caller, and silently re-issuing them from inside a
+            // helper would hide load problems and double the spend on a provider already failing.
+            Err(e @ (ProviderError::Decode(_) | ProviderError::EmptyResponse))
+                if attempt < DECODE_RETRIES =>
+            {
+                attempt += 1;
+                tracing::warn!(
+                    attempt,
+                    error = %e,
+                    "structured output did not decode — retrying once"
+                );
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+async fn complete_json_once<P, T>(provider: &P, request: CompletionRequest) -> ProviderResult<T>
+where
+    P: Provider + ?Sized,
+    T: DeserializeOwned,
+{
+    let response = provider.complete(request).await?;
     let content = response.content.ok_or(ProviderError::EmptyResponse)?;
     serde_json::from_str(&content).map_err(|e| {
         // Carry a prefix of what the model actually said. Without it a decode failure is

@@ -625,6 +625,38 @@ impl Orchestrator {
         let Some(sink) = &self.report_sink else {
             return Ok(()); // unreachable: resolve_delivery downgrades without a sink.
         };
+
+        // Check the report is a document before filing it as one.
+        //
+        // The subagent declares its own success, and on the delivery path nothing else looks: the
+        // orchestrator writes whatever came back, verbatim, and the human finds out by opening the
+        // note. A live run filed 231 bytes reading "I have all the research I need. Let me now write
+        // the comprehensive report directly to the vault" — outcome Succeeded, path correct,
+        // provenance correct, and the artifact was the model narrating an intention.
+        //
+        // `delivery_directive` now tells the subagent its report IS the document, which fixed that
+        // case. This is the mechanical version of the same guarantee: a prompt holds while the model
+        // complies, the prompt is unedited, and the provider does not drift. A length check holds
+        // regardless. An LLM grading its own output would add nothing — that is the
+        // "self-congratulation" the orchestration survey warns about — so this is deliberately a
+        // dumb, deterministic assertion.
+        if let Err(why) = looks_like_a_document(&report.summary) {
+            tracing::warn!(
+                path,
+                bytes = report.summary.len(),
+                why,
+                "report failed delivery verification — falling back to the main agent"
+            );
+            report.outcome = Outcome::PartiallySucceeded;
+            report.summary = format!(
+                "NOTE: this was meant to be filed to `{path}` as a document, but it does not look \
+                 like one ({why}), so it was not written. Relay what is below and say the write-up \
+                 did not come through.\n\n{}",
+                report.summary
+            );
+            return Ok(());
+        }
+
         let body = vault_note_body(report, correlation_id, &self.source);
         let bytes = body.len();
 
@@ -1486,6 +1518,44 @@ fn vault_delivery_path(path: &str) -> Result<String, &'static str> {
     }
 }
 
+/// Minimum plausible size for a report being filed as a standalone document.
+///
+/// Not a quality bar — a deliberately low floor that only a *non*-document trips. The failure it
+/// catches filed 231 bytes; a genuine short answer that belongs in the vault still clears this, and
+/// a genuine long one clears it by orders of magnitude (live runs: 19,970 and 28,225 bytes). Set it
+/// higher and it starts rejecting real work, which would be worse than the bug.
+const MIN_DELIVERED_DOCUMENT_BYTES: usize = 400;
+
+/// Does this report look like the document it is about to be filed as?
+///
+/// Scoped to the `Delivery::Vault` path on purpose. A general "is this output good" check would need
+/// a threshold that is wrong somewhere — 400 bytes is absurd for "what's on my calendar tomorrow",
+/// which is a perfectly correct one-line answer. But vault delivery has a *stated contract*
+/// (`delivery_directive`: your report IS the finished document), so this only asks whether that
+/// contract was honoured. That is why it needs no per-task tuning.
+fn looks_like_a_document(summary: &str) -> Result<(), &'static str> {
+    let trimmed = summary.trim();
+    if trimmed.is_empty() {
+        return Err("it is empty");
+    }
+    if trimmed.len() < MIN_DELIVERED_DOCUMENT_BYTES {
+        return Err("it is too short to be a write-up");
+    }
+    // The specific shape that got filed: a couple of sentences of the model talking about what it
+    // is going to do. A real write-up of this length has structure — headings, bullets, or simply
+    // more than a few lines. Checked only as a fallback for something long enough to pass the byte
+    // floor but still not a document.
+    let has_structure = trimmed.contains('#')
+        || trimmed.contains("\n-")
+        || trimmed.contains("\n*")
+        || trimmed.contains("\n1.")
+        || trimmed.lines().filter(|l| !l.trim().is_empty()).count() >= 5;
+    if !has_structure {
+        return Err("it has no headings, list, or paragraph structure");
+    }
+    Ok(())
+}
+
 /// The note written for a `Delivery::Vault` report.
 ///
 /// Front-matter first, because this file is found later, out of context, with no conversation
@@ -1574,6 +1644,53 @@ mod tests {
             }
             .deferred_to_human()
         );
+    }
+
+    /// The exact string that was filed live, as the fixture. The prompt fix makes this unlikely;
+    /// this makes it impossible to file.
+    #[test]
+    fn the_231_byte_non_document_is_refused() {
+        let filed_live = "I have all the research I need. Let me now write the comprehensive \
+                          report directly to the vault.";
+        assert!(looks_like_a_document(filed_live).is_err());
+        assert!(looks_like_a_document("").is_err());
+        assert!(looks_like_a_document("   \n  ").is_err());
+    }
+
+    /// The floor must not reject real work — that would be worse than the bug it guards.
+    #[test]
+    fn genuine_write_ups_pass_verification() {
+        // A structured report, comfortably over the floor.
+        let mut doc = String::from("# Findings\n\n");
+        for i in 0..12 {
+            doc.push_str(&format!(
+                "## Section {i}\n\nThe implementations converged on a shared interface, and \
+                 adoption followed once tooling stabilised.\n\n"
+            ));
+        }
+        assert!(looks_like_a_document(&doc).is_ok());
+
+        // Long prose with no markdown, but real paragraph structure, still passes: the check is
+        // "is this a document", not "is this formatted the way I like".
+        let prose = (0..8)
+            .map(|i| format!("Paragraph {i} carries a full sentence of genuine findings here."))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        assert!(prose.len() > MIN_DELIVERED_DOCUMENT_BYTES);
+        assert!(looks_like_a_document(&prose).is_ok());
+    }
+
+    /// Long enough to clear the byte floor but still just the model talking — caught by structure.
+    #[test]
+    fn a_long_status_line_without_structure_is_still_refused() {
+        let rambling = "I have now completed all of the research that I believe is necessary for \
+                        this task and I am confident that I have gathered sufficient material from \
+                        the sources I consulted, so the next thing I intend to do is compose the \
+                        full write-up and place it into the vault at the path that was specified \
+                        for me earlier in this conversation, which I will begin doing immediately \
+                        once I have finished organising my notes into a coherent narrative order.";
+        assert!(rambling.len() > MIN_DELIVERED_DOCUMENT_BYTES);
+        assert!(looks_like_a_document(rambling).is_err());
     }
 
     /// The 231-byte regression. A subagent whose report is filed verbatim must be told before it

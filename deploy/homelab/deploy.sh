@@ -69,26 +69,50 @@ say "  -> $SSH_TARGET   build dir ~/$BUILD_DIR"
 # --- 2. Ship main (committed ref) + vendored repos (working copies) ----------
 # Two tar streams into a fresh incoming dir: main via git archive (reproducible), vendored via tar
 # (they have no entry in the main index). Excludes keep .git/target/node_modules out of the wire.
-say "Syncing source into ~/$BUILD_DIR.incoming"
-ssh "$SSH_TARGET" "rm -rf ~/$BUILD_DIR.incoming && mkdir -p ~/$BUILD_DIR.incoming"
+# Staging is per-invocation, not a shared `.incoming`. It happens in separate ssh calls BEFORE the
+# build lock below can be taken, so a shared name would let two concurrent deploys untar over each
+# other and the lock would then dutifully protect an already-corrupted tree.
+STAGE="$BUILD_DIR.incoming.$SHORT.$$"
+say "Syncing source into ~/$STAGE"
+ssh "$SSH_TARGET" "rm -rf ~/$STAGE && mkdir -p ~/$STAGE"
 git archive --format=tar "$SHA" \
-  | ssh "$SSH_TARGET" "tar x -C ~/$BUILD_DIR.incoming"
+  | ssh "$SSH_TARGET" "tar x -C ~/$STAGE"
 tar -cf - --exclude='.git' --exclude='target' --exclude='node_modules' $VENDORED \
-  | ssh "$SSH_TARGET" "tar x -C ~/$BUILD_DIR.incoming"
+  | ssh "$SSH_TARGET" "tar x -C ~/$STAGE"
 
 # --- 3. Rsync into the build dir, rebuild, recreate, verify ------------------
 # Remote logic runs from a here-doc on stdin (not ssh args) to dodge Git-Bash path mangling.
 # $SHA is passed as $1 so the quoted here-doc stays literal. `--exclude=target/` protects any cargo
 # cache dirs on the box from --delete (docker ignores them via .dockerignore, but no need to churn).
-ssh "$SSH_TARGET" bash -s "$SHA" "$BUILD_DIR" <<'REMOTE'
+ssh "$SSH_TARGET" bash -s "$SHA" "$BUILD_DIR" "$STAGE" <<'REMOTE'
 set -euo pipefail
-SHA="$1"; BUILD_DIR="$2"
+SHA="$1"; BUILD_DIR="$2"; STAGE="$3"
 cd "$HOME"
+
+# --- Serialize deploys ------------------------------------------------------
+# `~/$BUILD_DIR` is a single shared tree and the build SHA is stamped from an ARGUMENT, not derived
+# from the sources that were compiled. So two overlapping deploys can interleave: the second rsyncs
+# its tree over the first's mid-build, and the first then stamps its own (now wrong) SHA onto an
+# image built from the other commit. The result is an image that lies about what is in it — and the
+# SHA check at the end of this script is precisely what everyone trusts to know what is live.
+#
+# This is not hypothetical; it happened twice in one session on 2026-07-26, both times because a
+# second deploy was launched while the first was still compiling. Resolved benignly only because the
+# later commit happened to be a superset of the earlier one.
+#
+# flock waits rather than failing: a queued deploy is what the operator wanted, just later. The
+# timeout is long enough for a full from-scratch release build (~15 min) plus slack.
+exec 9>"$HOME/.$BUILD_DIR.lock"
+if ! flock -w 1800 9; then
+  echo "!! another deploy has held the build lock for 30 minutes — refusing to interleave" >&2
+  exit 1
+fi
+echo ">> build lock acquired"
 
 echo ">> rsync source into ~/$BUILD_DIR (stale files removed; target/ caches kept)"
 mkdir -p "$HOME/$BUILD_DIR"
-rsync -a --delete --exclude='target/' "$HOME/$BUILD_DIR.incoming/" "$HOME/$BUILD_DIR/"
-rm -rf "$HOME/$BUILD_DIR.incoming"
+rsync -a --delete --exclude='target/' "$HOME/$STAGE/" "$HOME/$BUILD_DIR/"
+rm -rf "$HOME/$STAGE"
 echo "$SHA" > "$HOME/$BUILD_DIR/DEPLOYED_COMMIT"
 
 # Sanity: the vendored path-dep the whole build hinges on must be present post-sync.

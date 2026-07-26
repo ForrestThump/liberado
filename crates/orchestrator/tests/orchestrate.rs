@@ -1198,7 +1198,21 @@ async fn a_read_only_subagent_report_is_written_to_the_vault_by_the_orchestrator
         SUBMIT_REPORT_TOOL,
         serde_json::json!({
             "outcome": "succeeded",
-            "summary": "## Findings\n\nThe graph engineering literature splits three ways.",
+            // A realistic write-up, not a toy string: delivery now verifies the report actually
+            // looks like the document it is about to be filed as, so a two-line fixture would be
+            // (correctly) refused and this test would assert nothing about the happy path.
+            "summary": "# Graph Engineering — Survey\n\n\
+                        ## Findings\n\n\
+                        The graph engineering literature splits three ways.\n\n\
+                        - Storage engines optimise for traversal locality.\n\
+                        - Query planners diverge on whether to materialise intermediate paths.\n\
+                        - Streaming systems treat the graph as a changelog rather than a snapshot.\n\n\
+                        ## Detail\n\n\
+                        Each camp reports incomparable benchmarks, which is the main obstacle to \
+                        drawing conclusions across them. The storage-first work measures cold \
+                        traversal; the planner work measures warm repeated queries.\n\n\
+                        ## Open questions\n\n\
+                        Whether the streaming formulation subsumes the other two remains unsettled.",
         }),
     )])];
     let provider = Arc::new(MockProvider::with_script("mock", script));

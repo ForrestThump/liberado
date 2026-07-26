@@ -42,8 +42,22 @@ pub(crate) fn evaluate(
     tuning: &DispatchTuning,
     max_reaction_depth: u32,
 ) -> Option<BlockReason> {
-    // A Clarify is already the most conservative action — nothing to downgrade.
+    // A Clarify is the most conservative action — *when somebody can answer it*.
+    //
+    // For an actor holding no `AskHuman` capability there is no one, so a question is not a
+    // conservative fallback, it is a dead end: the run is spent producing something delivered to
+    // nobody. The capability model already says this ("structurally unable to block on a person who
+    // isn't there") and the homelab's `dispatcher` grant already omits `AskHuman` — this guard is
+    // the dispatcher finally reading a constraint that was declared all along, rather than a new
+    // rule. A live evening-debrief cron burned a run on "how should I proceed?" at 01:55.
     if matches!(decision.action, DispatchAction::Clarify { .. }) {
+        if !req.capabilities.grants_ask_human() {
+            return blocked(
+                "ask_human_capability",
+                BlockReason::Unattended,
+                "Clarify requires an interlocutor and this actor holds no AskHuman capability",
+            );
+        }
         return None;
     }
 
@@ -242,6 +256,46 @@ mod tests {
             reaction_depth,
             zone_write_classes: Vec::new(),
         }
+    }
+
+    fn clarify_decision() -> DispatchDecision {
+        DispatchDecision {
+            action: DispatchAction::Clarify {
+                questions: vec!["which one?".into()],
+                what_blocked: BlockReason::Ambiguous,
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        }
+    }
+
+    /// A cron holds no `AskHuman`, so a `Clarify` is a dead end: delivered to nobody, run spent.
+    /// The homelab's `dispatcher` grant already omitted the capability — the dispatcher just never
+    /// read it, and a live evening-debrief burned a run on "how should I proceed?" at 01:55.
+    #[test]
+    fn an_unattended_actor_may_not_be_asked_to_clarify() {
+        let unattended = granted("tasks-mcp"); // no AskHuman
+        let reason = evaluate(
+            &clarify_decision(),
+            &req(unattended, 0),
+            &DispatchTuning::default(),
+            5,
+        );
+        assert_eq!(reason, Some(BlockReason::Unattended));
+    }
+
+    /// ...and an actor that *can* ask is untouched: Clarify remains the conservative answer there.
+    #[test]
+    fn an_interactive_actor_may_still_clarify() {
+        let mut interactive = granted("tasks-mcp");
+        interactive.grant(Capability::AskHuman);
+        let reason = evaluate(
+            &clarify_decision(),
+            &req(interactive, 0),
+            &DispatchTuning::default(),
+            5,
+        );
+        assert_eq!(reason, None);
     }
 
     fn execute_direct(tool: &str, confidence: f32) -> DispatchDecision {
@@ -505,8 +559,12 @@ mod tests {
         );
     }
 
+    /// A Clarify skips the *other* guards — confidence floor, depth limit — because asking is
+    /// already the conservative answer. Renamed from `clarify_is_never_downgraded`: that was true
+    /// unconditionally until the AskHuman guard, and "never" is now wrong. The exemption holds only
+    /// when someone can actually answer, so this fixture must grant `AskHuman` to test it.
     #[test]
-    fn clarify_is_never_downgraded() {
+    fn clarify_skips_the_other_guards_when_a_human_is_reachable() {
         let d = DispatchDecision {
             action: DispatchAction::Clarify {
                 questions: vec!["which?".into()],
@@ -515,13 +573,10 @@ mod tests {
             confidence: 0.0, // would trip the confidence floor if it applied
             rationale: "test".into(),
         };
+        let mut caps = CapabilitySet::empty();
+        caps.grant(Capability::AskHuman);
         assert_eq!(
-            evaluate(
-                &d,
-                &req(CapabilitySet::empty(), 9),
-                &DispatchTuning::default(),
-                4
-            ),
+            evaluate(&d, &req(caps, 9), &DispatchTuning::default(), 4),
             None
         );
     }
