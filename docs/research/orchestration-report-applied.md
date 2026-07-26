@@ -30,12 +30,17 @@ citations are checkable peer-reviewed work, while most of the concrete numbers (
 cliff math, the six patterns) come from a single blog cited ~15 times and are presented with identical
 confidence.
 
-**What is actually worth doing.** First, **prompt caching**, which is entirely unclaimed: there is no
-`cache_control` or cache accounting anywhere, and `Usage` carries only prompt/completion/total, so we cannot
-even see whether the provider is caching for us. A `depth=deep` run resends the same system prompt and the
-same four MCPs' full tool schemas on all thirty turns — the most cacheable workload we have. Measure before
-optimising: surface the cache fields first, then chase prefix stability (`MultiMcpRuntime.runtimes` is a
-`HashMap`, so tool order is arbitrary across restarts). Second, **executable verification** on report
+**What is actually worth doing.** Not prompt caching, as it turns out — and the correction is the most useful
+thing in this document. It looked like the largest unclaimed lever (no `cache_control` anywhere, `Usage`
+carrying only prompt/completion/total) but it was never unclaimed, only **unmeasured**: DeepSeek caches a
+stable prefix automatically, and once `Usage` was taught to read the field, two cheap probes came back at
+**98.1% and 92.8%** hit rates — well above the report's 70% target. Implementing first would have produced
+`cache_control` breakpoints that this backend ignores, plus a claimed saving that already existed. What
+remains genuinely open is whether the cache tracks a *growing* prefix: both probes were short chats where the
+cached ~896 tokens are just system prompt + tool schemas, and a 30-turn research run accumulates tens of
+thousands of tokens of tool results. That is the case where caching is worth real money, and it should be
+measured on a deep run rather than extrapolated (`MultiMcpRuntime.runtimes` is a `HashMap`, so tool order is
+arbitrary across restarts — the first suspect if hit rate is ever low). Second, **executable verification** on report
 submission — the report is blunt that an LLM checking its own output is "self-congratulation," and our
 231-byte delivered artifact is that failure exactly: the subagent reported `Succeeded` and nothing checked.
 A non-model assertion at delivery (length, structure) would have caught it before the vault did. Third,
