@@ -227,6 +227,24 @@ impl Dispatcher {
             .collect::<Vec<_>>()
             .join("\n");
         let mut user_message = format!("Goal:\n{}\n\nAvailable MCPs:\n{}", req.goal, catalog);
+        // The zones a `delivery = Vault` path may start with. Without this the classifier is being
+        // asked to name a destination it has never been shown, so it invents a plausible one
+        // (`research/`), the orchestrator's zone guard refuses the undeclared zone, and delivery
+        // silently falls back — the feature would look broken rather than unconfigured. Only
+        // directly-writable zones are listed: a `ProposalOnly`/`HumanOnly` zone would be refused
+        // just the same, so offering it would only invite the mistake.
+        let writable: Vec<&str> = req
+            .zone_write_classes
+            .iter()
+            .filter(|(_, class)| class.allows_direct_agent_write())
+            .map(|(zone, _)| zone.as_str())
+            .collect();
+        if !writable.is_empty() {
+            user_message.push_str(&format!(
+                "\n\nVault zones a `delivery` path may start with (exact, case-sensitive):\n{}",
+                writable.join(", ")
+            ));
+        }
         if !hits.is_empty() {
             let guidance = hits
                 .iter()
@@ -356,7 +374,8 @@ tool is obvious (list_tasks, search, read_note).
 themes, multi-step synthesis) is complex enough to warrant a DispatchSubagent with its own \
 context slice, even when no single step is individually hard.
 
-Return ONLY JSON of the form (use exactly these fields — nothing else):
+Return ONLY JSON of the form (these fields, plus the optional `delivery` described below — never \
+invent others):
 {\"action\":{\"ExecuteDirect\":{\"seed_calls\":[{\"tool\":\"mcp:tool\",\"args\":{}}],\"relevant_mcps\":[\"...\"]}},\"confidence\":0.9,\"rationale\":\"...\"}
 {\"action\":{\"DispatchSubagent\":{\"goal\":\"...\",\"allowed_mcps\":[\"...\"],\"success_criteria\":[\"...\"]}},\"confidence\":0.8,\"rationale\":\"...\"}
 {\"action\":{\"Clarify\":{\"questions\":[\"...\"],\"what_blocked\":\"ambiguous\"}},\"confidence\":0.4,\"rationale\":\"...\"}
@@ -366,11 +385,23 @@ actually needs — same idea as DispatchSubagent's `allowed_mcps`, just for the 
 case. Leave it empty if the goal doesn't clearly need any MCP, or if you're unsure (it only \
 narrows what the executor sees; it is never the sole source of truth for what's allowed).
 
-For DispatchSubagent, emit only goal, allowed_mcps (names from the catalog), and success_criteria. \
+For DispatchSubagent, emit goal, allowed_mcps (names from the catalog), and success_criteria. \
 `allowed_mcps` is the subagent's tool scope: list every catalog MCP it will need (vault/note/task \
 goals need the vault MCP name as it appears in the catalog, e.g. turbovault). Prefer a tight list; \
 empty allowed_mcps means the full dispatcher grant (broad — avoid unless truly necessary). Do not \
-invent MCP names or capability objects. `seed_calls` may be omitted (empty).";
+invent MCP names or capability objects. `seed_calls` may be omitted (empty).
+
+DispatchSubagent may also set `delivery` to say where the finished result should GO. Omit it \
+(the default) and the result comes back to the main agent, which tells the human about it in its \
+own words — right for anything the human will want to discuss, and for anything that ACTS on the \
+world. Set \
+{\"Vault\":{\"path\":\"<zone>/<name>.md\"}} instead when the result is a document the human asked \
+to have written down — research write-ups, deep-dive summaries, reports they said to save. It is \
+then filed verbatim, unabridged, and the human is told where. Two rules: the path must start with \
+one of the vault zones listed below the MCP catalog, spelled exactly (they are case-sensitive, and \
+a zone not on that list is refused), and only use it when every MCP in allowed_mcps is read-only — \
+a subagent that changes something must report back through the main agent instead. When in doubt, \
+omit it.";
 
 /// Loose schema for v1 — the prompt carries the shape. A precise JSON Schema (e.g. via `schemars`)
 /// is a follow-up that improves real-provider reliability.
@@ -688,7 +719,7 @@ fn enforce_narrow_direct_tools(decision: &mut DispatchDecision, narrow_direct_to
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liberado_common::{Capability, Consequence, ToolCall};
+    use liberado_common::{Capability, Consequence, Delivery, ToolCall};
     use liberado_provider::{CompletionResponse, MockProvider, ResponseFormat};
     use std::sync::Mutex;
 
@@ -992,6 +1023,7 @@ mod tests {
                 artifact_target: None,
                 model: None,
                 correlation_id: "c1".into(),
+                delivery: Delivery::Summarize,
             },
             confidence: 0.9,
             rationale: "open-ended, touches an external MCP".into(),
@@ -1091,6 +1123,7 @@ mod tests {
                 artifact_target: Some("reviews/".into()),
                 model: None,
                 correlation_id: "c1".into(),
+                delivery: Delivery::Summarize,
             },
             confidence: 0.85,
             rationale: "open-ended".into(),

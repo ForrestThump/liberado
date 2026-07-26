@@ -55,8 +55,8 @@ pub use catalog::{
     zone_write_restriction,
 };
 pub use dispatch::{
-    BlockReason, DispatchAction, DispatchDecision, ExecMode, JobHandle, JobStatus, Outcome, Report,
-    ToolCall, bare_tool_name, mcp_of,
+    BlockReason, Delivery, DispatchAction, DispatchDecision, ExecMode, JobHandle, JobStatus,
+    Outcome, Report, ToolCall, bare_tool_name, mcp_of,
 };
 pub use error::{Error, Result};
 pub use event::{DEFAULT_POOL, Event, EventPayload, EventSource, event_source};

@@ -29,6 +29,36 @@ docs in `risk_gated.rs` and `main-agent`'s `face.rs`/`sessions.rs`.
 with the pool/dispatcher ceiling (Decision 4). Empty `allowed_mcps` means all MCPs under the ceiling
 for runtime factory + gate (same sense as empty `relevant_mcps` on direct).
 
+### Report delivery (`Delivery`)
+
+A `DispatchSubagent` carries a `delivery` saying where its terminal `Report` goes. Default
+`Summarize` — back to the main agent, which narrates it. `Vault { path }` instead makes the
+**orchestrator** file the body itself: one deterministic tool call through the configured
+`ReportSink`, no model reading the body on the way, and the main agent gets back a *receipt* (path
++ size) it has nothing to restate from. That second re-emission was the cost being removed — decode
+is sequential and latency-dominant, while ingesting the body on a later turn is near-free.
+
+Delivery is model-chosen, so it is checked afterwards, and every check can only **downgrade** to
+`Summarize` — never fail the run, never upgrade:
+
+| Check | Why |
+|---|---|
+| every `allowed_mcps` entry is `ReadOnly` | if the subagent could *act*, only the main agent can re-dispatch or explain a half-done action |
+| `Outcome::Succeeded` | a failure or partial belongs in the conversation, not filed as a finished document |
+| path names a zone, no `..`, not absolute | it is a model-produced path addressing a write |
+| zone is `allows_direct_agent_write()` | an undeclared zone defaults to `ProposalOnly` — a hallucinated destination is refused, not created |
+| pool holds `Write(Zone::vault(zone))` | the orchestrator writes under its own authority here |
+
+The last two exist because `deliver_to_vault` deliberately skips `gate()` — a `RiskGatedToolRuntime`
+would turn a restricted zone into a *proposal*, and filing a research note should be one silent
+write or nothing. Skipping the gate must not mean skipping its rules, or this becomes an unguarded
+write path into the vault (the F1 shape: a guard absent because a new code path grew around it).
+
+The sink (`[topology.report_sink]`) is declared, not inferred — this crate is kernel-layer and
+reaches the vault only as an MCP tool call, so it must be told the tool and argument names.
+`validate_merged_config` refuses to boot on a sink naming a missing, disabled, read-only, or
+non-writing tool; with no sink declared, `Vault` simply downgrades and nothing changes.
+
 ## The key decoupling: `RuntimeFactory`
 
 The orchestrator does **not** know how to connect to MCP servers. It depends on a trait:

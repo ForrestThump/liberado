@@ -103,6 +103,53 @@ pub fn validate_merged_config(config: &Config) -> Result<(), ConfigLoadError> {
         }
     }
 
+    // 6. A declared report sink must actually be able to write (Decision 14).
+    //
+    // The whole point of `Delivery::Vault` is that no model is in the loop: the orchestrator makes
+    // one deterministic tool call and reports where the note went. That leaves nothing to notice a
+    // sink pointing at a missing MCP, a disabled one, or — worst — a *read* tool, which would
+    // return happily and write nothing while the receipt claimed a path. The report would simply
+    // not exist, and the human would find out by opening the file. So the sink is checked here,
+    // where the failure is a daemon that refuses to start and says why.
+    if let Some(sink) = &config.topology.report_sink {
+        let Some(mcp) = config.topology.mcps.iter().find(|m| m.name == sink.mcp) else {
+            return Err(invalid(format!(
+                "topology.report_sink.mcp '{}' is not in topology.mcps",
+                sink.mcp
+            )));
+        };
+        if !mcp.enabled {
+            return Err(invalid(format!(
+                "topology.report_sink.mcp '{}' is disabled — a report delivered to it would be \
+                 silently lost. Enable it or remove the sink.",
+                sink.mcp
+            )));
+        }
+        if mcp.consequence == liberado_common::Consequence::ReadOnly {
+            return Err(invalid(format!(
+                "topology.report_sink.mcp '{}' is rated read_only, so it cannot write the report. \
+                 Point the sink at the vault MCP.",
+                sink.mcp
+            )));
+        }
+        // Only checkable for a path-addressed MCP — a fixed-zone MCP doesn't enumerate its writers.
+        if !mcp.write_tools.is_empty() && !mcp.write_tools.contains(&sink.tool) {
+            return Err(invalid(format!(
+                "topology.report_sink.tool '{}' is not among MCP '{}'s `write_tools` ({}). A sink \
+                 that is really a read would return success and write nothing.",
+                sink.tool,
+                sink.mcp,
+                mcp.write_tools.join(", ")
+            )));
+        }
+        if sink.path_arg.trim().is_empty() || sink.content_arg.trim().is_empty() {
+            return Err(invalid(
+                "topology.report_sink.path_arg and .content_arg must be non-empty argument names"
+                    .to_string(),
+            ));
+        }
+    }
+
     for secret in &config.policy.secret_refs {
         if std::env::var_os(secret).is_none() {
             return Err(invalid(format!(
@@ -134,7 +181,9 @@ fn zone_name(zone: &Zone) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Grant, McpConfig, McpTransport, Policy, Topology, ZonePolicy};
+    use crate::model::{
+        Grant, McpConfig, McpTransport, Policy, ReportSinkConfig, Topology, ZonePolicy,
+    };
     use liberado_common::capability::Consequence;
 
     /// Helper: a minimal valid topology with one MCP.
@@ -340,6 +389,80 @@ mod tests {
         // The escape hatch exists so the opt-out is explicit. Silence is a bug; saying so is fine.
         let mut topology = topology_with_mcp("liberado-pdf-mcp");
         topology.mcps[0].writes_vault = Some(false);
+        assert!(validate_merged_config(&config(topology, Policy::default())).is_ok());
+    }
+
+    // --- Report sink (#6) ---------------------------------------------------------------------
+    //
+    // Vault delivery runs with no model in the loop, so nothing downstream can notice a sink that
+    // points somewhere useless. A misdeclared sink would mean the report silently does not exist
+    // while the receipt names a path — so it is caught here, at boot.
+
+    /// A vault-shaped MCP: path-addressed, with a real writer among its tools.
+    fn topology_with_vault() -> Topology {
+        let mut topology = topology_with_mcp("turbovault");
+        topology.mcps[0].writes_vault = None;
+        topology.mcps[0].zone_from_arg = Some("path".into());
+        topology.mcps[0].write_tools = vec!["write_note".into(), "delete_note".into()];
+        topology
+    }
+
+    fn sink(mcp: &str, tool: &str) -> ReportSinkConfig {
+        ReportSinkConfig {
+            mcp: mcp.into(),
+            tool: tool.into(),
+            path_arg: "path".into(),
+            content_arg: "content".into(),
+        }
+    }
+
+    #[test]
+    fn a_well_formed_report_sink_validates() {
+        let mut topology = topology_with_vault();
+        topology.report_sink = Some(sink("turbovault", "write_note"));
+        assert!(validate_merged_config(&config(topology, Policy::default())).is_ok());
+    }
+
+    #[test]
+    fn a_report_sink_naming_an_unknown_mcp_is_refused() {
+        let mut topology = topology_with_vault();
+        topology.report_sink = Some(sink("nope", "write_note"));
+        let err = validate_merged_config(&config(topology, Policy::default()))
+            .expect_err("unknown sink MCP must fail at boot");
+        assert!(format!("{err}").contains("not in topology.mcps"));
+    }
+
+    /// The nastiest case: the sink resolves and the tool exists, but it is a *read*. It would
+    /// return success and write nothing, and the receipt would name a file that was never created.
+    #[test]
+    fn a_report_sink_pointing_at_a_read_tool_is_refused() {
+        let mut topology = topology_with_vault();
+        topology.report_sink = Some(sink("turbovault", "read_note"));
+        let err = validate_merged_config(&config(topology, Policy::default()))
+            .expect_err("a sink that is really a read must fail at boot");
+        assert!(format!("{err}").contains("write_tools"));
+    }
+
+    #[test]
+    fn a_report_sink_on_a_disabled_or_read_only_mcp_is_refused() {
+        let mut topology = topology_with_vault();
+        topology.report_sink = Some(sink("turbovault", "write_note"));
+        topology.mcps[0].enabled = false;
+        assert!(validate_merged_config(&config(topology.clone(), Policy::default())).is_err());
+
+        topology.mcps[0].enabled = true;
+        topology.mcps[0].consequence = Consequence::ReadOnly;
+        let err = validate_merged_config(&config(topology, Policy::default()))
+            .expect_err("a read_only MCP cannot be a write sink");
+        assert!(format!("{err}").contains("read_only"));
+    }
+
+    /// No sink declared is not an error — it just means vault delivery is unavailable and every
+    /// report is summarized, exactly as before this existed.
+    #[test]
+    fn no_report_sink_is_a_valid_configuration() {
+        let topology = topology_with_vault();
+        assert!(topology.report_sink.is_none());
         assert!(validate_merged_config(&config(topology, Policy::default())).is_ok());
     }
 }

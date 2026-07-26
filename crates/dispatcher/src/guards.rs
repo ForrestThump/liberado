@@ -179,7 +179,7 @@ fn zone_restricted(action: &DispatchAction, req: &DispatchRequest) -> bool {
 mod tests {
     use super::*;
     use crate::McpDescriptor;
-    use liberado_common::{Capability, CapabilitySet, Consequence, ToolCall, Zone};
+    use liberado_common::{Capability, CapabilitySet, Consequence, Delivery, ToolCall, Zone};
 
     fn req(capabilities: CapabilitySet, reaction_depth: u32) -> DispatchRequest {
         DispatchRequest {
@@ -443,6 +443,7 @@ mod tests {
                 artifact_target: None,
                 model: None,
                 correlation_id: "c1".into(),
+                delivery: Delivery::Summarize,
             },
             confidence: 0.95,
             rationale: "test".into(),

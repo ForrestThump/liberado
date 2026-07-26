@@ -4,8 +4,9 @@
 use std::sync::{Arc, Mutex};
 
 use liberado_common::{
-    BlockReason, Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision, Outcome,
-    Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall, WriteProvenance,
+    BlockReason, Capability, CapabilitySet, Consequence, Delivery, DispatchAction,
+    DispatchDecision, Outcome, Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall,
+    WriteProvenance,
 };
 use liberado_executor::SUBMIT_REPORT_TOOL;
 use liberado_orchestrator::{Disposition, Orchestrator, SubDispatch};
@@ -159,6 +160,7 @@ async fn dispatch_subagent_uses_its_own_correlation_and_allowed_mcps() {
             artifact_target: None,
             model: None,
             correlation_id: "subagent-42".into(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.8,
         rationale: "multi-step".into(),
@@ -530,6 +532,7 @@ async fn dispatch_subagent_gates_with_the_narrowed_capability_set() {
             artifact_target: None,
             model: None,
             correlation_id: "sub-1".into(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.8,
         rationale: "multi-step".into(),
@@ -587,6 +590,7 @@ async fn dispatch_subagent_empty_capabilities_derives_gate_from_allowed_mcps() {
             artifact_target: None,
             model: None,
             correlation_id: "sub-vault-1".into(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.85,
         rationale: "vault work".into(),
@@ -647,6 +651,7 @@ async fn dispatch_subagent_empty_capabilities_still_cannot_widen_past_ceiling() 
             artifact_target: None,
             model: None,
             correlation_id: "sub-no-widen".into(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.8,
         rationale: "test".into(),
@@ -1171,4 +1176,184 @@ async fn execute_approved_tool_calls_partial_failure_is_partial_outcome() {
 
     let report = orch.execute_approved(&proposal).await.expect("execute");
     assert_eq!(report.outcome, Outcome::PartiallySucceeded);
+}
+
+// --- Report delivery ----------------------------------------------------------------------------
+//
+// The motivating failure: a deep-research subagent produced a long write-up, the face agent
+// ingested it and paraphrased it back out, and the human's actual report was never written down.
+// `Delivery::Vault` makes the orchestrator file it directly — one tool call, no model reads the
+// body on the way there — and hand the face agent a receipt it has nothing to restate from.
+
+/// The full path, end to end: a read-only subagent finishes, and the orchestrator itself performs
+/// the write. This is the test that would have caught the original bug.
+#[tokio::test]
+async fn a_read_only_subagent_report_is_written_to_the_vault_by_the_orchestrator() {
+    let script = vec![CompletionResponse::tool_calls(vec![ToolInvocation::new(
+        "c",
+        SUBMIT_REPORT_TOOL,
+        serde_json::json!({
+            "outcome": "succeeded",
+            "summary": "## Findings\n\nThe graph engineering literature splits three ways.",
+        }),
+    )])];
+    let provider = Arc::new(MockProvider::with_script("mock", script));
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let ceiling = CapabilitySet::from_iter([
+        Capability::ExecuteMcp("search".into()),
+        Capability::ExecuteMcp("turbovault".into()),
+        Capability::Write(liberado_common::Zone::vault("Learning")),
+    ]);
+    let orch = Orchestrator::new(
+        provider,
+        InvocationRecordingFactory { runtime },
+        ceiling.clone(),
+        vec![
+            ("search".into(), Consequence::ReadOnly),
+            ("turbovault".into(), Consequence::Reversible),
+        ],
+        Vec::new(),
+        vec![(
+            "Learning".into(),
+            liberado_common::WriteClass::AgentWritable,
+        )],
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    )
+    .with_report_sink(liberado_orchestrator::ReportSink::new(
+        "turbovault",
+        "write_note",
+        "path",
+        "content",
+    ));
+
+    let decision = DispatchDecision {
+        action: DispatchAction::DispatchSubagent {
+            goal: "research graph engineering".into(),
+            capabilities: CapabilitySet::empty(),
+            allowed_mcps: vec!["search".into()],
+            success_criteria: vec![],
+            artifact_target: None,
+            model: None,
+            correlation_id: "sub-research-1".into(),
+            delivery: Delivery::Vault {
+                path: "Learning/graph-engineering.md".into(),
+            },
+        },
+        confidence: 0.9,
+        rationale: "read-only research".into(),
+    };
+
+    let disposition = orch
+        .run(decision, "outer goal ignored", "trigger-1", &ceiling)
+        .await
+        .expect("run");
+
+    let calls = invoked.lock().unwrap().clone();
+    let write = calls
+        .iter()
+        .find(|c| c.name == "turbovault:write_note")
+        .expect("the orchestrator must have written the report itself");
+    assert_eq!(
+        write.arguments["path"], "Learning/graph-engineering.md",
+        "the declared `path_arg` carries the destination"
+    );
+    let content = write.arguments["content"].as_str().unwrap();
+    assert!(
+        content.contains("The graph engineering literature splits three ways."),
+        "the report body is filed verbatim, not paraphrased"
+    );
+    assert!(
+        content.contains("liberado_correlation: sub-research-1"),
+        "the note must join back to the dispatch that produced it"
+    );
+
+    let Disposition::Reported(report) = disposition else {
+        panic!("expected a Reported disposition");
+    };
+    // The saving is that the face agent has nothing to restate.
+    assert!(
+        !report.summary.contains("splits three ways"),
+        "the receipt must not carry the body — that is the entire point"
+    );
+    assert!(report.summary.contains("Learning/graph-engineering.md"));
+    assert_eq!(report.artifacts, vec!["Learning/graph-engineering.md"]);
+}
+
+/// A subagent that could have *acted* never bypasses the face agent, however the dispatcher routed
+/// it. Guard #1 is a property of the MCP grant, checked after the model, not a promise from it.
+#[tokio::test]
+async fn delivery_is_refused_when_the_subagent_could_have_acted() {
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        vec![submit_report_response()],
+    ));
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let ceiling = CapabilitySet::from_iter([
+        Capability::ExecuteMcp("email".into()),
+        Capability::ExecuteMcp("turbovault".into()),
+        Capability::Write(liberado_common::Zone::vault("Learning")),
+    ]);
+    let orch = Orchestrator::new(
+        provider,
+        InvocationRecordingFactory { runtime },
+        ceiling.clone(),
+        vec![
+            ("email".into(), Consequence::External),
+            ("turbovault".into(), Consequence::Reversible),
+        ],
+        Vec::new(),
+        vec![(
+            "Learning".into(),
+            liberado_common::WriteClass::AgentWritable,
+        )],
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    )
+    .with_report_sink(liberado_orchestrator::ReportSink::new(
+        "turbovault",
+        "write_note",
+        "path",
+        "content",
+    ));
+
+    let decision = DispatchDecision {
+        action: DispatchAction::DispatchSubagent {
+            goal: "email the summary".into(),
+            capabilities: CapabilitySet::empty(),
+            allowed_mcps: vec!["email".into()],
+            success_criteria: vec![],
+            artifact_target: None,
+            model: None,
+            correlation_id: "sub-acts-1".into(),
+            delivery: Delivery::Vault {
+                path: "Learning/x.md".into(),
+            },
+        },
+        confidence: 0.9,
+        rationale: "acts on the world".into(),
+    };
+
+    let disposition = orch
+        .run(decision, "outer goal", "trigger-1", &ceiling)
+        .await
+        .expect("run");
+
+    assert!(
+        !invoked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c.name == "turbovault:write_note"),
+        "a dispatch that can act must not file its own report"
+    );
+    let Disposition::Reported(report) = disposition else {
+        panic!("expected a Reported disposition");
+    };
+    assert_eq!(report.summary, "done", "the body goes to the face agent");
+    assert!(report.artifacts.is_empty());
 }

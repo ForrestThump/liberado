@@ -14,6 +14,25 @@ timezone = "America/Chicago"
 [main_agent]
 delegation_mode = true
 
+# --- Report delivery --------------------------------------------------------------------------
+# Where a subagent's report goes when the dispatcher routes it with `delivery = Vault`.
+#
+# The orchestrator makes this ONE tool call itself, with no model in the loop: the research
+# write-up is written verbatim and the face agent gets back only a receipt (path + size), so the
+# body is never re-emitted by a second model. That is the whole point — a deep-research report used
+# to be ingested by the face agent and paraphrased back out, paying for it twice and losing detail.
+#
+# Only a read-only dispatch can use this, and only on a clean success; anything else falls back to
+# the face agent narrating the result. Both rules are enforced in the orchestrator, not here.
+#
+# The tool must appear in that MCP's `write_tools` below — the daemon refuses to start otherwise,
+# because a "sink" that was really a read would return success and write nothing.
+[report_sink]
+mcp = "turbovault"
+tool = "write_note"
+path_arg = "path"
+content_arg = "content"
+
 # --- Per-role model tiering (latency knobs; edit on the box + `up -d --force-recreate`, NO rebuild) --
 # Roles: main_agent (chat face), dispatcher (router), subagent (orchestrator/worker). All fields
 # optional; omitted = inherit `provider` + its model. temperature (when set) overrides the per-call

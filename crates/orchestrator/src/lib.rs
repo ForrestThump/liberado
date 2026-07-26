@@ -23,9 +23,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use liberado_common::{
-    BlockReason, Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision,
-    McpDescriptor, Outcome, Proposal, ProposalSigner, ProposedAction, Report, SignedProposal,
-    ToolCall, WriteClass, WriteProvenance, mcp_of,
+    BlockReason, Capability, CapabilitySet, Consequence, Delivery, DispatchAction,
+    DispatchDecision, McpDescriptor, Outcome, Proposal, ProposalSigner, ProposedAction, Report,
+    SignedProposal, ToolCall, WriteClass, WriteProvenance, mcp_of,
 };
 use liberado_executor::{
     Budget, ExecError, Executor, LoopProfile, RiskGatedToolRuntime, RuntimeFactory,
@@ -40,6 +40,46 @@ use tracing::Instrument;
 
 /// Default `source` recorded in write provenance for orchestrated executions.
 pub const DEFAULT_SOURCE: &str = "liberado-executor";
+
+/// The one tool call that lands a [`Delivery::Vault`] report, as declared in `topology.toml`.
+///
+/// The orchestrator is kernel-layer and does not depend on `liberado-vault`, so it reaches the
+/// vault the way everything else does — an MCP tool call through the [`RuntimeFactory`]. It must
+/// therefore be *told* which tool and which argument names, rather than assuming TurboVault's
+/// `write_note(path, content)`. `liberado-config-loader`'s validation refuses to boot on a sink
+/// that names a missing, disabled, read-only, or non-writing tool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportSink {
+    /// MCP that owns the write tool.
+    pub mcp: String,
+    /// Bare tool name (the fully-qualified `"<mcp>:<tool>"` form is built when invoking).
+    pub tool: String,
+    /// Argument carrying the destination path.
+    pub path_arg: String,
+    /// Argument carrying the report body.
+    pub content_arg: String,
+}
+
+impl ReportSink {
+    pub fn new(
+        mcp: impl Into<String>,
+        tool: impl Into<String>,
+        path_arg: impl Into<String>,
+        content_arg: impl Into<String>,
+    ) -> Self {
+        Self {
+            mcp: mcp.into(),
+            tool: tool.into(),
+            path_arg: path_arg.into(),
+            content_arg: content_arg.into(),
+        }
+    }
+
+    /// The `"<mcp>:<tool>"` name the runtime dispatches on (see [`mcp_of`]).
+    fn qualified_tool(&self) -> String {
+        format!("{}:{}", self.mcp, self.tool)
+    }
+}
 
 /// Exact [`Report::summary`] when [`Orchestrator::execute_approved`] refuses a past-deadline
 /// proposal without running tools. Callers (daemon) must match this string exactly — do not use
@@ -236,6 +276,9 @@ pub struct Orchestrator {
     /// Told about every proposal a runtime-level `gate` downgrade writes — optional, `None` by
     /// default. Best-effort: a notification failure never blocks the write it's reporting on.
     notifier: Option<Arc<dyn Notifier>>,
+    /// Where a [`Delivery::Vault`] report is written. `None` → vault delivery is unavailable and
+    /// every report is summarized by the main agent, exactly as before this existed.
+    report_sink: Option<ReportSink>,
 }
 
 /// The 6 of [`Orchestrator::new`]'s 9 parameters that are the same for every pool a given daemon
@@ -255,6 +298,8 @@ pub struct OrchestratorInfra {
     signer: ProposalSigner,
     /// Turn ceiling for read-only subagent work, applied to every pool built from this infra.
     research_max_turns: u32,
+    /// Vault report sink shared by every pool built from this infra.
+    report_sink: Option<ReportSink>,
 }
 
 impl OrchestratorInfra {
@@ -272,7 +317,14 @@ impl OrchestratorInfra {
             proposals_dir,
             signer,
             research_max_turns: RESEARCH_MAX_TURNS,
+            report_sink: None,
         }
+    }
+
+    /// Set the vault report sink for every pool built from this infra (see [`ReportSink`]).
+    pub fn with_report_sink(mut self, sink: ReportSink) -> Self {
+        self.report_sink = Some(sink);
+        self
     }
 
     /// Set the read-only ("research") subagent turn ceiling for every pool built from this infra.
@@ -309,6 +361,7 @@ impl OrchestratorInfra {
             subagent_budget: Budget::default(),
             research_budget: Budget::new(self.research_max_turns),
             notifier: None,
+            report_sink: self.report_sink.clone(),
         }
     }
 }
@@ -342,6 +395,7 @@ impl Orchestrator {
             subagent_budget: Budget::default(),
             research_budget: Budget::new(RESEARCH_MAX_TURNS),
             notifier: None,
+            report_sink: None,
         }
     }
 
@@ -349,6 +403,185 @@ impl Orchestrator {
     pub fn with_research_budget(mut self, budget: Budget) -> Self {
         self.research_budget = budget;
         self
+    }
+
+    /// Attach the vault report sink (see [`ReportSink`]). Without one, a `Delivery::Vault` request
+    /// falls back to `Summarize` rather than failing — an unconfigured deployment behaves exactly
+    /// as it did before delivery existed.
+    pub fn with_report_sink(mut self, sink: ReportSink) -> Self {
+        self.report_sink = Some(sink);
+        self
+    }
+
+    /// Apply the two delivery guards and return the sink this run actually gets.
+    ///
+    /// Both guards can only **downgrade** to [`Delivery::Summarize`], never upgrade — same shape as
+    /// the dispatcher's post-model guards, and for the same reason: delivery is chosen by a model,
+    /// so it has to be checkable afterwards rather than trusted.
+    ///
+    /// 1. **Only a read-only dispatch may bypass the main agent.** If the subagent could act on the
+    ///    world, the main agent narrates the result — it is the only participant that can re-dispatch,
+    ///    ask a follow-up, or explain a half-completed action. This is a property of the MCP grant,
+    ///    not a judgement about the task.
+    /// 2. **Only a clean success is filed.** A failed or partial run is exactly when the detail
+    ///    needs to be *in the conversation*, where it can be reacted to. Filing a half-finished
+    ///    write-up under a name that implies a finished document is its own small harm, and nothing
+    ///    is lost by the fallback: the findings still reach the human, just narrated.
+    ///
+    /// Together these make a mis-routed delivery cheap. Wrongly filing a successful retrieval only
+    /// means the human reads it unfiltered; wrongly filing a *failure* cannot happen.
+    fn resolve_delivery(
+        &self,
+        requested: &Delivery,
+        research: bool,
+        outcome: Outcome,
+    ) -> (Delivery, Option<&'static str>) {
+        match requested {
+            Delivery::Summarize => (Delivery::Summarize, None),
+            Delivery::Vault { .. } if self.report_sink.is_none() => {
+                (Delivery::Summarize, Some("no report sink configured"))
+            }
+            Delivery::Vault { .. } if !research => (
+                Delivery::Summarize,
+                Some("dispatch is not read-only — the main agent narrates anything that acts"),
+            ),
+            Delivery::Vault { .. } if outcome != Outcome::Succeeded => (
+                Delivery::Summarize,
+                Some("run did not cleanly succeed — the main agent needs the detail to react"),
+            ),
+            Delivery::Vault { path } => match vault_delivery_path(path) {
+                Err(reason) => (Delivery::Summarize, Some(reason)),
+                Ok(clean) => match self.delivery_write_refusal(&clean) {
+                    Some(reason) => (Delivery::Summarize, Some(reason)),
+                    None => (Delivery::Vault { path: clean }, None),
+                },
+            },
+        }
+    }
+
+    /// Why this orchestrator may **not** write a delivery to `path`, if it may not.
+    ///
+    /// `deliver_to_vault` deliberately does not run through [`gate`](Self::gate): a
+    /// `RiskGatedToolRuntime` would turn a restricted zone into a *proposal*, and a delivery is
+    /// supposed to be one silent write or nothing at all — nobody wants an approval request for
+    /// filing a research note. But skipping the gate cannot mean skipping its *rules*, or this
+    /// becomes an unguarded write path straight into the vault, which is precisely the F1 shape:
+    /// a guard that is silently absent because a new code path grew around it.
+    ///
+    /// So the two checks the gate would have made are made here, statically, and a failure
+    /// downgrades to `Summarize` rather than proposing:
+    ///
+    /// * the target zone must be directly agent-writable — an undeclared zone defaults to
+    ///   `ProposalOnly` (`Policy::write_class`'s fail-safe), so an invented path is refused, not
+    ///   filed;
+    /// * this pool must actually hold `Write` on that zone. The orchestrator writes under its own
+    ///   authority here, so it has to have the authority.
+    fn delivery_write_refusal(&self, path: &str) -> Option<&'static str> {
+        let zone = path.split('/').next().unwrap_or_default();
+        let class = self
+            .zone_write_classes
+            .iter()
+            .find(|(name, _)| name == zone)
+            .map(|(_, class)| *class)
+            .unwrap_or_default();
+        if !class.allows_direct_agent_write() {
+            return Some(
+                "target zone is not directly agent-writable (undeclared zones default so)",
+            );
+        }
+        if !self
+            .capabilities
+            .contains(&Capability::Write(liberado_common::Zone::vault(zone)))
+        {
+            return Some("no Write capability for the target zone");
+        }
+        None
+    }
+
+    /// Route a finished subagent `Report` to its requested sink, after the guards have had their
+    /// say. The single entry point both dispatch paths (live and approved-proposal) call, so the
+    /// two cannot drift on what delivery means.
+    ///
+    /// A downgrade is logged at `info` with its reason. That is not noise: delivery is a
+    /// model-chosen route, and "the report went somewhere other than where it was routed" was
+    /// invisible in the deep-research incident that motivated all of this — the report simply never
+    /// appeared, and finding out why took a full log read of the container's life.
+    async fn deliver(
+        &self,
+        report: &mut Report,
+        requested: &Delivery,
+        research: bool,
+        correlation_id: &str,
+    ) -> Result<(), OrchestratorError> {
+        let (effective, downgrade) = self.resolve_delivery(requested, research, report.outcome);
+        if let Some(reason) = downgrade {
+            tracing::info!(
+                requested = requested.label(),
+                effective = effective.label(),
+                reason,
+                "delivery downgraded"
+            );
+        }
+        match effective {
+            Delivery::Summarize => Ok(()),
+            Delivery::Vault { path } => self.deliver_to_vault(report, &path, correlation_id).await,
+        }
+    }
+
+    /// Perform a resolved [`Delivery::Vault`]: one deterministic tool call, no model in the loop,
+    /// then rewrite the report into a **receipt** so the main agent has nothing to restate.
+    ///
+    /// Runs on its own runtime scoped to the sink MCP alone. That is deliberate — the subagent's
+    /// runtime is read-only by construction (guard #1 above), and it stays that way. The write is
+    /// the *orchestrator's*, made once, with this dispatch's provenance, which is also the honest
+    /// account of what happened: a subagent that gathered, and a system that filed.
+    async fn deliver_to_vault(
+        &self,
+        report: &mut Report,
+        path: &str,
+        correlation_id: &str,
+    ) -> Result<(), OrchestratorError> {
+        let Some(sink) = &self.report_sink else {
+            return Ok(()); // unreachable: resolve_delivery downgrades without a sink.
+        };
+        let body = vault_note_body(report, correlation_id, &self.source);
+        let bytes = body.len();
+
+        let provenance = WriteProvenance::agent(self.source.clone(), correlation_id);
+        let runtime = self
+            .factory
+            .runtime_for(std::slice::from_ref(&sink.mcp), provenance)
+            .await?;
+        let inv = ToolInvocation::new(
+            format!("deliver-{correlation_id}"),
+            sink.qualified_tool(),
+            serde_json::json!({
+                sink.path_arg.as_str(): path,
+                sink.content_arg.as_str(): body,
+            }),
+        );
+
+        match runtime.invoke(&inv).await {
+            Ok(_) => {
+                tracing::info!(path, bytes, tool = %sink.qualified_tool(), "delivered report to vault");
+                report.artifacts.push(path.to_string());
+                report.summary = vault_receipt(path, bytes);
+                Ok(())
+            }
+            Err(e) => {
+                // Never hand back a receipt for a note that does not exist. Keep the full body (it
+                // is the only copy) and say plainly that filing failed, so the main agent tells the
+                // human instead of pointing them at an empty path.
+                tracing::error!(path, tool = %sink.qualified_tool(), error = %e, "report delivery failed");
+                report.outcome = Outcome::PartiallySucceeded;
+                report.summary = format!(
+                    "NOTE: could not write this report to `{path}` ({e}). The work below succeeded \
+                     — it just is not filed, so relay it here.\n\n{}",
+                    report.summary
+                );
+                Ok(())
+            }
+        }
     }
 
     /// Can this dispatch only *read*?
@@ -522,6 +755,7 @@ impl Orchestrator {
                     allowed_mcps,
                     success_criteria,
                     correlation_id,
+                    delivery,
                     ..
                 } => {
                     let provenance = WriteProvenance::agent(self.source.clone(), &correlation_id);
@@ -580,6 +814,8 @@ impl Orchestrator {
                     // reply (Gap 2). This is the primary path for a delegated subagent's permission
                     // request bubbling up through `delegate`.
                     report.deferred_to_human = deferred_flag_of(&deferral);
+                    self.deliver(&mut report, &delivery, research, &correlation_id)
+                        .await?;
                     tracing::Span::current().record("disposition", "reported");
                     tracing::info!(outcome = ?report.outcome, "subagent dispatch completed");
                     Ok(Disposition::Reported(report))
@@ -812,6 +1048,13 @@ impl Orchestrator {
         );
         let mut report = self.execute(budget, &*runtime, task).await?;
         report.deferred_to_human = deferred_flag_of(&deferral);
+        // No `deliver` call here, and `ProposedAction::Subagent` carries no `delivery` — on purpose.
+        // A subagent only becomes a proposal by tripping the consequence or zone-write guard, and
+        // neither can fire on a dispatch whose every MCP is `ReadOnly`. So an approved subagent
+        // proposal is never read-only, and `resolve_delivery` would downgrade it to `Summarize`
+        // every time. Threading the field through the proposal type would be surface that provably
+        // cannot change an outcome. If proposals ever gain a route that admits a read-only subagent,
+        // this is the line that has to change with it.
         tracing::info!(outcome = ?report.outcome, research, "executed approved subagent proposal");
         Ok(report)
     }
@@ -1058,6 +1301,89 @@ fn subagent_instructions(success_criteria: &[String]) -> String {
     format!("{SUBAGENT_PREAMBLE}\n\nYou are done when:\n{criteria}")
 }
 
+/// Validate and normalise a `Delivery::Vault` destination, or say why it can't be used.
+///
+/// The path comes from a model, and it addresses a **write** — so it gets the same treatment every
+/// other path-addressed write gets, checked here rather than trusted:
+///
+/// * It must name a zone (`research/notes.md`, not `notes.md`). A bare filename resolves to no
+///   zone, which is precisely the `WriteTarget::Undeterminable` case the capability guard fails
+///   closed on; accepting it here would route a report somewhere nobody authorised.
+/// * It must not be absolute, and must not contain `..`. Neither is expressible as a vault-relative
+///   path, so both are attempts — deliberate or hallucinated — to land outside the vault.
+///
+/// Returns the normalised path (backslashes folded to `/`, no leading slash) on success. Failure is
+/// a downgrade to `Summarize`, never an error: a bad path should cost the human a nicer delivery,
+/// not the research they waited for.
+fn vault_delivery_path(path: &str) -> Result<String, &'static str> {
+    let cleaned = path.trim().replace('\\', "/");
+    let cleaned = cleaned.trim_start_matches('/').trim();
+    if cleaned.is_empty() {
+        return Err("delivery path is empty");
+    }
+    if cleaned.contains(':') {
+        return Err("delivery path looks absolute (drive-qualified)");
+    }
+    if cleaned.split('/').any(|seg| seg == ".." || seg.is_empty()) {
+        return Err("delivery path contains an empty or parent (`..`) segment");
+    }
+    match cleaned.split_once('/') {
+        Some((zone, rest)) if !zone.is_empty() && !rest.is_empty() => Ok(cleaned.to_string()),
+        _ => Err("delivery path names no zone (expected `<zone>/<name>.md`)"),
+    }
+}
+
+/// The note written for a `Delivery::Vault` report.
+///
+/// Front-matter first, because this file is found later, out of context, with no conversation
+/// around it — "where did this come from and can I trust it" has to be answerable from the note
+/// itself. The correlation id is the same one every tool write in the run was tagged with, so the
+/// note joins back to the dispatch journal and the audit log.
+fn vault_note_body(report: &Report, correlation_id: &str, source: &str) -> String {
+    let mut out = String::new();
+    out.push_str("---\n");
+    out.push_str("liberado_source: ");
+    out.push_str(source);
+    out.push('\n');
+    out.push_str("liberado_correlation: ");
+    out.push_str(correlation_id);
+    out.push('\n');
+    out.push_str("generated: ");
+    out.push_str(&chrono::Utc::now().to_rfc3339());
+    out.push_str("\n---\n\n");
+    out.push_str(report.summary.trim());
+    out.push('\n');
+
+    if !report.new_high_signal_facts.is_empty() {
+        out.push_str("\n## Notable\n\n");
+        for fact in &report.new_high_signal_facts {
+            out.push_str("- ");
+            out.push_str(fact);
+            out.push('\n');
+        }
+    }
+    if let Some(follow_up) = &report.follow_up {
+        out.push_str("\n## Suggested next step\n\n");
+        out.push_str(follow_up.trim());
+        out.push('\n');
+    }
+    out
+}
+
+/// What the main agent gets instead of the report body.
+///
+/// The receipt is the mechanism, not a courtesy: the token and latency saving comes from the main
+/// agent having **nothing to restate**, so this deliberately does not summarise the findings. The
+/// closing instruction is there because a main agent handed a bare path tends to invent a summary
+/// of what it thinks is in the file — it has to be told that reading it is a separate, optional act.
+fn vault_receipt(path: &str, bytes: usize) -> String {
+    format!(
+        "Filed to the vault at `{path}` ({bytes} bytes). The findings are in that note — they were \
+         written directly and are NOT reproduced here. Tell the human where it is; do not \
+         characterise or summarise its contents, and read the note first if they ask about them."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1151,6 +1477,197 @@ mod tests {
             ProposalSigner::random(),
             "default",
         )
+    }
+
+    /// An orchestrator that *can* deliver: a sink, a writable `Learning` zone, and the `Write`
+    /// capability for it. Every delivery test starts from this and removes one thing.
+    fn delivering_orchestrator() -> Orchestrator {
+        Orchestrator::new(
+            Arc::new(MockProvider::with_script("mock", vec![])),
+            NoopFactory,
+            CapabilitySet::from_iter([Capability::Write(liberado_common::Zone::vault("Learning"))]),
+            web_catalog(),
+            Vec::new(),
+            vec![
+                ("Learning".into(), WriteClass::AgentWritable),
+                ("Legal".into(), WriteClass::HumanOnly),
+            ],
+            std::env::temp_dir(),
+            ProposalSigner::random(),
+            "default",
+        )
+        .with_report_sink(ReportSink::new("vault", "write_note", "path", "content"))
+    }
+
+    fn vault_to(path: &str) -> Delivery {
+        Delivery::Vault { path: path.into() }
+    }
+
+    /// The happy path: read-only work, clean outcome, writable zone we hold `Write` on.
+    #[test]
+    fn a_clean_read_only_run_is_delivered_to_the_vault() {
+        let orch = delivering_orchestrator();
+        let (effective, downgrade) =
+            orch.resolve_delivery(&vault_to("Learning/x.md"), true, Outcome::Succeeded);
+        assert_eq!(effective, vault_to("Learning/x.md"));
+        assert_eq!(downgrade, None);
+    }
+
+    /// Guard #1. The whole point of the read-only condition: if the subagent could have *acted*,
+    /// the main agent narrates it, because it is the only participant that can re-dispatch or
+    /// explain a half-done action.
+    #[test]
+    fn a_dispatch_that_can_act_never_bypasses_the_main_agent() {
+        let orch = delivering_orchestrator();
+        let (effective, downgrade) =
+            orch.resolve_delivery(&vault_to("Learning/x.md"), false, Outcome::Succeeded);
+        assert_eq!(effective, Delivery::Summarize);
+        assert!(downgrade.is_some_and(|d| d.contains("not read-only")));
+    }
+
+    /// Guard #2. A failed or partial run is exactly when the detail belongs in the conversation —
+    /// and filing a half-finished write-up under a name implying a finished document is its own
+    /// small harm. Nothing is lost: the findings still reach the human, just narrated.
+    #[test]
+    fn only_a_clean_success_is_filed() {
+        let orch = delivering_orchestrator();
+        for outcome in [
+            Outcome::Failed,
+            Outcome::PartiallySucceeded,
+            Outcome::Proposed,
+        ] {
+            let (effective, downgrade) =
+                orch.resolve_delivery(&vault_to("Learning/x.md"), true, outcome);
+            assert_eq!(
+                effective,
+                Delivery::Summarize,
+                "{outcome:?} must not be filed"
+            );
+            assert!(downgrade.is_some());
+        }
+    }
+
+    /// `deliver_to_vault` skips the `RiskGatedToolRuntime`, so the rules that runtime would have
+    /// applied are applied here instead. Without this the delivery path is an unguarded write
+    /// straight into the vault — a guard silently absent because a new code path grew around it.
+    #[test]
+    fn a_zone_that_is_not_agent_writable_is_refused_not_proposed() {
+        let orch = delivering_orchestrator();
+        let (effective, downgrade) =
+            orch.resolve_delivery(&vault_to("Legal/x.md"), true, Outcome::Succeeded);
+        assert_eq!(effective, Delivery::Summarize);
+        assert!(downgrade.is_some_and(|d| d.contains("agent-writable")));
+    }
+
+    /// An undeclared zone inherits `WriteClass`'s `ProposalOnly` default, so a hallucinated
+    /// destination is refused rather than created. This is the case that fires when the classifier
+    /// invents `research/` in a vault that has no such zone.
+    #[test]
+    fn an_undeclared_zone_is_refused_by_the_fail_safe_default() {
+        let orch = delivering_orchestrator();
+        let (effective, _) =
+            orch.resolve_delivery(&vault_to("research/x.md"), true, Outcome::Succeeded);
+        assert_eq!(effective, Delivery::Summarize);
+    }
+
+    /// The orchestrator writes under its own authority, so it must hold that authority.
+    #[test]
+    fn delivery_requires_write_on_the_target_zone() {
+        let mut orch = delivering_orchestrator();
+        orch.capabilities = CapabilitySet::empty();
+        let (effective, downgrade) =
+            orch.resolve_delivery(&vault_to("Learning/x.md"), true, Outcome::Succeeded);
+        assert_eq!(effective, Delivery::Summarize);
+        assert!(downgrade.is_some_and(|d| d.contains("Write capability")));
+    }
+
+    /// An unconfigured deployment behaves exactly as it did before delivery existed — it does not
+    /// fail, it just summarizes.
+    #[test]
+    fn without_a_sink_delivery_quietly_falls_back() {
+        let orch = orchestrator_with_catalog(web_catalog());
+        let (effective, downgrade) =
+            orch.resolve_delivery(&vault_to("Learning/x.md"), true, Outcome::Succeeded);
+        assert_eq!(effective, Delivery::Summarize);
+        assert!(downgrade.is_some_and(|d| d.contains("no report sink")));
+    }
+
+    #[test]
+    fn summarize_is_never_downgraded_and_needs_nothing() {
+        let orch = orchestrator_with_catalog(web_catalog());
+        for (research, outcome) in [(true, Outcome::Succeeded), (false, Outcome::Failed)] {
+            let (effective, downgrade) =
+                orch.resolve_delivery(&Delivery::Summarize, research, outcome);
+            assert_eq!(effective, Delivery::Summarize);
+            assert_eq!(downgrade, None);
+        }
+    }
+
+    /// The path is model-produced and addresses a write, so it is checked, not trusted. A bare
+    /// filename resolves to no zone — the `WriteTarget::Undeterminable` case the capability guard
+    /// fails closed on — and `..`/absolute paths are attempts to land outside the vault.
+    #[test]
+    fn delivery_paths_that_name_no_zone_or_escape_are_rejected() {
+        for bad in [
+            "",
+            "   ",
+            "notes.md",
+            "/",
+            "Learning/../../etc/passwd",
+            "C:/Windows/x.md",
+            "Learning//x.md",
+            "Learning/",
+        ] {
+            assert!(
+                vault_delivery_path(bad).is_err(),
+                "{bad:?} should not be a deliverable path"
+            );
+        }
+    }
+
+    #[test]
+    fn delivery_paths_are_normalised_not_merely_accepted() {
+        assert_eq!(
+            vault_delivery_path("/Learning/deep/x.md").unwrap(),
+            "Learning/deep/x.md"
+        );
+        assert_eq!(
+            vault_delivery_path(r"Learning\x.md").unwrap(),
+            "Learning/x.md"
+        );
+    }
+
+    /// The note is found later, out of context, with no conversation around it — "where did this
+    /// come from" has to be answerable from the note itself.
+    #[test]
+    fn the_delivered_note_carries_its_own_provenance() {
+        let report = Report {
+            outcome: Outcome::Succeeded,
+            summary: "## Findings\n\nGraphs are hard.".into(),
+            artifacts: vec![],
+            new_high_signal_facts: vec!["cost scales superlinearly".into()],
+            follow_up: Some("benchmark it".into()),
+            deferred_to_human: false,
+        };
+        let body = vault_note_body(&report, "corr-42", "liberado-executor");
+        assert!(body.starts_with("---\n"), "front matter comes first");
+        assert!(body.contains("liberado_correlation: corr-42"));
+        assert!(body.contains("liberado_source: liberado-executor"));
+        // The body is the point — verbatim, not paraphrased.
+        assert!(body.contains("Graphs are hard."));
+        assert!(body.contains("cost scales superlinearly"));
+        assert!(body.contains("benchmark it"));
+    }
+
+    /// The saving comes from the main agent having nothing to restate, so the receipt must not
+    /// contain the findings — and must say so, or the model invents a summary of a file it never
+    /// read.
+    #[test]
+    fn the_receipt_withholds_the_body_and_says_so() {
+        let receipt = vault_receipt("Learning/x.md", 4096);
+        assert!(receipt.contains("Learning/x.md"));
+        assert!(receipt.contains("4096"));
+        assert!(receipt.contains("NOT reproduced here"));
     }
 
     fn web_catalog() -> Vec<(String, Consequence)> {
