@@ -520,11 +520,7 @@ impl ApprovalBot {
         // Silence there would be the bot looking idle while it is not. In ordinary back-and-forth
         // `already_running` is 0 and this never fires.
         if already_running > 0 {
-            self.send_text(&format!(
-                "On it. (Still working on {already_running} earlier request{} — replies may arrive                  out of order.)",
-                if already_running == 1 { "" } else { "s" }
-            ))
-            .await;
+            self.send_text(&concurrency_notice(already_running)).await;
         }
 
         let _ = self.channel.set_typing().await;
@@ -689,6 +685,27 @@ fn revision_schema() -> serde_json::Value {
         },
         "required": ["rationale", "proposed_action"]
     })
+}
+
+/// Told to the human when a message arrives while other turns are still running.
+///
+/// A function rather than an inline `format!` so a test can assert the **rendered** string. The
+/// first version shipped with 18 literal spaces mid-sentence — a line-continuation flattened into
+/// the literal — and reached Telegram, because nothing anywhere rendered it.
+///
+/// Phrased as a parenthetical status note, deliberately. The first wording opened with "On it.",
+/// which read as an *answer*: the human had asked a question ("did it dispatch?") and instantly
+/// received what looked like a reply to it, while the real answer was still minutes away.
+fn concurrency_notice(already_running: usize) -> String {
+    let (verb, possessive) = if already_running == 1 {
+        (" is", "its")
+    } else {
+        ("s are", "their")
+    };
+    format!(
+        "(Note: {already_running} earlier request{verb} still running — {possessive} reply will \
+         come separately, and may land after this one.)"
+    )
 }
 
 /// A short echo of the message a late reply is answering, for the out-of-order marker.
@@ -1048,6 +1065,26 @@ mod tests {
         let content = vault.read("proposals/prop-1.md").await.unwrap();
         let proposal = Proposal::from_note(&content).unwrap();
         assert_eq!(proposal.status, ProposalStatus::Approved);
+    }
+
+    /// User-visible strings get asserted after **rendering**, not eyeballed in source. The stray
+    /// whitespace that shipped in the first version of this notice was invisible in review and
+    /// obvious the moment it hit a phone.
+    #[test]
+    fn the_concurrency_notice_is_clean_and_reads_as_a_status_line() {
+        for n in [1usize, 2, 5] {
+            let msg = concurrency_notice(n);
+            assert!(
+                !msg.contains("  "),
+                "double space in user-visible text: {msg:?}"
+            );
+            assert!(!msg.contains('\n'), "stray newline: {msg:?}");
+            // Must not read as an answer to what was just asked: the human may have asked a
+            // question, and "On it." replied to it wrongly, instantly, and confusingly.
+            assert!(msg.starts_with("(Note:"), "{msg:?}");
+        }
+        assert!(concurrency_notice(1).contains("1 earlier request is still running"));
+        assert!(concurrency_notice(3).contains("3 earlier requests are still running"));
     }
 
     #[test]

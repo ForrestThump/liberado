@@ -307,7 +307,8 @@ impl ToolRuntime for RiskGatedToolRuntime {
                         "refused",
                         call,
                         None,
-                        "a resolvable target zone (declare zone_from_arg/write_tools, or pass a                          zone-qualified path)",
+                        "a resolvable target zone (declare zone_from_arg/write_tools, or pass a \
+                         zone-qualified path)",
                     );
                     tracing::warn!(mcp = %mcp_name, %why, "tool call refused: undeterminable write zone");
                     return Err(format!("not authorized: {why}"));

@@ -420,7 +420,7 @@ mod tests {
         // Body text, as a real report has, before any incidental risk-shaped language appears.
         for i in 0..12 {
             goal.push_str(&format!(
-                "Section {i}: implementations converged on a shared interface definition, and                  adoption followed once the tooling stabilised.
+                "Section {i}: implementations converged on a shared interface definition,                  and adoption followed once the tooling stabilised.
 
 "
             ));
