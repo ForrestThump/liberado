@@ -2633,6 +2633,7 @@ mod tests {
                     prompt_tokens: tokens / 2,
                     completion_tokens: tokens / 2,
                     total_tokens: tokens,
+                    cached_prompt_tokens: None,
                 }),
             }
         }

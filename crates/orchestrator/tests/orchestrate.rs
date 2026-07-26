@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use liberado_common::{
-    BlockReason, Capability, CapabilitySet, Consequence, Delivery, DispatchAction,
+    BlockReason, Capability, CapabilitySet, Consequence, Delivery, Depth, DispatchAction,
     DispatchDecision, Outcome, Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall,
     WriteProvenance,
 };
@@ -161,6 +161,7 @@ async fn dispatch_subagent_uses_its_own_correlation_and_allowed_mcps() {
             model: None,
             correlation_id: "subagent-42".into(),
             delivery: Delivery::Summarize,
+            depth: Depth::Normal,
         },
         confidence: 0.8,
         rationale: "multi-step".into(),
@@ -533,6 +534,7 @@ async fn dispatch_subagent_gates_with_the_narrowed_capability_set() {
             model: None,
             correlation_id: "sub-1".into(),
             delivery: Delivery::Summarize,
+            depth: Depth::Normal,
         },
         confidence: 0.8,
         rationale: "multi-step".into(),
@@ -591,6 +593,7 @@ async fn dispatch_subagent_empty_capabilities_derives_gate_from_allowed_mcps() {
             model: None,
             correlation_id: "sub-vault-1".into(),
             delivery: Delivery::Summarize,
+            depth: Depth::Normal,
         },
         confidence: 0.85,
         rationale: "vault work".into(),
@@ -652,6 +655,7 @@ async fn dispatch_subagent_empty_capabilities_still_cannot_widen_past_ceiling() 
             model: None,
             correlation_id: "sub-no-widen".into(),
             delivery: Delivery::Summarize,
+            depth: Depth::Normal,
         },
         confidence: 0.8,
         rationale: "test".into(),
@@ -1194,7 +1198,21 @@ async fn a_read_only_subagent_report_is_written_to_the_vault_by_the_orchestrator
         SUBMIT_REPORT_TOOL,
         serde_json::json!({
             "outcome": "succeeded",
-            "summary": "## Findings\n\nThe graph engineering literature splits three ways.",
+            // A realistic write-up, not a toy string: delivery now verifies the report actually
+            // looks like the document it is about to be filed as, so a two-line fixture would be
+            // (correctly) refused and this test would assert nothing about the happy path.
+            "summary": "# Graph Engineering — Survey\n\n\
+                        ## Findings\n\n\
+                        The graph engineering literature splits three ways.\n\n\
+                        - Storage engines optimise for traversal locality.\n\
+                        - Query planners diverge on whether to materialise intermediate paths.\n\
+                        - Streaming systems treat the graph as a changelog rather than a snapshot.\n\n\
+                        ## Detail\n\n\
+                        Each camp reports incomparable benchmarks, which is the main obstacle to \
+                        drawing conclusions across them. The storage-first work measures cold \
+                        traversal; the planner work measures warm repeated queries.\n\n\
+                        ## Open questions\n\n\
+                        Whether the streaming formulation subsumes the other two remains unsettled.",
         }),
     )])];
     let provider = Arc::new(MockProvider::with_script("mock", script));
@@ -1241,6 +1259,7 @@ async fn a_read_only_subagent_report_is_written_to_the_vault_by_the_orchestrator
             delivery: Delivery::Vault {
                 path: "Learning/graph-engineering.md".into(),
             },
+            depth: Depth::Deep,
         },
         confidence: 0.9,
         rationale: "read-only research".into(),
@@ -1333,6 +1352,7 @@ async fn delivery_is_refused_when_the_subagent_could_have_acted() {
             delivery: Delivery::Vault {
                 path: "Learning/x.md".into(),
             },
+            depth: Depth::Deep,
         },
         confidence: 0.9,
         rationale: "acts on the world".into(),

@@ -1,10 +1,11 @@
 # How this system fails
 
 **Status**: living. Distilled 2026-07-14 from twelve audits and findings in
-[`../roadmap/archive/`](../roadmap/archive/), plus the live runs of 2026-07-13/14.
+[`../roadmap/archive/`](../roadmap/archive/), plus the live runs of 2026-07-13/14. Class 6 added
+2026-07-26 from a dogfooding session that produced five instances of it in one sitting.
 
-Twelve separate audits, spread over two weeks, kept finding **the same five bugs wearing different
-clothes**. Reading all twelve teaches you the incidents. Reading this teaches you the pattern, which
+Twelve separate audits, spread over two weeks, kept finding **the same handful of bugs wearing
+different clothes**. Reading all twelve teaches you the incidents. Reading this teaches you the pattern, which
 is the part that will bite you again.
 
 Every one of these shipped with a green test suite. Not one was found by reading the code.
@@ -138,11 +139,49 @@ path was never wired to the same check.
 
 ---
 
+## 6. Two things that should agree, and nothing checks that they do
+
+Five instances in a single session (2026-07-26), which is what earns this its own entry:
+
+- **Config vs repo.** `deploy/homelab/config/topology.toml` is a *mirror*; the box's copy is a host
+  mount `deploy.sh` never touches. A feature was added to the mirror, the deploy verified its build
+  SHA and reported success, and the feature was inert. Indistinguishable from a bug.
+- **Pool grant vs gate set.** The daemon logged `capability=Write(Vault("Learning"))` as present
+  while refusing that exact write. `subagent_gate_capabilities` intersected the ceiling against a
+  set built only from `ExecuteMcp`, silently dropping every zone capability. Months old.
+- **Code vs its own prompt.** One commit moved delivery to gate on consequence *and* left a
+  dispatcher prompt asserting that adding a vault MCP "DISABLES delivery entirely". Both written in
+  the same commit; neither reconciled.
+- **Build label vs build contents.** The image's SHA is stamped from a *build argument*, not derived
+  from the compiled tree, so two concurrent deploys can produce an image labelled with one commit
+  and built from another — and that stamp is the thing everyone trusts to know what is live.
+- **Guard vs guard.** The pre-flight magnitude check read `instruction_scope(goal)`; the runtime one
+  read the raw goal. Same goal, same question, two answers.
+
+The shape is not "a check was missing." Each pair had a correct value on both sides at some point,
+and nothing existed whose job was to notice when they diverged. That is why these survive: there is
+no failing assertion, only two components confidently disagreeing in different log lines.
+
+> **The smell.** A value that is *derived twice*, *declared twice*, or *stated in prose next to the
+> code it describes*. Ask: if these two drifted apart tomorrow, what would fail? If the answer is
+> "nothing, until someone reads both," you have this bug already — you just do not know its value.
+
+The fixes are all the same shape and all cheap: make one side the source and have the other read it
+(`CONSEQUENCE_GATE` moved to `liberado-common` so two guards share one constant; both magnitude
+checks now call `instruction_scope`), or add the thing whose job is to compare them (`smoke.sh`
+asserts the *in-container* config, not the mirror; `config explain` answers the authority question
+from the same descriptors the daemon enforces).
+
+Related to **#4** — a machine check overruling a human is one *specific* way two authorities
+disagree. This entry is the general case, and it is usually silent rather than wrong.
+
+---
+
 ## The meta-lesson
 
 **Every defect above passed the test suite and died on first contact with a running daemon.**
 
-That is not an argument for fewer tests — the suite (1,342 and counting) catches regressions
+That is not an argument for fewer tests — the suite (1,492 and counting) catches regressions
 constantly. It is an argument about *what unit tests can see*: they see the shapes you gave them.
 The bugs live in the shapes you didn't.
 

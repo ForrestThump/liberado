@@ -13,10 +13,22 @@ vocabulary and a mock. **It pulls in no HTTP stack and commits to no framework.*
   `Arc<dyn Provider>` and swaps mock vs. real, or different models per role).
 - **`complete_json`** — a free function (not a trait method, to preserve dyn-compatibility) that runs
   a request in JSON mode and deserializes the reply into a typed `T`. This is the dispatcher's path
-  to a typed `DispatchDecision`.
+  to a typed `DispatchDecision`. It **re-asks once** on an undecodable or empty reply: structured
+  output is near-deterministic, so a malformed reply is usually a transient hiccup, and an
+  unattended run gets no second chance (a live evening-debrief cron burned a whole run on one bad
+  reply). Deliberately narrow — transport and rate-limit errors are *not* retried here, because
+  those have backoff semantics at the caller and silently re-issuing them would hide load problems
+  and double spend on a provider already failing. The `Decode` error also carries a 400-char prefix
+  of what the model actually said, so a failure is diagnosable after the fact instead of
+  unanswerable.
 - **Types** (`types.rs`) — `CompletionRequest`/`CompletionResponse`, `Message`/`Role`, `ToolDef`,
   `ToolInvocation`, `ResponseFormat` (`Text`|`Json{schema}`), `FinishReason`, `Usage`. A
-  chat-completions-shaped, provider-agnostic narrow waist.
+  chat-completions-shaped, provider-agnostic narrow waist. `Usage::cached_prompt_tokens` reads
+  whatever cache accounting the backend volunteers (DeepSeek's top-level `prompt_cache_hit_tokens`,
+  OpenAI's nested `prompt_tokens_details.cached_tokens`) and stays `None` when it volunteers
+  nothing — "we cannot see" and "nothing is cached" are different answers, and conflating them is
+  how prompt caching looked like an unclaimed cost lever when it had been running at 93–98% all
+  along. Recorded in the latency journal so hit rate is a query, not a guess.
 - **`MockProvider`** (`mock.rs`) — scriptable test double: hand it a queue of `CompletionResponse`s,
   it pops one per call and records every request, so a scenario can assert on both what the system
   did with a response and what it sent.

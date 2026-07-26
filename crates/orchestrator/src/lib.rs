@@ -23,13 +23,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use liberado_common::{
-    BlockReason, Capability, CapabilitySet, Consequence, Delivery, DispatchAction,
-    DispatchDecision, McpDescriptor, Outcome, Proposal, ProposalSigner, ProposedAction, Report,
-    SignedProposal, ToolCall, WriteClass, WriteProvenance, mcp_of,
+    BlockReason, CONSEQUENCE_GATE, Capability, CapabilitySet, Consequence, Delivery, Depth,
+    DispatchAction, DispatchDecision, McpDescriptor, Outcome, Proposal, ProposalSigner,
+    ProposedAction, Report, SignedProposal, ToolCall, WriteClass, WriteProvenance, mcp_of,
 };
 use liberado_executor::{
     Budget, ExecError, Executor, LoopProfile, RiskGatedToolRuntime, RuntimeFactory,
-    RuntimeSetupError, Task, ToolRuntime,
+    RuntimeSetupError, SUBMIT_REPORT_TOOL, Task, ToolRuntime,
 };
 use liberado_notify::Notifier;
 use liberado_provider::{Provider, ToolDef, ToolInvocation};
@@ -413,6 +413,20 @@ impl Orchestrator {
         self
     }
 
+    /// The turn budget for a declared [`Depth`], capped by this pool's configured ceiling.
+    ///
+    /// `Deep` is the research budget — far above the default, because gathering is turn-hungry in a
+    /// way acting is not and a long ceiling costs only tokens. The cap is what makes depth safe to
+    /// let any dispatch source raise: an orchestration agent can ask for room within an envelope the
+    /// operator set, never past it.
+    fn budget_for(&self, depth: Depth) -> &Budget {
+        match depth {
+            Depth::Deep => &self.research_budget,
+            Depth::Normal => &self.subagent_budget,
+            Depth::Shallow => &self.direct_budget,
+        }
+    }
+
     /// Apply the two delivery guards and return the sink this run actually gets.
     ///
     /// Both guards can only **downgrade** to [`Delivery::Summarize`], never upgrade — same shape as
@@ -433,30 +447,97 @@ impl Orchestrator {
     fn resolve_delivery(
         &self,
         requested: &Delivery,
-        research: bool,
+        allowed_mcps: &[String],
         outcome: Outcome,
     ) -> (Delivery, Option<&'static str>) {
-        match requested {
-            Delivery::Summarize => (Delivery::Summarize, None),
-            Delivery::Vault { .. } if self.report_sink.is_none() => {
-                (Delivery::Summarize, Some("no report sink configured"))
-            }
-            Delivery::Vault { .. } if !research => (
-                Delivery::Summarize,
-                Some("dispatch is not read-only — the main agent narrates anything that acts"),
-            ),
-            Delivery::Vault { .. } if outcome != Outcome::Succeeded => (
+        // Everything except the outcome is knowable before the run — and has to be, because the
+        // subagent must be *told* its report is the deliverable (see `delivery_target`).
+        match self.delivery_target(requested, allowed_mcps) {
+            Err(reason) => (Delivery::Summarize, reason),
+            Ok(_) if outcome != Outcome::Succeeded => (
                 Delivery::Summarize,
                 Some("run did not cleanly succeed — the main agent needs the detail to react"),
             ),
-            Delivery::Vault { path } => match vault_delivery_path(path) {
-                Err(reason) => (Delivery::Summarize, Some(reason)),
-                Ok(clean) => match self.delivery_write_refusal(&clean) {
-                    Some(reason) => (Delivery::Summarize, Some(reason)),
-                    None => (Delivery::Vault { path: clean }, None),
-                },
-            },
+            Ok(path) => (Delivery::Vault { path }, None),
         }
+    }
+
+    /// Where a requested delivery would land, decided **without** the outcome.
+    ///
+    /// Split out from [`resolve_delivery`](Self::resolve_delivery) because the answer is needed at
+    /// two different times. The outcome check can only run after execution — but the *subagent* has
+    /// to be told before execution that its report will be filed verbatim, or it writes a status
+    /// line and waits for a chance to author the document that never comes. That is not
+    /// hypothetical: the first live run filed 231 bytes reading "I have all the research I need.
+    /// Let me now write the comprehensive report directly to the vault." Every mechanism was
+    /// correct and the artifact was the model's narration of a step we had removed its tools for.
+    ///
+    /// `Err(None)` means "nothing was requested" — not a downgrade, so nothing to log.
+    fn delivery_target(
+        &self,
+        requested: &Delivery,
+        allowed_mcps: &[String],
+    ) -> Result<String, Option<&'static str>> {
+        let path = match requested {
+            Delivery::Summarize => return Err(None),
+            Delivery::Vault { path } => path,
+        };
+        if self.report_sink.is_none() {
+            return Err(Some("no report sink configured"));
+        }
+        if !self.delivery_consequence_ok(allowed_mcps) {
+            return Err(Some(
+                "dispatch can act outside the vault — the main agent narrates anything with \
+                 irreversible or external effects",
+            ));
+        }
+        let clean = vault_delivery_path(path).map_err(Some)?;
+        match self.delivery_write_refusal(&clean) {
+            Some(reason) => Err(Some(reason)),
+            None => Ok(clean),
+        }
+    }
+
+    /// May a dispatch over these MCPs bypass the main agent?
+    ///
+    /// Gates on **consequence**, deliberately not on [`is_read_only_dispatch`](Self::is_read_only_dispatch).
+    /// Those were the same predicate until a live run showed why they must not be:
+    ///
+    /// "Research X and save the write-up to my vault" is the clearest case there is for direct
+    /// delivery — and it is exactly the phrasing that makes a classifier reach for the vault MCP.
+    /// The vault is `Reversible`, so the dispatch stopped being "read-only", so delivery refused,
+    /// so the report went back through the main agent to be paraphrased. The feature switched
+    /// itself off precisely when the human had asked for it most plainly.
+    ///
+    /// The question delivery actually cares about is narrower than "did this write anything". It is
+    /// **"did something happen that the main agent needs to narrate?"** — a sent email, a booked
+    /// appointment, a filed API call. Those are `Irreversible`/`External`, and for those the main
+    /// agent is the only participant that can re-dispatch, ask a follow-up, or explain a partial
+    /// action. A `Reversible` vault write is not that: it left nothing outside the system, and it
+    /// is a `git revert` away — the same reasoning [`Consequence`] already documents for rating a
+    /// vault write below an email.
+    ///
+    /// Budget and delivery therefore ask different questions of the same MCP list, and get
+    /// different answers. `is_read_only_dispatch` still governs turns and salvage, because *there*
+    /// the question really is "could this have left something half-written".
+    ///
+    /// An unknown MCP fails closed, same as the budget derivation: an unrecognised name is not
+    /// waved through to bypass the main agent.
+    fn delivery_consequence_ok(&self, allowed_mcps: &[String]) -> bool {
+        if allowed_mcps.is_empty() {
+            // Empty means "the full ceiling" — an unbounded scope we cannot rate. Fail closed.
+            return false;
+        }
+        let catalog = match &self.live_catalog {
+            Some(cat) => cat.consequence_catalog(),
+            None => self.consequence_catalog.clone(),
+        };
+        allowed_mcps.iter().all(|mcp| {
+            catalog
+                .iter()
+                .find(|(name, _)| name == mcp)
+                .is_some_and(|(_, consequence)| *consequence < CONSEQUENCE_GATE)
+        })
     }
 
     /// Why this orchestrator may **not** write a delivery to `path`, if it may not.
@@ -510,10 +591,10 @@ impl Orchestrator {
         &self,
         report: &mut Report,
         requested: &Delivery,
-        research: bool,
+        allowed_mcps: &[String],
         correlation_id: &str,
     ) -> Result<(), OrchestratorError> {
-        let (effective, downgrade) = self.resolve_delivery(requested, research, report.outcome);
+        let (effective, downgrade) = self.resolve_delivery(requested, allowed_mcps, report.outcome);
         if let Some(reason) = downgrade {
             tracing::info!(
                 requested = requested.label(),
@@ -544,6 +625,38 @@ impl Orchestrator {
         let Some(sink) = &self.report_sink else {
             return Ok(()); // unreachable: resolve_delivery downgrades without a sink.
         };
+
+        // Check the report is a document before filing it as one.
+        //
+        // The subagent declares its own success, and on the delivery path nothing else looks: the
+        // orchestrator writes whatever came back, verbatim, and the human finds out by opening the
+        // note. A live run filed 231 bytes reading "I have all the research I need. Let me now write
+        // the comprehensive report directly to the vault" — outcome Succeeded, path correct,
+        // provenance correct, and the artifact was the model narrating an intention.
+        //
+        // `delivery_directive` now tells the subagent its report IS the document, which fixed that
+        // case. This is the mechanical version of the same guarantee: a prompt holds while the model
+        // complies, the prompt is unedited, and the provider does not drift. A length check holds
+        // regardless. An LLM grading its own output would add nothing — that is the
+        // "self-congratulation" the orchestration survey warns about — so this is deliberately a
+        // dumb, deterministic assertion.
+        if let Err(why) = looks_like_a_document(&report.summary) {
+            tracing::warn!(
+                path,
+                bytes = report.summary.len(),
+                why,
+                "report failed delivery verification — falling back to the main agent"
+            );
+            report.outcome = Outcome::PartiallySucceeded;
+            report.summary = format!(
+                "NOTE: this was meant to be filed to `{path}` as a document, but it does not look \
+                 like one ({why}), so it was not written. Relay what is below and say the write-up \
+                 did not come through.\n\n{}",
+                report.summary
+            );
+            return Ok(());
+        }
+
         let body = vault_note_body(report, correlation_id, &self.source);
         let bytes = body.len();
 
@@ -756,6 +869,7 @@ impl Orchestrator {
                     success_criteria,
                     correlation_id,
                     delivery,
+                    depth,
                     ..
                 } => {
                     let provenance = WriteProvenance::agent(self.source.clone(), &correlation_id);
@@ -776,12 +890,15 @@ impl Orchestrator {
                     // read_only" is exactly the property that matters here — such a run cannot
                     // leave anything half-written, so returning what it gathered is always safe,
                     // and gathering is the work that benefits from a long budget.
-                    let research = self.is_read_only_dispatch(&allowed_mcps);
-                    let budget = if research {
-                        &self.research_budget
-                    } else {
-                        &self.subagent_budget
-                    };
+                    // Depth decides the budget; consequence decides salvage. These used to be one
+                    // predicate (`is_read_only_dispatch`) and the conflation is what made a
+                    // deep-research goal that merely *mentioned* the vault run on 8 turns and fail.
+                    let budget = self.budget_for(depth);
+                    // Salvageable = nothing irreversible could have happened, so returning partial
+                    // findings is safe and honest. That is a consequence question, not a depth one —
+                    // and deliberately still inferred: it is a safety property, not a preference,
+                    // and so not a model's to declare.
+                    let research = self.delivery_consequence_ok(&allowed_mcps);
                     tracing::debug!(
                         subagents = allowed_mcps.len(),
                         criteria = success_criteria.len(),
@@ -794,9 +911,19 @@ impl Orchestrator {
                     // a live research run was stopped three times for exactly that. Research
                     // therefore judges repeats byte-exactly — re-running the same query is still
                     // thrash and still trips the guard.
-                    let task = Task::new(subagent_instructions(&success_criteria), subgoal)
+                    // Decided before the run, deliberately: a subagent whose report will be filed
+                    // verbatim has to be told so up front, or it writes a status line and waits to
+                    // author the document with a tool it was never given (see `delivery_directive`).
+                    let mut instructions = subagent_instructions(&success_criteria);
+                    if let Ok(target) = self.delivery_target(&delivery, &allowed_mcps) {
+                        instructions.push_str(&delivery_directive(&target));
+                    }
+                    let task = Task::new(instructions, subgoal)
                         .salvageable(research)
-                        .loop_profile(if research {
+                        // Exact matching for deep work: varied search queries read as
+                        // near-duplicates to a bag-of-words comparison, and a live research run was
+                        // stopped three times for exactly that.
+                        .loop_profile(if depth == Depth::Deep {
                             LoopProfile::exact()
                         } else {
                             LoopProfile::semantic()
@@ -804,9 +931,11 @@ impl Orchestrator {
                     // At info, not debug: with the budget as the only other signal, a research
                     // misclassification was previously invisible without raising the log level.
                     tracing::info!(
-                        research,
+                        depth = depth.label(),
+                        salvageable = research,
                         max_turns = budget.max_turns,
                         mcps = allowed_mcps.len(),
+                        delivery = delivery.label(),
                         "dispatching subagent"
                     );
                     let mut report = self.execute(budget, &*runtime, task).await?;
@@ -814,7 +943,7 @@ impl Orchestrator {
                     // reply (Gap 2). This is the primary path for a delegated subagent's permission
                     // request bubbling up through `delegate`.
                     report.deferred_to_human = deferred_flag_of(&deferral);
-                    self.deliver(&mut report, &delivery, research, &correlation_id)
+                    self.deliver(&mut report, &delivery, &allowed_mcps, &correlation_id)
                         .await?;
                     tracing::Span::current().record("disposition", "reported");
                     tracing::info!(outcome = ?report.outcome, "subagent dispatch completed");
@@ -1266,10 +1395,29 @@ impl ToolRuntime for NoMcpRuntime {
 /// - Non-empty `decision_capabilities` (tests / future explicit grants):
 ///   `ceiling ∩ decision_capabilities`.
 /// - Empty (normal classifier output — the model is told not to emit capability objects):
-///   synthesize `ExecuteMcp` entries from `allowed_mcps`, then intersect with the ceiling.
-///   Empty `allowed_mcps` means no MCP narrowing (same sense as empty `relevant_mcps` on
-///   `ExecuteDirect`), so the gate is the full ceiling; the runtime still only exposes
-///   registered servers.
+///   narrow the ceiling's **`ExecuteMcp` dimension** to `allowed_mcps`, and carry every other
+///   capability through unchanged. Empty `allowed_mcps` means no MCP narrowing (same sense as
+///   empty `relevant_mcps` on `ExecuteDirect`), so the gate is the full ceiling; the runtime
+///   still only exposes registered servers.
+///
+/// # Why this is not a plain intersection
+///
+/// It used to be: `ceiling.narrow(&requested)`, where `requested` was built from `allowed_mcps` and
+/// therefore contained **only** `ExecuteMcp` entries. `narrow` is a strict intersection, so every
+/// `Read(Zone)` and `Write(Zone)` in the ceiling was dropped on the floor — the gate set was
+/// `ExecuteMcp`-only, always. No subagent has ever held a zone capability, so every subagent vault
+/// write has always been refused and turned into a permission request.
+///
+/// That went unnoticed for months because **the failure mode is indistinguishable from the success
+/// mode**: a denied write raises a proposal, which is exactly what a zone the operator *intended* to
+/// protect would produce. The system even logged `'everywhere' grant already present in the overlay
+/// — capability=Write(Vault("Learning"))` while refusing that same write, because the pool grant and
+/// the gate set were two different values nobody compared.
+///
+/// The intent was always to scope *which MCPs are reachable* — the doc above said so, and reads
+/// were never affected because only writes consult `Write(Zone)`. Scoping MCPs simply is not
+/// expressible as an intersection against a set that describes only MCPs. Authority still cannot
+/// widen: every capability here comes from `ceiling`.
 fn subagent_gate_capabilities(
     ceiling: &CapabilitySet,
     decision_capabilities: &CapabilitySet,
@@ -1281,11 +1429,21 @@ fn subagent_gate_capabilities(
     if allowed_mcps.is_empty() {
         return ceiling.clone();
     }
-    let requested: CapabilitySet = allowed_mcps
-        .iter()
-        .map(|name| Capability::ExecuteMcp(name.clone()))
-        .collect();
-    ceiling.narrow(&requested)
+    CapabilitySet {
+        capabilities: ceiling
+            .capabilities
+            .iter()
+            .filter(|cap| match cap {
+                // The one dimension this scoping is about.
+                Capability::ExecuteMcp(name) => allowed_mcps.contains(name),
+                // Zones and AskHuman are not what `allowed_mcps` narrows. Keeping them is not a
+                // widening — they are the ceiling's own, and the zone-write-class guard, the
+                // consequence guard and the proposal path all still apply on top.
+                _ => true,
+            })
+            .cloned()
+            .collect(),
+    }
 }
 
 /// Build the subagent system prompt, appending its success criteria when present.
@@ -1299,6 +1457,33 @@ fn subagent_instructions(success_criteria: &[String]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!("{SUBAGENT_PREAMBLE}\n\nYou are done when:\n{criteria}")
+}
+
+/// Told to a subagent whose report will be **filed verbatim** rather than summarised.
+///
+/// Without this the subagent has no way to know its `submit_report` summary is the artifact. The
+/// `Report::summary` contract says "high-signal, short" and every other dispatch treats it that
+/// way, so a research subagent gathers its material, writes a one-line status, and reaches for a
+/// vault tool to author the real document — a tool delivery deliberately withheld, because the
+/// system performs that write. The first live run filed exactly that: 231 bytes reading "I have
+/// all the research I need. Let me now write the comprehensive report directly to the vault."
+///
+/// So this has to do two things: say the report *is* the document, and pre-empt the search for a
+/// writing tool that is not there and is not coming.
+fn delivery_directive(path: &str) -> String {
+    format!(
+        "\n\nOUTPUT CONTRACT — read this before you start.\n\n\
+         Your `{SUBMIT_REPORT_TOOL}` `summary` IS the deliverable. The system files it verbatim at \
+         `{path}` the moment you submit, and the human reads that file — not a summary of it. So \
+         write the summary as the FINISHED DOCUMENT: complete, structured with markdown headings, \
+         as long as the material warrants, carrying the detail, sources and specifics you \
+         gathered. This is the one case where a long report is the correct answer.\n\n\
+         You have no file-writing or vault tool, and you do not need one — do not look for one, and \
+         do not end a turn intending to write the document afterwards. There is no afterwards: \
+         submitting the report IS writing it. A short status line (\"I have what I need, now I will \
+         write it up\") would be filed as the entire document, and the human would receive that \
+         instead of your work."
+    )
 }
 
 /// Validate and normalise a `Delivery::Vault` destination, or say why it can't be used.
@@ -1331,6 +1516,44 @@ fn vault_delivery_path(path: &str) -> Result<String, &'static str> {
         Some((zone, rest)) if !zone.is_empty() && !rest.is_empty() => Ok(cleaned.to_string()),
         _ => Err("delivery path names no zone (expected `<zone>/<name>.md`)"),
     }
+}
+
+/// Minimum plausible size for a report being filed as a standalone document.
+///
+/// Not a quality bar — a deliberately low floor that only a *non*-document trips. The failure it
+/// catches filed 231 bytes; a genuine short answer that belongs in the vault still clears this, and
+/// a genuine long one clears it by orders of magnitude (live runs: 19,970 and 28,225 bytes). Set it
+/// higher and it starts rejecting real work, which would be worse than the bug.
+const MIN_DELIVERED_DOCUMENT_BYTES: usize = 400;
+
+/// Does this report look like the document it is about to be filed as?
+///
+/// Scoped to the `Delivery::Vault` path on purpose. A general "is this output good" check would need
+/// a threshold that is wrong somewhere — 400 bytes is absurd for "what's on my calendar tomorrow",
+/// which is a perfectly correct one-line answer. But vault delivery has a *stated contract*
+/// (`delivery_directive`: your report IS the finished document), so this only asks whether that
+/// contract was honoured. That is why it needs no per-task tuning.
+fn looks_like_a_document(summary: &str) -> Result<(), &'static str> {
+    let trimmed = summary.trim();
+    if trimmed.is_empty() {
+        return Err("it is empty");
+    }
+    if trimmed.len() < MIN_DELIVERED_DOCUMENT_BYTES {
+        return Err("it is too short to be a write-up");
+    }
+    // The specific shape that got filed: a couple of sentences of the model talking about what it
+    // is going to do. A real write-up of this length has structure — headings, bullets, or simply
+    // more than a few lines. Checked only as a fallback for something long enough to pass the byte
+    // floor but still not a document.
+    let has_structure = trimmed.contains('#')
+        || trimmed.contains("\n-")
+        || trimmed.contains("\n*")
+        || trimmed.contains("\n1.")
+        || trimmed.lines().filter(|l| !l.trim().is_empty()).count() >= 5;
+    if !has_structure {
+        return Err("it has no headings, list, or paragraph structure");
+    }
+    Ok(())
 }
 
 /// The note written for a `Delivery::Vault` report.
@@ -1423,6 +1646,90 @@ mod tests {
         );
     }
 
+    /// The exact string that was filed live, as the fixture. The prompt fix makes this unlikely;
+    /// this makes it impossible to file.
+    #[test]
+    fn the_231_byte_non_document_is_refused() {
+        let filed_live = "I have all the research I need. Let me now write the comprehensive \
+                          report directly to the vault.";
+        assert!(looks_like_a_document(filed_live).is_err());
+        assert!(looks_like_a_document("").is_err());
+        assert!(looks_like_a_document("   \n  ").is_err());
+    }
+
+    /// The floor must not reject real work — that would be worse than the bug it guards.
+    #[test]
+    fn genuine_write_ups_pass_verification() {
+        // A structured report, comfortably over the floor.
+        let mut doc = String::from("# Findings\n\n");
+        for i in 0..12 {
+            doc.push_str(&format!(
+                "## Section {i}\n\nThe implementations converged on a shared interface, and \
+                 adoption followed once tooling stabilised.\n\n"
+            ));
+        }
+        assert!(looks_like_a_document(&doc).is_ok());
+
+        // Long prose with no markdown, but real paragraph structure, still passes: the check is
+        // "is this a document", not "is this formatted the way I like".
+        let prose = (0..8)
+            .map(|i| format!("Paragraph {i} carries a full sentence of genuine findings here."))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        assert!(prose.len() > MIN_DELIVERED_DOCUMENT_BYTES);
+        assert!(looks_like_a_document(&prose).is_ok());
+    }
+
+    /// Long enough to clear the byte floor but still just the model talking — caught by structure.
+    #[test]
+    fn a_long_status_line_without_structure_is_still_refused() {
+        let rambling = "I have now completed all of the research that I believe is necessary for \
+                        this task and I am confident that I have gathered sufficient material from \
+                        the sources I consulted, so the next thing I intend to do is compose the \
+                        full write-up and place it into the vault at the path that was specified \
+                        for me earlier in this conversation, which I will begin doing immediately \
+                        once I have finished organising my notes into a coherent narrative order.";
+        assert!(rambling.len() > MIN_DELIVERED_DOCUMENT_BYTES);
+        assert!(looks_like_a_document(rambling).is_err());
+    }
+
+    /// The 231-byte regression. A subagent whose report is filed verbatim must be told before it
+    /// starts, or it writes a status line and waits to author the document with a tool it never
+    /// had — which is exactly what the first live run filed.
+    #[test]
+    fn a_delivered_subagent_is_told_its_report_is_the_document() {
+        let orch = delivering_orchestrator();
+        let target = orch
+            .delivery_target(&vault_to("Learning/x.md"), &read_only_mcps())
+            .expect("this dispatch can deliver");
+        let directive = delivery_directive(&target);
+        assert!(directive.contains("Learning/x.md"));
+        assert!(
+            directive.contains(SUBMIT_REPORT_TOOL),
+            "it must name the tool whose argument becomes the artifact"
+        );
+        // The two failure modes it exists to prevent, in the model's own words.
+        assert!(directive.contains("no file-writing or vault tool"));
+        assert!(directive.contains("There is no afterwards"));
+    }
+
+    /// The directive is only correct when delivery will actually happen — a downgraded dispatch
+    /// must NOT be told its summary is a document, or it writes a 20KB "summary" into chat.
+    #[test]
+    fn a_dispatch_that_cannot_deliver_gets_no_output_contract() {
+        let orch = delivering_orchestrator();
+        assert!(
+            orch.delivery_target(&vault_to("Learning/x.md"), &acting_mcps())
+                .is_err(),
+            "an acting dispatch cannot deliver, so it must not be given the contract"
+        );
+        assert!(
+            orch.delivery_target(&Delivery::Summarize, &read_only_mcps())
+                .is_err(),
+            "the default sink authors no document"
+        );
+    }
+
     #[test]
     fn subagent_instructions_empty_returns_preamble() {
         let result = subagent_instructions(&[]);
@@ -1439,6 +1746,43 @@ mod tests {
             subagent_gate_capabilities(&ceiling, &CapabilitySet::empty(), &["turbovault".into()]);
         assert!(gate.grants_mcp("turbovault"));
         assert!(!gate.grants_mcp("weather"));
+    }
+
+    /// The months-old bug: `narrow` is a strict intersection, and the set built from
+    /// `allowed_mcps` holds only `ExecuteMcp`, so every zone capability was dropped. No subagent
+    /// ever held `Write`, so every subagent vault write became a permission request — and that
+    /// looked exactly like a zone the operator meant to protect, which is why nobody noticed.
+    #[test]
+    fn scoping_mcps_does_not_strip_zone_authority() {
+        let ceiling = CapabilitySet::from_iter([
+            Capability::ExecuteMcp("turbovault".into()),
+            Capability::ExecuteMcp("email".into()),
+            Capability::Read(liberado_common::Zone::vault("Learning")),
+            Capability::Write(liberado_common::Zone::vault("Learning")),
+        ]);
+        let gate =
+            subagent_gate_capabilities(&ceiling, &CapabilitySet::empty(), &["turbovault".into()]);
+
+        // The dimension `allowed_mcps` is actually about.
+        assert!(gate.grants_mcp("turbovault"));
+        assert!(
+            !gate.grants_mcp("email"),
+            "out-of-scope MCPs are still removed"
+        );
+
+        // The dimension it is not about, and used to destroy.
+        assert!(gate.contains(&Capability::Write(liberado_common::Zone::vault("Learning"))));
+        assert!(gate.contains(&Capability::Read(liberado_common::Zone::vault("Learning"))));
+    }
+
+    /// Decision 4 still holds: everything in the gate set comes from the ceiling.
+    #[test]
+    fn scoping_can_never_invent_authority_the_ceiling_lacks() {
+        let ceiling = CapabilitySet::from_iter([Capability::ExecuteMcp("turbovault".into())]);
+        let gate =
+            subagent_gate_capabilities(&ceiling, &CapabilitySet::empty(), &["turbovault".into()]);
+        assert!(!gate.contains(&Capability::Write(liberado_common::Zone::vault("Learning"))));
+        assert_eq!(gate.capabilities.len(), 1);
     }
 
     #[test]
@@ -1499,6 +1843,18 @@ mod tests {
         .with_report_sink(ReportSink::new("vault", "write_note", "path", "content"))
     }
 
+    /// A dispatch whose MCPs cannot reach past the vault: `ReadOnly` lookups and a `Reversible`
+    /// vault write. Both sit below `CONSEQUENCE_GATE`, so nothing happened that the main agent
+    /// must narrate.
+    fn read_only_mcps() -> Vec<String> {
+        vec!["search".into(), "vault".into()]
+    }
+
+    /// A dispatch that can act on the world — `email` is `External`.
+    fn acting_mcps() -> Vec<String> {
+        vec!["search".into(), "email".into()]
+    }
+
     fn vault_to(path: &str) -> Delivery {
         Delivery::Vault { path: path.into() }
     }
@@ -1507,8 +1863,11 @@ mod tests {
     #[test]
     fn a_clean_read_only_run_is_delivered_to_the_vault() {
         let orch = delivering_orchestrator();
-        let (effective, downgrade) =
-            orch.resolve_delivery(&vault_to("Learning/x.md"), true, Outcome::Succeeded);
+        let (effective, downgrade) = orch.resolve_delivery(
+            &vault_to("Learning/x.md"),
+            &read_only_mcps(),
+            Outcome::Succeeded,
+        );
         assert_eq!(effective, vault_to("Learning/x.md"));
         assert_eq!(downgrade, None);
     }
@@ -1519,10 +1878,94 @@ mod tests {
     #[test]
     fn a_dispatch_that_can_act_never_bypasses_the_main_agent() {
         let orch = delivering_orchestrator();
-        let (effective, downgrade) =
-            orch.resolve_delivery(&vault_to("Learning/x.md"), false, Outcome::Succeeded);
+        let (effective, downgrade) = orch.resolve_delivery(
+            &vault_to("Learning/x.md"),
+            &acting_mcps(),
+            Outcome::Succeeded,
+        );
         assert_eq!(effective, Delivery::Summarize);
-        assert!(downgrade.is_some_and(|d| d.contains("not read-only")));
+        assert!(downgrade.is_some_and(|d| d.contains("act outside the vault")));
+    }
+
+    /// The Telegram failure, root cause. A deep-research goal that merely *mentioned* the vault
+    /// got the vault MCP in `allowed_mcps`, which made it "not read-only", which gave it 8 turns
+    /// instead of 30 — and it failed at the budget. Depth is a property of the task, not of which
+    /// MCPs it happens to touch.
+    #[test]
+    fn depth_sets_the_budget_regardless_of_which_mcps_are_in_scope() {
+        let orch = delivering_orchestrator();
+        let with_vault = ["search".to_string(), "vault".to_string()];
+
+        assert_eq!(
+            orch.budget_for(Depth::Deep).max_turns,
+            orch.research_budget.max_turns,
+            "a deep task gets the research budget even though `vault` is Reversible"
+        );
+        assert_eq!(
+            orch.budget_for(Depth::Normal).max_turns,
+            orch.subagent_budget.max_turns
+        );
+        assert!(
+            orch.budget_for(Depth::Shallow).max_turns < orch.budget_for(Depth::Normal).max_turns
+        );
+
+        // The old predicate still says "not read-only" for this list — and no longer decides turns.
+        assert!(!orch.is_read_only_dispatch(&with_vault));
+    }
+
+    /// Salvage stays *inferred*, and from consequence rather than depth: returning partial findings
+    /// is safe when nothing irreversible could have happened. It is a safety property, not a
+    /// preference, so it is not a model's to declare.
+    #[test]
+    fn salvage_follows_consequence_not_depth() {
+        let orch = delivering_orchestrator();
+        assert!(orch.delivery_consequence_ok(&["search".into(), "vault".into()]));
+        assert!(!orch.delivery_consequence_ok(&["search".into(), "email".into()]));
+    }
+
+    /// The regression that motivated splitting delivery from the budget derivation.
+    ///
+    /// "Research X and save it to my vault" is the clearest case for direct delivery, and it is
+    /// exactly the phrasing that makes a classifier include the vault MCP. Live, that made the
+    /// dispatch non-read-only and delivery refused — the feature switched itself off precisely
+    /// when the human had asked for it most plainly. A `Reversible` vault write left nothing
+    /// outside the system, so there is nothing for the main agent to narrate.
+    #[test]
+    fn a_vault_reading_dispatch_may_still_deliver() {
+        let orch = delivering_orchestrator();
+        let (effective, downgrade) = orch.resolve_delivery(
+            &vault_to("Learning/x.md"),
+            &["search".into(), "vault".into()],
+            Outcome::Succeeded,
+        );
+        assert_eq!(effective, vault_to("Learning/x.md"));
+        assert_eq!(downgrade, None);
+    }
+
+    /// ...but the budget derivation still says "not research" for that same dispatch. The two
+    /// predicates ask different questions of the same list and are *supposed* to disagree: turns
+    /// and salvage care whether anything could be left half-written; delivery cares whether
+    /// something happened out in the world.
+    #[test]
+    fn delivery_and_budget_derivations_are_independent() {
+        let orch = delivering_orchestrator();
+        let vault_read = ["search".to_string(), "vault".to_string()];
+        assert!(
+            !orch.is_read_only_dispatch(&vault_read),
+            "a Reversible MCP is not read-only — the budget derivation is unchanged"
+        );
+        assert!(
+            orch.delivery_consequence_ok(&vault_read),
+            "but nothing irreversible happened, so delivery is still allowed"
+        );
+    }
+
+    /// An unbounded scope (empty = the full ceiling) cannot be rated, so it fails closed.
+    #[test]
+    fn an_unscoped_dispatch_may_not_bypass_the_main_agent() {
+        let orch = delivering_orchestrator();
+        assert!(!orch.delivery_consequence_ok(&[]));
+        assert!(!orch.delivery_consequence_ok(&["who-is-this".into()]));
     }
 
     /// Guard #2. A failed or partial run is exactly when the detail belongs in the conversation —
@@ -1537,7 +1980,7 @@ mod tests {
             Outcome::Proposed,
         ] {
             let (effective, downgrade) =
-                orch.resolve_delivery(&vault_to("Learning/x.md"), true, outcome);
+                orch.resolve_delivery(&vault_to("Learning/x.md"), &read_only_mcps(), outcome);
             assert_eq!(
                 effective,
                 Delivery::Summarize,
@@ -1553,8 +1996,11 @@ mod tests {
     #[test]
     fn a_zone_that_is_not_agent_writable_is_refused_not_proposed() {
         let orch = delivering_orchestrator();
-        let (effective, downgrade) =
-            orch.resolve_delivery(&vault_to("Legal/x.md"), true, Outcome::Succeeded);
+        let (effective, downgrade) = orch.resolve_delivery(
+            &vault_to("Legal/x.md"),
+            &read_only_mcps(),
+            Outcome::Succeeded,
+        );
         assert_eq!(effective, Delivery::Summarize);
         assert!(downgrade.is_some_and(|d| d.contains("agent-writable")));
     }
@@ -1565,8 +2011,11 @@ mod tests {
     #[test]
     fn an_undeclared_zone_is_refused_by_the_fail_safe_default() {
         let orch = delivering_orchestrator();
-        let (effective, _) =
-            orch.resolve_delivery(&vault_to("research/x.md"), true, Outcome::Succeeded);
+        let (effective, _) = orch.resolve_delivery(
+            &vault_to("research/x.md"),
+            &read_only_mcps(),
+            Outcome::Succeeded,
+        );
         assert_eq!(effective, Delivery::Summarize);
     }
 
@@ -1575,8 +2024,11 @@ mod tests {
     fn delivery_requires_write_on_the_target_zone() {
         let mut orch = delivering_orchestrator();
         orch.capabilities = CapabilitySet::empty();
-        let (effective, downgrade) =
-            orch.resolve_delivery(&vault_to("Learning/x.md"), true, Outcome::Succeeded);
+        let (effective, downgrade) = orch.resolve_delivery(
+            &vault_to("Learning/x.md"),
+            &read_only_mcps(),
+            Outcome::Succeeded,
+        );
         assert_eq!(effective, Delivery::Summarize);
         assert!(downgrade.is_some_and(|d| d.contains("Write capability")));
     }
@@ -1586,8 +2038,11 @@ mod tests {
     #[test]
     fn without_a_sink_delivery_quietly_falls_back() {
         let orch = orchestrator_with_catalog(web_catalog());
-        let (effective, downgrade) =
-            orch.resolve_delivery(&vault_to("Learning/x.md"), true, Outcome::Succeeded);
+        let (effective, downgrade) = orch.resolve_delivery(
+            &vault_to("Learning/x.md"),
+            &read_only_mcps(),
+            Outcome::Succeeded,
+        );
         assert_eq!(effective, Delivery::Summarize);
         assert!(downgrade.is_some_and(|d| d.contains("no report sink")));
     }
@@ -1595,9 +2050,11 @@ mod tests {
     #[test]
     fn summarize_is_never_downgraded_and_needs_nothing() {
         let orch = orchestrator_with_catalog(web_catalog());
-        for (research, outcome) in [(true, Outcome::Succeeded), (false, Outcome::Failed)] {
-            let (effective, downgrade) =
-                orch.resolve_delivery(&Delivery::Summarize, research, outcome);
+        for (mcps, outcome) in [
+            (&read_only_mcps(), Outcome::Succeeded),
+            (&acting_mcps(), Outcome::Failed),
+        ] {
+            let (effective, downgrade) = orch.resolve_delivery(&Delivery::Summarize, mcps, outcome);
             assert_eq!(effective, Delivery::Summarize);
             assert_eq!(downgrade, None);
         }

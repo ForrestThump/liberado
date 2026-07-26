@@ -34,14 +34,12 @@ async fn provider_is_object_safe_behind_dyn() {
 #[tokio::test]
 async fn complete_json_maps_empty_content_to_empty_response() {
     // A pure tool-call turn has no text content.
-    let mock = MockProvider::with_script(
-        "m",
-        [CompletionResponse::tool_calls(vec![ToolInvocation::new(
-            "1",
-            "t",
-            serde_json::json!({}),
-        )])],
-    );
+    // Two, because `complete_json` retries an unusable reply once — the error surfaces only when
+    // the retry is exhausted too.
+    let empty_turn = || {
+        CompletionResponse::tool_calls(vec![ToolInvocation::new("1", "t", serde_json::json!({}))])
+    };
+    let mock = MockProvider::with_script("m", [empty_turn(), empty_turn()]);
     let res: ProviderResult<serde_json::Value> =
         complete_json(&mock, CompletionRequest::new(vec![]), serde_json::json!({})).await;
     assert!(matches!(res, Err(ProviderError::EmptyResponse)));
@@ -49,10 +47,41 @@ async fn complete_json_maps_empty_content_to_empty_response() {
 
 #[tokio::test]
 async fn complete_json_maps_bad_json_to_decode_error() {
-    let mock = MockProvider::with_script("m", [CompletionResponse::text("definitely not json")]);
+    let mock = MockProvider::with_script(
+        "m",
+        [
+            CompletionResponse::text("definitely not json"),
+            CompletionResponse::text("still not json"),
+        ],
+    );
     let res: ProviderResult<serde_json::Value> =
         complete_json(&mock, CompletionRequest::new(vec![]), serde_json::json!({})).await;
     assert!(matches!(res, Err(ProviderError::Decode(_))));
+}
+
+/// The retry is the point, so pin it directly: one unusable reply followed by a good one succeeds.
+#[tokio::test]
+async fn complete_json_retries_an_unusable_reply_once() {
+    let mock = MockProvider::with_script(
+        "m",
+        [
+            CompletionResponse::text("not json"),
+            CompletionResponse::text(r#"{"ok":true}"#),
+        ],
+    );
+    let res: ProviderResult<serde_json::Value> =
+        complete_json(&mock, CompletionRequest::new(vec![]), serde_json::json!({})).await;
+    assert_eq!(res.unwrap(), serde_json::json!({"ok": true}));
+}
+
+/// ...but only once. A transport failure on the retry is NOT swallowed into a decode error.
+#[tokio::test]
+async fn complete_json_does_not_retry_forever() {
+    let mock = MockProvider::with_script("m", [CompletionResponse::text("not json")]);
+    let res: ProviderResult<serde_json::Value> =
+        complete_json(&mock, CompletionRequest::new(vec![]), serde_json::json!({})).await;
+    // Second attempt hits the exhausted mock — a real provider error, propagated as-is.
+    assert!(matches!(res, Err(ProviderError::MockExhausted)));
 }
 
 #[tokio::test]
@@ -122,6 +151,7 @@ fn request_and_response_serde_round_trip() {
             prompt_tokens: 1,
             completion_tokens: 2,
             total_tokens: 3,
+            cached_prompt_tokens: None,
         }),
     };
     let back: CompletionResponse =

@@ -9,9 +9,9 @@ two or more crates, it lives here.
 | Module | What it defines | Decision |
 |---|---|---|
 | `provenance` | `WriteProvenance` (`source` + `correlation_id` + zone/note), `PROVENANCE_KEY` (`_liberado_provenance`), `HUMAN_SOURCE`, `to_audit_metadata`/`from_audit_metadata`, `is_human()` | 5 |
-| `capability` | `Zone`, `WriteClass`, `Capability`, `CapabilitySet` (narrow-only containment), `grants_mcp()` | 4 |
+| `capability` | `Zone`, `WriteClass`, `Capability`, `CapabilitySet` (narrow-only containment), `grants_mcp()`, `grants_ask_human()`, `Consequence`, `CONSEQUENCE_GATE`, `instruction_scope()` + the magnitude heuristics | 4 |
 | `catalog` | `CapabilityCatalog`, `McpDescriptor` — the live, thread-safe (`Arc<RwLock<_>>` + a `watch` channel for change notification) runtime registry of available MCPs, populated at boot from `topology.mcps` and updated as MCPs come and go. The one shared `Arc<CapabilityCatalog>` the dispatcher, daemon, chat, and API all route against. | — |
-| `dispatch` | `DispatchDecision`, `DispatchAction` (`ExecuteDirect`/`DispatchSubagent`/`Clarify`), `Report`, `Outcome`, `BlockReason`, `ToolCall`, `ExecMode`, `JobHandle`/`JobStatus` | 1 |
+| `dispatch` | `DispatchDecision`, `DispatchAction` (`ExecuteDirect`/`DispatchSubagent`/`Clarify`/`Propose`), `Delivery`, `Depth`, `Report`, `Outcome`, `BlockReason`, `ToolCall`, `ExecMode`, `JobHandle`/`JobStatus` | 1 |
 | `event` | `Event`, `EventPayload`, `event_source` — one shape for **both** trigger paths (vault changes and hook webhooks) | 6 |
 | `local_time` | `UserTimezone`, `DEFAULT_TIMEZONE` — IANA zone + helpers to stamp "Local time: …" onto agent context when a caller opts in (config SSoT is `topology.timezone`) | — |
 | `model` | `ModelProfile`, `ModelRole`, `ModelTier`, `ModelChoice`, `RequiredCaps` — role-tiered capability floors | 13 |
@@ -24,6 +24,17 @@ re-exported from `liberado-config`) to avoid a dependency cycle: `liberado-confi
 cross-cutting validation needs the type, and `liberado-config` already depends on
 `liberado-config-loader`. Nothing in this crate reaches for it, so it doesn't belong in the shared
 vocabulary every crate compiles against regardless of whether it touches config.
+
+## Two constants that live here because two guards must agree
+
+- **`CONSEQUENCE_GATE`** was private to `liberado-dispatcher`. It is now read by two independent
+  guards — the dispatcher's (may this run without asking?) and the orchestrator's delivery guard
+  (may this report bypass the main agent?). Two copies drifting apart would mean an action safe
+  enough to run unattended is simultaneously too dangerous to report directly, or the reverse.
+- **`INSTRUCTION_SCAN_LIMIT`** caps how much of a goal the magnitude heuristics read, because a goal
+  carrying pasted content is an instruction *plus* a document. Both the pre-flight guard and
+  `RiskGatedToolRuntime` now read a goal through `instruction_scope`; previously only one did, so the
+  same goal could pass one guard and trip the other.
 
 ## Key invariants
 

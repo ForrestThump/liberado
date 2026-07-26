@@ -89,6 +89,13 @@ pub struct LatencyEvent {
     pub completion_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<u32>,
+    /// Prompt tokens the provider served from cache, when it reports them at all.
+    ///
+    /// Recorded so cache hit rate is a query over this journal rather than a guess. Absent means
+    /// the backend volunteered nothing — distinct from a reported zero, which would mean caching is
+    /// available and simply not working.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_prompt_tokens: Option<u32>,
     /// Finish reason (or `"error"` if the call failed).
     pub finish: String,
     /// Number of tool calls the model requested this turn.
@@ -190,6 +197,7 @@ impl Provider for MeteredProvider {
                 prompt_tokens: usage.map(|u| u.prompt_tokens),
                 completion_tokens: usage.map(|u| u.completion_tokens),
                 total_tokens: usage.map(|u| u.total_tokens),
+                cached_prompt_tokens: usage.and_then(|u| u.cached_prompt_tokens),
                 finish,
                 tool_calls,
                 streamed: false,
@@ -234,6 +242,7 @@ impl Provider for MeteredProvider {
                             prompt_tokens: usage.map(|u| u.prompt_tokens),
                             completion_tokens: usage.map(|u| u.completion_tokens),
                             total_tokens: usage.map(|u| u.total_tokens),
+                            cached_prompt_tokens: usage.and_then(|u| u.cached_prompt_tokens),
                             finish: format!("{:?}", resp.finish_reason),
                             tool_calls: resp.tool_calls.len(),
                             streamed: true,

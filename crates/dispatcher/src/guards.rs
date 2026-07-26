@@ -21,6 +21,7 @@
 //! good reason — but if you add a **new** guard here, check whether `risk_gated.rs` needs the
 //! runtime equivalent, and vice versa.
 
+use liberado_common::CONSEQUENCE_GATE;
 use liberado_common::{
     BlockReason, Consequence, DispatchAction, DispatchDecision, bare_tool_name, instruction_scope,
     is_sweeping_destructive, mcp_of, zone_write_restriction,
@@ -28,11 +29,6 @@ use liberado_common::{
 use liberado_config_loader::DispatchTuning;
 
 use crate::DispatchRequest;
-
-/// At or above this consequence, a direct action is gated to a `Clarify` for confirmation. Set to
-/// `Irreversible` so anything that can't be undone — and everything `External` — needs a human, while
-/// `Reversible` (git-tracked) writes and `ReadOnly` lookups flow.
-const CONSEQUENCE_GATE: Consequence = Consequence::Irreversible;
 
 /// Evaluate the guards against a classified decision. Returns the [`BlockReason`] of the first
 /// (highest-priority) violation, or `None` if the decision passes unchanged. The caller downgrades
@@ -46,8 +42,22 @@ pub(crate) fn evaluate(
     tuning: &DispatchTuning,
     max_reaction_depth: u32,
 ) -> Option<BlockReason> {
-    // A Clarify is already the most conservative action — nothing to downgrade.
+    // A Clarify is the most conservative action — *when somebody can answer it*.
+    //
+    // For an actor holding no `AskHuman` capability there is no one, so a question is not a
+    // conservative fallback, it is a dead end: the run is spent producing something delivered to
+    // nobody. The capability model already says this ("structurally unable to block on a person who
+    // isn't there") and the homelab's `dispatcher` grant already omits `AskHuman` — this guard is
+    // the dispatcher finally reading a constraint that was declared all along, rather than a new
+    // rule. A live evening-debrief cron burned a run on "how should I proceed?" at 01:55.
     if matches!(decision.action, DispatchAction::Clarify { .. }) {
+        if !req.capabilities.grants_ask_human() {
+            return blocked(
+                "ask_human_capability",
+                BlockReason::Unattended,
+                "Clarify requires an interlocutor and this actor holds no AskHuman capability",
+            );
+        }
         return None;
     }
 
@@ -60,7 +70,11 @@ pub(crate) fn evaluate(
                 action = %decision.action,
                 "capability gap: action references MCP not in the dispatcher grant"
             );
-            return Some(BlockReason::CapabilityGap);
+            return blocked(
+                "mcp_grant",
+                BlockReason::CapabilityGap,
+                &format!("action references '{mcp}', which the grant does not include"),
+            );
         }
     }
 
@@ -68,8 +82,13 @@ pub(crate) fn evaluate(
     // external (an email/message, an unversioned delete) needs human confirmation, even at high
     // confidence. A git-tracked vault write is `Reversible` and passes; `External`/`Irreversible`
     // does not.
-    if max_consequence(&decision.action, req) >= CONSEQUENCE_GATE {
-        return Some(BlockReason::HighConsequence);
+    let consequence = max_consequence(&decision.action, req);
+    if consequence >= CONSEQUENCE_GATE {
+        return blocked(
+            "consequence",
+            BlockReason::HighConsequence,
+            &format!("an MCP in scope is rated {consequence:?} (gate {CONSEQUENCE_GATE:?})"),
+        );
     }
 
     // (2b) Zone-write-class gate (§6 #2) — a permitted, low-*general*-consequence action can still
@@ -78,7 +97,11 @@ pub(crate) fn evaluate(
     // doc comment); the real, always-enforced boundary for every call including adaptive ones is
     // `RiskGatedToolRuntime`.
     if zone_restricted(&decision.action, req) {
-        return Some(BlockReason::ZoneRestricted);
+        return blocked(
+            "zone_write_class",
+            BlockReason::ZoneRestricted,
+            "a seed call targets a zone that is not directly agent-writable",
+        );
     }
 
     // (3) Magnitude gate — a *sweeping destructive* action is high-stakes by reach even when each
@@ -89,23 +112,56 @@ pub(crate) fn evaluate(
     // Scoped to the *instruction* — a goal that merely narrates a past deletion in a trailing
     // `Context:` section is not asking for one. See `instruction_scope`'s doc comment for the
     // live false positive that motivated this.
-    if is_sweeping_destructive(instruction_scope(&req.goal)) {
-        return Some(BlockReason::HighConsequence);
+    let instruction = instruction_scope(&req.goal);
+    if is_sweeping_destructive(instruction) {
+        return blocked(
+            "magnitude",
+            BlockReason::HighConsequence,
+            &format!(
+                "instruction reads as sweeping+destructive ({} of {} goal chars scanned)",
+                instruction.len(),
+                req.goal.len()
+            ),
+        );
     }
 
     // (4) Reaction-depth guard — halt runaway background cascades.
     if req.reaction_depth >= max_reaction_depth {
-        return Some(BlockReason::DepthLimit);
+        return blocked(
+            "reaction_depth",
+            BlockReason::DepthLimit,
+            &format!("depth {} >= max {max_reaction_depth}", req.reaction_depth),
+        );
     }
 
     // (5) Confidence floor — below the bar, ask rather than act. The write threshold is applied
     // conservatively to any action-taking decision (read/write tiering needs per-tool metadata,
     // deferred); `Clarify` was already excluded above.
     if decision.confidence < tuning.clarify_threshold_write {
-        return Some(BlockReason::LowConfidence);
+        return blocked(
+            "confidence_floor",
+            BlockReason::LowConfidence,
+            &format!(
+                "confidence {:.2} < threshold {:.2}",
+                decision.confidence, tuning.clarify_threshold_write
+            ),
+        );
     }
 
     None
+}
+
+/// Name the guard that just fired, alongside the [`BlockReason`] it produces.
+///
+/// `BlockReason` is a coarse wire type deliberately shared by more than one check: the consequence
+/// gate and the magnitude gate both return `HighConsequence`, and they are different problems with
+/// different fixes. When a live proposal appeared with `downgrade=HighConsequence`, telling the two
+/// apart required re-running the heuristic offline against the goal text — the log could not answer
+/// it. `guard=` closes that, and matches the field name `RiskGatedToolRuntime::authority_decision`
+/// uses on the runtime side, so one grep covers both enforcement points.
+fn blocked(guard: &'static str, reason: BlockReason, detail: &str) -> Option<BlockReason> {
+    tracing::warn!(guard, ?reason, detail = %detail, "pre-flight guard blocked the action");
+    Some(reason)
 }
 
 /// The MCPs an action would invoke. The tool-name convention is `"<mcp>:<tool>"`; a bare name is
@@ -179,7 +235,9 @@ fn zone_restricted(action: &DispatchAction, req: &DispatchRequest) -> bool {
 mod tests {
     use super::*;
     use crate::McpDescriptor;
-    use liberado_common::{Capability, CapabilitySet, Consequence, Delivery, ToolCall, Zone};
+    use liberado_common::{
+        Capability, CapabilitySet, Consequence, Delivery, Depth, ToolCall, Zone,
+    };
 
     fn req(capabilities: CapabilitySet, reaction_depth: u32) -> DispatchRequest {
         DispatchRequest {
@@ -198,6 +256,46 @@ mod tests {
             reaction_depth,
             zone_write_classes: Vec::new(),
         }
+    }
+
+    fn clarify_decision() -> DispatchDecision {
+        DispatchDecision {
+            action: DispatchAction::Clarify {
+                questions: vec!["which one?".into()],
+                what_blocked: BlockReason::Ambiguous,
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        }
+    }
+
+    /// A cron holds no `AskHuman`, so a `Clarify` is a dead end: delivered to nobody, run spent.
+    /// The homelab's `dispatcher` grant already omitted the capability — the dispatcher just never
+    /// read it, and a live evening-debrief burned a run on "how should I proceed?" at 01:55.
+    #[test]
+    fn an_unattended_actor_may_not_be_asked_to_clarify() {
+        let unattended = granted("tasks-mcp"); // no AskHuman
+        let reason = evaluate(
+            &clarify_decision(),
+            &req(unattended, 0),
+            &DispatchTuning::default(),
+            5,
+        );
+        assert_eq!(reason, Some(BlockReason::Unattended));
+    }
+
+    /// ...and an actor that *can* ask is untouched: Clarify remains the conservative answer there.
+    #[test]
+    fn an_interactive_actor_may_still_clarify() {
+        let mut interactive = granted("tasks-mcp");
+        interactive.grant(Capability::AskHuman);
+        let reason = evaluate(
+            &clarify_decision(),
+            &req(interactive, 0),
+            &DispatchTuning::default(),
+            5,
+        );
+        assert_eq!(reason, None);
     }
 
     fn execute_direct(tool: &str, confidence: f32) -> DispatchDecision {
@@ -444,6 +542,7 @@ mod tests {
                 model: None,
                 correlation_id: "c1".into(),
                 delivery: Delivery::Summarize,
+                depth: Depth::Normal,
             },
             confidence: 0.95,
             rationale: "test".into(),
@@ -460,8 +559,12 @@ mod tests {
         );
     }
 
+    /// A Clarify skips the *other* guards — confidence floor, depth limit — because asking is
+    /// already the conservative answer. Renamed from `clarify_is_never_downgraded`: that was true
+    /// unconditionally until the AskHuman guard, and "never" is now wrong. The exemption holds only
+    /// when someone can actually answer, so this fixture must grant `AskHuman` to test it.
     #[test]
-    fn clarify_is_never_downgraded() {
+    fn clarify_skips_the_other_guards_when_a_human_is_reachable() {
         let d = DispatchDecision {
             action: DispatchAction::Clarify {
                 questions: vec!["which?".into()],
@@ -470,13 +573,10 @@ mod tests {
             confidence: 0.0, // would trip the confidence floor if it applied
             rationale: "test".into(),
         };
+        let mut caps = CapabilitySet::empty();
+        caps.grant(Capability::AskHuman);
         assert_eq!(
-            evaluate(
-                &d,
-                &req(CapabilitySet::empty(), 9),
-                &DispatchTuning::default(),
-                4
-            ),
+            evaluate(&d, &req(caps, 9), &DispatchTuning::default(), 4),
             None
         );
     }

@@ -2,7 +2,7 @@
 
 **What is not done yet.** Forward-looking work only. What *is* built is described in [`../architecture/overview.md`](../architecture/overview.md); finished plans and closed audits are in [`archive/`](archive/README.md). Index of this folder: [`README.md`](README.md).
 
-Before starting anything, read [`../architecture/failure-modes.md`](../architecture/failure-modes.md) — five bug classes this codebase produces over and over. Every one of them shipped with a green test suite.
+Before starting anything, read [`../architecture/failure-modes.md`](../architecture/failure-modes.md) — six bug classes this codebase produces over and over. Every one of them shipped with a green test suite.
 
 ## Open now — in priority order
 

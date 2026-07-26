@@ -204,8 +204,19 @@ impl Dispatcher {
                     Ok(decision)
                 }
                 // The model responded, but unusably → safe default, don't crash.
-                Err(ProviderError::Decode(_)) | Err(ProviderError::EmptyResponse) => {
-                    tracing::warn!("classification produced unusable output; degrading to Clarify");
+                //
+                // Logged WITH the reason (which now carries a prefix of what the model actually
+                // said). A bare "unusable output" is unactionable: it cannot distinguish a provider
+                // hiccup from a prompt the model refused to answer in JSON, and the difference is
+                // the whole diagnosis. A failed evening-debrief cron was undiagnosable for exactly
+                // this reason — the fallback is deliberately silent about a Clarify nobody can
+                // answer, so this warning is the only trace the run leaves.
+                Err(e @ (ProviderError::Decode(_) | ProviderError::EmptyResponse)) => {
+                    tracing::warn!(
+                        error = %e,
+                        goal = %req.goal.chars().take(120).collect::<String>(),
+                        "classification produced unusable output; degrading to Clarify"
+                    );
                     Ok(clarify_fallback())
                 }
                 // A genuine provider failure — let the caller decide (retry/backoff).
@@ -396,12 +407,20 @@ DispatchSubagent may also set `delivery` to say where the finished result should
 own words — right for anything the human will want to discuss, and for anything that ACTS on the \
 world. Set \
 {\"Vault\":{\"path\":\"<zone>/<name>.md\"}} instead when the result is a document the human asked \
-to have written down — research write-ups, deep-dive summaries, reports they said to save. It is \
-then filed verbatim, unabridged, and the human is told where. Two rules: the path must start with \
-one of the vault zones listed below the MCP catalog, spelled exactly (they are case-sensitive, and \
-a zone not on that list is refused), and only use it when every MCP in allowed_mcps is read-only — \
-a subagent that changes something must report back through the main agent instead. When in doubt, \
-omit it.";
+to have written down — research write-ups, deep-dive summaries, reports they said to save. The \
+system then files the subagent's report at that path verbatim and tells the human where it is.
+
+Set `depth` to \"deep\" for open-ended gathering — deep research, multi-source synthesis, review \
+across many notes — which needs far more turns than the default. Leave it unset otherwise. Depth is \
+about how much work the goal is, never about which MCPs it uses.
+
+The SYSTEM performs that write, not the subagent — so `delivery` does not need, and is not helped \
+by, a writing tool in `allowed_mcps`. Scope `allowed_mcps` purely by what the subagent must READ \
+to do the work, exactly as you would without `delivery`: a goal that reads notes or tasks still \
+lists the vault MCP, because reading is what it is there for. Just don't add an MCP whose only \
+purpose would be saving the report — there is nothing for it to do. The path must start with one \
+of the vault zones listed below the MCP catalog, spelled exactly (they are case-sensitive; a zone \
+not on that list is refused). When in doubt, omit `delivery`.";
 
 /// Loose schema for v1 — the prompt carries the shape. A precise JSON Schema (e.g. via `schemars`)
 /// is a follow-up that improves real-provider reliability.
@@ -413,10 +432,17 @@ fn decision_schema() -> serde_json::Value {
 fn clarify_fallback() -> DispatchDecision {
     DispatchDecision {
         action: DispatchAction::Clarify {
-            questions: vec![
-                "I couldn't classify this goal reliably — how should I proceed?".into(),
-            ],
-            what_blocked: BlockReason::LowConfidence,
+            questions: vec![clarify_question(BlockReason::UnusableOutput)],
+            // NOT LowConfidence. The model did not answer in the required shape at all, which is a
+            // transient provider problem; low confidence means it understood and is unsure, which
+            // is a goal problem. Sharing one reason made a failed cron indistinguishable from an
+            // ambiguous one, and telling them apart meant re-running the classifier offline.
+            //
+            // Note this fallback is NOT a bypass of the guard pipeline: `classify` returns it and
+            // `dispatch` runs `guards::evaluate` over it like any other decision — so an unattended
+            // actor's decode failure is caught by the AskHuman guard rather than delivered as a
+            // question to nobody.
+            what_blocked: BlockReason::UnusableOutput,
         },
         confidence: 0.0,
         rationale: "classification output was unusable".into(),
@@ -444,6 +470,29 @@ fn clarify_fallback() -> DispatchDecision {
 fn downgrade(classified: DispatchDecision, reason: BlockReason) -> DispatchDecision {
     let confidence = classified.confidence;
     let rationale = classified.rationale;
+
+    // An unattended block keeps whatever the classifier actually wanted to ask, with the
+    // explanation appended rather than substituted.
+    //
+    // The question is the diagnosis: "which project did you mean?" tells you the cron goal is
+    // under-specified and roughly how, while a bare "this runs unattended" tells you only that
+    // something failed. Nobody will answer it, but somebody will *read* it — hours later, out of
+    // context, in a cron result — and that reader needs the specifics. Replacing them was a real
+    // regression, caught by `a_reaction_that_needed_a_human_fails_honestly_rather_than_reporting_success`.
+    if reason == BlockReason::Unattended
+        && let DispatchAction::Clarify { questions, .. } = classified.action
+    {
+        let mut questions = questions;
+        questions.push(clarify_question(BlockReason::Unattended));
+        return DispatchDecision {
+            action: DispatchAction::Clarify {
+                questions,
+                what_blocked: BlockReason::Unattended,
+            },
+            confidence,
+            rationale: format!("guard downgrade: {reason:?}"),
+        };
+    }
     if matches!(
         reason,
         BlockReason::HighConsequence | BlockReason::ZoneRestricted
@@ -550,6 +599,22 @@ fn clarify_question(reason: BlockReason) -> String {
         }
         BlockReason::LowConfidence => {
             "I'm not confident enough to act on this — can you confirm the intent?".into()
+        }
+        // The two below are the unattended cases, and they are deliberately NOT questions. Nobody
+        // is going to answer them: they are read later, out of context, in a cron result or a
+        // session summary. So each states what failed and what to change, because the only useful
+        // thing a dead-end disposition can do is tell you where to go fix it.
+        BlockReason::UnusableOutput => {
+            "The router returned output that could not be read as a decision (malformed or empty). \
+             This is usually transient; if it repeats for the same goal, the goal or the router \
+             model needs attention."
+                .into()
+        }
+        BlockReason::Unattended => {
+            "This goal could not be routed, and this dispatch runs unattended — there is no one to \
+             ask, so nothing was done. Fix the goal so it routes without clarification, or grant \
+             the AskHuman capability if a person should be consulted."
+                .into()
         }
         BlockReason::Ambiguous => "This goal is ambiguous — which interpretation did you mean?".into(),
         BlockReason::MissingParam => {
@@ -719,7 +784,7 @@ fn enforce_narrow_direct_tools(decision: &mut DispatchDecision, narrow_direct_to
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liberado_common::{Capability, Consequence, Delivery, ToolCall};
+    use liberado_common::{Capability, Consequence, Delivery, Depth, ToolCall};
     use liberado_provider::{CompletionResponse, MockProvider, ResponseFormat};
     use std::sync::Mutex;
 
@@ -1024,6 +1089,7 @@ mod tests {
                 model: None,
                 correlation_id: "c1".into(),
                 delivery: Delivery::Summarize,
+                depth: Depth::Normal,
             },
             confidence: 0.9,
             rationale: "open-ended, touches an external MCP".into(),
@@ -1124,6 +1190,7 @@ mod tests {
                 model: None,
                 correlation_id: "c1".into(),
                 delivery: Delivery::Summarize,
+                depth: Depth::Normal,
             },
             confidence: 0.85,
             rationale: "open-ended".into(),
@@ -1141,25 +1208,99 @@ mod tests {
         ));
     }
 
+    fn interactive_caps() -> CapabilitySet {
+        let mut caps = CapabilitySet::empty();
+        caps.grant(Capability::AskHuman);
+        caps
+    }
+
+    /// Both attempts unusable → Clarify, and the reason is `UnusableOutput`, NOT `LowConfidence`.
+    /// The two shared one variant until a failed cron could not be told apart from an ambiguous one.
     #[tokio::test]
     async fn malformed_output_degrades_to_clarify() {
         let mock = Arc::new(MockProvider::with_script(
             "mock",
-            [CompletionResponse::text("this is not valid json")],
+            [
+                CompletionResponse::text("this is not valid json"),
+                CompletionResponse::text("still not valid json"),
+            ],
         ));
         let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
 
         let out = dispatcher
-            .dispatch(&request(CapabilitySet::empty(), 0))
+            .dispatch(&request(interactive_caps(), 0))
             .await
             .unwrap();
         match out.action {
             DispatchAction::Clarify { what_blocked, .. } => {
-                assert_eq!(what_blocked, BlockReason::LowConfidence)
+                assert_eq!(what_blocked, BlockReason::UnusableOutput)
             }
             other => panic!("expected Clarify, got {other:?}"),
         }
         assert_eq!(out.confidence, 0.0);
+    }
+
+    /// One bad reply then a good one succeeds. Structured-output decoding is near-deterministic, so
+    /// a malformed reply is usually a transient hiccup — and an unattended run gets no second
+    /// chance, which is what a live evening-debrief discovered at 01:55.
+    #[tokio::test]
+    async fn structured_output_retries_once_before_giving_up() {
+        let good = r#"{"action":{"ExecuteDirect":{"seed_calls":[],"relevant_mcps":[]}},
+                       "confidence":0.9,"rationale":"ok"}"#;
+        let mock = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::text("not valid json"),
+                CompletionResponse::text(good),
+            ],
+        ));
+        let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
+
+        let out = dispatcher
+            .dispatch(&request(interactive_caps(), 0))
+            .await
+            .unwrap();
+        assert!(
+            matches!(out.action, DispatchAction::ExecuteDirect { .. }),
+            "the retry's good reply should be used, got {:?}",
+            out.action
+        );
+    }
+
+    /// The cron case, end to end: an actor with no `AskHuman` that cannot be classified does not
+    /// get asked a question it can never answer — it is blocked as `Unattended`, whose message
+    /// states what to fix rather than posing a question to nobody.
+    #[tokio::test]
+    async fn an_unclassifiable_goal_for_an_unattended_actor_is_not_a_question() {
+        let mock = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::text("garbage"),
+                CompletionResponse::text("garbage again"),
+            ],
+        ));
+        let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
+
+        let out = dispatcher
+            .dispatch(&request(CapabilitySet::empty(), 0)) // no AskHuman — a cron
+            .await
+            .unwrap();
+        match out.action {
+            DispatchAction::Clarify {
+                what_blocked,
+                questions,
+            } => {
+                assert_eq!(what_blocked, BlockReason::Unattended);
+                let all = questions.join("\n");
+                // The explanation is appended...
+                assert!(all.contains("unattended"), "{all}");
+                assert!(all.contains("no one to ask"), "{all}");
+                // ...and the original diagnosis survives it. Whoever reads this hours later needs
+                // to know *what* could not be routed, not merely that something could not be.
+                assert!(all.contains("could not be read as a decision"), "{all}");
+            }
+            other => panic!("expected the Unattended disposition, got {other:?}"),
+        }
     }
 
     #[tokio::test]

@@ -159,6 +159,38 @@ impl RiskGatedToolRuntime {
         self
     }
 
+    /// Emit the one line that says **which guard decided, and what would change its mind**.
+    ///
+    /// Every guard here can say no, and until this existed none of them could say *"it was me"*.
+    /// That is the specific reason this layer is hard to operate: a refused write and a
+    /// deliberately-protected zone produce the identical observable — a proposal — so a
+    /// misconfiguration, a missing grant, and a working policy all look the same from outside. A
+    /// capability bug that denied every subagent write survived months of use behind that
+    /// ambiguity, while the daemon simultaneously logged that the grant was present.
+    ///
+    /// `needed` and `held` are the fields that actually shorten a debugging session: they turn
+    /// "why was this blocked" into a diff you can read. Kept to one event with stable field names
+    /// so it greps cleanly (`guard=`, `verdict=`) and can back a metric later.
+    fn authority_decision(
+        &self,
+        guard: &'static str,
+        verdict: &'static str,
+        call: &ToolInvocation,
+        zone: Option<&str>,
+        needed: &str,
+    ) {
+        tracing::warn!(
+            guard,
+            verdict,
+            mcp = %mcp_of(&call.name),
+            tool = %bare_tool_name(&call.name),
+            zone = zone.unwrap_or("-"),
+            needed = %needed,
+            held = %held_summary(&self.capabilities),
+            "authority decision"
+        );
+    }
+
     fn consequence_of(&self, mcp_name: &str) -> Consequence {
         if let Some(cat) = &self.live_catalog {
             return cat.get(mcp_name).map(|d| d.consequence).unwrap_or_else(|| {
@@ -235,9 +267,12 @@ impl ToolRuntime for RiskGatedToolRuntime {
 
             // 1. Capability check: is the MCP granted?
             if !self.capabilities.grants_mcp(&mcp_name) {
-                tracing::warn!(
-                    mcp = %mcp_name,
-                    "tool call blocked: MCP not in capability set"
+                self.authority_decision(
+                    "mcp_grant",
+                    "refused",
+                    call,
+                    None,
+                    &format!("ExecuteMcp(\"{mcp_name}\")"),
                 );
                 return Err(format!(
                     "not authorized: MCP '{}' is not in the granted capability set",
@@ -267,6 +302,14 @@ impl ToolRuntime for RiskGatedToolRuntime {
                 // A write we cannot place. Fail closed — refusing a write whose target is unknown
                 // is the only safe answer, and it is a config bug worth surfacing loudly.
                 WriteTarget::Undeterminable(why) => {
+                    self.authority_decision(
+                        "write_zone_resolution",
+                        "refused",
+                        call,
+                        None,
+                        "a resolvable target zone (declare zone_from_arg/write_tools, or pass a \
+                         zone-qualified path)",
+                    );
                     tracing::warn!(mcp = %mcp_name, %why, "tool call refused: undeterminable write zone");
                     return Err(format!("not authorized: {why}"));
                 }
@@ -280,11 +323,12 @@ impl ToolRuntime for RiskGatedToolRuntime {
                 // makes sense once "is this permitted at all?" is yes. A missing capability is an
                 // authority failure, and reads like one: same shape as the `grants_mcp` refusal.
                 if !self.capabilities.contains(&Capability::Write(Zone::vault(zone))) {
-                    tracing::warn!(
-                        mcp = %mcp_name,
-                        tool = %bare_tool_name(&call.name),
-                        %zone,
-                        "tool call refused: no Write capability for the zone it targets"
+                    self.authority_decision(
+                        "write_capability",
+                        if self.notifier.is_some() { "permission_request" } else { "refused" },
+                        call,
+                        Some(zone),
+                        &format!("Write(Vault(\"{zone}\"))"),
                     );
                     // If a notifier is wired, don't dead-end: raise a permission request the human can
                     // expand (Deny/Once/Session/Everywhere via Telegram). Without a notifier there's no
@@ -304,10 +348,12 @@ impl ToolRuntime for RiskGatedToolRuntime {
 
             // 3. If consequence >= Irreversible, downgrade to proposal.
             if consequence >= Consequence::Irreversible {
-                tracing::warn!(
-                    mcp = %mcp_name,
-                    ?consequence,
-                    "tool call downgraded to proposal: high-consequence MCP"
+                self.authority_decision(
+                    "consequence",
+                    "proposal",
+                    call,
+                    None,
+                    &format!("an MCP rated below {:?} (this one is {consequence:?})", Consequence::Irreversible),
                 );
                 let proposal_path = self
                     .write_proposal(call, "High-consequence MCP — requires human approval")
@@ -321,7 +367,6 @@ impl ToolRuntime for RiskGatedToolRuntime {
             // `None`, and a write to the `human_only` finance zone sailed straight through. The two
             // guards ask different questions of one answer: 2b asks *may you*, this asks *is it
             // safe to do directly*.
-            let bare_tool = bare_tool_name(&call.name);
             let restricted_zone = write_zone.as_ref().filter(|zone| {
                 match self.zone_write_classes.iter().find(|(z, _)| z == *zone) {
                     // A zone declared in policy: its write-class always wins. A base `human_only`
@@ -347,11 +392,12 @@ impl ToolRuntime for RiskGatedToolRuntime {
                 }
             });
             if let Some(zone) = restricted_zone {
-                tracing::warn!(
-                    mcp = %mcp_name,
-                    tool = %bare_tool,
-                    %zone,
-                    "tool call downgraded to proposal: zone write-class restricted"
+                self.authority_decision(
+                    "zone_write_class",
+                    "proposal",
+                    call,
+                    Some(zone),
+                    &format!("zone '{zone}' declared agent_writable or shared in policy.zones"),
                 );
                 let proposal_path = self
                     .write_proposal(
@@ -363,12 +409,29 @@ impl ToolRuntime for RiskGatedToolRuntime {
             }
 
             // 4. Magnitude check: sweeping destructive behavior in args or goal context.
+            //
+            // The goal is read through `instruction_scope`, exactly as the dispatcher's pre-flight
+            // magnitude guard reads it. It previously was not: this side scanned the raw goal while
+            // the pre-flight side trimmed it, so the same goal could pass one guard and trip the
+            // other — and a goal carrying pasted content (a report to file, a note to save) tripped
+            // this one on words from the content rather than the instruction.
+            //
+            // The *arguments* are still scanned in full and deliberately so. That is where a real
+            // "delete all" actually appears at this layer, and it is the reason capping the goal
+            // text upstream stays safe.
             let args_text = call.arguments.to_string();
-            let full_context = format!("{} {}", self.goal_context, call.name);
+            let full_context = format!(
+                "{} {}",
+                liberado_common::instruction_scope(&self.goal_context),
+                call.name
+            );
             if is_sweeping_destructive(&args_text) || is_sweeping_destructive(&full_context) {
-                tracing::warn!(
-                    mcp = %mcp_name,
-                    "tool call downgraded to proposal: sweeping destructive action"
+                self.authority_decision(
+                    "magnitude",
+                    "proposal",
+                    call,
+                    None,
+                    "arguments/goal without sweeping-destructive phrasing",
                 );
                 let proposal_path = self
                     .write_proposal(
@@ -592,6 +655,28 @@ fn proposal_message(path: &std::path::Path) -> String {
         "PROPOSAL CREATED — the requested action was NOT executed. It is high-consequence and needs \
          your approval. Proposal saved at {}. It will run only after you approve it.",
         path.display()
+    )
+}
+
+/// A compact rendering of the authority actually in force, for [`authority_decision`]'s `held`.
+///
+/// Deliberately terse and deliberately complete on the two axes that get denied in practice: which
+/// MCPs may be called, and which zones may be written. "You hold X, you needed Y" is the whole
+/// diagnosis; a full Debug dump of the set buries that in noise.
+fn held_summary(caps: &CapabilitySet) -> String {
+    let mcps = caps.granted_mcps();
+    let writes: Vec<&str> = caps
+        .capabilities
+        .iter()
+        .filter_map(|c| match c {
+            Capability::Write(Zone::Vault(z) | Zone::Named(z)) => Some(z.as_str()),
+            _ => None,
+        })
+        .collect();
+    format!(
+        "mcps=[{}] write_zones=[{}]",
+        mcps.join(","),
+        writes.join(",")
     )
 }
 

@@ -72,11 +72,41 @@ blocks on health at the end, so a returned success is a real success.
 | `docker-compose.yml` | Mirror of the box's `~/homelab/services/liberado/docker-compose.yml` (run config). |
 | `config/topology.toml`, `config/policy.toml` | Mirror of the box's `~/homelab/services/liberado/config/*`. Edit here, then copy to the box (config is **not** shipped by `deploy.sh` — it's a read-only mount, changed independently of the image). |
 | `liberado-mcp-diagnosis.md` | Per-MCP wiring status/troubleshooting for the on-box agent. |
-| `smoke-chat.sh` | Quick end-to-end chat probe against the live daemon. |
+| `smoke-chat.sh` | Quick end-to-end chat probe against the live daemon (spends tokens). |
+| `smoke.sh` | Post-deploy assertions on **deployment facts** — daemon up, running SHA, in-container config validity, report sink present and writable. No inference, ~5s. Run automatically at the end of `deploy.sh`; also standalone: `bash deploy/homelab/smoke.sh [expected-sha]`. |
 
 > **Config vs image are separate.** `deploy.sh` ships **code**. `topology.toml`/`policy.toml` are
 > host mounts read at boot — change them on the box (or copy the mirror over) and
 > `docker compose ... up -d --force-recreate` to reload, no rebuild needed.
+>
+> This note existed and was still walked into (2026-07-26): a feature whose behaviour lived in
+> `topology.toml` was added to the mirror, `deploy.sh` reported success on the SHA check, and the
+> feature did nothing — indistinguishable from a bug, and it cost a container-log read to find. A
+> documented footgun is still a footgun, which is why `smoke.sh` now asserts the config *in the
+> container* rather than trusting that the mirror and the box agree.
+
+## Diagnosing an authority refusal
+
+`config explain <component> <mcp:tool> <vault/path.md>` answers "would this write be allowed, and if
+not, which guard stops it?" from config alone — every guard's verdict, plus the config edit that
+would fix each failure. Run it **in the container**, not locally:
+
+```
+ssh <box> 'docker exec -e LIBERADO_CONFIG_DIR=/config liberado     liberado config explain dispatcher turbovault:write_note Learning/x.md'
+```
+
+The box applies a machine-owned grants overlay (`/data/grants.overlay.toml`, written by Telegram
+"Approve everywhere" taps) that is **not** in the repo mirror, so a local run can disagree with the
+box — and the box's answer is the real one.
+
+## Deploys are serialized
+
+`deploy.sh` takes an `flock` on the box before touching `~/liberado-build`, and stages each
+invocation into its own `~/liberado-build.incoming.<sha>.<pid>`. Both are needed: the build SHA is
+stamped from an *argument* rather than derived from the compiled tree, so two overlapping deploys
+could produce an image that lies about what is in it — and that stamp is what everyone trusts to
+know what is live. A second deploy waits rather than failing; a queued deploy is what you wanted,
+just later.
 
 **Per-role model tuning (no rebuild).** `topology.toml` has a commented `[roles.main_agent|dispatcher|subagent]`
 section: set `provider` / `model` / `temperature` / `reasoning` per role to run a fast cheap router

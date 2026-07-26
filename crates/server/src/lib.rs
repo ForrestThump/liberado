@@ -426,6 +426,18 @@ pub fn config_check(dir: Option<&Path>) -> Result<(), Box<dyn std::error::Error>
                 "  mcps:        {}                  [{top_src}]",
                 config.topology.mcps.len()
             );
+            // Printed unconditionally, including the "(none)" case. A silently-absent sink is the
+            // shape of a real incident: the code shipped, `topology.toml` is a host mount the
+            // deploy script does not touch, and a `Delivery::Vault` report quietly downgraded to a
+            // chat summary with nothing but a debug log to say why. A deploy smoke check greps
+            // this line, so "did my config actually reach the box" is one command.
+            match &config.topology.report_sink {
+                Some(sink) => println!(
+                    "  report sink: {}:{}                  [{top_src}]",
+                    sink.mcp, sink.tool
+                ),
+                None => println!("  report sink: (none — vault delivery unavailable)"),
+            }
             Ok(())
         }
         Err(e) => {
@@ -433,6 +445,157 @@ pub fn config_check(dir: Option<&Path>) -> Result<(), Box<dyn std::error::Error>
             Err(Box::new(e))
         }
     }
+}
+
+/// Answer "would this write be allowed, and if not, which guard stops it?" — statically, from
+/// config alone, without running anything.
+///
+/// # Why this exists
+///
+/// A tool call passes several independent guards, and until now **every one of them could say no
+/// and none of them could say "it was me"**. Worse, a refusal and a deliberately-protected zone
+/// produce the identical observable: a proposal. So a missing grant, a misdeclared MCP, and a
+/// working policy are indistinguishable from outside — which is how a capability bug that denied
+/// every subagent write survived months of use while the daemon logged that the grant was present.
+///
+/// `authority_decision` fixed that at runtime; this answers the same question *before* you deploy,
+/// which is the difference between "run it and read the logs" and "ask".
+///
+/// Prints every guard's verdict rather than stopping at the first failure — the first `no` is
+/// rarely the only one, and fixing them one deploy at a time is the slow path.
+pub fn explain_write(
+    dir: Option<&Path>,
+    component: &str,
+    qualified_tool: &str,
+    path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use liberado_common::{Capability, WriteTarget, bare_tool_name, mcp_of};
+
+    let resolved = dir
+        .map(Path::to_path_buf)
+        .or_else(liberado_bootstrap::config_dir);
+    let (config, _) = liberado_bootstrap::load_config(resolved.as_deref())?;
+
+    let mcp_name = mcp_of(qualified_tool);
+    let bare = bare_tool_name(qualified_tool);
+    let caps = config.policy.capabilities_for(component);
+    // The same descriptor snapshot the live catalog is seeded from at boot, so this answers with
+    // exactly the declarations the daemon would enforce — not a re-derivation that could disagree.
+    let catalog = liberado_config::catalog_from_config(&config);
+
+    println!("would `{component}` be allowed to call `{qualified_tool}` on `{path}`?\n");
+
+    let mut blockers: Vec<String> = Vec::new();
+    let say = |ok: bool| if ok { "PASS" } else { "BLOCK" };
+
+    // 1. Is the MCP even declared, and granted?
+    let Some(descriptor) = catalog.iter().find(|d| d.name == mcp_name).cloned() else {
+        println!("  [BLOCK] mcp_declared      '{mcp_name}' is not an enabled [[mcps]] entry");
+        println!("\nverdict: BLOCKED — the MCP does not exist in this config.");
+        return Ok(());
+    };
+    let granted = caps.grants_mcp(mcp_name);
+    println!(
+        "  [{}] mcp_grant         needed ExecuteMcp(\"{mcp_name}\")",
+        say(granted)
+    );
+    if !granted {
+        blockers.push(format!(
+            "add {{ ExecuteMcp = \"{mcp_name}\" }} to the '{component}' grant in policy.toml"
+        ));
+    }
+
+    // 2. What does this call write, per the MCP's own declaration + these arguments?
+    let args = serde_json::json!({ "path": path });
+    let target = liberado_common::write_target(&descriptor, bare, &args);
+    let zone = match &target {
+        WriteTarget::NotAWrite => {
+            println!(
+                "  [PASS] write_target      '{bare}' is a read on this MCP — no write guards apply"
+            );
+            println!(
+                "\nverdict: {}",
+                if blockers.is_empty() {
+                    "ALLOWED"
+                } else {
+                    "BLOCKED"
+                }
+            );
+            for b in &blockers {
+                println!("  fix: {b}");
+            }
+            return Ok(());
+        }
+        WriteTarget::Undeterminable(why) => {
+            println!("  [BLOCK] write_target      cannot place this write: {why}");
+            blockers.push(
+                "give the path a leading zone segment, or declare zone_from_arg/write_tools"
+                    .to_string(),
+            );
+            println!("\nverdict: BLOCKED");
+            for b in &blockers {
+                println!("  fix: {b}");
+            }
+            return Ok(());
+        }
+        WriteTarget::Zone(z) => z.clone(),
+    };
+    println!("  [PASS] write_target      resolves to zone '{zone}'");
+
+    // 3. Does the component hold Write on that zone?
+    let holds_write = caps.contains(&Capability::Write(liberado_common::Zone::vault(&zone)));
+    println!(
+        "  [{}] write_capability  needed Write(Vault(\"{zone}\"))",
+        say(holds_write)
+    );
+    if !holds_write {
+        blockers.push(format!(
+            "add {{ Write = {{ Vault = \"{zone}\" }} }} to the '{component}' grant"
+        ));
+    }
+
+    // 4. Is the zone itself directly agent-writable?
+    let class = config.policy.write_class(&zone);
+    let class_ok = class.allows_direct_agent_write();
+    println!(
+        "  [{}] zone_write_class  zone '{zone}' is {class:?}{}",
+        say(class_ok),
+        if config.policy.zones.iter().any(|z| z.zone == zone) {
+            ""
+        } else {
+            " (UNDECLARED — fail-safe default)"
+        }
+    );
+    if !class_ok {
+        blockers.push(format!(
+            "declare zone '{zone}' with write_class = \"agent_writable\" in policy.toml \
+             (undeclared zones default to proposal_only)"
+        ));
+    }
+
+    // 5. Consequence — proposal-gated rather than refused, but still not a direct write.
+    let consequence = descriptor.consequence;
+    let conseq_ok = consequence < liberado_common::CONSEQUENCE_GATE;
+    println!(
+        "  [{}] consequence       '{mcp_name}' is {consequence:?} (gate is {:?})",
+        say(conseq_ok),
+        liberado_common::CONSEQUENCE_GATE
+    );
+    if !conseq_ok {
+        blockers.push(format!(
+            "'{mcp_name}' is rated {consequence:?}, so every call is proposal-gated by design"
+        ));
+    }
+
+    if blockers.is_empty() {
+        println!("\nverdict: ALLOWED — this write would execute directly.");
+    } else {
+        println!("\nverdict: BLOCKED by {} guard(s):", blockers.len());
+        for b in &blockers {
+            println!("  fix: {b}");
+        }
+    }
+    Ok(())
 }
 
 /// Build the chat agent when a provider is available: a connected tool runtime (the configured MCP
