@@ -1340,10 +1340,29 @@ impl ToolRuntime for NoMcpRuntime {
 /// - Non-empty `decision_capabilities` (tests / future explicit grants):
 ///   `ceiling ∩ decision_capabilities`.
 /// - Empty (normal classifier output — the model is told not to emit capability objects):
-///   synthesize `ExecuteMcp` entries from `allowed_mcps`, then intersect with the ceiling.
-///   Empty `allowed_mcps` means no MCP narrowing (same sense as empty `relevant_mcps` on
-///   `ExecuteDirect`), so the gate is the full ceiling; the runtime still only exposes
-///   registered servers.
+///   narrow the ceiling's **`ExecuteMcp` dimension** to `allowed_mcps`, and carry every other
+///   capability through unchanged. Empty `allowed_mcps` means no MCP narrowing (same sense as
+///   empty `relevant_mcps` on `ExecuteDirect`), so the gate is the full ceiling; the runtime
+///   still only exposes registered servers.
+///
+/// # Why this is not a plain intersection
+///
+/// It used to be: `ceiling.narrow(&requested)`, where `requested` was built from `allowed_mcps` and
+/// therefore contained **only** `ExecuteMcp` entries. `narrow` is a strict intersection, so every
+/// `Read(Zone)` and `Write(Zone)` in the ceiling was dropped on the floor — the gate set was
+/// `ExecuteMcp`-only, always. No subagent has ever held a zone capability, so every subagent vault
+/// write has always been refused and turned into a permission request.
+///
+/// That went unnoticed for months because **the failure mode is indistinguishable from the success
+/// mode**: a denied write raises a proposal, which is exactly what a zone the operator *intended* to
+/// protect would produce. The system even logged `'everywhere' grant already present in the overlay
+/// — capability=Write(Vault("Learning"))` while refusing that same write, because the pool grant and
+/// the gate set were two different values nobody compared.
+///
+/// The intent was always to scope *which MCPs are reachable* — the doc above said so, and reads
+/// were never affected because only writes consult `Write(Zone)`. Scoping MCPs simply is not
+/// expressible as an intersection against a set that describes only MCPs. Authority still cannot
+/// widen: every capability here comes from `ceiling`.
 fn subagent_gate_capabilities(
     ceiling: &CapabilitySet,
     decision_capabilities: &CapabilitySet,
@@ -1355,11 +1374,21 @@ fn subagent_gate_capabilities(
     if allowed_mcps.is_empty() {
         return ceiling.clone();
     }
-    let requested: CapabilitySet = allowed_mcps
-        .iter()
-        .map(|name| Capability::ExecuteMcp(name.clone()))
-        .collect();
-    ceiling.narrow(&requested)
+    CapabilitySet {
+        capabilities: ceiling
+            .capabilities
+            .iter()
+            .filter(|cap| match cap {
+                // The one dimension this scoping is about.
+                Capability::ExecuteMcp(name) => allowed_mcps.contains(name),
+                // Zones and AskHuman are not what `allowed_mcps` narrows. Keeping them is not a
+                // widening — they are the ceiling's own, and the zone-write-class guard, the
+                // consequence guard and the proposal path all still apply on top.
+                _ => true,
+            })
+            .cloned()
+            .collect(),
+    }
 }
 
 /// Build the subagent system prompt, appending its success criteria when present.
@@ -1577,6 +1606,43 @@ mod tests {
             subagent_gate_capabilities(&ceiling, &CapabilitySet::empty(), &["turbovault".into()]);
         assert!(gate.grants_mcp("turbovault"));
         assert!(!gate.grants_mcp("weather"));
+    }
+
+    /// The months-old bug: `narrow` is a strict intersection, and the set built from
+    /// `allowed_mcps` holds only `ExecuteMcp`, so every zone capability was dropped. No subagent
+    /// ever held `Write`, so every subagent vault write became a permission request — and that
+    /// looked exactly like a zone the operator meant to protect, which is why nobody noticed.
+    #[test]
+    fn scoping_mcps_does_not_strip_zone_authority() {
+        let ceiling = CapabilitySet::from_iter([
+            Capability::ExecuteMcp("turbovault".into()),
+            Capability::ExecuteMcp("email".into()),
+            Capability::Read(liberado_common::Zone::vault("Learning")),
+            Capability::Write(liberado_common::Zone::vault("Learning")),
+        ]);
+        let gate =
+            subagent_gate_capabilities(&ceiling, &CapabilitySet::empty(), &["turbovault".into()]);
+
+        // The dimension `allowed_mcps` is actually about.
+        assert!(gate.grants_mcp("turbovault"));
+        assert!(
+            !gate.grants_mcp("email"),
+            "out-of-scope MCPs are still removed"
+        );
+
+        // The dimension it is not about, and used to destroy.
+        assert!(gate.contains(&Capability::Write(liberado_common::Zone::vault("Learning"))));
+        assert!(gate.contains(&Capability::Read(liberado_common::Zone::vault("Learning"))));
+    }
+
+    /// Decision 4 still holds: everything in the gate set comes from the ceiling.
+    #[test]
+    fn scoping_can_never_invent_authority_the_ceiling_lacks() {
+        let ceiling = CapabilitySet::from_iter([Capability::ExecuteMcp("turbovault".into())]);
+        let gate =
+            subagent_gate_capabilities(&ceiling, &CapabilitySet::empty(), &["turbovault".into()]);
+        assert!(!gate.contains(&Capability::Write(liberado_common::Zone::vault("Learning"))));
+        assert_eq!(gate.capabilities.len(), 1);
     }
 
     #[test]
