@@ -122,6 +122,7 @@ fn request_and_response_serde_round_trip() {
             prompt_tokens: 1,
             completion_tokens: 2,
             total_tokens: 3,
+            cached_prompt_tokens: None,
         }),
     };
     let back: CompletionResponse =

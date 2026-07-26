@@ -189,6 +189,36 @@ pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
+    /// Prompt tokens served from the provider's cache, when it says so.
+    ///
+    /// Prompt caching is the largest unclaimed cost lever here: a `depth=deep` subagent resends the
+    /// same system prompt and the same MCP tool schemas on all 30 turns, which is the most cacheable
+    /// shape we produce. But whether any of it is *already* being cached was unknowable — this
+    /// struct carried three totals and nothing else, so a cache hit and a cache miss looked
+    /// identical from the outside.
+    ///
+    /// Providers disagree on both mechanism and field name. DeepSeek and OpenAI cache a stable
+    /// prefix automatically and report it (`prompt_cache_hit_tokens`, `cached_tokens`); Anthropic
+    /// requires explicit `cache_control` breakpoints. So this is measurement, not control: read
+    /// whatever the backend volunteers, then decide whether anything needs doing. `None` means the
+    /// provider said nothing, which is not the same as zero — see [`cache_hit_rate`](Self::cache_hit_rate).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_prompt_tokens: Option<u32>,
+}
+
+impl Usage {
+    /// Fraction of prompt tokens served from cache, or `None` when the provider reported nothing.
+    ///
+    /// Deliberately distinguishes "no cache data" from "0% hit rate": the first means we cannot see,
+    /// the second means we looked and it is missing. Conflating them is how an unclaimed cost lever
+    /// stays invisible.
+    pub fn cache_hit_rate(&self) -> Option<f32> {
+        let cached = self.cached_prompt_tokens?;
+        if self.prompt_tokens == 0 {
+            return None;
+        }
+        Some(cached as f32 / self.prompt_tokens as f32)
+    }
 }
 
 /// A normalized completion response.

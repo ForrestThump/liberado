@@ -337,10 +337,26 @@ fn parse_usage(u: &Value) -> Option<Usage> {
         return None;
     }
     let field = |k: &str| u[k].as_u64().unwrap_or(0) as u32;
+    // Cached-prompt accounting, under whichever name the backend uses. DeepSeek reports
+    // `prompt_cache_hit_tokens` at the top level; OpenAI (and OpenRouter passing it through) nests
+    // `cached_tokens` under `prompt_tokens_details`. Absent entirely means the backend said nothing,
+    // which stays `None` rather than collapsing to 0 — "we cannot see" and "nothing was cached" are
+    // different answers and only one of them is a problem to fix.
+    let cached_prompt_tokens = u
+        .get("prompt_cache_hit_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            u.get("prompt_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
+                .and_then(Value::as_u64)
+        })
+        .or_else(|| u.get("cached_tokens").and_then(Value::as_u64))
+        .map(|v| v as u32);
     Some(Usage {
         prompt_tokens: field("prompt_tokens"),
         completion_tokens: field("completion_tokens"),
         total_tokens: field("total_tokens"),
+        cached_prompt_tokens,
     })
 }
 
@@ -384,6 +400,49 @@ mod tests {
 
     fn empty_name_map() -> ToolNameMap {
         ToolNameMap::default()
+    }
+
+    /// Backends disagree on where cached-prompt accounting lives, so read all three shapes. Getting
+    /// this wrong is quiet: the number simply never appears and prompt caching stays unmeasurable.
+    #[test]
+    fn cached_prompt_tokens_are_read_under_each_backend_spelling() {
+        // DeepSeek: top-level.
+        let deepseek = json!({
+            "prompt_tokens": 1000, "completion_tokens": 50, "total_tokens": 1050,
+            "prompt_cache_hit_tokens": 900, "prompt_cache_miss_tokens": 100
+        });
+        assert_eq!(
+            parse_usage(&deepseek).unwrap().cached_prompt_tokens,
+            Some(900)
+        );
+
+        // OpenAI / OpenRouter passthrough: nested under prompt_tokens_details.
+        let openai = json!({
+            "prompt_tokens": 1000, "completion_tokens": 50, "total_tokens": 1050,
+            "prompt_tokens_details": { "cached_tokens": 768 }
+        });
+        assert_eq!(
+            parse_usage(&openai).unwrap().cached_prompt_tokens,
+            Some(768)
+        );
+
+        // A backend that says nothing stays None — NOT zero. "We cannot see" and "nothing was
+        // cached" are different answers, and only the second is a problem to go fix.
+        let silent =
+            json!({ "prompt_tokens": 1000, "completion_tokens": 50, "total_tokens": 1050 });
+        let u = parse_usage(&silent).unwrap();
+        assert_eq!(u.cached_prompt_tokens, None);
+        assert_eq!(u.cache_hit_rate(), None);
+    }
+
+    #[test]
+    fn cache_hit_rate_is_a_fraction_of_prompt_tokens() {
+        let u = parse_usage(&json!({
+            "prompt_tokens": 1000, "completion_tokens": 10, "total_tokens": 1010,
+            "prompt_cache_hit_tokens": 750
+        }))
+        .unwrap();
+        assert_eq!(u.cache_hit_rate(), Some(0.75));
     }
 
     #[test]
