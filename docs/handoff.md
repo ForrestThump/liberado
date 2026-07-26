@@ -2,6 +2,56 @@
 
 Docs map: [`README.md`](README.md) · open work: [`roadmap/current.md`](roadmap/current.md).
 
+## 2026-07-26 update (engineering + dogfood — report delivery, authority, deploy hygiene)
+
+Branch `fix/delivery-decoupling` (11 commits, 1492 tests). Live on the homelab and smoke-verified.
+Two of these were found by dogfooding over Telegram, not by tests.
+
+**Report delivery (`Delivery`).** A subagent's `Report` can now be filed straight to the vault by the
+orchestrator instead of paraphrased by the face agent — one deterministic tool call, no model reads
+the body, and the face agent gets a receipt. Verified live: a 28,225-byte research report reached
+`Learning/` from Telegram with a one-line chat reply. Declared sink in `[topology.report_sink]`,
+boot-validated. See `crates/orchestrator/ARCHITECTURE.md` and dispatch spec §7.1.
+
+**`Depth` is declared, not inferred.** Budget, loop profile, and delivery permission were all derived
+from one "every MCP is read-only" predicate. They are three different questions, and the conflation
+meant a deep-research goal that merely *mentioned* the vault got 8 turns instead of 30 and failed.
+Delivery now gates on `CONSEQUENCE_GATE`; `salvageable` stays inferred (a safety property). §7.2.
+
+**Subagents had no zone capabilities, ever.** `subagent_gate_capabilities` intersected the ceiling
+with a set built only from `ExecuteMcp`, silently dropping every `Read`/`Write(Zone)`. So every
+subagent vault write became a permission request — for months — and nobody noticed because *a denied
+write and a deliberately-protected zone produce the identical observable*. The daemon even logged the
+grant as present while refusing the write. Fixed; reads were never affected.
+
+**Unattended dispatch may no longer be asked to clarify.** A cron got "how should I proceed?" at
+01:55 with nobody there. `Clarify` presupposes an interlocutor; `Capability::AskHuman` already said
+so, the `dispatcher` grant already omitted it, `coder-agent` already honoured it — the dispatcher
+never consulted the capability set it was holding. Now guard 0. `BlockReason::UnusableOutput` split
+from `LowConfidence`, and `complete_json` re-asks once on undecodable output.
+
+**Observability, which is the real deliverable.** Every guard on both enforcement points now names
+itself (`guard=`/`verdict=`/`needed=`/`held=`); decode failures log what the model actually said;
+`liberado config explain <component> <mcp:tool> <path>` answers "would this be allowed, and if not
+why" from config alone. Diagnosis, not safety, was the weak half of this system — every failure this
+session was invisible until someone went looking.
+
+**Deploy hygiene.** `deploy.sh` now flocks the build dir and stages per-invocation (deploys were
+raced twice in one session; the SHA is stamped from an argument, not the compiled tree, so a race can
+produce an image that lies about its contents). `smoke.sh` runs post-deploy and asserts deployment
+*facts* — including that the config actually reached the box, which had already caused a "successful"
+deploy of an inert feature.
+
+**Prompt caching: already working.** Looked like the biggest unclaimed cost lever; measurement showed
+DeepSeek prefix caching at 93–98%. `Usage::cached_prompt_tokens` now records it.
+See [`research/orchestration-report-applied.md`](research/orchestration-report-applied.md).
+
+*Known open, deliberately:* checkpointing for long runs (zero crashes observed in 5 deep runs — the
+report's 20%→72% figure is for dependent chains, not a ReAct gathering loop); a precise
+`decision_schema()`; verifying deploys by capability rather than SHA label; whether the cache tracks
+a *growing* prefix on a 30-turn run. Concurrent Telegram turns share one sticky session, untested
+with two chatty turns. Subagents now inherit pool zone grants — defensible, unproven by use.
+
 ## 2026-07-23 update (engineering — read with 07-19)
 
 - **Architecture hardening landed** on branch `architecture-hardening` (commit message: module splits, T1, MCP pooling):

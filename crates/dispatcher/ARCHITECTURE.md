@@ -25,13 +25,44 @@ DispatchRequest ──► classify ──► guards.evaluate ──► downgrade
    `relevant_mcps` / `allowed_mcps` after sanitize means "no further narrowing" (full grant ceiling),
    not CapabilityGap. Prevents false gaps when the model confuses tools with MCP servers.
 3. **guards** (`guards.rs`) — deterministic checks that run **after** the model and can only
-   *downgrade* autonomy. Priority: capability gap → consequence gate → zone-write-class gate →
-   magnitude gate → reaction-depth limit → confidence floor. A capability gap, depth limit, or
-   low-confidence hit downgrades to `Clarify`; a consequence or zone-write-class hit on a
+   *downgrade* autonomy. Priority: interlocutor check → capability gap → consequence gate →
+   zone-write-class gate → magnitude gate → reaction-depth limit → confidence floor. A capability
+   gap, depth limit, or low-confidence hit downgrades to `Clarify`; a consequence or zone-write-class
+   hit on a
    *concrete* action (a non-empty `ExecuteDirect` or any `DispatchSubagent`) downgrades to
    `Propose` instead (Decision 11) — both are "needs human approval before running," just gated on
    different axes (general riskiness vs. the specific target zone). Guards never upgrade or invent
    an action. Capability-gap logs include the missing MCP name.
+
+   **Every guard names itself.** Each emits one `guard=<name>` event with a detail line, using the
+   same field name `RiskGatedToolRuntime::authority_decision` uses, so one grep covers both
+   enforcement points. `BlockReason` is deliberately coarser than the guard set — the consequence
+   gate and the magnitude gate both yield `HighConsequence` — and a live proposal logged
+   `downgrade=HighConsequence` that could only be attributed by re-running the heuristic offline.
+
+   **The interlocutor check (guard 0) is the one that runs *on* a `Clarify`.** Every other guard
+   skips them, because asking is already the conservative answer — but only when someone can answer.
+   An actor whose grant omits `Capability::AskHuman` (a cron, a webhook reaction) has nobody, so the
+   question is a dead end: delivered to no one, run spent. It becomes `Clarify{Unattended}`, whose
+   text states what to fix, **with the classifier's original questions kept ahead of it** — the
+   specific question is the diagnosis, and whoever reads the cron result hours later needs it. Note
+   this is enforcement of a constraint that was already declared: the capability's own docs call an
+   unattended profile "structurally unable to block on a person who isn't there", the homelab
+   `dispatcher` grant already omitted it, and `coder-agent` already honoured it. The dispatcher
+   simply never consulted the capability set it was already holding.
+
+   **`clarify_fallback` is not a bypass.** `classify` returns it on undecodable output and `dispatch`
+   runs `guards::evaluate` over it like any other decision — so an unattended actor's decode failure
+   is caught by guard 0 rather than delivered as a question to nobody. Its reason is
+   `UnusableOutput`, split from `LowConfidence`: unusable output is a transient provider problem
+   (`complete_json` re-asks once first), low confidence is a goal problem, and sharing one variant
+   made a failed cron indistinguishable from an ambiguous one.
+
+   **The magnitude gate reads only `instruction_scope(goal)`**, which caps how much of a goal the
+   bag-of-words heuristic sees. A goal carrying pasted content is an instruction *plus* a document,
+   and every long document contains "all" and "remove"; a 10,364-char goal gated a plain vault write
+   on words from its own body. Safe to cap because the concrete call's arguments are still scanned in
+   full downstream.
 
    The zone-write-class gate is pre-flight only, checking `ExecuteDirect`'s seed calls against
    per-tool zone declarations (`McpDescriptor.default_zone`/`tool_zones`, human-authored in

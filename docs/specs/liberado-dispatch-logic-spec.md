@@ -112,13 +112,18 @@ pub enum DispatchAction {
         allowed_mcps: Vec<String>,            // filtered catalog the subagent may see
         success_criteria: Vec<String>,        // how the subagent knows it's done
         artifact_target: Option<String>,      // e.g. "reviews/", "decisions/" (agent_writable zone)
+        delivery: Delivery,                   // Summarize (default) | Vault { path } — see §7.1
+        depth: Depth,                         // Shallow | Normal (default) | Deep — turn budget, §7.2
         model: Option<ModelChoice>,           // may differ from dispatcher/main
         correlation_id: String,               // ties writes to this goal (loop-breaking + idempotency)
     },
     /// Ask the MAIN AGENT (not the user) to resolve before any action is taken.
+    /// Legal only for an actor holding `Capability::AskHuman` — see §6 guard 0.
     Clarify {
         questions: Vec<String>,
-        what_blocked: BlockReason,            // Ambiguous | MissingParam | CapabilityGap | LowConfidence | DepthLimit
+        what_blocked: BlockReason,            // Ambiguous | MissingParam | CapabilityGap
+                                              // | LowConfidence | DepthLimit
+                                              // | UnusableOutput | Unattended
     },
 }
 ```
@@ -164,6 +169,13 @@ This is where the system gets cheaper *and* more reliable as procedural memory g
 Run after classification, in code, no inference. Each can only move the action toward *less*
 autonomy. This is what makes the two "expensive" rows of §3 impossible regardless of classifier error.
 
+0. **Interlocutor check.** A `Clarify` presupposes someone to answer it. An actor whose grant omits
+   `Capability::AskHuman` — a cron, a webhook reaction, any unattended profile — has none, so a
+   question is not a conservative fallback but a dead end: delivered to nobody, run spent. Downgrade
+   to `Clarify{Unattended}`, whose text states what to fix rather than posing a question, **with the
+   classifier's original questions preserved ahead of it** (the specific question is the diagnosis;
+   whoever reads the cron result hours later needs to know *what* could not be routed). All other
+   guards are skipped for a `Clarify` from an actor that *can* ask — asking is already conservative.
 1. **Capability check.** For every `ToolCall` / requested MCP, verify the grant exists in the
    active `CapabilitySet`. Missing → if narrowing could be requested, downgrade to `Clarify{CapabilityGap}`;
    never auto-widen (Decision 4 invariant).
@@ -182,7 +194,26 @@ autonomy. This is what makes the two "expensive" rows of §3 impossible regardle
 5. **Confidence floor.** `confidence < CLARIFY_THRESHOLD` and action ≠ Clarify → downgrade to
    `Clarify{LowConfidence}`.
 
-Order: a decision passes all five; the *most restrictive* downgrade wins.
+Order: a decision passes all of them; the *most restrictive* downgrade wins.
+
+**Every guard names itself.** Each emits one `guard=<name>` event with a detail line, matching the
+field `RiskGatedToolRuntime::authority_decision` uses on the runtime side, so one grep spans both
+enforcement points. This exists because `BlockReason` is deliberately coarser than the guard set —
+the consequence gate and the magnitude gate both produce `HighConsequence` — and a live proposal
+logged `downgrade=HighConsequence` that could only be attributed by re-running the heuristic offline.
+
+**`UnusableOutput` is not `LowConfidence`.** Undecodable classifier output used to share the
+low-confidence reason. They want opposite treatment: unusable output is a transient provider problem
+(`complete_json` now re-asks once before giving up), while low confidence means the model understood
+and is unsure, which is a *goal* problem. Sharing one variant made a failed cron indistinguishable
+from an ambiguous one.
+
+**The magnitude gate reads only the instruction.** `instruction_scope` caps what the bag-of-words
+heuristic sees (see `INSTRUCTION_SCAN_LIMIT`), because a goal carrying pasted content — a report to
+file, a note to save — is an instruction *plus* a document, and every long document contains "all"
+and "remove". A 10,364-char goal scored sweeping-destructive on words from its own body and gated a
+plain vault write. Capping is safe because this is pre-flight, not the boundary: the concrete
+arguments of the concrete call are still scanned in full by `RiskGatedToolRuntime`.
 
 ---
 
@@ -208,6 +239,53 @@ pub struct Report {
 - **Proposed outcome**: tells main "I prepared X for your approval at path Y" rather than "done."
 
 The main agent decides how much of the Report to surface to the user.
+
+### 7.1 Delivery — where the Report goes
+
+`Summarize` (the default) is the flow above: the Report returns to the main agent, which narrates it.
+`Vault { path }` instead has the **orchestrator** file the report body verbatim as one deterministic
+tool call — no model reads it on the way — and hand the main agent a *receipt* (path + size).
+
+The cost being removed is the **re-emission**, not the ingestion: decoding is sequential and
+latency-dominant, while a later turn prefills the note cheaply. A live deep-research report was
+ingested by the face agent and paraphrased back out, paying for the body twice and losing detail.
+
+Delivery is model-chosen, so it is checked afterwards and every check can only downgrade to
+`Summarize`:
+
+| Check | Why |
+|---|---|
+| every `allowed_mcps` entry below `CONSEQUENCE_GATE` | if something happened *out in the world*, only the main agent can re-dispatch or explain a partial action. Deliberately **not** the read-only test: a `Reversible` vault read/write left nothing outside the system, and gating on read-only meant "research X and save it to my vault" disabled itself, because naming the vault pulled the vault MCP into scope |
+| `Outcome::Succeeded` | a failure or partial belongs in the conversation, not filed as a finished document |
+| path names a zone, no `..`, not absolute | it is a model-produced path addressing a write |
+| zone is `allows_direct_agent_write()` | an undeclared zone keeps `WriteClass`'s `ProposalOnly` fail-safe |
+| pool holds `Write(Zone::vault(zone))` | the orchestrator writes under its own authority here |
+| the report **looks like a document** | the subagent declares its own success and nothing else looks; a live run filed 231 bytes of the model narrating an intention |
+
+The last two rows exist because `deliver_to_vault` deliberately skips the risk-gated runtime — that
+would turn a restricted zone into a *proposal*, and filing a note should be one silent write or
+nothing — so the rules that runtime would have applied are applied statically instead.
+
+A subagent whose report will be filed is **told so before it starts** (`delivery_directive`),
+because `Report::summary` is contractually "short" everywhere else; without that it writes a status
+line and waits to author the document with a tool it was never given.
+
+### 7.2 Depth — how much room the subagent gets
+
+`Depth` (`Shallow` | `Normal` | `Deep`) sets the turn budget, capped by the pool's configured
+research ceiling. **Declared, not inferred.** It was derived from "every allowed MCP is read-only",
+and that one predicate silently set three unrelated things — budget, loop profile, and whether a
+report could bypass the main agent. A deep-research goal that merely *mentioned* the vault therefore
+got 8 turns instead of 30 and failed at the ceiling.
+
+Declaring it also puts the knob where the knowledge is: any dispatch source may set it — the human,
+the main agent relaying them, or an orchestration agent that discovers mid-run that a sub-question is
+load-bearing in a way nobody anticipated. The pool ceiling makes raising it a request inside an
+envelope the operator set, never an escalation past it.
+
+`salvageable` (the wrap-up reserve) stays **inferred**, and from consequence rather than depth:
+returning partial findings is safe when nothing irreversible could have happened. That is a safety
+property, not a preference, so it is not a model's to declare.
 
 ---
 
