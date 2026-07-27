@@ -102,18 +102,11 @@ pub fn Sidebar(
 
     let toggle = move |_| collapsed.set(!collapsed());
 
+    // Collapsed renders *nothing* — not a slim rail. A rail spent a vertical strip of every screen
+    // on one button, which on a phone is a chunk of the conversation's width. The button that brings
+    // this back lives in the app header (see main.rs), where it costs no layout width at all.
     if collapsed() {
-        return rsx! {
-            div {
-                class: "sidebar sidebar-collapsed",
-                button {
-                    class: "sidebar-toggle-btn",
-                    onclick: toggle,
-                    title: "Expand sidebar",
-                    "☰"
-                }
-            }
-        };
+        return rsx! {};
     }
 
     rsx! {

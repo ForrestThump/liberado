@@ -63,9 +63,10 @@ fn App() -> Element {
     let base = api_base();
     let mut view = use_signal(|| "chat");
     let active_conv_id = use_signal(|| None::<String>);
+    // `mut` because the header's menu button toggles it (see below).
     // Default collapsed on narrow (phone-width) viewports so the sidebar doesn't cover the chat
     // on first load — expanded by default everywhere else, matching prior behavior.
-    let sidebar_collapsed = use_signal(|| {
+    let mut sidebar_collapsed = use_signal(|| {
         #[cfg(target_arch = "wasm32")]
         {
             web_sys::window()
@@ -103,6 +104,18 @@ fn App() -> Element {
                     class: "app-header-inner",
                     div {
                         class: "brand-group",
+                        // The sidebar's only always-visible control. It lives here rather than in a
+                        // collapsed rail so that hiding the conversation list gives the full width
+                        // back to the chat.
+                        button {
+                            class: "menu-btn",
+                            onclick: move |_| {
+                                let now = sidebar_collapsed();
+                                sidebar_collapsed.set(!now);
+                            },
+                            title: if sidebar_collapsed() { "Show conversations" } else { "Hide conversations" },
+                            "\u{2630}"
+                        }
                         span { class: "brand", "Liberado" }
                         span { class: "brand-version", "v0.1" }
                     }
