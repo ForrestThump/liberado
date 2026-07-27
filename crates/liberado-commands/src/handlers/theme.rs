@@ -34,10 +34,16 @@ pub fn handle(cmd: &ThemeCmd, ctx: &mut dyn CommandContext) -> Vec<CommandResult
                     (label, n.clone())
                 })
                 .collect();
-            vec![CommandResult::ShowOptions {
-                title: "Available themes".into(),
-                options,
-            }]
+            // Both: `ShowOptions` is the list a text surface prints, `OpenThemeBrowser` is the
+            // cue for a surface that has a picker. Emitting only the latter would silently make
+            // `/theme list` print nothing on the TUI and CLI.
+            vec![
+                CommandResult::ShowOptions {
+                    title: "Available themes".into(),
+                    options,
+                },
+                CommandResult::OpenThemeBrowser,
+            ]
         }
         ThemeCmd::Set(name) => {
             if name.is_empty() {

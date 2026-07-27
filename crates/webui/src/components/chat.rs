@@ -4,6 +4,7 @@ use chat_client_contract::ChatMessage;
 
 use crate::components::markdown::MarkdownText;
 use crate::components::model_browser::ModelBrowser;
+use crate::components::picker::Picker;
 
 // Slash commands only run in the browser — `submit` gates the whole block on wasm32, so gate the
 // imports identically or a native build trips the workspace's zero-warnings bar on unused imports.
@@ -122,6 +123,8 @@ pub fn Chat(
     // only writer is cfg'd out and the binding merely looks immutable.
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut model_browser_open = use_signal(|| false);
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut theme_browser_open = use_signal(|| false);
 
     let base_for_effect = api_base.clone();
     let base_for_submit = api_base.clone();
@@ -219,6 +222,9 @@ pub fn Chat(
                         CommandResult::OpenModelBrowser => {
                             model_browser_open.set(true);
                         }
+                        CommandResult::OpenThemeBrowser => {
+                            theme_browser_open.set(true);
+                        }
                         // The command layer validated the name against the shared registry; all that
                         // is left is to render it and remember it.
                         CommandResult::ThemeChanged { name } => {
@@ -299,6 +305,31 @@ pub fn Chat(
                     div { class: "bubble-row assistant",
                         div { class: "bubble-thinking", "\u{2026}" }
                     }
+                }
+            }
+
+            if theme_browser_open() {
+                Picker {
+                    title: "Switch theme",
+                    current: Some(theme_name()),
+                    items: crate::theme::theme_names(),
+                    status: None,
+                    error: None,
+                    open: theme_browser_open,
+                    // A theme applies instantly and locally, so unlike the model picker there is no
+                    // round trip to wait on: close as soon as it is chosen.
+                    on_pick: move |name: String| {
+                        theme_name.set(name.clone());
+                        crate::theme::save_theme_name(&name);
+                        theme_browser_open.set(false);
+                        messages
+                            .write()
+                            .push(ChatMsg {
+                                role: "system",
+                                content: format!("Theme: {name}"),
+                                thinking_steps: Vec::new(),
+                            });
+                    },
                 }
             }
 

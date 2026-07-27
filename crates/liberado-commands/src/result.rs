@@ -19,6 +19,10 @@ pub enum CommandResult {
         active: String,
     },
     ModelInfoShown,
+    /// Open the client's searchable theme browser (`/theme` / `/theme list`). Emitted alongside
+    /// [`CommandResult::ShowOptions`] so a text-only surface still prints the list while a surface
+    /// with a picker shows one instead.
+    OpenThemeBrowser,
     /// Open the client's searchable model browser (`/model`). TUI maps this to a full-screen
     /// picker that loads `GET /api/models`.
     OpenModelBrowser,

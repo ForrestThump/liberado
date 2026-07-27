@@ -402,6 +402,9 @@ impl TelegramChatBridge {
             CommandResult::ThemesReloaded { .. } | CommandResult::ThemeListed { .. } => {
                 Some("Themes are UI-only on Telegram.".into())
             }
+            // Telegram has no picker to open, and the `ShowOptions` emitted alongside this already
+            // renders the list here — so saying anything would just duplicate it.
+            CommandResult::OpenThemeBrowser => None,
         }
     }
 

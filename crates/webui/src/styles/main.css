@@ -1404,7 +1404,9 @@ html {
     border-radius: 0.375rem;
 }
 
-/* ── Model browser (the /model picker) ───────────────────────────────────── */
+/* -- Searchable picker (shared by /model and /theme) ---------------------- */
+/* One widget, two commands: see components/picker.rs. Sizing is tuned for the long case (the
+   model catalog runs to hundreds of ids); a short list like the themes just renders shorter. */
 
 /* Fixed to the viewport, not the chat pane, so the panel is centred regardless of where the
    command was typed or how far the message list is scrolled. */
@@ -1420,7 +1422,7 @@ html {
     backdrop-filter: blur(2px);
 }
 
-.model-browser {
+.picker {
     width: 100%;
     max-width: 34rem;
     /* The catalog runs to hundreds of entries; cap the panel and let the list scroll inside it so
@@ -1436,20 +1438,20 @@ html {
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
 }
 
-.model-browser-header {
+.picker-header {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
     gap: 0.75rem;
 }
 
-.model-browser-title {
+.picker-title {
     font-size: 0.9375rem;
     font-weight: 600;
     color: var(--lib-chat-assistant-text);
 }
 
-.model-browser-current {
+.picker-current {
     font-size: 0.75rem;
     color: var(--lib-status-bar-text);
     overflow: hidden;
@@ -1457,7 +1459,7 @@ html {
     white-space: nowrap;
 }
 
-.model-browser-input {
+.picker-input {
     width: 100%;
     padding: 0.5rem 0.75rem;
     border: 1px solid var(--lib-input-border-unfocused);
@@ -1469,11 +1471,11 @@ html {
     outline: none;
 }
 
-.model-browser-input:focus {
+.picker-input:focus {
     border-color: var(--lib-accent);
 }
 
-.model-list {
+.picker-list {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
@@ -1482,7 +1484,7 @@ html {
     gap: 0.125rem;
 }
 
-.model-row {
+.picker-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -1501,18 +1503,18 @@ html {
 
 /* One highlight class for both keyboard and pointer: `onmouseenter` moves the same index the
    arrow keys do, so the two never disagree about which row Enter would pick. */
-.model-row.active {
+.picker-row.active {
     background: var(--lib-accent);
     color: var(--lib-app-bg);
 }
 
-.model-row-name {
+.picker-row-name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.model-row-badge {
+.picker-row-badge {
     flex-shrink: 0;
     font-size: 0.625rem;
     text-transform: uppercase;
@@ -1520,13 +1522,13 @@ html {
     opacity: 0.75;
 }
 
-.model-browser-empty {
+.picker-empty {
     padding: 0.5rem 0.25rem;
     font-size: 0.8125rem;
     color: var(--lib-status-bar-text);
 }
 
-.model-browser-error {
+.picker-error {
     padding: 0.4rem 0.6rem;
     border: 1px solid var(--lib-tool-err);
     border-radius: 0.375rem;

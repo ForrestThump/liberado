@@ -3,6 +3,7 @@ pub mod dashboard;
 pub mod markdown;
 pub mod mcp_panel;
 pub mod model_browser;
+pub mod picker;
 pub mod reactions;
 pub mod sidebar;
 pub mod slash_commands;

@@ -197,8 +197,15 @@ pub async fn handle_slash_command(
     };
 
     let results = liberado_commands::dispatch(&cmd, &mut ctx);
+    // `ShowOptions` is the list a text-only surface prints. When the same dispatch also asks for a
+    // picker, that picker *is* the list — printing both would show it twice.
+    let opens_picker = results
+        .iter()
+        .any(|r| matches!(r, CommandResult::OpenThemeBrowser));
     for result in &results {
-        if let CommandResult::ShowOptions { title, options } = result {
+        if let CommandResult::ShowOptions { title, options } = result
+            && !opens_picker
+        {
             ctx.push_system_message(render_options(title, options));
         }
     }
