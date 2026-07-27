@@ -34,6 +34,16 @@ async fn fetch_search_results(
     Ok(body.results)
 }
 
+/// Close the sidebar after the user picks something in it — but only where it is an overlay
+/// sitting on top of the chat. On a phone the sidebar covers the whole content area, so leaving it
+/// open after a selection hides the very conversation you just chose and forces a second tap. On a
+/// wide screen it is a persistent side panel, and closing it would take the list away for no reason.
+fn collapse_after_pick(mut collapsed: Signal<bool>) {
+    if crate::is_narrow_viewport() {
+        collapsed.set(true);
+    }
+}
+
 fn relative_time(iso: &str) -> String {
     let parsed = chrono::DateTime::parse_from_rfc3339(iso)
         .or_else(|_| chrono::DateTime::parse_from_rfc3339(&format!("{iso}Z")))
@@ -117,7 +127,15 @@ pub fn Sidebar(
                 button {
                     class: "sidebar-new-chat-btn",
                     onclick: move |_| {
-                        active_conv_id.set(None);
+                        // Only reset when the focused chat has actually been used. `active_conv_id`
+                        // is set from the SSE `session` event on the first send, so `None` already
+                        // means "fresh and empty" — resetting again would clear nothing and just
+                        // re-render. (No session is minted here either way: this is client state,
+                        // and the server creates one when the first message is sent.)
+                        if active_conv_id.read().is_some() {
+                            active_conv_id.set(None);
+                        }
+                        collapse_after_pick(collapsed);
                     },
                     "+ New Chat"
                 }
@@ -157,7 +175,10 @@ pub fn Sidebar(
                                             on_select: {
                                                 let mut active = active_conv_id;
                                                 let id = result.conversation_id.clone();
-                                                move |_| active.set(Some(id.clone()))
+                                                move |_| {
+                                                    active.set(Some(id.clone()));
+                                                    collapse_after_pick(collapsed);
+                                                }
                                             },
                                         }
                                     }
@@ -191,7 +212,10 @@ pub fn Sidebar(
                                             on_select: {
                                                 let mut active = active_conv_id;
                                                 let id = conv.id.clone();
-                                                move |_| active.set(Some(id.clone()))
+                                                move |_| {
+                                                    active.set(Some(id.clone()));
+                                                    collapse_after_pick(collapsed);
+                                                }
                                             },
                                         }
                                     }

@@ -47,6 +47,27 @@ fn api_base() -> String {
     }
 }
 
+/// Whether the viewport is phone-width, at the same breakpoint `main.css` uses for its layout
+/// media query. Kept in one place because two behaviours key off it: the sidebar starts collapsed
+/// here, and it re-collapses itself after you pick a conversation — but only where it is an
+/// overlay covering the chat. On a wide screen it is a side panel, and closing it on every
+/// selection would just take the conversation list away from you.
+pub(crate) fn is_narrow_viewport() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        const NARROW_MAX_PX: f64 = 768.0;
+        web_sys::window()
+            .and_then(|w| w.inner_width().ok())
+            .and_then(|v| v.as_f64())
+            .map(|width| width < NARROW_MAX_PX)
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        false
+    }
+}
+
 fn main() {
     #[cfg(target_arch = "wasm32")]
     dioxus::launch(App);
@@ -66,20 +87,7 @@ fn App() -> Element {
     // `mut` because the header's menu button toggles it (see below).
     // Default collapsed on narrow (phone-width) viewports so the sidebar doesn't cover the chat
     // on first load — expanded by default everywhere else, matching prior behavior.
-    let mut sidebar_collapsed = use_signal(|| {
-        #[cfg(target_arch = "wasm32")]
-        {
-            web_sys::window()
-                .and_then(|w| w.inner_width().ok())
-                .and_then(|v| v.as_f64())
-                .map(|width| width < 768.0)
-                .unwrap_or(false)
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            false
-        }
-    });
+    let mut sidebar_collapsed = use_signal(is_narrow_viewport);
 
     let chat_cls = if view() == "chat" {
         "nav-btn active"
