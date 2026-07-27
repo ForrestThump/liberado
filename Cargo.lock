@@ -8001,6 +8001,7 @@ dependencies = [
  "log",
  "thiserror 2.0.18",
  "tracing",
+ "turbovault-core",
  "uuid",
 ]
 
@@ -8068,6 +8069,7 @@ version = "1.6.0"
 dependencies = [
  "anyhow",
  "dashmap",
+ "futures",
  "log",
  "notify",
  "path_trav",
@@ -8081,6 +8083,7 @@ dependencies = [
  "tracing",
  "turbovault-audit",
  "turbovault-core",
+ "turbovault-git",
  "turbovault-graph",
  "turbovault-parser",
  "unicode-normalization",
