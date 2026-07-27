@@ -406,7 +406,7 @@ html {
 }
 
 .bubble {
-    max-width: 80%;
+    max-width: 88%;
     padding: 0.5rem 1rem;
     border-radius: 1rem;
     font-size: 0.875rem;
@@ -466,10 +466,34 @@ html {
 /* ── Bubble wrap (for assistant messages with thinking steps) ─────────────── */
 
 .bubble-wrap {
-    max-width: 80%;
+    max-width: 88%;
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
+}
+
+/* Phone widths: reclaim the horizontal space the desktop layout can afford to give away.
+   Two things stack to waste it. `.chat` and `.messages` each contribute 1rem of side padding, so a
+   bubble starts 2rem in from both edges before its own max-width even applies -- on a ~390px screen
+   that is a sixth of the viewport spent on nothing. The cap then takes a slice of what little is
+   left. Desktop keeps the roomier gutter and the tighter cap, which there stop lines from running
+   unreadably long; at this width that reasoning does not apply.
+
+   Must stay AFTER the .bubble / .bubble-wrap rules above: a media query adds no specificity, so
+   whichever rule comes last wins and an earlier placement would silently lose to the 88%. */
+@media (max-width: 768px) {
+    .chat {
+        padding: 0.5rem;
+    }
+
+    .messages {
+        padding: 0.625rem;
+    }
+
+    .bubble,
+    .bubble-wrap {
+        max-width: 96%;
+    }
 }
 
 /* ── Thinking steps group (collapsible) ──────────────────────────────────── */
