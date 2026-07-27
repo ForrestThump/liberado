@@ -334,7 +334,9 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         )
         .route(
             "/api/conversations/{id}",
-            axum::routing::get(api::get_conversation).patch(api::patch_conversation_title),
+            axum::routing::get(api::get_conversation)
+                .patch(api::patch_conversation_title)
+                .delete(api::delete_conversation),
         )
         .route(
             "/api/hooks/{name}",

@@ -1419,6 +1419,10 @@ impl ConversationStore for FailOnceContentStore {
     ) -> liberado_conversation_store::StoreResult<()> {
         self.inner.set_title(conversation, title).await
     }
+
+    async fn delete(&self, conversation: Ulid) -> liberado_conversation_store::StoreResult<()> {
+        self.inner.delete(conversation).await
+    }
 }
 
 /// If a tail re-append fails after the marker is durable, this turn must still see the full kept

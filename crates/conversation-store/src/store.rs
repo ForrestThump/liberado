@@ -47,4 +47,16 @@ pub trait ConversationStore: Send + Sync {
     /// Used by: first-message default, future flash-title agent, `PATCH /api/conversations/{id}`,
     /// and a future `/title` slash command. Titles are display-only and always overwritable.
     async fn set_title(&self, conversation: Ulid, title: String) -> StoreResult<()>;
+
+    /// Permanently remove a conversation and every node in it.
+    ///
+    /// **Irreversible, and deliberately so.** There is no archive or soft-delete tier to fall back
+    /// on, so this deletes the log rather than flagging it: nothing replays it on the next boot and
+    /// no caller can resurrect it. A store that only hid the conversation would leave the bytes on
+    /// disk while telling the user they were gone, which is the one thing "delete" must not mean.
+    ///
+    /// `NotFound` when it does not exist — the same contract as [`set_title`](Self::set_title), so a
+    /// second delete is reported rather than silently succeeding. Callers wanting idempotent HTTP
+    /// semantics map that themselves.
+    async fn delete(&self, conversation: Ulid) -> StoreResult<()>;
 }

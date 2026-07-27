@@ -619,6 +619,14 @@ impl ChatSessions {
     ///
     /// Lazy backfill: if a header still has no title but history has a user message, persist the
     /// first-line default once so the sidebar is scannable without waiting for another turn.
+    /// Permanently delete a conversation. Thin passthrough: the store owns the semantics (see
+    /// [`ConversationStore::delete`]) and there is no cached conversation state here to invalidate —
+    /// every turn rehydrates from the store.
+    pub async fn delete(&self, id: Ulid) -> SessionResult<()> {
+        self.store.delete(id).await?;
+        Ok(())
+    }
+
     pub async fn list(&self) -> SessionResult<Vec<ConversationHeader>> {
         let mut headers = self.store.list().await?;
         for h in &mut headers {

@@ -601,6 +601,34 @@ impl ConversationStore for SessionStore {
         self.append_line(conversation, &Record::Header(Box::new(header)));
         Ok(())
     }
+
+    async fn delete(&self, conversation: Ulid) -> StoreResult<()> {
+        let mut map = self.inner.lock().await;
+        if map.remove(&conversation).is_none() {
+            return Err(StoreError::NotFound(format!("session {conversation}")));
+        }
+        drop(map);
+
+        // Drop the per-session append lock as well, or every delete leaves a dead entry behind in a
+        // map that is never otherwise pruned.
+        if let Ok(mut locks) = self.write_locks.lock() {
+            locks.remove(&conversation);
+        }
+
+        // The log file IS the record — one `{id}.jsonl` per session, replayed at boot — so removing
+        // it is what makes this a real delete rather than an in-memory illusion that comes back on
+        // restart. Blocking fs call to match `append_line`, which writes the same files the same way.
+        if let Some(path) = self.path_for(conversation) {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                // Already absent on disk: an in-memory-only store, or a log a human removed by hand.
+                // The in-memory eviction above is the part that had to happen, so this is success.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(StoreError::Io(e)),
+            }
+        }
+        Ok(())
+    }
 }
 
 // ── Lens 2: the kernel view (records + events) ───────────────────────────────────────────────

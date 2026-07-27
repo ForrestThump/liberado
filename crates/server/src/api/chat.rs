@@ -241,6 +241,45 @@ pub async fn list_conversations(State(state): State<Arc<AppState>>) -> impl Into
     }
 }
 
+/// `DELETE /api/conversations/{id}` — permanently delete a conversation.
+///
+/// Really deletes: the store removes the log from disk (see `ConversationStore::delete`), so this is
+/// not a hide. There is no archive tier to fall back to, and offering one that only hid the
+/// conversation would be worse than not offering it.
+///
+/// `404` when it is already gone, rather than a silent `204`. A client that just wants the row out
+/// of its list can treat both the same; a client with a real bug gets told.
+pub async fn delete_conversation(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Ulid>,
+) -> impl IntoResponse {
+    let Some(sessions) = &state.chat else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: "chat is disabled".into(),
+            }),
+        )
+            .into_response();
+    };
+    match sessions.delete(id).await {
+        Ok(()) => {
+            tracing::info!(conversation = %id, "conversation deleted");
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(liberado_main_agent::SessionError::Store(
+            liberado_conversation_store::StoreError::NotFound(_),
+        )) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "conversation not found".into(),
+            }),
+        )
+            .into_response(),
+        Err(e) => chat_error(e),
+    }
+}
+
 /// `PATCH /api/conversations/{id}` â€” update the title of an existing conversation.
 #[derive(Deserialize)]
 pub struct TitleRequest {

@@ -786,3 +786,74 @@ async fn a_turn_for_an_unknown_session_is_dropped_rather_than_inventing_one() {
         .await;
     assert!(store.list_sessions().await.is_empty());
 }
+
+// ── delete ───────────────────────────────────────────────────────────────────
+
+/// The point of `delete` is that it is not a hide: the log leaves the disk, so a reopened store
+/// does not bring the conversation back. Asserted by reopening, which is the only check that can
+/// tell a real delete from an in-memory eviction.
+#[tokio::test]
+async fn delete_removes_the_log_from_disk_and_it_does_not_come_back() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (kept, gone) = {
+        let store = SessionStore::open(dir.path()).await;
+        let kept = store
+            .create_session(NewSession {
+                title: Some("kept".into()),
+                ..Default::default()
+            })
+            .await;
+        let gone = store
+            .create_session(NewSession {
+                title: Some("gone".into()),
+                ..Default::default()
+            })
+            .await;
+        ConversationStore::append(&store, gone.id, user_node(None, "secret"))
+            .await
+            .unwrap();
+
+        let path = dir.path().join(format!("{}.jsonl", gone.id));
+        assert!(path.exists(), "the log should exist before deleting");
+
+        ConversationStore::delete(&store, gone.id).await.unwrap();
+
+        assert!(!path.exists(), "delete must remove the log from disk");
+        assert_eq!(store.list_sessions().await.len(), 1);
+        (kept.id, gone.id)
+    };
+
+    // Reopen from the same directory: a soft-delete would resurrect it here.
+    let store = SessionStore::open(dir.path()).await;
+    let ids: Vec<_> = store
+        .list_sessions()
+        .await
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(ids, vec![kept], "only the kept session should replay");
+    assert!(
+        ConversationStore::header(&store, gone).await.is_err(),
+        "the deleted conversation must not be readable after a reopen"
+    );
+}
+
+/// Deleting twice reports `NotFound` rather than silently succeeding — the same contract
+/// `set_title` has, so a caller can tell "I removed it" from "it was never there".
+#[tokio::test]
+async fn deleting_a_missing_conversation_is_not_found() {
+    let store = SessionStore::open(tempfile::tempdir().unwrap().path()).await;
+    let s = store.create_session(NewSession::default()).await;
+
+    ConversationStore::delete(&store, s.id).await.unwrap();
+    let again = ConversationStore::delete(&store, s.id).await;
+
+    assert!(
+        matches!(
+            again,
+            Err(liberado_conversation_store::StoreError::NotFound(_))
+        ),
+        "second delete should be NotFound, got {again:?}"
+    );
+}
