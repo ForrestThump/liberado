@@ -3,6 +3,7 @@ use dioxus::prelude::*;
 use chat_client_contract::ChatMessage;
 
 use crate::components::markdown::MarkdownText;
+use crate::components::model_browser::ModelBrowser;
 
 // Slash commands only run in the browser — `submit` gates the whole block on wasm32, so gate the
 // imports identically or a native build trips the workspace's zero-warnings bar on unused imports.
@@ -110,11 +111,17 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut session = use_signal(|| None::<String>);
     let mut should_set_title = use_signal(|| false);
+    // `/model` asks for a picker; this is it. Owned here because the command that opens it is
+    // dispatched from `submit` below — and that dispatch is wasm-only, so on a native build the
+    // only writer is cfg'd out and the binding merely looks immutable.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut model_browser_open = use_signal(|| false);
 
     let base_for_effect = api_base.clone();
     let base_for_submit = api_base.clone();
     let base_for_title = api_base.clone();
     let base_for_slash = api_base.clone();
+    let base_for_models = api_base.clone();
 
     use_effect(move || {
         if sending() {
@@ -198,6 +205,12 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
                         CommandResult::SessionClosed { .. } => {
                             session.set(None);
                         }
+                        // The command announces the browser; opening it is the surface's job. This
+                        // arm is what was missing: the result fell into `_` and `/model` printed
+                        // "Opening model browser" while nothing opened.
+                        CommandResult::OpenModelBrowser => {
+                            model_browser_open.set(true);
+                        }
                         _ => {}
                     }
                 }
@@ -271,6 +284,22 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
                     div { class: "bubble-row assistant",
                         div { class: "bubble-thinking", "\u{2026}" }
                     }
+                }
+            }
+
+            if model_browser_open() {
+                ModelBrowser {
+                    api_base: base_for_models.clone(),
+                    open: model_browser_open,
+                    on_switched: move |model: String| {
+                        messages
+                            .write()
+                            .push(ChatMsg {
+                                role: "system",
+                                content: format!("Model switched to {model} (hot-swap, no restart)."),
+                                thinking_steps: Vec::new(),
+                            });
+                    },
                 }
             }
 

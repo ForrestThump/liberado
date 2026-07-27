@@ -2,6 +2,7 @@ pub mod chat;
 pub mod dashboard;
 pub mod markdown;
 pub mod mcp_panel;
+pub mod model_browser;
 pub mod reactions;
 pub mod sidebar;
 pub mod slash_commands;
