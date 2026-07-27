@@ -406,7 +406,13 @@ html {
 }
 
 .bubble {
-    max-width: 88%;
+    /* 100%, NOT a percentage of the viewport. Every .bubble sits inside a .bubble-wrap that already
+       carries the real cap, and .bubble-wrap shrink-wraps to its content -- so a second percentage
+       here compounds: the bubble renders at 88% of a wrapper that is only as wide as the bubble
+       wanted to be, leaving it 12% short of its own text. Long messages just wrapped a word early,
+       but a short one had nowhere to wrap and `overflow-wrap: break-word` split it mid-word --
+       "Hello" came out as "Hell" / "o". Cap the wrapper; let the bubble fill it. */
+    max-width: 100%;
     padding: 0.5rem 1rem;
     border-radius: 1rem;
     font-size: 0.875rem;
@@ -490,7 +496,7 @@ html {
         padding: 0.625rem;
     }
 
-    .bubble,
+    /* Only the wrapper -- see the note on .bubble's max-width for why capping both compounds. */
     .bubble-wrap {
         max-width: 96%;
     }
