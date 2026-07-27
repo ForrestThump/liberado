@@ -2,8 +2,8 @@
 //!
 //! Provenance rides on the **Turbovault audit log**, not note frontmatter (frontmatter is
 //! last-writer-only state and goes stale the moment a human edits in Obsidian). Every agent
-//! write attaches a [`WriteProvenance`] to the audit entry's `metadata` field via the
-//! `write_*_with_metadata` SDK methods, under the reserved key [`PROVENANCE_KEY`]. Reactive
+//! write hangs a [`WriteProvenance`] on its `ChangePlan` under the reserved key
+//! [`PROVENANCE_KEY`], and the write substrate records it on the resulting audit entry. Reactive
 //! consumers read it back to attribute changes and break loops (hash-join, spec §6).
 //!
 //! **One narrow exception, and why it does not weaken the rule.** A write that reaches the vault
@@ -88,7 +88,7 @@ impl WriteProvenance {
         self
     }
 
-    /// Render as the `metadata` JSON to pass to Turbovault's `write_*_with_metadata`:
+    /// Render as the `metadata` JSON to hang on a Turbovault `ChangePlan`:
     /// `{ "_liberado_provenance": { ... } }`.
     pub fn to_audit_metadata(&self) -> serde_json::Value {
         serde_json::json!({ PROVENANCE_KEY: self })

@@ -2,9 +2,9 @@
 //!
 //! Liberado's thin adapter over Turbovault. Two jobs, both load-bearing for background autonomy:
 //!
-//! 1. **Provenance-tagged writes** (Decision 5). Every agent write goes through
-//!    `write_*_with_metadata`, attaching a [`WriteProvenance`] to the audit entry. This is the
-//!    consumer side of the upstream `metadata` passthrough.
+//! 1. **Provenance-tagged writes** (Decision 5). Every agent write is issued as a `ChangePlan`
+//!    carrying a [`WriteProvenance`] in its `metadata`, which the write substrate records on the
+//!    resulting audit entry. This is the consumer side of the upstream `metadata` passthrough.
 //! 2. **Consumer-side hash-join attribution** ([`attribution`]). Given an observed change, decide
 //!    *react or suppress* by matching the file's content hash against the `after_hash` of a recent
 //!    agent write (concurrency spec §6). This is what stops reactive hooks from reacting to their
@@ -26,6 +26,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
 use turbovault_audit::{AuditLog, SnapshotStore};
 use turbovault_core::prelude::{ServerConfig, VaultConfig};
+use turbovault_core::{Change, ChangePlan, Precondition};
 use turbovault_vault::{VaultManager, VaultWatcher, WatcherConfig};
 
 pub use liberado_common::WriteProvenance;
@@ -150,9 +151,28 @@ impl Vault {
         SnapshotStore::compute_hash(content)
     }
 
+    /// The path spelling a [`ChangePlan`] must use: Turbovault resolves and re-relativises a path
+    /// before planning, and the plan's paths are what land in the audit entry — so attribution
+    /// (which matches on that spelling) only works if we normalise identically.
+    fn plan_path(&self, rel_path: &Path) -> VaultResult<String> {
+        let resolved = self.manager.resolve_path(rel_path)?;
+        Ok(self.manager.relative_path(&resolved))
+    }
+
+    /// Turn the adapter's `expected_hash` into the substrate's precondition. `Some` is optimistic
+    /// concurrency (fail if the file changed under us); `None` keeps the documented "unconditional
+    /// write" semantics — deliberately [`Precondition::Blind`] and not `ExpectAbsent`, which would
+    /// turn every overwrite into an error.
+    fn precondition(expected_hash: Option<&str>) -> Precondition {
+        match expected_hash {
+            Some(hash) => Precondition::ExpectBlob(hash.to_string()),
+            None => Precondition::Blind,
+        }
+    }
+
     /// Write a note with provenance. `expected_hash` enables optimistic concurrency (`None` for a
-    /// fresh create / unconditional write). The provenance is attached to the audit entry so this
-    /// write is attributable and loop-breakable.
+    /// fresh create / unconditional write). The provenance rides on the plan's `metadata`, which
+    /// the substrate records on the audit entry, so this write is attributable and loop-breakable.
     pub async fn write(
         &self,
         rel_path: impl AsRef<Path>,
@@ -161,14 +181,12 @@ impl Vault {
         provenance: &WriteProvenance,
     ) -> VaultResult<()> {
         self.validate_rel_path(rel_path.as_ref())?;
-        self.manager
-            .write_file_with_metadata(
-                rel_path.as_ref(),
-                content,
-                expected_hash,
-                Some(provenance.to_audit_metadata()),
-            )
-            .await?;
+        let path = self.plan_path(rel_path.as_ref())?;
+        let plan = ChangePlan::new(format!("write {path}"))
+            .upsert(path.clone(), content.as_bytes())
+            .with_precondition(path, Self::precondition(expected_hash))
+            .with_metadata(provenance.to_audit_metadata());
+        self.manager.apply_changes(&plan).await?;
         Ok(())
     }
 
@@ -180,13 +198,12 @@ impl Vault {
         provenance: &WriteProvenance,
     ) -> VaultResult<()> {
         self.validate_rel_path(rel_path.as_ref())?;
-        self.manager
-            .delete_file_with_metadata(
-                rel_path.as_ref(),
-                expected_hash,
-                Some(provenance.to_audit_metadata()),
-            )
-            .await?;
+        let path = self.plan_path(rel_path.as_ref())?;
+        let plan = ChangePlan::new(format!("delete {path}"))
+            .remove(path.clone())
+            .with_precondition(path, Self::precondition(expected_hash))
+            .with_metadata(provenance.to_audit_metadata());
+        self.manager.apply_changes(&plan).await?;
         Ok(())
     }
 
@@ -200,14 +217,18 @@ impl Vault {
     ) -> VaultResult<()> {
         self.validate_rel_path(from.as_ref())?;
         self.validate_rel_path(to.as_ref())?;
-        self.manager
-            .move_file_with_metadata(
-                from.as_ref(),
-                to.as_ref(),
-                expected_hash,
-                Some(provenance.to_audit_metadata()),
-            )
-            .await?;
+        let from_path = self.plan_path(from.as_ref())?;
+        let to_path = self.plan_path(to.as_ref())?;
+        let plan = ChangePlan::new(format!("move {from_path} to {to_path}"))
+            .with_change(Change::Rename {
+                from: from_path.clone(),
+                to: to_path.clone(),
+            })
+            .with_precondition(from_path, Self::precondition(expected_hash))
+            // Never clobber the destination — matches `ChangePlan::rename`'s own semantics.
+            .with_precondition(to_path, Precondition::ExpectAbsent)
+            .with_metadata(provenance.to_audit_metadata());
+        self.manager.apply_changes(&plan).await?;
         Ok(())
     }
 
