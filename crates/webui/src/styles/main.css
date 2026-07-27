@@ -559,6 +559,22 @@ html {
     flex-direction: column;
 }
 
+/* Expanded body of a tool result. `pre-wrap` keeps the daemon's line breaks (the session id and
+   journal path are on their own lines) while still wrapping long paths instead of forcing a
+   horizontal scrollbar. Capped and scrollable so a very long result cannot push the answer that
+   follows it off the screen -- the reason this block is collapsible in the first place. */
+.tool-result-body {
+    padding: 0.5rem 0.75rem;
+    font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 0.6875rem;
+    line-height: 1.5;
+    color: var(--lib-tool-args);
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    max-height: 18rem;
+    overflow-y: auto;
+}
+
 .thinking-step {
     display: flex;
     align-items: center;

@@ -327,6 +327,7 @@ fn MessageRow(msg: ChatMsg) -> Element {
                                 MarkdownText { content: msg.content.clone() }
                             }
                         },
+                        "tool" => rsx! { ToolBlock { content: msg.content.clone() } },
                         _ => rsx! {
                             div { class: "bubble {msg.role}",
                                 "{msg.content}"
@@ -339,14 +340,74 @@ fn MessageRow(msg: ChatMsg) -> Element {
     }
 }
 
+// ── Collapsible tool result ─────────────────────────────────────────────────
+
+/// A `tool` message — the full text a dispatched tool returned, as replayed from conversation
+/// history. This is the block that used to be permanently open: the live turn shows a
+/// [`ThinkingGroup`], but history has no thinking steps (they exist only on the SSE stream), so a
+/// reloaded conversation rendered the whole result as a plain bubble with no way to fold it away.
+/// Several hundred characters of session ids and journal paths then sat between the question and
+/// the answer.
+///
+/// Collapsed by default, with the outcome line kept in the header, and it stays wherever the user
+/// puts it.
+#[component]
+fn ToolBlock(content: String) -> Element {
+    let mut expanded = use_signal(|| false);
+
+    // The daemon's first line is already a summary ("RESULT (Succeeded):"). Reuse it as the header
+    // rather than inventing one, falling back only if it is empty so the header is never blank.
+    let label = content
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .unwrap_or("Tool result")
+        .trim_end_matches(':')
+        .to_string();
+    let arrow = if expanded() { "\u{25BC}" } else { "\u{25B8}" };
+
+    rsx! {
+        div {
+            class: "thinking-group",
+            button {
+                class: "thinking-header",
+                // Explicit: a bare <button> defaults to type=submit, which would post the chat
+                // form the moment this block is ever rendered inside one.
+                r#type: "button",
+                onclick: move |_| {
+                    let now = expanded();
+                    expanded.set(!now);
+                },
+                span { class: "thinking-arrow", "{arrow}" }
+                span { class: "thinking-label", "\u{1F527} {label}" }
+            }
+            if expanded() {
+                div {
+                    class: "thinking-body",
+                    div { class: "tool-result-body", "{content}" }
+                }
+            }
+        }
+    }
+}
+
 // ── Collapsible thinking-steps group ────────────────────────────────────────
 
 #[component]
 fn ThinkingGroup(steps: Vec<ThinkingStep>) -> Element {
-    let mut expanded = use_signal(|| steps.iter().any(|s| s.ok.is_none()));
+    // Starts collapsed and then belongs entirely to the user — nothing derived from `steps` ever
+    // moves it again. It used to open itself whenever a step was pending, which meant the run
+    // decided the disclosure state instead of the reader: it sprang open mid-turn, and wherever it
+    // happened to be when the last step resolved was where it stuck. Progress is already in the
+    // header label, which is the part that stays visible while collapsed.
+    let mut expanded = use_signal(|| false);
 
     let has_pending = steps.iter().any(|s| s.ok.is_none());
-    let toggle = move |_| expanded.set(!expanded());
+    let toggle = move |_| {
+        let now = expanded();
+        expanded.set(!now);
+    };
 
     let count = steps.len();
     let summary: Vec<String> = steps.iter().map(|s| s.tool_name.clone()).collect();
@@ -370,6 +431,7 @@ fn ThinkingGroup(steps: Vec<ThinkingStep>) -> Element {
             class: "thinking-group",
             button {
                 class: "thinking-header",
+                r#type: "button",
                 onclick: toggle,
                 span { class: "thinking-arrow", "{header_arrow}" }
                 span { class: "thinking-label", "{header_label}" }
