@@ -83,7 +83,19 @@ async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<Vec<ChatMsg
         .json()
         .await
         .map_err(|e| format!("Bad response: {e}"))?;
-    Ok(history.messages.iter().map(ChatMsg::from_wire).collect())
+    // Drop `system` messages: in stored history that is the face agent's prompt, ~2.2k characters
+    // of instructions that were being rendered as the opening chat bubble of every conversation.
+    //
+    // Filtered HERE and not in the renderer on purpose. The UI also builds `system` messages of its
+    // own for slash-command output (`/help`, command errors — see components/slash_commands.rs), and
+    // those must keep rendering. The distinction is provenance, not role, so it belongs at the point
+    // the wire is decoded.
+    Ok(history
+        .messages
+        .iter()
+        .filter(|m| m.role != "system")
+        .map(ChatMsg::from_wire)
+        .collect())
 }
 
 // ── Chat component ──────────────────────────────────────────────────────────
