@@ -7,7 +7,70 @@
 //! Switching themes at runtime is trivial: call this function with the new
 //! `Theme` and swap the injected `<style>` element's text content.
 
-use liberado_theme::Theme;
+use liberado_theme::{Theme, ThemeRegistry};
+
+/// Where the chosen theme name is remembered.
+///
+/// The TUI persists to `settings.toml` under the platform config dir (see
+/// `liberado_theme::save_theme_preference`). A browser cannot write there, so this is the same idea
+/// in the only store it has. That keeps the *intent* of `UiSettings` intact — a theme is a
+/// machine-local UI preference, not a vault artifact — at the cost of not sharing the choice with
+/// the TUI on the same machine.
+const STORAGE_KEY: &str = "liberado.theme";
+
+/// The theme to render, by name, falling back to the built-in dark when the name is unknown.
+///
+/// Resolved through the **shared** [`ThemeRegistry`] rather than a webui-local list, so `dark`,
+/// `light` and `nord` are exactly the set the TUI has and adding a built-in upstream reaches both
+/// surfaces with no change here.
+///
+/// Not shared with the TUI: user theme *files*. The registry loads those from
+/// `<config>/liberado/themes/*.toml`, which a WASM build cannot read — see `theme_names` in
+/// `components/slash_commands.rs`.
+pub fn theme_by_name(name: &str) -> Theme {
+    ThemeRegistry::new()
+        .get(name)
+        .cloned()
+        .unwrap_or_else(Theme::default_dark)
+}
+
+/// Every theme name this surface can render, sorted for a stable `/theme list`.
+pub fn theme_names() -> Vec<String> {
+    let registry = ThemeRegistry::new();
+    let mut names: Vec<String> = registry.names().into_iter().map(str::to_string).collect();
+    names.sort();
+    names
+}
+
+/// The remembered theme name, or `dark` when nothing is stored yet.
+pub fn saved_theme_name() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(name) = web_sys::window()
+            .and_then(|w| w.local_storage().ok().flatten())
+            .and_then(|s| s.get_item(STORAGE_KEY).ok().flatten())
+            .filter(|n| !n.trim().is_empty())
+        {
+            return name;
+        }
+    }
+    "dark".to_string()
+}
+
+/// Remember `name` for the next load. Best-effort: a browser with storage disabled just means the
+/// choice lasts for the session, which is better than refusing to switch at all.
+pub fn save_theme_name(name: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+            let _ = storage.set_item(STORAGE_KEY, name);
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = name;
+    }
+}
 
 /// Return a `:root { … }` CSS block defining every `--lib-*` custom property
 /// from `t`.  Any `None` field falls back to the corresponding value in

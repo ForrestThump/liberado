@@ -83,6 +83,8 @@ fn main() {
 fn App() -> Element {
     let base = api_base();
     let mut view = use_signal(|| "chat");
+    // The active theme name, restored from the last choice. Chat writes it when `/theme set` lands.
+    let theme_name = use_signal(crate::theme::saved_theme_name);
     let active_conv_id = use_signal(|| None::<String>);
     // `mut` because the header's menu button toggles it (see below).
     // Default collapsed on narrow (phone-width) viewports so the sidebar doesn't cover the chat
@@ -101,7 +103,7 @@ fn App() -> Element {
     };
 
     rsx! {
-        style { {crate::theme::theme_css_vars(&liberado_theme::Theme::default_dark())} }
+        style { {crate::theme::theme_css_vars(&crate::theme::theme_by_name(&theme_name()))} }
         style { {include_str!("./styles/main.css")} }
 
         div {
@@ -147,6 +149,7 @@ fn App() -> Element {
                         Chat {
                             api_base: base.clone(),
                             active_conv_id,
+                            theme_name,
                         }
                     } else {
                         Dashboard { api_base: base.clone() }

@@ -102,7 +102,13 @@ async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<Vec<ChatMsg
 // ── Chat component ──────────────────────────────────────────────────────────
 
 #[component]
-pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Element {
+pub fn Chat(
+    api_base: String,
+    mut active_conv_id: Signal<Option<String>>,
+    theme_name: Signal<String>,
+) -> Element {
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut theme_name = theme_name;
     let mut messages = use_signal(Vec::new);
     let mut input = use_signal(String::new);
     let mut sending = use_signal(|| false);
@@ -171,6 +177,7 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
             let message_count = messages.read().len();
             let base = base_for_slash.clone();
             let text_owned = text.clone();
+            let theme_snapshot = theme_name.read().clone();
 
             #[cfg(target_arch = "wasm32")]
             wasm_bindgen_futures::spawn_local(async move {
@@ -180,6 +187,7 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
                     session_snapshot,
                     sending_snapshot,
                     message_count,
+                    &theme_snapshot,
                 )
                 .await;
                 for msg in cmd_msgs {
@@ -211,6 +219,12 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
                         CommandResult::OpenModelBrowser => {
                             model_browser_open.set(true);
                         }
+                        // The command layer validated the name against the shared registry; all that
+                        // is left is to render it and remember it.
+                        CommandResult::ThemeChanged { name } => {
+                            theme_name.set(name.clone());
+                            crate::theme::save_theme_name(name);
+                        }
                         _ => {}
                     }
                 }
@@ -223,6 +237,7 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
                     session_snapshot,
                     sending_snapshot,
                     message_count,
+                    theme_snapshot,
                 );
             }
 

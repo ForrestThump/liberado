@@ -104,6 +104,9 @@ pub fn Sidebar(
     active_conv_id: Signal<Option<String>>,
     collapsed: Signal<bool>,
 ) -> Element {
+    // `mut` for `restart()` after a delete, which is wasm-only — on native that writer is cfg'd out
+    // and the binding merely looks immutable.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut conversations = use_resource({
         let base = api_base.clone();
         move || {
