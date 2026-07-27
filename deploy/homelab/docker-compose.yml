@@ -62,10 +62,6 @@ services:
       # scripts/deploy-webui-homelab.ps1. ServeDir reads it per request, so shipping a new UI is a
       # file copy - no restart, no image rebuild.
       - /home/shiloh/homelab/services/liberado/webui:/webui:ro
-      # Compat mount for an image built before LIBERADO_WEBUI_DIST existed: there, DIST_DIR is a
-      # path relative to the container's CWD (which is /), so this is the only place such an image
-      # looks. Delete this line once an image carrying that env var is deployed.
-      - /home/shiloh/homelab/services/liberado/webui:/target/dx/liberado-webui/release/web/public:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4201/api/status || exit 1"]
       interval: 60s
