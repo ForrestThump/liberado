@@ -6,6 +6,15 @@
 //! `write_*_with_metadata` SDK methods, under the reserved key [`PROVENANCE_KEY`]. Reactive
 //! consumers read it back to attribute changes and break loops (hash-join, spec §6).
 //!
+//! **One narrow exception, and why it does not weaken the rule.** A write that reaches the vault
+//! through an MCP *tool* rather than the `liberado-vault` adapter arrives with `metadata: {}` — the
+//! tool carries this provenance in the request's `_meta`, but Turbovault's tool layer does not
+//! forward it into the audit entry. Such a write is ours yet unattributable, so the daemon reacted
+//! to notes it had just generated itself. `liberado_vault::attribution` therefore falls back to
+//! front matter, but *only* after an audit entry's `after_hash` has already been matched to the
+//! bytes on disk — which is exactly the condition a stale-front-matter human edit cannot meet. The
+//! real fix is upstream: forward `_meta` into the audit entry, then the fallback goes unused.
+//!
 //! Attribution is **best-effort, never a security boundary**: a missing or unrecognized
 //! provenance always means "treat as external/unknown," never "trusted." Security is the
 //! capability/zone model ([`crate::capability`]).

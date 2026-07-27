@@ -81,8 +81,17 @@ impl Vault {
                 match WriteProvenance::from_audit_metadata(&entry.metadata) {
                     // An agent we recognize (not a human-sourced write) → suppress.
                     Some(prov) if !prov.is_human() => Attribution::Agent(prov),
-                    // Matched an entry, but it was human-sourced or carried no provenance → react.
-                    _ => Attribution::External,
+                    // Explicitly human-sourced. Believe it; front matter must not override an
+                    // audit entry that names a human.
+                    Some(_) => Attribution::External,
+                    // No provenance on the entry. Not necessarily external: a write that reached
+                    // the vault through an MCP *tool* rather than this adapter lands here, because
+                    // the tool layer does not forward our `_meta` into the audit entry. Fall back
+                    // to the note's own front matter. See `frontmatter_provenance`.
+                    None => match frontmatter_provenance(&content) {
+                        Some(prov) if !prov.is_human() => Attribution::Agent(prov),
+                        _ => Attribution::External,
+                    },
                 },
             );
         }
@@ -106,6 +115,71 @@ impl Vault {
 /// paths with the OS separator; events/callers may use `/`).
 fn normalize(path: &str) -> String {
     path.replace('\\', "/")
+}
+
+/// Front-matter keys the orchestrator's report sink stamps into a delivered note
+/// (`vault_note_body` in `liberado-orchestrator`).
+const FM_SOURCE_KEY: &str = "liberado_source";
+const FM_CORRELATION_KEY: &str = "liberado_correlation";
+
+/// Recover provenance from a note's YAML front matter.
+///
+/// **This is a fallback, and only legitimate because of where it is called from.** The module-level
+/// rule (see `liberado_common::provenance`) is that provenance rides the audit log and *not* front
+/// matter, because front matter is last-writer-only state that goes stale the instant a human edits
+/// the note in Obsidian. That objection is precisely what the call site neutralises: this runs only
+/// after an audit entry's `after_hash` was found equal to the bytes currently on disk. A human's
+/// Obsidian save produces no such entry, so a stale `liberado_source:` left in a note a human then
+/// edited is never consulted — the hash no longer matches and attribution has already returned
+/// `External`. What reaches here is a write that *did* go through the vault's audit path but arrived
+/// without metadata.
+///
+/// That gap is real: an MCP tool call carries our [`WriteProvenance`] in the request's `_meta`, but
+/// Turbovault's tool layer does not forward it into the audit entry, so the entry lands with
+/// `metadata: {}`. Writes through this adapter are unaffected — they attach provenance directly.
+/// The concrete failure this closes: the daemon delivered a generated morning brief through the
+/// report sink, saw the resulting change, could not attribute it, and dispatched an agent to react
+/// to the system's own output (three times over, on 2026-07-26).
+///
+/// Deliberately a two-key scan, not a YAML parse: only the sink's own keys are recognised, so this
+/// cannot be widened by whatever else a note happens to carry.
+fn frontmatter_provenance(content: &str) -> Option<WriteProvenance> {
+    // Front matter must open on the very first line, or there is none.
+    let rest = content
+        .strip_prefix("---\n")
+        .or_else(|| content.strip_prefix("---\r\n"))?;
+
+    let mut source = None;
+    let mut correlation = None;
+    let mut closed = false;
+
+    for line in rest.lines() {
+        if line.trim_end() == "---" {
+            closed = true;
+            break;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"').trim_matches('\'');
+        match key.trim() {
+            FM_SOURCE_KEY => source = Some(value.to_string()),
+            FM_CORRELATION_KEY => correlation = Some(value.to_string()),
+            _ => {}
+        }
+    }
+
+    // An unterminated block is not front matter — refuse to read provenance out of the body.
+    if !closed {
+        return None;
+    }
+
+    Some(WriteProvenance {
+        source: source.filter(|s| !s.is_empty())?,
+        correlation_id: correlation.filter(|c| !c.is_empty()),
+        zone: None,
+        note: None,
+    })
 }
 
 #[cfg(test)]
@@ -243,6 +317,143 @@ mod tests {
             vault.attribute("journal/today.md").await.unwrap(),
             Attribution::External
         );
+    }
+
+    /// Reproduce the shape an MCP tool write leaves behind: the bytes are on disk and the audit log
+    /// has an entry whose `after_hash` matches them, but `metadata` is `{}` because the tool layer
+    /// dropped our `_meta`. This is what `turbovault:write_note` actually produced for the morning
+    /// brief on 2026-07-27 (verified against the live audit log).
+    async fn write_like_an_mcp_tool(vault: &Vault, dir: &TempDir, rel: &str, content: &str) {
+        let path = dir.path().join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, content).unwrap();
+
+        let hash = Vault::content_hash(content);
+        let entry = turbovault_audit::AuditEntry::new(turbovault_audit::OperationType::Create, rel)
+            .with_after(hash.clone(), hash);
+        assert_eq!(
+            entry.metadata,
+            serde_json::json!({}),
+            "the bug depends on this entry carrying no provenance"
+        );
+        vault.audit().record(&entry).await.unwrap();
+    }
+
+    /// The regression: a delivered report is suppressed even though the audit entry lost its
+    /// provenance, because the note's own front matter still names the agent that wrote it.
+    #[tokio::test]
+    async fn mcp_tool_write_is_attributed_from_front_matter() {
+        let (vault, dir) = temp_vault().await;
+        let note = "---\nliberado_source: liberado-executor\n\
+                    liberado_correlation: sub:6dba0afc21695ad7\n\
+                    generated: 2026-07-27T11:55:38Z\n---\n\n# Morning Brief\n\nbody\n";
+
+        write_like_an_mcp_tool(&vault, &dir, "wakeups/2026-07-27-morning-brief.md", note).await;
+
+        match vault
+            .attribute("wakeups/2026-07-27-morning-brief.md")
+            .await
+            .unwrap()
+        {
+            Attribution::Agent(p) => {
+                assert_eq!(p.source, "liberado-executor");
+                assert_eq!(p.correlation_id.as_deref(), Some("sub:6dba0afc21695ad7"));
+            }
+            other => panic!("expected the delivered report to be suppressed, got {other:?}"),
+        }
+        assert!(
+            !vault
+                .should_react("wakeups/2026-07-27-morning-brief.md")
+                .await
+                .unwrap()
+        );
+    }
+
+    /// The guarantee the fallback must not break. A human edits a note that still carries agent
+    /// front matter; their bytes match no audit entry, so the stale front matter is never read and
+    /// the edit is still reacted to. This is the one mistake loop-breaking may never make.
+    #[tokio::test]
+    async fn human_edit_of_a_note_with_agent_front_matter_still_reacts() {
+        let (vault, dir) = temp_vault().await;
+        let note =
+            "---\nliberado_source: liberado-executor\nliberado_correlation: c1\n---\n\nbody\n";
+
+        write_like_an_mcp_tool(&vault, &dir, "wakeups/brief.md", note).await;
+        assert!(!vault.should_react("wakeups/brief.md").await.unwrap());
+
+        // The human appends a line in Obsidian. Front matter still says liberado-executor.
+        std::fs::write(
+            dir.path().join("wakeups/brief.md"),
+            format!("{note}\nmy own note\n"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            vault.attribute("wakeups/brief.md").await.unwrap(),
+            Attribution::External,
+            "a human edit must be reacted to even when stale agent front matter remains"
+        );
+    }
+
+    /// Front matter must not override an audit entry that explicitly names a human.
+    #[tokio::test]
+    async fn audit_human_provenance_beats_agent_front_matter() {
+        let (vault, _dir) = temp_vault().await;
+        let note = "---\nliberado_source: liberado-executor\n---\n\napproved by hand\n";
+
+        vault
+            .write("proposals/p.md", note, None, &WriteProvenance::human())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            vault.attribute("proposals/p.md").await.unwrap(),
+            Attribution::External
+        );
+    }
+
+    /// A note whose front matter names no liberado source is still external, even via the MCP path.
+    #[tokio::test]
+    async fn mcp_tool_write_without_liberado_front_matter_is_external() {
+        let (vault, dir) = temp_vault().await;
+
+        write_like_an_mcp_tool(&vault, &dir, "notes/n.md", "---\ntags: [x]\n---\n\nbody\n").await;
+        assert_eq!(
+            vault.attribute("notes/n.md").await.unwrap(),
+            Attribution::External
+        );
+
+        // ...and so is a note with no front matter at all.
+        write_like_an_mcp_tool(&vault, &dir, "notes/plain.md", "just text\n").await;
+        assert_eq!(
+            vault.attribute("notes/plain.md").await.unwrap(),
+            Attribution::External
+        );
+    }
+
+    #[test]
+    fn front_matter_parsing_edge_cases() {
+        // Unterminated block: refuse to mine the body for provenance.
+        assert!(
+            super::frontmatter_provenance("---\nliberado_source: liberado-executor\n\nbody\n")
+                .is_none()
+        );
+        // Must open on the first line.
+        assert!(
+            super::frontmatter_provenance("\n---\nliberado_source: liberado-executor\n---\n")
+                .is_none()
+        );
+        // Quotes are stripped; a missing correlation id is allowed (source is what decides).
+        let p = super::frontmatter_provenance("---\nliberado_source: \"agent-x\"\n---\n").unwrap();
+        assert_eq!(p.source, "agent-x");
+        assert_eq!(p.correlation_id, None);
+        // An empty source is not provenance.
+        assert!(super::frontmatter_provenance("---\nliberado_source:\n---\n").is_none());
+        // A human-sourced note is parsed, and `is_human` is what suppresses suppression.
+        let h = super::frontmatter_provenance("---\nliberado_source: human\n---\n").unwrap();
+        assert!(h.is_human());
     }
 
     #[tokio::test]
