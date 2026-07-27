@@ -41,7 +41,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 axum = { version = "0.8", features = ["json"] }
-tower-http = { version = "0.6", features = ["cors", "fs"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "compression-gzip"] }
 tower = { version = "0.5", features = ["util"] }
 thiserror = { workspace = true }
 

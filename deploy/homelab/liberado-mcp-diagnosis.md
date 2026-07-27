@@ -227,7 +227,7 @@ transport = { kind = "http", url = "http://actual-mcp:3600" }
 - **Working** via `http://turbovault:3001` (nginx → backend with Origin injection).  
 - Keep rebuilds on **`develop`**: `~/homelab/scripts/rebuild-turbovault.sh develop`.  
 - Dockerfile: `~/homelab/custom_builds/turbovault-supergateway.Dockerfile` (`ARG BRANCH=develop`).  
-- Liberado topology uses path-addressed zones (`zone_from_arg = "path"`, write tool list). Liberado’s vault mount is still **`:ro`**; writes go through TurboVault’s **`:rw`** vault mount — intentional.
+- Liberado topology uses path-addressed zones (`zone_from_arg = "path"`, write tool list). Liberado’s vault mount is now **`:rw`** — it no longer needs to detour writes through TurboVault’s `:rw` mount, and what a write is allowed to touch is decided by `policy.toml` zones, not by the mount flag.
 
 ---
 

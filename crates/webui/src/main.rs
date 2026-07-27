@@ -10,16 +10,34 @@ use components::chat::Chat;
 use components::dashboard::Dashboard;
 use components::sidebar::Sidebar;
 
+/// Absolute base URL of the daemon's HTTP API.
+///
+/// **Same origin by default.** Whoever served this page also answers `/api/*`: the daemon does it
+/// directly on `:4201`, and the homelab deploy puts an nginx in front that reverse-proxies `/api/`
+/// to the daemon on the AI node (see `deploy/homelab/webui/`). Same-origin is what lets the UI live
+/// behind Traefik at `https://liberado.homelab.local/` — a hardcoded `:4201` would send the browser
+/// to a port Traefik does not listen on — and it costs no CORS preflight.
+///
+/// The one exception is `dx serve`, which serves the hot-reload build on its own port and cannot
+/// proxy. There, and only there, retarget the same host's `:4201`.
+///
+/// Must stay absolute: `reqwest`'s wasm client parses this through `Url::parse`, which rejects a
+/// relative path.
 fn api_base() -> String {
     #[cfg(target_arch = "wasm32")]
     {
-        const API_PORT: &str = "4201";
+        const DEV_SERVE_PORT: &str = "8080";
+        const DAEMON_PORT: &str = "4201";
         web_sys::window()
             .and_then(|w| {
                 let loc = w.location();
-                let proto = loc.protocol().ok()?;
-                let host = loc.hostname().ok()?;
-                Some(format!("{proto}//{host}:{API_PORT}"))
+                if loc.port().ok()? == DEV_SERVE_PORT {
+                    let proto = loc.protocol().ok()?;
+                    let host = loc.hostname().ok()?;
+                    return Some(format!("{proto}//{host}:{DAEMON_PORT}"));
+                }
+                // scheme://host[:port] — no trailing slash, so `{base}/api/x` stays well-formed.
+                loc.origin().ok()
             })
             .unwrap_or_else(|| "http://127.0.0.1:4201".to_string())
     }

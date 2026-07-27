@@ -31,12 +31,25 @@ use liberado_main_agent::ChatSessions;
 use liberado_mcp::McpRegistry;
 use liberado_session_store::SessionStore;
 use tokio::sync::Mutex;
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
 
-/// Where `dx build --release --package liberado-webui --web` places the built frontend.
+/// Where `dx build --release --package liberado-webui --web` places the built frontend, relative to
+/// the repo root. Correct when you run the daemon from a dev checkout; useless in the deploy image,
+/// which has no repo and whose working directory is `/` — hence [`dist_dir`].
 const DIST_DIR: &str = "target/dx/liberado-webui/release/web/public";
+
+/// Directory the frontend is served from: `LIBERADO_WEBUI_DIST` if set, else [`DIST_DIR`].
+///
+/// The homelab mounts the bundle into the container and points this at the mount, because the UI is
+/// built on a dev machine (it needs the wasm32 toolchain, which the deploy image does not carry) and
+/// shipped separately from the binary. Keeping it a mount rather than an image layer also means a UI
+/// redeploy is a file copy — `ServeDir` reads per request, so no restart is needed.
+fn dist_dir() -> String {
+    std::env::var("LIBERADO_WEBUI_DIST").unwrap_or_else(|_| DIST_DIR.to_string())
+}
 
 use crate::state::AppState;
 
@@ -355,7 +368,16 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/goals/{id}/park", axum::routing::post(api::goals_park))
         .layer(CorsLayer::permissive())
         .with_state(state)
-        .fallback_service(ServeDir::new(DIST_DIR));
+        // Compression is scoped to the static fallback, deliberately not applied to the router as a
+        // whole. The payload that needs it is the release .wasm (multi-MB, ~4x compressible, and the
+        // whole page blocks on it over the tailnet); the payload that must never be buffered is
+        // `/api/chat/stream`, where holding bytes back turns a live turn into a frozen UI. Scoping it
+        // here makes that impossible by construction rather than by trusting a predicate.
+        .fallback_service(
+            tower::ServiceBuilder::new()
+                .layer(CompressionLayer::new())
+                .service(ServeDir::new(dist_dir())),
+        );
 
     let addr = format!("0.0.0.0:{port}");
     info!("Web UI server listening on http://{}", addr);

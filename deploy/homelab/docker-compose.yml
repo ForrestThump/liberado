@@ -29,11 +29,15 @@ services:
     networks:
       - homelab
     ports:
-      - "4201:4201"     # LAN: http://192.168.0.144:4201  (API + SSE; WebUI is not built yet)
+      # LAN: http://192.168.0.144:4201 — API + SSE + the WebUI, one origin. Publicly reached at
+      # https://liberado.homelab.local (Traefik on the primary node routes the host here; see
+      # ~/homelab/services/traefik/dynamic/ai-node.yml).
+      - "4201:4201"
     env_file:
       - .env            # OPENROUTER_API_KEY (+ optional DEEPSEEK_API_KEY) only
     environment:
       LIBERADO_PORT: "4201"
+      LIBERADO_WEBUI_DIST: "/webui"   # where the bundle above is mounted
       # `liberado serve` requires the vault path via arg or this env — it does NOT fall back to
       # topology.vault_path at the CLI layer (that fallback is inside run(), reached only after the
       # CLI arg-check passes). Found on first boot, 2026-07-15.
@@ -46,11 +50,22 @@ services:
       # LIBERADO_TELEGRAM_BOT_TOKEN: ...
       # LIBERADO_TELEGRAM_CHAT_ID: ...
     volumes:
-      # The real Obsidian vault, syncthing-synced, mounted READ-ONLY for v1 (the F1 lesson).
-      - /home/shiloh/homelab/volumes/syncthing/bulk/Obsidian/Main:/vault:ro
+      # The real Obsidian vault, syncthing-synced. Mounted READ-WRITE: v1 shipped `:ro` (the F1
+      # lesson) and writes had to detour through TurboVault's own `:rw` mount; the daemon now writes
+      # the vault directly, gated by policy.toml zones rather than by the mount.
+      - /home/shiloh/homelab/volumes/syncthing/bulk/Obsidian/Main:/vault:rw
       # Config (topology.toml + policy.toml) and persistent data (session store), on the host.
       - /home/shiloh/homelab/services/liberado/config:/config:ro
       - /home/shiloh/homelab/services/liberado/data:/data
+      # WebUI: the wasm bundle, built on the dev machine (it needs the wasm32 toolchain this
+      # deploy image deliberately does not carry) and shipped separately from the binary by
+      # scripts/deploy-webui-homelab.ps1. ServeDir reads it per request, so shipping a new UI is a
+      # file copy - no restart, no image rebuild.
+      - /home/shiloh/homelab/services/liberado/webui:/webui:ro
+      # Compat mount for an image built before LIBERADO_WEBUI_DIST existed: there, DIST_DIR is a
+      # path relative to the container's CWD (which is /), so this is the only place such an image
+      # looks. Delete this line once an image carrying that env var is deployed.
+      - /home/shiloh/homelab/services/liberado/webui:/target/dx/liberado-webui/release/web/public:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4201/api/status || exit 1"]
       interval: 60s

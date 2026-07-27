@@ -4,6 +4,13 @@ use chat_client_contract::ChatMessage;
 
 use crate::components::markdown::MarkdownText;
 
+// Slash commands only run in the browser — `submit` gates the whole block on wasm32, so gate the
+// imports identically or a native build trips the workspace's zero-warnings bar on unused imports.
+#[cfg(target_arch = "wasm32")]
+use crate::components::slash_commands::handle_slash_command;
+#[cfg(target_arch = "wasm32")]
+use liberado_commands::CommandResult;
+
 // ── Data types ──────────────────────────────────────────────────────────────
 
 /// A tool call + its result, grouped as a thinking step under an assistant message.
@@ -86,7 +93,10 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
     let mut messages = use_signal(Vec::new);
     let mut input = use_signal(String::new);
     let mut sending = use_signal(|| false);
-    let session = use_signal(|| None::<String>);
+    // `mut` is required by the wasm-only slash-command block below, which reassigns this. On a
+    // native build those call sites are cfg'd out and the binding only looks immutable.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut session = use_signal(|| None::<String>);
     let mut should_set_title = use_signal(|| false);
 
     let base_for_effect = api_base.clone();

@@ -30,6 +30,17 @@ making changes without re-deriving any of it.
   rebuild the bundle (`.\scripts\start-webui.ps1 -Build` or the `dx build` below). If
   `:4201` looks stale, that's why — hard-refresh after a rebuild, or just use `:8080`.
 
+### Ship it to the homelab
+
+```powershell
+.\scripts\deploy-webui-homelab.ps1     # build + ship, ~1 min -> https://liberado.homelab.local
+```
+
+The bundle is **mounted** into the daemon's container rather than baked into its image, and
+`ServeDir` re-reads it per request — so this is a file copy, with no image rebuild and no restart.
+Do *not* use `deploy/homelab/deploy.sh` for a frontend-only change; that rebuilds the daemon image
+and takes 20–40 minutes. See `deploy/homelab/README.md`.
+
 ---
 
 ## Build commands
@@ -117,17 +128,23 @@ App shell (`.app`, `.app-header`, `.brand`, `.nav`, `.nav-btn`), chat
 
 ## api_base & CORS
 
-`main.rs::api_base()` (wasm build) derives the daemon URL from `window.location` and
-**forces port 4201**, keeping the page's protocol+host:
+`main.rs::api_base()` (wasm build) is **same-origin by default** — it returns
+`window.location.origin`, because whoever served the page also answers `/api/*`:
 
-```
-<page-protocol>//<page-host>:4201
-```
+| Served by | Page origin | API base |
+|---|---|---|
+| the daemon, directly | `http://<host>:4201` | same |
+| Traefik → the daemon | `https://liberado.homelab.local` | same |
+| `dx serve` (dev) | `http://<host>:8080` | `http://<host>:4201` |
 
-So the same WASM works whether it was served by the daemon (`:4201`, same origin) or by
-`dx serve` (`:8080`, cross-port) — and over the LAN (`http://<lan-ip>:…`) with no
-hardcoded IP. The daemon sets `CorsLayer::permissive()`, which is what allows the
-cross-port `:8080 → :4201` calls. If you change the API port, change `API_PORT` here.
+`dx serve` is the one exception: it can't proxy, so port `8080` — and only `8080` — retargets the
+daemon. That cross-port case is what `CorsLayer::permissive()` on the daemon exists for; the two
+same-origin cases need no CORS at all.
+
+**Don't reintroduce a hardcoded `:4201`.** It was one, and it broke the homelab deploy: at
+`https://liberado.homelab.local/` the WASM asked for `https://liberado.homelab.local:4201`, where
+Traefik does not listen (it terminates TLS on 443 only). The base must also stay **absolute** —
+`reqwest`'s wasm client runs it through `Url::parse`, which rejects a relative path.
 
 ---
 
@@ -141,23 +158,16 @@ from an empty chat (`use_signal(Vec::new)`).
 
 ---
 
-## Slash commands (scaffolded, not yet wired)
+## Slash commands (wired)
 
-`components/slash_commands.rs` sketches a `CommandContext` impl over the chat state and a
-`handle_slash_command()` entry point, backed by the **`liberado-commands`** crate (the
-shared `/help`, `/new`, `/theme`, … parser used by the TUI). It is **not** in `mod.rs`
-and won't compile as-is because:
+`components/slash_commands.rs` implements `CommandContext` over the chat state and exposes
+`handle_slash_command()`, backed by the **`liberado-commands`** crate (the shared `/help`, `/new`,
+`/theme`, … parser used by the TUI). It is in `mod.rs`, `liberado-commands` is a base dependency,
+`ChatMsg` is `pub`, and `chat.rs::submit` calls it when `text` starts with `/`.
 
-- it references `super::chat::ChatMsg`, which is **private** to `chat.rs` (make it `pub`
-  to share it, or move it to a shared module), and
-- `liberado-commands` is currently a dependency only under
-  `[target.'cfg(not(target_arch = "wasm32"))']` in `Cargo.toml`. The crate is
-  **wasm-safe** (its only dependency is `liberado-theme`), so to use it in the browser,
-  move it into the `wasm32` target deps (or the base `[dependencies]`).
-
-To wire it up: make `ChatMsg` shareable, fix the Cargo dependency target, add
-`pub mod slash_commands;` to `mod.rs`, and call `handle_slash_command()` from
-`chat.rs::submit` when `text` starts with `/`.
+Both the call and the `CommandResult` match live inside `#[cfg(target_arch = "wasm32")]` blocks, so
+the imports in `chat.rs` are gated the same way — ungate them and a native build fails the
+workspace's zero-warnings bar on unused imports.
 
 ---
 
