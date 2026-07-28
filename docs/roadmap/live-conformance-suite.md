@@ -1,6 +1,8 @@
 # The live conformance suite
 
-**Status**: Tier-1 **complete** (levels L1–L10) — **L1–L8 / L10** in
+**Status**: Tier-1 **complete** (levels L1–L10); **Tier 3 open** (live, per-path, against the
+deployed daemon — see below; added after three defects on 2026-07-28 that Tier 1 structurally could
+not see) — **L1–L8 / L10** in
 `crates/server/src/t1_conformance.rs` (in-process production-shaped goals surface, durable
 `SessionStore`, `MockProvider`; L6 via `RiskGatedToolRuntime` + spy write tool; L3/L4 via
 parked reopen + production `POST .../message` → resume; L7 via spy `SessionAlert` + real
@@ -63,6 +65,62 @@ tests whether the *model* can actually drive the machinery.
 - Intake reaches a coherent contract without the coherence checker burning its budget (the S7-c
   regression: three false contradictions killed a session having never asked the human anything).
 
+### Tier 3 — against the **deployed daemon**, one run per path, on a schedule
+
+**Status**: open, and the highest-value unbuilt thing here (added 2026-07-28).
+
+Tier 1 is in-process with a `MockProvider`. That is the right design and it is why it runs in CI —
+but it means Tier 1 cannot see anything that only exists on a real deployment: the actual config on
+the box, the real provider's wire format, an MCP that is up, the request body we genuinely send.
+
+Three defects on 2026-07-28 landed in exactly that blind spot, and **all three were found by running,
+none by review**:
+
+| defect | why Tier 1 could not see it |
+|---|---|
+| `to_openai_request` discarded every caller's JSON schema, sending `json_object` instead | nothing asserted the *request body*; `MockProvider` accepts any shape |
+| both morning crons dead for a day | no path runs cron→dispatch→execute against a live model |
+| `POST /api/goals {"domain":"dispatch"}` started a powerless session | needs the real `policy.toml`, where the grant is `dispatcher` |
+
+The schema one is the instructive case. Four callers wrote correct schemas; the boundary dropped all
+four; the coding pack independently grew `extract_json_object` to cope, which **masked** it locally.
+A correct-looking abstraction, used correctly, unplugged at the edge, for an unknown length of time.
+
+#### What it is
+
+One scripted run per **path**, against the deployed daemon, on a schedule (nightly is enough), each
+asserting an outcome rather than a status code:
+
+- **cron → dispatch → execute** — fire a schedule's real goal; assert it classified, ran, and
+  delivered. This is the one that was broken.
+- **chat turn** — a message through `/api/chat/stream`; assert tokens, and a persisted transcript.
+- **hook** — `POST /api/hooks/{name}`; assert a joinable session.
+- **spawn** — a profiled goal; assert it ran under the profile's grant, not the domain fallback.
+- **delegate** — a chat turn that must delegate; assert a child session with the dispatcher's grant.
+
+#### The rule that makes it worth having
+
+**Assert the thing that would be wrong, not that nothing errored.** A cron returning `202` proved
+nothing on the 28th — the session started and then failed every action. The assertion has to be
+"a brief arrived", "the tool surface was these N tools", "the request carried a `json_schema`".
+
+#### Cheap companion: seam tests
+
+Independent of Tier 3 and worth doing first because it is nearly free — for every "we send X to the
+provider" abstraction, one unit test inspecting the **built request body**. Two now exist
+(`a_schema_that_constrains_shape_is_sent_as_json_schema`,
+`a_shapeless_schema_falls_back_to_json_object`). That class needs a sweep: tools, temperature,
+max_tokens, and whatever the next boundary carries. This is what would have caught the schema bug in
+CI years earlier than a live run would.
+
+#### Why this and not more unit tests
+
+95k lines of Rust across 43 crates, and five distinct execution paths, none of which gets the volume
+of live iteration a single-purpose coding agent's one loop does. Breadth is the project's goal, so the
+answer is not less breadth — it is **proof per path**. A path nothing exercises end to end will break,
+and you will find out from Telegram.
+
+
 ## Design rules, learned the hard way
 
 **Assert on ground truth, not on what the system says about itself.** The E5 bug emitted
@@ -94,3 +152,7 @@ be debugged as one.
 Tier 1 first, and probably L5/L6/L8 first within it — they are the cheapest and they guard the
 security-relevant behaviour. Tier 2 only after Tier 1 is green, because a flaky model-in-the-loop test
 sitting on top of unverified plumbing tells you nothing you can act on.
+
+Tier 3 is now the open one, and the **seam tests** under it come first: they are unit-cheap, run in
+CI, and would have caught the defect that cost a day of crons. Then the cron path, because it is the
+one that has already failed silently. The remaining paths in whatever order they next surprise you.
