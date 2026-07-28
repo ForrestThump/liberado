@@ -1,6 +1,6 @@
 # Session Profiles — Design & Roadmap
 
-**Status**: steps 1–3 landed on `feat/session-profiles` (2026-07-28). Steps 4–6 open.
+**Status**: steps 1–4 landed on `feat/session-profiles` (2026-07-28). Steps 5–6 open. **Nothing is deployed** — the branch is parked pending the cron-router investigation below.
 Design settled with the operator in conversation on 2026-07-28; the decisions in
 [Settled decisions](#settled-decisions) are answers to direct questions, not proposals.
 
@@ -159,11 +159,22 @@ mcps  = [
 - Both shapes coexist: `component` (borrow a grant wholesale — the live `research` profile, tested
   unchanged) **or** an inline declaration. Setting both is refused at load.
 
-### 4. Switching
+### 4. Switching — **landed** (`98b830f`, `4359c11`)
 
-- `POST /api/conversations/{id}/profile` (surface-only, never a tool).
-- Header line + system node, per [Human-only switching](#human-only-switching).
-- `/profile` slash command via the shared `Picker` (one list + a callback).
+- `POST /api/conversations/{id}/profile` (surface-only, never a tool) and
+  `GET /api/profiles`.
+- Recorded twice: a fresh header line (what the next turn reads) **and** a transcript node authored
+  `profile`. `Author::Named`, not `Author::System` — a system node in this store is the face agent's
+  prompt and every reader drops those, so a `System` note would have been invisible in the WebUI.
+- Applies on the **next** turn; the response says so, since the runtime is rebuilt per turn.
+- Typed `delegation` / `model` / `prompt_append` on `SessionGrant` rather than `overrides`, which is
+  opaque by contract and parsed only by a pack — and a chat has no pack, so anything there would be
+  read by nobody. `ResolvedProfile::grant_parts` keeps the mapping in one place.
+- `/profile` on the shared `Picker` (its third caller), an active-profile chip in the chat, and
+  `ConversationHistoryResponse.profile` so the chip is right from first paint rather than only after
+  a switch.
+- Refusals tested: unknown profile → 400 with the grant untouched (a typo must never resolve to "no
+  profile", which silently means the wider default); unknown conversation → 404; clearing allowed.
 
 ### 5. Per-session `delegation_mode`
 
@@ -189,6 +200,27 @@ Recorded because each was invisible in the failing direction:
   variant that fails to round-trip is a grant that does not survive a restart.
 - **Empty grant vs. no profile** must stay distinguishable, or "this chat may call nothing" is
   unsayable. The profile *name* carries the intent.
+
+## Blocked on: cron router failures (2026-07-28)
+
+Both `daily-planning` and `evening-debrief` failed that morning. The Telegram message leads with
+capability language, but **it is not a permissions problem**:
+
+```
+classify{model=deepseek/deepseek-v4-flash}: structured output did not decode — retrying once
+  error=failed to decode structured output: expected value at line 1 column 503
+        — finish_reason=Stop, completion_tokens=267, reply was 964 chars
+→ classification produced unusable output; degrading to Clarify
+→ dispatch decision downgraded by guard  downgrade=Unattended
+```
+
+The **router model returned unparseable JSON**, twice (the retry failed too), and `finish_reason=Stop`
+rules out truncation. The dispatcher correctly degraded to `Clarify`; the Unattended guard then
+blocked it because a cron holds no `AskHuman`. The capability advice in the message is the
+*consequence*, and acting on it — granting `AskHuman` — would be exactly wrong: it would leave an
+unattended 06:55 cron waiting on a person instead of failing.
+
+Worth fixing the message itself, which sent the operator down that path.
 
 ## Open questions
 
