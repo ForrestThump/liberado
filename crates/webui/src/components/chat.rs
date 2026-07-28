@@ -107,9 +107,17 @@ pub fn Chat(
     api_base: String,
     mut active_conv_id: Signal<Option<String>>,
     theme_name: Signal<String>,
+    /// Incognito mode (see `components/incognito.rs`): the next chat opened is RAM-only on the
+    /// daemon and discarded when it is left.
+    incognito: Signal<bool>,
 ) -> Element {
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut theme_name = theme_name;
+    // The live incognito session, if one has been opened. Tracked separately from `session` because
+    // it is the thing that has to be *discarded*, and by the time we notice we are leaving, `session`
+    // has often already moved on to whatever the user switched to.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut ghost_session = use_signal(|| None::<String>);
     let mut messages = use_signal(Vec::new);
     let mut input = use_signal(String::new);
     let mut sending = use_signal(|| false);
@@ -148,15 +156,61 @@ pub fn Chat(
                         messages.set(msgs);
                     }
                 });
-            } else {
+            } else if ghost_session.read().is_none() {
                 messages.set(Vec::new());
                 session.set(None);
             }
+            // An incognito chat is deliberately *not* an `active_conv_id`: it is not in the sidebar,
+            // so there is nothing there to highlight, and letting it set one would make the
+            // conversation list flicker at a row that does not exist. That leaves this effect seeing
+            // `None` and reading it as "fresh chat" — which would blank the live transcript the
+            // moment `sending` flips false at the end of the first turn. The guard above is what
+            // keeps a private chat on screen; `discard_ghost` is the only thing that clears it.
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
             let _ = &id;
             let _ = &base;
+        }
+    });
+
+    // Tear down the live incognito session: tell the daemon to drop it, and clear the pane it was
+    // showing. Idempotent — a second call with nothing live does nothing.
+    let base_for_discard = api_base.clone();
+    let discard_ghost = use_callback(move |_: ()| {
+        let Some(id) = ghost_session.write().take() else {
+            return;
+        };
+        crate::components::incognito::forget();
+        messages.set(Vec::new());
+        session.set(None);
+        let base = base_for_discard.clone();
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(crate::components::incognito::discard(base, id));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = (base, id);
+        }
+    });
+
+    // The one place "left the incognito chat" is decided, so the three ways out cannot disagree:
+    // the toggle going off, and picking any conversation from the sidebar (which includes New Chat,
+    // since that sets `active_conv_id` to `None` — and a fresh normal chat is still a chat that is
+    // not this one). Closing the tab is the fourth, handled by the `pagehide` hook below because no
+    // effect gets to run then.
+    use_effect(move || {
+        let still_on = incognito();
+        let switched_away = active_conv_id.read().is_some();
+        if ghost_session.read().is_some() && (!still_on || switched_away) {
+            discard_ghost.call(());
+        }
+    });
+
+    // Registered once, and only once the mode has actually been used — there is no reason to hold an
+    // unload handler for a window that has never opened a private chat.
+    use_effect(move || {
+        if incognito() {
+            crate::components::incognito::install_unload_discard();
         }
     });
 
@@ -265,12 +319,16 @@ pub fn Chat(
         open_stream(
             &base_for_submit,
             &text,
-            messages,
-            sending,
-            session,
-            active_conv_id,
-            should_set_title,
+            StreamTargets {
+                messages,
+                sending,
+                session,
+                active_conv_id,
+                should_set_title,
+                ghost_session,
+            },
             &base_for_title,
+            incognito(),
         );
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -284,14 +342,33 @@ pub fn Chat(
     });
 
     let conv_id = active_conv_id.read().clone();
+    let chat_cls = if incognito() {
+        "chat incognito"
+    } else {
+        "chat"
+    };
 
     rsx! {
         div {
-            class: "chat",
+            class: "{chat_cls}",
+
+            if incognito() {
+                // Stated where the conversation is, not only on the button in the header — the
+                // wrong thing to be unsure about mid-chat is whether it is being recorded. The
+                // second sentence is the honest limit of the promise.
+                div {
+                    class: "incognito-banner",
+                    span { class: "incognito-glyph", "\u{1F576}" }
+                    span {
+                        b { "Incognito." }
+                        " This chat is never written to disk and is discarded when you leave it. Actions the agent takes — notes, memories, files — still happen."
+                    }
+                }
+            }
 
             div {
                 class: "messages",
-                if messages.read().is_empty() && conv_id.is_none() && !sending() {
+                if messages.read().is_empty() && conv_id.is_none() && !sending() && ghost_session.read().is_none() {
                     div {
                         class: "empty-state",
                         p { "Start a conversation with Liberado." }
@@ -612,27 +689,56 @@ fn close_current_stream() {
     });
 }
 
+/// The chat state one live turn writes into.
+///
+/// Bundled rather than passed one-by-one: `open_stream` was already carrying five signals plus two
+/// base URLs, and incognito wanted two more. Signals are `Copy`, so this is a plain regrouping with
+/// no lifetime or ownership consequences — the SSE closures below each still capture only what they
+/// touch.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy)]
+struct StreamTargets {
+    messages: Signal<Vec<ChatMsg>>,
+    sending: Signal<bool>,
+    session: Signal<Option<String>>,
+    /// Left untouched by an incognito turn — that session is not in the sidebar to be selected.
+    active_conv_id: Signal<Option<String>>,
+    should_set_title: Signal<bool>,
+    /// Where an incognito turn records the session it opened, for the teardown paths.
+    ghost_session: Signal<Option<String>>,
+}
+
 #[cfg(target_arch = "wasm32")]
 fn open_stream(
     api_base: &str,
     message: &str,
-    mut messages: Signal<Vec<ChatMsg>>,
-    mut sending: Signal<bool>,
-    mut session: Signal<Option<String>>,
-    mut active_conv_id: Signal<Option<String>>,
-    mut should_set_title: Signal<bool>,
+    targets: StreamTargets,
     api_base_for_title: &str,
+    incognito: bool,
 ) {
+    let StreamTargets {
+        mut messages,
+        mut sending,
+        mut session,
+        mut active_conv_id,
+        mut should_set_title,
+        mut ghost_session,
+    } = targets;
     use std::rc::Rc;
     use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;
     use web_sys::{EventSource, MessageEvent};
 
     let encoded = urlencoding::encode(message);
+    // `incognito` describes how to *open* a session, so it rides only on the request that has no
+    // `session` — sending it alongside an existing id would suggest an already-durable conversation
+    // could be retroactively made private, which is not a thing the daemon can do.
     let url = match session.read().as_ref() {
         Some(id) => format!("{api_base}/api/chat/stream?message={encoded}&session={id}"),
+        None if incognito => format!("{api_base}/api/chat/stream?message={encoded}&incognito=1"),
         None => format!("{api_base}/api/chat/stream?message={encoded}"),
     };
+    let ghost_base = api_base.to_string();
     let source = match EventSource::new(&url) {
         Ok(s) => Rc::new(s),
         Err(_) => {
@@ -644,12 +750,21 @@ fn open_stream(
         *cell.borrow_mut() = Some(source.clone());
     });
 
-    // session -> record it and update active_conv_id so the sidebar highlights it.
+    // session -> record it, and (for a normal chat) set active_conv_id so the sidebar highlights it.
     {
         let on_session = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
-            if let Some(data) = e.data().as_string() {
-                if !data.is_empty() {
-                    session.set(Some(data.clone()));
+            if let Some(data) = e.data().as_string()
+                && !data.is_empty()
+            {
+                session.set(Some(data.clone()));
+                if incognito {
+                    // Recorded as the ghost instead of the active conversation: it is not in the
+                    // sidebar to be highlighted, and this is the id the teardown paths need. The
+                    // `pagehide` mirror is set here too — this is the first moment there is anything
+                    // to discard.
+                    crate::components::incognito::remember(&ghost_base, &data);
+                    ghost_session.set(Some(data));
+                } else {
                     active_conv_id.set(Some(data));
                 }
             }
@@ -767,7 +882,10 @@ fn open_stream(
             sending.set(false);
             CURRENT_SOURCE.with(|cell| *cell.borrow_mut() = None);
 
-            if should_set_title() {
+            // Skipped for incognito: a title exists to label a row in the sidebar, and an incognito
+            // session has no row. Naming it would only mean sending the first thing the user typed
+            // back over the wire for a field nobody will ever read.
+            if should_set_title() && !incognito {
                 should_set_title.set(false);
                 let title_opt = messages.read().iter().find(|m| m.role == "user").map(|m| {
                     let t = m.content.trim();

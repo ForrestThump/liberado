@@ -15,6 +15,7 @@
 //! across store instances, and concurrent appends.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use liberado_conversation_store::{
     Author, ConversationStore, NewConversation, NewNode, StoreError, Ulid,
@@ -34,6 +35,7 @@ fn new_convo(title: &str) -> NewConversation {
         title: Some(title.to_string()),
         parent_conversation: None,
         spawned_by: None,
+        ephemeral: false,
     }
 }
 
@@ -450,6 +452,7 @@ async fn create_stores_parent_conversation_lineage() {
             title: Some("child".into()),
             parent_conversation: Some(parent.id),
             spawned_by: None,
+            ephemeral: false,
         })
         .await
         .unwrap();
@@ -477,9 +480,189 @@ async fn create_stores_spawned_by_lineage() {
             title: Some("spawned".into()),
             parent_conversation: None,
             spawned_by: Some(node.id),
+            ephemeral: false,
         })
         .await
         .unwrap();
 
     assert_eq!(spawned.spawned_by, Some(node.id));
+}
+
+// ── Incognito: RAM-only sessions ─────────────────────────────────────────────────────────────
+//
+// The load-bearing claim of incognito mode is negative — that nothing reaches the disk — and a
+// negative claim is exactly the kind that rots silently, because no feature stops working when it
+// breaks. These assert on the filesystem itself rather than on any store API, so they keep holding
+// no matter how the store is refactored underneath.
+
+/// A conversation opened incognito.
+fn new_incognito(title: &str) -> NewConversation {
+    NewConversation {
+        title: Some(title.to_string()),
+        parent_conversation: None,
+        spawned_by: None,
+        ephemeral: true,
+    }
+}
+
+/// Every `*.jsonl` in `dir`, as a sorted list of file stems (which are session ids).
+fn logs_in(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("jsonl"))
+        .filter_map(|e| e.path().file_stem()?.to_str().map(str::to_string))
+        .collect();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn incognito_session_writes_no_file_at_all() {
+    let dir = tempdir().unwrap();
+    let store = store_at(dir.path()).await;
+
+    let ghost = store.create(new_incognito("private")).await.unwrap();
+    let node = store
+        .append(ghost.id, user_node(None, "something sensitive"))
+        .await
+        .unwrap();
+    // Retitling appends a fresh header line — a second write path, and the one most likely to be
+    // forgotten if the flag were threaded through call sites instead of checked at the chokepoint.
+    store
+        .set_title(ghost.id, "still private".into())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        logs_in(dir.path()),
+        Vec::<String>::new(),
+        "an incognito session must not leave a log behind — not a header, not a node, not a retitle"
+    );
+
+    // ...and it is fully usable in memory while it exists.
+    let path = store.leaf_path(ghost.id, None).await.unwrap();
+    assert_eq!(path.len(), 1);
+    assert_eq!(path[0].id, node.id);
+}
+
+#[tokio::test]
+async fn a_normal_session_alongside_an_incognito_one_is_still_durable() {
+    // Guards the obvious way to get this wrong: making the *store* ephemeral instead of the session.
+    let dir = tempdir().unwrap();
+    let store = store_at(dir.path()).await;
+
+    let kept = store.create(new_convo("keep me")).await.unwrap();
+    let ghost = store.create(new_incognito("forget me")).await.unwrap();
+    store
+        .append(kept.id, user_node(None, "durable"))
+        .await
+        .unwrap();
+    store
+        .append(ghost.id, user_node(None, "ephemeral"))
+        .await
+        .unwrap();
+
+    assert_eq!(logs_in(dir.path()), vec![kept.id.to_string()]);
+
+    // Reopening is the real test of durability, and of the ghost's absence.
+    let reopened = store_at(dir.path()).await;
+    assert_eq!(reopened.leaf_path(kept.id, None).await.unwrap().len(), 1);
+    assert!(
+        matches!(
+            reopened.leaf_path(ghost.id, None).await,
+            Err(StoreError::NotFound(_))
+        ),
+        "an incognito session must not survive a restart"
+    );
+}
+
+#[tokio::test]
+async fn incognito_sessions_are_hidden_from_listings_but_readable_by_id() {
+    let dir = tempdir().unwrap();
+    let store = store_at(dir.path()).await;
+
+    let listed = store.create(new_convo("in the sidebar")).await.unwrap();
+    let ghost = store
+        .create(new_incognito("not in the sidebar"))
+        .await
+        .unwrap();
+
+    let ids: Vec<Ulid> = store.list().await.unwrap().iter().map(|h| h.id).collect();
+    assert_eq!(
+        ids,
+        vec![listed.id],
+        "a listed incognito chat is not incognito"
+    );
+
+    // The surface that opened it still has to be able to load it back.
+    assert_eq!(store.header(ghost.id).await.unwrap().id, ghost.id);
+}
+
+#[tokio::test]
+async fn deleting_an_incognito_session_succeeds_and_removes_no_one_elses_log() {
+    let dir = tempdir().unwrap();
+    let store = store_at(dir.path()).await;
+
+    let kept = store.create(new_convo("bystander")).await.unwrap();
+    let ghost = store.create(new_incognito("private")).await.unwrap();
+    store
+        .append(ghost.id, user_node(None, "hello"))
+        .await
+        .unwrap();
+
+    // A session with no file must still delete cleanly — this is the path the WebUI takes on the way
+    // out, and an error here would surface as a failed teardown for a chat that was fine.
+    store.delete(ghost.id).await.unwrap();
+
+    assert!(matches!(
+        store.header(ghost.id).await,
+        Err(StoreError::NotFound(_))
+    ));
+    assert_eq!(logs_in(dir.path()), vec![kept.id.to_string()]);
+}
+
+#[tokio::test]
+async fn sweep_drops_idle_incognito_sessions_and_leaves_everything_else() {
+    let dir = tempdir().unwrap();
+    let store = store_at(dir.path()).await;
+
+    let durable = store.create(new_convo("durable")).await.unwrap();
+    let ghost = store.create(new_incognito("private")).await.unwrap();
+    store
+        .append(ghost.id, user_node(None, "just said this"))
+        .await
+        .unwrap();
+
+    // A generous idle window: nothing here is anywhere near that old, so nothing should go.
+    assert_eq!(store.sweep_ephemeral(Duration::from_secs(3600)).await, 0);
+    assert_eq!(store.header(ghost.id).await.unwrap().id, ghost.id);
+
+    // A zero window makes everything idle. Only the incognito session is eligible.
+    assert_eq!(store.sweep_ephemeral(Duration::ZERO).await, 1);
+    assert!(matches!(
+        store.header(ghost.id).await,
+        Err(StoreError::NotFound(_))
+    ));
+    assert_eq!(store.header(durable.id).await.unwrap().id, durable.id);
+    assert_eq!(logs_in(dir.path()), vec![durable.id.to_string()]);
+}
+
+#[tokio::test]
+async fn forking_an_incognito_session_stays_incognito() {
+    // Otherwise `fork` is a laundering path: branch the private chat, and the branch lands on disk
+    // carrying a copy of every message in it.
+    let dir = tempdir().unwrap();
+    let store = store_at(dir.path()).await;
+
+    let ghost = store.create(new_incognito("private")).await.unwrap();
+    store
+        .append(ghost.id, user_node(None, "secret"))
+        .await
+        .unwrap();
+
+    let fork = store.fork_session(ghost.id, None, None).await.unwrap();
+
+    assert!(fork.ephemeral);
+    assert_eq!(logs_in(dir.path()), Vec::<String>::new());
 }

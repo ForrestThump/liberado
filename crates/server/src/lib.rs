@@ -119,6 +119,27 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     let sessions_root = liberado_bootstrap::sessions_dir();
     let sessions = Arc::new(liberado_session_store::SessionStore::open(&sessions_root).await);
 
+    // Backstop for incognito chats whose surface never got to discard them — a closed laptop, a
+    // killed tab, a dropped connection. The WebUI deletes its own on the way out and that is what
+    // runs almost every time; this is what makes "almost" not the end of the story, because an
+    // incognito transcript sitting in daemon RAM until the next restart is exactly the thing the mode
+    // promises not to do. Nothing here touches the disk: an ephemeral session has no file to remove.
+    {
+        const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+        // Generous next to the sweep interval: this is the abandonment threshold, not an idle
+        // timeout, and a chat you walked away from mid-thought should still be there when you come
+        // back from lunch-adjacent distances.
+        const IDLE_BEFORE_SWEEP: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+        let sessions = Arc::clone(&sessions);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(SWEEP_EVERY);
+            loop {
+                ticker.tick().await;
+                sessions.sweep_ephemeral(IDLE_BEFORE_SWEEP).await;
+            }
+        });
+    }
+
     // Goal session hub first — the **one** execution engine (one-execution-engine plan E3/E4).
     // Life-ops demo always; coding when a provider is available; dispatch pack so cron/webhook/
     // delegate are hosted sessions, not a second engine. Built before chat so `delegate` can use it.

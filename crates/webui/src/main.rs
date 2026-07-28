@@ -8,6 +8,7 @@ mod theme;
 
 use components::chat::Chat;
 use components::dashboard::Dashboard;
+use components::incognito::IncognitoToggle;
 use components::sidebar::Sidebar;
 
 /// Absolute base URL of the daemon's HTTP API.
@@ -86,6 +87,11 @@ fn App() -> Element {
     // The active theme name, restored from the last choice. Chat writes it when `/theme set` lands.
     let theme_name = use_signal(crate::theme::saved_theme_name);
     let active_conv_id = use_signal(|| None::<String>);
+    // Incognito lives up here, not in `Chat`, because it is a mode the whole window is in: the
+    // header shows it, the body is tinted for it, and it has to survive a trip through the Status
+    // view and back. It always starts **off** — a privacy mode you did not switch on yourself, out
+    // of a store you forgot was there, is a mode you cannot reason about.
+    let incognito = use_signal(|| false);
     // `mut` because the header's menu button toggles it (see below).
     // Default collapsed on narrow (phone-width) viewports so the sidebar doesn't cover the chat
     // on first load — expanded by default everywhere else, matching prior behavior.
@@ -131,6 +137,7 @@ fn App() -> Element {
                     }
                     nav {
                         class: "nav",
+                        IncognitoToggle { on: incognito }
                         button { class: "{chat_cls}", onclick: move |_| view.set("chat"), "Chat" }
                         button { class: "{status_cls}", onclick: move |_| view.set("status"), "Status" }
                     }
@@ -150,6 +157,7 @@ fn App() -> Element {
                             api_base: base.clone(),
                             active_conv_id,
                             theme_name,
+                            incognito,
                         }
                     } else {
                         Dashboard { api_base: base.clone() }

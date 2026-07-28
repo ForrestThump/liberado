@@ -31,6 +31,13 @@ pub struct ChatRequest {
     /// works for both the JSON body and the `?session=â€¦` query.
     #[serde(default)]
     pub session: Option<Ulid>,
+    /// Open a RAM-only session for this chat: nothing written to disk, nothing in any listing.
+    ///
+    /// Only consulted when `session` is absent — it describes how to *create* one, so passing it
+    /// alongside an existing id cannot retroactively make that conversation private and is simply
+    /// ignored rather than quietly half-honored.
+    #[serde(default)]
+    pub incognito: bool,
 }
 
 /// Streaming chat â€” the shared client contract (see `docs/reference/api.md`). Returns
@@ -43,7 +50,7 @@ pub async fn chat_stream_post(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ChatRequest>,
 ) -> Sse<SseBody> {
-    chat_stream_core(state, req.message, req.session).await
+    chat_stream_core(state, req.message, req.session, req.incognito).await
 }
 
 /// `GET /api/chat/stream?message=â€¦` â€” the `EventSource`-friendly variant (browsers can't `POST` an
@@ -52,7 +59,7 @@ pub async fn chat_stream_get(
     State(state): State<Arc<AppState>>,
     Query(req): Query<ChatRequest>,
 ) -> Sse<SseBody> {
-    chat_stream_core(state, req.message, req.session).await
+    chat_stream_core(state, req.message, req.session, req.incognito).await
 }
 
 /// The SSE item stream `chat_stream_core` returns. Boxed because the function has several early
@@ -64,6 +71,7 @@ async fn chat_stream_core(
     state: Arc<AppState>,
     message: String,
     session: Option<Ulid>,
+    incognito: bool,
 ) -> Sse<SseBody> {
     let (tx, rx) = mpsc::channel::<AgentEvent>(64);
 
@@ -83,7 +91,11 @@ async fn chat_stream_core(
     // client *before* the agent events. A creation failure becomes a single `failed` event.
     let session = match session {
         Some(id) => id,
-        None => match sessions.create(None).await {
+        None => match if incognito {
+            sessions.create_incognito(None).await
+        } else {
+            sessions.create(None).await
+        } {
             Ok(id) => id,
             Err(e) => {
                 tracing::warn!(error = %e, "chat stream could not create a conversation");

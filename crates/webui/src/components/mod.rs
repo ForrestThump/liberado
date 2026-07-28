@@ -1,5 +1,6 @@
 pub mod chat;
 pub mod dashboard;
+pub mod incognito;
 pub mod markdown;
 pub mod mcp_panel;
 pub mod model_browser;

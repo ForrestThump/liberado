@@ -59,6 +59,17 @@ pub struct SessionHeader {
     /// scanning its log.
     #[serde(default)]
     pub awaiting_input: bool,
+
+    /// **Incognito.** This session lives in RAM and is never written to disk — see
+    /// [`SessionStore::path_for`](crate::SessionStore) and the module docs on why that is one check
+    /// rather than a second storage backend. It is also hidden from
+    /// [`list_sessions`](crate::SessionStore::list_sessions), so it never reaches a sidebar.
+    ///
+    /// Serialized only so the field round-trips if some future caller *does* write one; in practice
+    /// an ephemeral session has no file for this to appear in, which is the whole point. Skipped when
+    /// false so existing logs are byte-identical.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ephemeral: bool,
 }
 
 fn pending() -> SessionStatus {
@@ -84,6 +95,7 @@ impl SessionHeader {
             finished_at: None,
             result: None,
             awaiting_input: false,
+            ephemeral: false,
         }
     }
 
@@ -138,4 +150,7 @@ pub struct NewSession {
     pub correlation_id: Option<String>,
     pub visibility: Visibility,
     pub grant: SessionGrant,
+    /// Open this session in RAM only — nothing about it ever touches the disk. See
+    /// [`SessionHeader::ephemeral`].
+    pub ephemeral: bool,
 }

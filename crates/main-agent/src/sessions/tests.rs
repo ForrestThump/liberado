@@ -235,6 +235,7 @@ async fn list_backfills_title_from_existing_user_message() {
             title: None,
             parent_conversation: None,
             spawned_by: None,
+            ephemeral: false,
         })
         .await
         .unwrap();

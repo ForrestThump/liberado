@@ -4045,6 +4045,7 @@ dependencies = [
  "chrono",
  "dioxus",
  "getrandom 0.2.17",
+ "js-sys",
  "liberado-commands",
  "liberado-theme",
  "pulldown-cmark",
