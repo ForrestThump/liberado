@@ -54,16 +54,54 @@ function Write-Step([string]$msg) {
     Write-Host "==> $msg" -ForegroundColor Cyan
 }
 
+# Run a native executable and return its exit code, WITHOUT letting anything it prints to stderr
+# abort the script.
+#
+# Windows PowerShell 5.1 turns each stderr line from a native command into an ErrorRecord, and with
+# `$ErrorActionPreference = "Stop"` that record terminates — so a command that succeeded, exit code
+# 0 and all, kills the run because it was chatty. `docker compose` announces "Container liberado
+# Recreate" on stderr, which meant every deploy died immediately after recreating the container,
+# leaving it in `Created` and never started. Two deploys in a row had to be finished by hand.
+#
+# `$ErrorActionPreference` set here is function-scoped and restored on return, so cmdlet errors
+# everywhere else in the script still stop the run. Exit codes remain the only success signal for
+# native commands, which is what they were supposed to be all along.
+#
+# Args are passed as an array rather than a scriptblock on purpose: a scriptblock would resolve its
+# variables against whatever scope happened to be on the call stack, which is exactly the kind of
+# spooky action this function exists to remove.
+# Output goes straight to the host rather than down the pipeline, so the caller's `$code` is the
+# exit code and nothing else. Returning both meant `$code` was an array whose first elements were
+# the remote command's stdout, and every `-ne 0` comparison against it was true — the preflight
+# failed with "ssh failed (exit ok 26.1.5+dfsg1 compose-ok 0)", which at least named its own bug.
+function Invoke-Native([string]$Exe, [string[]]$Arguments) {
+    $ErrorActionPreference = "Continue"
+    & $Exe @Arguments | Out-Host
+    return $LASTEXITCODE
+}
+
 function Invoke-Ssh([string]$cmd) {
-    & ssh -o BatchMode=yes -o ConnectTimeout=15 $SshHost $cmd
-    if ($LASTEXITCODE -ne 0) {
-        throw "ssh failed (exit $LASTEXITCODE): $cmd"
+    $code = Invoke-Native "ssh" @("-o", "BatchMode=yes", "-o", "ConnectTimeout=15", $SshHost, $cmd)
+    if ($code -ne 0) {
+        throw "ssh failed (exit $code): $cmd"
     }
 }
 
 function Invoke-SshAllowFail([string]$cmd) {
-    & ssh -o BatchMode=yes -o ConnectTimeout=15 $SshHost $cmd
-    return $LASTEXITCODE
+    return Invoke-Native "ssh" @("-o", "BatchMode=yes", "-o", "ConnectTimeout=15", $SshHost, $cmd)
+}
+
+# Docker's own word for what the container is doing: `running`, `created`, `exited`, or `missing`
+# when there is no such container.
+# Not routed through `Invoke-Native`: this is the one call whose *output* is the answer, and that
+# helper deliberately sends output to the host. Same local `$ErrorActionPreference` trick.
+function Get-ContainerState {
+    $ErrorActionPreference = "Continue"
+    $out = & ssh -o BatchMode=yes -o ConnectTimeout=15 $SshHost `
+        "docker inspect -f '{{.State.Status}}' liberado 2>/dev/null || echo missing"
+    $lines = @($out)
+    if ($lines.Count -eq 0) { return "unknown" }
+    return ([string]$lines[-1]).Trim()
 }
 
 function ConvertTo-SshSingleQuoted([string]$script) {
@@ -113,17 +151,17 @@ if (-not $SkipBuild) {
         "--exclude=*/.git",
         "-C", $root
     ) + $packList
-    & tar @tarArgs
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tgz)) {
-        throw "tar pack failed (exit $LASTEXITCODE)"
+    $code = Invoke-Native "tar" $tarArgs
+    if ($code -ne 0 -or -not (Test-Path $tgz)) {
+        throw "tar pack failed (exit $code)"
     }
     $sizeMb = [math]::Round((Get-Item $tgz).Length / 1MB, 1)
     Write-Host "  packed $tgz ($sizeMb MB)" -ForegroundColor DarkGray
 
     # --- 2. Upload ---
     Write-Step "Upload to ${SshHost}:~/liberado-src.tgz"
-    & scp -o BatchMode=yes -o ConnectTimeout=15 $tgz "${SshHost}:~/liberado-src.tgz"
-    if ($LASTEXITCODE -ne 0) { throw "scp failed (exit $LASTEXITCODE)" }
+    $code = Invoke-Native "scp" @("-o", "BatchMode=yes", "-o", "ConnectTimeout=15", $tgz, "${SshHost}:~/liberado-src.tgz")
+    if ($code -ne 0) { throw "scp failed (exit $code)" }
     Remove-Item $tgz -Force -ErrorAction SilentlyContinue
 
     # --- 3. Extract on host (preserve turbovault unless refresh) ---
@@ -162,11 +200,17 @@ cd $RemoteBuild
 : > ~/liberado-build.log
 docker build -t $Image . 2>&1 | tee ~/liberado-build.log
 "@
-    & ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 $SshHost "bash -lc $(ConvertTo-SshSingleQuoted $buildCmd)"
-    if ($LASTEXITCODE -ne 0) {
+    # `docker build` writes its entire progress stream to stderr, so this is the call that most
+    # obviously needs `Invoke-Native` — it was only ever surviving because the build's own `tee`
+    # merged the streams first.
+    $code = Invoke-Native "ssh" @(
+        "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=30",
+        $SshHost, "bash -lc $(ConvertTo-SshSingleQuoted $buildCmd)"
+    )
+    if ($code -ne 0) {
         Write-Host "Build failed. Last log lines:" -ForegroundColor Red
-        Invoke-SshAllowFail "tail -n 40 ~/liberado-build.log" | Out-Host
-        throw "docker build failed (exit $LASTEXITCODE)"
+        $null = Invoke-SshAllowFail "tail -n 40 ~/liberado-build.log"
+        throw "docker build failed (exit $code)"
     }
     Write-Host "  image $Image built" -ForegroundColor Green
 }
@@ -176,16 +220,18 @@ if (-not $SkipConfig) {
     Write-Step "Sync deploy/homelab/config → ${SshHost}:$RemoteService/config"
     $cfgLocal = Join-Path $root "deploy\homelab\config"
     if (-not (Test-Path $cfgLocal)) { throw "missing $cfgLocal" }
-    & scp -o BatchMode=yes `
-        (Join-Path $cfgLocal "topology.toml") `
-        (Join-Path $cfgLocal "policy.toml") `
+    $code = Invoke-Native "scp" @(
+        "-o", "BatchMode=yes",
+        (Join-Path $cfgLocal "topology.toml"),
+        (Join-Path $cfgLocal "policy.toml"),
         "${SshHost}:${RemoteService}/config/"
-    if ($LASTEXITCODE -ne 0) { throw "config scp failed (exit $LASTEXITCODE)" }
+    )
+    if ($code -ne 0) { throw "config scp failed (exit $code)" }
 
     $composeLocal = Join-Path $root "deploy\homelab\docker-compose.yml"
     if (Test-Path $composeLocal) {
-        & scp -o BatchMode=yes $composeLocal "${SshHost}:${RemoteService}/docker-compose.yml"
-        if ($LASTEXITCODE -ne 0) { throw "compose scp failed (exit $LASTEXITCODE)" }
+        $code = Invoke-Native "scp" @("-o", "BatchMode=yes", $composeLocal, "${SshHost}:${RemoteService}/docker-compose.yml")
+        if ($code -ne 0) { throw "compose scp failed (exit $code)" }
     }
 }
 
@@ -193,6 +239,29 @@ if (-not $SkipConfig) {
 Write-Step "Recreate liberado container"
 Invoke-Ssh "docker compose -f $RemoteService/docker-compose.yml up -d --force-recreate"
 Start-Sleep -Seconds 5
+
+# `up -d` returning 0 is not the same as the container running: a compose run interrupted between
+# `Recreated` and `Started` leaves it in `Created`, which looks like nothing happened. That is
+# exactly the state two aborted deploys left behind, and nothing here noticed — the health check
+# below then reported a perfectly healthy API belonging to the *previous* container and called the
+# deploy a success. Assert the state rather than infer it from an exit code.
+#
+# NOTE: keep string literals in this file ASCII. It is UTF-8 with no BOM, so Windows PowerShell 5.1
+# decodes it as the ANSI codepage — and an em dash's third UTF-8 byte (0x94) lands on CP1252's
+# closing smart double-quote, which PS accepts as a string delimiter. One em dash inside a
+# double-quoted string therefore ends that string early and swallows everything up to the next
+# quote, braces included. Comments are safe (they end at the newline); strings are not.
+if ((Get-ContainerState) -ne "running") {
+    $state = Get-ContainerState
+    Write-Host "  container is '$state', not running - starting it" -ForegroundColor Yellow
+    Invoke-Ssh "docker compose -f $RemoteService/docker-compose.yml up -d"
+    Start-Sleep -Seconds 8
+    $state = Get-ContainerState
+    if ($state -ne "running") {
+        throw "liberado container is '$state' after recreate - check: ssh $SshHost 'docker logs liberado --tail 80'"
+    }
+}
+Write-Host "  container running" -ForegroundColor Green
 
 # --- 7. Health ---
 Write-Step "Health checks"

@@ -45,6 +45,23 @@ function Write-Step([string]$msg) {
     Write-Host "==> $msg" -ForegroundColor Cyan
 }
 
+# Run a native executable and return its exit code, without letting its stderr abort the script.
+#
+# Windows PowerShell 5.1 turns every stderr line from a native command into an ErrorRecord, and
+# under `$ErrorActionPreference = "Stop"` that record terminates the run — so a successful command
+# fails the deploy merely for being chatty. `dx` prints "warning: Waiting for cargo-metadata..." to
+# stderr and killed this script before it packed anything. See the twin of this helper in
+# deploy-homelab.ps1, where `docker compose` did the same thing with worse consequences.
+#
+# `$ErrorActionPreference` here is function-scoped and restored on return, so real cmdlet errors
+# elsewhere still stop the script.
+# Output goes to the host, not down the pipeline, so the caller's `$code` is the exit code alone.
+function Invoke-Native([string]$Exe, [string[]]$Arguments) {
+    $ErrorActionPreference = "Continue"
+    & $Exe @Arguments | Out-Host
+    return $LASTEXITCODE
+}
+
 $dist = Join-Path $root "target\dx\liberado-webui\release\web\public"
 
 if (-not $SkipBuild) {
@@ -60,8 +77,10 @@ if (-not $SkipBuild) {
     # `dx` must run under the rustup-managed cargo: the standalone MSI Rust that shadows it on PATH
     # has no wasm32 std, and the failure is the misleading "can't find crate for `core`".
     $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
-    & dx build -r -p liberado-webui --web
-    # dx exits 0 even when the cargo build inside it fails, so trust the artifact, not $LASTEXITCODE.
+    # dx exits 0 even when the cargo build inside it fails, so the exit code is discarded and the
+    # artifact check below is what decides. It still has to go through Invoke-Native, or dx's stderr
+    # warnings terminate the script before that check ever runs.
+    $null = Invoke-Native "dx" @("build", "-r", "-p", "liberado-webui", "--web")
 }
 
 $index = Join-Path $dist "index.html"
@@ -77,14 +96,14 @@ if (Test-Path $tgz) { Remove-Item $tgz -Force }
 # rustup/cargo PATH prepend above makes which one wins depend on the machine.
 $tarExe = Join-Path $env:SystemRoot "System32\tar.exe"
 if (-not (Test-Path $tarExe)) { $tarExe = "tar" }
-& $tarExe -czf $tgz -C $dist .
-if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tgz)) { throw "tar pack failed (exit $LASTEXITCODE)" }
+$code = Invoke-Native $tarExe @("-czf", $tgz, "-C", $dist, ".")
+if ($code -ne 0 -or -not (Test-Path $tgz)) { throw "tar pack failed (exit $code)" }
 $sizeKb = [math]::Round((Get-Item $tgz).Length / 1KB)
 Write-Host "  $tgz ($sizeKb KB gzipped)" -ForegroundColor DarkGray
 
 Write-Step "Upload to ${SshHost}:$RemoteDist"
-& scp -o BatchMode=yes -o ConnectTimeout=15 $tgz "${SshHost}:~/liberado-webui-dist.tgz"
-if ($LASTEXITCODE -ne 0) { throw "scp failed (exit $LASTEXITCODE)" }
+$code = Invoke-Native "scp" @("-o", "BatchMode=yes", "-o", "ConnectTimeout=15", $tgz, "${SshHost}:~/liberado-webui-dist.tgz")
+if ($code -ne 0) { throw "scp failed (exit $code)" }
 Remove-Item $tgz -Force -ErrorAction SilentlyContinue
 
 # Unpack to a staging dir first, so a half-extracted tree is never the one being served, then
@@ -108,8 +127,11 @@ rm -f ~/liberado-webui-dist.tgz
 echo swap-ok
 "@
 Write-Step "Refresh bundle contents in place (keeps the bind-mount inode)"
-& ssh -o BatchMode=yes -o ConnectTimeout=15 $SshHost "bash -lc '$($remote -replace "'", "'\''")'"
-if ($LASTEXITCODE -ne 0) { throw "remote swap failed (exit $LASTEXITCODE)" }
+$code = Invoke-Native "ssh" @(
+    "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", $SshHost,
+    "bash -lc '$($remote -replace "'", "'\''")'"
+)
+if ($code -ne 0) { throw "remote swap failed (exit $code)" }
 
 Write-Step "Verify"
 try {
