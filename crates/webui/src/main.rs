@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 use dioxus::prelude::*;
 
+mod back_nav;
 mod components;
 mod theme;
 
@@ -95,10 +96,58 @@ fn App() -> Element {
     // "New Chat" as an event rather than a state change — see the button in `sidebar.rs`. Owned here
     // because the sidebar raises it and the chat acts on it.
     let new_chat_nonce = use_signal(|| 0u64);
+    // The `/model` and `/theme` pickers. They are opened from inside `Chat`, but they live here with
+    // every other dismissible layer, because the Back gesture needs one place that knows what is
+    // open and in what order (see the block below and `back_nav.rs`).
+    let model_browser_open = use_signal(|| false);
+    let theme_browser_open = use_signal(|| false);
     // `mut` because the header's menu button toggles it (see below).
     // Default collapsed on narrow (phone-width) viewports so the sidebar doesn't cover the chat
     // on first load — expanded by default everywhere else, matching prior behavior.
     let mut sidebar_collapsed = use_signal(is_narrow_viewport);
+
+    // ── Back gesture ────────────────────────────────────────────────────────────────────────
+    //
+    // Swipe-back on a phone should close whatever is on top, not leave the app. `back_nav` keeps one
+    // history entry per open layer; these two blocks are the only place that says what a "layer" is,
+    // so the count and the closer cannot disagree about it.
+    //
+    // The sidebar counts only where it is an overlay. On a wide screen it is a persistent panel that
+    // starts open, which would mean a guard entry from first paint and a Back press that collapses
+    // the conversation list for no reason — the same distinction `collapse_after_pick` draws.
+    let sidebar_is_a_layer = move || !sidebar_collapsed() && is_narrow_viewport();
+
+    use_hook(|| {
+        let mut view = view;
+        let mut sidebar_collapsed = sidebar_collapsed;
+        let mut model_browser_open = model_browser_open;
+        let mut theme_browser_open = theme_browser_open;
+        back_nav::install(move || {
+            // Innermost first: a picker sits on top of the sidebar, which sits on top of the view.
+            if model_browser_open() {
+                model_browser_open.set(false);
+            } else if theme_browser_open() {
+                theme_browser_open.set(false);
+            } else if !sidebar_collapsed() && is_narrow_viewport() {
+                sidebar_collapsed.set(true);
+            } else if view() != "chat" {
+                view.set("chat");
+            }
+        });
+    });
+
+    let back_depth = use_memo(move || {
+        [
+            model_browser_open(),
+            theme_browser_open(),
+            sidebar_is_a_layer(),
+            view() != "chat",
+        ]
+        .iter()
+        .filter(|open| **open)
+        .count()
+    });
+    use_effect(move || back_nav::sync_depth(back_depth()));
 
     let chat_cls = if view() == "chat" {
         "nav-btn active"
@@ -163,6 +212,8 @@ fn App() -> Element {
                             theme_name,
                             incognito,
                             new_chat_nonce,
+                            model_browser_open,
+                            theme_browser_open,
                         }
                     } else {
                         Dashboard { api_base: base.clone() }

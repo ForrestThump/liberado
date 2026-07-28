@@ -113,7 +113,17 @@ pub fn Chat(
     /// Bumped by the sidebar's "New Chat". An explicit request, because it cannot be inferred from
     /// `active_conv_id` — an incognito chat never sets one.
     new_chat_nonce: Signal<u64>,
+    /// The `/model` picker. Owned by `App` rather than here, along with every other dismissible
+    /// layer, so that one place can order them for the Back gesture (see `back_nav.rs`). Chat still
+    /// opens it — the command that asks for it is dispatched from `submit` below.
+    model_browser_open: Signal<bool>,
+    /// The `/theme` picker. Same ownership story as `model_browser_open`.
+    theme_browser_open: Signal<bool>,
 ) -> Element {
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut model_browser_open = model_browser_open;
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut theme_browser_open = theme_browser_open;
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut theme_name = theme_name;
     // Written back when a sidebar pick takes the user out of a private chat — the mode has to follow
@@ -132,13 +142,6 @@ pub fn Chat(
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut session = use_signal(|| None::<String>);
     let mut should_set_title = use_signal(|| false);
-    // `/model` asks for a picker; this is it. Owned here because the command that opens it is
-    // dispatched from `submit` below — and that dispatch is wasm-only, so on a native build the
-    // only writer is cfg'd out and the binding merely looks immutable.
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
-    let mut model_browser_open = use_signal(|| false);
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
-    let mut theme_browser_open = use_signal(|| false);
 
     let base_for_effect = api_base.clone();
     let base_for_submit = api_base.clone();
