@@ -236,6 +236,7 @@ async fn list_backfills_title_from_existing_user_message() {
             parent_conversation: None,
             spawned_by: None,
             ephemeral: false,
+            grant: Default::default(),
         })
         .await
         .unwrap();
@@ -1802,5 +1803,155 @@ async fn compaction_tail_copies_are_not_visible_in_rendered_history() {
         user_turns_after,
         user_turns_before + 1,
         "compaction must not inflate the user-turn count that fork/rewind indexes against"
+    );
+}
+
+// ── Per-session grants (session profiles, step 2) ────────────────────────────────────────────
+//
+// `session_capabilities` decides what authority a turn runs under. Getting it wrong is invisible:
+// too narrow silently removes tools from working chats, too wide silently ignores a profile. Both
+// look like a normal turn.
+
+/// The migration case, and the one that would have broken every existing conversation. Chats created
+/// before profiles carry an empty default grant; reading that literally would leave them with no
+/// tools at all.
+#[tokio::test]
+async fn a_conversation_with_no_profile_runs_under_the_process_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let process_grant =
+        CapabilitySet::from_iter([liberado_common::Capability::ExecuteMcp("tasks-mcp".into())]);
+    let sessions = sessions_at(dir.path(), vec![]).await.with_guards(
+        Vec::new(),
+        process_grant.clone(),
+        PathBuf::new(),
+        ProposalSigner::random(),
+    );
+
+    let id = sessions.create(None).await.unwrap();
+
+    assert_eq!(
+        sessions.session_capabilities(id).await,
+        process_grant,
+        "an unprofiled chat must keep the daemon's grant, not inherit the store's empty default"
+    );
+}
+
+/// A named profile is the session's authority, replacing the process grant rather than intersecting
+/// with it — otherwise a profile could never add an MCP the face agent's own grant lacks, which is
+/// most of the point.
+#[tokio::test]
+async fn a_named_profile_replaces_the_process_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let process_grant =
+        CapabilitySet::from_iter([liberado_common::Capability::ExecuteMcp("tasks-mcp".into())]);
+    let sessions = sessions_at(dir.path(), vec![]).await.with_guards(
+        Vec::new(),
+        process_grant,
+        PathBuf::new(),
+        ProposalSigner::random(),
+    );
+
+    let profile = SessionGrant {
+        capabilities: CapabilitySet::from_iter([
+            liberado_common::Capability::ExecuteMcp("spider-mcp".into()),
+            liberado_common::Capability::ExecuteTool("turbovault:read_note".into()),
+        ]),
+        profile: Some("basic-chat".into()),
+        overrides: serde_json::Value::Null,
+    };
+    let id = sessions
+        .create_with_grant(None, profile.clone())
+        .await
+        .unwrap();
+
+    let effective = sessions.session_capabilities(id).await;
+    assert!(effective.grants_tool("spider-mcp:fetch"));
+    assert!(effective.grants_tool("turbovault:read_note"));
+    assert!(
+        !effective.grants_tool("turbovault:write_note"),
+        "the per-tool half of the profile must survive the round trip through the store"
+    );
+    assert!(
+        !effective.grants_tool("tasks-mcp:add"),
+        "the profile replaces the process grant; it does not add to it"
+    );
+}
+
+/// "This chat may call nothing" has to be sayable, and distinguishable from "no profile chosen".
+/// The profile *name* is what carries that intent — an empty capability set alone cannot.
+#[tokio::test]
+async fn a_named_profile_granting_nothing_is_honored_not_treated_as_unset() {
+    let dir = tempfile::tempdir().unwrap();
+    let process_grant =
+        CapabilitySet::from_iter([liberado_common::Capability::ExecuteMcp("tasks-mcp".into())]);
+    let sessions = sessions_at(dir.path(), vec![]).await.with_guards(
+        Vec::new(),
+        process_grant,
+        PathBuf::new(),
+        ProposalSigner::random(),
+    );
+
+    let id = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                capabilities: CapabilitySet::empty(),
+                profile: Some("no-tools".into()),
+                overrides: serde_json::Value::Null,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        sessions.session_capabilities(id).await,
+        CapabilitySet::empty()
+    );
+}
+
+/// The grant is on the header line, so it must survive a restart like any other session state.
+#[tokio::test]
+async fn a_profile_survives_reopening_the_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let grant = SessionGrant {
+        capabilities: CapabilitySet::from_iter([liberado_common::Capability::ExecuteTool(
+            "turbovault:read_note".into(),
+        )]),
+        profile: Some("basic-chat".into()),
+        overrides: serde_json::Value::Null,
+    };
+
+    let id = {
+        let sessions = sessions_at(dir.path(), vec![]).await;
+        sessions.create_with_grant(None, grant).await.unwrap()
+    };
+
+    let reopened = sessions_at(dir.path(), vec![]).await;
+    let header = reopened.store.header(id).await.unwrap();
+    assert_eq!(header.grant.profile.as_deref(), Some("basic-chat"));
+    assert!(
+        header
+            .grant
+            .capabilities
+            .grants_tool("turbovault:read_note")
+    );
+}
+
+/// A lookup failure must not quietly become an authority change in either direction.
+#[tokio::test]
+async fn an_unknown_session_falls_back_to_the_process_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let process_grant =
+        CapabilitySet::from_iter([liberado_common::Capability::ExecuteMcp("tasks-mcp".into())]);
+    let sessions = sessions_at(dir.path(), vec![]).await.with_guards(
+        Vec::new(),
+        process_grant.clone(),
+        PathBuf::new(),
+        ProposalSigner::random(),
+    );
+
+    assert_eq!(
+        sessions.session_capabilities(Ulid::new()).await,
+        process_grant
     );
 }
