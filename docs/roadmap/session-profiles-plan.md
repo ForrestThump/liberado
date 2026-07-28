@@ -1,6 +1,6 @@
 # Session Profiles — Design & Roadmap
 
-**Status**: steps 1–3 landed on `feat/session-profiles` (2026-07-28). Steps 3–6 open.
+**Status**: steps 1–3 landed on `feat/session-profiles` (2026-07-28). Steps 4–6 open.
 Design settled with the operator in conversation on 2026-07-28; the decisions in
 [Settled decisions](#settled-decisions) are answers to direct questions, not proposals.
 
