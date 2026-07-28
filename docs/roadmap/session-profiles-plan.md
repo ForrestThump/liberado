@@ -202,6 +202,71 @@ Two gaps found by looking at the running UI, both invisible in the code:
 The Status screen got a **read-only** list, not a switcher: everything else there is daemon-scoped,
 so a switcher would have to ask which conversation you meant — the chat's question.
 
+### 7. Derived system prompts — **not started**
+
+A profile already owns both halves of the thing that drifts: a tool set (`mcps`) and prompt text
+(`prompt_append`). Today they are written independently, so a profile can instruct the model to use
+a tool it was never granted, and nothing anywhere notices. That is the VTCode failure mode exactly —
+their `prompts.coder` named `write_file`/`list_dir`/`read_file` when the shipped toolset exposed
+`unified_file`/`unified_search`, and their system prompt told the model to use `task_tracker`, which
+was not among the 17 tools it was offered. Two sources of truth about what exists, no validation
+between them, and the symptom (a model that explores and never acts) looks nothing like the cause.
+
+**Single-source the value; do not merely keep two copies agreeing.** The weak version of this fix
+generates prompt prose from config, so the two are consistent at load time. The strong version
+renders the prompt's tool section from *the same* `Vec<ToolDef>` handed to the provider — one value,
+two renderings — so disagreement is unrepresentable rather than prevented. Prefer the strong version
+wherever a prompt states a fact the runtime already holds.
+
+**Split by provenance, not by config key.** Two kinds of text live in a system prompt and they want
+opposite treatment:
+
+- *Facts about this session* — which tools exist, whether the session may ask a human, timezone,
+  vault root. The resolved profile already knows these; hand-writing them duplicates a source of
+  truth. **Derive.**
+- *Voice, priority, judgment* — the non-negotiable role framing in `HUMAN_INTERFACE_SYSTEM_PROMPT`,
+  "be concise", "do not skip clarifying questions". Not derivable from any config, and encoding it
+  in TOML would be strictly worse than prose in a Rust const. **Keep authored.**
+
+Append the derived part as a delimited block; do not weave it into tuned paragraphs. VTCode is
+evidence that prompt *structure* is load-bearing: their `system_prompt_mode = "minimal"` experiment
+made behaviour worse, not better (14 turns vs. the usual 4-6, the same file re-read seven times in
+overlapping chunks), which says a mechanically thinned prompt can cost more than the tokens it saves.
+
+**The capability statement is the largest win.** A session's prompt never says what the session
+*cannot* do. A cron holds no `AskHuman`, and nothing tells the model that. Derived, it would state
+plainly: *you cannot ask the human anything; if you lack information, report what is missing and
+stop.* Note honestly what this does and does not buy — it would **not** have prevented the 2026-07-28
+cron failure below, which degraded to `Clarify` from a JSON parse failure with no model decision
+involved. It closes the adjacent case, where an unattended model legitimately chooses `Clarify`
+because nothing told it clarification was impossible.
+
+Mechanism fits what step 5 already established: the derived block is composed **per turn** and
+injected as a system message alongside `prompt_append`, never written into the conversation's root
+node — the store is append-only and the root is persisted, so a session whose tool set changes must
+not rewrite history to say so. Resolve it in the same `turn_settings` lookup, for the same reason
+that lookup exists: so a switch cannot land between two reads.
+
+Precedent already in the tree: the daemon prepends `Local time: … (America/Chicago)` to cron goals.
+That is a derived prompt fact, just ad hoc and in one place.
+
+**Build the inspector first.** Once a prompt is composed rather than written, it can be printed:
+
+```
+liberado prompt --profile basic-chat      # exactly what the model will see
+```
+
+This is the diagnostic VTCode needed and did not have — "success but no writes" survived eight
+hypotheses partly because nobody could cheaply compare what the model was *told* against what it was
+*offered*. A hand-written const cannot offer this once appends and overrides land on top of it.
+
+**Bound the variation, or this becomes the disease it cures.** Every conditional is a variation
+point; four booleans is sixteen possible prompts, none of which a human ever reads. Keep the derived
+block mechanical — lists and flat statements, no branching rhetoric. Anything needing an `if` inside
+a sentence belongs in the authored half. One snapshot test per shipped profile, asserting both
+directions (the `delegate` tool appears iff `delegation`, a tool absent from `mcps` appears nowhere
+in the text).
+
 ## Traps found while building
 
 Recorded because each was invisible in the failing direction:
