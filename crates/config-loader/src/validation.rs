@@ -47,6 +47,34 @@ pub fn validate_merged_config(config: &Config) -> Result<(), ConfigLoadError> {
                         )));
                     }
                 }
+                // Only the server half is checkable: `topology.mcps` is wiring, and an MCP's tool
+                // names are not known until it connects. So validate the prefix and, above all,
+                // insist there *is* one.
+                //
+                // A missing `:` is the trap worth catching here. `ExecuteTool("read_note")` parses
+                // fine and then means "the MCP named read_note" everywhere downstream — a grant that
+                // authorizes nothing, silently, in a file whose whole job is to authorize things.
+                Capability::ExecuteTool(qualified) => {
+                    let Some((mcp, tool)) = qualified.split_once(':') else {
+                        return Err(invalid(format!(
+                            "grant has ExecuteTool '{qualified}' with no ':' — it must be \
+                             '<mcp>:<tool>' (e.g. 'turbovault:read_note'), or it silently grants \
+                             nothing. Use ExecuteMcp to grant a whole server."
+                        )));
+                    };
+                    if tool.is_empty() {
+                        return Err(invalid(format!(
+                            "grant has ExecuteTool '{qualified}' with an empty tool name — use \
+                             ExecuteMcp = '{mcp}' to grant the whole server"
+                        )));
+                    }
+                    if !config.topology.mcps.iter().any(|c| c.name == mcp) {
+                        return Err(invalid(format!(
+                            "grant references unknown MCP '{mcp}' in ExecuteTool '{qualified}' \
+                             (not in topology.mcps)"
+                        )));
+                    }
+                }
                 // Self-contained: names no zone and no MCP, so there is nothing to resolve.
                 Capability::AskHuman => {}
             }

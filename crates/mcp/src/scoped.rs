@@ -7,29 +7,73 @@
 //!
 //! When `allowed_mcps` is empty, every tool passes through (no scoping) — this preserves the
 //! default behavior when no advisor filtering is desired.
+//!
+//! # That empty-means-everything default is fail-open
+//!
+//! It is correct for the advisor ("I selected nothing, so do not filter") and dangerous for anything
+//! else. A caller deriving the allow-list from a *capability grant* wants the opposite: a grant that
+//! names no MCP must show no tools. Building this with `ScopedRuntime::new(inner, vec![])` from a
+//! grant would hand the model the entire fleet.
+//!
+//! [`ScopedRuntime::from_capabilities`] is the constructor to use for a grant. It answers the
+//! authorization question per tool via [`CapabilitySet::grants_tool`], so a grant of
+//! `ExecuteTool("turbovault:read_note")` shows exactly that one tool — expressible no other way —
+//! and an empty grant shows nothing.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use liberado_common::mcp_of;
+use liberado_common::{CapabilitySet, mcp_of};
 use liberado_executor::ToolRuntime;
 use liberado_provider::{ToolDef, ToolInvocation};
 
-/// A runtime wrapper that limits the visible tool surface to a set of allowed MCPs.
+/// How a [`ScopedRuntime`] decides what is in scope.
+enum Scope {
+    /// Allowed MCP names; empty means pass-through. The tool-advisor's shape — see the module docs
+    /// on why this default must not be reused for capability grants.
+    Mcps(Vec<String>),
+    /// A capability grant, consulted per tool. Never passes through: no grant, no tools.
+    Grant(CapabilitySet),
+}
+
+/// A runtime wrapper that limits the visible tool surface.
 pub struct ScopedRuntime {
     inner: Arc<dyn ToolRuntime>,
-    /// Allowed MCP names. Empty = pass-through (all tools visible).
-    allowed_mcps: Vec<String>,
+    scope: Scope,
 }
 
 impl ScopedRuntime {
-    /// Build a scoped runtime.
+    /// Build a scoped runtime from an explicit MCP allow-list.
     ///
-    /// When `allowed_mcps` is empty, every tool passes through with no filtering.
+    /// When `allowed_mcps` is empty, every tool passes through with no filtering. For a capability
+    /// grant use [`from_capabilities`](Self::from_capabilities) instead, which fails closed.
     pub fn new(inner: Arc<dyn ToolRuntime>, allowed_mcps: Vec<String>) -> Self {
         Self {
             inner,
-            allowed_mcps,
+            scope: Scope::Mcps(allowed_mcps),
+        }
+    }
+
+    /// Build a scoped runtime enforcing `capabilities` tool by tool.
+    ///
+    /// Fails closed: an empty set yields an empty catalog. This is the constructor for a session's
+    /// grant, and the only one that can express a partial grant over a single MCP.
+    pub fn from_capabilities(inner: Arc<dyn ToolRuntime>, capabilities: CapabilitySet) -> Self {
+        Self {
+            inner,
+            scope: Scope::Grant(capabilities),
+        }
+    }
+
+    /// Whether `tool` (a `"<mcp>:<tool>"` name) is in scope.
+    fn permits(&self, tool: &str) -> bool {
+        match &self.scope {
+            Scope::Mcps(allowed) if allowed.is_empty() => true,
+            Scope::Mcps(allowed) => {
+                let mcp = mcp_of(tool);
+                allowed.iter().any(|a| a == mcp)
+            }
+            Scope::Grant(caps) => caps.grants_tool(tool),
         }
     }
 }
@@ -37,32 +81,22 @@ impl ScopedRuntime {
 #[async_trait]
 impl ToolRuntime for ScopedRuntime {
     fn catalog(&self) -> Vec<ToolDef> {
-        if self.allowed_mcps.is_empty() {
-            // Empty allow-list = no scoping; return everything.
-            return self.inner.catalog();
-        }
-
         self.inner
             .catalog()
             .into_iter()
-            .filter(|tool| {
-                let mcp = mcp_of(&tool.name);
-                self.allowed_mcps.iter().any(|allowed| allowed == mcp)
-            })
+            .filter(|tool| self.permits(&tool.name))
             .collect()
     }
 
     async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
-        if !self.allowed_mcps.is_empty() {
-            let mcp = mcp_of(&call.name);
-            if !self.allowed_mcps.iter().any(|allowed| allowed == mcp) {
-                return Err(format!(
-                    "MCP '{}' is not in scope for this turn (tool '{}')",
-                    mcp, call.name
-                ));
-            }
+        // Checked as well as filtered from the catalog: a model can name a tool it was never shown,
+        // whether by hallucination or because the catalog it saw is a turn old.
+        if !self.permits(&call.name) {
+            return Err(format!(
+                "tool '{}' is not in scope for this turn",
+                call.name
+            ));
         }
-
         self.inner.invoke(call).await
     }
 }
@@ -71,6 +105,7 @@ impl ToolRuntime for ScopedRuntime {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use liberado_common::Capability;
     use std::sync::Mutex;
 
     /// A mock inner runtime that records invocations.
@@ -167,5 +202,86 @@ mod tests {
         let call = ToolInvocation::new("c1", "tasks-mcp:add", serde_json::json!({"title": "milk"}));
         let result = scoped.invoke(&call).await;
         assert_eq!(result, Ok("added".into()));
+    }
+
+    // ── from_capabilities: the fail-closed constructor ───────────────────────────────────────
+
+    fn fleet() -> Arc<MockInner> {
+        Arc::new(MockInner::new(
+            &[
+                "turbovault:read_note",
+                "turbovault:write_note",
+                "turbovault:search_notes",
+                "spider-mcp:fetch",
+                "email-mcp:send",
+            ],
+            Ok("ok".into()),
+        ))
+    }
+
+    /// The case per-tool grants exist for, and which no `Vec<String>` of MCP names can express.
+    #[tokio::test]
+    async fn a_partial_grant_shows_only_the_granted_tools_of_that_mcp() {
+        let caps = CapabilitySet::from_iter([
+            Capability::ExecuteMcp("spider-mcp".into()),
+            Capability::ExecuteTool("turbovault:read_note".into()),
+            Capability::ExecuteTool("turbovault:search_notes".into()),
+        ]);
+        let scoped = ScopedRuntime::from_capabilities(fleet(), caps);
+
+        let names: Vec<String> = scoped.catalog().into_iter().map(|t| t.name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "turbovault:read_note",
+                "turbovault:search_notes",
+                "spider-mcp:fetch"
+            ],
+            "the whole server for spider, two tools for turbovault, nothing for email"
+        );
+
+        let denied = ToolInvocation::new("c1", "turbovault:write_note", serde_json::json!({}));
+        assert!(
+            scoped.invoke(&denied).await.is_err(),
+            "an ungranted tool on a partially granted MCP must be refused, not merely hidden"
+        );
+    }
+
+    /// The regression that motivated a second constructor. `ScopedRuntime::new(inner, vec![])` means
+    /// "no filtering" — correct for the tool-advisor, catastrophic for a grant. A grant that permits
+    /// nothing must show nothing.
+    #[tokio::test]
+    async fn an_empty_grant_shows_nothing_rather_than_everything() {
+        let scoped = ScopedRuntime::from_capabilities(fleet(), CapabilitySet::empty());
+        assert!(
+            scoped.catalog().is_empty(),
+            "empty grant must fail closed; the MCP-list constructor's pass-through default must not \
+             leak into this path"
+        );
+        let call = ToolInvocation::new("c1", "spider-mcp:fetch", serde_json::json!({}));
+        assert!(scoped.invoke(&call).await.is_err());
+    }
+
+    /// Zone capabilities say nothing about which tools may be called, so they must not smuggle any in.
+    #[tokio::test]
+    async fn zone_capabilities_alone_grant_no_tools() {
+        let caps = CapabilitySet::from_iter([
+            Capability::Read(liberado_common::Zone::vault("Work")),
+            Capability::Write(liberado_common::Zone::vault("Work")),
+        ]);
+        let scoped = ScopedRuntime::from_capabilities(fleet(), caps);
+        assert!(scoped.catalog().is_empty());
+    }
+
+    /// A model can name a tool it was never shown — from a stale catalog or from nowhere at all.
+    #[tokio::test]
+    async fn a_tool_absent_from_the_catalog_is_still_refused_at_invoke() {
+        let caps =
+            CapabilitySet::from_iter([Capability::ExecuteTool("turbovault:read_note".into())]);
+        let scoped = ScopedRuntime::from_capabilities(fleet(), caps);
+
+        let hallucinated = ToolInvocation::new("c1", "email-mcp:send", serde_json::json!({}));
+        let err = scoped.invoke(&hallucinated).await.unwrap_err();
+        assert!(err.contains("not in scope"), "got: {err}");
     }
 }

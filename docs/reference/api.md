@@ -256,3 +256,48 @@ Both native clients are landed and share code (`chat-client-contract`'s `ChatEve
    HTML — so each client renders natively.
 3. **Server owns state, clients stay thin.** Conversation/session/history live server-side; a client
    is a renderer + an input box.
+
+## Trust boundary: the API is unauthenticated and agent-reachable
+
+**Known gap, recorded 2026-07-28. Not yet fixed.**
+
+The daemon's HTTP API has no authentication. That is defensible on its own — it binds a LAN address
+and every client is the operator's. What makes it a real exposure is the second half:
+
+**A granted web-fetching MCP can call it.** `spider-mcp` performs no loopback or private-IP check on
+its target URLs (no `is_loopback`, no private-range filter anywhere in `crates/…/scraper`), so a
+model that can reach it can also reach `http://127.0.0.1:4201/api/…`. The agent's *information*
+channel therefore terminates inside the daemon's own control surface — a channel crossing
+[`channels-and-interactivity.md`](../architecture/channels-and-interactivity.md) otherwise keeps
+separate.
+
+What is reachable today, given spider-mcp fetches with `GET`:
+
+| Endpoint | Consequence |
+|---|---|
+| `GET /api/conversations` | Every conversation id and title |
+| `GET /api/conversations/{id}` | A full transcript, system prompt included |
+| `GET /api/conversations/search?q=` | Grep across every stored chat |
+| `GET /api/status`, `/api/catalog` | Model, MCP fleet, capability grants |
+
+So the live exposure is **disclosure, not escalation**: no `GET` mutates anything. An incognito chat
+is not listed and has no file, so it cannot be found by listing or search — but it *is* readable at
+`GET /api/conversations/{id}` by anyone holding the id.
+
+### What this means for anything claiming to be human-only
+
+Do not rest such a claim on "no tool in the catalog does this". That is true and useful — it is why
+the agent cannot re-authorize its own session — but it is a statement about the tool catalog, not
+about reachability. Two rules follow:
+
+1. **Mutating authority endpoints must not be `GET`.** A `POST`/`PATCH`/`DELETE` is out of reach of a
+   fetcher that only issues `GET`s, which is an incidental defence but a real one. The session-profile
+   switch is a `POST` for exactly this reason.
+2. **A real fix has to distinguish surface traffic from agent traffic** — a shared secret the MCPs are
+   not given, a separate bind address for mutating routes, or an egress filter that refuses
+   loopback/private targets in the fetching MCPs themselves. The last is the most general: it fixes
+   every future endpoint at once, and it belongs in the MCPs, which are the things making the
+   requests.
+
+Until then, treat any capability reachable over `GET` as readable by any session granted a
+web-fetching MCP.

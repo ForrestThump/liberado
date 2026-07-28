@@ -265,18 +265,24 @@ impl ToolRuntime for RiskGatedToolRuntime {
         async {
             let mcp_name = mcp_of(&call.name).to_string();
 
-            // 1. Capability check: is the MCP granted?
-            if !self.capabilities.grants_mcp(&mcp_name) {
+            // 1. Capability check: is **this tool** granted?
+            //
+            // `grants_tool`, not `grants_mcp`: a grant may name the whole server
+            // (`ExecuteMcp("turbovault")`) or one tool on it (`ExecuteTool("turbovault:read_note")`),
+            // and only the tool-level question distinguishes them. Asking `grants_mcp` here would
+            // pass every tool on a server the grant only meant to open a crack of — precisely what
+            // per-tool grants exist to prevent, and it would have done so silently.
+            if !self.capabilities.grants_tool(&call.name) {
                 self.authority_decision(
                     "mcp_grant",
                     "refused",
                     call,
                     None,
-                    &format!("ExecuteMcp(\"{mcp_name}\")"),
+                    &format!("ExecuteTool(\"{}\")", call.name),
                 );
                 return Err(format!(
-                    "not authorized: MCP '{}' is not in the granted capability set",
-                    mcp_name
+                    "not authorized: tool '{}' is not in the granted capability set",
+                    call.name
                 ));
             }
 
@@ -759,6 +765,43 @@ mod tests {
             ProposalSigner::random(),
             "default",
         )
+    }
+
+    /// The gate must ask the **tool-level** question. It previously asked `grants_mcp`, which for a
+    /// partial grant answers "yes, that MCP is reachable" and would have waved through every tool on
+    /// a server the grant only meant to open a crack of.
+    #[tokio::test]
+    async fn a_per_tool_grant_gates_the_rest_of_that_mcp() {
+        let inner = MockInner::new(
+            &["turbovault:read_note", "turbovault:write_note"],
+            Ok("ok".into()),
+        );
+        let caps =
+            CapabilitySet::from_iter([Capability::ExecuteTool("turbovault:read_note".into())]);
+        let rt = test_runtime(inner, caps, &[("turbovault", Consequence::ReadOnly)]);
+
+        let granted = ToolInvocation::new("c1", "turbovault:read_note", serde_json::json!({}));
+        assert_eq!(rt.invoke(&granted).await, Ok("ok".into()));
+
+        let ungranted = ToolInvocation::new("c2", "turbovault:write_note", serde_json::json!({}));
+        let err = rt.invoke(&ungranted).await.unwrap_err();
+        assert!(err.contains("not authorized"), "got: {err}");
+    }
+
+    /// And a server-wide grant must keep working — the coarse form is still the common case.
+    #[tokio::test]
+    async fn a_server_grant_still_authorizes_every_tool_on_it() {
+        let inner = MockInner::new(
+            &["turbovault:read_note", "turbovault:write_note"],
+            Ok("ok".into()),
+        );
+        let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("turbovault".into())]);
+        let rt = test_runtime(inner, caps, &[("turbovault", Consequence::ReadOnly)]);
+
+        for tool in ["turbovault:read_note", "turbovault:write_note"] {
+            let call = ToolInvocation::new("c1", tool, serde_json::json!({}));
+            assert_eq!(rt.invoke(&call).await, Ok("ok".into()), "{tool}");
+        }
     }
 
     #[tokio::test]

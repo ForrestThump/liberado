@@ -539,14 +539,21 @@ pub fn explain_write(
         println!("\nverdict: BLOCKED — the MCP does not exist in this config.");
         return Ok(());
     };
-    let granted = caps.grants_mcp(mcp_name);
-    println!(
-        "  [{}] mcp_grant         needed ExecuteMcp(\"{mcp_name}\")",
-        say(granted)
-    );
+    // `grants_tool`, because this explainer was asked about a *specific* tool and is echoed to a human
+    // as a verdict. `grants_mcp` answers "is this MCP reachable at all", which for a partial grant is
+    // true even when the named tool is not granted — an explainer that reports PASS on a call the
+    // runtime would refuse is worse than no explainer.
+    let granted = caps.grants_tool(qualified_tool);
+    let needed = if caps.grants_mcp(mcp_name) {
+        format!("ExecuteTool(\"{qualified_tool}\")")
+    } else {
+        format!("ExecuteMcp(\"{mcp_name}\") or ExecuteTool(\"{qualified_tool}\")")
+    };
+    println!("  [{}] mcp_grant         needed {needed}", say(granted));
     if !granted {
         blockers.push(format!(
-            "add {{ ExecuteMcp = \"{mcp_name}\" }} to the '{component}' grant in policy.toml"
+            "add {{ ExecuteTool = \"{qualified_tool}\" }} (or {{ ExecuteMcp = \"{mcp_name}\" }} for \
+             the whole server) to the '{component}' grant in policy.toml"
         ));
     }
 

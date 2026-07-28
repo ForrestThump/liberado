@@ -396,13 +396,13 @@ fn append_grant_to_overlay_at(
 }
 
 /// The zone a capability names, if any — for [`append_grant_to_overlay_at`]'s zone-declaration
-/// guard. `ExecuteMcp`/`AskHuman` name no zone.
+/// guard. The execute and ask-human variants name no zone.
 fn capability_zone_name(cap: &Capability) -> Option<&str> {
     match cap {
         Capability::Read(z) | Capability::Write(z) | Capability::ReadSummary(z) => match z {
             Zone::Vault(name) | Zone::Named(name) => Some(name),
         },
-        Capability::ExecuteMcp(_) | Capability::AskHuman => None,
+        Capability::ExecuteMcp(_) | Capability::ExecuteTool(_) | Capability::AskHuman => None,
     }
 }
 

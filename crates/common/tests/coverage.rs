@@ -21,13 +21,50 @@ where
 
 #[test]
 fn capability_set_serde_round_trip_all_variants() {
+    // "All variants" now means all of them. It previously omitted `AskHuman`, and `ExecuteTool` would
+    // have made two of six unproven under a name promising otherwise — the failure class
+    // `docs/architecture/failure-modes.md` §1 is about.
+    //
+    // Serde is load-bearing for these in two places: `policy.toml` grants, and the `SessionGrant`
+    // written into a session log's header line. A variant that fails to round-trip is a grant that
+    // silently does not survive a daemon restart.
     let set = CapabilitySet::from_iter([
         Capability::Read(Zone::vault("tasks")),
         Capability::Write(Zone::vault("decisions")),
         Capability::ReadSummary(Zone::named("finance")),
         Capability::ExecuteMcp("tasks-mcp".into()),
+        Capability::ExecuteTool("turbovault:read_note".into()),
+        Capability::AskHuman,
     ]);
-    round_trip(set);
+    let decoded = round_trip(set);
+
+    // Round-tripping the container is not the same as the semantics surviving it: a decoded set must
+    // still answer the authorization question the same way.
+    assert!(decoded.grants_tool("turbovault:read_note"));
+    assert!(!decoded.grants_tool("turbovault:write_note"));
+    assert!(decoded.grants_tool("tasks-mcp:anything"));
+    assert!(decoded.grants_ask_human());
+}
+
+/// TOML specifically, because that is the shape a human writes in `policy.toml` — and the shape the
+/// docs will tell them to write.
+#[test]
+fn execute_tool_round_trips_through_toml_as_written_in_policy() {
+    #[derive(serde::Deserialize)]
+    struct Grant {
+        capabilities: Vec<Capability>,
+    }
+    let written = r#"
+        capabilities = [
+            { ExecuteMcp = "spider-mcp" },
+            { ExecuteTool = "turbovault:read_note" },
+        ]
+    "#;
+    let grant: Grant = toml::from_str(written).expect("policy-shaped TOML must parse");
+    let set = CapabilitySet::from_iter(grant.capabilities);
+    assert!(set.grants_tool("spider-mcp:fetch"));
+    assert!(set.grants_tool("turbovault:read_note"));
+    assert!(!set.grants_tool("turbovault:write_note"));
 }
 
 #[test]

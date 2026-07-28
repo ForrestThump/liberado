@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::dispatch::mcp_of;
 use crate::error::{Error, Result};
 
 /// A logical scope of data or system access.
@@ -287,8 +288,20 @@ pub enum Capability {
     Write(Zone),
     /// Read-only access to a summarized/aggregated view (e.g. finance totals without detail).
     ReadSummary(Zone),
-    /// Permission to invoke a specific MCP by name.
+    /// Permission to invoke a specific MCP by name — **every** tool it exposes.
     ExecuteMcp(String),
+    /// Permission to invoke one named tool, as `"<mcp>:<tool>"` — e.g.
+    /// `ExecuteTool("turbovault:read_note")`.
+    ///
+    /// The finer half of [`ExecuteMcp`], for a profile that wants a handful of an MCP's tools rather
+    /// than the whole server. `ExecuteMcp(m)` **subsumes** every `ExecuteTool("m:…")`, which is what
+    /// keeps the two from being separate authority systems: see
+    /// [`Capability::subsumes`] and [`CapabilitySet::narrow`].
+    ///
+    /// Granting the *server* is still the right default for a trusted pack; this exists because
+    /// "read my notes but do not write them" cannot be said any other way, and a coarse grant plus a
+    /// hopeful prompt is not a boundary.
+    ExecuteTool(String),
     /// Permission to **interrupt a human for guidance** — the human-input channel
     /// (`docs/architecture/channels-and-interactivity.md`, Decision A: interactivity is a
     /// capability, not a session subtype).
@@ -298,6 +311,41 @@ pub enum Capability {
     /// This is what makes an unattended profile (a cron, a narrow research hat) *structurally*
     /// unable to block on a person who isn't there, rather than merely conventionally so.
     AskHuman,
+}
+
+impl Capability {
+    /// Whether holding `self` already implies holding `other`.
+    ///
+    /// Only one relation is non-trivial: `ExecuteMcp(m)` implies `ExecuteTool("m:anything")`, because
+    /// granting a server grants its tools. Everything else is plain equality — zones deliberately do
+    /// **not** nest (`Read(Work)` does not imply `Read(Work/Sub)`; zones are flat names).
+    ///
+    /// This exists because [`CapabilitySet::narrow`] used naive equality, and adding
+    /// [`ExecuteTool`](Capability::ExecuteTool) would have made
+    /// `ExecuteMcp("turbovault") ∩ ExecuteTool("turbovault:read_note")` come out **empty** — silently
+    /// revoking a delegated subagent's tools rather than failing loudly. A partial order is the only
+    /// thing that makes coarse and fine grants interoperate.
+    pub fn subsumes(&self, other: &Capability) -> bool {
+        if self == other {
+            return true;
+        }
+        match (self, other) {
+            (Capability::ExecuteMcp(mcp), Capability::ExecuteTool(qualified)) => {
+                mcp_of(qualified) == mcp
+            }
+            _ => false,
+        }
+    }
+
+    /// The MCP this capability concerns, if any — the server for [`ExecuteMcp`](Capability::ExecuteMcp),
+    /// the owning server for [`ExecuteTool`](Capability::ExecuteTool).
+    pub fn mcp_name(&self) -> Option<&str> {
+        match self {
+            Capability::ExecuteMcp(mcp) => Some(mcp),
+            Capability::ExecuteTool(qualified) => Some(mcp_of(qualified)),
+            _ => None,
+        }
+    }
 }
 
 /// A set of capabilities held by an actor (component, subagent, or dispatch grant).
@@ -327,13 +375,49 @@ impl CapabilitySet {
         self.capabilities.contains(cap)
     }
 
-    /// Whether this set grants permission to invoke the MCP named `mcp`. Avoids allocating a
-    /// `Capability::ExecuteMcp(String)` just to test membership — used on the dispatch guard hot
-    /// path.
+    /// Whether this set permits touching the MCP named `mcp` **at all** — the whole server, or any
+    /// single tool on it.
+    ///
+    /// A coarse question, and the coarseness is deliberate: it answers "should this MCP be visible /
+    /// connected / listed", not "may this call proceed". Use [`grants_tool`](Self::grants_tool) for
+    /// the latter. Before `ExecuteTool` existed the two questions were the same one, so every caller
+    /// asking this got the precise answer for free — check any security-relevant caller you find
+    /// still using it.
+    ///
+    /// Avoids allocating a `Capability::ExecuteMcp(String)` just to test membership — used on the
+    /// dispatch guard hot path.
     pub fn grants_mcp(&self, mcp: &str) -> bool {
+        self.capabilities.iter().any(|c| c.mcp_name() == Some(mcp))
+    }
+
+    /// Whether this set permits invoking the specific tool `qualified` (`"<mcp>:<tool>"`).
+    ///
+    /// **This is the authorization question.** True when the set grants the owning server outright, or
+    /// grants exactly this tool. A bare name with no `:` is treated as its own MCP, matching
+    /// [`mcp_of`]'s fallback, so an unprefixed tool is not accidentally authorized by an unrelated
+    /// grant.
+    pub fn grants_tool(&self, qualified: &str) -> bool {
+        let mcp = mcp_of(qualified);
+        self.capabilities.iter().any(|c| match c {
+            Capability::ExecuteMcp(name) => name == mcp,
+            Capability::ExecuteTool(name) => name == qualified,
+            _ => false,
+        })
+    }
+
+    /// The individually granted tools, as `"<mcp>:<tool>"`, in grant order.
+    ///
+    /// Only [`ExecuteTool`](Capability::ExecuteTool) entries — a server-wide `ExecuteMcp` is *not*
+    /// expanded here, because this set has no way to enumerate a server's tools. Callers deciding
+    /// what to show a model need both this and [`granted_mcps`](Self::granted_mcps).
+    pub fn granted_tools(&self) -> Vec<String> {
         self.capabilities
             .iter()
-            .any(|c| matches!(c, Capability::ExecuteMcp(name) if name == mcp))
+            .filter_map(|c| match c {
+                Capability::ExecuteTool(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Whether this set permits interrupting a human for guidance ([`Capability::AskHuman`]) — the
@@ -358,15 +442,40 @@ impl CapabilitySet {
     /// Narrow this set to the intersection with `other`. This is the **only** way to derive a
     /// delegated set — the result can never contain a capability absent from `self`, so
     /// authority can only shrink down a delegation chain (Decision 4 invariant).
+    /// Narrow this set to what `other` also permits.
+    ///
+    /// # Not a set intersection
+    ///
+    /// Membership is decided by [`Capability::subsumes`], so a coarse grant on one side authorizes a
+    /// fine request on the other. Two cases, and the result is the **narrower** of the pair each time:
+    ///
+    /// * `self` has `ExecuteMcp("tv")`, `other` asks for `ExecuteTool("tv:read")` → keep
+    ///   `ExecuteTool("tv:read")`. The narrowing asked for less; honor it.
+    /// * `self` has `ExecuteTool("tv:read")`, `other` allows `ExecuteMcp("tv")` → keep
+    ///   `ExecuteTool("tv:read")`. We never held more than the one tool; a permissive narrowing
+    ///   cannot invent the rest.
+    ///
+    /// Plain equality — what this used to do — got the first case **wrong in the dangerous
+    /// direction**: no entry matched, so the result was empty and a delegated subagent silently lost
+    /// every tool. Never a security hole (empty is the safe end) but an invisible functional one,
+    /// which is worse to debug.
+    ///
+    /// The invariant still holds: every returned capability is subsumed by something in `self`, so
+    /// authority can only shrink down a delegation chain (Decision 4).
     pub fn narrow(&self, other: &CapabilitySet) -> CapabilitySet {
-        CapabilitySet {
-            capabilities: self
-                .capabilities
-                .iter()
-                .filter(|c| other.capabilities.contains(c))
-                .cloned()
-                .collect(),
+        let mut narrowed = CapabilitySet::empty();
+        for mine in &self.capabilities {
+            for theirs in &other.capabilities {
+                // Whichever side is more specific is the one that survives; when they are equal
+                // either branch yields the same value.
+                if mine.subsumes(theirs) {
+                    narrowed.grant(theirs.clone());
+                } else if theirs.subsumes(mine) {
+                    narrowed.grant(mine.clone());
+                }
+            }
         }
+        narrowed
     }
 
     /// Guard: return `Ok(())` if `cap` is granted, otherwise [`Error::CapabilityDenied`].
@@ -532,6 +641,115 @@ Context: the user asked twice."
         assert!(narrowed.contains(&Capability::Read(Zone::vault("tasks"))));
         assert!(!narrowed.contains(&Capability::Write(Zone::vault("decisions"))));
         assert!(!narrowed.contains(&Capability::Write(Zone::vault("tasks"))));
+    }
+
+    // ── Per-tool grants (`ExecuteTool`) ─────────────────────────────────────────────────────
+    //
+    // The pair `ExecuteMcp` / `ExecuteTool` is a partial order, not two flat variants, and `narrow`
+    // is where getting that wrong does damage. These pin both directions of the relation.
+
+    #[test]
+    fn execute_mcp_subsumes_its_tools_but_not_the_reverse() {
+        let server = Capability::ExecuteMcp("turbovault".into());
+        let one_tool = Capability::ExecuteTool("turbovault:read_note".into());
+        let other_server = Capability::ExecuteTool("tasks-mcp:add".into());
+
+        assert!(server.subsumes(&one_tool));
+        assert!(
+            !one_tool.subsumes(&server),
+            "one tool is not the whole server"
+        );
+        assert!(
+            !server.subsumes(&other_server),
+            "a grant must not leak across MCPs"
+        );
+        assert!(one_tool.subsumes(&one_tool), "subsumption is reflexive");
+    }
+
+    #[test]
+    fn grants_tool_is_the_authorization_question() {
+        let whole = CapabilitySet::from_iter([Capability::ExecuteMcp("turbovault".into())]);
+        assert!(whole.grants_tool("turbovault:read_note"));
+        assert!(whole.grants_tool("turbovault:write_note"));
+
+        let partial =
+            CapabilitySet::from_iter([Capability::ExecuteTool("turbovault:read_note".into())]);
+        assert!(partial.grants_tool("turbovault:read_note"));
+        assert!(
+            !partial.grants_tool("turbovault:write_note"),
+            "the point of a per-tool grant: the rest of the server stays shut"
+        );
+
+        // `grants_mcp` is the coarse question and answers yes for a partial grant — that is correct
+        // (the MCP is reachable) and is exactly why it must not be used to authorize a call.
+        assert!(partial.grants_mcp("turbovault"));
+        assert!(!partial.grants_mcp("tasks-mcp"));
+    }
+
+    /// The regression this whole change turns on. Under the old `narrow` — a plain set intersection —
+    /// this returned **empty**, silently stripping a delegated subagent of tools its parent held.
+    #[test]
+    fn narrowing_a_server_grant_to_one_tool_keeps_that_tool() {
+        let base = CapabilitySet::from_iter([Capability::ExecuteMcp("turbovault".into())]);
+        let requested =
+            CapabilitySet::from_iter([Capability::ExecuteTool("turbovault:read_note".into())]);
+
+        let narrowed = base.narrow(&requested);
+
+        assert!(narrowed.grants_tool("turbovault:read_note"));
+        assert!(
+            !narrowed.grants_tool("turbovault:write_note"),
+            "narrowing asked for one tool, so only that tool survives"
+        );
+    }
+
+    /// The other direction: a permissive narrowing cannot re-inflate a grant we never held.
+    #[test]
+    fn a_permissive_narrowing_cannot_widen_a_tool_grant_to_the_server() {
+        let base =
+            CapabilitySet::from_iter([Capability::ExecuteTool("turbovault:read_note".into())]);
+        let requested = CapabilitySet::from_iter([Capability::ExecuteMcp("turbovault".into())]);
+
+        let narrowed = base.narrow(&requested);
+
+        assert!(narrowed.grants_tool("turbovault:read_note"));
+        assert!(
+            !narrowed.grants_tool("turbovault:write_note"),
+            "Decision 4: delegation may not widen, whatever the narrowing asks for"
+        );
+        assert!(!narrowed.contains(&Capability::ExecuteMcp("turbovault".into())));
+    }
+
+    #[test]
+    fn tool_grants_do_not_leak_between_mcps() {
+        let base =
+            CapabilitySet::from_iter([Capability::ExecuteTool("turbovault:read_note".into())]);
+        let requested =
+            CapabilitySet::from_iter([Capability::ExecuteTool("tasks-mcp:read_note".into())]);
+        assert_eq!(base.narrow(&requested), CapabilitySet::empty());
+    }
+
+    #[test]
+    fn granted_tools_lists_only_the_individual_grants() {
+        let set = CapabilitySet::from_iter([
+            Capability::ExecuteMcp("spider-mcp".into()),
+            Capability::ExecuteTool("turbovault:read_note".into()),
+            Capability::ExecuteTool("turbovault:search_notes".into()),
+        ]);
+        assert_eq!(
+            set.granted_tools(),
+            vec!["turbovault:read_note", "turbovault:search_notes"]
+        );
+        // A server-wide grant is not expanded — this set cannot know what tools spider-mcp has.
+        assert_eq!(set.granted_mcps(), vec!["spider-mcp"]);
+    }
+
+    /// A bare name with no `:` must not be authorized by an unrelated grant. `mcp_of` treats it as
+    /// its own MCP, and `grants_tool` has to agree, or an unprefixed tool name becomes a wildcard.
+    #[test]
+    fn an_unprefixed_tool_name_is_not_authorized_by_another_grant() {
+        let set = CapabilitySet::from_iter([Capability::ExecuteMcp("turbovault".into())]);
+        assert!(!set.grants_tool("read_note"));
     }
 
     #[test]
