@@ -55,7 +55,7 @@ pub async fn goals_start(
     // may interrupt a human is decided *here*, by the grant â€” not by the caller asserting it.
     // A named profile that resolves to nothing is refused, not silently downgraded to the domain
     // grant — that would run the session with authority the caller never asked for.
-    let (domain, capabilities, overrides, profile_idle) = match state
+    let resolved = match state
         .config
         .resolve_session_profile(goal.profile.as_deref(), goal.domain.as_str())
     {
@@ -70,17 +70,33 @@ pub async fn goals_start(
                 .into_response();
         }
     };
-    if domain.as_str() != goal.domain.as_str() {
-        goal.domain = liberado_session::DomainHint::from(domain.as_str());
+    // A goal session needs a pack to run it, and a chat-only profile names none. Refused rather than
+    // defaulted to the caller's domain: that would run the work under a pack the profile never
+    // authorized, on nothing worse than picking the wrong name from a list.
+    let Some(domain) = resolved.domain.as_deref() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: format!(
+                    "session profile '{}' declares no domain — it is a chat profile and cannot \
+                     run a goal session",
+                    resolved.name.as_deref().unwrap_or("?")
+                ),
+            }),
+        )
+            .into_response();
+    };
+    if domain != goal.domain.as_str() {
+        goal.domain = liberado_session::DomainHint::from(domain);
     }
     // Per-goal idle wins; otherwise the profile default (E5 â€” hours for interactive coding).
     if goal.max_idle_secs.is_none() {
-        goal.max_idle_secs = profile_idle;
+        goal.max_idle_secs = resolved.max_idle_secs;
     }
     let grant = liberado_session::SessionGrant {
-        capabilities,
+        capabilities: resolved.capabilities,
         profile: goal.profile.clone(),
-        overrides: serde_json::to_value(&overrides).unwrap_or(serde_json::Value::Null),
+        overrides: serde_json::to_value(&resolved.overrides).unwrap_or(serde_json::Value::Null),
     };
 
     match state.goals.start_with_grant(goal, grant).await {

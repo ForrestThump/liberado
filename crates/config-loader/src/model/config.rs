@@ -5,7 +5,50 @@ use serde::{Deserialize, Serialize};
 
 use super::builder::ConfigBuilder;
 use super::policy::Policy;
-use super::topology::{McpTransport, Topology, empty_table};
+use super::topology::{McpGrant, McpTransport, SessionProfile, Topology, empty_table};
+
+/// What a session profile resolves to — everything a caller needs to start a session under it.
+///
+/// A struct rather than the tuple this used to return: the tuple was already four wide, and profiles
+/// now carry behaviour (model, prompt, delegation) as well as authority. A named struct also lets a
+/// caller take only what it needs — `POST /api/goals` wants the domain, a chat wants the model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedProfile {
+    /// The profile's name, or `None` when no profile was named (the domain-fallback path).
+    pub name: Option<String>,
+    pub description: Option<String>,
+    /// Which pack runs this session. `None` for a chat-only profile — a conversation has the face
+    /// agent, not a pack, so a caller that *needs* a pack must reject it rather than invent one.
+    pub domain: Option<String>,
+    /// **The** authority boundary for the session; narrowable from here, never widenable.
+    pub capabilities: CapabilitySet,
+    /// Opaque, pack-parsed. Never interpreted by the config stack.
+    pub overrides: toml::Value,
+    pub max_idle_secs: Option<u64>,
+    /// `None` = the daemon's default delegation mode.
+    pub delegation: Option<bool>,
+    /// `None` = the daemon's current model for the role.
+    pub model: Option<String>,
+    pub prompt_append: Option<String>,
+}
+
+/// Hand-written rather than derived: `toml::Value` has no `Default`, and "no overrides" must
+/// deserialize to an empty *table* rather than a null so packs parse it uniformly.
+impl Default for ResolvedProfile {
+    fn default() -> Self {
+        Self {
+            name: None,
+            description: None,
+            domain: None,
+            capabilities: CapabilitySet::empty(),
+            overrides: empty_table(),
+            max_idle_secs: None,
+            delegation: None,
+            model: None,
+            prompt_append: None,
+        }
+    }
+}
 use super::tuning::Tuning;
 
 /// The fully-resolved configuration the daemon runs on.
@@ -71,7 +114,7 @@ impl Config {
     /// `topology.schedules` at load time. Runtime-created goals (HTTP `POST /api/goals`, Telegram
     /// `/spawn`) can only be caught here.
     ///
-    /// Returns `(domain, capabilities, overrides, max_idle_secs)`. The capability set is **the**
+    /// Returns everything a caller needs to run under this profile. The capability set is **the**
     /// authority boundary for the session and can only ever be narrowed from here (Decision 4).
     /// `max_idle_secs` comes from the profile when set (E5); the caller may still override with a
     /// per-goal value.
@@ -79,14 +122,14 @@ impl Config {
         &self,
         profile: Option<&str>,
         domain_fallback: &str,
-    ) -> Result<(String, CapabilitySet, toml::Value, Option<u64>)> {
+    ) -> Result<ResolvedProfile> {
         let Some(name) = profile else {
-            return Ok((
-                domain_fallback.to_string(),
-                self.policy.capabilities_for(domain_fallback),
-                empty_table(),
-                None,
-            ));
+            return Ok(ResolvedProfile {
+                domain: Some(domain_fallback.to_string()),
+                capabilities: self.policy.capabilities_for(domain_fallback),
+                overrides: empty_table(),
+                ..ResolvedProfile::default()
+            });
         };
         let found = self
             .topology
@@ -94,17 +137,53 @@ impl Config {
             .iter()
             .find(|p| p.enabled && p.name == name);
         match found {
-            Some(p) => Ok((
-                p.domain.clone(),
-                self.policy.capabilities_for(p.component_key()),
-                p.overrides.clone(),
-                p.max_idle_secs,
-            )),
+            Some(p) => Ok(ResolvedProfile {
+                name: Some(p.name.clone()),
+                description: p.description.clone(),
+                domain: p.domain.clone(),
+                capabilities: self.profile_capabilities(p),
+                overrides: p.overrides.clone(),
+                max_idle_secs: p.max_idle_secs,
+                delegation: p.delegation,
+                model: p.model.clone(),
+                prompt_append: p.prompt_append.clone(),
+            }),
             None => Err(Error::Config(format!(
                 "session profile '{name}' does not name an enabled \
                  topology.session_profiles entry"
             ))),
         }
+    }
+
+    /// A profile's effective authority, in its two shapes.
+    ///
+    /// * **Declares nothing** → `capabilities_for(component_key())`. Unchanged from before profiles
+    ///   could declare authority; the pool rule still applies.
+    /// * **Declares something** → exactly that, narrowed against [`ceiling`](SessionProfile::ceiling)
+    ///   when one is named. Narrowing is what keeps `policy.toml` a hard bound: a profile asking for
+    ///   an MCP the ceiling lacks resolves to nothing rather than granting it.
+    ///
+    /// The narrowing is `CapabilitySet::narrow`, which understands that `ExecuteMcp` subsumes
+    /// `ExecuteTool` — so a ceiling granting the whole `turbovault` server permits a profile that
+    /// asks for two of its tools, which is the case this feature exists for.
+    fn profile_capabilities(&self, profile: &SessionProfile) -> CapabilitySet {
+        if !profile.declares_authority() {
+            return self.policy.capabilities_for(profile.component_key());
+        }
+        let declared = profile.declared_capabilities();
+        match &profile.ceiling {
+            Some(key) => declared.narrow(&self.policy.capabilities_for(key)),
+            None => declared,
+        }
+    }
+
+    /// Every enabled profile, for a picker. Ordered as configured, so the operator controls the list.
+    pub fn enabled_session_profiles(&self) -> Vec<&SessionProfile> {
+        self.topology
+            .session_profiles
+            .iter()
+            .filter(|p| p.enabled)
+            .collect()
     }
 
     /// Validate invariants checkable from the resolved model alone. The daemon's loader layers
@@ -325,23 +404,79 @@ impl Config {
                     profile.name
                 )));
             }
-            if profile.domain.trim().is_empty() {
+            // `domain` may be absent (a chat profile has no pack) but must not be *present and
+            // blank* — that reads as an unfinished edit rather than a deliberate omission.
+            if profile.domain.as_ref().is_some_and(|d| d.trim().is_empty()) {
                 return Err(Error::Config(format!(
-                    "topology.session_profiles['{}'].domain is empty — it must name a domain pack \
-                     (e.g. \"life\", \"coding\")",
+                    "topology.session_profiles['{}'].domain is empty — name a domain pack \
+                     (e.g. \"life\", \"coding\") or omit the key entirely for a chat-only profile",
                     profile.name
                 )));
             }
             if !profile.enabled {
                 continue;
             }
-            let component = profile.component_key();
-            if !self.policy.grants.iter().any(|g| g.component == component) {
+
+            // Two shapes, and mixing them means two answers to "what may this do".
+            if profile.declares_authority() && profile.component.is_some() {
                 return Err(Error::Config(format!(
-                    "topology.session_profiles['{}'].component '{component}' names no \
-                     policy.toml [[grants]] entry — the session would run with zero authority",
+                    "topology.session_profiles['{}'] sets both `component` and its own \
+                     mcps/read/write — pick one: `component` borrows a policy grant wholesale, \
+                     while declaring authority states it here (use `ceiling` to bound it)",
                     profile.name
                 )));
+            }
+
+            if profile.declares_authority() {
+                // A ceiling that names nothing would narrow every declaration to nothing, so the
+                // profile would silently grant no tools — the worst failure this feature can have,
+                // and indistinguishable at runtime from a profile that meant to grant nothing.
+                if let Some(ceiling) = &profile.ceiling
+                    && !self.policy.grants.iter().any(|g| &g.component == ceiling)
+                {
+                    return Err(Error::Config(format!(
+                        "topology.session_profiles['{}'].ceiling '{ceiling}' names no policy.toml \
+                         [[grants]] entry — every declared capability would narrow to nothing",
+                        profile.name
+                    )));
+                }
+                for entry in &profile.mcps {
+                    let mcp = entry.mcp_name();
+                    if !self.topology.mcps.iter().any(|m| m.name == mcp) {
+                        return Err(Error::Config(format!(
+                            "topology.session_profiles['{}'].mcps names unknown MCP '{mcp}' \
+                             (not in topology.mcps)",
+                            profile.name
+                        )));
+                    }
+                    if let McpGrant::Narrowed { tools, .. } = entry
+                        && tools.is_empty()
+                    {
+                        return Err(Error::Config(format!(
+                            "topology.session_profiles['{}'].mcps entry for '{mcp}' lists no \
+                             tools — grants nothing. Write \"{mcp}\" as a bare string for the \
+                             whole server, or name the tools.",
+                            profile.name
+                        )));
+                    }
+                }
+                for zone in profile.read.iter().chain(profile.write.iter()) {
+                    if !self.policy.zones.iter().any(|z| &z.zone == zone) {
+                        return Err(Error::Config(format!(
+                            "topology.session_profiles['{}'] references undeclared zone '{zone}'",
+                            profile.name
+                        )));
+                    }
+                }
+            } else {
+                let component = profile.component_key();
+                if !self.policy.grants.iter().any(|g| g.component == component) {
+                    return Err(Error::Config(format!(
+                        "topology.session_profiles['{}'].component '{component}' names no \
+                         policy.toml [[grants]] entry — the session would run with zero authority",
+                        profile.name
+                    )));
+                }
             }
         }
 

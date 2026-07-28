@@ -318,7 +318,7 @@ impl TelegramChatBridge {
                     .state
                     .config
                     .resolve_session_profile(profile.as_deref(), domain_fallback);
-                let (resolved_domain, capabilities, overrides, profile_idle) = match resolved {
+                let resolved = match resolved {
                     Ok(resolved) => resolved,
                     Err(e) => {
                         tracing::warn!(
@@ -333,6 +333,15 @@ impl TelegramChatBridge {
                         ));
                     }
                 };
+                // `/spawn` starts a *pack* session, so a chat-only profile is the wrong tool. Say so
+                // rather than falling back to a domain the human did not pick.
+                let Some(resolved_domain) = resolved.domain.clone() else {
+                    return Some(format!(
+                        "'{}' is a chat profile — it has no domain pack to run a session. Use it \
+                         with /profile in a conversation instead.",
+                        profile.as_deref().unwrap_or("?")
+                    ));
+                };
 
                 let mut spec = GoalSpec {
                     id: None,
@@ -340,7 +349,7 @@ impl TelegramChatBridge {
                     success_criteria: Vec::new(),
                     domain: DomainHint::from(resolved_domain.as_str()),
                     max_turns: 0,
-                    max_idle_secs: profile_idle,
+                    max_idle_secs: resolved.max_idle_secs,
                     origin,
                     profile,
                     payload: serde_json::Value::Null,
@@ -350,9 +359,10 @@ impl TelegramChatBridge {
                 }
 
                 let grant = SessionGrant {
-                    capabilities,
+                    capabilities: resolved.capabilities,
                     profile: spec.profile.clone(),
-                    overrides: serde_json::to_value(&overrides).unwrap_or(serde_json::Value::Null),
+                    overrides: serde_json::to_value(&resolved.overrides)
+                        .unwrap_or(serde_json::Value::Null),
                 };
                 match self.state.goals.start_with_grant(spec, grant).await {
                     Ok(id) => Some(format!(

@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use liberado_common::{
-    Consequence, DEFAULT_TIMEZONE, ModelProfile, ModelRole, ReasoningLevel, UserTimezone,
+    Capability, CapabilitySet, Consequence, DEFAULT_TIMEZONE, ModelProfile, ModelRole,
+    ReasoningLevel, UserTimezone, Zone,
 };
 use serde::{Deserialize, Serialize};
 
@@ -452,11 +453,65 @@ pub struct SessionProfile {
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// Which domain pack runs sessions started under this profile.
-    pub domain: String,
+    ///
+    /// `None` for a **chat profile**: a conversation has no pack, it has the face agent. Only
+    /// `/spawn` and `POST /api/goals` need a domain, and they reject a profile without one rather
+    /// than guessing.
+    #[serde(default)]
+    pub domain: Option<String>,
+    /// One line for the picker, shown next to the name. Absent renders as just the name.
+    #[serde(default)]
+    pub description: Option<String>,
     /// Capability grant key — `policy.toml`'s `[[grants]] component = "…"`. Defaults to `name`
     /// (the pool rule: the name *is* the component) when omitted.
+    ///
+    /// **Only for a profile that declares no authority of its own.** This is the original shape and
+    /// stays exactly as it was; a profile that declares [`mcps`](Self::mcps)/[`read`](Self::read)/
+    /// [`write`](Self::write) must not also set it (rejected at load — two sources for one answer).
     #[serde(default)]
     pub component: Option<String>,
+    /// An upper bound on what this profile may declare, named as a `policy.toml` grant key.
+    ///
+    /// Optional and explicit. When set, the profile's declared authority is **narrowed** against
+    /// that grant, so `policy.toml` stays a hard ceiling and a profile cannot widen past what the
+    /// operator allowed there — asking for an MCP the ceiling lacks resolves to nothing rather than
+    /// granting it. When absent, the declared authority stands on its own.
+    ///
+    /// Deliberately not defaulted to `name`, unlike [`component`](Self::component): a ceiling that
+    /// appears by accident because no grant of that name exists would narrow every declaration to
+    /// nothing, and a profile silently granting no tools is the worst failure this could have.
+    #[serde(default)]
+    pub ceiling: Option<String>,
+    /// Vault zones this profile may read, by zone name.
+    ///
+    /// Expanded into [`Capability::Read`](liberado_common::Capability::Read). Stated rather than
+    /// inferred from the granted tools: a tool's declared zone can change under you, and a profile's
+    /// reach should not move because an MCP edited its descriptor.
+    #[serde(default)]
+    pub read: Vec<String>,
+    /// Vault zones this profile may write, by zone name.
+    ///
+    /// An **empty list says "reads only" out loud**, which matters because the execute capability is
+    /// not sufficient on its own: `RiskGatedToolRuntime` checks `Write(Zone)` separately (since
+    /// 2026-07-14 — before that a grant with `ExecuteMcp` and no `Write` could write the whole
+    /// vault). A profile granting `turbovault:write_note` with no zone here produces an agent that
+    /// sees the tool and is refused when it calls it.
+    #[serde(default)]
+    pub write: Vec<String>,
+    /// The tools this profile may call — a whole server, or named tools within one.
+    #[serde(default)]
+    pub mcps: Vec<McpGrant>,
+    /// Whether the face agent may `delegate` in this session. `None` = the daemon's default
+    /// (`topology.main_agent.delegation_mode`). `Some(false)` is what makes a "basic chat" profile a
+    /// mode rather than merely a shorter tool list.
+    #[serde(default)]
+    pub delegation: Option<bool>,
+    /// Model to pin for sessions under this profile. `None` = the daemon's current face model.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Extra system-prompt text for this profile, appended to the base prompt.
+    #[serde(default)]
+    pub prompt_append: Option<String>,
     /// Kernel idle budget for interactive sessions under this profile (E5): how long the hub waits
     /// on human input before `BudgetExhausted`. `None` = wait indefinitely (or the per-goal
     /// `GoalSpec.max_idle_secs` wins when set). Interactive coding profiles typically want hours.
@@ -467,6 +522,36 @@ pub struct SessionProfile {
     pub overrides: toml::Value,
 }
 
+/// One entry in a profile's [`mcps`](SessionProfile::mcps): a whole server, or named tools from it.
+///
+/// Untagged so the common case is one word and the narrow case is a table:
+///
+/// ```toml
+/// mcps = [
+///   "liberado-spider-mcp",                                  # every tool
+///   { name = "turbovault", tools = ["read_note"] },         # just this one
+/// ]
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum McpGrant {
+    /// Every tool the server exposes — [`Capability::ExecuteMcp`](liberado_common::Capability::ExecuteMcp).
+    Whole(String),
+    /// Only the named tools — one
+    /// [`Capability::ExecuteTool`](liberado_common::Capability::ExecuteTool) each.
+    Narrowed { name: String, tools: Vec<String> },
+}
+
+impl McpGrant {
+    /// The server this entry concerns, either way.
+    pub fn mcp_name(&self) -> &str {
+        match self {
+            McpGrant::Whole(name) => name,
+            McpGrant::Narrowed { name, .. } => name,
+        }
+    }
+}
+
 /// An empty TOML table — `toml::Value` has no `Default`, and "no overrides" must deserialize to an
 /// empty table (not a null) so packs can parse it uniformly.
 pub(crate) fn empty_table() -> toml::Value {
@@ -474,9 +559,68 @@ pub(crate) fn empty_table() -> toml::Value {
 }
 
 impl SessionProfile {
+    /// A named, enabled profile with nothing else set — the base for building one field by field.
+    ///
+    /// Exists so adding an optional field does not touch every construction site, which is most of
+    /// why this struct is easy to extend at all.
+    pub fn empty(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            enabled: true,
+            domain: None,
+            description: None,
+            component: None,
+            ceiling: None,
+            read: Vec::new(),
+            write: Vec::new(),
+            mcps: Vec::new(),
+            delegation: None,
+            model: None,
+            prompt_append: None,
+            max_idle_secs: None,
+            overrides: empty_table(),
+        }
+    }
+
     /// The capability grant key this profile resolves to — `component` when set, else `name`.
+    ///
+    /// Only meaningful for a profile that declares no authority of its own; see
+    /// [`declares_authority`](Self::declares_authority).
     pub fn component_key(&self) -> &str {
         self.component.as_deref().unwrap_or(&self.name)
+    }
+
+    /// Whether this profile states its own authority instead of borrowing a component's.
+    ///
+    /// The switch between the two shapes. A profile that declares nothing behaves exactly as before
+    /// profiles could declare anything: its authority is `capabilities_for(component_key())`.
+    pub fn declares_authority(&self) -> bool {
+        !self.mcps.is_empty() || !self.read.is_empty() || !self.write.is_empty()
+    }
+
+    /// The capability set this profile declares, before any [`ceiling`](Self::ceiling) is applied.
+    ///
+    /// Zones are named bare and become vault zones — the same reading `policy.toml`'s
+    /// `{ Read = { Vault = "Work" } }` has, without making a profile spell out the wrapper.
+    pub fn declared_capabilities(&self) -> CapabilitySet {
+        let mut set = CapabilitySet::empty();
+        for zone in &self.read {
+            set.grant(Capability::Read(Zone::vault(zone)));
+        }
+        for zone in &self.write {
+            set.grant(Capability::Write(Zone::vault(zone)));
+        }
+        for entry in &self.mcps {
+            match entry {
+                McpGrant::Whole(name) => set.grant(Capability::ExecuteMcp(name.clone())),
+                McpGrant::Narrowed { name, tools } => {
+                    for tool in tools {
+                        set.grant(Capability::ExecuteTool(format!("{name}:{tool}")));
+                    }
+                }
+            }
+        }
+        set
     }
 }
 
