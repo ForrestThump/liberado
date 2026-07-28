@@ -1,6 +1,6 @@
 # Session Profiles — Design & Roadmap
 
-**Status**: steps 1–2 landed on `feat/session-profiles` (2026-07-28). Steps 3–6 open.
+**Status**: steps 1–3 landed on `feat/session-profiles` (2026-07-28). Steps 3–6 open.
 Design settled with the operator in conversation on 2026-07-28; the decisions in
 [Settled decisions](#settled-decisions) are answers to direct questions, not proposals.
 
@@ -126,14 +126,38 @@ Recording reuses two existing mechanisms, no new record kinds:
   - named profile with empty capabilities → honoured as "may call nothing";
   - lookup failure → falls back and warns.
 
-### 3. Profile resolution and config shape — **next**
+### 3. Profile resolution and config shape — **landed** (`d6c1c1a`)
 
-- `SessionProfile.domain` → `Option<String>` (a chat profile names no pack).
-- Add `description` (for the picker), `delegation: Option<bool>`, `prompt_append: Option<String>`,
-  `model: Option<String>`, `delegate_grant: Option<String>`.
-- Decide where the non-capability settings live: typed fields on `SessionGrant` (readable by the chat
-  engine) rather than `overrides`, which is documented as opaque and pack-parsed.
-- Write out a concrete `basic-chat` profile and check it reads right **before** wiring surfaces.
+A profile may now declare its own authority instead of pointing at a policy grant. Settled shape,
+TOML (the whole config stack is TOML, and these files lean hard on comments):
+
+```toml
+[[session_profiles]]
+name        = "basic-chat"
+description = "Quick answers. Web, search, read-only notes. No dispatch."
+delegation  = false
+model       = "deepseek/deepseek-v4-flash"
+prompt_append = "Answer directly and briefly."
+read  = ["Work", "Life"]
+write = []
+mcps  = [
+  "liberado-search-orchestrator-mcp",                    # whole server
+  { name = "turbovault", tools = ["read_note"] },        # named tools only
+]
+```
+
+- **`policy.toml` stays a ceiling, not a bypass.** `ceiling = "<grant>"` narrows the declaration
+  against a policy grant, so a profile cannot exceed what the operator allowed there. Optional and
+  never defaulted to `name` — a ceiling appearing by accident (no grant of that name) would narrow
+  every declaration to nothing, and a profile silently granting no tools is the worst failure here.
+- **`write = []` is load-bearing.** `ExecuteTool("turbovault:write_note")` alone does not permit a
+  write: the runtime gate checks `Write(<zone>)` separately (since the 2026-07-14 fix). Zones are
+  stated, not inferred from the granted tools, whose declarations can change underneath a profile.
+- `domain` optional (a chat profile runs the face agent, not a pack); `/spawn` and `POST /api/goals`
+  reject a domainless profile by name rather than falling back to a domain nobody picked.
+- `resolve_session_profile` returns `ResolvedProfile`, not a 4-tuple.
+- Both shapes coexist: `component` (borrow a grant wholesale — the live `research` profile, tested
+  unchanged) **or** an inline declaration. Setting both is refused at load.
 
 ### 4. Switching
 
@@ -168,7 +192,7 @@ Recorded because each was invisible in the failing direction:
 
 ## Open questions
 
-- Where the non-capability profile settings live (step 3's first bullet).
-- Whether `/profile` on an existing chat should switch in place or offer to fork. Switching is
-  settled; forking may still be the nicer default for a *narrowing* switch.
+- Where a chat's *resolved* non-capability settings (model, prompt_append, delegation) ride from
+  config to the running turn. `SessionGrant.overrides` is documented as opaque and pack-parsed, so
+  typed fields on `SessionGrant` are the likely answer — decided in step 4/5.
 - `may_delegate_to` — deferred, shape sketched above.
