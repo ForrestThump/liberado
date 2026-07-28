@@ -4,6 +4,7 @@ pub mod fork;
 pub mod help;
 pub mod model;
 pub mod new;
+pub mod profile;
 pub mod quit;
 pub mod session;
 pub mod status;

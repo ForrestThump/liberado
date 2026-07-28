@@ -43,6 +43,11 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
         description: "browse eligible models (type to search)",
     },
     CommandSpec {
+        insert: "/profile",
+        name: "/profile",
+        description: "session profile for this chat (tools, dispatch)",
+    },
+    CommandSpec {
         insert: "/fork",
         name: "/fork",
         description: "branch this conversation, keeping the original (/fork <turn> to go back)",

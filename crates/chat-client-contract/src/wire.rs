@@ -331,6 +331,15 @@ pub struct ChatMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationHistoryResponse {
     pub messages: Vec<ChatMessage>,
+    /// The session profile this conversation runs under, if any.
+    ///
+    /// On the history response because it is what a client fetches when *opening* a conversation,
+    /// and a surface has to show the active authority from the first paint rather than only after
+    /// the human changes it. Absent (or `null`) means the daemon's default grant.
+    ///
+    /// `#[serde(default)]` so a client built before this field still decodes a newer daemon's reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -823,6 +832,7 @@ mod tests {
                     tool_call_id: None,
                 },
             ],
+            profile: Some("basic-chat".into()),
         };
         let json = serde_json::to_value(&resp).unwrap();
         let back: ConversationHistoryResponse = serde_json::from_value(json).unwrap();

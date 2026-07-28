@@ -519,7 +519,15 @@ pub async fn get_conversation(
                 .into_iter()
                 .map(chat_message_from_provider)
                 .collect();
-            Json(ConversationHistoryResponse { messages }).into_response()
+            // Read from the session's own header rather than tracked client-side: a conversation
+            // opened in a second tab, or after a restart, must show the authority it actually runs
+            // under.
+            let profile = state
+                .sessions
+                .session(id)
+                .await
+                .and_then(|h| h.grant.profile);
+            Json(ConversationHistoryResponse { messages, profile }).into_response()
         }
         Err(liberado_main_agent::SessionError::Store(
             liberado_conversation_store::StoreError::NotFound(_),

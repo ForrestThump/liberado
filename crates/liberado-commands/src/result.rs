@@ -19,6 +19,8 @@ pub enum CommandResult {
         active: String,
     },
     ModelInfoShown,
+    /// The text summary for `/profile` was printed (companion to [`OpenProfileBrowser`]).
+    ProfileInfoShown,
     /// Open the client's searchable theme browser (`/theme` / `/theme list`). Emitted alongside
     /// [`CommandResult::ShowOptions`] so a text-only surface still prints the list while a surface
     /// with a picker shows one instead.
@@ -26,6 +28,11 @@ pub enum CommandResult {
     /// Open the client's searchable model browser (`/model`). TUI maps this to a full-screen
     /// picker that loads `GET /api/models`.
     OpenModelBrowser,
+    /// The surface should open its session-profile picker.
+    ///
+    /// Emitted alongside the text summary, like `OpenThemeBrowser`, so a surface with no picker
+    /// still prints something useful rather than silently doing nothing.
+    OpenProfileBrowser,
     SessionClosed {
         id: Option<String>,
     },

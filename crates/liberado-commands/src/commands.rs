@@ -8,6 +8,11 @@ pub enum SlashCommand {
     Status,
     Theme(ThemeCmd),
     Model,
+    /// Open the session-profile picker: which tools (and dispatch mode) *this chat* runs under.
+    ///
+    /// Per-conversation and switchable, unlike `/model`'s process-wide hot-swap. A human-only act
+    /// by construction — the agent has no tool that reaches it.
+    Profile,
     Session(SessionCmd),
     /// Open the unified session switcher (primary chat + goal sessions in one list).
     Sessions,
@@ -92,6 +97,7 @@ impl std::fmt::Display for SlashCommand {
                 ThemeCmd::Reload => write!(f, "/theme reload"),
             },
             SlashCommand::Model => write!(f, "/model"),
+            SlashCommand::Profile => write!(f, "/profile"),
             SlashCommand::Session(cmd) => match cmd {
                 SessionCmd::Info => write!(f, "/session info"),
                 SessionCmd::List => write!(f, "/session list"),
