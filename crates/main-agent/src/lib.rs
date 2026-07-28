@@ -16,7 +16,7 @@
 //! marker so the model-visible context stays under the context window.
 
 use liberado_executor::{AgentEvent, ExecError, Executor, ToolRuntime};
-use liberado_provider::Message;
+use liberado_provider::{Message, Role};
 use tokio::sync::mpsc::Sender;
 
 mod compaction;
@@ -140,6 +140,35 @@ impl Conversation {
             .await;
         rollback.disarm();
         result
+    }
+
+    /// The model-visible view, for tests asserting where a message landed.
+    #[cfg(test)]
+    pub(crate) fn messages_for_test(&self) -> &[Message] {
+        &self.messages
+    }
+
+    /// Add a session profile's extra prompt text for this turn, if it has any.
+    ///
+    /// Appended as a **second system message** rather than edited into the first, for two reasons.
+    /// The first system message is the conversation's persisted root node — rewriting it would mean
+    /// rewriting history every time a profile changed, and the store is append-only. And the model
+    /// sees this view fresh each turn, so a profile switch takes effect immediately without any
+    /// stored message becoming wrong about which profile was in force when it was written.
+    ///
+    /// Placed right after the base prompt so it reads as a qualification of it rather than as
+    /// something the user said. Idempotent in practice because the view is rebuilt per turn; calling
+    /// it twice on one view would append twice, so don't.
+    pub fn apply_prompt_append(&mut self, extra: Option<&str>) {
+        let Some(text) = extra.map(str::trim).filter(|t| !t.is_empty()) else {
+            return;
+        };
+        let insert_at = self
+            .messages
+            .iter()
+            .position(|m| m.role != Role::System)
+            .unwrap_or(self.messages.len());
+        self.messages.insert(insert_at, Message::system(text));
     }
 
     /// Append a user message and a plain assistant reply directly, with no executor/tool

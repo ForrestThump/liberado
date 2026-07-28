@@ -118,6 +118,19 @@ pub fn default_conversation_title(user_text: &str) -> String {
     out
 }
 
+/// What one turn runs under, resolved from the session's profile (or the daemon's defaults).
+///
+/// A struct rather than three lookups so a profile switch cannot land between them — a turn running
+/// one profile's tools under another's delegation setting would be a genuinely confusing bug to
+/// chase, and the cost of preventing it is one type.
+struct TurnSettings {
+    capabilities: CapabilitySet,
+    /// Whether the face agent may `delegate`. Resolved: the profile's setting, else the daemon's.
+    delegation: bool,
+    /// Extra system-prompt text for this profile, injected per turn.
+    prompt_append: Option<String>,
+}
+
 /// What can go wrong running a persisted turn: the agent loop failed, or the store did. Both are
 /// transparent — the caller sees the underlying cause, not a wrapper.
 #[derive(Debug, Error)]
@@ -559,13 +572,19 @@ impl ChatSessions {
         let (mut convo, parent_leaf) = self.maybe_compact(session, nodes, parent_leaf, user).await;
         let before = convo.len();
 
-        let reply = if self.uses_face_agent() {
+        // Read per turn, not cached: a profile switch mid-conversation takes effect on the next
+        // turn, which is the whole of "switchable" — no restart, no reconnect.
+        let settings = self.turn_settings(session).await;
+        convo.apply_prompt_append(settings.prompt_append.as_deref());
+
+        let reply = if self.uses_face_agent(settings.delegation) {
             let turn_deferral = Arc::new(AtomicBool::new(false));
-            // Read per turn, not cached: a profile switch mid-conversation takes effect on the next
-            // turn, which is the whole of "switchable" — no restart, no reconnect.
-            let capabilities = self.session_capabilities(session).await;
-            let turn_runtime =
-                self.build_face_runtime(user, session, capabilities, turn_deferral.clone());
+            let turn_runtime = self.build_face_runtime(
+                user,
+                session,
+                settings.capabilities.clone(),
+                turn_deferral.clone(),
+            );
             let reply = convo
                 .turn(&self.executor, turn_runtime.as_ref(), user)
                 .await?;
@@ -615,7 +634,10 @@ impl ChatSessions {
         let (mut convo, parent_leaf) = self.maybe_compact(session, nodes, parent_leaf, user).await;
         let before = convo.len();
 
-        if self.uses_face_agent() {
+        let settings = self.turn_settings(session).await;
+        convo.apply_prompt_append(settings.prompt_append.as_deref());
+
+        if self.uses_face_agent(settings.delegation) {
             // Streaming path (web-UI SSE): tokens are emitted live, so a post-turn deferral flag
             // can't retract an already-streamed reply — Gap 2 suppression is a buffered-`turn`
             // affordance (the Telegram surface). Pass a throwaway flag to satisfy the signature.
@@ -646,8 +668,18 @@ impl ChatSessions {
         Ok(())
     }
 
-    fn uses_face_agent(&self) -> bool {
-        self.delegation_mode && self.face_bridge.is_some()
+    /// Whether this turn runs as the face agent (delegating) rather than driving the dispatcher
+    /// directly.
+    ///
+    /// `delegation` is the **session's** resolved setting, not the process-wide flag: turning
+    /// dispatch off is most of what a "basic chat" profile means, and a profile that could only
+    /// shorten the tool list would leave the agent still handing work to the dispatcher.
+    ///
+    /// `face_bridge` still gates it. A daemon with no hub attached has no `delegate` tool to offer,
+    /// so a profile asking for delegation there gets the direct path rather than a tool that does
+    /// not exist.
+    fn uses_face_agent(&self, delegation: bool) -> bool {
+        delegation && self.face_bridge.is_some()
     }
 
     /// The capability set a turn in `session` runs under.
@@ -664,17 +696,50 @@ impl ChatSessions {
     /// A session the store cannot produce a header for also falls back — a lookup failure must not
     /// quietly become an authority change.
     async fn session_capabilities(&self, session: Ulid) -> CapabilitySet {
-        match self.store.header(session).await {
-            Ok(header) if header.grant.profile.is_some() => header.grant.capabilities,
-            Ok(_) => self.capabilities.clone(),
+        self.turn_settings(session).await.capabilities
+    }
+
+    /// Everything a turn in `session` runs under, resolved once per turn.
+    ///
+    /// One lookup rather than three: capabilities, delegation and the prompt nudge all come from the
+    /// same header read, and reading them separately would let a profile switch land *between* them —
+    /// a turn running one profile's tools under another's delegation setting.
+    async fn turn_settings(&self, session: Ulid) -> TurnSettings {
+        let header = match self.store.header(session).await {
+            Ok(header) => header,
             Err(e) => {
                 tracing::warn!(
                     error = %e,
                     session = %session,
-                    "could not read session grant; falling back to the process-wide grant"
+                    "could not read session grant; falling back to the process-wide defaults"
                 );
-                self.capabilities.clone()
+                return self.default_turn_settings();
             }
+        };
+        // A *named* profile is authoritative; the absence of one means the daemon's defaults. See
+        // `ConversationHeader::grant` for why the name, not an empty capability set, is the signal.
+        if header.grant.profile.is_none() {
+            return self.default_turn_settings();
+        }
+        TurnSettings {
+            capabilities: header.grant.capabilities,
+            delegation: header.grant.delegation.unwrap_or(self.delegation_mode),
+            prompt_append: header.grant.prompt_append,
+        }
+    }
+
+    /// The daemon-wide delegation default, for tests asserting the inherit path without hard-coding
+    /// what that default happens to be.
+    #[cfg(test)]
+    pub(crate) fn delegation_mode_for_test(&self) -> bool {
+        self.delegation_mode
+    }
+
+    fn default_turn_settings(&self) -> TurnSettings {
+        TurnSettings {
+            capabilities: self.capabilities.clone(),
+            delegation: self.delegation_mode,
+            prompt_append: None,
         }
     }
 

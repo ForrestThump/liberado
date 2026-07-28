@@ -1966,3 +1966,117 @@ async fn an_unknown_session_falls_back_to_the_process_grant() {
         process_grant
     );
 }
+
+/// A profile that turns dispatch off must actually change the *shape* of the turn, not merely
+/// shorten the tool list â€” that is most of what "basic chat" means.
+#[tokio::test]
+async fn a_profile_can_switch_delegation_off_for_one_conversation() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = sessions_at(dir.path(), vec![]).await;
+
+    let default_on = sessions.create(None).await.unwrap();
+    let basic = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                capabilities: CapabilitySet::empty(),
+                profile: Some("basic-chat".into()),
+                delegation: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        sessions.turn_settings(default_on).await.delegation == sessions.delegation_mode_for_test(),
+        "no profile must inherit the daemon's setting, whatever it is"
+    );
+    assert!(
+        !sessions.turn_settings(basic).await.delegation,
+        "the profile's `delegation = false` must win for this conversation"
+    );
+}
+
+/// `None` means "inherit", not "off" â€” a profile that says nothing about delegation must not
+/// silently disable it.
+#[tokio::test]
+async fn a_profile_silent_on_delegation_inherits_the_daemon_setting() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = sessions_at(dir.path(), vec![]).await;
+    let id = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                profile: Some("quiet".into()),
+                delegation: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        sessions.turn_settings(id).await.delegation,
+        sessions.delegation_mode_for_test()
+    );
+}
+
+#[tokio::test]
+async fn a_profiles_prompt_append_reaches_the_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = sessions_at(dir.path(), vec![]).await;
+    let id = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                profile: Some("terse".into()),
+                prompt_append: Some("Answer in one sentence.".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        sessions.turn_settings(id).await.prompt_append.as_deref(),
+        Some("Answer in one sentence.")
+    );
+    // ...and an unprofiled chat gets none, rather than inheriting another session's.
+    let plain = sessions.create(None).await.unwrap();
+    assert!(sessions.turn_settings(plain).await.prompt_append.is_none());
+}
+
+/// The nudge must qualify the system prompt, not arrive as if the user said it â€” a model treats
+/// those very differently.
+#[test]
+fn a_prompt_append_lands_after_the_system_prompt_and_before_the_first_user_turn() {
+    let mut convo = Conversation::from_history(vec![
+        Message::system("base prompt"),
+        Message::user("hello"),
+        Message::assistant("hi"),
+    ]);
+    convo.apply_prompt_append(Some("Be terse."));
+
+    let roles: Vec<Role> = convo.messages_for_test().iter().map(|m| m.role).collect();
+    assert_eq!(
+        roles,
+        vec![Role::System, Role::System, Role::User, Role::Assistant],
+        "the nudge must sit with the system prompt, not among the dialogue"
+    );
+    assert_eq!(convo.messages_for_test()[1].content, "Be terse.");
+}
+
+#[test]
+fn an_absent_or_blank_prompt_append_changes_nothing() {
+    for extra in [None, Some(""), Some("   \n ")] {
+        let mut convo =
+            Conversation::from_history(vec![Message::system("base"), Message::user("q")]);
+        convo.apply_prompt_append(extra);
+        assert_eq!(
+            convo.messages_for_test().len(),
+            2,
+            "blank nudge must not add a message: {extra:?}"
+        );
+    }
+}
