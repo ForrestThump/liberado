@@ -424,8 +424,135 @@ not on that list is refused). When in doubt, omit `delivery`.";
 
 /// Loose schema for v1 — the prompt carries the shape. A precise JSON Schema (e.g. via `schemars`)
 /// is a follow-up that improves real-provider reliability.
+/// The JSON Schema for a classifier reply — the shape a `DispatchDecision` must arrive in.
+///
+/// # Why this exists now
+///
+/// It used to be the placeholder `{"type": "object"}`, which describes nothing, and the provider
+/// discarded even that in favour of `{"type":"json_object"}` — "valid JSON, any shape". So the
+/// classifier's output shape rested entirely on prompt text, at temperature 0 with reasoning off, on
+/// a small fast router model. On 2026-07-28 both morning crons died on replies that would not decode.
+///
+/// With a real schema the **backend** constrains decoding: a non-conforming token cannot be emitted.
+///
+/// # Written for `strict` mode
+///
+/// Every object sets `additionalProperties: false` and lists every property in `required`. That is
+/// what OpenAI-compatible strict mode obliges, and it is why fields that are `#[serde(default)]` in
+/// Rust are *required* here — the model must emit `"seed_calls": []` rather than omit it. Serde still
+/// accepts the omission, so a backend that ignores the schema is no worse off than before.
+///
+/// # Only what the classifier may produce
+///
+/// Three variants, not four. `Propose` is a **post-guard downgrade**, never a classification — the
+/// guards route *into* it. Leaving it out means the model cannot emit it even by accident, which is a
+/// constraint the prompt could only ask for politely.
+///
+/// The variants are externally tagged (`{"ExecuteDirect": {…}}`) because that is serde's default
+/// representation for this enum, and the schema has to match what `serde_json` will actually accept.
+/// If the enum ever gains `#[serde(tag = "…")]`, this must change with it — the round-trip test below
+/// is what will tell you.
 fn decision_schema() -> serde_json::Value {
-    serde_json::json!({ "type": "object" })
+    let variant = |name: &str, payload: serde_json::Value| {
+        serde_json::json!({
+            "type": "object",
+            "properties": { name: payload },
+            "required": [name],
+            "additionalProperties": false,
+        })
+    };
+
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "action": {
+                "description": "Exactly one of the three classifications.",
+                "anyOf": [
+                    // `seed_calls` is deliberately absent, and this is the one real cost of strict
+                    // mode: a seed call carries a free-form `args` object, and strict mode cannot
+                    // express "an object of arbitrary shape" — it requires `additionalProperties:
+                    // false`, which permits only the properties you list, i.e. none.
+                    //
+                    // So the choice was the opening move or the hard guarantee. The guarantee wins:
+                    // `seed_calls` is an optimisation whose absence is already well-defined ("let the
+                    // executor decide every step"), and the executor's loop is adaptive by design,
+                    // whereas a router that cannot be trusted to emit parseable output fails the
+                    // whole dispatch. Serde still accepts the field, so nothing else changes if it
+                    // ever comes back.
+                    variant("ExecuteDirect", serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "relevant_mcps": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description":
+                                    "MCP names relevant to this goal. Empty means no narrowing.",
+                            },
+                        },
+                        "required": ["relevant_mcps"],
+                        "additionalProperties": false,
+                    })),
+                    variant("DispatchSubagent", serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "goal": {
+                                "type": "string",
+                                "description": "Restated, self-contained goal for the subagent.",
+                            },
+                            "allowed_mcps": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "MCPs the subagent may see. Empty = all in scope.",
+                            },
+                            "success_criteria": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "How the subagent knows it is done.",
+                            },
+                        },
+                        // Deliberately a subset of the Rust type's fields. `capabilities`,
+                        // `delivery`, `depth`, `model` and `correlation_id` are ours to decide, not
+                        // the model's — `correlation_id` especially is an internal id the dispatcher
+                        // mints. Omitting them from the schema means the model cannot set them, and
+                        // serde's `#[serde(default)]` fills them in.
+                        "required": ["goal", "allowed_mcps", "success_criteria"],
+                        "additionalProperties": false,
+                    })),
+                    variant("Clarify", serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "questions": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "What the main agent must resolve first.",
+                            },
+                            "what_blocked": {
+                                "type": "string",
+                                // snake_case: `BlockReason` is `#[serde(rename_all = "snake_case")]`,
+                                // so PascalCase here would have made every Clarify fail to
+                                // deserialize — reintroducing the exact failure being fixed, from
+                                // the other side. The test below checks each against the real type.
+                                "enum": ["ambiguous", "missing_param", "capability_gap"],
+                                "description": "Why this could not be classified into an action.",
+                            },
+                        },
+                        "required": ["questions", "what_blocked"],
+                        "additionalProperties": false,
+                    })),
+                ],
+            },
+            "confidence": {
+                "type": "number",
+                "description": "0.0-1.0 confidence in this classification.",
+            },
+            "rationale": {
+                "type": "string",
+                "description": "One line explaining the choice. Not shown to the user.",
+            },
+        },
+        "required": ["action", "confidence", "rationale"],
+        "additionalProperties": false,
+    })
 }
 
 /// The safe default when classification can't be trusted: ask the main agent.
@@ -1555,5 +1682,149 @@ mod tests {
         dispatcher.record_outcome("some goal", &decision).await;
 
         assert!(guidance.recorded.lock().unwrap().is_empty());
+    }
+
+    // â”€â”€ The classifier schema â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    //
+    // A schema that constrains the model into a shape `serde` then refuses is worse than no schema:
+    // it converts an occasional malformed reply into a guaranteed failure. These pin the two halves
+    // against each other.
+
+    /// The decisive property: a reply conforming to the schema must deserialize.
+    ///
+    /// Hand-written JSON, in the exact shape the schema describes, rather than round-tripping a Rust
+    /// value â€” round-tripping proves serde agrees with itself and says nothing about whether the
+    /// *schema* describes that shape.
+    #[test]
+    fn a_reply_shaped_by_the_schema_deserializes() {
+        let cases = [
+            serde_json::json!({
+                "action": {
+                    "ExecuteDirect": {
+                        "relevant_mcps": ["turbovault"],
+                    }
+                },
+                "confidence": 0.95,
+                "rationale": "single lookup",
+            }),
+            // Empty collections are the common terse case and must still decode.
+            serde_json::json!({
+                // Serde still accepts `seed_calls` even though the schema no longer offers it, so a
+                // persisted decision from before this change still decodes.
+                "action": { "ExecuteDirect": { "seed_calls": [], "relevant_mcps": [] } },
+                "confidence": 0.5,
+                "rationale": "let the executor decide",
+            }),
+            serde_json::json!({
+                "action": {
+                    "DispatchSubagent": {
+                        "goal": "research X",
+                        "allowed_mcps": ["liberado-spider-mcp"],
+                        "success_criteria": ["a written summary"],
+                    }
+                },
+                "confidence": 0.8,
+                "rationale": "multi-step",
+            }),
+            serde_json::json!({
+                "action": {
+                    "Clarify": { "questions": ["which vault?"], "what_blocked": "ambiguous" }
+                },
+                "confidence": 0.2,
+                "rationale": "ambiguous target",
+            }),
+        ];
+
+        for case in cases {
+            let decoded: Result<DispatchDecision, _> = serde_json::from_value(case.clone());
+            assert!(
+                decoded.is_ok(),
+                "schema-shaped reply must deserialize: {case}\nerror: {:?}",
+                decoded.unwrap_err()
+            );
+        }
+    }
+
+    /// Every `what_blocked` the schema offers must be a real `BlockReason`. A typo here would let the
+    /// model emit a value the schema blesses and serde rejects â€” the exact failure this is meant to
+    /// prevent, arriving from the other direction.
+    #[test]
+    fn every_block_reason_the_schema_offers_is_a_real_one() {
+        let schema = decision_schema();
+        let offered = schema["properties"]["action"]["anyOf"]
+            .as_array()
+            .expect("anyOf")
+            .iter()
+            .find_map(|v| {
+                v["properties"]["Clarify"]["properties"]["what_blocked"]["enum"].as_array()
+            })
+            .expect("Clarify offers what_blocked");
+
+        for value in offered {
+            let name = value.as_str().expect("string");
+            let decoded: Result<BlockReason, _> = serde_json::from_value(serde_json::json!(name));
+            assert!(
+                decoded.is_ok(),
+                "schema offers unknown BlockReason '{name}'"
+            );
+        }
+    }
+
+    /// Strict mode obliges every object to close itself and list its properties. A schema that
+    /// violates it is *rejected outright* by the backend â€” a louder failure than the malformed
+    /// replies it replaces, and one worth catching here rather than at 06:55.
+    #[test]
+    fn the_schema_satisfies_strict_mode_rules() {
+        fn check(node: &serde_json::Value, path: &str) {
+            if node["type"] == "object" {
+                assert_eq!(
+                    node["additionalProperties"],
+                    serde_json::json!(false),
+                    "{path}: strict mode requires additionalProperties:false"
+                );
+                let props: Vec<&String> = node["properties"]
+                    .as_object()
+                    .map(|o| o.keys().collect())
+                    .unwrap_or_default();
+                let required: Vec<&str> = node["required"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+                    .unwrap_or_default();
+                for p in &props {
+                    assert!(
+                        required.contains(&p.as_str()),
+                        "{path}: strict mode requires every property in `required`, missing '{p}'"
+                    );
+                }
+            }
+            match node {
+                serde_json::Value::Object(map) => {
+                    for (k, v) in map {
+                        check(v, &format!("{path}.{k}"));
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for (i, v) in items.iter().enumerate() {
+                        check(v, &format!("{path}[{i}]"));
+                    }
+                }
+                _ => {}
+            }
+        }
+        check(&decision_schema(), "root");
+    }
+
+    /// `Propose` is a post-guard downgrade, never a classification. Leaving it out of the schema is
+    /// what makes that structural rather than a request in the prompt.
+    #[test]
+    fn the_schema_does_not_offer_propose() {
+        let rendered = decision_schema().to_string();
+        assert!(
+            !rendered.contains("Propose"),
+            "the classifier must not be able to emit Propose"
+        );
+        for expected in ["ExecuteDirect", "DispatchSubagent", "Clarify"] {
+            assert!(rendered.contains(expected), "missing variant {expected}");
+        }
     }
 }
