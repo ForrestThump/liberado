@@ -206,11 +206,45 @@ pub fn to_openai_request(model: &str, req: &CompletionRequest, name_map: &ToolNa
                 .collect(),
         );
     }
-    if matches!(req.response_format, ResponseFormat::Json { .. }) {
-        // Most OpenAI-compatible backends support this "type": "json_object" hint; a backend whose
-        // routed model doesn't honor it ignores or rejects it — picking a capable model is the
-        // caller's job (Decision 13's role-tiered model floors).
-        body["response_format"] = json!({ "type": "json_object" });
+    if let ResponseFormat::Json { schema } = &req.response_format {
+        // **Send the schema.** This used to send only `{"type": "json_object"}`, discarding the
+        // schema every caller had gone to the trouble of building — `complete_json` takes one,
+        // `CompletionRequest::with_json_schema` stores one, and it stopped here.
+        //
+        // The difference is not cosmetic. `json_object` asks for *syntactically valid JSON* and
+        // nothing more: the shape is left to the model's goodwill, and on a small, fast router model
+        // that goodwill is exactly what runs out. `json_schema` with `strict` makes the **backend**
+        // constrain decoding, so a non-conforming token cannot be emitted in the first place. That
+        // is the same mechanism tool-calling uses, without changing our call shape.
+        //
+        // Gated on the schema actually *describing* something. A schema with no `properties` —
+        // `{"type":"object"}`, which is what `liberado-dispatcher`'s `decision_schema()` still
+        // returns — constrains nothing, and sending it under `strict` would be rejected by backends
+        // that (correctly) require `properties`/`required` there. So today this changes no request
+        // on the wire; it activates the moment a caller writes a real schema.
+        //
+        // **If you are writing that schema**: `strict` obliges you to satisfy the backend's rules —
+        // every property listed in `required`, and `additionalProperties: false` — or the request is
+        // refused outright rather than merely under-constrained. Verify against the live backend
+        // before relying on it; a refusal is a louder failure than the malformed replies this
+        // replaces, and worth catching in staging rather than in a 06:55 cron.
+        let constrains_shape = schema
+            .get("properties")
+            .is_some_and(serde_json::Value::is_object);
+        if constrains_shape {
+            body["response_format"] = json!({
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "decision",
+                    // Refuse a reply that does not fit rather than silently returning prose we would
+                    // fail to parse a layer later.
+                    "strict": true,
+                    "schema": schema,
+                }
+            });
+        } else {
+            body["response_format"] = json!({ "type": "json_object" });
+        }
     }
     if let Some(t) = req.temperature {
         body["temperature"] = json!(t);
@@ -494,10 +528,44 @@ mod tests {
         assert_eq!(body["messages"][0]["role"], "system");
         assert_eq!(body["messages"][1]["role"], "user");
         assert_eq!(body["messages"][1]["content"], "hi");
+        // A shapeless schema still asks only for `json_object` — see `to_openai_request`.
         assert_eq!(body["response_format"]["type"], "json_object");
         assert_eq!(body["temperature"], 0.0);
         assert_eq!(body["max_tokens"], 64);
         assert!(body.get("tools").is_none());
+    }
+
+    /// A schema that actually describes a shape must reach the wire.
+    ///
+    /// It used not to: every caller's schema was dropped and replaced with `{"type":"json_object"}`,
+    /// which asks for valid JSON and says nothing about the shape. That left a small, fast router
+    /// model's output shape resting entirely on prompt text.
+    #[test]
+    fn a_schema_that_constrains_shape_is_sent_as_json_schema() {
+        let schema = json!({
+            "type": "object",
+            "properties": { "action": { "type": "string" } },
+            "required": ["action"],
+            "additionalProperties": false,
+        });
+        let req =
+            CompletionRequest::new(vec![Message::user("hi")]).with_json_schema(schema.clone());
+
+        let body = to_openai_request("test-model", &req, &empty_name_map());
+        assert_eq!(body["response_format"]["type"], "json_schema");
+        assert_eq!(body["response_format"]["json_schema"]["strict"], true);
+        assert_eq!(body["response_format"]["json_schema"]["schema"], schema);
+    }
+
+    /// ...and a shapeless one must not, or a backend enforcing `strict` refuses the request outright
+    /// — a louder failure than the under-constrained reply it would be replacing.
+    #[test]
+    fn a_shapeless_schema_falls_back_to_json_object() {
+        for shapeless in [json!({ "type": "object" }), json!({}), json!(null)] {
+            let req = CompletionRequest::new(vec![Message::user("hi")]).with_json_schema(shapeless);
+            let body = to_openai_request("test-model", &req, &empty_name_map());
+            assert_eq!(body["response_format"]["type"], "json_object");
+        }
     }
 
     #[test]
