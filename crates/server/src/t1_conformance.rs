@@ -1381,3 +1381,38 @@ async fn l11_parking_an_unknown_session_is_refused() {
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+/// A domain with no `[[grants]]` entry resolves to zero authority (the documented fail-safe), which
+/// means the session could do nothing at all. Refuse it here rather than start it: the run would
+/// otherwise fail every action with a capability gap naming the *MCP*, telling the operator nothing
+/// about the missing grant.
+///
+/// Live instance: `dispatch` is a registered domain and `policy.toml`'s grant is `dispatcher`, so
+/// `POST /api/goals {"domain":"dispatch"}` started a powerless session and blamed caldav.
+#[tokio::test]
+async fn a_goal_on_a_domain_with_no_grant_is_refused_with_the_remedy() {
+    // `life` is granted; `dispatch` is not — the shape the live config actually has.
+    let h = T1Harness::with_pack(Arc::new(LifeOpsDemoRunner), life_config_with_ask_human()).await;
+
+    let (status, body) = h
+        .post_json(
+            "/api/goals",
+            r#"{"description":"do the thing","domain":"dispatch","success_criteria":[]}"#,
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+    assert!(
+        body.contains("dispatch") && body.contains("[[grants]]"),
+        "the error must name the domain and the fix, got: {body}"
+    );
+
+    // ...and a granted domain is unaffected.
+    let (ok_status, ok_body) = h
+        .post_json(
+            "/api/goals",
+            r#"{"description":"do the thing","domain":"life","success_criteria":[]}"#,
+        )
+        .await;
+    assert_eq!(ok_status, StatusCode::ACCEPTED, "body: {ok_body}");
+}

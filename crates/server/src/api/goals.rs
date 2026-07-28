@@ -70,6 +70,29 @@ pub async fn goals_start(
                 .into_response();
         }
     };
+    // A session that may do nothing is safe, and never useful. Refuse it here rather than start it.
+    //
+    // With no profile named, the grant is keyed by the **domain name** (the pool rule). A domain with
+    // no matching `[[grants]]` entry therefore resolves to zero authority — correct as a fail-safe,
+    // but the session then burns a run failing every action with a capability gap, and the error the
+    // operator sees names the *MCP* rather than the missing grant. `dispatch` is exactly this today:
+    // it is a registered domain, and `policy.toml`'s grant is `dispatcher`.
+    //
+    // `resolve_session_profile` keeps its documented empty-on-unknown-domain behaviour; the refusal
+    // belongs here, where "can do nothing" is actionable and can name both remedies.
+    if goal.profile.is_none() && capabilities.capabilities.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: format!(
+                    "domain '{domain}' has no capability grant, so this session could do nothing. \
+                     Add a policy.toml [[grants]] entry with component = \"{domain}\", or name a \
+                     session profile that carries one."
+                ),
+            }),
+        )
+            .into_response();
+    }
     if domain.as_str() != goal.domain.as_str() {
         goal.domain = liberado_session::DomainHint::from(domain.as_str());
     }

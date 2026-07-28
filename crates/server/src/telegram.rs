@@ -334,6 +334,17 @@ impl TelegramChatBridge {
                     }
                 };
 
+                // Same refusal as `POST /api/goals`: a domain with no grant resolves to zero
+                // authority, and a session that may do nothing is safe but never useful. Saying so
+                // beats a run that fails every action with a capability gap naming the wrong thing.
+                if profile.is_none() && capabilities.capabilities.is_empty() {
+                    return Some(format!(
+                        "'{resolved_domain}' has no capability grant, so that session could do \
+                         nothing. Add a policy.toml [[grants]] entry with component = \
+                         \"{resolved_domain}\", or /spawn a configured profile."
+                    ));
+                }
+
                 let mut spec = GoalSpec {
                     id: None,
                     description: goal.clone(),
