@@ -235,6 +235,7 @@ async fn list_backfills_title_from_existing_user_message() {
             title: None,
             parent_conversation: None,
             spawned_by: None,
+            ephemeral: false,
         })
         .await
         .unwrap();
@@ -1418,6 +1419,10 @@ impl ConversationStore for FailOnceContentStore {
         title: String,
     ) -> liberado_conversation_store::StoreResult<()> {
         self.inner.set_title(conversation, title).await
+    }
+
+    async fn delete(&self, conversation: Ulid) -> liberado_conversation_store::StoreResult<()> {
+        self.inner.delete(conversation).await
     }
 }
 

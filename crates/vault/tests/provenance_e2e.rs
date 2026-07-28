@@ -1,9 +1,16 @@
 //! End-to-end capstone: the provenance loop closes across real components.
 //!
-//! Gated behind the `e2e` feature: it drives the turbovault **host** MCP server,
-//! which currently does not build against our local turbomcp fork (turbovault 1.6
-//! refactored its `McpHandler` usage). Run with `--features e2e` once the fork is
-//! reconciled. The core provenance/attribution self-tests do not need it.
+//! Gated behind the `e2e` feature because it drives the turbovault **host** MCP server, pulling the
+//! whole server graph into the test build. Run it with:
+//!
+//! ```text
+//! cargo test -p liberado-vault --features e2e
+//! ```
+//!
+//! It was previously unrunnable for a different reason — the host would not build against our local
+//! turbomcp fork — which turned out to be a `[patch.crates-io]` that named only the `turbomcp`
+//! umbrella. Two copies of `turbomcp-core` then landed in one graph and its types stopped unifying.
+//! Patching every `turbomcp-*` crate the tree names (see the root `Cargo.toml`) fixed it.
 #![cfg(feature = "e2e")]
 //!
 //! An agent writes a note **through the turbovault MCP server**, carrying its provenance in the

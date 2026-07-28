@@ -15,6 +15,9 @@ struct WebCommandContext {
     message_count: usize,
     conversations: Vec<ConvHeader>,
     status: Option<DaemonStatus>,
+    /// Active theme name. `set_theme` validates against the shared registry and rewrites this; the
+    /// caller reads the new name off `CommandResult::ThemeChanged`.
+    theme: String,
 }
 
 impl CommandContext for WebCommandContext {
@@ -47,10 +50,14 @@ impl CommandContext for WebCommandContext {
         })
     }
     fn theme_names(&self) -> Vec<String> {
-        vec!["dark".to_string()]
+        // The shared registry's built-ins — the same dark/light/nord the TUI offers. User theme
+        // *files* are absent by construction: the registry reads them from
+        // `<config>/liberado/themes/*.toml` and a WASM build has no filesystem, so this surface sees
+        // built-ins only. Adding a built-in upstream reaches both surfaces with no change here.
+        crate::theme::theme_names()
     }
     fn current_theme_name(&self) -> &str {
-        "dark"
+        &self.theme
     }
     fn conversation_title_for(&self, id: &str) -> Option<String> {
         self.conversations
@@ -100,12 +107,24 @@ impl CommandContext for WebCommandContext {
     }
     fn clear_input(&mut self) {}
     fn stop_streaming(&mut self) {}
-    fn set_theme(&mut self, _name: &str) -> bool {
-        false
+    fn set_theme(&mut self, name: &str) -> bool {
+        // Accept only names the registry actually knows, so `/theme set bogus` reports failure
+        // instead of leaving the UI on a theme that silently fell back to dark.
+        if crate::theme::theme_names().iter().any(|n| n == name) {
+            self.theme = name.to_string();
+            true
+        } else {
+            false
+        }
     }
     fn reload_themes(&mut self) -> Result<usize, Vec<String>> {
+        // Honest refusal rather than a fake success. Reloading means re-reading
+        // `<config>/liberado/themes/*.toml`, and a browser cannot read the filesystem — the built-ins
+        // are compiled in, so there is nothing to re-read either. Serving user theme files here would
+        // need the daemon to expose them over HTTP.
         Err(vec![
-            "Theme switching isn't implemented in the web UI yet.".into(),
+            "Reloading themes needs the config directory, which the browser cannot read.              Built-in themes (see /theme list) are always available; user theme files are TUI-only."
+                .into(),
         ])
     }
 }
@@ -154,6 +173,7 @@ pub async fn handle_slash_command(
     session_id: Option<String>,
     sending: bool,
     message_count: usize,
+    current_theme: &str,
 ) -> (Vec<ChatMsg>, Option<String>, Vec<CommandResult>) {
     let cmd = match liberado_commands::parse(text) {
         Some(c) => c,
@@ -173,11 +193,19 @@ pub async fn handle_slash_command(
         message_count,
         conversations,
         status,
+        theme: current_theme.to_string(),
     };
 
     let results = liberado_commands::dispatch(&cmd, &mut ctx);
+    // `ShowOptions` is the list a text-only surface prints. When the same dispatch also asks for a
+    // picker, that picker *is* the list — printing both would show it twice.
+    let opens_picker = results
+        .iter()
+        .any(|r| matches!(r, CommandResult::OpenThemeBrowser));
     for result in &results {
-        if let CommandResult::ShowOptions { title, options } = result {
+        if let CommandResult::ShowOptions { title, options } = result
+            && !opens_picker
+        {
             ctx.push_system_message(render_options(title, options));
         }
     }

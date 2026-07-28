@@ -3,6 +3,16 @@ use dioxus::prelude::*;
 use chat_client_contract::ChatMessage;
 
 use crate::components::markdown::MarkdownText;
+use crate::components::model_browser::ModelBrowser;
+use crate::components::picker::Picker;
+use crate::components::slash_palette::SlashPalette;
+
+// Slash commands only run in the browser — `submit` gates the whole block on wasm32, so gate the
+// imports identically or a native build trips the workspace's zero-warnings bar on unused imports.
+#[cfg(target_arch = "wasm32")]
+use crate::components::slash_commands::handle_slash_command;
+#[cfg(target_arch = "wasm32")]
+use liberado_commands::CommandResult;
 
 // ── Data types ──────────────────────────────────────────────────────────────
 
@@ -76,23 +86,80 @@ async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<Vec<ChatMsg
         .json()
         .await
         .map_err(|e| format!("Bad response: {e}"))?;
-    Ok(history.messages.iter().map(ChatMsg::from_wire).collect())
+    // Drop `system` messages: in stored history that is the face agent's prompt, ~2.2k characters
+    // of instructions that were being rendered as the opening chat bubble of every conversation.
+    //
+    // Filtered HERE and not in the renderer on purpose. The UI also builds `system` messages of its
+    // own for slash-command output (`/help`, command errors — see components/slash_commands.rs), and
+    // those must keep rendering. The distinction is provenance, not role, so it belongs at the point
+    // the wire is decoded.
+    Ok(history
+        .messages
+        .iter()
+        .filter(|m| m.role != "system")
+        .map(ChatMsg::from_wire)
+        .collect())
 }
 
 // ── Chat component ──────────────────────────────────────────────────────────
 
 #[component]
-pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Element {
+pub fn Chat(
+    api_base: String,
+    mut active_conv_id: Signal<Option<String>>,
+    theme_name: Signal<String>,
+    /// Incognito mode (see `components/incognito.rs`): the next chat opened is RAM-only on the
+    /// daemon and discarded when it is left.
+    incognito: Signal<bool>,
+    /// Bumped by the sidebar's "New Chat". An explicit request, because it cannot be inferred from
+    /// `active_conv_id` — an incognito chat never sets one.
+    new_chat_nonce: Signal<u64>,
+    /// The `/model` picker. Owned by `App` rather than here, along with every other dismissible
+    /// layer, so that one place can order them for the Back gesture (see `back_nav.rs`). Chat still
+    /// opens it — the command that asks for it is dispatched from `submit` below.
+    model_browser_open: Signal<bool>,
+    /// The `/theme` picker. Same ownership story as `model_browser_open`.
+    theme_browser_open: Signal<bool>,
+    /// Set true by Back (and by Esc) to hide the slash palette. Owned by `App` for the same reason
+    /// the pickers are: it is a dismissible layer, and one place has to order them.
+    palette_dismissed: Signal<bool>,
+    /// Written here, read by `App`: whether the palette is actually on screen. `App` cannot derive it
+    /// — openness depends on the input text, which lives in this component.
+    palette_visible: Signal<bool>,
+) -> Element {
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut palette_dismissed = palette_dismissed;
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut model_browser_open = model_browser_open;
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut theme_browser_open = theme_browser_open;
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut theme_name = theme_name;
+    // Written back when a sidebar pick takes the user out of a private chat — the mode has to follow
+    // them out, or the banner ends up sitting above a conversation that is being written to disk.
+    let mut incognito = incognito;
+    // The live incognito session, if one has been opened. Tracked separately from `session` because
+    // it is the thing that has to be *discarded*, and by the time we notice we are leaving, `session`
+    // has often already moved on to whatever the user switched to.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut ghost_session = use_signal(|| None::<String>);
     let mut messages = use_signal(Vec::new);
     let mut input = use_signal(String::new);
     let mut sending = use_signal(|| false);
-    let session = use_signal(|| None::<String>);
+    // `mut` is required by the wasm-only slash-command block below, which reassigns this. On a
+    // native build those call sites are cfg'd out and the binding only looks immutable.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut session = use_signal(|| None::<String>);
     let mut should_set_title = use_signal(|| false);
+    // Which palette row is selected — the TUI's `slash_palette_index` by another name, feeding the
+    // same `liberado_commands` functions.
+    let mut slash_index = use_signal(|| 0usize);
 
     let base_for_effect = api_base.clone();
     let base_for_submit = api_base.clone();
     let base_for_title = api_base.clone();
     let base_for_slash = api_base.clone();
+    let base_for_models = api_base.clone();
 
     use_effect(move || {
         if sending() {
@@ -110,15 +177,89 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
                         messages.set(msgs);
                     }
                 });
-            } else {
+            } else if ghost_session.read().is_none() {
                 messages.set(Vec::new());
                 session.set(None);
             }
+            // An incognito chat is deliberately *not* an `active_conv_id`: it is not in the sidebar,
+            // so there is nothing there to highlight, and letting it set one would make the
+            // conversation list flicker at a row that does not exist. That leaves this effect seeing
+            // `None` and reading it as "fresh chat" — which would blank the live transcript the
+            // moment `sending` flips false at the end of the first turn. The guard above is what
+            // keeps a private chat on screen; `discard_ghost` is the only thing that clears it.
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
             let _ = &id;
             let _ = &base;
+        }
+    });
+
+    // Tell the daemon to drop the live incognito session. Deliberately does *not* touch `messages`
+    // or `session`: the three callers below want different things there, and one of them is about to
+    // load a different conversation into both. Idempotent — with nothing live it does nothing.
+    let base_for_discard = api_base.clone();
+    let discard_ghost = use_callback(move |_: ()| {
+        let Some(id) = ghost_session.write().take() else {
+            return;
+        };
+        crate::components::incognito::forget();
+        let base = base_for_discard.clone();
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(crate::components::incognito::discard(base, id));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = (base, id);
+        }
+    });
+
+    // The whole lifecycle of the mode, in one effect, so the ways in and out cannot disagree with
+    // each other. `prev` is what makes the *transitions* visible: an effect only ever sees the
+    // current value, and "incognito is on" and "incognito just came on" call for different things.
+    let mut prev_incognito = use_signal(|| false);
+    let mut prev_new_chat = use_signal(|| 0u64);
+    use_effect(move || {
+        let now = incognito();
+        let was = prev_incognito();
+        let nonce = new_chat_nonce();
+        // "New Chat" while private starts a *new private chat* — the mode is not a per-conversation
+        // setting you have to re-arm, same as a new tab in an incognito window.
+        let asked_for_fresh = nonce != prev_new_chat();
+
+        if now != was || asked_for_fresh {
+            prev_incognito.set(now);
+            prev_new_chat.set(nonce);
+            discard_ghost.call(());
+            // Entering means a *new* chat, always. Without this, switching the mode on while a saved
+            // conversation was open would leave `session` pointing at it — and the next message
+            // would quietly continue that durable conversation with the banner promising privacy,
+            // which is the worst failure this feature could have.
+            messages.set(Vec::new());
+            session.set(None);
+            if active_conv_id.read().is_some() {
+                active_conv_id.set(None);
+            }
+            if now {
+                // Only once the mode has actually been used: no reason to hold an unload handler for
+                // a window that has never opened a private chat.
+                crate::components::incognito::install_unload_discard();
+            }
+            return;
+        }
+
+        // Still on, and a saved conversation got selected. Leave the private chat and disarm the
+        // mode: what you are now looking at is written to disk, so the banner must not claim
+        // otherwise. `messages`/`session` are left alone — the history effect above owns them now.
+        //
+        // Note there is **no `ghost_session.is_some()` condition** here. There used to be, and it
+        // was half of a data-loss bug: arming the mode without sending anything leaves no ghost, so
+        // this branch never fired, the banner sat over a saved conversation, and the mode stayed
+        // armed while that conversation was the live one. Selecting a saved chat means leaving
+        // incognito whether or not a private session was ever opened.
+        if now && active_conv_id.read().is_some() {
+            discard_ghost.call(());
+            incognito.set(false);
+            prev_incognito.set(false);
         }
     });
 
@@ -131,10 +272,18 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
     // `use_callback` (not a plain closure) so the same handle is `Copy` and can be moved into both
     // `onsubmit` and the textarea's `onkeydown` without a "closure moved twice" conflict.
     let submit = use_callback(move |_: ()| {
-        let text = input.read().trim().to_string();
+        let raw = input.read().clone();
+        // Enter accepts the selected palette match without needing Tab first, so `/hel` + Enter runs
+        // `/help`. Same rule and same function as the TUI's `send_message`.
+        let text = match liberado_commands::accept_completion(&raw, slash_index()) {
+            Some(completed) if !palette_dismissed() => completed.trim().to_string(),
+            _ => raw.trim().to_string(),
+        };
         if text.is_empty() || sending() {
             return;
         }
+        slash_index.set(0);
+        palette_dismissed.set(false);
 
         if text.starts_with('/') {
             let session_snapshot = session.read().clone();
@@ -142,6 +291,7 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
             let message_count = messages.read().len();
             let base = base_for_slash.clone();
             let text_owned = text.clone();
+            let theme_snapshot = theme_name.read().clone();
 
             #[cfg(target_arch = "wasm32")]
             wasm_bindgen_futures::spawn_local(async move {
@@ -151,6 +301,7 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
                     session_snapshot,
                     sending_snapshot,
                     message_count,
+                    &theme_snapshot,
                 )
                 .await;
                 for msg in cmd_msgs {
@@ -176,6 +327,21 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
                         CommandResult::SessionClosed { .. } => {
                             session.set(None);
                         }
+                        // The command announces the browser; opening it is the surface's job. This
+                        // arm is what was missing: the result fell into `_` and `/model` printed
+                        // "Opening model browser" while nothing opened.
+                        CommandResult::OpenModelBrowser => {
+                            model_browser_open.set(true);
+                        }
+                        CommandResult::OpenThemeBrowser => {
+                            theme_browser_open.set(true);
+                        }
+                        // The command layer validated the name against the shared registry; all that
+                        // is left is to render it and remember it.
+                        CommandResult::ThemeChanged { name } => {
+                            theme_name.set(name.clone());
+                            crate::theme::save_theme_name(name);
+                        }
                         _ => {}
                     }
                 }
@@ -188,6 +354,7 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
                     session_snapshot,
                     sending_snapshot,
                     message_count,
+                    theme_snapshot,
                 );
             }
 
@@ -209,12 +376,16 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
         open_stream(
             &base_for_submit,
             &text,
-            messages,
-            sending,
-            session,
-            active_conv_id,
-            should_set_title,
+            StreamTargets {
+                messages,
+                sending,
+                session,
+                active_conv_id,
+                should_set_title,
+                ghost_session,
+            },
             &base_for_title,
+            incognito(),
         );
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -229,13 +400,53 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
 
     let conv_id = active_conv_id.read().clone();
 
+    // Shown while the input is a slash query that still matches something, and not while a turn is
+    // streaming — the palette is for composing, and mid-stream the input is about to be replaced.
+    let palette_open = use_memo(move || {
+        !palette_dismissed()
+            && !sending()
+            && !crate::components::slash_palette::matches_for(&input()).is_empty()
+    });
+    // The remainder of the selected match, from the same function the TUI's ghost uses. `None` once
+    // the typed text covers the whole command, so a complete `/help` shows no trailing artifact.
+    let ghost_suffix = use_memo(move || {
+        if !palette_open() {
+            return None;
+        }
+        liberado_commands::ghost_suffix(&input(), slash_index())
+    });
+    // Report openness upward so `App` can put the palette in the Back-gesture layer stack. A mirror
+    // rather than a prop: `App` has no access to the input text this is derived from.
+    let mut palette_visible = palette_visible;
+    use_effect(move || palette_visible.set(palette_open()));
+
+    let chat_cls = if incognito() {
+        "chat incognito"
+    } else {
+        "chat"
+    };
+
     rsx! {
         div {
-            class: "chat",
+            class: "{chat_cls}",
+
+            if incognito() {
+                // Stated where the conversation is, not only on the button in the header — the
+                // wrong thing to be unsure about mid-chat is whether it is being recorded. The
+                // second sentence is the honest limit of the promise.
+                div {
+                    class: "incognito-banner",
+                    span { class: "incognito-glyph", "\u{1F576}" }
+                    span {
+                        b { "Incognito." }
+                        " This chat is never written to disk and is discarded when you leave it. Actions the agent takes — notes, memories, files — still happen."
+                    }
+                }
+            }
 
             div {
                 class: "messages",
-                if messages.read().is_empty() && conv_id.is_none() && !sending() {
+                if messages.read().is_empty() && conv_id.is_none() && !sending() && ghost_session.read().is_none() {
                     div {
                         class: "empty-state",
                         p { "Start a conversation with Liberado." }
@@ -252,29 +463,144 @@ pub fn Chat(api_base: String, mut active_conv_id: Signal<Option<String>>) -> Ele
                 }
             }
 
+            if theme_browser_open() {
+                Picker {
+                    title: "Switch theme",
+                    current: Some(theme_name()),
+                    items: crate::theme::theme_names(),
+                    status: None,
+                    error: None,
+                    open: theme_browser_open,
+                    // A theme applies instantly and locally, so unlike the model picker there is no
+                    // round trip to wait on: close as soon as it is chosen.
+                    on_pick: move |name: String| {
+                        theme_name.set(name.clone());
+                        crate::theme::save_theme_name(&name);
+                        theme_browser_open.set(false);
+                        messages
+                            .write()
+                            .push(ChatMsg {
+                                role: "system",
+                                content: format!("Theme: {name}"),
+                                thinking_steps: Vec::new(),
+                            });
+                    },
+                }
+            }
+
+            if model_browser_open() {
+                ModelBrowser {
+                    api_base: base_for_models.clone(),
+                    open: model_browser_open,
+                    on_switched: move |model: String| {
+                        messages
+                            .write()
+                            .push(ChatMsg {
+                                role: "system",
+                                content: format!("Model switched to {model} (hot-swap, no restart)."),
+                                thinking_steps: Vec::new(),
+                            });
+                    },
+                }
+            }
+
+            if palette_open() {
+                SlashPalette {
+                    input: input(),
+                    selected: slash_index(),
+                    // A tap is the phone's Tab. Fill the input rather than running it, so a
+                    // command that takes an argument can still have one typed.
+                    on_pick: move |idx: usize| {
+                        if let Some(filled) = liberado_commands::complete_commands(&input(), idx) {
+                            input.set(filled);
+                            slash_index.set(idx);
+                            resize_input_to_content();
+                            focus_chat_input();
+                        }
+                    },
+                }
+            }
+
             form {
                 class: "input-bar",
                 onsubmit: move |evt| {
                     evt.prevent_default();
                     submit.call(());
                 },
-                textarea {
-                    id: "chat-input",
-                    class: "input",
-                    placeholder: "Message Liberado\u{2026}",
-                    value: "{input}",
-                    rows: 1,
-                    autofocus: true,
-                    oninput: move |e| {
-                        input.set(e.value());
-                        resize_input_to_content();
-                    },
-                    onkeydown: move |e: Event<KeyboardData>| {
-                        if e.key() == Key::Enter && !e.modifiers().contains(Modifiers::SHIFT) {
-                            e.prevent_default();
-                            submit.call(());
+                // Wraps the textarea so the ghost mirror can sit exactly under it. `.input` keeps
+                // its own metrics; this only supplies the positioning context.
+                div {
+                    class: "input-wrap",
+                    // The dim remainder of the selected match, drawn *behind* a transparent-background
+                    // textarea. The typed part is reproduced invisibly so the visible suffix starts
+                    // precisely where the caret is — there is no way to measure that from Rust, so the
+                    // browser measures it for us by laying out the same text in the same font.
+                    if let Some(ghost) = ghost_suffix() {
+                        div {
+                            class: "input-ghost",
+                            "aria-hidden": "true",
+                            span { class: "input-ghost-typed", "{input}" }
+                            span { class: "input-ghost-suffix", "{ghost}" }
                         }
-                    },
+                    }
+                    textarea {
+                        id: "chat-input",
+                        class: "input",
+                        placeholder: "Message Liberado\u{2026}",
+                        value: "{input}",
+                        rows: 1,
+                        autofocus: true,
+                        // The palette is a completion aid, not a listbox the caret moves into, so the
+                        // textarea keeps focus and announces the relationship instead.
+                        autocomplete: "off",
+                        oninput: move |e| {
+                            input.set(e.value());
+                            // A changed query invalidates the old selection: `/s` selecting the third
+                            // match and then typing `e` would otherwise leave the highlight on
+                            // whatever now happens to be third.
+                            slash_index.set(0);
+                            palette_dismissed.set(false);
+                            resize_input_to_content();
+                        },
+                        onkeydown: move |e: Event<KeyboardData>| {
+                            let open = palette_open();
+                            match e.key() {
+                                // Tab fills progressively — the shared `complete_commands` decides
+                                // how far, which is what keeps `/th` behaving as it does in the TUI.
+                                Key::Tab if open => {
+                                    e.prevent_default();
+                                    if let Some(filled) =
+                                        liberado_commands::complete_commands(&input(), slash_index())
+                                    {
+                                        input.set(filled);
+                                        resize_input_to_content();
+                                    }
+                                }
+                                Key::ArrowDown if open => {
+                                    e.prevent_default();
+                                    let n = crate::components::slash_palette::matches_for(&input()).len();
+                                    if n > 0 {
+                                        slash_index.set((slash_index() + 1).min(n - 1));
+                                    }
+                                }
+                                Key::ArrowUp if open => {
+                                    e.prevent_default();
+                                    slash_index.set(slash_index().saturating_sub(1));
+                                }
+                                // Dismiss without clearing what was typed. Reopened by the next
+                                // keystroke, since that is a new query.
+                                Key::Escape if open => {
+                                    e.prevent_default();
+                                    palette_dismissed.set(true);
+                                }
+                                Key::Enter if !e.modifiers().contains(Modifiers::SHIFT) => {
+                                    e.prevent_default();
+                                    submit.call(());
+                                }
+                                _ => {}
+                            }
+                        },
+                    }
                 }
                 if sending() {
                     button {
@@ -317,6 +643,7 @@ fn MessageRow(msg: ChatMsg) -> Element {
                                 MarkdownText { content: msg.content.clone() }
                             }
                         },
+                        "tool" => rsx! { ToolBlock { content: msg.content.clone() } },
                         _ => rsx! {
                             div { class: "bubble {msg.role}",
                                 "{msg.content}"
@@ -329,14 +656,74 @@ fn MessageRow(msg: ChatMsg) -> Element {
     }
 }
 
+// ── Collapsible tool result ─────────────────────────────────────────────────
+
+/// A `tool` message — the full text a dispatched tool returned, as replayed from conversation
+/// history. This is the block that used to be permanently open: the live turn shows a
+/// [`ThinkingGroup`], but history has no thinking steps (they exist only on the SSE stream), so a
+/// reloaded conversation rendered the whole result as a plain bubble with no way to fold it away.
+/// Several hundred characters of session ids and journal paths then sat between the question and
+/// the answer.
+///
+/// Collapsed by default, with the outcome line kept in the header, and it stays wherever the user
+/// puts it.
+#[component]
+fn ToolBlock(content: String) -> Element {
+    let mut expanded = use_signal(|| false);
+
+    // The daemon's first line is already a summary ("RESULT (Succeeded):"). Reuse it as the header
+    // rather than inventing one, falling back only if it is empty so the header is never blank.
+    let label = content
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .unwrap_or("Tool result")
+        .trim_end_matches(':')
+        .to_string();
+    let arrow = if expanded() { "\u{25BC}" } else { "\u{25B8}" };
+
+    rsx! {
+        div {
+            class: "thinking-group",
+            button {
+                class: "thinking-header",
+                // Explicit: a bare <button> defaults to type=submit, which would post the chat
+                // form the moment this block is ever rendered inside one.
+                r#type: "button",
+                onclick: move |_| {
+                    let now = expanded();
+                    expanded.set(!now);
+                },
+                span { class: "thinking-arrow", "{arrow}" }
+                span { class: "thinking-label", "\u{1F527} {label}" }
+            }
+            if expanded() {
+                div {
+                    class: "thinking-body",
+                    div { class: "tool-result-body", "{content}" }
+                }
+            }
+        }
+    }
+}
+
 // ── Collapsible thinking-steps group ────────────────────────────────────────
 
 #[component]
 fn ThinkingGroup(steps: Vec<ThinkingStep>) -> Element {
-    let mut expanded = use_signal(|| steps.iter().any(|s| s.ok.is_none()));
+    // Starts collapsed and then belongs entirely to the user — nothing derived from `steps` ever
+    // moves it again. It used to open itself whenever a step was pending, which meant the run
+    // decided the disclosure state instead of the reader: it sprang open mid-turn, and wherever it
+    // happened to be when the last step resolved was where it stuck. Progress is already in the
+    // header label, which is the part that stays visible while collapsed.
+    let mut expanded = use_signal(|| false);
 
     let has_pending = steps.iter().any(|s| s.ok.is_none());
-    let toggle = move |_| expanded.set(!expanded());
+    let toggle = move |_| {
+        let now = expanded();
+        expanded.set(!now);
+    };
 
     let count = steps.len();
     let summary: Vec<String> = steps.iter().map(|s| s.tool_name.clone()).collect();
@@ -360,6 +747,7 @@ fn ThinkingGroup(steps: Vec<ThinkingStep>) -> Element {
             class: "thinking-group",
             button {
                 class: "thinking-header",
+                r#type: "button",
                 onclick: toggle,
                 span { class: "thinking-arrow", "{header_arrow}" }
                 span { class: "thinking-label", "{header_label}" }
@@ -436,6 +824,28 @@ fn resize_input_to_content() {
 #[cfg(not(target_arch = "wasm32"))]
 fn resize_input_to_content() {}
 
+/// Put the caret back in the chat box after tapping a palette row.
+///
+/// The row's `onmousedown` already prevents the blur on desktop, but a touch tap on a phone can
+/// still take focus away — and being dropped out of the input right after asking for a completion is
+/// the opposite of helpful.
+#[cfg(target_arch = "wasm32")]
+fn focus_chat_input() {
+    use wasm_bindgen::JsCast;
+
+    let Some(el) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id("chat-input"))
+        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+    else {
+        return;
+    };
+    let _ = el.focus();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn focus_chat_input() {}
+
 // ── SSE streaming (browser-only) ────────────────────────────────────────────
 
 #[cfg(target_arch = "wasm32")]
@@ -453,27 +863,68 @@ fn close_current_stream() {
     });
 }
 
+/// The chat state one live turn writes into.
+///
+/// Bundled rather than passed one-by-one: `open_stream` was already carrying five signals plus two
+/// base URLs, and incognito wanted two more. Signals are `Copy`, so this is a plain regrouping with
+/// no lifetime or ownership consequences — the SSE closures below each still capture only what they
+/// touch.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy)]
+struct StreamTargets {
+    messages: Signal<Vec<ChatMsg>>,
+    sending: Signal<bool>,
+    session: Signal<Option<String>>,
+    /// Left untouched by an incognito turn — that session is not in the sidebar to be selected.
+    active_conv_id: Signal<Option<String>>,
+    should_set_title: Signal<bool>,
+    /// Where an incognito turn records the session it opened, for the teardown paths.
+    ghost_session: Signal<Option<String>>,
+}
+
 #[cfg(target_arch = "wasm32")]
 fn open_stream(
     api_base: &str,
     message: &str,
-    mut messages: Signal<Vec<ChatMsg>>,
-    mut sending: Signal<bool>,
-    mut session: Signal<Option<String>>,
-    mut active_conv_id: Signal<Option<String>>,
-    mut should_set_title: Signal<bool>,
+    targets: StreamTargets,
     api_base_for_title: &str,
+    incognito: bool,
 ) {
+    let StreamTargets {
+        mut messages,
+        mut sending,
+        mut session,
+        mut active_conv_id,
+        mut should_set_title,
+        mut ghost_session,
+    } = targets;
     use std::rc::Rc;
     use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;
     use web_sys::{EventSource, MessageEvent};
 
     let encoded = urlencoding::encode(message);
+    // **Whether this turn is opening a private session**, which is not the same question as whether
+    // the mode is on. If `session` is already set we are continuing an existing conversation, and no
+    // flag can retroactively make that one private.
+    //
+    // Everything below keys off *this*, never off `incognito`. Conflating the two is what destroyed
+    // a saved conversation: with the mode armed but no private session yet, selecting a saved chat
+    // and sending a message made the SSE handler record that chat's id as the ghost — and the
+    // teardown then deleted it. A session may only be treated as disposable if we watched it get
+    // created as one.
+    let opened_incognito = incognito && session.read().is_none();
     let url = match session.read().as_ref() {
         Some(id) => format!("{api_base}/api/chat/stream?message={encoded}&session={id}"),
+        // `true`, not `1`: axum's `Query` deserializes a bool through `FromStr`, which accepts only
+        // "true"/"false". `incognito=1` fails the whole extraction, so the request would 400 and the
+        // chat would simply not answer — a loud failure, but for a silly reason.
+        None if incognito => {
+            format!("{api_base}/api/chat/stream?message={encoded}&incognito=true")
+        }
         None => format!("{api_base}/api/chat/stream?message={encoded}"),
     };
+    let ghost_base = api_base.to_string();
     let source = match EventSource::new(&url) {
         Ok(s) => Rc::new(s),
         Err(_) => {
@@ -485,12 +936,21 @@ fn open_stream(
         *cell.borrow_mut() = Some(source.clone());
     });
 
-    // session -> record it and update active_conv_id so the sidebar highlights it.
+    // session -> record it, and (for a normal chat) set active_conv_id so the sidebar highlights it.
     {
         let on_session = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
-            if let Some(data) = e.data().as_string() {
-                if !data.is_empty() {
-                    session.set(Some(data.clone()));
+            if let Some(data) = e.data().as_string()
+                && !data.is_empty()
+            {
+                session.set(Some(data.clone()));
+                if opened_incognito {
+                    // Recorded as the ghost instead of the active conversation: it is not in the
+                    // sidebar to be highlighted, and this is the id the teardown paths need. The
+                    // `pagehide` mirror is set here too — this is the first moment there is anything
+                    // to discard.
+                    crate::components::incognito::remember(&ghost_base, &data);
+                    ghost_session.set(Some(data));
+                } else {
                     active_conv_id.set(Some(data));
                 }
             }
@@ -608,7 +1068,10 @@ fn open_stream(
             sending.set(false);
             CURRENT_SOURCE.with(|cell| *cell.borrow_mut() = None);
 
-            if should_set_title() {
+            // Skipped for incognito: a title exists to label a row in the sidebar, and an incognito
+            // session has no row. Naming it would only mean sending the first thing the user typed
+            // back over the wire for a field nobody will ever read.
+            if should_set_title() && !incognito {
                 should_set_title.set(false);
                 let title_opt = messages.read().iter().find(|m| m.role == "user").map(|m| {
                     let t = m.content.trim();

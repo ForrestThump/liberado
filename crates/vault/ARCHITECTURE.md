@@ -4,7 +4,7 @@ Liberado's thin adapter over **Turbovault** (the Obsidian-Markdown vault that is
 of truth). It does two things and isolates one risk:
 
 1. **Provenance-tagged writes** — `write` / `move_note` attach a `WriteProvenance` to the write's
-   audit-log entry (via Turbovault's `write_*_with_metadata`).
+   audit-log entry (via Turbovault's `ChangePlan::with_metadata`, recorded by the write substrate).
 2. **Consumer-side attribution** — `attribute(path)` decides whether an observed change was made by
    one of our agents (suppress) or by something outside our write path (react). This is the
    loop-breaking primitive (Decision 5).

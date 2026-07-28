@@ -61,19 +61,30 @@ pub(crate) fn evaluate(
         return None;
     }
 
-    // (1) Capability check — never auto-widen (Decision 4 invariant). Every MCP the action would
+    // (1) Capability check — never auto-widen (Decision 4 invariant). Everything the action would
     // invoke must be granted in the active capability set.
-    for mcp in referenced_mcps(&decision.action) {
-        if !req.capabilities.grants_mcp(mcp) {
+    //
+    // Checked at whatever precision the reference carries: a seed call names a concrete
+    // `<mcp>:<tool>`, so it is checked against the tool-level grant; a `relevant_mcps` /
+    // `allowed_mcps` hint names only a server, so only the server can be checked. Collapsing seed
+    // calls to their MCP (which this used to do) would pass a partial grant's *ungranted* tools
+    // pre-flight and leave the refusal to `RiskGatedToolRuntime` — safe, since that gate does ask the
+    // tool-level question, but it burns a dispatch turn to arrive at an error we could name here.
+    for reference in referenced_grants(&decision.action) {
+        let authorized = match reference.contains(':') {
+            true => req.capabilities.grants_tool(reference),
+            false => req.capabilities.grants_mcp(reference),
+        };
+        if !authorized {
             tracing::warn!(
-                mcp,
+                reference,
                 action = %decision.action,
-                "capability gap: action references MCP not in the dispatcher grant"
+                "capability gap: action references something not in the dispatcher grant"
             );
             return blocked(
                 "mcp_grant",
                 BlockReason::CapabilityGap,
-                &format!("action references '{mcp}', which the grant does not include"),
+                &format!("action references '{reference}', which the grant does not include"),
             );
         }
     }
@@ -166,7 +177,13 @@ fn blocked(guard: &'static str, reason: BlockReason, detail: &str) -> Option<Blo
 
 /// The MCPs an action would invoke. The tool-name convention is `"<mcp>:<tool>"`; a bare name is
 /// treated as the MCP itself.
-fn referenced_mcps(action: &DispatchAction) -> Vec<&str> {
+/// Everything an action would invoke, each at the precision the action states it: a qualified
+/// `"<mcp>:<tool>"` for a concrete seed call, a bare MCP name for a scope hint.
+///
+/// The caller distinguishes them by the `:` and asks the matching question. Kept as one list because
+/// the guard's job is "is all of this granted", and splitting it would invite checking one list and
+/// forgetting the other.
+fn referenced_grants(action: &DispatchAction) -> Vec<&str> {
     match action {
         // Pre-flight check over the classifier's opening move (`seed_calls`) AND its narrowing hint
         // (`relevant_mcps`, if the model populated one) — a hallucinated or out-of-scope name in
@@ -178,8 +195,10 @@ fn referenced_mcps(action: &DispatchAction) -> Vec<&str> {
             seed_calls,
             relevant_mcps,
         } => seed_calls
+            // The tool name whole, not `mcp_of` it: this is the one place the action is specific
+            // enough to check a per-tool grant, and discarding that was the precision loss.
             .iter()
-            .map(|c| mcp_of(&c.tool))
+            .map(|c| c.tool.as_str())
             .chain(relevant_mcps.iter().map(String::as_str))
             .collect(),
         DispatchAction::DispatchSubagent { allowed_mcps, .. } => {
@@ -195,8 +214,14 @@ fn referenced_mcps(action: &DispatchAction) -> Vec<&str> {
 /// a pre-flight read of the action's declared scope; runtime gating of an `ExecuteDirect`'s adaptive
 /// calls is a separate, later boundary.
 fn max_consequence(action: &DispatchAction, req: &DispatchRequest) -> Consequence {
-    referenced_mcps(action)
+    referenced_grants(action)
         .into_iter()
+        // `mcp_of` is mandatory here, not cosmetic: consequence is declared per MCP, and
+        // `referenced_grants` now yields qualified `<mcp>:<tool>` names for seed calls. Comparing
+        // those against `d.name` matches nothing, and an unmatched entry contributes
+        // `Consequence::ReadOnly` — so omitting this would quietly disarm the consequence gate for
+        // every `ExecuteDirect`, the exact actions it exists to catch.
+        .map(mcp_of)
         .filter_map(|mcp| {
             req.catalog
                 .iter()
@@ -282,6 +307,49 @@ mod tests {
             5,
         );
         assert_eq!(reason, Some(BlockReason::Unattended));
+    }
+
+    /// A seed call names a concrete tool, so a per-tool grant must be read at that precision here
+    /// rather than collapsed to its MCP. Collapsing it passed pre-flight and left the refusal to the
+    /// runtime gate — safe, but it spent a dispatch turn to reach an error nameable up front.
+    #[test]
+    fn a_partial_grant_blocks_an_ungranted_seed_call_at_preflight() {
+        let partial = CapabilitySet::from_iter([Capability::ExecuteTool("tasks-mcp:list".into())]);
+
+        let allowed = evaluate(
+            &execute_direct("tasks-mcp:list", 0.95),
+            &req(partial.clone(), 0),
+            &DispatchTuning::default(),
+            5,
+        );
+        assert_eq!(allowed, None, "the granted tool must pass");
+
+        let refused = evaluate(
+            &execute_direct("tasks-mcp:delete_all", 0.95),
+            &req(partial, 0),
+            &DispatchTuning::default(),
+            5,
+        );
+        assert_eq!(
+            refused,
+            Some(BlockReason::CapabilityGap),
+            "another tool on the same MCP is not granted, and the MCP-level question cannot see that"
+        );
+    }
+
+    /// The consequence gate reads its declaration per MCP, so it has to keep resolving qualified tool
+    /// names back to their server. If it stopped, every `ExecuteDirect` would score `ReadOnly` and the
+    /// gate would silently pass the actions it exists to catch.
+    #[test]
+    fn consequence_is_still_resolved_for_a_qualified_seed_call() {
+        // `tasks-mcp` is declared `Reversible` in `req`; the catalog is keyed by bare MCP name.
+        let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("tasks-mcp".into())]);
+        let action = execute_direct("tasks-mcp:list", 0.95);
+        assert_eq!(
+            max_consequence(&action.action, &req(caps, 0)),
+            Consequence::Reversible,
+            "a qualified tool name must still resolve to its MCP's declared consequence"
+        );
     }
 
     /// ...and an actor that *can* ask is untouched: Clarify remains the conservative answer there.

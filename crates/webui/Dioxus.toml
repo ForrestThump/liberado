@@ -1,0 +1,6 @@
+# dx build config. Without this the generated index.html carries Dioxus's placeholder title
+# ("dioxus | ⛺"), which is what a pinned tab at https://liberado.homelab.local/ would be named.
+[application]
+
+[web.app]
+title = "Liberado"

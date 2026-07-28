@@ -83,6 +83,14 @@ pub struct SessionStore {
     ids: Arc<std::sync::Mutex<ulid::Generator>>,
     /// Per-session append locks, held across mint-and-write. See [`write_lock_for`](Self::write_lock_for).
     write_locks: Arc<std::sync::Mutex<HashMap<Ulid, Arc<tokio::sync::Mutex<()>>>>>,
+    /// Sessions opened **incognito**: RAM only, never a byte on disk.
+    ///
+    /// Held as an id set rather than read off each session's header because the one place it is
+    /// consulted — [`path_for`](Self::path_for) — is synchronous and runs *after* the async map lock
+    /// has been dropped (see [`append`](ConversationStore::append), which persists outside the lock
+    /// on purpose). Threading the flag through all seven `append_line` call sites instead would work
+    /// exactly until someone adds an eighth and forgets. One chokepoint, one check.
+    ephemeral: Arc<std::sync::Mutex<std::collections::HashSet<Ulid>>>,
 }
 
 impl SessionStore {
@@ -112,6 +120,7 @@ impl SessionStore {
             dir: None,
             ids: Arc::new(std::sync::Mutex::new(ulid::Generator::new())),
             write_locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            ephemeral: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }
     }
 
@@ -153,11 +162,32 @@ impl SessionStore {
             dir: Some(Arc::new(dir)),
             ids: Arc::new(std::sync::Mutex::new(ulid::Generator::new())),
             write_locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            ephemeral: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }
     }
 
+    /// Where this session's log lives, or `None` if it has none.
+    ///
+    /// **This is the whole of incognito.** Every durable write in this file funnels through
+    /// [`append_line`](Self::append_line), which funnels through here, so a session that answers
+    /// `None` cannot reach the disk by any path — not its header, not a node, not an event, not a
+    /// retitle. That is why incognito is a check here and not a parallel storage backend.
+    ///
+    /// It also means an incognito chat is invisible to `GET /api/conversations/search`, which greps
+    /// these files directly rather than going through the store: there is no file to match, so the
+    /// exclusion needs no filter anyone could forget to write.
     fn path_for(&self, id: Ulid) -> Option<PathBuf> {
+        if self.is_ephemeral(id) {
+            return None;
+        }
         self.dir.as_ref().map(|d| d.join(format!("{id}.jsonl")))
+    }
+
+    fn is_ephemeral(&self, id: Ulid) -> bool {
+        self.ephemeral
+            .lock()
+            .map(|set| set.contains(&id))
+            .unwrap_or(false)
     }
 
     /// Best-effort append. A failed write is logged, never panics: losing the durable copy of an
@@ -210,6 +240,11 @@ impl SessionStore {
     /// Open a session (chat or goal). The one constructor — that is the point.
     pub async fn create_session(&self, new: NewSession) -> SessionHeader {
         let id = self.next_id();
+        // Registered *before* the header is appended below. Doing it after would write line 0 of an
+        // incognito session's log to disk and then never write line 1 — the worst of both modes.
+        if let (true, Ok(mut set)) = (new.ephemeral, self.ephemeral.lock()) {
+            set.insert(id);
+        }
         let header = SessionHeader {
             id,
             title: new.title,
@@ -229,6 +264,7 @@ impl SessionStore {
             finished_at: None,
             result: None,
             awaiting_input: false,
+            ephemeral: new.ephemeral,
         };
         self.append_line(id, &Record::Header(Box::new(header.clone())));
         let (bus, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
@@ -247,16 +283,68 @@ impl SessionStore {
     /// Every session, newest first — chats and goal sessions in **one list**. This is the call the
     /// unified switcher wanted all along; before convergence it had to poll two endpoints and glue
     /// the results together in the client.
+    ///
+    /// Incognito sessions are **not** listed. A chat that leaves no trace but shows up in the
+    /// sidebar is not incognito, and both surfaces' listings (`/api/conversations` and
+    /// `/api/sessions`) reach the store through here — so the exclusion is stated once. Lookup by id
+    /// still works: the surface that opened one has to be able to read it back.
     pub async fn list_sessions(&self) -> Vec<SessionHeader> {
         let mut rows: Vec<_> = self
             .inner
             .lock()
             .await
             .values()
+            .filter(|l| !l.header.ephemeral)
             .map(|l| l.header.clone())
             .collect();
         rows.sort_by_key(|row| std::cmp::Reverse(row.id));
         rows
+    }
+
+    /// Drop every incognito session untouched for at least `idle`, returning how many went.
+    ///
+    /// The backstop for a client that never got to say goodbye — a closed laptop, a killed browser,
+    /// a dropped network. The surface discards its own session on the way out (that is the fast
+    /// path, and the one that runs almost every time); this exists so "almost" is not the whole
+    /// story. Nothing here touches the disk, because by construction there is nothing there.
+    ///
+    /// Idleness is read from the **ULID timestamps** already in the log — the newest node's, or the
+    /// session's own if it never got one — rather than a `last_touched` field. ULIDs embed their
+    /// mint time to the millisecond and this store mints them monotonically, so the information was
+    /// already there; a parallel clock would only be a second thing to keep in sync.
+    pub async fn sweep_ephemeral(&self, idle: std::time::Duration) -> usize {
+        let cutoff_ms =
+            (Utc::now().timestamp_millis() as u64).saturating_sub(idle.as_millis() as u64);
+        let stale: Vec<Ulid> = self
+            .inner
+            .lock()
+            .await
+            .values()
+            .filter(|l| l.header.ephemeral)
+            .filter(|l| {
+                let last = l
+                    .nodes
+                    .iter()
+                    .map(|n| n.id.timestamp_ms())
+                    .max()
+                    .unwrap_or_else(|| l.header.id.timestamp_ms());
+                // `<=`, not `<`: the predicate is "untouched for *at least* `idle`", and with
+                // millisecond resolution a strict compare makes `Duration::ZERO` mean "sweep
+                // nothing" — the exact opposite of what a zero window reads as.
+                last <= cutoff_ms
+            })
+            .map(|l| l.header.id)
+            .collect();
+
+        for id in &stale {
+            // Goes through the normal delete so the write-lock registry and the ephemeral set are
+            // pruned too; the file removal inside is a no-op for a session that never had a file.
+            let _ = ConversationStore::delete(self, *id).await;
+        }
+        if !stale.is_empty() {
+            tracing::info!(count = stale.len(), "swept idle incognito sessions");
+        }
+        stale.len()
     }
 
     pub async fn session(&self, id: Ulid) -> Option<SessionHeader> {
@@ -339,6 +427,9 @@ impl SessionStore {
                 // Whoever forked it is sitting right there looking at it.
                 visibility: Visibility::Foreground,
                 grant: parent.grant.clone(),
+                // A fork of an incognito chat is incognito too, or forking would be a way to launder
+                // a RAM-only transcript onto the disk.
+                ephemeral: parent.ephemeral,
             })
             .await;
 
@@ -466,6 +557,7 @@ impl ConversationStore for SessionStore {
                 correlation_id: None,
                 visibility: Default::default(),
                 grant: Default::default(),
+                ephemeral: new.ephemeral,
             })
             .await;
         Ok(header.to_conversation_header())
@@ -601,6 +693,41 @@ impl ConversationStore for SessionStore {
         self.append_line(conversation, &Record::Header(Box::new(header)));
         Ok(())
     }
+
+    async fn delete(&self, conversation: Ulid) -> StoreResult<()> {
+        let mut map = self.inner.lock().await;
+        if map.remove(&conversation).is_none() {
+            return Err(StoreError::NotFound(format!("session {conversation}")));
+        }
+        drop(map);
+
+        // Drop the per-session append lock as well, or every delete leaves a dead entry behind in a
+        // map that is never otherwise pruned.
+        if let Ok(mut locks) = self.write_locks.lock() {
+            locks.remove(&conversation);
+        }
+        // Likewise the incognito registry, which is otherwise never pruned. It also has to happen
+        // before `path_for` below, or that call would still answer `None` for an id whose session is
+        // already gone — harmless today (there is no file either way) but a trap for anyone who
+        // later reuses `path_for` to mean "where this session's log would live".
+        if let Ok(mut set) = self.ephemeral.lock() {
+            set.remove(&conversation);
+        }
+
+        // The log file IS the record — one `{id}.jsonl` per session, replayed at boot — so removing
+        // it is what makes this a real delete rather than an in-memory illusion that comes back on
+        // restart. Blocking fs call to match `append_line`, which writes the same files the same way.
+        if let Some(path) = self.path_for(conversation) {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                // Already absent on disk: an in-memory-only store, or a log a human removed by hand.
+                // The in-memory eviction above is the part that had to happen, so this is success.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(StoreError::Io(e)),
+            }
+        }
+        Ok(())
+    }
 }
 
 // ── Lens 2: the kernel view (records + events) ───────────────────────────────────────────────
@@ -636,6 +763,9 @@ impl SessionRecordStore for SessionStore {
             finished_at: record.finished_at,
             result: record.result.clone(),
             awaiting_input: record.awaiting_input,
+            // A goal session is durable by construction: it is run by a pack, reported on, and
+            // resumed. Incognito is a property of a human sitting at a chat surface asking for it.
+            ephemeral: false,
         };
         self.append_line(id, &Record::Header(Box::new(header.clone())));
         let (bus, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);

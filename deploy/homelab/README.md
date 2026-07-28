@@ -12,6 +12,43 @@ That's the whole happy path. The script syncs the exact committed tree, rebuilds
 recreates the container, and **won't return success until the live daemon reports the SHA it just
 built**. If it prints `OK  running=true  build-sha=<sha>`, the new code is actually running.
 
+## The WebUI ships separately (and cheaply)
+
+**<https://liberado.homelab.local>** — the browser UI, live.
+
+It is a WASM bundle, **not** part of `liberado:dev`. The image carries no wasm32 toolchain on
+purpose, so the bundle is built on the dev machine and **mounted** into the container:
+
+```powershell
+.\scripts\deploy-webui-homelab.ps1            # build + ship, ~1 min
+.\scripts\deploy-webui-homelab.ps1 -SkipBuild # ship what is already in target/
+```
+
+`ServeDir` reads the mount per request, so shipping a new UI is a file copy — **no image rebuild,
+no restart, no downtime**. Use this for anything that is frontend-only; save `deploy.sh` (20–40 min)
+for daemon changes.
+
+```
+browser ──► https://liberado.homelab.local
+             └─ Traefik, primary node 192.168.0.220:443   [~/homelab/services/traefik/dynamic/ai-node.yml]
+                  └─ liberado daemon, AI node 192.168.0.144:4201
+                       ├─ /api/*  → axum routes
+                       └─ /*      → ServeDir($LIBERADO_WEBUI_DIST)
+```
+
+**One origin serves UI and API**, which is the whole design: the frontend calls
+`window.location.origin`, so it needs no CORS and no second hostname. Never reintroduce a hardcoded
+`:4201` in `crates/webui` — Traefik terminates TLS on 443 only, so such a call has nowhere to land.
+Details in `crates/webui/README.md`.
+
+Two things that bite when touching the mount:
+
+- **Never `mv` the bundle directory** to swap it. Docker resolves a bind mount to an inode at
+  container start; renaming the directory leaves the container serving an unlinked one (symptom: a
+  sudden 404 on `/` that only `up -d --force-recreate` clears). The script uses
+  `rsync -a --delete` into the existing directory for exactly this reason.
+- `topology.toml`/`policy.toml` are unrelated to the UI — see the config-vs-image note below.
+
 ## What is deployed right now?
 
 Never guess from uptime or file dates. Ask the running container:
@@ -69,7 +106,7 @@ blocks on health at the end, so a returned success is a real success.
 |---|---|
 | `deploy.sh` | The deploy command. Run from the dev machine. |
 | `latency-report.sh` | Per-role p50/p95 inference latency from the daemon's journal (`<data>/latency/events.jsonl`). Baseline for model-tuning. |
-| `docker-compose.yml` | Mirror of the box's `~/homelab/services/liberado/docker-compose.yml` (run config). |
+| `docker-compose.yml` | Mirror of the box's `~/homelab/services/liberado/docker-compose.yml` (run config). **`deploy.sh` does not ship this** — it runs the copy already on the box, so edit there and mirror here. |
 | `config/topology.toml`, `config/policy.toml` | Mirror of the box's `~/homelab/services/liberado/config/*`. Edit here, then copy to the box (config is **not** shipped by `deploy.sh` — it's a read-only mount, changed independently of the image). |
 | `liberado-mcp-diagnosis.md` | Per-MCP wiring status/troubleshooting for the on-box agent. |
 | `smoke-chat.sh` | Quick end-to-end chat probe against the live daemon (spends tokens). |

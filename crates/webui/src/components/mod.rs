@@ -1,8 +1,12 @@
 pub mod chat;
 pub mod dashboard;
+pub mod incognito;
 pub mod markdown;
 pub mod mcp_panel;
+pub mod model_browser;
+pub mod picker;
 pub mod reactions;
 pub mod sidebar;
 pub mod slash_commands;
+pub mod slash_palette;
 pub mod vault;

@@ -110,11 +110,20 @@ turbomcp-server = { path = "turbomcp/crates/turbomcp-server" } # test-only (in-p
 turbomcp-core = { path = "turbomcp/crates/turbomcp-core" }     # test-only (McpHandler)
 turbomcp-types = { path = "turbomcp/crates/turbomcp-types" }   # test-only (handler types)
 
-# Co-development: our path-dep turbovault still declares `turbomcp = "3.1.5"` from crates.io.
-# Redirect that to the local turbomcp fork so the whole tree builds against one turbomcp (the one
-# carrying the request `_meta` pass-through). Remove once turbomcp publishes the change.
+# Co-development: our path-dep turbovault still declares the `turbomcp*` crates as "3.1.5" from
+# crates.io. Redirect them to the local fork so the whole tree builds against ONE turbomcp — the one
+# carrying the request `_meta` pass-through. Remove once turbomcp publishes the change.
+#
+# Every turbomcp-* crate turbovault names must be listed, not just the umbrella. Patching `turbomcp`
+# alone linked the fork's `turbomcp-core` (via the umbrella) alongside the registry's (via
+# turbovault's direct dep) — two crates of the same name in one graph, so identical-looking types
+# stopped unifying: "expected `ResourceTemplate`, found `turbomcp_core::ResourceTemplate`". That is
+# what kept the `e2e` provenance capstone unbuildable and switched off.
 [patch.crates-io]
 turbomcp = { path = "turbomcp/crates/turbomcp" }
+turbomcp-core = { path = "turbomcp/crates/turbomcp-core" }
+turbomcp-server = { path = "turbomcp/crates/turbomcp-server" }
+turbomcp-types = { path = "turbomcp/crates/turbomcp-types" }
 
 [profile.release]
 lto = true

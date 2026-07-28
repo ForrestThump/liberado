@@ -22,9 +22,12 @@ liberado-theme = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 dioxus = { version = "0.7", default-features = false, features = ["macro", "hooks", "html", "signals", "web", "launch"] }
 getrandom = { version = "0.2", features = ["js"] }
-web-sys = { version = "0.3", features = ["console", "Window", "Location", "EventSource", "MessageEvent", "Document", "Element", "HtmlElement", "HtmlTextAreaElement", "CssStyleDeclaration"] }
+web-sys = { version = "0.3", features = ["console", "Window", "Location", "EventSource", "MessageEvent", "Document", "Element", "HtmlElement", "HtmlTextAreaElement", "CssStyleDeclaration", "Storage", "Request", "RequestInit", "Event", "EventTarget", "History"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+# Only for `Reflect::set` — web-sys has no binding for `RequestInit.keepalive`, which the
+# unload-time incognito discard needs. See components/incognito.rs.
+js-sys = "0.3"
 urlencoding = "2"
 
 [package.metadata.docs.rs]

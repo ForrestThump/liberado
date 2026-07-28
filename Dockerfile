@@ -1,9 +1,11 @@
 # Liberado daemon — headless deploy image (P1: the automation daemon).
 #
 # Multi-stage: build the whole Rust workspace with the official `rust` image, ship only the
-# `liberado` binary on a slim Debian runtime. No WASM WebUI here — v1 is the daemon + HTTP/SSE API +
-# Telegram + MCP clients; the WebUI (W1) is not built yet, and `serve` 404s the static route cleanly
-# when the dist dir is absent, so the API still works.
+# `liberado` binary on a slim Debian runtime. The WASM WebUI is deliberately NOT in this image: it
+# needs the wasm32 toolchain and the Dioxus CLI, which would roughly double the builder stage for a
+# frontend that changes on a different cadence than the daemon. It is built on a dev machine and
+# mounted in instead (`LIBERADO_WEBUI_DIST`, see deploy/homelab/docker-compose.yml). With no bundle
+# mounted, `serve` 404s the static route cleanly and the API still works.
 #
 # Building in this container IS the Debian shakeout: the Unix code paths that have only ever been
 # compiled on Windows finally compile *and run* on the target platform, isolated where a bug can do no
@@ -68,6 +70,6 @@ ENV LIBERADO_CONFIG_DIR=/config \
 
 EXPOSE 4201
 
-# `serve` with an empty vault arg falls back to topology.vault_path (= /vault, read-only for v1).
+# `serve` with an empty vault arg falls back to topology.vault_path (= /vault, mounted read-write).
 ENTRYPOINT ["liberado"]
 CMD ["serve"]

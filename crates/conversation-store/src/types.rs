@@ -123,6 +123,10 @@ pub struct NewConversation {
     pub title: Option<String>,
     pub parent_conversation: Option<Ulid>,
     pub spawned_by: Option<Ulid>,
+    /// **Incognito**: open this conversation in RAM only, so nothing about it is ever written to
+    /// disk and it never appears in a listing. A store with no durable tier at all may ignore this —
+    /// it is already telling the truth.
+    pub ephemeral: bool,
 }
 
 /// The input to [`append`](crate::ConversationStore::append): a complete message plus its place in

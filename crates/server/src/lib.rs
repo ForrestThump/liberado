@@ -31,12 +31,25 @@ use liberado_main_agent::ChatSessions;
 use liberado_mcp::McpRegistry;
 use liberado_session_store::SessionStore;
 use tokio::sync::Mutex;
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
 
-/// Where `dx build --release --package liberado-webui --web` places the built frontend.
+/// Where `dx build --release --package liberado-webui --web` places the built frontend, relative to
+/// the repo root. Correct when you run the daemon from a dev checkout; useless in the deploy image,
+/// which has no repo and whose working directory is `/` — hence [`dist_dir`].
 const DIST_DIR: &str = "target/dx/liberado-webui/release/web/public";
+
+/// Directory the frontend is served from: `LIBERADO_WEBUI_DIST` if set, else [`DIST_DIR`].
+///
+/// The homelab mounts the bundle into the container and points this at the mount, because the UI is
+/// built on a dev machine (it needs the wasm32 toolchain, which the deploy image does not carry) and
+/// shipped separately from the binary. Keeping it a mount rather than an image layer also means a UI
+/// redeploy is a file copy — `ServeDir` reads per request, so no restart is needed.
+fn dist_dir() -> String {
+    std::env::var("LIBERADO_WEBUI_DIST").unwrap_or_else(|_| DIST_DIR.to_string())
+}
 
 use crate::state::AppState;
 
@@ -105,6 +118,27 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // that is precisely how the MCP got left behind pointing at the dead `conversations/` directory.
     let sessions_root = liberado_bootstrap::sessions_dir();
     let sessions = Arc::new(liberado_session_store::SessionStore::open(&sessions_root).await);
+
+    // Backstop for incognito chats whose surface never got to discard them — a closed laptop, a
+    // killed tab, a dropped connection. The WebUI deletes its own on the way out and that is what
+    // runs almost every time; this is what makes "almost" not the end of the story, because an
+    // incognito transcript sitting in daemon RAM until the next restart is exactly the thing the mode
+    // promises not to do. Nothing here touches the disk: an ephemeral session has no file to remove.
+    {
+        const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+        // Generous next to the sweep interval: this is the abandonment threshold, not an idle
+        // timeout, and a chat you walked away from mid-thought should still be there when you come
+        // back from lunch-adjacent distances.
+        const IDLE_BEFORE_SWEEP: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+        let sessions = Arc::clone(&sessions);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(SWEEP_EVERY);
+            loop {
+                ticker.tick().await;
+                sessions.sweep_ephemeral(IDLE_BEFORE_SWEEP).await;
+            }
+        });
+    }
 
     // Goal session hub first — the **one** execution engine (one-execution-engine plan E3/E4).
     // Life-ops demo always; coding when a provider is available; dispatch pack so cron/webhook/
@@ -321,7 +355,9 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         )
         .route(
             "/api/conversations/{id}",
-            axum::routing::get(api::get_conversation).patch(api::patch_conversation_title),
+            axum::routing::get(api::get_conversation)
+                .patch(api::patch_conversation_title)
+                .delete(api::delete_conversation),
         )
         .route(
             "/api/hooks/{name}",
@@ -355,7 +391,16 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/goals/{id}/park", axum::routing::post(api::goals_park))
         .layer(CorsLayer::permissive())
         .with_state(state)
-        .fallback_service(ServeDir::new(DIST_DIR));
+        // Compression is scoped to the static fallback, deliberately not applied to the router as a
+        // whole. The payload that needs it is the release .wasm (multi-MB, ~4x compressible, and the
+        // whole page blocks on it over the tailnet); the payload that must never be buffered is
+        // `/api/chat/stream`, where holding bytes back turns a live turn into a frozen UI. Scoping it
+        // here makes that impossible by construction rather than by trusting a predicate.
+        .fallback_service(
+            tower::ServiceBuilder::new()
+                .layer(CompressionLayer::new())
+                .service(ServeDir::new(dist_dir())),
+        );
 
     let addr = format!("0.0.0.0:{port}");
     info!("Web UI server listening on http://{}", addr);
@@ -494,14 +539,21 @@ pub fn explain_write(
         println!("\nverdict: BLOCKED — the MCP does not exist in this config.");
         return Ok(());
     };
-    let granted = caps.grants_mcp(mcp_name);
-    println!(
-        "  [{}] mcp_grant         needed ExecuteMcp(\"{mcp_name}\")",
-        say(granted)
-    );
+    // `grants_tool`, because this explainer was asked about a *specific* tool and is echoed to a human
+    // as a verdict. `grants_mcp` answers "is this MCP reachable at all", which for a partial grant is
+    // true even when the named tool is not granted — an explainer that reports PASS on a call the
+    // runtime would refuse is worse than no explainer.
+    let granted = caps.grants_tool(qualified_tool);
+    let needed = if caps.grants_mcp(mcp_name) {
+        format!("ExecuteTool(\"{qualified_tool}\")")
+    } else {
+        format!("ExecuteMcp(\"{mcp_name}\") or ExecuteTool(\"{qualified_tool}\")")
+    };
+    println!("  [{}] mcp_grant         needed {needed}", say(granted));
     if !granted {
         blockers.push(format!(
-            "add {{ ExecuteMcp = \"{mcp_name}\" }} to the '{component}' grant in policy.toml"
+            "add {{ ExecuteTool = \"{qualified_tool}\" }} (or {{ ExecuteMcp = \"{mcp_name}\" }} for \
+             the whole server) to the '{component}' grant in policy.toml"
         ));
     }
 

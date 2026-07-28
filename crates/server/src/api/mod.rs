@@ -7,8 +7,8 @@ mod sessions;
 mod status;
 
 pub use chat::{
-    chat, chat_stream_get, chat_stream_post, get_conversation, list_conversations,
-    patch_conversation_title,
+    chat, chat_stream_get, chat_stream_post, delete_conversation, get_conversation,
+    list_conversations, patch_conversation_title,
 };
 pub use goals::{
     goals_cancel, goals_domains, goals_get, goals_list, goals_message, goals_park, goals_start,

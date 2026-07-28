@@ -402,12 +402,35 @@ impl ChatSessions {
     /// Persisting the prompt as the root (rather than re-injecting it on load) keeps the store the
     /// single source of truth for the whole history, system prompt included.
     pub async fn create(&self, title: Option<String>) -> SessionResult<Ulid> {
+        self.create_conversation(title, false).await
+    }
+
+    /// Create an **incognito** conversation: RAM only, never written to disk, never listed.
+    ///
+    /// Its own method rather than a `bool` on [`create`](Self::create) because ephemerality is not a
+    /// tuning knob — it is a promise to the person typing, and a call site should have to say the
+    /// word. (It also leaves the thirty-odd existing `create(None)` calls saying exactly what they
+    /// already meant.)
+    ///
+    /// Note what this does *not* cover: the turn's **side effects**. A tool the agent calls during an
+    /// incognito chat still writes what it writes — a vault note, a memory, an audit entry. What is
+    /// ephemeral is the transcript, not the consequences.
+    pub async fn create_incognito(&self, title: Option<String>) -> SessionResult<Ulid> {
+        self.create_conversation(title, true).await
+    }
+
+    async fn create_conversation(
+        &self,
+        title: Option<String>,
+        ephemeral: bool,
+    ) -> SessionResult<Ulid> {
         let header = self
             .store
             .create(NewConversation {
                 title,
                 parent_conversation: None,
                 spawned_by: None,
+                ephemeral,
             })
             .await?;
         self.store
@@ -619,6 +642,14 @@ impl ChatSessions {
     ///
     /// Lazy backfill: if a header still has no title but history has a user message, persist the
     /// first-line default once so the sidebar is scannable without waiting for another turn.
+    /// Permanently delete a conversation. Thin passthrough: the store owns the semantics (see
+    /// [`ConversationStore::delete`]) and there is no cached conversation state here to invalidate —
+    /// every turn rehydrates from the store.
+    pub async fn delete(&self, id: Ulid) -> SessionResult<()> {
+        self.store.delete(id).await?;
+        Ok(())
+    }
+
     pub async fn list(&self) -> SessionResult<Vec<ConversationHeader>> {
         let mut headers = self.store.list().await?;
         for h in &mut headers {

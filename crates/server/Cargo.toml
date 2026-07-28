@@ -41,9 +41,16 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 axum = { version = "0.8", features = ["json"] }
-tower-http = { version = "0.6", features = ["cors", "fs"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "compression-gzip"] }
 tower = { version = "0.5", features = ["util"] }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+# The exact deserializer axum's `Query` extractor uses, so the query-string contract test in
+# api/chat.rs exercises the real parser rather than an approximation of it.
+serde_urlencoded = "0.7"
+liberado-test-support = { workspace = true }
+tempfile = { workspace = true }
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
