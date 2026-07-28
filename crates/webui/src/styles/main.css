@@ -207,6 +207,38 @@ html {
     }
 }
 
+.profile-chip {
+    align-self: flex-start;
+    display: flex;
+    align-items: baseline;
+    gap: 0.4375rem;
+    padding: 0.1875rem 0.5rem;
+    border: 1px solid var(--lib-border);
+    border-radius: 999px;
+    background: var(--lib-surface);
+    color: var(--lib-sidebar-text);
+    font-family: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.profile-chip:hover {
+    border-color: var(--lib-accent);
+}
+
+.profile-chip-label {
+    opacity: 0.6;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.625rem;
+}
+
+.profile-chip-name {
+    font-weight: 600;
+    color: var(--lib-chat-assistant-text);
+}
+
 .incognito-banner {
     display: flex;
     align-items: flex-start;

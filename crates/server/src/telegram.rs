@@ -169,7 +169,14 @@ impl TelegramChatBridge {
             | CommandResult::StatusShown
             | CommandResult::ModelInfoShown
             | CommandResult::SessionInfoShown
+            | CommandResult::ProfileInfoShown
             | CommandResult::None => None,
+
+            // Telegram has no picker widget, and a sticky Telegram chat is not the place to be
+            // re-authorising a session anyway — the switch is a deliberate, per-conversation act.
+            CommandResult::OpenProfileBrowser => Some(
+                "Session profiles are switched from the web UI or TUI with /profile.".into(),
+            ),
 
             CommandResult::Quit => {
                 Some("I'm a long-running bot — I can't quit. Use /new for a fresh chat.".into())

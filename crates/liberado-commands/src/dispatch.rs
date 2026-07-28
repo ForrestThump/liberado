@@ -19,6 +19,7 @@ pub fn parse(input: &str) -> Option<SlashCommand> {
         "/status" => Some(SlashCommand::Status),
         "/theme" => Some(parse_theme(parts.get(1).copied(), parts.get(2).copied())),
         "/model" => Some(SlashCommand::Model),
+        "/profile" => Some(SlashCommand::Profile),
         // `/session` and `/sessions` are aliases: both open the one unified switcher (all chats +
         // goal sessions). `/session <sub>` still exposes the power-user subcommands (info/switch/close).
         "/session" => Some(parse_session(parts.get(1).copied(), parts.get(2).copied())),
@@ -108,6 +109,7 @@ pub fn dispatch(cmd: &SlashCommand, ctx: &mut dyn CommandContext) -> Vec<Command
         SlashCommand::Status => handlers::status::handle(ctx),
         SlashCommand::Theme(cmd) => handlers::theme::handle(cmd, ctx),
         SlashCommand::Model => handlers::model::handle(ctx),
+        SlashCommand::Profile => handlers::profile::handle(ctx),
         SlashCommand::Session(cmd) => handlers::session::handle(cmd, ctx),
         SlashCommand::Sessions => handlers::focus::open_switcher(ctx),
         SlashCommand::Join(id) => handlers::focus::join(id, ctx),
