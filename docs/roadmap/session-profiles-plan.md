@@ -1,6 +1,6 @@
 # Session Profiles — Design & Roadmap
 
-**Status**: steps 1–4 landed on `feat/session-profiles` (2026-07-28). Steps 5–6 open. **Nothing is deployed** — the branch is parked pending the cron-router investigation below.
+**Status**: steps 1–6 landed (the feature is complete end to end) on `feat/session-profiles` (2026-07-28). **Nothing is deployed** — the branch is parked pending the cron-router investigation below.
 Design settled with the operator in conversation on 2026-07-28; the decisions in
 [Settled decisions](#settled-decisions) are answers to direct questions, not proposals.
 
@@ -176,16 +176,31 @@ mcps  = [
 - Refusals tested: unknown profile → 400 with the grant untouched (a typo must never resolve to "no
   profile", which silently means the wider default); unknown conversation → 404; clearing allowed.
 
-### 5. Per-session `delegation_mode`
+### 5. Per-session delegation + prompt nudge — **landed**
 
-Currently one boolean for the whole daemon (`topology.main_agent.delegation_mode`), read by
-`uses_face_agent()`. Making it per-session is what turns "basic chat" into a real mode rather than a
-shorter tool list.
+- `delegation` resolved per turn from the session's profile. `None` means *inherit*, not off — only
+  an explicit `delegation = false` disables dispatch.
+- `prompt_append` injected as a **second** system message. The first is the conversation's persisted
+  root node and the store is append-only, so editing it would mean rewriting history on every
+  profile change. It sits with the system prompt, not among the dialogue.
+- One `turn_settings` lookup resolves all three, so a switch cannot land *between* them and produce a
+  turn running one profile's tools under another's delegation setting.
+- **`model` is deferred to CH4**, not done. The model lives on the provider, not the request, so
+  per-session selection needs a per-call model field or a provider pool. The field is carried and
+  persisted; nothing reads it.
 
-### 6. Surfaces
+### 6. Surfaces — **landed**
 
-`GET /api/profiles` (nothing enumerates enabled profiles today — `resolve_session_profile` only
-resolves one by name), Status-screen tap-to-select, and an active-profile chip in the header.
+Two gaps found by looking at the running UI, both invisible in the code:
+
+- **The first turn always ran on the default grant.** A profile could not be chosen before the
+  conversation it applies to existed. `ChatRequest` now carries `profile` beside `incognito`, same
+  rule: consulted only when creating.
+- **The chip only appeared once a profile was set**, so a new chat showed no control at all. Now
+  always rendered, reading "default" when unset.
+
+The Status screen got a **read-only** list, not a switcher: everything else there is daemon-scoped,
+so a switcher would have to ask which conversation you meant — the chat's question.
 
 ## Traps found while building
 
@@ -221,6 +236,16 @@ blocked it because a cron holds no `AskHuman`. The capability advice in the mess
 unattended 06:55 cron waiting on a person instead of failing.
 
 Worth fixing the message itself, which sent the operator down that path.
+
+## Before deploying
+
+**Do not add a chat profile to the live `topology.toml` until this branch is deployed.** On the
+currently-deployed build `SessionProfile.domain` is a required `String`; it only became optional in
+step 3. A chat profile omitting it fails to deserialize, and config errors are fail-fast — the daemon
+would refuse to boot.
+
+Still to do: a live test putting a real chat into `basic-chat` and confirming the tool surface
+actually shrinks. Nothing here has run outside CI.
 
 ## Open questions
 
