@@ -20,6 +20,7 @@
 | [rust-native-agentic-coder-plan.md](rust-native-agentic-coder-plan.md) | Coding pack roadmap |
 | [tui-maturity-roadmap.md](tui-maturity-roadmap.md) | TUI surface |
 | [turbovault-modules-integration-roadmap.md](turbovault-modules-integration-roadmap.md) | TurboVault plugins umbrella |
+| [session-profiles-plan.md](session-profiles-plan.md) | Per-conversation tool authority (steps 1–2 landed on `feat/session-profiles`) |
 | [turbovault-vault-events-plugin-plan.md](turbovault-vault-events-plugin-plan.md) | vault_events module |
 | [mcp-forge-backlog.md](mcp-forge-backlog.md) | MCP forge service |
 | [mcp-suite-standardization.md](mcp-suite-standardization.md) | Peer MCP suite norms |
