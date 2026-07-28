@@ -33,35 +33,63 @@ use std::cell::Cell;
 thread_local! {
     /// History entries pushed to stand in for open layers.
     static PUSHED: Cell<usize> = const { Cell::new(0) };
-    /// `popstate` events we caused with our own `history.back()`, still to be ignored.
-    static SELF_INFLICTED: Cell<usize> = const { Cell::new(0) };
+    /// The layer count we are trying to reach. Read by [`drive`], which may need several turns of
+    /// the event loop to get there.
+    static DESIRED: Cell<usize> = const { Cell::new(0) };
+    /// A `history.back()` of ours is in flight, awaiting its `popstate`. Nothing may touch history
+    /// until it lands — see [`drive`].
+    static RETIRING: Cell<bool> = const { Cell::new(false) };
     static INSTALLED: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Match the number of guard entries to `depth`, the number of layers currently open.
+/// Ask for `depth` guard entries. Safe to call on every render; it is a target, not a command.
 ///
 /// Call from an effect that reads the same state the layer count is derived from, so the two cannot
-/// drift. Pushing and popping are both idempotent with respect to `depth`: calling this repeatedly
-/// with an unchanged value does nothing.
+/// drift.
 #[cfg(target_arch = "wasm32")]
 pub fn sync_depth(depth: usize) {
+    DESIRED.set(depth);
+    drive();
+}
+
+/// Move one step toward [`DESIRED`], then stop.
+///
+/// # Why this is serialized rather than a loop
+///
+/// `pushState` takes effect synchronously, but `history.back()` only *queues* a traversal — its
+/// `popstate` arrives later. So a push issued between our `back()` and its traversal gets eaten by
+/// that traversal, and the entry we meant to retire survives instead. The counts then say we hold a
+/// guard we do not, and the next Back leaves the app.
+///
+/// That is not hypothetical. It appeared the moment the slash palette became a layer, because the
+/// palette closes as a command is submitted while the picker that command opens appears an async tick
+/// later: retire-then-push, straddling the traversal, and Back walked out of the app.
+///
+/// So at most one history mutation is outstanding at a time. While [`RETIRING`] is set we only record
+/// the new target; the `popstate` handler clears the flag and calls back in. A burst of open/close
+/// inside one tick therefore costs zero history calls — the target simply never changed by the time
+/// we look at it.
+#[cfg(target_arch = "wasm32")]
+fn drive() {
+    if RETIRING.get() {
+        return;
+    }
     let Some(history) = web_sys::window().and_then(|w| w.history().ok()) else {
         return;
     };
     let pushed = PUSHED.get();
-    if depth > pushed {
-        for _ in pushed..depth {
+    let desired = DESIRED.get();
+    if desired > pushed {
+        // Synchronous, so several at once are safe — and in practice layers open one at a time.
+        for _ in pushed..desired {
             // No URL: the address bar must not change, only the history depth.
             let _ = history.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", None);
         }
-    } else if depth < pushed {
-        let owed = pushed - depth;
-        SELF_INFLICTED.set(SELF_INFLICTED.get() + owed);
-        for _ in 0..owed {
-            let _ = history.back();
-        }
+        PUSHED.set(desired);
+    } else if desired < pushed {
+        RETIRING.set(true);
+        let _ = history.back();
     }
-    PUSHED.set(depth);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -89,10 +117,12 @@ where
     };
 
     let handler = Closure::<dyn FnMut(web_sys::Event)>::new(move |_e: web_sys::Event| {
-        let owed = SELF_INFLICTED.get();
-        if owed > 0 {
-            // We caused this one by retiring an entry for a layer that closed some other way.
-            SELF_INFLICTED.set(owed - 1);
+        if RETIRING.get() {
+            // Our own `history.back()` landing. The entry is gone; release the lock and continue
+            // toward whatever the target became while we were waiting.
+            RETIRING.set(false);
+            PUSHED.set(PUSHED.get().saturating_sub(1));
+            drive();
             return;
         }
         let pushed = PUSHED.get();
@@ -102,8 +132,9 @@ where
             return;
         }
         // The browser already popped the entry; keep our count level with it *before* closing the
-        // layer, or the effect that follows will read a stale depth and push a replacement.
+        // layer, so the effect that follows sees a consistent pair and pushes no replacement.
         PUSHED.set(pushed - 1);
+        DESIRED.set(pushed - 1);
         on_back();
     });
     let _ = window.add_event_listener_with_callback("popstate", handler.as_ref().unchecked_ref());

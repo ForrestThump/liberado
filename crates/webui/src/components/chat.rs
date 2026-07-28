@@ -5,6 +5,7 @@ use chat_client_contract::ChatMessage;
 use crate::components::markdown::MarkdownText;
 use crate::components::model_browser::ModelBrowser;
 use crate::components::picker::Picker;
+use crate::components::slash_palette::SlashPalette;
 
 // Slash commands only run in the browser — `submit` gates the whole block on wasm32, so gate the
 // imports identically or a native build trips the workspace's zero-warnings bar on unused imports.
@@ -119,7 +120,15 @@ pub fn Chat(
     model_browser_open: Signal<bool>,
     /// The `/theme` picker. Same ownership story as `model_browser_open`.
     theme_browser_open: Signal<bool>,
+    /// Set true by Back (and by Esc) to hide the slash palette. Owned by `App` for the same reason
+    /// the pickers are: it is a dismissible layer, and one place has to order them.
+    palette_dismissed: Signal<bool>,
+    /// Written here, read by `App`: whether the palette is actually on screen. `App` cannot derive it
+    /// — openness depends on the input text, which lives in this component.
+    palette_visible: Signal<bool>,
 ) -> Element {
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut palette_dismissed = palette_dismissed;
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut model_browser_open = model_browser_open;
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
@@ -142,6 +151,9 @@ pub fn Chat(
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut session = use_signal(|| None::<String>);
     let mut should_set_title = use_signal(|| false);
+    // Which palette row is selected — the TUI's `slash_palette_index` by another name, feeding the
+    // same `liberado_commands` functions.
+    let mut slash_index = use_signal(|| 0usize);
 
     let base_for_effect = api_base.clone();
     let base_for_submit = api_base.clone();
@@ -260,10 +272,18 @@ pub fn Chat(
     // `use_callback` (not a plain closure) so the same handle is `Copy` and can be moved into both
     // `onsubmit` and the textarea's `onkeydown` without a "closure moved twice" conflict.
     let submit = use_callback(move |_: ()| {
-        let text = input.read().trim().to_string();
+        let raw = input.read().clone();
+        // Enter accepts the selected palette match without needing Tab first, so `/hel` + Enter runs
+        // `/help`. Same rule and same function as the TUI's `send_message`.
+        let text = match liberado_commands::accept_completion(&raw, slash_index()) {
+            Some(completed) if !palette_dismissed() => completed.trim().to_string(),
+            _ => raw.trim().to_string(),
+        };
         if text.is_empty() || sending() {
             return;
         }
+        slash_index.set(0);
+        palette_dismissed.set(false);
 
         if text.starts_with('/') {
             let session_snapshot = session.read().clone();
@@ -379,6 +399,27 @@ pub fn Chat(
     });
 
     let conv_id = active_conv_id.read().clone();
+
+    // Shown while the input is a slash query that still matches something, and not while a turn is
+    // streaming — the palette is for composing, and mid-stream the input is about to be replaced.
+    let palette_open = use_memo(move || {
+        !palette_dismissed()
+            && !sending()
+            && !crate::components::slash_palette::matches_for(&input()).is_empty()
+    });
+    // The remainder of the selected match, from the same function the TUI's ghost uses. `None` once
+    // the typed text covers the whole command, so a complete `/help` shows no trailing artifact.
+    let ghost_suffix = use_memo(move || {
+        if !palette_open() {
+            return None;
+        }
+        liberado_commands::ghost_suffix(&input(), slash_index())
+    });
+    // Report openness upward so `App` can put the palette in the Back-gesture layer stack. A mirror
+    // rather than a prop: `App` has no access to the input text this is derived from.
+    let mut palette_visible = palette_visible;
+    use_effect(move || palette_visible.set(palette_open()));
+
     let chat_cls = if incognito() {
         "chat incognito"
     } else {
@@ -463,29 +504,103 @@ pub fn Chat(
                 }
             }
 
+            if palette_open() {
+                SlashPalette {
+                    input: input(),
+                    selected: slash_index(),
+                    // A tap is the phone's Tab. Fill the input rather than running it, so a
+                    // command that takes an argument can still have one typed.
+                    on_pick: move |idx: usize| {
+                        if let Some(filled) = liberado_commands::complete_commands(&input(), idx) {
+                            input.set(filled);
+                            slash_index.set(idx);
+                            resize_input_to_content();
+                            focus_chat_input();
+                        }
+                    },
+                }
+            }
+
             form {
                 class: "input-bar",
                 onsubmit: move |evt| {
                     evt.prevent_default();
                     submit.call(());
                 },
-                textarea {
-                    id: "chat-input",
-                    class: "input",
-                    placeholder: "Message Liberado\u{2026}",
-                    value: "{input}",
-                    rows: 1,
-                    autofocus: true,
-                    oninput: move |e| {
-                        input.set(e.value());
-                        resize_input_to_content();
-                    },
-                    onkeydown: move |e: Event<KeyboardData>| {
-                        if e.key() == Key::Enter && !e.modifiers().contains(Modifiers::SHIFT) {
-                            e.prevent_default();
-                            submit.call(());
+                // Wraps the textarea so the ghost mirror can sit exactly under it. `.input` keeps
+                // its own metrics; this only supplies the positioning context.
+                div {
+                    class: "input-wrap",
+                    // The dim remainder of the selected match, drawn *behind* a transparent-background
+                    // textarea. The typed part is reproduced invisibly so the visible suffix starts
+                    // precisely where the caret is — there is no way to measure that from Rust, so the
+                    // browser measures it for us by laying out the same text in the same font.
+                    if let Some(ghost) = ghost_suffix() {
+                        div {
+                            class: "input-ghost",
+                            "aria-hidden": "true",
+                            span { class: "input-ghost-typed", "{input}" }
+                            span { class: "input-ghost-suffix", "{ghost}" }
                         }
-                    },
+                    }
+                    textarea {
+                        id: "chat-input",
+                        class: "input",
+                        placeholder: "Message Liberado\u{2026}",
+                        value: "{input}",
+                        rows: 1,
+                        autofocus: true,
+                        // The palette is a completion aid, not a listbox the caret moves into, so the
+                        // textarea keeps focus and announces the relationship instead.
+                        autocomplete: "off",
+                        oninput: move |e| {
+                            input.set(e.value());
+                            // A changed query invalidates the old selection: `/s` selecting the third
+                            // match and then typing `e` would otherwise leave the highlight on
+                            // whatever now happens to be third.
+                            slash_index.set(0);
+                            palette_dismissed.set(false);
+                            resize_input_to_content();
+                        },
+                        onkeydown: move |e: Event<KeyboardData>| {
+                            let open = palette_open();
+                            match e.key() {
+                                // Tab fills progressively — the shared `complete_commands` decides
+                                // how far, which is what keeps `/th` behaving as it does in the TUI.
+                                Key::Tab if open => {
+                                    e.prevent_default();
+                                    if let Some(filled) =
+                                        liberado_commands::complete_commands(&input(), slash_index())
+                                    {
+                                        input.set(filled);
+                                        resize_input_to_content();
+                                    }
+                                }
+                                Key::ArrowDown if open => {
+                                    e.prevent_default();
+                                    let n = crate::components::slash_palette::matches_for(&input()).len();
+                                    if n > 0 {
+                                        slash_index.set((slash_index() + 1).min(n - 1));
+                                    }
+                                }
+                                Key::ArrowUp if open => {
+                                    e.prevent_default();
+                                    slash_index.set(slash_index().saturating_sub(1));
+                                }
+                                // Dismiss without clearing what was typed. Reopened by the next
+                                // keystroke, since that is a new query.
+                                Key::Escape if open => {
+                                    e.prevent_default();
+                                    palette_dismissed.set(true);
+                                }
+                                Key::Enter if !e.modifiers().contains(Modifiers::SHIFT) => {
+                                    e.prevent_default();
+                                    submit.call(());
+                                }
+                                _ => {}
+                            }
+                        },
+                    }
                 }
                 if sending() {
                     button {
@@ -708,6 +823,28 @@ fn resize_input_to_content() {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn resize_input_to_content() {}
+
+/// Put the caret back in the chat box after tapping a palette row.
+///
+/// The row's `onmousedown` already prevents the blur on desktop, but a touch tap on a phone can
+/// still take focus away — and being dropped out of the input right after asking for a completion is
+/// the opposite of helpful.
+#[cfg(target_arch = "wasm32")]
+fn focus_chat_input() {
+    use wasm_bindgen::JsCast;
+
+    let Some(el) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id("chat-input"))
+        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+    else {
+        return;
+    };
+    let _ = el.focus();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn focus_chat_input() {}
 
 // ── SSE streaming (browser-only) ────────────────────────────────────────────
 

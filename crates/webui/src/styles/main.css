@@ -721,6 +721,146 @@ html {
     transition: border-color 0.15s;
 }
 
+/* ── Slash-command palette + ghost completion ─────────────────────────────────
+
+   The ghost is a mirror: the same text, in the same font, at the same metrics, drawn underneath a
+   textarea whose own background is transparent. The typed prefix is reproduced invisibly purely so
+   the visible remainder begins exactly at the caret — nothing can measure that position from Rust,
+   so the browser measures it by laying out the identical string.
+
+   Every property below marked "mirror" MUST stay identical to `.input`, or the ghost drifts out of
+   alignment as you type. */
+
+.input-wrap {
+    position: relative;
+    flex: 1;
+    display: flex;
+    min-width: 0;
+}
+
+.input-wrap .input {
+    /* Transparent so the mirror behind it shows through; `.input`'s colour moves to `.input-wrap`. */
+    background: transparent;
+    position: relative;
+    z-index: 1;
+}
+
+.input-wrap::before {
+    /* The input's background, as its own layer below both the mirror and the textarea — painting it
+       on `.input` would hide the ghost, and painting it on `.input-wrap` would bleed past the
+       textarea's rounded border. */
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 0.5rem;
+    background: var(--lib-input-bg);
+    z-index: 0;
+}
+
+.input-ghost {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+    /* mirror of .input */
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    font-family: inherit;
+    line-height: 1.4;
+    border: 1px solid transparent;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+}
+
+.input-ghost-typed {
+    color: transparent;
+}
+
+.input-ghost-suffix {
+    color: var(--lib-input-placeholder);
+}
+
+.slash-palette {
+    /* Sits above the input rather than over the conversation: this is a composing aid, and covering
+       what you are replying to while you type a command is the wrong trade. Spacing comes from
+       `.chat`'s flex `gap` — a margin here would add to it rather than replace it. */
+    border: 1px solid var(--lib-input-border-focused);
+    border-radius: 0.5rem;
+    background: var(--lib-surface);
+    overflow: hidden;
+    flex-shrink: 0;
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.slash-palette-list {
+    display: flex;
+    flex-direction: column;
+    /* 8 rows at ~2rem, matching the TUI's MAX_VISIBLE window. */
+    max-height: 16rem;
+    overflow-y: auto;
+}
+
+.slash-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.625rem;
+    width: 100%;
+    padding: 0.3125rem 0.625rem;
+    border: none;
+    background: transparent;
+    color: var(--lib-sidebar-text);
+    font-family: inherit;
+    font-size: 0.8125rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.slash-row.selected {
+    background: var(--lib-accent);
+    color: var(--lib-app-bg);
+}
+
+.slash-row-name {
+    flex-shrink: 0;
+    /* Wide enough for the longest command so the descriptions line up into a column, the way the
+       TUI's fixed-width name field does. */
+    min-width: 8.5rem;
+    font-weight: 600;
+}
+
+.slash-row-desc {
+    opacity: 0.75;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.slash-palette-hint {
+    padding: 0.25rem 0.625rem;
+    border-top: 1px solid var(--lib-border);
+    color: var(--lib-input-placeholder);
+    font-size: 0.6875rem;
+}
+
+/* On a phone there is no Tab key and no room for two columns: stack the description under the name
+   and let the row be a tap target. */
+@media (max-width: 560px) {
+    .slash-row {
+        flex-direction: column;
+        gap: 0.0625rem;
+        padding: 0.375rem 0.625rem;
+    }
+
+    .slash-row-name {
+        min-width: 0;
+    }
+
+    .slash-palette-hint {
+        display: none;
+    }
+}
+
 .input::placeholder {
     color: var(--lib-input-placeholder);
 }

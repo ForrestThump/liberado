@@ -101,6 +101,11 @@ fn App() -> Element {
     // open and in what order (see the block below and `back_nav.rs`).
     let model_browser_open = use_signal(|| false);
     let theme_browser_open = use_signal(|| false);
+    // The slash palette. `Chat` reports whether it is showing (openness depends on the input text,
+    // which only Chat has) and `App` sets `dismissed` to close it — the same two-signal split any
+    // layer whose visibility is derived would need.
+    let palette_visible = use_signal(|| false);
+    let palette_dismissed = use_signal(|| false);
     // `mut` because the header's menu button toggles it (see below).
     // Default collapsed on narrow (phone-width) viewports so the sidebar doesn't cover the chat
     // on first load — expanded by default everywhere else, matching prior behavior.
@@ -122,9 +127,13 @@ fn App() -> Element {
         let mut sidebar_collapsed = sidebar_collapsed;
         let mut model_browser_open = model_browser_open;
         let mut theme_browser_open = theme_browser_open;
+        let mut palette_dismissed = palette_dismissed;
         back_nav::install(move || {
-            // Innermost first: a picker sits on top of the sidebar, which sits on top of the view.
-            if model_browser_open() {
+            // Innermost first: the palette hovers over the input, a picker sits on top of the
+            // sidebar, and the sidebar sits on top of the view.
+            if palette_visible() {
+                palette_dismissed.set(true);
+            } else if model_browser_open() {
                 model_browser_open.set(false);
             } else if theme_browser_open() {
                 theme_browser_open.set(false);
@@ -138,6 +147,7 @@ fn App() -> Element {
 
     let back_depth = use_memo(move || {
         [
+            palette_visible(),
             model_browser_open(),
             theme_browser_open(),
             sidebar_is_a_layer(),
@@ -214,6 +224,8 @@ fn App() -> Element {
                             new_chat_nonce,
                             model_browser_open,
                             theme_browser_open,
+                            palette_dismissed,
+                            palette_visible,
                         }
                     } else {
                         Dashboard { api_base: base.clone() }
