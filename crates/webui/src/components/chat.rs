@@ -113,6 +113,9 @@ pub fn Chat(
 ) -> Element {
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut theme_name = theme_name;
+    // Written back when a sidebar pick takes the user out of a private chat — the mode has to follow
+    // them out, or the banner ends up sitting above a conversation that is being written to disk.
+    let mut incognito = incognito;
     // The live incognito session, if one has been opened. Tracked separately from `session` because
     // it is the thing that has to be *discarded*, and by the time we notice we are leaving, `session`
     // has often already moved on to whatever the user switched to.
@@ -174,16 +177,15 @@ pub fn Chat(
         }
     });
 
-    // Tear down the live incognito session: tell the daemon to drop it, and clear the pane it was
-    // showing. Idempotent — a second call with nothing live does nothing.
+    // Tell the daemon to drop the live incognito session. Deliberately does *not* touch `messages`
+    // or `session`: the three callers below want different things there, and one of them is about to
+    // load a different conversation into both. Idempotent — with nothing live it does nothing.
     let base_for_discard = api_base.clone();
     let discard_ghost = use_callback(move |_: ()| {
         let Some(id) = ghost_session.write().take() else {
             return;
         };
         crate::components::incognito::forget();
-        messages.set(Vec::new());
-        session.set(None);
         let base = base_for_discard.clone();
         #[cfg(target_arch = "wasm32")]
         wasm_bindgen_futures::spawn_local(crate::components::incognito::discard(base, id));
@@ -193,24 +195,42 @@ pub fn Chat(
         }
     });
 
-    // The one place "left the incognito chat" is decided, so the three ways out cannot disagree:
-    // the toggle going off, and picking any conversation from the sidebar (which includes New Chat,
-    // since that sets `active_conv_id` to `None` — and a fresh normal chat is still a chat that is
-    // not this one). Closing the tab is the fourth, handled by the `pagehide` hook below because no
-    // effect gets to run then.
+    // The whole lifecycle of the mode, in one effect, so the ways in and out cannot disagree with
+    // each other. `prev` is what makes the *transitions* visible: an effect only ever sees the
+    // current value, and "incognito is on" and "incognito just came on" call for different things.
+    let mut prev_incognito = use_signal(|| false);
     use_effect(move || {
-        let still_on = incognito();
-        let switched_away = active_conv_id.read().is_some();
-        if ghost_session.read().is_some() && (!still_on || switched_away) {
-            discard_ghost.call(());
-        }
-    });
+        let now = incognito();
+        let was = prev_incognito();
 
-    // Registered once, and only once the mode has actually been used — there is no reason to hold an
-    // unload handler for a window that has never opened a private chat.
-    use_effect(move || {
-        if incognito() {
-            crate::components::incognito::install_unload_discard();
+        if now != was {
+            prev_incognito.set(now);
+            discard_ghost.call(());
+            // Entering means a *new* chat, always. Without this, switching the mode on while a saved
+            // conversation was open would leave `session` pointing at it — and the next message
+            // would quietly continue that durable conversation with the banner promising privacy,
+            // which is the worst failure this feature could have.
+            messages.set(Vec::new());
+            session.set(None);
+            if active_conv_id.read().is_some() {
+                active_conv_id.set(None);
+            }
+            if now {
+                // Only once the mode has actually been used: no reason to hold an unload handler for
+                // a window that has never opened a private chat.
+                crate::components::incognito::install_unload_discard();
+            }
+            return;
+        }
+
+        // Still on, and a conversation got selected in the sidebar — including "New Chat", which
+        // sets `None` and is still a request to be somewhere else. Leave the private chat and let
+        // the mode follow, so the banner never sits above a conversation that is being written to
+        // disk. `messages`/`session` are left alone here: the history effect above owns them now.
+        if now && ghost_session.read().is_some() && active_conv_id.read().is_some() {
+            discard_ghost.call(());
+            incognito.set(false);
+            prev_incognito.set(false);
         }
     });
 
