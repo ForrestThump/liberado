@@ -117,6 +117,9 @@ impl SessionHeader {
             parent_conversation: self.parent_session,
             spawned_by: self.spawned_by,
             created_at: self.created_at,
+            // The same grant, seen through the chat lens — not a copy that can drift, since both
+            // views are built from this one header.
+            grant: self.grant.clone(),
         }
     }
 

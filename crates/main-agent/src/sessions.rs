@@ -402,7 +402,21 @@ impl ChatSessions {
     /// Persisting the prompt as the root (rather than re-injecting it on load) keeps the store the
     /// single source of truth for the whole history, system prompt included.
     pub async fn create(&self, title: Option<String>) -> SessionResult<Ulid> {
-        self.create_conversation(title, false).await
+        self.create_conversation(title, false, SessionGrant::default())
+            .await
+    }
+
+    /// Create a conversation running under an already-resolved session profile.
+    ///
+    /// The grant arrives resolved: turning a profile *name* into capabilities is
+    /// `Config::resolve_session_profile`'s job, and it fails closed on an unknown or disabled name,
+    /// so a typo can never reach here as "no profile" (which would silently mean the default grant).
+    pub async fn create_with_grant(
+        &self,
+        title: Option<String>,
+        grant: SessionGrant,
+    ) -> SessionResult<Ulid> {
+        self.create_conversation(title, false, grant).await
     }
 
     /// Create an **incognito** conversation: RAM only, never written to disk, never listed.
@@ -416,13 +430,15 @@ impl ChatSessions {
     /// incognito chat still writes what it writes — a vault note, a memory, an audit entry. What is
     /// ephemeral is the transcript, not the consequences.
     pub async fn create_incognito(&self, title: Option<String>) -> SessionResult<Ulid> {
-        self.create_conversation(title, true).await
+        self.create_conversation(title, true, SessionGrant::default())
+            .await
     }
 
     async fn create_conversation(
         &self,
         title: Option<String>,
         ephemeral: bool,
+        grant: SessionGrant,
     ) -> SessionResult<Ulid> {
         let header = self
             .store
@@ -431,6 +447,7 @@ impl ChatSessions {
                 parent_conversation: None,
                 spawned_by: None,
                 ephemeral,
+                grant,
             })
             .await?;
         self.store
@@ -491,7 +508,11 @@ impl ChatSessions {
 
         let reply = if self.uses_face_agent() {
             let turn_deferral = Arc::new(AtomicBool::new(false));
-            let turn_runtime = self.build_face_runtime(user, session, turn_deferral.clone());
+            // Read per turn, not cached: a profile switch mid-conversation takes effect on the next
+            // turn, which is the whole of "switchable" — no restart, no reconnect.
+            let capabilities = self.session_capabilities(session).await;
+            let turn_runtime =
+                self.build_face_runtime(user, session, capabilities, turn_deferral.clone());
             let reply = convo
                 .turn(&self.executor, turn_runtime.as_ref(), user)
                 .await?;
@@ -546,7 +567,8 @@ impl ChatSessions {
             // can't retract an already-streamed reply — Gap 2 suppression is a buffered-`turn`
             // affordance (the Telegram surface). Pass a throwaway flag to satisfy the signature.
             let turn_deferral = Arc::new(AtomicBool::new(false));
-            let turn_runtime = self.build_face_runtime(user, session, turn_deferral);
+            let capabilities = self.session_capabilities(session).await;
+            let turn_runtime = self.build_face_runtime(user, session, capabilities, turn_deferral);
             convo
                 .turn_stream(&self.executor, turn_runtime.as_ref(), user, events)
                 .await?;
@@ -575,6 +597,34 @@ impl ChatSessions {
         self.delegation_mode && self.face_bridge.is_some()
     }
 
+    /// The capability set a turn in `session` runs under.
+    ///
+    /// **A session with no profile gets the process-wide grant**, which is every conversation that
+    /// existed before profiles and every one started without naming one. Falling back to the
+    /// session's empty default instead would have silently stripped the tools from every existing
+    /// chat the moment this shipped — a migration disguised as a feature.
+    ///
+    /// A *named* profile is authoritative even when its capability set is empty, so "this chat may
+    /// call nothing" stays sayable and distinct from "nothing was chosen". The name is what carries
+    /// the intent; an empty `capabilities` alone cannot.
+    ///
+    /// A session the store cannot produce a header for also falls back — a lookup failure must not
+    /// quietly become an authority change.
+    async fn session_capabilities(&self, session: Ulid) -> CapabilitySet {
+        match self.store.header(session).await {
+            Ok(header) if header.grant.profile.is_some() => header.grant.capabilities,
+            Ok(_) => self.capabilities.clone(),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    session = %session,
+                    "could not read session grant; falling back to the process-wide grant"
+                );
+                self.capabilities.clone()
+            }
+        }
+    }
+
     /// Face-agent runtime: built-in `delegate` is never risk-gated by MCP name (it is core).
     /// Optional `"main-agent"` MCP grants are scoped + risk-gated separately so operators can
     /// thicken the surface without exposing the fleet by default.
@@ -586,9 +636,10 @@ impl ChatSessions {
         &self,
         user: &str,
         session: Ulid,
+        capabilities: CapabilitySet,
         turn_deferral: Arc<AtomicBool>,
     ) -> Box<dyn ToolRuntime> {
-        let extras = self.scoped_extras_runtime(user, session);
+        let extras = self.scoped_extras_runtime(user, session, capabilities);
         Box::new(FaceRuntime::new(
             self.face_bridge.clone(),
             extras,
@@ -607,14 +658,29 @@ impl ChatSessions {
             || !self.zone_catalog.is_empty()
     }
 
-    /// Optional MCP tools granted to main-agent only (usually empty under the face design).
-    fn scoped_extras_runtime(&self, user: &str, session: Ulid) -> Arc<dyn ToolRuntime> {
-        let granted_mcps = self.capabilities.granted_mcps();
-        if granted_mcps.is_empty() {
+    /// The MCP tools this **session** may call directly.
+    ///
+    /// `capabilities` is the session's own grant — its profile — not the process-wide
+    /// `self.capabilities`. That is the whole of per-session tool scoping: the runtime was already
+    /// rebuilt per turn and already handed the session id, so the only thing missing was asking the
+    /// session what it is allowed to do.
+    ///
+    /// Built with `from_capabilities`, which enforces per **tool** and fails closed. The MCP-name
+    /// constructor could not express a partial grant, and its empty-list-means-everything default
+    /// would turn a restrictive profile into an unrestricted one.
+    fn scoped_extras_runtime(
+        &self,
+        user: &str,
+        session: Ulid,
+        capabilities: CapabilitySet,
+    ) -> Arc<dyn ToolRuntime> {
+        if capabilities.granted_mcps().is_empty() && capabilities.granted_tools().is_empty() {
             return Arc::new(NoToolsRuntime);
         }
-        let scoped: Arc<dyn ToolRuntime> =
-            Arc::new(ScopedRuntime::new(self.runtime.clone(), granted_mcps));
+        let scoped: Arc<dyn ToolRuntime> = Arc::new(ScopedRuntime::from_capabilities(
+            self.runtime.clone(),
+            capabilities.clone(),
+        ));
         // Never return raw scoped tools when a live catalog (or snapshot gate data) is configured:
         // empty boot-time `consequences` must not bypass Write(zone)/consequence after reload.
         if !self.risk_gate_enabled() {

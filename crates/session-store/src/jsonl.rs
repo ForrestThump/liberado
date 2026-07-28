@@ -556,7 +556,9 @@ impl ConversationStore for SessionStore {
                 spawned_by: new.spawned_by,
                 correlation_id: None,
                 visibility: Default::default(),
-                grant: Default::default(),
+                // Carried through rather than defaulted: this is the line where a chat's chosen
+                // profile becomes the session's authority, and where it was previously dropped.
+                grant: new.grant,
                 ephemeral: new.ephemeral,
             })
             .await;
