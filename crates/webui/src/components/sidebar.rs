@@ -103,7 +103,10 @@ pub fn Sidebar(
     api_base: String,
     active_conv_id: Signal<Option<String>>,
     collapsed: Signal<bool>,
+    /// Bumped whenever "New Chat" is pressed. See the button below for why a counter and not a bool.
+    new_chat_nonce: Signal<u64>,
 ) -> Element {
+    let mut new_chat_nonce = new_chat_nonce;
     // `mut` for `restart()` after a delete, which is wasm-only — on native that writer is cfg'd out
     // and the binding merely looks immutable.
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
@@ -180,11 +183,16 @@ pub fn Sidebar(
                 button {
                     class: "sidebar-new-chat-btn",
                     onclick: move |_| {
-                        // Only reset when the focused chat has actually been used. `active_conv_id`
-                        // is set from the SSE `session` event on the first send, so `None` already
-                        // means "fresh and empty" — resetting again would clear nothing and just
-                        // re-render. (No session is minted here either way: this is client state,
-                        // and the server creates one when the first message is sent.)
+                        // Announce the *request* rather than infer it from state. This used to be
+                        // only `if active_conv_id.is_some() { set(None) }`, on the premise that
+                        // `None` already means "fresh and empty" — true until incognito, whose
+                        // session deliberately never becomes an `active_conv_id`. New Chat then
+                        // no-opped in exactly the case where clearing mattered most, leaving the
+                        // private transcript on screen.
+                        //
+                        // A counter, not a bool: pressing New Chat twice has to register twice, and
+                        // a flag that is already `true` cannot say "again".
+                        new_chat_nonce += 1;
                         if active_conv_id.read().is_some() {
                             active_conv_id.set(None);
                         }

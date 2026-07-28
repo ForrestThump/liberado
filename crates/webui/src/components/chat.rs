@@ -110,6 +110,9 @@ pub fn Chat(
     /// Incognito mode (see `components/incognito.rs`): the next chat opened is RAM-only on the
     /// daemon and discarded when it is left.
     incognito: Signal<bool>,
+    /// Bumped by the sidebar's "New Chat". An explicit request, because it cannot be inferred from
+    /// `active_conv_id` — an incognito chat never sets one.
+    new_chat_nonce: Signal<u64>,
 ) -> Element {
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut theme_name = theme_name;
@@ -199,12 +202,18 @@ pub fn Chat(
     // each other. `prev` is what makes the *transitions* visible: an effect only ever sees the
     // current value, and "incognito is on" and "incognito just came on" call for different things.
     let mut prev_incognito = use_signal(|| false);
+    let mut prev_new_chat = use_signal(|| 0u64);
     use_effect(move || {
         let now = incognito();
         let was = prev_incognito();
+        let nonce = new_chat_nonce();
+        // "New Chat" while private starts a *new private chat* — the mode is not a per-conversation
+        // setting you have to re-arm, same as a new tab in an incognito window.
+        let asked_for_fresh = nonce != prev_new_chat();
 
-        if now != was {
+        if now != was || asked_for_fresh {
             prev_incognito.set(now);
+            prev_new_chat.set(nonce);
             discard_ghost.call(());
             // Entering means a *new* chat, always. Without this, switching the mode on while a saved
             // conversation was open would leave `session` pointing at it — and the next message
@@ -755,7 +764,12 @@ fn open_stream(
     // could be retroactively made private, which is not a thing the daemon can do.
     let url = match session.read().as_ref() {
         Some(id) => format!("{api_base}/api/chat/stream?message={encoded}&session={id}"),
-        None if incognito => format!("{api_base}/api/chat/stream?message={encoded}&incognito=1"),
+        // `true`, not `1`: axum's `Query` deserializes a bool through `FromStr`, which accepts only
+        // "true"/"false". `incognito=1` fails the whole extraction, so the request would 400 and the
+        // chat would simply not answer — a loud failure, but for a silly reason.
+        None if incognito => {
+            format!("{api_base}/api/chat/stream?message={encoded}&incognito=true")
+        }
         None => format!("{api_base}/api/chat/stream?message={encoded}"),
     };
     let ghost_base = api_base.to_string();

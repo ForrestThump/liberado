@@ -386,3 +386,34 @@ fn chat_message_from_provider(m: liberado_provider::Message) -> ChatMessage {
         tool_call_id: m.tool_call_id,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ChatRequest;
+
+    /// The WebUI reaches the chat stream through `EventSource`, which can only issue a `GET` — so
+    /// `incognito` crosses the wire as a query parameter, and axum deserializes it with
+    /// `serde_urlencoded`. That deserializer parses a `bool` through `FromStr`, which accepts
+    /// **only** `true`/`false`.
+    ///
+    /// This is pinned because the failure is disproportionate to the mistake: `incognito=1` does not
+    /// fall back to `false`, it fails the whole `Query` extraction, so the request 400s and the chat
+    /// just does not answer. Nothing in the type signature hints at that.
+    #[test]
+    fn incognito_parses_from_the_query_string_as_true_not_one() {
+        let ok: ChatRequest = serde_urlencoded::from_str("message=hi&incognito=true").unwrap();
+        assert!(ok.incognito);
+
+        let off: ChatRequest = serde_urlencoded::from_str("message=hi&incognito=false").unwrap();
+        assert!(!off.incognito);
+
+        // Absent is the overwhelmingly common case: every normal chat, and every other client.
+        let absent: ChatRequest = serde_urlencoded::from_str("message=hi").unwrap();
+        assert!(!absent.incognito);
+
+        assert!(
+            serde_urlencoded::from_str::<ChatRequest>("message=hi&incognito=1").is_err(),
+            "if `1` ever starts parsing, the comment on the URL builder in webui/chat.rs is stale"
+        );
+    }
+}

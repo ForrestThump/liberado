@@ -92,6 +92,9 @@ fn App() -> Element {
     // view and back. It always starts **off** — a privacy mode you did not switch on yourself, out
     // of a store you forgot was there, is a mode you cannot reason about.
     let incognito = use_signal(|| false);
+    // "New Chat" as an event rather than a state change — see the button in `sidebar.rs`. Owned here
+    // because the sidebar raises it and the chat acts on it.
+    let new_chat_nonce = use_signal(|| 0u64);
     // `mut` because the header's menu button toggles it (see below).
     // Default collapsed on narrow (phone-width) viewports so the sidebar doesn't cover the chat
     // on first load — expanded by default everywhere else, matching prior behavior.
@@ -149,6 +152,7 @@ fn App() -> Element {
                     api_base: base.clone(),
                     active_conv_id,
                     collapsed: sidebar_collapsed,
+                    new_chat_nonce,
                 }
                 main {
                     class: "main-content",
@@ -158,6 +162,7 @@ fn App() -> Element {
                             active_conv_id,
                             theme_name,
                             incognito,
+                            new_chat_nonce,
                         }
                     } else {
                         Dashboard { api_base: base.clone() }
