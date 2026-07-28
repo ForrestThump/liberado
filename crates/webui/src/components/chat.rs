@@ -232,11 +232,16 @@ pub fn Chat(
             return;
         }
 
-        // Still on, and a conversation got selected in the sidebar — including "New Chat", which
-        // sets `None` and is still a request to be somewhere else. Leave the private chat and let
-        // the mode follow, so the banner never sits above a conversation that is being written to
-        // disk. `messages`/`session` are left alone here: the history effect above owns them now.
-        if now && ghost_session.read().is_some() && active_conv_id.read().is_some() {
+        // Still on, and a saved conversation got selected. Leave the private chat and disarm the
+        // mode: what you are now looking at is written to disk, so the banner must not claim
+        // otherwise. `messages`/`session` are left alone — the history effect above owns them now.
+        //
+        // Note there is **no `ghost_session.is_some()` condition** here. There used to be, and it
+        // was half of a data-loss bug: arming the mode without sending anything leaves no ghost, so
+        // this branch never fired, the banner sat over a saved conversation, and the mode stayed
+        // armed while that conversation was the live one. Selecting a saved chat means leaving
+        // incognito whether or not a private session was ever opened.
+        if now && active_conv_id.read().is_some() {
             discard_ghost.call(());
             incognito.set(false);
             prev_incognito.set(false);
@@ -759,9 +764,16 @@ fn open_stream(
     use web_sys::{EventSource, MessageEvent};
 
     let encoded = urlencoding::encode(message);
-    // `incognito` describes how to *open* a session, so it rides only on the request that has no
-    // `session` — sending it alongside an existing id would suggest an already-durable conversation
-    // could be retroactively made private, which is not a thing the daemon can do.
+    // **Whether this turn is opening a private session**, which is not the same question as whether
+    // the mode is on. If `session` is already set we are continuing an existing conversation, and no
+    // flag can retroactively make that one private.
+    //
+    // Everything below keys off *this*, never off `incognito`. Conflating the two is what destroyed
+    // a saved conversation: with the mode armed but no private session yet, selecting a saved chat
+    // and sending a message made the SSE handler record that chat's id as the ghost — and the
+    // teardown then deleted it. A session may only be treated as disposable if we watched it get
+    // created as one.
+    let opened_incognito = incognito && session.read().is_none();
     let url = match session.read().as_ref() {
         Some(id) => format!("{api_base}/api/chat/stream?message={encoded}&session={id}"),
         // `true`, not `1`: axum's `Query` deserializes a bool through `FromStr`, which accepts only
@@ -791,7 +803,7 @@ fn open_stream(
                 && !data.is_empty()
             {
                 session.set(Some(data.clone()));
-                if incognito {
+                if opened_incognito {
                     // Recorded as the ghost instead of the active conversation: it is not in the
                     // sidebar to be highlighted, and this is the id the teardown paths need. The
                     // `pagehide` mirror is set here too — this is the first moment there is anything

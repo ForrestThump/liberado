@@ -29,11 +29,20 @@
 
 use dioxus::prelude::*;
 
-/// `DELETE /api/conversations/{id}` for a session we are walking away from.
+/// The path the daemon refuses to serve for anything but an incognito session.
 ///
-/// 404 is success: the point is that it is gone, and the sweeper may have gotten there first.
+/// Teardown happens on its own, from an effect, with nobody watching — so it must not be able to
+/// delete a saved conversation even if this code hands it the wrong id. It once did exactly that.
+/// With the guard, the worst a bug of that shape can do is leave a private session behind for the
+/// idle sweeper.
+pub const DISCARD_QUERY: &str = "?ephemeral_only=true";
+
+/// Discard a session we are walking away from.
+///
+/// Failures are swallowed on purpose: nothing useful can be done about them here, a 404 already
+/// means the outcome we wanted, and a 409 means the guard above just saved us.
 pub async fn discard(api_base: String, id: String) {
-    let url = format!("{api_base}/api/conversations/{id}");
+    let url = format!("{api_base}/api/conversations/{id}{DISCARD_QUERY}");
     let _ = reqwest::Client::new().delete(&url).send().await;
 }
 
@@ -106,7 +115,7 @@ pub fn install_unload_discard() {
             &wasm_bindgen::JsValue::from_str("keepalive"),
             &wasm_bindgen::JsValue::TRUE,
         );
-        let url = format!("{base}/api/conversations/{id}");
+        let url = format!("{base}/api/conversations/{id}{DISCARD_QUERY}");
         if let Ok(req) = web_sys::Request::new_with_str_and_init(&url, &opts) {
             // The promise is deliberately dropped: the document is going away and there is nobody
             // left to tell. `keepalive` is what makes the request outlive us, not the awaiting.

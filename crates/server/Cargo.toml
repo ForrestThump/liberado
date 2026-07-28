@@ -49,6 +49,8 @@ thiserror = { workspace = true }
 # The exact deserializer axum's `Query` extractor uses, so the query-string contract test in
 # api/chat.rs exercises the real parser rather than an approximation of it.
 serde_urlencoded = "0.7"
+liberado-test-support = { workspace = true }
+tempfile = { workspace = true }
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)

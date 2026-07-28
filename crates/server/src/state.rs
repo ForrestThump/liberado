@@ -159,3 +159,47 @@ impl AppState {
         tx
     }
 }
+
+#[cfg(test)]
+impl AppState {
+    /// A minimal `AppState` for handler tests: a real store and a real `ChatSessions`, everything
+    /// else inert.
+    ///
+    /// The store and chat are genuine on purpose — a test that stubs the store cannot prove
+    /// anything about whether a request destroys data, which is the only reason this exists.
+    pub(crate) fn for_test(
+        sessions: Arc<liberado_session_store::SessionStore>,
+        chat: Option<Arc<ChatSessions>>,
+        root: PathBuf,
+    ) -> Self {
+        let (hook_tx, _hook_rx) = tokio::sync::mpsc::unbounded_channel();
+        // Leaked so the receiver never drops: a closed channel would make `hook_tx.send` fail in a
+        // way no test here is about.
+        std::mem::forget(_hook_rx);
+        Self {
+            start_time: Instant::now(),
+            reactions: Arc::new(Mutex::new(Vec::new())),
+            dispatcher_attached: false,
+            orchestrator_attached: false,
+            vault_path: root.join("vault").to_string_lossy().into_owned(),
+            goals: Arc::new(GoalSessionHub::new(
+                liberado_session_store::SessionStore::clone(&sessions),
+            )),
+            chat,
+            chat_tools: 0,
+            chat_tool_names: Vec::new(),
+            catalog: Arc::new(CapabilityCatalog::new()),
+            sessions_root: root,
+            main_agent_capabilities: CapabilitySet::empty(),
+            dispatcher_capabilities: CapabilitySet::empty(),
+            sessions,
+            config: Arc::new(Config::default()),
+            model_name: None,
+            provider: None,
+            hooks: HashMap::new(),
+            hook_tx,
+            hook_idempotency: IdempotencyCache::default(),
+            live_mcp: LiveMcpController::empty(),
+        }
+    }
+}

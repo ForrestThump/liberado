@@ -253,6 +253,15 @@ pub async fn list_conversations(State(state): State<Arc<AppState>>) -> impl Into
     }
 }
 
+/// Query parameters for [`delete_conversation`].
+#[derive(Deserialize, Default)]
+pub struct DeleteParams {
+    /// Refuse the delete unless the target is an incognito session. See the handler's docs — this
+    /// is a guard against automatic teardown destroying a saved conversation, not a convenience.
+    #[serde(default)]
+    pub ephemeral_only: bool,
+}
+
 /// `DELETE /api/conversations/{id}` — permanently delete a conversation.
 ///
 /// Really deletes: the store removes the log from disk (see `ConversationStore::delete`), so this is
@@ -261,9 +270,22 @@ pub async fn list_conversations(State(state): State<Arc<AppState>>) -> impl Into
 ///
 /// `404` when it is already gone, rather than a silent `204`. A client that just wants the row out
 /// of its list can treat both the same; a client with a real bug gets told.
+///
+/// # `?ephemeral_only=true`
+///
+/// Refuses with `409` unless the session is incognito. **This exists because the unguarded version
+/// destroyed a real conversation.** The WebUI's incognito teardown fires on its own, from an effect,
+/// with no human in the loop — so a client-side mix-up about *which* session is the private one
+/// silently deletes a saved chat with no undo and no backup. Two client bugs did exactly that.
+///
+/// The client fixes are in, but "the caller will pass the right id" is not a property worth resting
+/// permanent data loss on. Every automatic teardown passes this flag, so the worst a future bug of
+/// the same shape can do is fail to clean up — which the idle sweeper then handles. The sidebar's
+/// Delete button deliberately does *not* pass it: a human clicked it and confirmed.
 pub async fn delete_conversation(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Ulid>,
+    Query(params): Query<DeleteParams>,
 ) -> impl IntoResponse {
     let Some(sessions) = &state.chat else {
         return (
@@ -274,6 +296,25 @@ pub async fn delete_conversation(
         )
             .into_response();
     };
+
+    if params.ephemeral_only
+        && let Some(header) = state.sessions.session(id).await
+        && !header.ephemeral
+    {
+        tracing::warn!(
+            conversation = %id,
+            "refused an ephemeral-only delete of a durable conversation — a caller thought a saved \
+             chat was its incognito session"
+        );
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiError {
+                error: "refusing to delete: this conversation is not incognito".into(),
+            }),
+        )
+            .into_response();
+    }
+
     match sessions.delete(id).await {
         Ok(()) => {
             tracing::info!(conversation = %id, "conversation deleted");
@@ -415,5 +456,128 @@ mod tests {
             serde_urlencoded::from_str::<ChatRequest>("message=hi&incognito=1").is_err(),
             "if `1` ever starts parsing, the comment on the URL builder in webui/chat.rs is stale"
         );
+    }
+
+    // ── The `?ephemeral_only=true` guard ─────────────────────────────────────────────────────
+    //
+    // Driven through the real router and the real store, because what is being asserted is that a
+    // *request* cannot destroy data — and the parts that would let it (route wiring, extractor
+    // order, the store's own notion of ephemerality) are precisely the parts a narrower test would
+    // stub out.
+
+    use std::sync::Arc;
+
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::Request;
+    use liberado_executor::{Budget, Executor};
+    use liberado_main_agent::ChatSessions;
+    use liberado_provider::MockProvider;
+    use liberado_session_store::SessionStore;
+    use liberado_test_support::NoopRuntime;
+    use tower::ServiceExt;
+
+    use super::*;
+
+    struct Harness {
+        app: Router,
+        chat: Arc<ChatSessions>,
+        _dir: tempfile::TempDir,
+    }
+
+    async fn harness() -> Harness {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = Arc::new(SessionStore::open(dir.path()).await);
+        let executor = Executor::new(
+            Arc::new(MockProvider::with_script("mock", vec![])),
+            Budget::default(),
+        );
+        let chat = Arc::new(ChatSessions::new(
+            sessions.clone(),
+            executor,
+            Arc::new(NoopRuntime),
+        ));
+        let state = Arc::new(crate::state::AppState::for_test(
+            sessions.clone(),
+            Some(chat.clone()),
+            dir.path().to_path_buf(),
+        ));
+        let app = Router::new()
+            .route(
+                "/api/conversations/{id}",
+                axum::routing::delete(super::delete_conversation),
+            )
+            .with_state(state);
+        Harness {
+            app,
+            chat,
+            _dir: dir,
+        }
+    }
+
+    async fn delete(app: &Router, uri: &str) -> StatusCode {
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+
+    /// The guard that turns "a client sent the wrong id" from permanent data loss into a no-op.
+    ///
+    /// This is not hypothetical. The WebUI's incognito teardown once mistook a saved conversation
+    /// for its private session and deleted it — no confirmation, no undo, no backup. Every automatic
+    /// teardown now passes this flag, so the same class of bug can only fail to clean up.
+    #[tokio::test]
+    async fn ephemeral_only_delete_refuses_a_durable_conversation() {
+        let h = harness().await;
+        let durable = h.chat.create(None).await.unwrap();
+
+        let status = delete(
+            &h.app,
+            &format!("/api/conversations/{durable}?ephemeral_only=true"),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(
+            h.chat.history(durable).await.is_ok(),
+            "the conversation must still be there — a refused delete that deleted anyway is the \
+             whole bug this guards"
+        );
+    }
+
+    #[tokio::test]
+    async fn ephemeral_only_delete_removes_an_incognito_session() {
+        let h = harness().await;
+        let ghost = h.chat.create_incognito(None).await.unwrap();
+
+        let status = delete(
+            &h.app,
+            &format!("/api/conversations/{ghost}?ephemeral_only=true"),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(h.chat.history(ghost).await.is_err());
+    }
+
+    /// Without the flag the endpoint is unchanged — that is the path the sidebar's Delete button
+    /// takes, where a human clicked and confirmed.
+    #[tokio::test]
+    async fn an_unguarded_delete_still_removes_a_durable_conversation() {
+        let h = harness().await;
+        let durable = h.chat.create(None).await.unwrap();
+
+        let status = delete(&h.app, &format!("/api/conversations/{durable}")).await;
+
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(h.chat.history(durable).await.is_err());
     }
 }
