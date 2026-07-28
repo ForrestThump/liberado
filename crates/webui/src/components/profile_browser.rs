@@ -152,12 +152,13 @@ pub fn ProfileBrowser(
             if busy() {
                 return;
             }
+            // No conversation yet: accept the pick and let the owner carry it onto the request that
+            // creates one. Refusing here is what made the *first* turn of every chat run on the
+            // default grant — the turn a "basic chat" profile most wants to scope.
             let Some(session) = session.clone() else {
-                error.set(Some(
-                    "Send a message first — a profile applies to a conversation, and this one does \
-                     not exist yet."
-                        .into(),
-                ));
+                let chosen = (label != CLEAR_LABEL).then(|| name_from_label(&label).to_string());
+                on_switched.call(chosen);
+                open.set(false);
                 return;
             };
             busy.set(true);

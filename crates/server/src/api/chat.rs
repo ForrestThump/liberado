@@ -38,6 +38,17 @@ pub struct ChatRequest {
     /// ignored rather than quietly half-honored.
     #[serde(default)]
     pub incognito: bool,
+    /// Session profile for a chat being **created** by this request.
+    ///
+    /// Same rule as `incognito`: consulted only when `session` is absent, because it describes how to
+    /// open a conversation. Switching an existing one is
+    /// `POST /api/conversations/{id}/profile` — a deliberate, recorded act, not a field on a message.
+    ///
+    /// Without this the first turn of every chat ran on the default grant, since a profile could not
+    /// be chosen before the session it applies to existed. For a "basic chat" profile that is exactly
+    /// the turn you wanted scoped.
+    #[serde(default)]
+    pub profile: Option<String>,
 }
 
 /// Streaming chat â€” the shared client contract (see `docs/reference/api.md`). Returns
@@ -50,7 +61,7 @@ pub async fn chat_stream_post(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ChatRequest>,
 ) -> Sse<SseBody> {
-    chat_stream_core(state, req.message, req.session, req.incognito).await
+    chat_stream_core(state, req.message, req.session, req.incognito, req.profile).await
 }
 
 /// `GET /api/chat/stream?message=â€¦` â€” the `EventSource`-friendly variant (browsers can't `POST` an
@@ -59,7 +70,7 @@ pub async fn chat_stream_get(
     State(state): State<Arc<AppState>>,
     Query(req): Query<ChatRequest>,
 ) -> Sse<SseBody> {
-    chat_stream_core(state, req.message, req.session, req.incognito).await
+    chat_stream_core(state, req.message, req.session, req.incognito, req.profile).await
 }
 
 /// The SSE item stream `chat_stream_core` returns. Boxed because the function has several early
@@ -72,6 +83,7 @@ async fn chat_stream_core(
     message: String,
     session: Option<Ulid>,
     incognito: bool,
+    profile: Option<String>,
 ) -> Sse<SseBody> {
     let (tx, rx) = mpsc::channel::<AgentEvent>(64);
 
@@ -89,10 +101,40 @@ async fn chat_stream_core(
 
     // Resolve the session up front (creating one on the first message), so we can announce it to the
     // client *before* the agent events. A creation failure becomes a single `failed` event.
+    // Resolve the requested profile before creating anything: an unknown name must fail the request
+    // rather than quietly open a chat on the default grant, which is wider than whatever was asked
+    // for. Same fail-closed rule the switch endpoint follows.
+    let grant = match profile.as_deref() {
+        None => None,
+        Some(name) => match state.config.resolve_session_profile(Some(name), "") {
+            Ok(resolved) => {
+                let parts = resolved.grant_parts();
+                Some(liberado_session::SessionGrant {
+                    capabilities: parts.capabilities,
+                    profile: parts.profile,
+                    overrides: serde_json::to_value(&resolved.overrides)
+                        .unwrap_or(serde_json::Value::Null),
+                    delegation: parts.delegation,
+                    model: parts.model.map(str::to_string),
+                    prompt_append: parts.prompt_append.map(str::to_string),
+                })
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                tokio::spawn(async move {
+                    let _ = tx.send(AgentEvent::Error(msg)).await;
+                });
+                return Sse::new(stream_with_session(None, rx));
+            }
+        },
+    };
+
     let session = match session {
         Some(id) => id,
         None => match if incognito {
             sessions.create_incognito(None).await
+        } else if let Some(grant) = grant {
+            sessions.create_with_grant(None, grant).await
         } else {
             sessions.create(None).await
         } {

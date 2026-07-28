@@ -416,6 +416,9 @@ pub fn Chat(
             },
             &base_for_title,
             incognito(),
+            // Only meaningful when creating: an existing session's profile is already stored, and
+            // the daemon ignores the field when a session id is present.
+            active_profile(),
         );
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -460,17 +463,28 @@ pub fn Chat(
         div {
             class: "{chat_cls}",
 
-            if let Some(profile) = active_profile() {
-                // Shown in the conversation rather than only in a menu: a profile changes what this
-                // chat can do, and an authority you have to go looking for is one you will forget.
-                // Clicking it reopens the picker, so the label doubles as the control.
-                button {
-                    class: "profile-chip",
-                    r#type: "button",
-                    title: "Session profile for this chat — click to change",
-                    onclick: move |_| profile_browser_open.set(true),
-                    span { class: "profile-chip-label", "profile" }
-                    span { class: "profile-chip-name", "{profile}" }
+            {
+                // **Always rendered**, including with no profile set. It used to appear only once a
+                // profile was chosen, which meant a new chat showed no control at all — you could
+                // change a profile you already had, and had no way to acquire one except by knowing
+                // `/profile` existed. A control that only exists after you have used it is not a
+                // control.
+                //
+                // Shown in the conversation rather than in a menu: a profile changes what this chat
+                // can do, and an authority you have to go looking for is one you will forget.
+                let name = active_profile();
+                let cls = if name.is_some() { "profile-chip set" } else { "profile-chip" };
+                let label = name.unwrap_or_else(|| "default".to_string());
+                rsx! {
+                    button {
+                        class: "{cls}",
+                        r#type: "button",
+                        title: "Session profile for this chat — click to change",
+                        onclick: move |_| profile_browser_open.set(true),
+                        span { class: "profile-chip-label", "profile" }
+                        span { class: "profile-chip-name", "{label}" }
+                        span { class: "profile-chip-caret", "\u{25BE}" }
+                    }
                 }
             }
 
@@ -958,6 +972,8 @@ fn open_stream(
     targets: StreamTargets,
     api_base_for_title: &str,
     incognito: bool,
+    // A profile chosen before this conversation existed. Applied by the request that creates it.
+    pending_profile: Option<String>,
 ) {
     let StreamTargets {
         mut messages,
@@ -991,6 +1007,13 @@ fn open_stream(
         None if incognito => {
             format!("{api_base}/api/chat/stream?message={encoded}&incognito=true")
         }
+        // A profile picked before the first message has nowhere to be applied yet — the session it
+        // scopes does not exist. Carrying it on the request that *creates* the session is what makes
+        // the first turn run under it, which for a "basic chat" profile is the turn that matters.
+        None if pending_profile.is_some() => format!(
+            "{api_base}/api/chat/stream?message={encoded}&profile={}",
+            urlencoding::encode(pending_profile.as_deref().unwrap_or_default())
+        ),
         None => format!("{api_base}/api/chat/stream?message={encoded}"),
     };
     let ghost_base = api_base.to_string();

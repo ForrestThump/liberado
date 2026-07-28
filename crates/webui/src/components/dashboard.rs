@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 
+use crate::components::profiles_panel::ProfilesPanel;
 use crate::components::reactions::ReactionsPanel;
 use crate::components::vault::VaultPanel;
 use chat_client_contract::DaemonStatus;
@@ -34,6 +35,7 @@ pub fn Dashboard(api_base: String) -> Element {
                         class: "dashboard-grid",
                         VaultPanel { api_base: api_base.clone() }
                         ReactionsPanel { api_base: api_base.clone() }
+                        ProfilesPanel { api_base: api_base.clone() }
                     }
                 },
                 Some(Err(e)) => rsx! {
