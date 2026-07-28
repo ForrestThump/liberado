@@ -32,6 +32,36 @@ pub struct ResolvedProfile {
     pub prompt_append: Option<String>,
 }
 
+impl ResolvedProfile {
+    /// The kernel-side `SessionGrant` this profile runs as.
+    ///
+    /// Returns the parts rather than the type itself: `liberado-config-loader` sits below
+    /// `liberado-session` and must not depend on it, so the caller assembles the struct. Keeping the
+    /// *mapping* here is what stops three call sites from each deciding which fields to carry —
+    /// forgetting one would silently drop a profile's model or its delegation setting.
+    ///
+    /// `overrides` is converted to JSON by the caller (it is `toml::Value` here, `serde_json::Value`
+    /// there), which is the one piece this cannot hand over cleanly.
+    pub fn grant_parts(&self) -> GrantParts<'_> {
+        GrantParts {
+            capabilities: self.capabilities.clone(),
+            profile: self.name.clone(),
+            delegation: self.delegation,
+            model: self.model.as_deref(),
+            prompt_append: self.prompt_append.as_deref(),
+        }
+    }
+}
+
+/// The pieces of a `SessionGrant` a resolved profile supplies. See [`ResolvedProfile::grant_parts`].
+pub struct GrantParts<'a> {
+    pub capabilities: CapabilitySet,
+    pub profile: Option<String>,
+    pub delegation: Option<bool>,
+    pub model: Option<&'a str>,
+    pub prompt_append: Option<&'a str>,
+}
+
 /// Hand-written rather than derived: `toml::Value` has no `Default`, and "no overrides" must
 /// deserialize to an empty *table* rather than a null so packs parse it uniformly.
 impl Default for ResolvedProfile {

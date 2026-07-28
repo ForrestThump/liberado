@@ -27,7 +27,9 @@ mod sessions;
 pub use compaction::{COMPACTION_AUTHOR, CompactionConfig, SUMMARY_HEADER, estimate_tokens};
 pub use dispatch_journal::{dispatches_dir, journal_path};
 pub use face::{DELEGATE_TOOL_NAME, DispatchBridge, FaceRuntime};
-pub use sessions::{ChatSessions, SessionError, SessionResult, default_conversation_title};
+pub use sessions::{
+    ChatSessions, PROFILE_AUTHOR, SessionError, SessionResult, default_conversation_title,
+};
 
 /// Short legacy prompt (used when `delegation_mode = false` and no custom prompt is set).
 pub const DEFAULT_SYSTEM_PROMPT: &str = "\

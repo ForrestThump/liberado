@@ -13,7 +13,7 @@ mod topology;
 mod tuning;
 
 pub use builder::ConfigBuilder;
-pub use config::{Config, ResolvedProfile};
+pub use config::{Config, GrantParts, ResolvedProfile};
 pub use policy::{Grant, Policy, ZonePolicy};
 pub use topology::{
     COMPACTION_TRIGGER_PCT_DEFAULT, COMPACTION_TRIGGER_TOKENS_FALLBACK, CompactionSettings,

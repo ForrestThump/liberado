@@ -1049,6 +1049,7 @@ async fn l2_reopen_store_while_awaiting_input_is_parked_with_question() {
             capabilities: life_capabilities_with_ask_human(),
             profile: None,
             overrides: serde_json::Value::Null,
+            ..Default::default()
         };
         session_id = goals
             .start_with_grant(

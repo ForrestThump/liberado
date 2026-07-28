@@ -105,6 +105,7 @@ impl Daemon {
                 capabilities,
                 profile: goal.profile.clone(),
                 overrides: serde_json::Value::Null,
+                ..Default::default()
             };
             match hub.start_background(goal, grant).await {
                 Ok(session_id) => {

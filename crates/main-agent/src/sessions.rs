@@ -68,6 +68,13 @@ use crate::{Conversation, DEFAULT_SYSTEM_PROMPT, HUMAN_INTERFACE_SYSTEM_PROMPT};
 /// Max display length for the cheap first-line default title (UTF-8 chars).
 const DEFAULT_TITLE_MAX_CHARS: usize = 72;
 
+/// [`Author::Named`] identity of the note recording a session-profile switch.
+///
+/// Named rather than `Author::System` because a `system` node in this store is the face agent's
+/// prompt, and every reader drops those — the WebUI's history filter most visibly. A switch the
+/// human cannot see in the thread is not meaningfully recorded.
+pub const PROFILE_AUTHOR: &str = "profile";
+
 /// What the face agent's reply collapses to when its turn deferred a decision to the human
 /// out-of-band (Gap 2). The interactive proposal/permission notification is the real message;
 /// this is a tiny pointer at it so the thread doesn't read as a hang.
@@ -461,6 +468,52 @@ impl ChatSessions {
             )
             .await?;
         Ok(header.id)
+    }
+
+    /// Switch a conversation onto a different session profile, and record that it happened.
+    ///
+    /// Two writes, both needed for different reasons:
+    ///
+    /// 1. **The header** carries the new grant, which is what the next turn reads. Append-only, so
+    ///    the previous header lines remain as the record of what ran before.
+    /// 2. **A transcript node**, so the switch is visible where the conversation is read and findable
+    ///    by `chat-search`. The header is authoritative but invisible — a change of authority the
+    ///    human cannot see in the thread is not meaningfully "recorded".
+    ///
+    /// Takes effect on the **next** turn: the tool runtime is rebuilt per turn from this grant, so an
+    /// in-flight turn finishes under the authority it started with rather than changing mid-flight.
+    ///
+    /// **Human-only by construction, not by check.** This is reachable from a surface endpoint and is
+    /// deliberately not registered as a tool anywhere, so no agent can re-authorise its own session.
+    /// If you are about to expose it to a model, that is the decision to revisit — not this method.
+    pub async fn set_profile(&self, conversation: Ulid, grant: SessionGrant) -> SessionResult<()> {
+        let label = grant.profile.clone();
+        self.store.set_grant(conversation, grant).await?;
+
+        // `Author::Named`, not `Author::System`: a `system` node in this store is the face agent's
+        // prompt, and every reader (the WebUI's history filter, compaction) drops those. A named
+        // author keeps the note visible and says who wrote it.
+        let parent_leaf = self
+            .store
+            .leaf_path(conversation, None)
+            .await?
+            .last()
+            .map(|n| n.id);
+        let note = match label {
+            Some(name) => format!("Session profile: {name}"),
+            None => "Session profile cleared — using the default grant.".to_string(),
+        };
+        self.store
+            .append(
+                conversation,
+                NewNode {
+                    parent_id: parent_leaf,
+                    author: Author::Named(PROFILE_AUTHOR.into()),
+                    message: Message::system(note),
+                },
+            )
+            .await?;
+        Ok(())
     }
 
     /// Fold a note into a conversation at its current leaf — the goal-session **return handoff**
@@ -857,6 +910,7 @@ impl ChatSessions {
                     capabilities: grant_caps,
                     profile: None,
                     overrides: serde_json::Value::Null,
+                    ..Default::default()
                 },
             )
             .await

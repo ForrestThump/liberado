@@ -333,6 +333,133 @@ pub async fn delete_conversation(
     }
 }
 
+/// `GET /api/profiles` — the session profiles a human may choose from.
+///
+/// Enabled entries only, in configured order, so the operator controls the list a picker shows.
+pub async fn list_profiles(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let profiles: Vec<serde_json::Value> = state
+        .config
+        .enabled_session_profiles()
+        .into_iter()
+        .map(|p| {
+            serde_json::json!({
+                "name": p.name,
+                "description": p.description,
+                // Present for a pack profile (`/spawn`), absent for a chat profile (`/profile`).
+                // The client uses it to say which list an entry belongs in.
+                "domain": p.domain,
+                "delegation": p.delegation,
+                "model": p.model,
+            })
+        })
+        .collect();
+    Json(serde_json::json!({ "profiles": profiles }))
+}
+
+#[derive(Deserialize)]
+pub struct ProfileRequest {
+    /// The profile to switch to. `None` clears back to the daemon's default grant.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// `POST /api/conversations/{id}/profile` — switch which session profile a chat runs under.
+///
+/// # This is the human-only authority path
+///
+/// Switching a profile can *widen* what a conversation may do. That is correct — narrow-only
+/// (Decision 4) governs delegation, and a human re-authorising their own chat from operator-authored
+/// `policy.toml` is a different act — but it is only correct **because a human does it**.
+///
+/// So: reachable from surfaces, and **never registered as a tool in any runtime catalog**. The face
+/// agent's `delegate` cannot reach it and no MCP exposes it, which is what makes "the agent cannot
+/// re-authorise itself" a structural property rather than a convention.
+///
+/// `POST` rather than `GET` is load-bearing for the same reason. A granted web-fetching MCP can
+/// reach the daemon's own API over loopback (see `docs/reference/api.md`), and a fetcher that only
+/// issues `GET`s cannot reach this. That is an incidental defence, not the guarantee — the guarantee
+/// is the tool catalog — but it is the reason not to make this a convenience `GET`.
+pub async fn set_conversation_profile(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Ulid>,
+    Json(req): Json<ProfileRequest>,
+) -> impl IntoResponse {
+    let Some(sessions) = &state.chat else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: "chat is disabled".into(),
+            }),
+        )
+            .into_response();
+    };
+
+    let grant = match req.name.as_deref() {
+        // Clearing is a real choice, not an error: it returns the chat to the daemon's default
+        // grant, which is what every conversation ran under before profiles existed.
+        None => liberado_session::SessionGrant::default(),
+        Some(name) => {
+            // `resolve_session_profile` fails closed on an unknown or disabled name — a typo must
+            // never resolve to "no profile", which would silently mean the *default* grant.
+            //
+            // The domain fallback is unused here: it only applies when no profile is named, and a
+            // name is named. A chat profile has no domain and that is fine — unlike `/spawn`, a
+            // conversation needs no pack.
+            match state.config.resolve_session_profile(Some(name), "") {
+                Ok(resolved) => {
+                    let parts = resolved.grant_parts();
+                    liberado_session::SessionGrant {
+                        capabilities: parts.capabilities,
+                        profile: parts.profile,
+                        overrides: serde_json::to_value(&resolved.overrides)
+                            .unwrap_or(serde_json::Value::Null),
+                        delegation: parts.delegation,
+                        model: parts.model.map(str::to_string),
+                        prompt_append: parts.prompt_append.map(str::to_string),
+                    }
+                }
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(ApiError {
+                            error: e.to_string(),
+                        }),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    };
+
+    let label = grant.profile.clone();
+    match sessions.set_profile(id, grant).await {
+        Ok(()) => {
+            tracing::info!(
+                conversation = %id,
+                profile = label.as_deref().unwrap_or("(default)"),
+                "session profile switched by a human"
+            );
+            Json(serde_json::json!({
+                "conversation": id.to_string(),
+                "profile": label,
+                // Said plainly so a surface can tell the human why nothing changed yet.
+                "applies": "next turn",
+            }))
+            .into_response()
+        }
+        Err(liberado_main_agent::SessionError::Store(
+            liberado_conversation_store::StoreError::NotFound(_),
+        )) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "conversation not found".into(),
+            }),
+        )
+            .into_response(),
+        Err(e) => chat_error(e),
+    }
+}
+
 /// `PATCH /api/conversations/{id}` â€” update the title of an existing conversation.
 #[derive(Deserialize)]
 pub struct TitleRequest {
@@ -482,6 +609,8 @@ mod tests {
     struct Harness {
         app: Router,
         chat: Arc<ChatSessions>,
+        sessions: Arc<SessionStore>,
+        state: Arc<crate::state::AppState>,
         _dir: tempfile::TempDir,
     }
 
@@ -507,10 +636,12 @@ mod tests {
                 "/api/conversations/{id}",
                 axum::routing::delete(super::delete_conversation),
             )
-            .with_state(state);
+            .with_state(state.clone());
         Harness {
             app,
             chat,
+            sessions,
+            state,
             _dir: dir,
         }
     }
@@ -566,6 +697,101 @@ mod tests {
 
         assert_eq!(status, StatusCode::NO_CONTENT);
         assert!(h.chat.history(ghost).await.is_err());
+    }
+
+    // ── Profile switching ────────────────────────────────────────────────────────────────────
+
+    async fn post_profile(app: &Router, id: &str, body: &str) -> (StatusCode, String) {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/conversations/{id}/profile"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    fn profile_router(state: Arc<crate::state::AppState>) -> Router {
+        Router::new()
+            .route(
+                "/api/conversations/{id}/profile",
+                axum::routing::post(super::set_conversation_profile),
+            )
+            .with_state(state)
+    }
+
+    /// A typo must not resolve to "no profile", which would silently mean the *default* grant — a
+    /// wider one than the profile being asked for. `resolve_session_profile` fails closed and this
+    /// is the endpoint honouring that rather than swallowing it.
+    #[tokio::test]
+    async fn an_unknown_profile_is_refused_and_the_grant_is_untouched() {
+        let h = harness().await;
+        let id = h.chat.create(None).await.unwrap();
+        let app = profile_router(h.state.clone());
+
+        let (status, body) = post_profile(&app, &id.to_string(), r#"{"name":"nonesuch"}"#).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.contains("nonesuch"), "the error must name it: {body}");
+        assert!(
+            h.sessions
+                .session(id)
+                .await
+                .expect("still there")
+                .grant
+                .profile
+                .is_none(),
+            "a refused switch must leave the conversation on the grant it had"
+        );
+    }
+
+    #[tokio::test]
+    async fn switching_to_an_unknown_conversation_is_404() {
+        let h = harness().await;
+        let app = profile_router(h.state.clone());
+        let (status, _) = post_profile(&app, &Ulid::new().to_string(), r#"{"name":null}"#).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    /// Clearing is a real choice, not an error: it returns a chat to the daemon's default grant,
+    /// which is what every conversation ran under before profiles existed.
+    #[tokio::test]
+    async fn clearing_the_profile_is_allowed_and_records_a_note() {
+        let h = harness().await;
+        let id = h.chat.create(None).await.unwrap();
+        let app = profile_router(h.state.clone());
+
+        let (status, body) = post_profile(&app, &id.to_string(), r#"{"name":null}"#).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("next turn"), "say when it applies: {body}");
+
+        // The switch is recorded in the transcript, not only in the header — a change of authority
+        // the human cannot see in the thread is not meaningfully recorded.
+        let nodes = liberado_conversation_store::ConversationStore::leaf_path(
+            h.sessions.as_ref(),
+            id,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            nodes.iter().any(|n| matches!(
+                &n.author,
+                liberado_conversation_store::Author::Named(name)
+                    if name == liberado_main_agent::PROFILE_AUTHOR
+            )),
+            "a profile-authored note must be on the transcript"
+        );
     }
 
     /// Without the flag the endpoint is unchanged — that is the path the sidebar's Delete button
