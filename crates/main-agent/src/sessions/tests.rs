@@ -1422,6 +1422,14 @@ impl ConversationStore for FailOnceContentStore {
         self.inner.set_title(conversation, title).await
     }
 
+    async fn set_grant(
+        &self,
+        conversation: Ulid,
+        grant: liberado_session::SessionGrant,
+    ) -> liberado_conversation_store::StoreResult<()> {
+        self.inner.set_grant(conversation, grant).await
+    }
+
     async fn delete(&self, conversation: Ulid) -> liberado_conversation_store::StoreResult<()> {
         self.inner.delete(conversation).await
     }
@@ -1858,6 +1866,7 @@ async fn a_named_profile_replaces_the_process_grant() {
         ]),
         profile: Some("basic-chat".into()),
         overrides: serde_json::Value::Null,
+        ..Default::default()
     };
     let id = sessions
         .create_with_grant(None, profile.clone())
@@ -1898,6 +1907,7 @@ async fn a_named_profile_granting_nothing_is_honored_not_treated_as_unset() {
                 capabilities: CapabilitySet::empty(),
                 profile: Some("no-tools".into()),
                 overrides: serde_json::Value::Null,
+                ..Default::default()
             },
         )
         .await
@@ -1919,6 +1929,7 @@ async fn a_profile_survives_reopening_the_store() {
         )]),
         profile: Some("basic-chat".into()),
         overrides: serde_json::Value::Null,
+        ..Default::default()
     };
 
     let id = {

@@ -358,11 +358,15 @@ impl TelegramChatBridge {
                     spec.domain = DomainHint::from(resolved_domain.as_str());
                 }
 
+                let parts = resolved.grant_parts();
                 let grant = SessionGrant {
-                    capabilities: resolved.capabilities,
+                    capabilities: parts.capabilities,
                     profile: spec.profile.clone(),
                     overrides: serde_json::to_value(&resolved.overrides)
                         .unwrap_or(serde_json::Value::Null),
+                    delegation: parts.delegation,
+                    model: parts.model.map(str::to_string),
+                    prompt_append: parts.prompt_append.map(str::to_string),
                 };
                 match self.state.goals.start_with_grant(spec, grant).await {
                     Ok(id) => Some(format!(

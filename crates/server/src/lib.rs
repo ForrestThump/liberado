@@ -359,6 +359,13 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
                 .patch(api::patch_conversation_title)
                 .delete(api::delete_conversation),
         )
+        // Surface-only authority change. Deliberately POST, and deliberately absent from every tool
+        // catalog — see the handler's docs for why both halves matter.
+        .route(
+            "/api/conversations/{id}/profile",
+            axum::routing::post(api::set_conversation_profile),
+        )
+        .route("/api/profiles", axum::routing::get(api::list_profiles))
         .route(
             "/api/hooks/{name}",
             axum::routing::post(hooks::trigger_hook),

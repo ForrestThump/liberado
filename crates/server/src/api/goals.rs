@@ -93,10 +93,14 @@ pub async fn goals_start(
     if goal.max_idle_secs.is_none() {
         goal.max_idle_secs = resolved.max_idle_secs;
     }
+    let parts = resolved.grant_parts();
     let grant = liberado_session::SessionGrant {
-        capabilities: resolved.capabilities,
+        capabilities: parts.capabilities,
         profile: goal.profile.clone(),
         overrides: serde_json::to_value(&resolved.overrides).unwrap_or(serde_json::Value::Null),
+        delegation: parts.delegation,
+        model: parts.model.map(str::to_string),
+        prompt_append: parts.prompt_append.map(str::to_string),
     };
 
     match state.goals.start_with_grant(goal, grant).await {
@@ -536,6 +540,7 @@ mod goal_message_tests {
             capabilities: life_capabilities(),
             profile: None,
             overrides: serde_json::Value::Null,
+            ..Default::default()
         }
     }
 
