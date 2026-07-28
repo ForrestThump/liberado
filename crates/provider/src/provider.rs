@@ -91,9 +91,29 @@ where
 {
     let request = request.with_json_schema(schema);
     let mut attempt = 0;
+    // The last raw reply, kept only so the give-up branch can log it in full. Held here rather than
+    // threaded through the error because an error message is read by operators and a whole model
+    // reply does not belong in one.
+    let mut last_reply: Option<String> = None;
     loop {
-        match complete_json_once::<P, T>(provider, request.clone()).await {
+        match complete_json_once::<P, T>(provider, request.clone(), &mut last_reply).await {
             Ok(value) => return Ok(value),
+            // The backend refused the *request*, not the reply — an older route, or one that does
+            // not implement `json_schema` response format. Retry once asking only for valid JSON.
+            //
+            // Without this, adding a schema turns "occasionally malformed" into "always fails" on
+            // any backend that does not support it, which is a strictly worse trade: a constrained
+            // decoder is an optimisation over prompt-only shaping, and an optimisation must not be
+            // load-bearing. Degrading here keeps the floor exactly where it was.
+            Err(ProviderError::InvalidRequest(msg)) if request.has_json_schema() => {
+                tracing::warn!(
+                    error = %msg,
+                    "backend rejected the json_schema response format — falling back to json_object \
+                     for this call. Structured decoding is unconstrained until this is resolved."
+                );
+                let relaxed = request.clone().without_json_schema();
+                return complete_json_once::<P, T>(provider, relaxed, &mut last_reply).await;
+            }
             // A reply that isn't the required shape is the one failure here worth re-asking about:
             // structured-output decoding is close to deterministic, so a malformed or empty reply
             // is usually a transient provider hiccup rather than a prompt the model refuses. One
@@ -113,12 +133,36 @@ where
                     "structured output did not decode — retrying once"
                 );
             }
+            // Out of retries on an undecodable reply. Log the **whole** reply once, at debug, before
+            // giving up.
+            //
+            // The windowed error above is the right thing in a warning — bounded, aimed at the
+            // defect. But a window is a hypothesis about where the problem is, and the two crons
+            // that failed on 2026-07-28 were diagnosed from a window that was itself misaligned.
+            // When the retry has already failed, the reply is worth having in full: it is the only
+            // artefact that settles what the model actually emitted, and by then it is not noise
+            // because the dispatch is about to fail anyway.
+            //
+            // `debug`, so an ordinary run does not carry model output into the log, and a diagnosis
+            // is one `RUST_LOG` away rather than a rebuild.
+            Err(e @ (ProviderError::Decode(_) | ProviderError::EmptyResponse)) => {
+                tracing::debug!(
+                    error = %e,
+                    reply = %last_reply.as_deref().unwrap_or("(none captured)"),
+                    "structured output failed after retry — full reply follows"
+                );
+                return Err(e);
+            }
             Err(e) => return Err(e),
         }
     }
 }
 
-async fn complete_json_once<P, T>(provider: &P, request: CompletionRequest) -> ProviderResult<T>
+async fn complete_json_once<P, T>(
+    provider: &P,
+    request: CompletionRequest,
+    last_reply: &mut Option<String>,
+) -> ProviderResult<T>
 where
     P: Provider + ?Sized,
     T: DeserializeOwned,
@@ -134,6 +178,7 @@ where
     let finish = response.finish_reason;
     let completion_tokens = response.usage.map(|u| u.completion_tokens);
     let content = response.content.ok_or(ProviderError::EmptyResponse)?;
+    *last_reply = Some(content.clone());
     serde_json::from_str(&content).map_err(|e| {
         // Carry what the model actually said, aimed at the *failure point*.
         //
