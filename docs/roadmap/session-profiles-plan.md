@@ -302,6 +302,59 @@ unattended 06:55 cron waiting on a person instead of failing.
 
 Worth fixing the message itself, which sent the operator down that path.
 
+## Live test, 2026-07-28 — profiles work; the prompt does not follow them
+
+Deployed `0aac75f` to the homelab, added a `basic-chat` profile to the live `topology.toml`, and
+drove the WebUI headlessly. **The capability half passed completely.** Three sessions in one daemon,
+three authorities:
+
+| session | profile | caps | writes | tools |
+|---|---|---|---|---|
+| chat B (control) | `None` | 0 | none | daemon default |
+| chat A | `basic-chat` | 5 | **none** | search whole + 2 named turbovault tools |
+| cron | `None` | 36 | 10 zones | 6+ whole MCPs |
+
+`write = []` produced no `Write` capability at all; the narrowed entry produced two `ExecuteTool`
+grants rather than a whole-server `ExecuteMcp`; empty-grant and no-profile stayed distinguishable.
+The chip, the picker, and profile-before-first-message all worked end to end.
+
+**And the session did nothing.** Asked "What tasks do I have open?", the model replied *"I'll fetch
+your open tasks first."* and issued **zero tool calls** — announced an action, took none. The exact
+symptom [`pr-dispatch-vtcode-no-write-finding.md`](pr-dispatch-vtcode-no-write-finding.md) spent
+three rounds on, reproduced in our own system on the first live run.
+
+The cause is the drift step 7 predicts, now concrete:
+
+- [`crates/server/src/lib.rs`](../../crates/server/src/lib.rs) ~750 picks the system prompt **once at
+  daemon construction** from the global `main_agent.delegation_mode`.
+- [`crates/main-agent/src/sessions.rs`](../../crates/main-agent/src/sessions.rs) ~479 persists that
+  one prompt as every conversation's root node.
+- The same file ~580/~640 resolves `uses_face_agent(settings.delegation)` **per turn, per profile**.
+
+So step 5 made the tool surface per-session and left the prompt daemon-wide. A `basic-chat` session
+is handed `HUMAN_INTERFACE_SYSTEM_PROMPT` — *"You are a face agent, not a tool user… call the
+`delegate` tool"*, plus *"Do not try to enumerate tools from your own context. You will usually see
+only `delegate`"* — while holding no `delegate` and five other tools. The model obeyed the prompt
+over the tool list, which is the correct thing for it to do and the wrong thing for us to have asked.
+
+**This makes step 7 a blocker, not a nicety.** `basic-chat` cannot ship until the prompt follows the
+profile. Note the fix cannot be "choose a better prompt at conversation creation": a profile is
+switchable mid-conversation and the root node is persisted append-only, so creation-time selection
+would be wrong on the very next switch. It has to be composed per turn beside `prompt_append` —
+which is what step 7 already specifies, for exactly this reason.
+
+Minimum viable slice, smaller than full step 7: when `uses_face_agent(delegation)` is false, swap the
+model-visible system message for one that describes the tools the session actually holds. The derived
+`## Environment` block and the `liberado prompt` inspector can follow.
+
+Two smaller findings from the same run:
+
+- **The per-turn tool surface is never logged.** `chat: tool surface ready` fires once at boot with
+  the daemon default; there is no way to see what a given session was offered. Diagnosing the above
+  required reading the stored grant over the API and then the source. Worth a per-turn log line.
+- **`wasm-opt` crashes** (`0xc0000409`) during `deploy-webui-homelab.ps1`; the build falls through and
+  ships an unoptimized bundle. Works, larger than it should be.
+
 ## Before deploying
 
 **Do not add a chat profile to the live `topology.toml` until this branch is deployed.** On the
@@ -309,8 +362,9 @@ currently-deployed build `SessionProfile.domain` is a required `String`; it only
 step 3. A chat profile omitting it fails to deserialize, and config errors are fail-fast — the daemon
 would refuse to boot.
 
-Still to do: a live test putting a real chat into `basic-chat` and confirming the tool surface
-actually shrinks. Nothing here has run outside CI.
+~~Still to do: a live test putting a real chat into `basic-chat`.~~ **Done 2026-07-28** — see the
+live-test section above. The tool surface shrinks correctly; the system prompt does not follow it,
+which blocks `basic-chat` on step 7.
 
 ## Open questions
 
