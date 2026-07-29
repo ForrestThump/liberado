@@ -2215,3 +2215,170 @@ fn the_swap_is_a_no_op_on_an_empty_or_headless_history() {
     assert_eq!(headless.messages_for_test()[0].role, Role::User);
     assert_eq!(headless.messages_for_test()[0].content, "q");
 }
+
+// ── The tool manifest: one value, two renderings ────────────────────────────────────────────────
+
+/// The property the whole design rests on: the tools **named in the prompt** and the tools **sent in
+/// the request** are the same list, because both come off the runtime handed to the executor.
+///
+/// Asserted as an equality between the two, not as "the prompt mentions calendar-mcp:list" — a
+/// substring check would still pass if the prompt named a tool the request omitted, which is exactly
+/// vtcode's `prompts.coder` naming `write_file` against a `unified_file` toolset.
+#[tokio::test]
+async fn the_prompt_names_exactly_the_tools_the_request_carries() {
+    use liberado_common::{Capability, CapabilitySet};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        [CompletionResponse::text("ok")],
+    ));
+    let executor = Executor::new(provider.clone(), Budget::default());
+    let sessions = ChatSessions::new(store, executor, Arc::new(OneTool("calendar-mcp:list")))
+        .with_guards(
+            vec![("calendar-mcp".into(), Consequence::Reversible)],
+            CapabilitySet::from_iter([Capability::ExecuteMcp("calendar-mcp".into())]),
+            dir.path().join("proposals"),
+            ProposalSigner::random(),
+        );
+
+    let id = sessions.create(None).await.unwrap();
+    sessions.turn(id, "what's on my calendar?").await.unwrap();
+
+    let request = &provider.received_requests()[0];
+    let carried: Vec<String> = request.tools.iter().map(|t| t.name.clone()).collect();
+    assert!(
+        !carried.is_empty(),
+        "fixture should carry at least one tool"
+    );
+
+    let manifest = request
+        .messages
+        .iter()
+        .filter(|m| m.role == Role::System)
+        .map(|m| m.content.as_str())
+        .find(|c| c.contains("available to you on this turn"))
+        .expect("the turn must state which tools it holds");
+
+    for name in &carried {
+        assert!(
+            manifest.contains(name.as_str()),
+            "tool {name} is in the request but missing from the prompt: {manifest}"
+        );
+    }
+    assert!(
+        !manifest.contains("write_file"),
+        "sanity: the manifest must not invent tools the request does not carry"
+    );
+}
+
+/// A turn with nothing to call must say so outright. Otherwise the model fills the silence by
+/// offering to look something up — the announce-then-stall failure, reached from the other side.
+#[test]
+fn a_toolless_turn_is_told_not_to_offer_lookups() {
+    let mut convo = Conversation::from_history(vec![Message::system("base"), Message::user("q")]);
+    convo.apply_available_tools(&[]);
+    let stated = &convo.messages_for_test()[1].content;
+    assert!(stated.contains("no tools"), "got: {stated}");
+    assert!(
+        stated.contains("cannot"),
+        "an empty manifest must forbid promising a lookup, not merely omit tools: {stated}"
+    );
+}
+
+/// It has to beat concrete tool successes sitting further up the transcript, so it goes last —
+/// after the profile nudge, immediately before the dialogue.
+#[test]
+fn the_tool_manifest_is_the_last_word_before_the_dialogue() {
+    let mut convo = Conversation::from_history(vec![
+        Message::system(HUMAN_INTERFACE_SYSTEM_PROMPT),
+        Message::user("earlier"),
+        Message::assistant("earlier reply"),
+    ]);
+    convo.apply_direct_agent_prompt();
+    convo.apply_prompt_append(Some("Answer directly and briefly."));
+    convo.apply_available_tools(&[ToolDef::new(
+        "turbovault:tasks_list",
+        "list tasks",
+        serde_json::json!({ "type": "object" }),
+    )]);
+
+    let msgs = convo.messages_for_test();
+    assert_eq!(msgs[0].content, DEFAULT_SYSTEM_PROMPT);
+    assert_eq!(msgs[1].content, "Answer directly and briefly.");
+    assert!(msgs[2].content.contains("turbovault:tasks_list"));
+    assert_eq!(msgs[2].role, Role::System);
+    assert_eq!(
+        msgs[3].role,
+        Role::User,
+        "the manifest must be the final system message, not buried among the dialogue"
+    );
+}
+
+/// The stale-evidence case: a transcript containing a successful call to a since-revoked tool must
+/// be explicitly outranked, not merely contradicted by omission.
+#[test]
+fn the_manifest_tells_the_model_to_distrust_the_transcript() {
+    let mut convo = Conversation::from_history(vec![Message::system("base"), Message::user("q")]);
+    convo.apply_available_tools(&[ToolDef::new(
+        "search",
+        "search",
+        serde_json::json!({ "type": "object" }),
+    )]);
+    let stated = &convo.messages_for_test()[1].content;
+    assert!(
+        stated.contains("withdrawn") && stated.contains("trust this list"),
+        "a tool absent here but present in history must be addressed head-on: {stated}"
+    );
+}
+
+/// Transient system messages are injected at the *front* of the view, so slicing the turn's output
+/// by a pre-turn length walks back into history and re-persists messages already on disk.
+///
+/// Latent for as long as the only injector was a profile's optional nudge; the tool manifest runs
+/// every turn, which made it certain. Caught by an unrelated compaction test starting to fail —
+/// duplicated messages inflated the next load past the compaction trigger.
+#[tokio::test]
+async fn a_turn_persists_only_its_own_messages_not_the_injected_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = sessions_at(
+        dir.path(),
+        vec![
+            CompletionResponse::text("first answer"),
+            CompletionResponse::text("second answer"),
+        ],
+    )
+    .await;
+    let id = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                profile: Some("terse".into()),
+                prompt_append: Some("Be terse.".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    sessions.turn(id, "first question").await.unwrap();
+    sessions.turn(id, "second question").await.unwrap();
+
+    let history = sessions.history(id).await.unwrap();
+    for probe in ["first question", "first answer", "second question"] {
+        assert_eq!(
+            history.iter().filter(|m| m.content == probe).count(),
+            1,
+            "{probe:?} must be stored exactly once; history: {:?}",
+            history.iter().map(|m| &m.content).collect::<Vec<_>>()
+        );
+    }
+    // And the per-turn injections are views, never records.
+    for injected in ["Be terse.", "available to you on this turn"] {
+        assert!(
+            !history.iter().any(|m| m.content.contains(injected)),
+            "{injected:?} is a per-turn view and must not be persisted"
+        );
+    }
+}

@@ -591,6 +591,9 @@ impl ChatSessions {
                 settings.capabilities.clone(),
                 turn_deferral.clone(),
             );
+            // Derived from the runtime the executor is about to be handed, never from a list built
+            // beside it — see `Conversation::apply_available_tools`.
+            convo.apply_available_tools(&turn_runtime.catalog());
             let reply = convo
                 .turn(&self.executor, turn_runtime.as_ref(), user)
                 .await?;
@@ -606,13 +609,14 @@ impl ChatSessions {
                 }
                 DispatchOutcome::Proceed(relevant_mcps) => {
                     let turn_runtime = self.build_turn_runtime(user, session, &relevant_mcps);
+                    convo.apply_available_tools(&turn_runtime.catalog());
                     convo
                         .turn(&self.executor, turn_runtime.as_ref(), user)
                         .await?
                 }
             }
         };
-        self.persist_tail(session, &convo.history()[before..], parent_leaf)
+        self.persist_tail(session, convo.turn_tail(before), parent_leaf)
             .await?;
         Ok(reply)
     }
@@ -654,6 +658,7 @@ impl ChatSessions {
             let turn_deferral = Arc::new(AtomicBool::new(false));
             let capabilities = self.session_capabilities(session).await;
             let turn_runtime = self.build_face_runtime(user, session, capabilities, turn_deferral);
+            convo.apply_available_tools(&turn_runtime.catalog());
             convo
                 .turn_stream(&self.executor, turn_runtime.as_ref(), user, events)
                 .await?;
@@ -667,13 +672,14 @@ impl ChatSessions {
                 }
                 DispatchOutcome::Proceed(relevant_mcps) => {
                     let turn_runtime = self.build_turn_runtime(user, session, &relevant_mcps);
+                    convo.apply_available_tools(&turn_runtime.catalog());
                     convo
                         .turn_stream(&self.executor, turn_runtime.as_ref(), user, events)
                         .await?;
                 }
             }
         }
-        self.persist_tail(session, &convo.history()[before..], parent_leaf)
+        self.persist_tail(session, convo.turn_tail(before), parent_leaf)
             .await?;
         Ok(())
     }
