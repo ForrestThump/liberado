@@ -911,7 +911,7 @@ fn enforce_narrow_direct_tools(decision: &mut DispatchDecision, narrow_direct_to
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liberado_common::{Capability, Consequence, Delivery, Depth, ToolCall};
+    use liberado_common::{Capability, Consequence, Delivery, Depth, ToolCall, WriteClass};
     use liberado_provider::{CompletionResponse, MockProvider, ResponseFormat};
     use std::sync::Mutex;
 
@@ -1109,6 +1109,36 @@ mod tests {
             }
             other => panic!("expected Clarify(LowConfidence), got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn prompt_includes_vault_zones_when_writable() {
+        let mut req = request(caps("tasks-mcp"), 0);
+        req.zone_write_classes =
+            vec![("tasks".into(), WriteClass::AgentWritable)];
+        let mock = scripted(&execute_direct("tasks-mcp:add", 0.95));
+        let dispatcher = Dispatcher::new(mock.clone(), DispatchTuning::default(), 4);
+        dispatcher.dispatch(&req).await.unwrap();
+        let sent = mock.last_request().unwrap();
+        let user_message = &sent.messages[1].content;
+        assert!(
+            user_message.contains("Vault zones"),
+            "prompt must include vault zones when writable zones exist"
+        );
+    }
+
+    #[tokio::test]
+    async fn prompt_excludes_vault_zones_when_not_writable() {
+        let req = request(caps("tasks-mcp"), 0);
+        let mock = scripted(&execute_direct("tasks-mcp:add", 0.95));
+        let dispatcher = Dispatcher::new(mock.clone(), DispatchTuning::default(), 4);
+        dispatcher.dispatch(&req).await.unwrap();
+        let sent = mock.last_request().unwrap();
+        let user_message = &sent.messages[1].content;
+        assert!(
+            !user_message.contains("Vault zones"),
+            "prompt must not include vault zones when no writable zones exist"
+        );
     }
 
     #[tokio::test]
@@ -1335,6 +1365,50 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn goal_hash_differs_across_distinct_goals() {
+        assert_ne!(goal_hash("task A"), goal_hash("different task"));
+    }
+
+    #[tokio::test]
+    async fn ensure_correlation_mints_an_id_when_empty() {
+        let decision = DispatchDecision {
+            action: DispatchAction::DispatchSubagent {
+                goal: "review recent decisions".into(),
+                capabilities: CapabilitySet::empty(),
+                allowed_mcps: vec!["tasks-mcp".into()],
+                success_criteria: vec!["a review note exists".into()],
+                artifact_target: None,
+                model: None,
+                correlation_id: String::new(),
+                delivery: Delivery::Summarize,
+                depth: Depth::Normal,
+            },
+            confidence: 0.85,
+            rationale: "open-ended".into(),
+        };
+        let mock = scripted(&decision);
+        let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
+
+        let out = dispatcher
+            .dispatch(&request(caps("tasks-mcp"), 0))
+            .await
+            .unwrap();
+        match out.action {
+            DispatchAction::DispatchSubagent { correlation_id, .. } => {
+                assert!(
+                    !correlation_id.is_empty(),
+                    "ensure_correlation should have filled an empty correlation_id"
+                );
+                assert!(
+                    correlation_id.starts_with("sub:"),
+                    "correlation_id should start with 'sub:', got {correlation_id}"
+                );
+            }
+            other => panic!("expected DispatchSubagent, got {other:?}"),
+        }
+    }
+
     fn interactive_caps() -> CapabilitySet {
         let mut caps = CapabilitySet::empty();
         caps.grant(Capability::AskHuman);
@@ -1527,6 +1601,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn score_at_the_guidance_floor_does_short_circuit() {
+        let mock = Arc::new(MockProvider::new("mock"));
+        let guidance = MockGuidance::with_hits(vec![GuidanceHit {
+            content: "maybe use tasks-mcp".into(),
+            tools_used: vec!["tasks-mcp".into()],
+            score: 0.8, // exactly at the default guidance_match_floor
+        }]);
+        let dispatcher =
+            Dispatcher::new(mock, DispatchTuning::default(), 4).with_guidance(guidance);
+
+        let out = dispatcher
+            .dispatch(&request(caps("tasks-mcp"), 0))
+            .await
+            .unwrap();
+        match out.action {
+            DispatchAction::ExecuteDirect { relevant_mcps, .. } => {
+                assert_eq!(relevant_mcps, vec!["tasks-mcp".to_string()]);
+            }
+            other => panic!("expected ExecuteDirect, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn prompt_includes_guidance_hits_when_present() {
+        let mock = scripted(&execute_direct("tasks-mcp:add", 0.9));
+        let guidance = MockGuidance::with_hits(vec![GuidanceHit {
+            content: "Use tasks-mcp for shopping list items".into(),
+            tools_used: vec!["tasks-mcp".into()],
+            score: 0.5, // below 0.8 floor — short-circuit doesn't fire, classify runs with hits
+        }]);
+        let dispatcher =
+            Dispatcher::new(mock.clone(), DispatchTuning::default(), 4).with_guidance(guidance);
+        dispatcher
+            .dispatch(&request(caps("tasks-mcp"), 0))
+            .await
+            .unwrap();
+        let sent = mock.last_request().unwrap();
+        let user_message = &sent.messages[1].content;
+        assert!(
+            user_message.contains("Relevant past guidance"),
+            "prompt must include guidance section when hits are present"
+        );
+    }
+
+    #[tokio::test]
+    async fn prompt_excludes_guidance_hits_when_absent() {
+        let mock = scripted(&execute_direct("tasks-mcp:add", 0.9));
+        let dispatcher = Dispatcher::new(mock.clone(), DispatchTuning::default(), 4);
+        dispatcher
+            .dispatch(&request(caps("tasks-mcp"), 0))
+            .await
+            .unwrap();
+        let sent = mock.last_request().unwrap();
+        let user_message = &sent.messages[1].content;
+        assert!(
+            !user_message.contains("Relevant past guidance"),
+            "prompt must not include guidance section with no guidance source"
+        );
+    }
+
+    #[tokio::test]
     async fn guidance_short_circuit_still_passes_through_the_guard_pipeline() {
         // A confident guidance hit naming an MCP that is *in the catalog* but not granted must
         // still CapabilityGap — short-circuit never bypasses guards. (email-mcp is in catalog
@@ -1682,6 +1817,116 @@ mod tests {
         dispatcher.record_outcome("some goal", &decision).await;
 
         assert!(guidance.recorded.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn record_outcome_dispatch_subagent() {
+        let guidance = MockGuidance::with_hits(vec![]);
+        let mock = Arc::new(MockProvider::new("mock"));
+        let dispatcher =
+            Dispatcher::new(mock, DispatchTuning::default(), 4).with_guidance(guidance.clone());
+
+        let decision = DispatchDecision {
+            action: DispatchAction::DispatchSubagent {
+                goal: "review recent decisions".into(),
+                capabilities: CapabilitySet::empty(),
+                allowed_mcps: vec!["decisions-mcp".into(), "tasks-mcp".into()],
+                success_criteria: vec!["done".into()],
+                artifact_target: None,
+                model: None,
+                correlation_id: "c1".into(),
+                delivery: Delivery::Summarize,
+                depth: Depth::Normal,
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        };
+        dispatcher.record_outcome("review decisions", &decision).await;
+
+        let recorded = guidance.recorded.lock().unwrap();
+        assert_eq!(recorded.len(), 1, "DispatchSubagent should be recorded");
+        assert!(
+            recorded[0].0.contains("review decisions"),
+            "directive should mention the goal"
+        );
+    }
+
+    #[tokio::test]
+    async fn record_outcome_subagent_without_allowed_mcps_is_a_noop() {
+        let guidance = MockGuidance::with_hits(vec![]);
+        let mock = Arc::new(MockProvider::new("mock"));
+        let dispatcher =
+            Dispatcher::new(mock, DispatchTuning::default(), 4).with_guidance(guidance.clone());
+
+        let decision = DispatchDecision {
+            action: DispatchAction::DispatchSubagent {
+                goal: "review recent decisions".into(),
+                capabilities: CapabilitySet::empty(),
+                allowed_mcps: Vec::new(),
+                success_criteria: vec!["done".into()],
+                artifact_target: None,
+                model: None,
+                correlation_id: "c1".into(),
+                delivery: Delivery::Summarize,
+                depth: Depth::Normal,
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        };
+        dispatcher.record_outcome("review decisions", &decision).await;
+
+        assert!(
+            guidance.recorded.lock().unwrap().is_empty(),
+            "DispatchSubagent with empty allowed_mcps must not record"
+        );
+    }
+
+    #[tokio::test]
+    async fn record_outcome_empty_execute_direct_is_a_noop() {
+        let guidance = MockGuidance::with_hits(vec![]);
+        let mock = Arc::new(MockProvider::new("mock"));
+        let dispatcher =
+            Dispatcher::new(mock, DispatchTuning::default(), 4).with_guidance(guidance.clone());
+
+        let decision = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: Vec::new(),
+                relevant_mcps: Vec::new(),
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        };
+        dispatcher.record_outcome("list tasks", &decision).await;
+
+        assert!(
+            guidance.recorded.lock().unwrap().is_empty(),
+            "empty ExecuteDirect must not record anything"
+        );
+    }
+
+    #[tokio::test]
+    async fn record_outcome_with_relevant_mcps() {
+        let guidance = MockGuidance::with_hits(vec![]);
+        let mock = Arc::new(MockProvider::new("mock"));
+        let dispatcher =
+            Dispatcher::new(mock, DispatchTuning::default(), 4).with_guidance(guidance.clone());
+
+        let decision = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: Vec::new(),
+                relevant_mcps: vec!["tasks-mcp".into()],
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        };
+        dispatcher.record_outcome("list tasks", &decision).await;
+
+        let recorded = guidance.recorded.lock().unwrap();
+        assert_eq!(recorded.len(), 1, "should record from relevant_mcps");
+        assert!(
+            recorded[0].0.contains("tasks-mcp"),
+            "directive should include the MCP name"
+        );
     }
 
     // â”€â”€ The classifier schema â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
