@@ -575,9 +575,15 @@ impl ChatSessions {
         // Read per turn, not cached: a profile switch mid-conversation takes effect on the next
         // turn, which is the whole of "switchable" — no restart, no reconnect.
         let settings = self.turn_settings(session).await;
+        // Resolved once: the prompt the model reads and the tools it is handed must agree, and
+        // deciding that twice is how they came apart in the first place.
+        let face_agent = self.uses_face_agent(settings.delegation);
+        if !face_agent {
+            convo.apply_direct_agent_prompt();
+        }
         convo.apply_prompt_append(settings.prompt_append.as_deref());
 
-        let reply = if self.uses_face_agent(settings.delegation) {
+        let reply = if face_agent {
             let turn_deferral = Arc::new(AtomicBool::new(false));
             let turn_runtime = self.build_face_runtime(
                 user,
@@ -635,9 +641,13 @@ impl ChatSessions {
         let before = convo.len();
 
         let settings = self.turn_settings(session).await;
+        let face_agent = self.uses_face_agent(settings.delegation);
+        if !face_agent {
+            convo.apply_direct_agent_prompt();
+        }
         convo.apply_prompt_append(settings.prompt_append.as_deref());
 
-        if self.uses_face_agent(settings.delegation) {
+        if face_agent {
             // Streaming path (web-UI SSE): tokens are emitted live, so a post-turn deferral flag
             // can't retract an already-streamed reply — Gap 2 suppression is a buffered-`turn`
             // affordance (the Telegram surface). Pass a throwaway flag to satisfy the signature.

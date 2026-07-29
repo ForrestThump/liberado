@@ -171,6 +171,41 @@ impl Conversation {
         self.messages.insert(insert_at, Message::system(text));
     }
 
+    /// Swap a persisted **face-agent** system prompt for the direct tool-user one, for this turn's
+    /// view only.
+    ///
+    /// The root system message is chosen once at daemon construction from the process-wide
+    /// `delegation_mode` and persisted append-only, but `delegation` resolves **per turn** from the
+    /// session's profile. Without this, a session that does not delegate is handed
+    /// [`HUMAN_INTERFACE_SYSTEM_PROMPT`] — *"You are a face agent, not a tool user… call the
+    /// `delegate` tool"*, plus an instruction not to enumerate its own tools — while holding no
+    /// `delegate` and a profile's worth of real ones.
+    ///
+    /// That is not a cosmetic mismatch. Observed live on 2026-07-28: asked for its open tasks, a
+    /// `basic-chat` session answered *"I'll fetch your open tasks first."* and issued zero tool
+    /// calls. Models obey the prompt over the tool list, which is the correct behaviour on their
+    /// part — the contradiction was ours.
+    ///
+    /// **Replaces rather than appends.** A corrective second message would leave two contradictory
+    /// instructions in context, which is the confusion being fixed, not a fix for it.
+    ///
+    /// Only the *built-in* face prompt is swapped. An operator who set `main_agent.system_prompt`
+    /// chose that text deliberately for every session, and silently discarding it would be the same
+    /// class of drift in the other direction — the same conservatism
+    /// [`ChatSessions::with_delegation`] already applies when it upgrades the default prompt.
+    ///
+    /// In memory only: the stored root node is never rewritten, so nothing on disk becomes wrong
+    /// about which prompt was in force when it was written. Call before
+    /// [`apply_prompt_append`](Self::apply_prompt_append) so the profile's nudge stays last.
+    pub fn apply_direct_agent_prompt(&mut self) {
+        let Some(first) = self.messages.first_mut() else {
+            return;
+        };
+        if first.role == Role::System && first.content == HUMAN_INTERFACE_SYSTEM_PROMPT {
+            first.content = DEFAULT_SYSTEM_PROMPT.to_string();
+        }
+    }
+
     /// Append a user message and a plain assistant reply directly, with no executor/tool
     /// involvement — used when a turn is answered outside the conversational tool loop.
     pub fn answer(&mut self, user: &str, reply: &str) {

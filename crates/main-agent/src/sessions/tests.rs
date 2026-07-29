@@ -2080,3 +2080,138 @@ fn an_absent_or_blank_prompt_append_changes_nothing() {
         );
     }
 }
+
+// ── The prompt must follow the profile ───────────────────────────────────────────────────────────
+//
+// Found live on 2026-07-28, not by CI: a `basic-chat` session (delegation off, five real tools, no
+// `delegate`) was still handed the face-agent root prompt — "you are a face agent, not a tool user…
+// call the `delegate` tool", plus an instruction not to enumerate its own tools. Asked for its open
+// tasks it answered "I'll fetch your open tasks first." and called nothing. The prompt and the tool
+// surface were two sources of truth and they drifted the moment step 5 made the surface per-session
+// while the prompt stayed daemon-wide.
+
+/// The regression test that matters: assert on what the **provider actually received**, not on the
+/// helper that built it. A session that does not delegate must not be told to delegate.
+#[tokio::test]
+async fn a_non_delegating_session_is_not_told_it_is_a_face_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let provider = Arc::new(MockProvider::with_script(
+        "chat",
+        [CompletionResponse::text("ok")],
+    ));
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let executor = Executor::new(provider.clone(), Budget::default());
+    // Delegation mode on, so the *persisted root prompt* is the face-agent one — exactly the live
+    // configuration. No hub attached, so this turn does not run as the face agent.
+    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools)).with_delegation_mode(true);
+
+    let id = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                profile: Some("basic-chat".into()),
+                delegation: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    sessions
+        .turn(id, "What tasks do I have open?")
+        .await
+        .unwrap();
+
+    let sent = &provider.received_requests()[0].messages[0];
+    assert_eq!(sent.role, Role::System);
+    assert_ne!(
+        sent.content, HUMAN_INTERFACE_SYSTEM_PROMPT,
+        "a session that cannot delegate must not be handed the face-agent prompt"
+    );
+    assert!(
+        !sent.content.contains("delegate"),
+        "the model must not be instructed to call a tool it does not hold; got: {}",
+        &sent.content[..sent.content.len().min(200)]
+    );
+}
+
+/// The counterpart: a session that *does* delegate must keep the face-agent prompt. A fix that
+/// stripped it unconditionally would trade one drift for another.
+#[tokio::test]
+async fn a_delegating_session_keeps_the_face_agent_prompt() {
+    use liberado_session::{GoalSessionHub, GoalSessionStore};
+    let dir = tempfile::tempdir().unwrap();
+    let provider = Arc::new(MockProvider::with_script(
+        "chat",
+        [CompletionResponse::text("ok")],
+    ));
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let executor = Executor::new(provider.clone(), Budget::default());
+    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools))
+        .with_delegation_mode(true)
+        .with_goal_hub(Arc::new(GoalSessionHub::new(GoalSessionStore::new())));
+
+    let id = sessions.create(None).await.unwrap();
+    sessions.turn(id, "hello").await.unwrap();
+
+    assert_eq!(
+        provider.received_requests()[0].messages[0].content,
+        HUMAN_INTERFACE_SYSTEM_PROMPT,
+        "the face agent must still be told it is one"
+    );
+}
+
+#[test]
+fn the_swap_replaces_the_builtin_face_prompt_only() {
+    // The built-in face prompt is swapped...
+    let mut convo = Conversation::from_history(vec![
+        Message::system(HUMAN_INTERFACE_SYSTEM_PROMPT),
+        Message::user("q"),
+    ]);
+    convo.apply_direct_agent_prompt();
+    assert_eq!(convo.messages_for_test()[0].content, DEFAULT_SYSTEM_PROMPT);
+
+    // ...an operator's own prompt is not. They chose that text for every session, and discarding it
+    // silently would be the same class of bug pointing the other way.
+    let custom = "You are a narrow research assistant. Never speculate.";
+    let mut convo = Conversation::from_history(vec![Message::system(custom), Message::user("q")]);
+    convo.apply_direct_agent_prompt();
+    assert_eq!(convo.messages_for_test()[0].content, custom);
+
+    // ...and a prompt already correct for this path is left exactly as it is.
+    let mut convo = Conversation::from_history(vec![
+        Message::system(DEFAULT_SYSTEM_PROMPT),
+        Message::user("q"),
+    ]);
+    convo.apply_direct_agent_prompt();
+    assert_eq!(convo.messages_for_test()[0].content, DEFAULT_SYSTEM_PROMPT);
+}
+
+/// Order is load-bearing: the profile's nudge qualifies whichever base prompt ends up in force, so
+/// it has to stay last. Swapping the base after appending would put them the wrong way round.
+#[test]
+fn the_swap_leaves_the_profile_nudge_after_the_base_prompt() {
+    let mut convo = Conversation::from_history(vec![
+        Message::system(HUMAN_INTERFACE_SYSTEM_PROMPT),
+        Message::user("q"),
+    ]);
+    convo.apply_direct_agent_prompt();
+    convo.apply_prompt_append(Some("Answer directly and briefly."));
+
+    let msgs = convo.messages_for_test();
+    assert_eq!(msgs[0].content, DEFAULT_SYSTEM_PROMPT);
+    assert_eq!(msgs[1].content, "Answer directly and briefly.");
+    assert_eq!(msgs[2].role, Role::User);
+}
+
+#[test]
+fn the_swap_is_a_no_op_on_an_empty_or_headless_history() {
+    let mut empty = Conversation::from_history(vec![]);
+    empty.apply_direct_agent_prompt();
+    assert!(empty.messages_for_test().is_empty());
+
+    // A history whose first message is not a system prompt must not be rewritten into one.
+    let mut headless = Conversation::from_history(vec![Message::user("q")]);
+    headless.apply_direct_agent_prompt();
+    assert_eq!(headless.messages_for_test()[0].role, Role::User);
+    assert_eq!(headless.messages_for_test()[0].content, "q");
+}
