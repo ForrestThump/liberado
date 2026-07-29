@@ -91,9 +91,29 @@ where
 {
     let request = request.with_json_schema(schema);
     let mut attempt = 0;
+    // The last raw reply, kept only so the give-up branch can log it in full. Held here rather than
+    // threaded through the error because an error message is read by operators and a whole model
+    // reply does not belong in one.
+    let mut last_reply: Option<String> = None;
     loop {
-        match complete_json_once::<P, T>(provider, request.clone()).await {
+        match complete_json_once::<P, T>(provider, request.clone(), &mut last_reply).await {
             Ok(value) => return Ok(value),
+            // The backend refused the *request*, not the reply — an older route, or one that does
+            // not implement `json_schema` response format. Retry once asking only for valid JSON.
+            //
+            // Without this, adding a schema turns "occasionally malformed" into "always fails" on
+            // any backend that does not support it, which is a strictly worse trade: a constrained
+            // decoder is an optimisation over prompt-only shaping, and an optimisation must not be
+            // load-bearing. Degrading here keeps the floor exactly where it was.
+            Err(ProviderError::InvalidRequest(msg)) if request.has_json_schema() => {
+                tracing::warn!(
+                    error = %msg,
+                    "backend rejected the json_schema response format — falling back to json_object \
+                     for this call. Structured decoding is unconstrained until this is resolved."
+                );
+                let relaxed = request.clone().without_json_schema();
+                return complete_json_once::<P, T>(provider, relaxed, &mut last_reply).await;
+            }
             // A reply that isn't the required shape is the one failure here worth re-asking about:
             // structured-output decoding is close to deterministic, so a malformed or empty reply
             // is usually a transient provider hiccup rather than a prompt the model refuses. One
@@ -113,12 +133,36 @@ where
                     "structured output did not decode — retrying once"
                 );
             }
+            // Out of retries on an undecodable reply. Log the **whole** reply once, at debug, before
+            // giving up.
+            //
+            // The windowed error above is the right thing in a warning — bounded, aimed at the
+            // defect. But a window is a hypothesis about where the problem is, and the two crons
+            // that failed on 2026-07-28 were diagnosed from a window that was itself misaligned.
+            // When the retry has already failed, the reply is worth having in full: it is the only
+            // artefact that settles what the model actually emitted, and by then it is not noise
+            // because the dispatch is about to fail anyway.
+            //
+            // `debug`, so an ordinary run does not carry model output into the log, and a diagnosis
+            // is one `RUST_LOG` away rather than a rebuild.
+            Err(e @ (ProviderError::Decode(_) | ProviderError::EmptyResponse)) => {
+                tracing::debug!(
+                    error = %e,
+                    reply = %last_reply.as_deref().unwrap_or("(none captured)"),
+                    "structured output failed after retry — full reply follows"
+                );
+                return Err(e);
+            }
             Err(e) => return Err(e),
         }
     }
 }
 
-async fn complete_json_once<P, T>(provider: &P, request: CompletionRequest) -> ProviderResult<T>
+async fn complete_json_once<P, T>(
+    provider: &P,
+    request: CompletionRequest,
+    last_reply: &mut Option<String>,
+) -> ProviderResult<T>
 where
     P: Provider + ?Sized,
     T: DeserializeOwned,
@@ -134,6 +178,7 @@ where
     let finish = response.finish_reason;
     let completion_tokens = response.usage.map(|u| u.completion_tokens);
     let content = response.content.ok_or(ProviderError::EmptyResponse)?;
+    *last_reply = Some(content.clone());
     serde_json::from_str(&content).map_err(|e| {
         // Carry what the model actually said, aimed at the *failure point*.
         //
@@ -154,29 +199,65 @@ where
                 .map(|t| t.to_string())
                 .unwrap_or_else(|| "unreported".into()),
             content.chars().count(),
-            window_around(&content, e.column())
+            window_around(&content, e.line(), e.column())
         ))
     })
 }
 
-/// A bounded window of `s` centred on 1-based character `column`, marked with `⟪⟫` at the point the
-/// parser gave up. Character-based throughout, so a multi-byte boundary can't be split.
-fn window_around(s: &str, column: usize) -> String {
+/// A bounded window of `s` around the parser's failure point, marked with `⟪HERE⟫`.
+///
+/// # `column` is a BYTE offset, not a character one
+///
+/// This is the whole subtlety, and getting it wrong made the diagnostic lie. `serde_json` reports
+/// `line`/`column` where the column counts **bytes** within that line — `from_str` on the 21-char,
+/// 27-byte `{"a": "— — —", "b": }` reports column 27. Indexing a `Vec<char>` with that number walked
+/// past the failure (and off the end entirely, where the old `.min(len)` silently clamped to the end
+/// of the reply).
+///
+/// So every window printed for a reply containing any non-ASCII — an em dash or curly quote in the
+/// model's own `rationale`, which is most of them — pointed too far right, and the further into the
+/// reply the failure was, the further off it landed. The two live cron failures on 2026-07-28 were
+/// read from exactly such a window.
+///
+/// The previous version's comment claimed to be "character-based throughout, so a multi-byte
+/// boundary can't be split" — true of the *output*, and the reason the bug was invisible: it never
+/// panicked, it just aimed wrong.
+fn window_around(s: &str, line: usize, column: usize) -> String {
     const RADIUS: usize = 160;
-    let chars: Vec<char> = s.chars().collect();
-    // serde columns are 1-based; a 0 (or an out-of-range value) falls back to the start.
-    let idx = column.saturating_sub(1).min(chars.len());
-    let start = idx.saturating_sub(RADIUS);
-    let end = (idx + RADIUS).min(chars.len());
+
+    // Byte offset of the start of `line` (1-based), then the byte column within it.
+    let line_start = if line <= 1 {
+        0
+    } else {
+        s.match_indices('\n')
+            .nth(line - 2)
+            .map(|(i, _)| i + 1)
+            .unwrap_or(0)
+    };
+    let mut byte_idx = line_start
+        .saturating_add(column.saturating_sub(1))
+        .min(s.len());
+    // Snap left onto a boundary: a column can land mid-character when the offending byte *is* a
+    // malformed multi-byte sequence.
+    while byte_idx > 0 && !s.is_char_boundary(byte_idx) {
+        byte_idx -= 1;
+    }
+
+    let (before, after) = s.split_at(byte_idx);
+    let head: String = {
+        let kept: Vec<char> = before.chars().rev().take(RADIUS).collect();
+        kept.into_iter().rev().collect()
+    };
+    let tail: String = after.chars().take(RADIUS).collect();
 
     let mut out = String::new();
-    if start > 0 {
+    if before.chars().count() > head.chars().count() {
         out.push('…');
     }
-    out.extend(&chars[start..idx]);
+    out.push_str(&head);
     out.push_str("⟪HERE⟫");
-    out.extend(&chars[idx..end]);
-    if end < chars.len() {
+    out.push_str(&tail);
+    if after.chars().count() > tail.chars().count() {
         out.push('…');
     }
     out
@@ -205,7 +286,7 @@ mod tests {
         let rendered = format!(
             "{err} — reply was {} chars; around the failure: {}",
             bad.chars().count(),
-            window_around(&bad, col)
+            window_around(&bad, err.line(), col)
         );
         assert!(rendered.contains("⟪HERE⟫"), "{rendered}");
         assert!(
@@ -254,11 +335,58 @@ mod tests {
     #[test]
     fn the_window_is_bounded_and_multibyte_safe() {
         let s = "🎉".repeat(2000);
-        let w = window_around(&s, 1500);
+        let w = window_around(&s, 1, 1500);
         assert!(w.chars().count() < 400, "window must stay bounded");
         // Out-of-range and zero columns must not panic, nor must an empty reply.
-        let _ = window_around(&s, 0);
-        let _ = window_around(&s, 99_999);
-        let _ = window_around("", 5);
+        let _ = window_around(&s, 1, 0);
+        let _ = window_around(&s, 1, 99_999);
+        let _ = window_around("", 1, 5);
+        let _ = window_around(&s, 99_999, 1);
+    }
+
+    /// The bug this window was built to avoid, and then had: `serde_json`'s column counts **bytes**,
+    /// so indexing characters with it aims past the failure — further past it the more non-ASCII the
+    /// reply contains. A model's own `rationale` prose is full of em dashes, so this was the normal
+    /// case, not an edge one.
+    #[test]
+    fn the_window_points_at_the_real_failure_when_the_reply_has_multibyte_text() {
+        // 21 chars, 27 bytes. The offending `}` is the last byte; serde reports column 27.
+        let reply = r#"{"a": "— — —", "b": }"#;
+        let err = serde_json::from_str::<serde_json::Value>(reply).unwrap_err();
+        assert_eq!(
+            err.column(),
+            27,
+            "precondition: serde reports a byte column"
+        );
+        assert!(
+            err.column() > reply.chars().count(),
+            "precondition: the byte column is past the end of the char sequence, which is exactly \
+             what silently clamped the old window to the end of the reply"
+        );
+
+        let w = window_around(reply, err.line(), err.column());
+        let (before, after) = w.split_once("⟪HERE⟫").expect("marker present");
+        assert!(
+            before.ends_with("\"b\": "),
+            "the marker must sit just before the offending token, got: {w}"
+        );
+        assert!(
+            after.starts_with('}'),
+            "and the offending token must follow it, got: {w}"
+        );
+    }
+
+    /// A column is relative to its *line*, so a multi-line reply needs the line offset added or the
+    /// window lands near the start of the whole body.
+    #[test]
+    fn the_window_accounts_for_the_line_the_error_is_on() {
+        let reply = "{\n  \"a\": 1,\n  \"b\": }\n}";
+        let err = serde_json::from_str::<serde_json::Value>(reply).unwrap_err();
+        assert!(err.line() > 1, "precondition: the failure is not on line 1");
+
+        let w = window_around(reply, err.line(), err.column());
+        let (before, after) = w.split_once("⟪HERE⟫").expect("marker present");
+        assert!(before.ends_with("\"b\": "), "got: {w}");
+        assert!(after.starts_with('}'), "got: {w}");
     }
 }

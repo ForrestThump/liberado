@@ -16,6 +16,9 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+# Lets the seam tests assert on the bytes that actually leave the process, rather than on the
+# helper that builds them — the distinction that let a discarded `response_format` ship green.
+wiremock = "0.6"
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)

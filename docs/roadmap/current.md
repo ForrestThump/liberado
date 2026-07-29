@@ -83,6 +83,14 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
 - **Modularity** remains the enabler: [`../architecture/modularity.md`](../architecture/modularity.md). Hot-path **module splits** landed (server API, daemon, config-loader model, executor budget).
 - **A4 dual-store hub tests** (2026-07-23): list / cancel / park→resume / rehydrate via real `GoalSessionHub` on production `SessionStore` — `crates/session-store/tests/hub_dual_store.rs` (see [`../architecture/failure-modes.md`](../architecture/failure-modes.md) §1).
 - **TurboVault modules**: vector + tasks paying back; remaining **`vault_events`** and upstream merge. Umbrella: [`turbovault-modules-integration-roadmap.md`](turbovault-modules-integration-roadmap.md).
+- **Redundant tool calls hidden by the doom-loop guard** (found 2026-07-28 in the passing
+  `evening-debrief` live run, build `66b5771`). The subagent called `liberado-caldav-mcp:list_events`
+  **four times for two dates** — twice on turn 2, twice again on turn 3 — before the guard fired
+  (`doom loop detected; nudging once`), after which it recovered and filed on turn 4. The run
+  **succeeded**, which is the point: the guard is currently absorbing a 2× redundancy rather than the
+  redundancy being fixed, so it shows up as latency and spend, not as a failure. Worth a look when
+  the executor's tool loop is next touched — the guard should stay, but it should be catching
+  pathology, not routine duplication.
 - **Move-on bar:** leave P1 when you daily-drive without wincing — not when polished.
 
 ## What's next (one screen)

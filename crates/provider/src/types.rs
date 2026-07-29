@@ -133,6 +133,35 @@ impl CompletionRequest {
         self
     }
 
+    /// Whether this request asks the backend to constrain decoding to a **shape**, as opposed to
+    /// merely to valid JSON.
+    ///
+    /// The distinction the wire mapping draws: a schema with no `properties` describes nothing and is
+    /// sent as `json_object`. Only a shape-constraining schema is worth falling back *from* when a
+    /// backend rejects it — see `complete_json`.
+    pub fn has_json_schema(&self) -> bool {
+        match &self.response_format {
+            ResponseFormat::Json { schema } => schema
+                .get("properties")
+                .is_some_and(serde_json::Value::is_object),
+            ResponseFormat::Text => false,
+        }
+    }
+
+    /// Drop the schema, keeping the request in plain JSON mode.
+    ///
+    /// The degraded retry for a backend that will not accept a `json_schema` response format. Keeps
+    /// the JSON *hint* rather than clearing the format entirely, because the reply still has to
+    /// deserialize — the model is simply back to being shaped by the prompt alone.
+    pub fn without_json_schema(mut self) -> Self {
+        if matches!(self.response_format, ResponseFormat::Json { .. }) {
+            self.response_format = ResponseFormat::Json {
+                schema: serde_json::json!({}),
+            };
+        }
+        self
+    }
+
     /// Set the sampling temperature (the dispatcher pins this to 0 for determinism).
     pub fn with_temperature(mut self, temperature: f32) -> Self {
         self.temperature = Some(temperature);
