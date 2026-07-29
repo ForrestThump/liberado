@@ -46,8 +46,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use liberado_common::{
-    CapabilityCatalog, CapabilitySet, Consequence, DEFAULT_POOL, DispatchAction, McpDescriptor,
-    ProposalSigner, WriteClass,
+    Capability, CapabilityCatalog, CapabilitySet, Consequence, DEFAULT_POOL, DispatchAction,
+    McpDescriptor, ProposalSigner, WriteClass, mcp_of,
 };
 use liberado_conversation_store::{
     Author, ConversationHeader, ConversationStore, MessageNode, NewConversation, NewNode,
@@ -608,7 +608,12 @@ impl ChatSessions {
                     reply
                 }
                 DispatchOutcome::Proceed(relevant_mcps) => {
-                    let turn_runtime = self.build_turn_runtime(user, session, &relevant_mcps);
+                    let turn_runtime = self.build_turn_runtime(
+                        user,
+                        session,
+                        &relevant_mcps,
+                        &settings.capabilities,
+                    );
                     convo.apply_available_tools(&turn_runtime.catalog());
                     convo
                         .turn(&self.executor, turn_runtime.as_ref(), user)
@@ -671,7 +676,12 @@ impl ChatSessions {
                     let _ = events.send(AgentEvent::Token(reply)).await;
                 }
                 DispatchOutcome::Proceed(relevant_mcps) => {
-                    let turn_runtime = self.build_turn_runtime(user, session, &relevant_mcps);
+                    let turn_runtime = self.build_turn_runtime(
+                        user,
+                        session,
+                        &relevant_mcps,
+                        &settings.capabilities,
+                    );
                     convo.apply_available_tools(&turn_runtime.catalog());
                     convo
                         .turn_stream(&self.executor, turn_runtime.as_ref(), user, events)
@@ -1030,7 +1040,13 @@ impl ChatSessions {
         user: &str,
         session: Ulid,
         relevant_mcps: &[String],
+        capabilities: &CapabilitySet,
     ) -> Box<dyn ToolRuntime> {
+        // Deliberately still `self.capabilities`: this asks "is this daemon guarded at all", which is
+        // a property of the *process*, not of one session. Reading the session's set here would let a
+        // profile that legitimately grants nothing ("this chat may call nothing") fall into the
+        // unguarded fixture branch and be handed every tool — a fail-open in the one case that most
+        // needs to fail closed.
         if self.capabilities.capabilities.is_empty()
             && self.consequences.is_empty()
             && self.live_catalog.is_none()
@@ -1039,31 +1055,51 @@ impl ChatSessions {
             return Box::new(PassThroughRuntime(self.runtime.clone()));
         }
 
-        // Capability scoping: surface only MCPs the chat agent is granted, every turn, regardless of
+        // Capability scoping: surface only what *this session* is granted, every turn, regardless of
         // how the message is phrased. The model sees the full granted tool set (robust — no missed
-        // requests). An empty grant set scopes to nothing (no tools visible).
-        let granted_mcps: Vec<String> = self.capabilities.granted_mcps();
-        // Dispatcher-narrowed tool surfacing (the token-efficiency piece — see module docs): when
-        // the dispatch step named specific relevant MCPs for this goal, further narrow within the
-        // granted ceiling instead of always surfacing every granted MCP's full tool schemas. Never
-        // widens — only names already in `granted_mcps` survive the intersection.
-        let scoped_mcps: Vec<String> = if relevant_mcps.is_empty() {
-            granted_mcps
+        // requests).
+        //
+        // Scoped by **capability, not by MCP name**. `granted_mcps()` reports only `ExecuteMcp`, so
+        // an `ExecuteTool("turbovault:tasks_list")` grant contributed nothing to an MCP-level
+        // allow-list and a per-tool profile surfaced no tools at all. `from_capabilities` is the
+        // constructor step 1 added for exactly this — "the only one that can express a partial grant
+        // over a single MCP" — and this path had never adopted it.
+        //
+        // And the session's set, not the process's. The face path has always passed the session
+        // grant explicitly; this one read `self.capabilities`, so a profile resolved into the
+        // header, showed up over the API, and then surfaced as nothing — on precisely the path its
+        // own `delegation = false` selects. An unprofiled session resolves to the process grant, so
+        // this is unchanged for every chat that names no profile.
+        //
+        // Dispatcher narrowing (the token-efficiency piece — see module docs) is applied *within*
+        // the grant and can only shrink it: a capability survives only if the goal's relevant MCPs
+        // mention its server. Non-execute capabilities pass through untouched — they say nothing
+        // about which tools to surface, and dropping them here would quietly narrow the risk gate.
+        let scope: CapabilitySet = if relevant_mcps.is_empty() {
+            capabilities.clone()
         } else {
-            granted_mcps
-                .into_iter()
-                .filter(|name| relevant_mcps.contains(name))
-                .collect()
+            CapabilitySet::from_iter(
+                capabilities
+                    .capabilities
+                    .iter()
+                    .filter(|c| match c {
+                        Capability::ExecuteMcp(name) => relevant_mcps.iter().any(|r| r == name),
+                        Capability::ExecuteTool(qualified) => {
+                            relevant_mcps.iter().any(|r| r == mcp_of(qualified))
+                        }
+                        _ => true,
+                    })
+                    .cloned(),
+            )
         };
-        // `ScopedRuntime` treats an empty allow-list as pass-through (its general-purpose default).
-        // For capability scoping that's the wrong sense — no grants must mean no tools — so route the
-        // empty case to a no-tools runtime instead of letting everything through.
-        let inner: Arc<dyn ToolRuntime> = if scoped_mcps.is_empty() {
-            Arc::new(NoToolsRuntime)
-        } else {
-            tracing::debug!(count = scoped_mcps.len(), mcps = ?scoped_mcps, "chat turn tool scope");
-            Arc::new(ScopedRuntime::new(self.runtime.clone(), scoped_mcps))
-        };
+        tracing::debug!(tools = ?scope.granted_tools(), "chat turn tool scope");
+        // Fails closed on an empty set by construction, so no no-tools special case is needed:
+        // `ScopedRuntime::new`'s empty allow-list means pass-through, which is the wrong sense for a
+        // grant and was previously guarded by hand.
+        let inner: Arc<dyn ToolRuntime> = Arc::new(ScopedRuntime::from_capabilities(
+            self.runtime.clone(),
+            scope,
+        ));
 
         // Wrap in RiskGatedToolRuntime for safety guards (capability / consequence / magnitude).
         // Chat isn't one of the daemon's named pools (it has its own separate "main-agent"
@@ -1072,7 +1108,9 @@ impl ChatSessions {
         // pre-pool behavior (one orchestrator handled every approval, regardless of origin).
         let mut gated = RiskGatedToolRuntime::new(
             inner,
-            self.capabilities.clone(),
+            // The same set that scoped the surface above. Gating on the process grant while scoping
+            // on the session's would surface a profile's tool and then refuse the call.
+            capabilities.clone(),
             self.consequences.clone(),
             self.zone_catalog.clone(),
             self.zone_write_classes.clone(),

@@ -2382,3 +2382,94 @@ async fn a_turn_persists_only_its_own_messages_not_the_injected_ones() {
         );
     }
 }
+
+/// A profile's `mcps` must reach the **non-delegating** path — the one `delegation = false` selects,
+/// and therefore the only path a "basic chat" profile ever runs on.
+///
+/// It did not. `build_turn_runtime` scoped and gated against the process-wide grant, so a profile's
+/// tools resolved into the session header, showed up over the API, and then surfaced as nothing:
+/// `main-agent` deliberately holds no `ExecuteMcp` ("specialists stay on dispatcher"), so the
+/// intersection was always empty. Live, the model correctly reported it had no access to a tool the
+/// grant plainly listed.
+#[tokio::test]
+async fn a_profiles_tools_reach_a_non_delegating_turn() {
+    use liberado_common::{Capability, CapabilitySet};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        [CompletionResponse::text("ok")],
+    ));
+    let executor = Executor::new(provider.clone(), Budget::default());
+    // The process grant holds nothing executable — exactly like the live `main-agent` grant.
+    let sessions = ChatSessions::new(store, executor, Arc::new(OneTool("turbovault:tasks_list")))
+        .with_guards(
+            vec![("turbovault".into(), Consequence::Reversible)],
+            CapabilitySet::empty(),
+            dir.path().join("proposals"),
+            ProposalSigner::random(),
+        );
+
+    let id = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                capabilities: CapabilitySet::from_iter([Capability::ExecuteTool(
+                    "turbovault:tasks_list".into(),
+                )]),
+                profile: Some("basic-chat".into()),
+                delegation: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    sessions.turn(id, "what tasks are open?").await.unwrap();
+
+    let offered: Vec<String> = provider.received_requests()[0]
+        .tools
+        .iter()
+        .map(|t| t.name.clone())
+        .collect();
+    assert!(
+        offered.contains(&"turbovault:tasks_list".to_string()),
+        "the profile's tool must be surfaced on the path its own `delegation = false` selects; \
+         got {offered:?}"
+    );
+}
+
+/// The other direction: a session that names no profile must still see the process grant, so this
+/// cannot become a migration that silently strips tools from every pre-existing chat.
+#[tokio::test]
+async fn an_unprofiled_turn_still_sees_the_process_grant() {
+    use liberado_common::{Capability, CapabilitySet};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        [CompletionResponse::text("ok")],
+    ));
+    let executor = Executor::new(provider.clone(), Budget::default());
+    let sessions = ChatSessions::new(store, executor, Arc::new(OneTool("calendar-mcp:list")))
+        .with_guards(
+            vec![("calendar-mcp".into(), Consequence::Reversible)],
+            CapabilitySet::from_iter([Capability::ExecuteMcp("calendar-mcp".into())]),
+            dir.path().join("proposals"),
+            ProposalSigner::random(),
+        );
+
+    let id = sessions.create(None).await.unwrap();
+    sessions.turn(id, "what's on my calendar?").await.unwrap();
+
+    let offered: Vec<String> = provider.received_requests()[0]
+        .tools
+        .iter()
+        .map(|t| t.name.clone())
+        .collect();
+    assert!(
+        offered.contains(&"calendar-mcp:list".to_string()),
+        "an unprofiled chat must keep the process grant; got {offered:?}"
+    );
+}
