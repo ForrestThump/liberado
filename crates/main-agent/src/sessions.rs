@@ -129,6 +129,9 @@ struct TurnSettings {
     delegation: bool,
     /// Extra system-prompt text for this profile, injected per turn.
     prompt_append: Option<String>,
+    /// The profile's name, for logging. `None` is "no profile named", which is distinct from a
+    /// profile that grants nothing — the distinction this plan keeps insisting on.
+    profile: Option<String>,
 }
 
 /// What can go wrong running a persisted turn: the agent loop failed, or the store did. Both are
@@ -593,7 +596,7 @@ impl ChatSessions {
             );
             // Derived from the runtime the executor is about to be handed, never from a list built
             // beside it — see `Conversation::apply_available_tools`.
-            convo.apply_available_tools(&turn_runtime.catalog());
+            self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
             let reply = convo
                 .turn(&self.executor, turn_runtime.as_ref(), user)
                 .await?;
@@ -614,7 +617,7 @@ impl ChatSessions {
                         &relevant_mcps,
                         &settings.capabilities,
                     );
-                    convo.apply_available_tools(&turn_runtime.catalog());
+                    self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
                     convo
                         .turn(&self.executor, turn_runtime.as_ref(), user)
                         .await?
@@ -661,9 +664,16 @@ impl ChatSessions {
             // can't retract an already-streamed reply — Gap 2 suppression is a buffered-`turn`
             // affordance (the Telegram surface). Pass a throwaway flag to satisfy the signature.
             let turn_deferral = Arc::new(AtomicBool::new(false));
-            let capabilities = self.session_capabilities(session).await;
-            let turn_runtime = self.build_face_runtime(user, session, capabilities, turn_deferral);
-            convo.apply_available_tools(&turn_runtime.catalog());
+            // `settings.capabilities`, not a second lookup: `TurnSettings` exists so a profile
+            // switch cannot land between two reads of the same turn's authority, and this path was
+            // quietly doing exactly that.
+            let turn_runtime = self.build_face_runtime(
+                user,
+                session,
+                settings.capabilities.clone(),
+                turn_deferral,
+            );
+            self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
             convo
                 .turn_stream(&self.executor, turn_runtime.as_ref(), user, events)
                 .await?;
@@ -682,7 +692,7 @@ impl ChatSessions {
                         &relevant_mcps,
                         &settings.capabilities,
                     );
-                    convo.apply_available_tools(&turn_runtime.catalog());
+                    self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
                     convo
                         .turn_stream(&self.executor, turn_runtime.as_ref(), user, events)
                         .await?;
@@ -721,6 +731,11 @@ impl ChatSessions {
     ///
     /// A session the store cannot produce a header for also falls back — a lookup failure must not
     /// quietly become an authority change.
+    /// Test-only since the streaming path stopped re-reading the grant it had already resolved:
+    /// production reads authority exactly once per turn, through [`TurnSettings`]. Kept because four
+    /// resolution tests assert on it directly, and they are the tests that pin "no profile means the
+    /// process grant, an empty named profile means nothing".
+    #[cfg(test)]
     async fn session_capabilities(&self, session: Ulid) -> CapabilitySet {
         self.turn_settings(session).await.capabilities
     }
@@ -751,7 +766,38 @@ impl ChatSessions {
             capabilities: header.grant.capabilities,
             delegation: header.grant.delegation.unwrap_or(self.delegation_mode),
             prompt_append: header.grant.prompt_append,
+            profile: header.grant.profile,
         }
+    }
+
+    /// Log the tool surface this turn actually holds, then state it to the model.
+    ///
+    /// Both from one `catalog()` call on the runtime being handed to the executor, so the operator's
+    /// log line and the model's prompt can never describe different tool sets. Reading it twice
+    /// would reintroduce, in the diagnostics, exactly the drift the manifest exists to remove.
+    ///
+    /// At INFO because this is the line whose absence cost three debugging rounds: `tool surface
+    /// ready` fires once at boot with the daemon default, so nothing recorded what any individual
+    /// session was offered, and every profile failure had to be diagnosed through the store and the
+    /// source instead of the log.
+    fn state_tool_surface(
+        &self,
+        convo: &mut Conversation,
+        session: Ulid,
+        settings: &TurnSettings,
+        runtime: &dyn ToolRuntime,
+    ) {
+        let catalog = runtime.catalog();
+        let names: Vec<&str> = catalog.iter().map(|t| t.name.as_str()).collect();
+        tracing::info!(
+            session = %session,
+            profile = settings.profile.as_deref().unwrap_or("(none)"),
+            delegation = settings.delegation,
+            count = names.len(),
+            tools = ?names,
+            "chat turn: tool surface"
+        );
+        convo.apply_available_tools(&catalog);
     }
 
     /// The daemon-wide delegation default, for tests asserting the inherit path without hard-coding
@@ -766,6 +812,7 @@ impl ChatSessions {
             capabilities: self.capabilities.clone(),
             delegation: self.delegation_mode,
             prompt_append: None,
+            profile: None,
         }
     }
 
