@@ -372,3 +372,54 @@ which blocks `basic-chat` on step 7.
   config to the running turn. `SessionGrant.overrides` is documented as opaque and pack-parsed, so
   typed fields on `SessionGrant` are the likely answer — decided in step 4/5.
 - `may_delegate_to` — deferred, shape sketched above.
+
+### Stale tool exchanges survive a profile switch
+
+Raised by the operator 2026-07-28, after the prompt fix: a conversation that used profile A's tools
+and then switches to profile B still carries A's `tool_calls` and tool results verbatim. Rehydration
+is `nodes.iter().map(|n| n.message.clone())` with no capability filtering, so a model that watched
+itself succeed at `spider:fetch` has in-context evidence that outlives the grant.
+
+**This is a coherence problem, not an authority one**, and the distinction should survive into
+whatever fixes it. Tool calls are constrained to the declared catalog, so a stale memory cannot
+become a stale invocation, and `ScopedRuntime` fails closed per-tool if one somehow arrived. Nothing
+is reachable that should not be. The expected symptom is the model *claiming* a capability or
+offering to re-run a lookup it can no longer perform — the same announce-then-stall shape as the
+prompt bug, arriving by a different route.
+
+The existing mitigation is weak: `set_profile` appends `Message::system("Session profile: basic-chat")`
+and that is rehydrated, but it names a *profile*, not a capability set. The model cannot know what
+`basic-chat` grants, so it reads as a topic change rather than a tool revocation, and loses against a
+concrete successful call three turns up.
+
+**Naive filtering is not available.** Providers validate that an assistant message carrying
+`tool_calls` is followed by matching tool results; drop the result and the orphaned call 400s, drop
+both and the turn's causal record is corrupt. Any real version *rewrites* the exchange into a neutral
+note rather than removing it.
+
+**On the cache cost** (the operator's objection to stripping): rewriting history does invalidate the
+cached prefix from the rewrite point, and the earliest stale call is usually early. But the cost is
+**bounded and one-off, not per turn** — the filtered view is a pure function of the current grant, so
+once switched it is stable and re-cacheable until the next switch. One cold turn per switch, not a
+permanently cold conversation. That is affordable; it is the *complexity* of rewriting exchanges, not
+the cache, that argues against doing it.
+
+Three options, in increasing cost:
+
+1. **Nothing.** Rely on catalog gating. Accept occasional incoherent claims.
+2. **State current capability per turn** — step 7's derived block. Beats stale evidence on position
+   (system, not buried mid-thread) and recency (this turn). Costs nothing extra once step 7 exists,
+   since `turn_settings` already resolves the capability set. **Preferred.**
+3. **Rewrite historical exchanges** for tools no longer granted. Most thorough, most machinery, and
+   the cache cost above.
+
+An interim cheaper than (2) is making the switch note say what changed rather than naming a profile
+— "Session profile: basic-chat. Tools now available: …". One line, no new machinery, but it
+*persists a claim* that goes stale if the profile's config is later edited: the drift argument for
+deriving per turn instead of writing down.
+
+**The operator's broader read, worth keeping:** that switching profiles while retaining context may
+be the wrong default. Fork-then-switch sidesteps all of this — a fresh conversation has no stale
+exchanges to disagree with — and is already available, since profile switching deliberately does not
+offer to fork ([Build order](#build-order) step 4). If (2) proves insufficient in practice, the
+answer is more likely "recommend forking" than "build (3)".
