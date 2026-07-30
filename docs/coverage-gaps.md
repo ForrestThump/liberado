@@ -144,3 +144,51 @@ async fn wall_clock_limit_exhausts_at_exact_non_zero_boundary() {
 **Impact:** When wall-clock or token budget is exhausted, the report claims the turn budget ran out instead of the actual resource. A developer debugging the report or a model reading it would misdiagnose the failure.
 
 **Fix:** Change line 463-467 to pass `exhausted_name` through to the error (e.g. `ExecError::BudgetExceeded { resource: &'static str, turns: u32 }`) and call `budget_failed_report_named` with the real resource name.
+
+## Test-Code Deduplication Analysis (2026-07-30)
+
+`cargo dupes` found 244 exact-duplicate groups (6,351 lines) and 66 near-duplicate groups (1,729 lines) across the workspace.
+
+### Approaches Evaluated
+
+#### Option A: Move test doubles into `liberado-common`
+
+**Pro:** Every crate already depends on common — zero new dev-deps required.
+**Con:** Common has zero workspace deps today. Adding test doubles that need `liberado-executor`,
+`liberado-provider`, `liberado-notify`, or `liberado-messaging` creates a circular dependency
+(those crates depend on common).
+
+**Verdict:** Infeasible for anything beyond common's own types (`SampleProposal`, `SampleMcpDescriptor`).
+
+#### Option B: Keep the dedicated `liberado-test-support` crate (current approach)
+
+**Pro:** Clean dependency graph. 6 crates already use it (orchestrator, daemon, server, telegram-approvals,
+dispatch-pack, test-support itself). Zero production code pollution.
+**Con:** Every consuming crate must add the dev-dep manually. Orphan-rule friction when a local trait
+(`RebindableRuntime` in mcp) needs to be implemented on a test-support type.
+
+**Verdict:** Best option available. The remaining test-code duplication is all in test modules that
+would need local trait impls regardless of where the struct lives.
+
+### Remaining Duplication in Hardened Crates
+
+| Pattern | Copies | Why not consolidated |
+|---------|:------:|---------------------|
+| `NoopRuntime` + `impl ToolRuntime` | 5+ | Already in test-support; local copies where test-support isn't a dev-dep (mcp, main-agent) |
+| `vault_descriptor` | 3 | Private test helper; extractable as `pub fn sample_vault_descriptor() -> McpDescriptor` in common |
+| `NoopFactory` | 2 | Semantically different: one returns `unreachable!()`, other returns `Err(...)` |
+| `granted_tools`/`granted_mcps` | 1 | **Fixed** — consolidated via `matching_names` helper |
+
+### Production Dedup Applied
+
+`CapabilitySet::granted_tools` and `CapabilitySet::granted_mcps` were 14 lines of near-identical
+code differing only by variant name. Consolidated via a private `matching_names` helper that takes
+a predicate.
+
+### Code Decomposition for Testability
+
+The `looks_like_a_path` closure (12 lines, pure, zero captures) was extracted from inside
+`scope_names_a_file` into a named function. The extraction itself yielded no new mutation kills —
+it confirmed that the surviving operators (`>`, `!=`, `&&`) are false positives because no valid
+filename input can distinguish them — but it makes the function testable when future boundary
+conditions are added.
