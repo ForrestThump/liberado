@@ -2622,6 +2622,34 @@ mod tests {
         );
     }
 
+    /// Freeze clock, advance by exactly the non-zero budget — verifies the `>=` boundary at
+    /// `Duration::from_secs(1)`. Currently ignored because the FrozenClock cannot inject time
+    /// between `run_started` capture and the budget check within the same loop iteration, and
+    /// `budget_failed_report` hardcodes "turns" regardless of which resource exhausted (see
+    /// docs/coverage-gaps.md).
+    #[tokio::test]
+    #[ignore = "FrozenClock cannot inject time mid-loop iteration"]
+    async fn wall_clock_limit_exhausts_at_exact_non_zero_boundary() {
+        let t0 = std::time::Instant::now();
+        liberado_common::clock::test_freeze_at(t0);
+
+        let (_provider, exec) = executor(
+            vec![submit(valid_report_args())],
+            Budget::new(10).with_wall_clock(std::time::Duration::from_secs(1)),
+        );
+
+        liberado_common::clock::test_advance(std::time::Duration::from_secs(1));
+
+        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Failed);
+        liberado_common::clock::test_thaw();
+    }
+
     #[tokio::test]
     async fn token_limit_exhausts_once_accumulated_usage_crosses_it() {
         fn tool_call_with_usage(id: &str, tokens: u32) -> CompletionResponse {
