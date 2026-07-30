@@ -9,10 +9,11 @@ use liberado_common::{
     WriteProvenance,
 };
 use liberado_executor::SUBMIT_REPORT_TOOL;
-use liberado_orchestrator::{Disposition, Orchestrator, SubDispatch};
+use liberado_orchestrator::{Disposition, Orchestrator, OrchestratorError, SubDispatch};
 use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
 use liberado_test_support::{
-    CallRecordingFactory, InvocationRecordingFactory, InvocationRecordingRuntime,
+    CallRecordingFactory, FailingFactory as ErrorFailingFactory, InvocationRecordingFactory,
+    InvocationRecordingRuntime,
 };
 
 type Calls = Arc<Mutex<Vec<(Vec<String>, WriteProvenance)>>>;
@@ -1376,4 +1377,43 @@ async fn delivery_is_refused_when_the_subagent_could_have_acted() {
     };
     assert_eq!(report.summary, "done", "the body goes to the face agent");
     assert!(report.artifacts.is_empty());
+}
+
+#[tokio::test]
+async fn factory_setup_error_is_surfaced_by_orchestrator() {
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        [submit_report_response()],
+    ));
+    let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("tasks-mcp".into())]);
+
+    let orch = Orchestrator::new(
+        provider,
+        ErrorFailingFactory::new("MCP launch failed"),
+        capabilities.clone(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    );
+
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: vec!["tasks-mcp".into()],
+        },
+        confidence: 0.9,
+        rationale: "should fail".into(),
+    };
+
+    let err = orch
+        .run(decision, "test goal", "trigger-1", &capabilities)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, OrchestratorError::Runtime(_)),
+        "expected Runtime error, got {err:?}"
+    );
 }
