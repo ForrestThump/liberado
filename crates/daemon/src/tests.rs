@@ -2389,7 +2389,9 @@ async fn stamp_local_time_is_attached_for_cron_events() {
 
     let event = Event::trigger("CronFired", "cron:test", "cron:test:1", Default::default());
     assert!(
-        daemon.stamp_local_time_if_needed(&event, "a goal").is_some(),
+        daemon
+            .stamp_local_time_if_needed(&event, "a goal")
+            .is_some(),
         "cron events without a vault path should get a time stamp"
     );
 
@@ -2403,7 +2405,9 @@ async fn stamp_local_time_is_attached_for_cron_events() {
         },
     );
     assert!(
-        daemon.stamp_local_time_if_needed(&event, "a goal").is_none(),
+        daemon
+            .stamp_local_time_if_needed(&event, "a goal")
+            .is_none(),
         "vault change events with a path should NOT get a time stamp"
     );
 
@@ -2421,8 +2425,8 @@ async fn stamp_local_time_is_attached_for_cron_events() {
 async fn handle_proposal_change_active_failed_not_expired_does_not_enter_expiry_path() {
     use chrono::{Duration as ChronoDuration, Utc};
     use liberado_common::{
-        Capability, GrantScope, Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall,
-        WriteProvenance, session_grants, DEFAULT_POOL,
+        Capability, DEFAULT_POOL, GrantScope, Proposal, ProposalSigner, ProposalStatus,
+        ProposedAction, ToolCall, WriteProvenance, session_grants,
     };
     use liberado_executor::SUBMIT_REPORT_TOOL;
     use liberado_orchestrator::Orchestrator;
@@ -2499,4 +2503,165 @@ async fn handle_proposal_change_active_failed_not_expired_does_not_enter_expiry_
         !grant.capabilities.is_empty(),
         "session grant must be applied when the failed outcome is not the expiry refusal"
     );
+}
+
+/// L9 extended: a webhook event (not cron) injected via the daemon's event_sender produces a
+/// joinable, terminal background session — proving the event→daemon→hub→session path is
+/// source-agnostic (webhook and cron share the same dispatch pipeline).
+#[tokio::test]
+async fn l9_webhook_event_becomes_joinable_dispatched_session() {
+    use liberado_common::{DispatchAction, DispatchDecision};
+    use liberado_config_loader::DispatchTuning;
+    use liberado_cron::{CronEventSource, Schedule};
+    use liberado_dispatch_pack::{DISPATCH_DOMAIN, DispatchPack};
+    use liberado_executor::{RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime};
+    use liberado_orchestrator::Orchestrator;
+    use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
+    use liberado_session::{
+        GoalSessionHub, GoalSessionStore, SessionStatus, TerminalKind, Visibility,
+    };
+    use std::sync::Arc;
+
+    struct WebhookL9Runtime;
+    #[async_trait::async_trait]
+    impl ToolRuntime for WebhookL9Runtime {
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".into())
+        }
+    }
+    struct WebhookL9Factory;
+    #[async_trait::async_trait]
+    impl RuntimeFactory for WebhookL9Factory {
+        async fn runtime_for(
+            &self,
+            _allowed_mcps: &[String],
+            _provenance: WriteProvenance,
+        ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+            Ok(Box::new(WebhookL9Runtime))
+        }
+    }
+
+    let (daemon, _dir) = temp_daemon().await;
+
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: Vec::new(),
+        },
+        confidence: 0.95,
+        rationale: "webhook task".into(),
+    };
+    let dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "dispatch",
+            [CompletionResponse::text(
+                serde_json::to_string(&decision).unwrap(),
+            )],
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    let orchestrator = Orchestrator::new(
+        Arc::new(MockProvider::with_script(
+            "exec",
+            [CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "c",
+                SUBMIT_REPORT_TOOL,
+                serde_json::json!({ "outcome": "succeeded", "summary": "webhook task done" }),
+            )])],
+        )),
+        WebhookL9Factory,
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    );
+
+    let pack = DispatchPack::new(
+        Arc::new(CapabilityCatalog::new()),
+        Vec::new(),
+        1,
+        std::env::temp_dir(),
+    )
+    .with_pool("default", dispatcher, orchestrator);
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(Arc::new(pack));
+    let hub = Arc::new(hub);
+
+    let grant_dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "unused",
+            Vec::<CompletionResponse>::new(),
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    let daemon = daemon
+        .with_dispatcher(
+            grant_dispatcher,
+            Arc::new(CapabilityCatalog::new()),
+            CapabilitySet::empty(),
+            Vec::new(),
+        )
+        .with_goal_hub(hub.clone());
+
+    let sender = daemon.event_sender();
+    let (tx, mut rx) = unbounded_channel();
+    let handle = tokio::spawn(daemon.run(tx));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Webhook event — same Event::trigger shape the production POST /api/hooks/{name} handler
+    // produces, but injected here to decouple the test from the HTTP layer (which is covered
+    // by the hooks.rs integration tests).
+    sender
+        .send(Event::trigger(
+            "WebhookFired",
+            "webhook:nightly-backup",
+            "webhook:nightly-backup:t1",
+            liberado_common::EventPayload {
+                summary: Some("back up the vault".into()),
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+
+    let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for webhook reaction")
+        .expect("reaction channel closed");
+    assert_eq!(reaction.event.source, "webhook:nightly-backup");
+
+    let session_id = match reaction.outcome {
+        ReactionOutcome::Dispatched { session_id } => session_id,
+        other => panic!("expected Dispatched for webhook, got {}", other.label()),
+    };
+
+    let snap = hub.await_terminal(&session_id).await.expect("terminal");
+    let row = &snap.session;
+
+    assert_eq!(row.visibility, Visibility::Background);
+    assert_eq!(row.goal.description, "back up the vault");
+    assert_eq!(row.status, SessionStatus::Succeeded);
+    assert_eq!(
+        row.result.as_ref().unwrap().terminal,
+        TerminalKind::Succeeded
+    );
+    assert!(
+        row.result.as_ref().unwrap().summary.contains("webhook"),
+        "session summary must contain the webhook work: {:?}",
+        row.result.as_ref().unwrap().summary
+    );
+    assert_eq!(
+        row.goal.domain.as_str(),
+        DISPATCH_DOMAIN,
+        "webhook reaction sessions run under the dispatch domain"
+    );
+
+    handle.abort();
 }

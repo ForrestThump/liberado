@@ -1417,3 +1417,92 @@ async fn a_goal_on_a_domain_with_no_grant_is_refused_with_the_remedy() {
         .await;
     assert_eq!(ok_status, StatusCode::ACCEPTED, "body: {ok_body}");
 }
+
+/// L10 extended: fork through the HTTP surface also works for goal-derived sessions — not just
+/// chat-derived sessions. The `POST /api/sessions/{conv_id}/fork` endpoint is session-agnostic
+/// and should serve both origins equally.
+#[tokio::test]
+async fn l10_fork_via_http_works_for_goal_sessions_too() {
+    use liberado_provider::Message;
+
+    let harness = T1Harness::with_life_pack().await;
+    let sessions = harness.sessions.as_ref();
+
+    // Build a session like a goal would produce
+    let conv = sessions
+        .create_session(liberado_session_store::NewSession {
+            title: Some("t1-goal-fork".into()),
+            ..Default::default()
+        })
+        .await
+        .id;
+
+    let mut parent = None;
+    for i in 1u32..=3u32 {
+        let u = sessions
+            .append(
+                conv,
+                NewNode {
+                    parent_id: parent,
+                    author: Author::User,
+                    message: Message::user(&format!("goal-turn-{i}")),
+                },
+            )
+            .await
+            .unwrap();
+        let a = sessions
+            .append(
+                conv,
+                NewNode {
+                    parent_id: Some(u.id),
+                    author: Author::Assistant,
+                    message: Message::assistant(&format!("goal-reply-{i}")),
+                },
+            )
+            .await
+            .unwrap();
+        parent = Some(a.id);
+    }
+
+    let (status, body) = harness
+        .post_json(&format!("/api/sessions/{conv}/fork"), r#"{"after_turn":2}"#)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let fork: chat_client_contract::ForkResponse = serde_json::from_str(&body).unwrap();
+    assert_eq!(fork.kept_turns, 2);
+    let fork_id: Ulid = fork.id.parse().unwrap();
+
+    let fork_path = sessions.leaf_path(fork_id, None).await.unwrap();
+    let texts: Vec<&str> = fork_path
+        .iter()
+        .map(|n| n.message.content.as_str())
+        .collect();
+    assert_eq!(
+        texts,
+        vec!["goal-turn-1", "goal-reply-1", "goal-turn-2", "goal-reply-2"],
+        "fork of goal-derived session must hold only the first 2 turns"
+    );
+
+    // Continue original — fork must not grow (copy semantics)
+    let original_path = sessions.leaf_path(conv, None).await.unwrap();
+    let leaf = original_path.last().unwrap().id;
+    sessions
+        .append(
+            conv,
+            NewNode {
+                parent_id: Some(leaf),
+                author: Author::User,
+                message: Message::user("goal-turn-4-after-fork"),
+            },
+        )
+        .await
+        .unwrap();
+
+    let fork_after = sessions.leaf_path(fork_id, None).await.unwrap();
+    assert!(
+        !fork_after
+            .iter()
+            .any(|n| n.message.content == "goal-turn-4-after-fork"),
+        "continuing the original must not move the fork"
+    );
+}
