@@ -425,18 +425,18 @@ Expect **1.5–3 hours**. Run overnight if convenient; run during the day and ch
 periodically. Do NOT wrap in `Start-Process -NoNewWindow` or `timeout` — let the cargo
 process own its lifetime.
 
-### Phase 4 Results (to fill)
+### Phase 4 Results
 
 | Crate | Tests Before | Tests After | Catch Before | Catch After | Delta | Report |
 |-------|:------------:|:-----------:|:------------:|:-----------:|:-----:|--------|
 | coder-sandbox | 8 | 13 | —% | **97%** | — | `mutation-testing-report-coder-sandbox.md` |
 | coder-tools | 10 | 21 | —% | **93%** | — | `mutation-testing-report-coder-tools.md` |
-| daemon | 38 | 42 | —% | **51%** | — | `mutation-testing-report-daemon.md` |
-| server | 56 | 56 | —% | **27%** | — | `mutation-testing-report-server.md` |
+| daemon | 38 | 47† | —% | **51%** | — | `mutation-testing-report-daemon.md` |
+| server | 56 | 57†† | —% | **27%** | — | `mutation-testing-report-server.md` |
 | coder-agent | 84 (64+12+8) | 64 (lib only) | —% | **54%** | — | `mutation-testing-report-coder-agent.md` |
-| daemon | — | — | —% | —% | — | `mutation-testing-report-daemon.md` |
-| server | — | — | —% | —% | — | `mutation-testing-report-server.md` |
-| coder-agent | — | — | —% | —% | — | `mutation-testing-report-coder-agent.md` |
+
+† Includes 3 wiring tests (L9 webhook, notifier, proposal lifecycle) and 2 debounce boundary tests added after the mutant run.
+†† Includes 1 wiring test (L10 fork goal session) added after the mutant run.
 
 ### Survivor Triage Guide (repeated from Phase 1 for reference)
 
@@ -450,3 +450,163 @@ process own its lifetime.
 | Gate/completion logic | Test with mock reviewers + quorum math assertions |
 | Tool-call routing/policy | Test with `InvocationRecordingRuntime` asserting which tools fired |
 | Auth/zone-check guards | **High priority** — capability narrowing must be caught; add positive+negative arms |
+
+---
+
+## Phase 5: Post-Mutation Hardening Roadmap
+
+Seven ideas synthesized from the mutation testing program and an independent audit of
+`docs/failure-modes.md`. Ordered by leverage: impact × confidence × feasibility.
+
+### 1. Dual-Guard Conformance (dispatcher ↔ runtime)
+
+**ℹ️ As documented in** `failure-modes.md` Class 6 ("two things that should agree, nothing checks").
+
+The pre-flight guard pipeline (`dispatcher/src/guards.rs`) and the runtime enforcement guard
+(`executor/src/risk_gated.rs`) both check capability, consequence, zone-write-class, and
+magnitude — but *separately*, with different code paths and no test asserting they agree.
+A change to one that diverges from the other creates a silent enforcement gap.
+
+**Test:** One conformance test per guard rule that constructs identical inputs (same
+`ToolCall`, same `CapabilitySet`, same `McpDescriptor`, same goal text) and asserts both
+sides agree on: whether the call is permitted, the `BlockReason` when it is not, and the
+consequence classification for any MCP name.
+
+**Where:** `crates/executor/tests` or `crates/server/src/t1_conformance.rs`.
+
+**Cost:** ~60 lines of test code, ~30 minutes to write. Zero new deps.
+
+### 2. Provider Wire-Body Seam Tests
+
+**ℹ️ Would have caught the 2026-07-28 `json_schema` dropping bug.**
+
+`to_openai_request` (provider-openai-compat) translates internal `CompletionRequest` fields
+into the OpenAI wire format. The `MockProvider` accepts any shape, so nothing catches a
+field that went missing between internal struct and wire bytes. Only two seam tests exist
+today (both for `json_schema` vs `json_object`). The remaining ~20 fields (`max_tokens`,
+`stop`, `temperature`, `frequency_penalty`, `seed`, `user`, `tool_choice`, streaming,
+`response_format`, reasoning body) have no wire-assertion test.
+
+**Test:** For every field the `CompletionRequest` struct carries that ends up in the OpenAI
+request body, write one test that sets the field to a distinctive sentinel value, calls
+`to_openai_request`, inspects the output JSON, and asserts the field is present with the
+correct name and value.
+
+**Where:** `crates/provider/src/openai_compat.rs` (unit tests, not integration).
+
+**Cost:** ~20 tests, ~5 lines each. ~15 minutes to write. Runs on every `cargo test -p liberado-provider`.
+
+### 3. Concurrent Session-Lifecycle Stress Test
+
+**ℹ️ Mutation testing cannot catch races — concurrency is a coverage blind spot.**
+
+The hub's concurrent state management uses three mutex-protected maps (`cancels`, `inputs`,
+`park_requests`) with documented lock-ordering rules, a `run_session` background task that
+reads/writes the store concurrently with HTTP handlers, and a `park_requests` handoff that
+distinguishes park from cancel. No test drives multiple concurrent actions against the same
+session.
+
+**Test:** Spawn 3–5 tasks acting on the same session simultaneously: task A loops polling
+`snapshot`, task B repeatedly sends input, task C parks and resumes, task D cancels. Run
+for a fixed duration (e.g., 2 seconds), then assert the session reaches a terminal state
+with no panics, no hung tasks, and no inconsistent store state (e.g., `awaiting_input`
+true on a terminal session).
+
+**Where:** `crates/session/src/hub.rs` or `crates/server/src/t1_conformance.rs`.
+
+**Cost:** ~80 lines of test code. ~30 minutes to write. No new deps (uses existing hub API).
+
+### 4. Session State-Machine Invariant Guard
+
+**ℹ️ Adds the thing whose job is to notice when status semantics drift (Class 3/6 intersection).**
+
+The session lifecycle (`Pending → Running → {Succeeded, Failed, Cancelled, Parked}`) is
+implemented across `hub.rs`, `store.rs`, `run_session`, `send_input`, `cancel`, `park`,
+`resume`, and `replay_file`. Adding a new status variant requires finding every match arm,
+and Rust's exhaustiveness checking only helps when the match is on the enum itself — not on
+`==` chains or `matches!` macros. A new variant that forgets to clear `awaiting_input`
+would be invisible.
+
+**Test:** Write a `check_session_invariants(record: &GoalSessionRecord) -> Result<(), String>`
+function (test-only) that asserts:
+- A terminal session must not be `awaiting_input`
+- A `Parked` session must have `awaiting_input` true and `finished_at` `None`
+- A `Cancelled` session must have `finished_at` `Some` and `awaiting_input` false
+- No session with `Visibility::Background` can have a live input sender
+
+Call it after every state transition in the hub's tests and the T1 suite.
+
+**Where:** `crates/session/src/store.rs` (the function) + test call sites.
+
+**Cost:** ~30 lines for the function, ~10 call-site insertions, ~20 minutes.
+
+### 5. JSONL Rehydration Fuzzing
+
+**ℹ️ Crash-recovery is the sole path sessions survive a daemon restart. Only tested on clean logs.**
+
+`GoalSessionStore::open` rehydration and `SessionStore`'s JSONL replay are the sole paths
+by which sessions survive a daemon restart. The code tolerates a torn last line but has no
+corruption detection: a missing line mid-log, a duplicate `Start` line, a `Finish` without a
+`Start`, or a new `LogLine` variant from a future build are all silently ignored.
+
+**Test:** Write a known session log, then mutate it in controlled ways (truncate last N bytes,
+delete a random line, duplicate a line, insert a line with an unknown `t` value, scramble a
+JSON value within a line). Assert the rehydration always produces a valid `SessionInner`
+(never panics) and, critically, logs a warning when data loss occurs. The visible state must
+be *conservative* — e.g., a deleted `Finish` line should leave the session as `Failed`
+(coerced non-terminal), not `Succeeded` with a gap.
+
+**Where:** `crates/session/src/store.rs` (unit tests) + `crates/session-store/src/jsonl.rs`.
+
+**Cost:** ~60 lines of test code, ~30 minutes. No new deps.
+
+### 6. Negative-Case API Testing
+
+**ℹ️ Every endpoint returns 200/202 in the happy path; most have never been sent garbage.**
+
+`POST /api/goals` with malformed JSON → currently may 500. `POST /api/hooks/{name}` with
+wrong secret → currently returns 401 (correct, tested). But ~8 other endpoints lack a
+negative case. Adding them prevents the class of bug where a new handler maps
+`Result::Err` → 500 instead of the appropriate HTTP status.
+
+**Test:** For each endpoint, send: malformed JSON, extra fields, wrong types, missing required
+fields, nonexistent IDs (GET/POST on gone, park/cancel on never-started), and wrong HTTP
+method. Assert the response has the correct status code (400, 401, 404, 405, 409, 503) and
+a descriptive error message in the body.
+
+**Where:** `crates/server/src/t1_conformance.rs` or an `api_errors.rs` test module.
+
+**Cost:** ~20 lines per endpoint, ~20 endpoints = ~400 lines of test data altogether.
+~1 hour to write.
+
+### 7. `cargo audit` + `cargo deny` CI Gate
+
+**ℹ️ Infrastructure-level: prevents landing a dependency with a known RUSTSEC advisory.**
+
+Zero development time: add `cargo-deny` to the project's dev toolchain, add a `deny.toml`
+config, and add one CI step (`cargo deny check`). Blocks CI when a dependency has a known
+RUSTSEC advisory or a license violation.
+
+| Tool | Purpose | Config file |
+|------|---------|-------------|
+| `cargo deny` | RUSTSEC advisories, duplicate deps, license compliance | `deny.toml` (workspace root) |
+
+**Cost:** ~10 minutes setup. One-time effort. Runs in CI with no network except for advisory
+database fetch.
+
+---
+
+### Summary table
+
+| # | Idea | Leverage | Cost | Blind spot covered |
+|:-:|------|:--------:|:----:|--------------------|
+| 1 | Dual-guard conformance | Highest | ~30 min | Class 6 drift (dispatcher vs runtime) |
+| 2 | Provider wire-body seam tests | Very high | ~15 min | Silent field dropping |
+| 3 | Concurrent session stress test | High | ~30 min | Races, lock-ordering, torn reads |
+| 4 | Session state-machine invariant guard | High | ~20 min | Status semantics drift across 8 files |
+| 5 | JSONL rehydration fuzzing | Medium | ~30 min | Crash-recovery data loss |
+| 6 | Negative-case API testing | Medium | ~1 hour | 500s instead of 400s/401s/404s |
+| 7 | `cargo audit` + `cargo deny` CI gate | Medium | ~10 min | Known RUSTSEC advisories |
+
+**Total estimated effort: ~3 hours** for all seven items. None require a live model, a
+network call, or a real vault.
