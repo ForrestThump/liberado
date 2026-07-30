@@ -36,7 +36,7 @@ use crate::DispatchRequest;
 ///
 /// Priority order — most fundamental first, so the reported reason is the most actionable:
 /// capability gap → reaction-depth limit → confidence floor.
-pub(crate) fn evaluate(
+pub fn evaluate(
     decision: &DispatchDecision,
     req: &DispatchRequest,
     tuning: &DispatchTuning,

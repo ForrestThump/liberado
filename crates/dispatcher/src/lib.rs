@@ -16,7 +16,7 @@
 //! it is bounded on both sides — malformed output degrades to a safe `Clarify` rather than
 //! crashing (Decision 13), and the guards constrain the result regardless of what the model said.
 
-mod guards;
+pub mod guards;
 
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
