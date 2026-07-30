@@ -8,7 +8,14 @@
 //!   provenance), not what the runtime does once connected.
 //! - [`InvocationRecordingFactory`]/[`InvocationRecordingRuntime`] — a test cares what tool
 //!   invocations actually *reached* the runtime (e.g. proving a gated call never got there).
+//!
+//! Error simulation:
+//! - [`InvocationRecordingRuntime`] accepts per-tool error overrides via [`Self::with_error`] and a
+//!   default result via [`Self::with_default_result`].
+//! - [`FailingFactory`] always returns a [`RuntimeSetupError`] — for testing the orchestrator's
+//!   pool-creation failure path.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -57,9 +64,50 @@ impl RuntimeFactory for CallRecordingFactory {
 
 /// A runtime that records every `invoke` call — for tests asserting exactly which calls actually ran
 /// (e.g. approved-proposal execution, or that a gated call never reached the real tool).
-#[derive(Clone, Default)]
+///
+/// By default every invocation succeeds with `"ok"`. Call [`Self::with_default_result`] to change
+/// the default, or [`Self::with_error`] to make a specific tool name fail.
+#[derive(Clone)]
 pub struct InvocationRecordingRuntime {
     pub invoked: Arc<Mutex<Vec<ToolInvocation>>>,
+    default_result: Arc<Mutex<Result<String, String>>>,
+    per_tool: Arc<Mutex<HashMap<String, Result<String, String>>>>,
+}
+
+impl Default for InvocationRecordingRuntime {
+    fn default() -> Self {
+        Self {
+            invoked: Arc::default(),
+            default_result: Arc::new(Mutex::new(Ok("ok".to_string()))),
+            per_tool: Arc::default(),
+        }
+    }
+}
+
+impl InvocationRecordingRuntime {
+    /// Set the result for any tool invocation that does not match a per-tool override.
+    pub fn with_default_result(self, result: Result<String, String>) -> Self {
+        *self.default_result.lock().unwrap() = result;
+        self
+    }
+
+    /// Make a specific tool name return an error (or success). Overrides the default result.
+    pub fn with_error(self, tool: impl Into<String>, err: impl Into<String>) -> Self {
+        self.per_tool
+            .lock()
+            .unwrap()
+            .insert(tool.into(), Err(err.into()));
+        self
+    }
+
+    /// Make a specific tool name return a success result. Overrides the default result.
+    pub fn with_result(self, tool: impl Into<String>, result: impl Into<String>) -> Self {
+        self.per_tool
+            .lock()
+            .unwrap()
+            .insert(tool.into(), Ok(result.into()));
+        self
+    }
 }
 
 #[async_trait]
@@ -69,7 +117,11 @@ impl ToolRuntime for InvocationRecordingRuntime {
     }
     async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
         self.invoked.lock().unwrap().push(call.clone());
-        Ok("ok".to_string())
+        let per_tool = self.per_tool.lock().unwrap();
+        if let Some(result) = per_tool.get(&call.name) {
+            return result.clone();
+        }
+        self.default_result.lock().unwrap().clone()
     }
 }
 
@@ -88,6 +140,31 @@ impl RuntimeFactory for InvocationRecordingFactory {
         _provenance: WriteProvenance,
     ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
         Ok(Box::new(self.runtime.clone()))
+    }
+}
+
+/// A [`RuntimeFactory`] that always fails with a [`RuntimeSetupError`] — for testing the
+/// orchestrator's pool-creation failure path.
+pub struct FailingFactory {
+    error: String,
+}
+
+impl FailingFactory {
+    pub fn new(error: impl Into<String>) -> Self {
+        Self {
+            error: error.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl RuntimeFactory for FailingFactory {
+    async fn runtime_for(
+        &self,
+        _allowed_mcps: &[String],
+        _provenance: WriteProvenance,
+    ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+        Err(RuntimeSetupError(self.error.clone()))
     }
 }
 
@@ -133,5 +210,68 @@ mod tests {
         let recorded = rt.invoked.lock().unwrap();
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].name, "test");
+    }
+
+    #[tokio::test]
+    async fn recording_invoke_with_per_tool_error() {
+        let rt = InvocationRecordingRuntime::default()
+            .with_error("dangerous_tool", "permission denied");
+
+        let call = ToolInvocation {
+            id: "t3".into(),
+            name: "dangerous_tool".into(),
+            arguments: Value::Null,
+        };
+        let result = rt.invoke(&call).await;
+        assert_eq!(result, Err("permission denied".to_string()));
+    }
+
+    #[tokio::test]
+    async fn recording_invoke_with_default_error() {
+        let rt = InvocationRecordingRuntime::default()
+            .with_default_result(Err("transport down".to_string()));
+
+        let call = ToolInvocation {
+            id: "t4".into(),
+            name: "any_tool".into(),
+            arguments: Value::Null,
+        };
+        let result = rt.invoke(&call).await;
+        assert_eq!(result, Err("transport down".to_string()));
+    }
+
+    #[tokio::test]
+    async fn recording_invoke_per_tool_override_wins_over_default() {
+        let rt = InvocationRecordingRuntime::default()
+            .with_default_result(Err("transport down".to_string()))
+            .with_result("special_tool", "special ok");
+
+        let good = rt
+            .invoke(&ToolInvocation {
+                id: "g1".into(),
+                name: "special_tool".into(),
+                arguments: Value::Null,
+            })
+            .await;
+        assert_eq!(good, Ok("special ok".to_string()));
+
+        let bad = rt
+            .invoke(&ToolInvocation {
+                id: "b1".into(),
+                name: "other_tool".into(),
+                arguments: Value::Null,
+            })
+            .await;
+        assert_eq!(bad, Err("transport down".to_string()));
+    }
+
+    #[tokio::test]
+    async fn failing_factory_returns_runtime_setup_error() {
+        let factory = FailingFactory::new("MCP launch failed");
+        let result = factory.runtime_for(&[], WriteProvenance::human()).await;
+        match result {
+            Err(e) => assert!(e.0.contains("MCP launch failed")),
+            Ok(_) => panic!("expected error"),
+        }
     }
 }
