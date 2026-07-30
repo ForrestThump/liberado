@@ -678,4 +678,59 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
     }
+
+    #[test]
+    fn sanitize_draft_drops_incomplete_verifiers() {
+        let mut draft = GoalContractDraft {
+            description: "x".into(),
+            success_criteria: vec![],
+            verifiers: vec![
+                VerifierSpec::Command {
+                    id: "empty".into(),
+                    program: String::new(),
+                    args: vec![],
+                    env: Default::default(),
+                    timeout_secs: None,
+                    output_max_bytes: None,
+                    network: false,
+                },
+                VerifierSpec::PathsExist {
+                    id: "p".into(),
+                    paths: vec![],
+                },
+                VerifierSpec::GitNonemptyDiff { id: "diff".into() },
+            ],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        sanitize_draft(&mut draft);
+        assert_eq!(draft.verifiers.len(), 1);
+        assert_eq!(draft.verifiers[0].id(), "diff");
+    }
+
+    #[test]
+    fn validate_draft_content_contains_needs_fields() {
+        let draft = GoalContractDraft {
+            description: "x".into(),
+            success_criteria: vec![],
+            verifiers: vec![VerifierSpec::ContentContains {
+                id: "c".into(),
+                path: String::new(),
+                must_include: vec![String::new()],
+            }],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        assert!(validate_draft(&draft).is_err());
+    }
+
+    #[test]
+    fn node_test_profile_resolves() {
+        let profile = profile_verifiers("node-test");
+        assert!(profile.iter().any(|v| v.id() == "npm-test"));
+    }
 }

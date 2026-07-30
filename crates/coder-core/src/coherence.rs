@@ -479,4 +479,47 @@ mod tests {
         );
         assert!(found[0].message.contains("cargo-clippy"));
     }
+
+    #[test]
+    fn verifier_tokens_skips_flags_and_paths() {
+        let v = VerifierSpec::Command {
+            id: "check".into(),
+            program: "mypgm".into(),
+            args: vec![
+                "-v".into(),
+                "/etc/passwd".into(),
+                "lint".into(),
+                "C:\\foo".into(),
+            ],
+            env: Default::default(),
+            timeout_secs: None,
+            output_max_bytes: None,
+            network: false,
+        };
+        let tokens = verifier_tokens(&v);
+        assert!(tokens.contains(&"mypgm".into()));
+        assert!(tokens.contains(&"lint".into()));
+        assert!(!tokens.iter().any(|t| t.starts_with('-')));
+        assert!(!tokens.iter().any(|t| t.contains('/')));
+        assert!(!tokens.iter().any(|t| t.contains('\\')));
+    }
+
+    #[test]
+    fn verifier_tokens_removes_short_and_generic_tokens() {
+        let v = VerifierSpec::Command {
+            id: "custom_check".into(),
+            program: "npm".into(),
+            args: vec!["run".into(), "test".into(), "ab".into()],
+            env: Default::default(),
+            timeout_secs: None,
+            output_max_bytes: None,
+            network: false,
+        };
+        let tokens = verifier_tokens(&v);
+        // "run", "npm", "test" are all GENERIC; "ab" is <= 2 chars.
+        // Only "custom_check" (12 chars, not generic) survives.
+        assert!(tokens.contains(&"custom_check".into()));
+        assert!(!tokens.contains(&"run".into()));
+        assert!(!tokens.contains(&"ab".into()));
+    }
 }
