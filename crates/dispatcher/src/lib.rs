@@ -1114,8 +1114,7 @@ mod tests {
     #[tokio::test]
     async fn prompt_includes_vault_zones_when_writable() {
         let mut req = request(caps("tasks-mcp"), 0);
-        req.zone_write_classes =
-            vec![("tasks".into(), WriteClass::AgentWritable)];
+        req.zone_write_classes = vec![("tasks".into(), WriteClass::AgentWritable)];
         let mock = scripted(&execute_direct("tasks-mcp:add", 0.95));
         let dispatcher = Dispatcher::new(mock.clone(), DispatchTuning::default(), 4);
         dispatcher.dispatch(&req).await.unwrap();
@@ -1518,6 +1517,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_transport_error_propagates_to_dispatch_error() {
+        let mock = Arc::new(MockProvider::new("mock"));
+        mock.push_error(ProviderError::Transport("connection refused".into()));
+        let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
+
+        let err = dispatcher
+            .dispatch(&request(CapabilitySet::empty(), 0))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            DispatchError::Provider(ProviderError::Transport(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn provider_rate_limit_error_propagates_to_dispatch_error() {
+        let mock = Arc::new(MockProvider::new("mock"));
+        mock.push_error(ProviderError::RateLimited);
+        let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
+
+        let err = dispatcher
+            .dispatch(&request(CapabilitySet::empty(), 0))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            DispatchError::Provider(ProviderError::RateLimited)
+        ));
+    }
+
+    #[tokio::test]
     async fn high_confidence_guidance_short_circuits_classification() {
         // An empty-script mock would fail (MockExhausted) if classify() were ever called — proves
         // the short-circuit genuinely skips the LLM call, not just that it produces the same
@@ -1841,7 +1872,9 @@ mod tests {
             confidence: 0.9,
             rationale: "test".into(),
         };
-        dispatcher.record_outcome("review decisions", &decision).await;
+        dispatcher
+            .record_outcome("review decisions", &decision)
+            .await;
 
         let recorded = guidance.recorded.lock().unwrap();
         assert_eq!(recorded.len(), 1, "DispatchSubagent should be recorded");
@@ -1873,7 +1906,9 @@ mod tests {
             confidence: 0.9,
             rationale: "test".into(),
         };
-        dispatcher.record_outcome("review decisions", &decision).await;
+        dispatcher
+            .record_outcome("review decisions", &decision)
+            .await;
 
         assert!(
             guidance.recorded.lock().unwrap().is_empty(),
