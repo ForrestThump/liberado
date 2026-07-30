@@ -698,6 +698,11 @@ mod tests {
                     id: "p".into(),
                     paths: vec![],
                 },
+                VerifierSpec::ContentContains {
+                    id: "bad-cc".into(),
+                    path: String::new(),
+                    must_include: vec!["something".into()],
+                },
                 VerifierSpec::GitNonemptyDiff { id: "diff".into() },
             ],
             out_of_scope: vec![],

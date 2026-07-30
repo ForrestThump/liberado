@@ -213,18 +213,6 @@ fn duplicate_verifiers(draft: &GoalContractDraft) -> Vec<ContractFinding> {
 /// opaque, and nothing declares that it reads that file. What we *can* do is put the sentence in
 /// front of the human with the consequence spelled out.
 fn scope_names_a_file(draft: &GoalContractDraft) -> Vec<ContractFinding> {
-    let looks_like_a_path = |word: &str| {
-        let w =
-            word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '/' && c != '_');
-        (w.contains('/') || w.contains('.'))
-            && !w.ends_with('.')
-            && w.len() > 3
-            && w.chars().next().is_some_and(|c| c.is_alphanumeric())
-            // Not a sentence ("todos.", "e.g.") — a real filename has a plausible extension.
-            && w.rsplit('.').next().is_some_and(|ext| {
-                (2..=5).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric())
-            })
-    };
     draft
         .out_of_scope
         .iter()
@@ -240,6 +228,24 @@ fn scope_names_a_file(draft: &GoalContractDraft) -> Vec<ContractFinding> {
             )))
         })
         .collect()
+}
+
+/// A heuristic for spotting filename-like tokens in out-of-scope prose: the word contains a `/` or
+/// a `.` (but does not end with `.`), is longer than 3 chars, starts with an alphanumeric, and has
+/// a plausible 2-5 character ASCII extension after the last dot.
+///
+/// Extracted from the closure inside [`scope_names_a_file`] so boundary conditions (length exactly
+/// 3, extension edge cases) are directly unit-testable.
+fn looks_like_a_path(word: &str) -> bool {
+    let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '/' && c != '_');
+    (w.contains('/') || w.contains('.'))
+        && !w.ends_with('.')
+        && w.len() > 3
+        && w.chars().next().is_some_and(|c| c.is_alphanumeric())
+        // Not a sentence ("todos.", "e.g.") — a real filename has a plausible extension.
+        && w.rsplit('.').next().is_some_and(|ext| {
+            (2..=5).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        })
 }
 
 /// A `paths_exist` gate on a build artifact (`target/`, `node_modules/`, `.git/`) is fragile at
@@ -521,5 +527,23 @@ mod tests {
         assert!(tokens.contains(&"custom_check".into()));
         assert!(!tokens.contains(&"run".into()));
         assert!(!tokens.contains(&"ab".into()));
+    }
+
+    #[test]
+    fn looks_like_a_path_accepts_valid_filenames() {
+        assert!(looks_like_a_path("src/main.rs"));
+        assert!(looks_like_a_path("notes.md"));
+    }
+
+    #[test]
+    fn looks_like_a_path_rejects_short_names() {
+        assert!(!looks_like_a_path("a.b"), "3 chars — not > 3");
+        assert!(!looks_like_a_path("x.y"), "3 chars — not > 3");
+    }
+
+    #[test]
+    fn looks_like_a_path_rejects_end_of_sentence() {
+        assert!(!looks_like_a_path("todos."), "trailing dot is not a path");
+        assert!(!looks_like_a_path("e.g."), "trailing dot, generic ext/word");
     }
 }
