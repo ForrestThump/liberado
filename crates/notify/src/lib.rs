@@ -632,4 +632,117 @@ mod tests {
             .await
             .expect("a real send with real credentials must succeed");
     }
+
+    /// A notifier that only implements `notify` — tests the default impls for
+    /// `notify_proposal`, `notify_permission_request`, and `deliver_cron`.
+    struct NotifyOnlyNotifier;
+
+    #[async_trait]
+    impl Notifier for NotifyOnlyNotifier {
+        async fn notify(&self, message: &str) -> Result<(), NotifyError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn default_notify_proposal_delegates_to_notify() {
+        let n = NotifyOnlyNotifier;
+        assert!(n.notify_proposal("prop-1", "test").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn default_notify_permission_request_delegates_to_notify() {
+        let n = NotifyOnlyNotifier;
+        assert!(
+            n.notify_permission_request("prop-1", "request access to Work zone")
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn default_deliver_cron_delegates_to_notify() {
+        let n = NotifyOnlyNotifier;
+        assert!(n.deliver_cron("cron message").await.is_ok());
+    }
+
+    /// A recording [`MessagingChannel`] for testing [`ChannelNotifier`].
+    struct RecordingChannel {
+        sent: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl liberado_messaging::MessagingChannel for RecordingChannel {
+        fn name(&self) -> &str {
+            "test-recording"
+        }
+        async fn send_text(&self, msg: &str) -> Result<(), MessagingError> {
+            self.sent.lock().unwrap().push(msg.to_string());
+            Ok(())
+        }
+        async fn send_with_actions(
+            &self,
+            msg: &str,
+            _rows: &[Vec<ActionButton>],
+        ) -> Result<(), MessagingError> {
+            self.sent.lock().unwrap().push(msg.to_string());
+            Ok(())
+        }
+        async fn request_reply(&self, _prompt: &str) -> Result<String, MessagingError> {
+            Ok("reply-id".into())
+        }
+        async fn acknowledge(&self, _event_id: &str, _text: &str) -> Result<(), MessagingError> {
+            Ok(())
+        }
+        async fn receive(&self, _cursor: &mut String) -> Result<Vec<InboundEvent>, MessagingError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn channel_notifier_sends_via_inner_channel() {
+        let channel = Arc::new(RecordingChannel {
+            sent: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let sent = channel.sent.clone();
+        let notifier = ChannelNotifier::new(channel);
+
+        notifier.notify("hello").await.unwrap();
+        assert!(sent.lock().unwrap().iter().any(|m| m.contains("hello")));
+    }
+
+    #[tokio::test]
+    async fn channel_notifier_proposal_sends_with_buttons() {
+        let channel = Arc::new(RecordingChannel {
+            sent: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let sent = channel.sent.clone();
+        let notifier = ChannelNotifier::new(channel);
+
+        notifier
+            .notify_proposal("prop-1", "approve this")
+            .await
+            .unwrap();
+        assert!(sent.lock().unwrap().iter().any(|m| m.contains("approve")));
+    }
+
+    #[tokio::test]
+    async fn channel_notifier_permission_sends_with_buttons() {
+        let channel = Arc::new(RecordingChannel {
+            sent: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let sent = channel.sent.clone();
+        let notifier = ChannelNotifier::new(channel);
+
+        notifier
+            .notify_permission_request("perm-1", "needs access")
+            .await
+            .unwrap();
+        assert!(
+            sent.lock()
+                .unwrap()
+                .iter()
+                .any(|m| m.contains("needs access"))
+        );
+    }
 }
