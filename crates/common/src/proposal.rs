@@ -409,6 +409,21 @@ pub enum ProposalNoteError {
     Yaml(#[from] serde_yaml::Error),
 }
 
+/// A pending proposal with canned values, for use by tests that need a valid `Proposal` without
+/// repeating construction boilerplate.
+pub fn sample_proposal() -> Proposal {
+    Proposal::pending(
+        "prop-sig",
+        "corr-sig",
+        "liberado",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "email:send".into(),
+            args: serde_json::json!({ "to": "boss@example.com" }),
+        }]),
+        "rationale",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,19 +530,6 @@ mod tests {
         let back: Proposal = serde_json::from_str(&json).unwrap();
         assert_eq!(p, back);
         assert_eq!(back.status, ProposalStatus::Pending);
-    }
-
-    fn sample_proposal() -> Proposal {
-        Proposal::pending(
-            "prop-sig",
-            "corr-sig",
-            "liberado",
-            ProposedAction::ToolCalls(vec![ToolCall {
-                tool: "email:send".into(),
-                args: serde_json::json!({ "to": "boss@example.com" }),
-            }]),
-            "rationale",
-        )
     }
 
     #[test]
@@ -653,5 +655,14 @@ mod tests {
         let signer_2 = ProposalSigner::new(key);
         let signed = signer_1.sign(sample_proposal());
         assert!(signer_2.verify(&signed));
+    }
+
+    #[test]
+    fn set_status_updates_status_in_place() {
+        let signer = ProposalSigner::random();
+        let mut signed = signer.sign(sample_proposal());
+        assert_eq!(signed.status, ProposalStatus::Pending);
+        signed.set_status(ProposalStatus::Approved);
+        assert_eq!(signed.status, ProposalStatus::Approved);
     }
 }
