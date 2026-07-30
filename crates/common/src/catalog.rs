@@ -767,8 +767,11 @@ mod tests {
             "write_note",
             &serde_json::json!({"path": "//foo/bar.md"}),
         );
-        assert_eq!(result, WriteTarget::Zone("foo".into()),
-            "empty segments must be skipped to find the real zone: got {result:?}");
+        assert_eq!(
+            result,
+            WriteTarget::Zone("foo".into()),
+            "empty segments must be skipped to find the real zone: got {result:?}"
+        );
     }
 
     /// When purge_expired_degraded removes entries, it should send a notification. The
@@ -791,5 +794,28 @@ mod tests {
             rx.has_changed().unwrap(),
             "purge must notify subscribers when entries are removed"
         );
+    }
+
+    /// Freeze time, mark degraded, advance by exactly TTL — verifies the half-open boundary.
+    #[test]
+    fn degraded_entry_purged_at_exact_ttl_boundary() {
+        let catalog = CapabilityCatalog::new();
+        catalog.register(sample_descriptor("weather"));
+
+        let t0 = std::time::Instant::now();
+        crate::clock::test_freeze_at(t0);
+        catalog.mark_degraded("weather");
+        assert!(catalog.is_degraded("weather"));
+
+        let ttl = Duration::from_secs(5);
+        catalog.set_degraded_half_open_ttl(ttl);
+        crate::clock::test_advance(ttl);
+
+        assert!(
+            !catalog.is_degraded("weather"),
+            "must be purged at exact TTL boundary"
+        );
+
+        crate::clock::test_thaw();
     }
 }
