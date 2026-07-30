@@ -210,3 +210,191 @@ async fn wall_clock_limit_exhausts_at_exact_non_zero_boundary() { ... }
 | String/getter constants | ~20 | `label()`, `as_str()`, `summary()` return static strings — functionally identical to their mutants |
 | Builder/constructor returns | ~8 | `Default::default()` or `Ok(Default::default())` in constructors — semantically identical |
 | Serde visitors | ~6 | `Visitor::expecting`, `visit_*` methods — trait impls where return value replacement is equivalent |
+
+---
+
+## Phase 4: Remaining Crate Hardening (5 crates)
+
+Ordered by estimated build cost (workspace deps × source files × test count).
+
+### Pre-check: cargo-mutants timeout flags
+
+```
+cargo mutants --help | rg timeout
+```
+
+Output shows:
+- `--timeout N` — **multiplier** (relative to baseline test time), not absolute seconds
+- `--minimum-test-timeout N` — absolute floor in seconds (lower bound on auto-set time)
+- `--build-timeout N` / `--build-timeout-multiplier N` — same for build phase
+
+**Recommendation:** start with `--timeout 3.0` (3× baseline) and
+`--minimum-test-timeout 30` (no test gets less than 30s). Raise the floor for
+crates with heavier integration tests (daemon 60s, server 90s) — see table below.
+This ensures short tests aren't killed by a tight multiplier while hung tests
+time out within a reasonable bound.
+
+The overall process has no built-in timeout; it runs until all mutants are evaluated.
+To let it run for hours, ensure the shell/terminal session won't time out (no `timeout`
+wrapper, or explicitly set a large value).
+
+| Crate | Src Files | Wkspc Deps | Tests | Mutants (est.) | Per-Mutant Build | Timeout Flags |
+|-------|:---------:|:----------:|:-----:|:--------------:|:----------------:|---------------|
+| **coder-sandbox** | 1 | 1 | 9 | ~30–50 | ~10–20s | `--timeout 3.0 --minimum-test-timeout 30` |
+| **coder-tools** | 1 | 4 | 10 | ~40–80 | ~15–30s | `--timeout 3.0 --minimum-test-timeout 30` |
+| **daemon** | 8 | 13 | 39 | ~80–150 | ~30–60s | `--timeout 4.0 --minimum-test-timeout 60` |
+| **server** | 14 | 21 | 63* | ~100–200 | ~45–90s | `--timeout 5.0 --minimum-test-timeout 90` |
+| **coder-agent** | 16 | 8 | 53† | 200+ | ~20–60s | `--timeout 3.0 --minimum-test-timeout 30` |
+
+\* Server tests include 16 `t1_conformance` + 12 hooks + 12 goals + 7 chat + 5 cron-delivery + 4 sticky + 5 others
+† coder-agent includes 30 unit tests + 23 integration tests (`completion_gate_e2e` 12, `mock_intake_e2e` 8, `live_scaffold` 3)
+
+### Checklist
+
+Each step includes the exact command with crate-specific timeout flags. Avoid `--in-place` on Windows.
+
+#### 1. coder-sandbox — workspace isolation primitives
+
+| Step | What | Status |
+|------|------|:------:|
+| 1a | Baseline: `cargo test -p liberado-coder-sandbox` | ⬜ |
+| 1b | Run: `cargo mutants -p liberado-coder-sandbox --cap-lints true --timeout 3.0 --minimum-test-timeout 30` | ⬜ |
+| 1c | Triage survivors | ⬜ |
+| 1d | Patch actionable misses | ⬜ |
+| 1e | Re-run to verify catch rate | ⬜ |
+| 1f | Report: `docs/mutation-testing-report-coder-sandbox.md` | ⬜ |
+
+**What's inside** (`crates/coder-sandbox/src/lib.rs`): `HostWorkspace`, `DockerWorkspace`,
+`PathPolicy`, shadow-git checkpoint scaffold, workspace-relative path validation.
+
+**Key risks**: None — single file, fast tests, no network or I/O beyond already-mocked filesystem calls.
+
+#### 2. coder-tools — the 10 coding tools
+
+| Step | What | Status |
+|------|------|:------:|
+| 2a | Baseline: `cargo test -p liberado-coder-tools` | ⬜ |
+| 2b | Run: `cargo mutants -p liberado-coder-tools --cap-lints true --timeout 3.0 --minimum-test-timeout 30` | ⬜ |
+| 2c | Triage survivors | ⬜ |
+| 2d | Patch actionable misses | ⬜ |
+| 2e | Re-run to verify catch rate | ⬜ |
+| 2f | Report: `docs/mutation-testing-report-coder-tools.md` | ⬜ |
+
+**What's inside** (`crates/coder-tools/src/lib.rs`): `list_files`, `search_text`, `read_file`,
+`write_file`, `edit_file`, `apply_patch`, `git_status`, `git_diff`, `run_command`, `validate`.
+
+**Key risks**: `run_command` and `git_diff` spawn child processes. Mutants that break the
+subprocess path may hang. The `--timeout 3.0 --minimum-test-timeout 30` flags catch
+hangs. The existing 10 tests (`tool_schemas_are_non_empty`, path validation, etc.) are fast.
+
+#### 3. daemon — composition root (cron + proposals + sessions)
+
+| Step | What | Status |
+|------|------|:------:|
+| 3a | Baseline: `cargo test -p liberado-daemon` | ⬜ |
+| 3b | Run: `cargo mutants -p liberado-daemon --cap-lints true --timeout 4.0 --minimum-test-timeout 60` | ⬜ |
+| 3c | Triage survivors | ⬜ |
+| 3d | Patch actionable misses | ⬜ |
+| 3e | Re-run to verify catch rate | ⬜ |
+| 3f | Report: `docs/mutation-testing-report-daemon.md` | ⬜ |
+
+**What's inside** (`crates/daemon/src/`): `lib.rs` (29 tests — daemon bootstrap, pool routing,
+schedule wiring), `proposals.rs` (7 tests — expiry reaper, proposal lifecycle),
+`debounce.rs` (3 tests). 39 tests total across 8 source files.
+
+**Key risks**: The daemon test in `lib.rs` constructs a full daemon with mock providers and
+runs schedules. Mutants in scheduling/dispatch logic could cause deadlocks. 13 workspace
+deps means moderate compile time per mutant. `--timeout 4.0 --minimum-test-timeout 60`
+gives slower tests enough room while capping hung ones.
+
+**Why it matters**: The daemon is the composition root where config, policy, cron, and
+dispatcher meet. Bugs here are the Class 6 kind — two things that should agree don't —
+and they manifest as silent failures, not panic stacks.
+
+#### 4. server — HTTP surface + T1 conformance + hooks + goals
+
+| Step | What | Status |
+|------|------|:------:|
+| 4a | Baseline: `cargo test -p liberado-server` | ⬜ |
+| 4b | Run: `cargo mutants -p liberado-server --cap-lints true --timeout 5.0 --minimum-test-timeout 90` | ⬜ |
+| 4c | Triage survivors | ⬜ |
+| 4d | Patch actionable misses | ⬜ |
+| 4e | Re-run to verify catch rate | ⬜ |
+| 4f | Report: `docs/mutation-testing-report-server.md` | ⬜ |
+
+**What's inside** (`crates/server/src/`): `t1_conformance.rs` (16 tests — Tier 1 live
+conformance L1–L10), `api/goals.rs` (12), `api/chat.rs` (7), `hooks.rs` (12),
+`cron_delivery.rs` (5), `sticky.rs` (4). 63 tests across 14 source files.
+
+**Key risks**: `t1_conformance` spawns a real `liberado-server` on a temp port with temp
+dirs and a `MockProvider`. These are the heaviest tests in the workspace — they exercise
+the full HTTP→dispatch→execute path. Mutants that break the HTTP surface may produce
+misleading survivors (test setup fails, mutant counted as "caught" only because nothing
+ran — not because the test correctly asserted the wrong result).
+
+21 workspace deps means the longest per-mutant compile time in this phase. `--timeout 5.0
+--minimum-test-timeout 90` accommodates slow T1 tests. Estimate: 100–200 mutants ×
+45–90s = 75 min to 5 hours total. Worth running overnight.
+
+#### 5. coder-agent — intake → planner → worker → verifier → critic pipeline
+
+**Retry of the timed-out Phase 3 run.** The 200+ mutant surface plus 53 tests (some
+integration-grade) made the default run infeasible. Strategy: short per-mutant timeout
+so hung tests don't accumulate, but let the process run for hours to cover the full surface.
+
+| Step | What | Status |
+|------|------|:------:|
+| 5a | Baseline: `cargo test -p liberado-coder-agent` | ⬜ |
+| 5b | Run: `cargo mutants -p liberado-coder-agent --cap-lints true --timeout 3.0 --minimum-test-timeout 30` | ⬜ |
+| 5c | If any test hangs consistently, `#[ignore]` it and re-run | ⬜ |
+| 5d | Triage survivors | ⬜ |
+| 5e | Patch actionable misses | ⬜ |
+| 5f | Re-run to verify catch rate | ⬜ |
+| 5g | Report: `docs/mutation-testing-report-coder-agent.md` | ⬜ |
+
+**What's inside** (`crates/coder-agent/src/`): 16 source files — `lib.rs`, `completion_gate.rs`
+(5 tests), `gates.rs` (2), `planner.rs` (1), `intake_session.rs` (1), `repair_feedback.rs`
+(10), `progress.rs` (5), `session_pack/tests.rs` (4), plus 23 integration tests in
+`tests/`. The Phase 3 coverage expansion improved `repair_feedback.rs` from 59.8%→89.0%
+but mutants were not re-run.
+
+**Key risks**:
+- `completion_gate_e2e.rs` (12 integration tests) exercises the full gatekeeper+quorum
+  flow with mock reviewers. Mutants in gate quorum logic may produce infinite retry loops.
+- `mock_intake_e2e.rs` (8 tests) runs the intake→contract pipeline end-to-end.
+- `live_scaffold.rs` (3 tests) is `#[ignore]`d — shouldn't affect the run but verify.
+- `--timeout 3.0 --minimum-test-timeout 30` gives each mutant 3× its baseline runtime with a
+  30-second floor. A hung test (e.g., budget loop never exits) will time out at ~30–60s.
+  Timeout ≠ caught, so a high miss rate from timeouts needs investigation, but it's
+  better than the process dying after 15 minutes with zero results.
+- Ensure the shell has no external timeout: `$env:TIMEOUT = $null`.
+
+**Estimated runtime**: 200 mutants. If most tests complete near their baseline (0.5–2s),
+each mutant takes ~30s floor + <5s compile × 200 = ~100 minutes. If integration tests
+routinely hit the 3.0 multiplier (~15s actual), runtime climbs to ~90 minutes.
+Expect **1.5–3 hours**. Run overnight if convenient; run during the day and check
+periodically. Do NOT wrap in `Start-Process -NoNewWindow` or `timeout` — let the cargo
+process own its lifetime.
+
+### Phase 4 Results (to fill)
+
+| Crate | Tests Before | Tests After | Catch Before | Catch After | Delta | Report |
+|-------|:------------:|:-----------:|:------------:|:-----------:|:-----:|--------|
+| coder-sandbox | — | — | —% | —% | — | `mutation-testing-report-coder-sandbox.md` |
+| coder-tools | — | — | —% | —% | — | `mutation-testing-report-coder-tools.md` |
+| daemon | — | — | —% | —% | — | `mutation-testing-report-daemon.md` |
+| server | — | — | —% | —% | — | `mutation-testing-report-server.md` |
+| coder-agent | — | — | —% | —% | — | `mutation-testing-report-coder-agent.md` |
+
+### Survivor Triage Guide (repeated from Phase 1 for reference)
+
+| Category | Action |
+|----------|--------|
+| Tracing/diagnostic (`tracing::info!`, `warn!`, `debug!`) | Ignore — need log-capture framework; zero behavioral impact |
+| String/getter constants (`label()`, `as_str()`) | Ignore — different wording, same semantics; false positive |
+| Builder/constructor defaults | Ignore — `Ok(Default::default())` identical to `Ok(Foo::default())` |
+| IO/path — `config_dir`, `read_to_string`, `create_dir_all` | Document as infrastructure-gated; file under `coverage-gaps.md` |
+| Budget/loop arithmetic | Test with `FrozenClock` + `Budget::new(N).with_wall_clock(D)` |
+| Gate/completion logic | Test with mock reviewers + quorum math assertions |
+| Tool-call routing/policy | Test with `InvocationRecordingRuntime` asserting which tools fired |
+| Auth/zone-check guards | **High priority** — capability narrowing must be caught; add positive+negative arms |
