@@ -97,6 +97,10 @@ pub struct RiskGatedToolRuntime {
     /// failed — then the chat reply is the only signal and must NOT be suppressed. Defaults to a
     /// private, unshared flag (a runtime nobody wired one into simply never reports a deferral).
     notified_deferral: Arc<AtomicBool>,
+    /// Set `true` by tests to simulate `create_dir_all` failing on the next proposal downgrade.
+    pub fail_next_create_dir: Arc<AtomicBool>,
+    /// Set `true` by tests to simulate `write` failing on the next proposal downgrade.
+    pub fail_next_write: Arc<AtomicBool>,
 }
 
 impl RiskGatedToolRuntime {
@@ -141,6 +145,8 @@ impl RiskGatedToolRuntime {
             pool_name: pool_name.into(),
             notifier: None,
             notified_deferral: Arc::new(AtomicBool::new(false)),
+            fail_next_create_dir: Arc::new(AtomicBool::new(false)),
+            fail_next_write: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -504,6 +510,9 @@ impl RiskGatedToolRuntime {
         let note = proposal.to_note();
 
         // Create the proposals directory if it doesn't exist.
+        if self.fail_next_create_dir.swap(false, Ordering::Relaxed) {
+            return Err("simulated create_dir_all failure — proposal was NOT saved".into());
+        }
         if let Err(e) = tokio::fs::create_dir_all(&proposals_subdir).await {
             tracing::error!(
                 path = %proposals_subdir.display(),
@@ -518,6 +527,9 @@ impl RiskGatedToolRuntime {
             ));
         }
 
+        if self.fail_next_write.swap(false, Ordering::Relaxed) {
+            return Err("simulated write failure — proposal was NOT saved".into());
+        }
         if let Err(e) = tokio::fs::write(&proposal_path, &note).await {
             tracing::error!(
                 path = %proposal_path.display(),
