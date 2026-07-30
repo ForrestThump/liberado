@@ -2628,7 +2628,7 @@ mod tests {
     /// `budget_failed_report` hardcodes "turns" regardless of which resource exhausted (see
     /// docs/coverage-gaps.md).
     #[tokio::test]
-    #[ignore = "FrozenClock cannot inject time mid-loop iteration"]
+    #[ignore = "FrozenClock limitation + budget_failed_report bug (see docs/coverage-gaps.md)"]
     async fn wall_clock_limit_exhausts_at_exact_non_zero_boundary() {
         let t0 = std::time::Instant::now();
         liberado_common::clock::test_freeze_at(t0);
