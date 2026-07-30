@@ -23,6 +23,30 @@ use liberado_common::WriteProvenance;
 use liberado_executor::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
 use liberado_provider::{ToolDef, ToolInvocation};
 
+/// A configurable notifier for testing proposal-downgrade alert paths.
+pub struct MockNotifier {
+    pub ok: bool,
+}
+
+impl Default for MockNotifier {
+    fn default() -> Self {
+        Self { ok: true }
+    }
+}
+
+#[async_trait]
+impl liberado_notify::Notifier for MockNotifier {
+    async fn notify(&self, _message: &str) -> Result<(), liberado_notify::NotifyError> {
+        if self.ok {
+            Ok(())
+        } else {
+            Err(liberado_notify::NotifyError(
+                "mock notification failure".into(),
+            ))
+        }
+    }
+}
+
 /// A runtime with an empty catalog that always succeeds with a fixed reply — for tests that don't
 /// care what the runtime does, only that the orchestrator reaches it.
 pub struct NoopRuntime;
