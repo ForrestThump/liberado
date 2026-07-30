@@ -4,13 +4,13 @@
 //! Call [`now`] everywhere you would call [`std::time::Instant::now`]. In production it
 //! passes straight through; in `#[cfg(test)]` it respects a thread-local freeze set by tests.
 
-use std::sync::Mutex;
 use std::time::Instant;
 
 /// State that is only present in test builds.
 #[cfg(test)]
 mod frozen {
     use super::*;
+    use std::sync::Mutex;
     use std::sync::LazyLock;
 
     static FROZEN: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
