@@ -1,5 +1,54 @@
 # Mutation Testing Plan — Crate Run Order & Results
 
+## Summary — All Phases Complete
+
+| Phase | Focus | Crates | Mutants | Caught | **Catch Rate** | Tests Added |
+|:-----:|-------|:------:|:-------:|:------:|:--------------:|:-----------:|
+| 1 | Primary hardening | dispatcher, common, config-loader, session, config, executor, orchestrator, provider | ~1,500 | — | **~79–97%** | 78 |
+| 2 | Mock harness | test-support, common (clock), executor (risk_gate), provider (mock) | —* | — | — | — |
+| 3 | Coverage expansion | coder-core, coder-agent, notify, mcp | —* | — | — | 21 |
+| 4 | Remaining hardening | coder-sandbox, coder-tools, daemon, server, coder-agent | 809 | 349 | **43%** | 20 |
+
+\* Phase 2/3 focused on coverage and infrastructure, not mutation runs. Phase 3 coder-agent
+mutants timed out (retried in Phase 4 with `-- --lib`).
+
+### Phase 4 Details
+
+| Crate | Tests | Viable | Caught | Catch Rate | Key Issue |
+|-------|:-----:|:------:|:------:|:----------:|-----------|
+| coder-sandbox | 13 | 35 | 34 | **97%** | Single file, well tested |
+| coder-tools | 21 | 59 | 55 | **93%** | 11 new tests patched 14 survivors |
+| daemon | 47 | 67 | 34 | **51%** | 16 TIMEOUTs (24%) — event pipeline hangs |
+| server | 57 | 184 | 50 | **27%** | 60% of survivors in telegram.rs (live API) |
+| coder-agent | 64 (lib) | 328 | 176 | **54%** | Ran with `-- --lib`; mock_intake_e2e hangs in cargo-mutants env |
+
+### End-to-End Wiring Tests Added (T1 Conformance + Daemon)
+
+| Test | Path | What it proves |
+|------|------|----------------|
+| `l9_webhook_event_becomes_joinable_dispatched_session` | Webhook → daemon → dispatch → hub → session | Event→daemon→hub path is source-agnostic |
+| `l9_webhook_session_triggers_notifier_deliver_cron` | Cron → daemon → hub → notifier.deliver_cron | Notifier delivery confirmation — notifier fires when session reaches terminal |
+| `l9_cron_event_becomes_joinable_dispatched_session` (existing) | Cron → daemon → dispatch → hub → session | L9 proved at daemon level |
+| `daemon_hub_proposal_lifecycle_applies_grant` | Vault write → vault watch → proposal change → execute → archive → session grant | Full proposal lifecycle with grant application |
+| `l10_fork_via_http_works_for_goal_sessions_too` | `POST /api/sessions/{id}/fork` | Fork endpoint works for goal-derived conversations |
+| `l10_fork_holds_prefix_while_original_continues` (existing) | `POST /api/sessions/{id}/fork` | Fork copy semantics — continuing the original must not move the fork |
+| Debounce boundary tests (2 added) | `zero_quiet_time_drains_immediately`, `large_quiet_time_does_not_overflow` | Debounce edge cases — zero/very-long quiet durations |
+
+All run in CI — no network, no API key, no real vault.
+
+### Gaps Evaluated & Skipped
+
+| Gap | Reason skipped |
+|-----|---------------|
+| Session profile → derived grant at runtime | `resolve_session_profile` well-tested in `config-loader/src/model/builder.rs`; switching at runtime has implementation gaps per `session-profiles-plan.md` §7 |
+| Chat turn → face → delegate → dispatch → exec SSE | Requires full `ChatTurnHarness` (~200 line harness, 5+ mock providers, SSE streaming); core logic tested in `chat.rs` (6 unit tests) |
+
+### Real Bug Found
+
+`budget_failed_report` ignores `exhausted_name` (executor/src/lib.rs:1079). Always reports
+"turns" even when wall-clock or token budget actually exhausted. Documented at
+`docs/coverage-gaps.md:95-146`.
+
 ## Phase 1: Primary Mutation Hardening (8 crates)
 
 Run crates in ascending estimated time. A crate's speed is driven by the size of its workspace
