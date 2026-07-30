@@ -550,12 +550,107 @@ mod tests {
         });
         let req =
             CompletionRequest::new(vec![Message::user("hi")]).with_json_schema(schema.clone());
-
         let body = to_openai_request("test-model", &req, &empty_name_map());
         assert_eq!(body["response_format"]["type"], "json_schema");
         assert_eq!(body["response_format"]["json_schema"]["strict"], true);
         assert_eq!(body["response_format"]["json_schema"]["schema"], schema);
     }
+
+#[cfg(test)]
+mod wire_body_seam_tests {
+    use super::*;
+    use crate::{CompletionRequest, Message, ResponseFormat, Role, ToolDef};
+
+    fn req() -> CompletionRequest {
+        CompletionRequest::new(vec![Message {
+            role: Role::User, content: "hello".into(),
+            tool_calls: Vec::new(), tool_call_id: None,
+        }])
+    }
+
+    #[test]
+    fn model_present() {
+        let body = to_openai_request("gpt-4", &req(), &ToolNameMap::default());
+        assert_eq!(body["model"], "gpt-4");
+    }
+
+    #[test]
+    fn messages_present() {
+        let body = to_openai_request("m", &req(), &ToolNameMap::default());
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"], "hello");
+    }
+
+    #[test]
+    fn tools_present_when_non_empty() {
+        let mut r = req();
+        r.tools = vec![ToolDef {
+            name: "vault:read".into(), description: "read".into(),
+            parameters: serde_json::json!({}),
+        }];
+        let nm = build_tool_name_map(&r.tools);
+        let body = to_openai_request("m", &r, &nm);
+        assert!(body["tools"].is_array());
+        assert!(body["tools"][0]["function"]["name"].as_str().unwrap().contains("vault"));
+    }
+
+    #[test]
+    fn tools_absent_when_empty() {
+        let body = to_openai_request("m", &req(), &ToolNameMap::default());
+        assert!(body.get("tools").is_none());
+    }
+
+    #[test]
+    fn temperature_present_when_set() {
+        let mut r = req();
+        r.temperature = Some(0.3);
+        let body = to_openai_request("m", &r, &ToolNameMap::default());
+        let temp = body["temperature"].as_f64().unwrap();
+        assert!((temp - 0.3).abs() < 0.01);
+    }
+
+    #[test]
+    fn temperature_absent_when_none() {
+        assert!(to_openai_request("m", &req(), &ToolNameMap::default())
+            .get("temperature").is_none());
+    }
+
+    #[test]
+    fn max_tokens_present_when_set() {
+        let mut r = req();
+        r.max_tokens = Some(4096);
+        let body = to_openai_request("m", &r, &ToolNameMap::default());
+        assert_eq!(body["max_tokens"], 4096);
+    }
+
+    #[test]
+    fn max_tokens_absent_when_none() {
+        assert!(to_openai_request("m", &req(), &ToolNameMap::default())
+            .get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn json_schema_when_constraining() {
+        let mut r = req();
+        r.response_format = ResponseFormat::Json {
+            schema: serde_json::json!({"type":"object","properties":{"x":{"type":"string"}}}),
+        };
+        let body = to_openai_request("m", &r, &ToolNameMap::default());
+        assert_eq!(body["response_format"]["type"], "json_schema");
+        assert_eq!(body["response_format"]["json_schema"]["strict"], true);
+        assert!(body["response_format"]["json_schema"]["schema"]["properties"]["x"]["type"] == "string");
+    }
+
+    #[test]
+    fn json_object_when_empty_schema() {
+        let mut r = req();
+        r.response_format = ResponseFormat::Json {
+            schema: serde_json::json!({"type":"object"}),
+        };
+        let body = to_openai_request("m", &r, &ToolNameMap::default());
+        assert_eq!(body["response_format"]["type"], "json_object");
+    }
+}
 
     /// ...and a shapeless one must not, or a backend enforcing `strict` refuses the request outright
     /// — a louder failure than the under-constrained reply it would be replacing.
