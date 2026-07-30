@@ -218,7 +218,7 @@ impl CapabilityCatalog {
                 mcps: HashMap::new(),
                 degraded: HashMap::new(),
                 degraded_ttl: DEFAULT_DEGRADED_HALF_OPEN,
-                last_updated: Instant::now(),
+                last_updated: crate::clock::now(),
             })),
             updated: tx,
         }
@@ -239,7 +239,7 @@ impl CapabilityCatalog {
     pub fn register(&self, mcp: McpDescriptor) {
         let mut state = self.inner.write().unwrap_or_else(|e| e.into_inner());
         state.mcps.insert(mcp.name.clone(), mcp);
-        state.last_updated = Instant::now();
+        state.last_updated = crate::clock::now();
         let _ = self.updated.send(());
     }
 
@@ -249,7 +249,7 @@ impl CapabilityCatalog {
         let mut state = self.inner.write().unwrap_or_else(|e| e.into_inner());
         state.mcps.remove(name);
         state.degraded.remove(name);
-        state.last_updated = Instant::now();
+        state.last_updated = crate::clock::now();
         let _ = self.updated.send(());
     }
 
@@ -263,8 +263,8 @@ impl CapabilityCatalog {
         if !state.mcps.contains_key(name) {
             return;
         }
-        state.degraded.insert(name.to_string(), Instant::now());
-        state.last_updated = Instant::now();
+        state.degraded.insert(name.to_string(), crate::clock::now());
+        state.last_updated = crate::clock::now();
         let _ = self.updated.send(());
     }
 
@@ -272,7 +272,7 @@ impl CapabilityCatalog {
     pub fn mark_healthy(&self, name: &str) {
         let mut state = self.inner.write().unwrap_or_else(|e| e.into_inner());
         if state.degraded.remove(name).is_some() {
-            state.last_updated = Instant::now();
+            state.last_updated = crate::clock::now();
             let _ = self.updated.send(());
         }
     }
@@ -280,7 +280,7 @@ impl CapabilityCatalog {
     /// Drop degraded entries whose mark Instant is older than `degraded_ttl` (half-open).
     /// Returns whether any entry was removed (and subscribers were notified).
     fn purge_expired_degraded(&self) -> bool {
-        let now = Instant::now();
+        let now = crate::clock::now();
         {
             let state = self.inner.read().unwrap_or_else(|e| e.into_inner());
             let any_expired = state
@@ -298,7 +298,7 @@ impl CapabilityCatalog {
             .degraded
             .retain(|_, at| now.saturating_duration_since(*at) < ttl);
         if state.degraded.len() != before {
-            state.last_updated = Instant::now();
+            state.last_updated = crate::clock::now();
             let _ = self.updated.send(());
             true
         } else {
@@ -732,5 +732,64 @@ mod tests {
             &[("reviews".to_string(), WriteClass::ProposalOnly)],
         );
         assert_eq!(restriction, None);
+    }
+
+    #[test]
+    fn consequence_catalog_returns_all_consequences() {
+        let catalog = CapabilityCatalog::new();
+        let d1 = McpDescriptor {
+            name: "weather".into(),
+            consequence: Consequence::ReadOnly,
+            ..sample_descriptor("weather")
+        };
+        let d2 = McpDescriptor {
+            name: "email".into(),
+            consequence: Consequence::External,
+            ..sample_descriptor("email")
+        };
+        catalog.register(d1);
+        catalog.register(d2);
+
+        let catalog_result = catalog.consequence_catalog();
+        assert_eq!(catalog_result.len(), 2);
+        assert!(catalog_result.contains(&("weather".into(), Consequence::ReadOnly)));
+        assert!(catalog_result.contains(&("email".into(), Consequence::External)));
+    }
+
+    #[test]
+    fn write_target_empty_segment_is_not_a_zone() {
+        let d = path_addressed_descriptor();
+        // path starting with `//` → first split segments are empty.
+        // The correct `&&` skips empties to find "foo". A `||` mutation would match the
+        // empty string first and return `Zone("")` — a zone we cannot authorize.
+        let result = write_target(
+            &d,
+            "write_note",
+            &serde_json::json!({"path": "//foo/bar.md"}),
+        );
+        assert_eq!(result, WriteTarget::Zone("foo".into()),
+            "empty segments must be skipped to find the real zone: got {result:?}");
+    }
+
+    /// When purge_expired_degraded removes entries, it should send a notification. The
+    /// `!=` → `==` mutation on line 300 inverts this check.
+    #[test]
+    fn degraded_purge_sends_notification_on_expiry() {
+        let catalog = CapabilityCatalog::new();
+        catalog.register(sample_descriptor("weather"));
+        catalog.mark_degraded("weather");
+
+        // Subscribe after mark_degraded — rx sees the latest value.
+        let rx = catalog.subscribe();
+
+        catalog.set_degraded_half_open_ttl(Duration::ZERO);
+        // is_degraded calls purge_expired_degraded internally.
+        // With correct `!=`, it sends a notification after removing entries.
+        let _ = catalog.is_degraded("weather");
+
+        assert!(
+            rx.has_changed().unwrap(),
+            "purge must notify subscribers when entries are removed"
+        );
     }
 }

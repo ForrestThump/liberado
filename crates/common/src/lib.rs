@@ -35,6 +35,7 @@
 
 pub mod capability;
 pub mod catalog;
+pub mod clock;
 pub mod dispatch;
 pub mod error;
 pub mod event;

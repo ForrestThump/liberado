@@ -231,6 +231,10 @@ All additions are to existing crates. No new crate needed.
 ### Phase 2: Clock control (~1 hour)
 
 - [ ] **2a.** `FrozenClock` — `Instant` override for exact-time boundary tests (degraded TTL, budget exhaustion, TTFT)
+  - **Partially done:** `clock` module added to `liberado-common` with `test_freeze_at`/`test_thaw`/`test_advance`.
+  - `common/catalog.rs` call sites updated to use `crate::clock::now()`.
+  - **Blocker:** `provider` does not depend on `liberado-common`, so TTFT recording cannot use the frozen clock without adding the dependency.
+  - **Remaining work:** update `executor`'s `run_started` → `clock::now()` and add boundary tests for `WallClockLimit` / degraded TTL.
 
 ### Phase 3: Filesystem abstraction (~2 hours)
 
