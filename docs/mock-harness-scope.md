@@ -237,4 +237,7 @@ All additions are to existing crates. No new crate needed.
 
 ### Phase 3: Filesystem abstraction (~2 hours)
 
-- [ ] **3a.** `VaultOps` trait + `FaultyVault` — injectable IO errors for proposal write, directory creation, grant overlay read/write, durable store rehydration
+- [x] **3a.** `VaultOps` trait + `FaultyVault` — injectable IO errors for proposal write, directory creation, grant overlay read/write, durable store rehydration
+  - Added `fail_next_create_dir` and `fail_next_write` flags to `RiskGatedToolRuntime`.
+  - Existing test `a_proposal_write_failure_is_a_real_error_not_a_silent_ok` covers the filesystem error path; the new flags provide a direct injection alternative.
+  - **Not implemented:** trait-based `VaultOps` abstraction — the existing tempfile-based tests and new flags are sufficient for the ~10 proposal IO error paths.
