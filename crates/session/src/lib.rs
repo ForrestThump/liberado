@@ -11,6 +11,7 @@
 mod completion_gate;
 mod event;
 mod goal;
+pub use goal::check_session_invariants;
 mod hub;
 mod life_demo;
 mod record_store;

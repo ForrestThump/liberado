@@ -3266,4 +3266,7 @@ async fn concurrent_park_and_cancel_do_not_deadlock() {
         cancelled.load(std::sync::atomic::Ordering::SeqCst),
         "pack must have seen cancellation signal"
     );
+    // State-machine invariants must hold after terminal.
+    liberado_session::check_session_invariants(&snap.session)
+        .expect("session invariants violated after concurrent cancel");
 }
