@@ -222,11 +222,11 @@ All additions are to existing crates. No new crate needed.
 
 ### Phase 1: Consolidate error-capable mocks (~2 hours)
 
-- [ ] **1a.** Scriptable `MockProvider` errors — add `ScriptEntry` enum, `push_error()`, update `complete()` to return `ProviderError` variants from script queue
-- [ ] **1b.** Error-capable `InvocationRecordingRuntime` in `test-support` — consolidate existing `MockInner`/`MockToolRuntime` patterns with configurable per-tool errors
-- [ ] **1c.** `FailingFactory` in `test-support` — `RuntimeFactory` that returns `RuntimeSetupError`
-- [ ] **1d.** `MockNotifier` in `test-support` — move existing from `executor/src/risk_gated.rs`
-- [ ] **1e.** Export `sample_proposal()` from `liberado-common` — make existing test helper public
+- [x] **1a.** Scriptable `MockProvider` errors — add `ScriptEntry` enum, `push_error()`, update `complete()` to return `ProviderError` variants from script queue
+- [x] **1b.** Error-capable `InvocationRecordingRuntime` in `test-support` — consolidate existing `MockInner`/`MockToolRuntime` patterns with configurable per-tool errors
+- [x] **1c.** `FailingFactory` in `test-support` — `RuntimeFactory` that returns `RuntimeSetupError`
+- [x] **1d.** `MockNotifier` in `test-support` — move existing from `executor/src/risk_gated.rs`
+- [x] **1e.** Export `sample_proposal()` from `liberado-common` — make existing test helper public
 
 ### Phase 2: Clock control (~1 hour)
 
