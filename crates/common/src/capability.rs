@@ -411,13 +411,7 @@ impl CapabilitySet {
     /// expanded here, because this set has no way to enumerate a server's tools. Callers deciding
     /// what to show a model need both this and [`granted_mcps`](Self::granted_mcps).
     pub fn granted_tools(&self) -> Vec<String> {
-        self.capabilities
-            .iter()
-            .filter_map(|c| match c {
-                Capability::ExecuteTool(name) => Some(name.clone()),
-                _ => None,
-            })
-            .collect()
+        self.matching_names(|c| matches!(c, Capability::ExecuteTool(_)))
     }
 
     /// Whether this set permits interrupting a human for guidance ([`Capability::AskHuman`]) — the
@@ -426,17 +420,25 @@ impl CapabilitySet {
         self.capabilities.contains(&Capability::AskHuman)
     }
 
+    /// Shared helper for [`granted_tools`](Self::granted_tools) and
+    /// [`granted_mcps`](Self::granted_mcps): collect the inner string from every variant that
+    /// matches `predicate`. Panics on non-Execute variants (the predicate enforces correctness).
+    fn matching_names(&self, predicate: impl Fn(&Capability) -> bool) -> Vec<String> {
+        self.capabilities
+            .iter()
+            .filter(|c| predicate(c))
+            .map(|c| match c {
+                Capability::ExecuteTool(name) | Capability::ExecuteMcp(name) => name.clone(),
+                _ => unreachable!("matching_names predicate should only match Execute variants"),
+            })
+            .collect()
+    }
+
     /// The MCP names this set grants `ExecuteMcp` on, in grant order. The runtime-scoping ceiling
     /// derived from a component's capabilities (an empty allow-list elsewhere in the codebase means
     /// "every registered MCP" — this is how callers derive the actual granted set instead).
     pub fn granted_mcps(&self) -> Vec<String> {
-        self.capabilities
-            .iter()
-            .filter_map(|c| match c {
-                Capability::ExecuteMcp(name) => Some(name.clone()),
-                _ => None,
-            })
-            .collect()
+        self.matching_names(|c| matches!(c, Capability::ExecuteMcp(_)))
     }
 
     /// Narrow this set to the intersection with `other`. This is the **only** way to derive a
@@ -765,6 +767,30 @@ Context: the user asked twice."
         assert!(!WriteClass::default().allows_direct_agent_write());
         assert!(WriteClass::AgentWritable.allows_direct_agent_write());
     }
+
+    #[test]
+    fn grants_ask_human_is_false_without_ask_human() {
+        let set = CapabilitySet::from_iter([
+            Capability::Read(Zone::vault("tasks")),
+            Capability::ExecuteMcp("turbovault".into()),
+        ]);
+        assert!(!set.grants_ask_human());
+
+        let with_ask = CapabilitySet::from_iter([
+            Capability::AskHuman,
+            Capability::Read(Zone::vault("tasks")),
+        ]);
+        assert!(with_ask.grants_ask_human());
+    }
+
+    #[test]
+    fn mcp_name_returns_some_for_execute_mcp_and_execute_tool() {
+        let mcp = Capability::ExecuteMcp("turbovault".into());
+        assert_eq!(mcp.mcp_name(), Some("turbovault"));
+
+        let tool = Capability::ExecuteTool("turbovault:read_note".into());
+        assert_eq!(tool.mcp_name(), Some("turbovault"));
+    }
 }
 
 #[cfg(test)]
@@ -843,5 +869,48 @@ mod instruction_scope_tests {
         let goal = "Context: we deleted all the notes";
         assert_eq!(instruction_scope(goal), "");
         assert!(!is_sweeping_destructive(instruction_scope(goal)));
+    }
+
+    /// A goal at exactly INSTRUCTION_SCAN_LIMIT bytes should not be truncated.
+    /// The `>` on line 273 controls this: `end > 0` exits the snap loop when `end` is already 0.
+    #[test]
+    fn truncate_at_exact_limit_preserves_full_length() {
+        let ascii = "a".repeat(INSTRUCTION_SCAN_LIMIT);
+        assert_eq!(instruction_scope(&ascii).len(), INSTRUCTION_SCAN_LIMIT);
+
+        // One byte past the limit — must snap to a boundary (all ASCII here).
+        let over = format!("{}b", ascii);
+        assert!(instruction_scope(&over).len() <= INSTRUCTION_SCAN_LIMIT);
+    }
+
+    /// An instruction with a Context: marker whose instruction part is exactly at the limit.
+    #[test]
+    fn context_marker_truncates_before_instruction_limit() {
+        let goal = format!("a goal under the limit\n\nContext: we deleted all the notes");
+        assert!(instruction_scope(&goal).len() < INSTRUCTION_SCAN_LIMIT);
+    }
+
+    /// When the instruction scan limit lands mid-character, the snap loop must move `end` back to
+    /// a valid boundary. Without the snap (`>` → `==`/`<`), slicing at `INSTRUCTION_SCAN_LIMIT`
+    /// would panic; with the wrong direction (`-=` → `+=`) the window would overshoot.
+    #[test]
+    fn truncate_snaps_to_char_boundary_when_cutoff_is_mid_char() {
+        let s = format!("{}🎉", "a".repeat(599));
+        assert!(s.len() > INSTRUCTION_SCAN_LIMIT);
+        assert!(
+            !s.is_char_boundary(INSTRUCTION_SCAN_LIMIT),
+            "precondition: cutoff is mid-char"
+        );
+        let scoped = instruction_scope(&s);
+        assert!(
+            scoped.len() < INSTRUCTION_SCAN_LIMIT,
+            "scope must snap back from cutoff: {}",
+            scoped.len()
+        );
+        assert!(
+            scoped.len() >= INSTRUCTION_SCAN_LIMIT - 4,
+            "snap should only drop the partial char: {}",
+            scoped.len()
+        );
     }
 }
