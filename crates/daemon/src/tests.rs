@@ -2664,3 +2664,181 @@ async fn l9_webhook_event_becomes_joinable_dispatched_session() {
 
     handle.abort();
 }
+
+/// L9 extended: notifier delivery confirmation — a webhook-triggered session calls
+/// `Notifier::deliver_cron` with the session's terminal summary once it completes.
+#[tokio::test]
+async fn l9_webhook_session_triggers_notifier_deliver_cron() {
+    use liberado_common::{DispatchAction, DispatchDecision};
+    use liberado_config_loader::DispatchTuning;
+    use liberado_dispatch_pack::DispatchPack;
+    use liberado_executor::{
+        RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime,
+    };
+    use liberado_notify::Notifier;
+    use liberado_orchestrator::Orchestrator;
+    use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
+    use liberado_session::{GoalSessionHub, GoalSessionStore, SessionStatus};
+    use std::sync::Arc;
+
+    struct L9NotifyRuntime;
+    #[async_trait::async_trait]
+    impl ToolRuntime for L9NotifyRuntime {
+        fn catalog(&self) -> Vec<ToolDef> { Vec::new() }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".into())
+        }
+    }
+    struct L9NotifyFactory;
+    #[async_trait::async_trait]
+    impl RuntimeFactory for L9NotifyFactory {
+        async fn runtime_for(
+            &self,
+            _allowed_mcps: &[String],
+            _provenance: WriteProvenance,
+        ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+            Ok(Box::new(L9NotifyRuntime))
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingNotifier {
+        calls: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+    #[async_trait::async_trait]
+    impl Notifier for RecordingNotifier {
+        async fn notify(&self, _message: &str) -> Result<(), liberado_notify::NotifyError> {
+            Ok(())
+        }
+        async fn deliver_cron(&self, message: &str) -> Result<(), liberado_notify::NotifyError> {
+            self.calls.lock().unwrap().push(message.to_string());
+            Ok(())
+        }
+    }
+
+    let recorded_calls: Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let notifier = Arc::new(RecordingNotifier {
+        calls: recorded_calls.clone(),
+    });
+
+    let (daemon, _dir) = temp_daemon().await;
+
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: Vec::new(),
+        },
+        confidence: 0.95,
+        rationale: "notify task".into(),
+    };
+    let dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "dispatch",
+            [CompletionResponse::text(
+                serde_json::to_string(&decision).unwrap(),
+            )],
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    let orchestrator = Orchestrator::new(
+        Arc::new(MockProvider::with_script(
+            "exec",
+            [CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "c",
+                SUBMIT_REPORT_TOOL,
+                serde_json::json!({ "outcome": "succeeded", "summary": "notified task done" }),
+            )])],
+        )),
+        L9NotifyFactory,
+        CapabilitySet::empty(),
+        Vec::new(), Vec::new(), Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    );
+
+    let pack = DispatchPack::new(
+        Arc::new(CapabilityCatalog::new()),
+        Vec::new(),
+        1,
+        std::env::temp_dir(),
+    )
+    .with_pool("default", dispatcher, orchestrator);
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(Arc::new(pack));
+    let hub = Arc::new(hub);
+
+    let grant_dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "unused",
+            Vec::<CompletionResponse>::new(),
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    let daemon = daemon
+        .with_dispatcher(
+            grant_dispatcher,
+            Arc::new(CapabilityCatalog::new()),
+            CapabilitySet::empty(),
+            Vec::new(),
+        )
+        .with_goal_hub(hub.clone())
+        .with_notifier(notifier);
+
+    let sender = daemon.event_sender();
+    let (tx, mut rx) = unbounded_channel();
+    let handle = tokio::spawn(daemon.run(tx));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    sender
+        .send(Event::trigger(
+            "CronFired",
+            "cron:notify-test",
+            "cron:notify-test:t1",
+            liberado_common::EventPayload {
+                summary: Some("verify notifier delivery".into()),
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+
+    let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for reaction")
+        .expect("reaction channel closed");
+
+    let session_id = match reaction.outcome {
+        ReactionOutcome::Dispatched { session_id } => session_id,
+        other => panic!("expected Dispatched, got {}", other.label()),
+    };
+
+    let snap = hub.await_terminal(&session_id).await.expect("terminal");
+    assert_eq!(
+        snap.session.status,
+        SessionStatus::Succeeded,
+        "notifier-test session should succeed, got {:?}: result={:?}",
+        snap.session.status,
+        snap.session.result
+    );
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let recorded = recorded_calls.lock().unwrap();
+    assert_eq!(
+        recorded.len(),
+        1,
+        "deliver_cron must be called exactly once, got {:?}",
+        *recorded
+    );
+    assert!(
+        recorded[0].contains("notify-test"),
+        "notifier message must contain the schedule name, got: {:?}",
+        recorded[0]
+    );
+
+    handle.abort();
+}
