@@ -1374,7 +1374,8 @@ async fn daemon_executes_an_approved_proposal() {
             args: serde_json::json!({ "summary": "test task" }),
         }]),
         "a test proposal",
-    );
+    )
+    .with_requested_grant(liberado_common::Capability::Write(liberado_common::Zone::vault("tasks")));
     let mut proposal = signer.sign(proposal);
     proposal.set_status(ProposalStatus::Approved);
     std::fs::write(proposals_dir.join("approved.md"), proposal.to_note()).unwrap();
@@ -1416,6 +1417,134 @@ async fn daemon_executes_an_approved_proposal() {
     );
     let parsed = Proposal::from_note(&contents).unwrap();
     assert_eq!(parsed.status, ProposalStatus::Done);
+
+    handle.abort();
+}
+
+/// Full lifecycle through the hub path: vault watch → handle_proposal_change → execute
+/// → archive → grant. Unlike `daemon_executes_an_approved_proposal` (which uses the direct
+/// orchestrator path), this test attaches a hub so the session grant is applied.
+#[tokio::test]
+async fn daemon_hub_proposal_lifecycle_applies_grant() {
+    use liberado_common::{
+        GrantScope, Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall,
+        session_grants, DEFAULT_POOL,
+    };
+    use liberado_executor::{
+        RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime,
+    };
+    use liberado_orchestrator::Orchestrator;
+    use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
+    use liberado_session::{GoalSessionHub, GoalSessionStore};
+    use std::sync::Arc;
+
+    struct LpRuntime;
+    #[async_trait::async_trait]
+    impl ToolRuntime for LpRuntime {
+        fn catalog(&self) -> Vec<ToolDef> { Vec::new() }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".into())
+        }
+    }
+    struct LpFactory;
+    #[async_trait::async_trait]
+    impl RuntimeFactory for LpFactory {
+        async fn runtime_for(
+            &self,
+            _allowed_mcps: &[String],
+            _provenance: liberado_common::WriteProvenance,
+        ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+            Ok(Box::new(LpRuntime))
+        }
+    }
+
+    let signer = ProposalSigner::random();
+    let orch = Orchestrator::new(
+        Arc::new(MockProvider::with_script(
+            "mock",
+            [CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "c",
+                SUBMIT_REPORT_TOOL,
+                serde_json::json!({ "outcome": "succeeded", "summary": "proposal lifecycle" }),
+            )])],
+        )),
+        LpFactory,
+        CapabilitySet::empty(),
+        Vec::new(), Vec::new(), Vec::new(),
+        std::env::temp_dir(),
+        signer.clone(),
+        "default",
+    );
+
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(Arc::new(liberado_session::LifeOpsDemoRunner));
+    let hub = Arc::new(hub);
+
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon
+        .with_debounce(Duration::from_millis(80))
+        .with_orchestrator(orch)
+        .with_proposal_signer(signer.clone())
+        .with_goal_hub(hub.clone());
+
+    let proposals_dir = dir.path().join("proposals");
+    std::fs::create_dir_all(&proposals_dir).unwrap();
+
+    let (tx, mut rx) = unbounded_channel();
+    let handle = tokio::spawn(daemon.run(tx));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let mut proposal = Proposal::pending(
+        "vault-change:lifecycle:1",
+        "vault-change:lifecycle:1",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "lifecycle test" }),
+        }]),
+        "proposal lifecycle test",
+    )
+    .with_requested_grant(liberado_common::Capability::Write(liberado_common::Zone::vault("lifecycle")));
+    proposal.pool = Some(DEFAULT_POOL.to_string());
+    proposal.approved_scope = Some(GrantScope::Session);
+    let mut proposal = signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+    std::fs::write(proposals_dir.join("lifecycle.md"), proposal.to_note()).unwrap();
+
+    let _reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for reaction")
+        .expect("reaction channel closed");
+
+    // Grant applied.
+    let grant = session_grants::session_grant(DEFAULT_POOL);
+    assert!(
+        !grant.capabilities.is_empty(),
+        "hub lifecycle: grant must be non-empty, got {grant:?}"
+    );
+    assert!(
+        grant.contains(&liberado_common::Capability::Write(liberado_common::Zone::vault("lifecycle"))),
+        "hub lifecycle: grant must include Write(vault/\"lifecycle\"): {grant:?}"
+    );
+
+    // Proposal archived.
+    let archived = proposals_dir.join("archive/approved/lifecycle.md");
+    let mut found = false;
+    for _ in 0..50 {
+        if archived.exists() {
+            found = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(found, "proposal must be archived at {archived:?}");
+    assert!(
+        !proposals_dir.join("lifecycle.md").exists(),
+        "archived proposal must be removed from active proposals dir"
+    );
+    let archived_proposal =
+        Proposal::from_note(&std::fs::read_to_string(&archived).unwrap()).unwrap();
+    assert_eq!(archived_proposal.status, ProposalStatus::Done);
 
     handle.abort();
 }
