@@ -185,4 +185,15 @@ mod tests {
         let body = with_context("UTC", "do the thing").unwrap();
         assert!(body.contains("do the thing"));
     }
+
+    /// The FromStr impl delegates to UserTimezone::parse. This test goes through the trait method
+    /// to catch mutations that replace `from_str` with `Ok(Default::default())`.
+    #[test]
+    fn from_str_rejects_unknown_zone() {
+        use std::str::FromStr;
+        assert!(UserTimezone::from_str("Not/AZone").is_err());
+        assert!(UserTimezone::from_str("").is_err());
+        // A known zone round-trips correctly.
+        assert!(UserTimezone::from_str("UTC").is_ok());
+    }
 }

@@ -2515,4 +2515,54 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("no MCP"));
     }
+
+    #[test]
+    fn vault_delivery_path_accepts_valid() {
+        assert_eq!(vault_delivery_path("zone/name.md").unwrap(), "zone/name.md");
+        assert_eq!(
+            vault_delivery_path("/zone/name.md").unwrap(),
+            "zone/name.md"
+        );
+    }
+
+    #[test]
+    fn vault_delivery_path_rejects_bare_filename() {
+        assert!(vault_delivery_path("name.md").is_err());
+    }
+
+    #[test]
+    fn vault_delivery_path_rejects_empty_segments() {
+        assert!(vault_delivery_path("zone//name.md").is_err());
+    }
+
+    #[test]
+    fn looks_like_a_document_accepts_at_threshold() {
+        let body = format!("# {}", "x".repeat(MIN_DELIVERED_DOCUMENT_BYTES - 2));
+        assert_eq!(body.len(), MIN_DELIVERED_DOCUMENT_BYTES);
+        assert!(looks_like_a_document(&body).is_ok());
+    }
+
+    #[test]
+    fn looks_like_a_document_rejects_below_threshold() {
+        let text = "x".repeat(MIN_DELIVERED_DOCUMENT_BYTES - 1);
+        assert!(looks_like_a_document(&text).is_err());
+    }
+
+    #[test]
+    fn looks_like_a_document_accepts_bullets() {
+        let body = format!(
+            "{}\n- point one\n- point two\n- point three",
+            "x".repeat(MIN_DELIVERED_DOCUMENT_BYTES)
+        );
+        assert!(looks_like_a_document(&body).is_ok());
+    }
+
+    #[test]
+    fn looks_like_a_document_accepts_numbered_list() {
+        let body = format!(
+            "{}\n1. first\n1. second\n1. third",
+            "x".repeat(MIN_DELIVERED_DOCUMENT_BYTES)
+        );
+        assert!(looks_like_a_document(&body).is_ok());
+    }
 }

@@ -493,4 +493,38 @@ mod tests {
         assert!(topology.report_sink.is_none());
         assert!(validate_merged_config(&config(topology, Policy::default())).is_ok());
     }
+
+    /// An MCP with default_zone set but no per-tool zones — `||` on line 106 requires only one of
+    /// the two to be present; `&&` would demand both.
+    #[test]
+    fn default_zone_alone_satisfies_zone_requirement() {
+        let mut topology = topology_with_mcp("turbovault");
+        topology.mcps[0].writes_vault = None;
+        topology.mcps[0].default_zone = Some("tasks".into());
+        assert!(validate_merged_config(&config(topology, Policy::default())).is_ok());
+    }
+
+    /// A report sink with an empty path_arg should fail even when content_arg is valid. The `||`
+    /// on line 173 catches this; `&&` would let it through.
+    #[test]
+    fn report_sink_empty_path_arg_is_refused() {
+        let mut topology = topology_with_vault();
+        topology.report_sink = Some(ReportSinkConfig {
+            path_arg: "".into(),
+            content_arg: "content".into(),
+            ..sink("turbovault", "write_note")
+        });
+        assert!(validate_merged_config(&config(topology, Policy::default())).is_err());
+    }
+
+    #[test]
+    fn report_sink_empty_content_arg_is_refused() {
+        let mut topology = topology_with_vault();
+        topology.report_sink = Some(ReportSinkConfig {
+            path_arg: "path".into(),
+            content_arg: "".into(),
+            ..sink("turbovault", "write_note")
+        });
+        assert!(validate_merged_config(&config(topology, Policy::default())).is_err());
+    }
 }

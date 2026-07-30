@@ -1144,4 +1144,49 @@ transport = { kind = "stdio", command = "tasks-mcp", args = [] }
             "the base zone's protection must not be downgraded by the overlay"
         );
     }
+
+    #[test]
+    fn has_any_config_file_returns_true_for_single_file() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "topology.toml", "");
+        assert!(has_any_config_file(dir.path()));
+    }
+
+    #[test]
+    fn merge_overlay_into_appends_zones_and_grants() {
+        let mut policy = Policy::default();
+        let overlay = Policy {
+            zones: vec![ZonePolicy {
+                zone: "sandbox".into(),
+                write_class: WriteClass::AgentWritable,
+            }],
+            grants: vec![Grant {
+                component: "agent".into(),
+                capabilities: vec![Capability::Write(liberado_common::Zone::vault("sandbox"))],
+            }],
+            ..Policy::default()
+        };
+        merge_overlay_into(&mut policy, overlay);
+        assert!(policy.zones.iter().any(|z| z.zone == "sandbox"));
+        assert!(policy.grants.iter().any(|g| g.component == "agent"));
+    }
+
+    #[test]
+    fn append_grant_to_overlay_at_zone_dedup() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("grants.overlay.toml");
+        let cap = Capability::Write(liberado_common::Zone::vault("Work"));
+
+        // First append creates the zone and grant.
+        let changed = append_grant_to_overlay_at(&path, "agent", &cap).unwrap();
+        assert!(changed, "first append should be a change");
+
+        // Read back: zone should be declared exactly once.
+        let overlay = load_grants_overlay_at(&path);
+        assert_eq!(
+            overlay.zones.iter().filter(|z| z.zone == "Work").count(),
+            1,
+            "zone must not be duplicated on re-append"
+        );
+    }
 }

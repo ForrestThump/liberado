@@ -397,4 +397,55 @@ mod tests {
     fn exec_mode_defaults_to_await() {
         assert_eq!(ExecMode::default(), ExecMode::Await);
     }
+
+    #[test]
+    fn depth_is_normal_true_for_normal() {
+        assert!(Depth::Normal.is_normal());
+        assert!(!Depth::Shallow.is_normal());
+        assert!(!Depth::Deep.is_normal());
+    }
+
+    #[test]
+    fn delivery_is_summarize_true_for_summarize() {
+        assert!(Delivery::Summarize.is_summarize());
+        assert!(
+            !Delivery::Vault {
+                path: "x.md".into()
+            }
+            .is_summarize()
+        );
+    }
+
+    #[test]
+    fn dispatch_action_display_matches_label() {
+        let ed = DispatchAction::ExecuteDirect {
+            seed_calls: vec![],
+            relevant_mcps: vec![],
+        };
+        let ds = DispatchAction::DispatchSubagent {
+            goal: "x".into(),
+            capabilities: CapabilitySet::empty(),
+            allowed_mcps: vec![],
+            success_criteria: vec![],
+            artifact_target: None,
+            model: None,
+            correlation_id: "".into(),
+            delivery: Delivery::Summarize,
+            depth: Depth::Normal,
+        };
+        let cl = DispatchAction::Clarify {
+            questions: vec!["?".into()],
+            what_blocked: crate::BlockReason::Ambiguous,
+        };
+        assert_eq!(ed.to_string(), "ExecuteDirect");
+        assert_eq!(ds.to_string(), "DispatchSubagent");
+        assert_eq!(cl.to_string(), "Clarify");
+    }
+
+    #[test]
+    fn bare_tool_name_strips_prefix() {
+        assert_eq!(bare_tool_name("mcp:tool"), "tool");
+        assert_eq!(bare_tool_name("bare_tool"), "bare_tool");
+        assert_eq!(bare_tool_name("a:b:c"), "b:c");
+    }
 }

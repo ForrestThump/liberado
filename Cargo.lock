@@ -3985,6 +3985,7 @@ dependencies = [
  "async-trait",
  "liberado-common",
  "liberado-executor",
+ "liberado-notify",
  "liberado-provider",
  "serde_json",
  "tokio",

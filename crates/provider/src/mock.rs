@@ -60,7 +60,10 @@ impl MockProvider {
 
     /// Queue another response.
     pub fn push(&self, response: CompletionResponse) {
-        self.scripted.lock().unwrap().push_back(ScriptEntry::Ok(response));
+        self.scripted
+            .lock()
+            .unwrap()
+            .push_back(ScriptEntry::Ok(response));
     }
 
     /// Queue an error to be returned on a subsequent `complete` call.
@@ -68,7 +71,10 @@ impl MockProvider {
     /// Use this to test transport failures, rate limiting, empty responses, or invalid
     /// requests without needing real network conditions.
     pub fn push_error(&self, error: ProviderError) {
-        self.scripted.lock().unwrap().push_back(ScriptEntry::Err(error));
+        self.scripted
+            .lock()
+            .unwrap()
+            .push_back(ScriptEntry::Err(error));
     }
 
     /// Number of scripted responses not yet consumed.

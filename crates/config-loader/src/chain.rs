@@ -354,4 +354,14 @@ mod tests {
             "expected Io error, got: {err}"
         );
     }
+
+    #[test]
+    fn push_adds_source() {
+        let mut loader = ChainLoader::new();
+        assert!(loader.is_empty());
+        loader.push(Box::new(InlineSource::some("key = 1", "pushed")));
+        assert!(!loader.is_empty());
+        let value = loader.load_value().unwrap();
+        assert!(value.is_some(), "pushed source should produce content");
+    }
 }

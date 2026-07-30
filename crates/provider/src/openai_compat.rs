@@ -756,4 +756,84 @@ mod tests {
     fn parse_models_response_missing_data_is_empty() {
         assert_eq!(parse_models_response(&json!({})), Vec::<String>::new());
     }
+
+    #[test]
+    fn map_finish_reason_recognizes_length() {
+        assert_eq!(map_finish_reason("length"), FinishReason::Length);
+    }
+
+    #[test]
+    fn map_finish_reason_recognizes_content_filter() {
+        assert_eq!(
+            map_finish_reason("content_filter"),
+            FinishReason::ContentFilter
+        );
+    }
+
+    #[test]
+    fn into_invocation_returns_none_for_empty_name() {
+        let acc = ToolAcc::default();
+        let map = ToolNameMap::default();
+        assert!(acc.into_invocation(&map).is_none());
+    }
+
+    #[test]
+    fn into_invocation_maps_name_through_reverse_map() {
+        let tools = vec![ToolDef::new("original:a", "", json!({}))];
+        let map = build_tool_name_map(&tools);
+        let acc = ToolAcc {
+            id: "call-1".into(),
+            name: "original_a".into(),
+            arguments: r#"{"x":1}"#.into(),
+        };
+        let inv = acc.into_invocation(&map).unwrap();
+        assert_eq!(inv.name, "original:a");
+        assert_eq!(inv.arguments["x"], 1);
+    }
+
+    #[test]
+    fn into_invocation_uses_raw_name_when_not_in_map() {
+        let map = ToolNameMap::default();
+        let acc = ToolAcc {
+            id: "c2".into(),
+            name: "unmapped_name".into(),
+            arguments: "{}".into(),
+        };
+        let inv = acc.into_invocation(&map).unwrap();
+        assert_eq!(inv.name, "unmapped_name");
+    }
+
+    #[test]
+    fn accumulate_tool_deltas_expands_slots_and_sets_fields() {
+        let mut acc = Vec::new();
+        let deltas: Vec<Value> = serde_json::from_str(
+            r#"[{"index":0,"id":"c1","function":{"name":"search","arguments":"{\"q\":"}}]"#,
+        )
+        .unwrap();
+        accumulate_tool_deltas(&mut acc, &deltas);
+        assert_eq!(acc.len(), 1);
+        assert_eq!(acc[0].id, "c1");
+        assert_eq!(acc[0].name, "search");
+        assert_eq!(acc[0].arguments, r#"{"q":"#);
+    }
+
+    #[test]
+    fn accumulate_tool_deltas_does_not_overwrite_with_empty_id_or_name() {
+        let mut acc = vec![ToolAcc {
+            id: "existing".into(),
+            name: "existing".into(),
+            arguments: String::new(),
+        }];
+        let deltas: Vec<Value> = serde_json::from_str(
+            r#"[{"index":0,"id":"","function":{"name":"","arguments":"more"}}]"#,
+        )
+        .unwrap();
+        accumulate_tool_deltas(&mut acc, &deltas);
+        assert_eq!(acc[0].id, "existing", "should not overwrite with empty id");
+        assert_eq!(
+            acc[0].name, "existing",
+            "should not overwrite with empty name"
+        );
+        assert_eq!(acc[0].arguments, "more", "arguments should still append");
+    }
 }

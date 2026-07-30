@@ -486,10 +486,22 @@ mod tests {
         );
 
         // Workspace volume mount at args[4] must reference /workspace.
-        assert!(args[4].contains(":/workspace"), "volume mount should reference /workspace, got: {0}", args[4]);
-        assert!(!args[4].contains(":ro"), "volume mount should not be read-only, got: {0}", args[4]);
+        assert!(
+            args[4].contains(":/workspace"),
+            "volume mount should reference /workspace, got: {0}",
+            args[4]
+        );
+        assert!(
+            !args[4].contains(":ro"),
+            "volume mount should not be read-only, got: {0}",
+            args[4]
+        );
         let normalized_root = ws.root().to_string_lossy().replace('\\', "/");
-        assert!(args[4].starts_with(&normalized_root), "volume mount should start with host root, got: {0}", args[4]);
+        assert!(
+            args[4].starts_with(&normalized_root),
+            "volume mount should start with host root, got: {0}",
+            args[4]
+        );
     }
 
     #[test]

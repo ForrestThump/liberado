@@ -385,6 +385,7 @@ mod tests {
             Ok("ok".into())
         }
     }
+    #[async_trait]
     impl RebindableRuntime for NoopRuntime {
         fn rebind_provenance(&mut self, _provenance: WriteProvenance) {}
     }

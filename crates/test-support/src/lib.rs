@@ -238,8 +238,8 @@ mod tests {
 
     #[tokio::test]
     async fn recording_invoke_with_per_tool_error() {
-        let rt = InvocationRecordingRuntime::default()
-            .with_error("dangerous_tool", "permission denied");
+        let rt =
+            InvocationRecordingRuntime::default().with_error("dangerous_tool", "permission denied");
 
         let call = ToolInvocation {
             id: "t3".into(),

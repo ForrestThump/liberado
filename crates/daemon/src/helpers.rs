@@ -118,16 +118,28 @@ mod helper_tests {
 
     #[test]
     fn archive_outcome_subdir_maps_terminal_statuses() {
-        assert_eq!(archive_outcome_subdir(ProposalStatus::Done), Some("approved"));
-        assert_eq!(archive_outcome_subdir(ProposalStatus::Rejected), Some("rejected"));
-        assert_eq!(archive_outcome_subdir(ProposalStatus::Expired), Some("expired"));
+        assert_eq!(
+            archive_outcome_subdir(ProposalStatus::Done),
+            Some("approved")
+        );
+        assert_eq!(
+            archive_outcome_subdir(ProposalStatus::Rejected),
+            Some("rejected")
+        );
+        assert_eq!(
+            archive_outcome_subdir(ProposalStatus::Expired),
+            Some("expired")
+        );
         assert_eq!(archive_outcome_subdir(ProposalStatus::Pending), None);
         assert_eq!(archive_outcome_subdir(ProposalStatus::Approved), None);
     }
 
     #[test]
     fn slugify_collapses_non_alphanumeric() {
-        assert_eq!(slugify("vault-change:inbox/x.md:abc"), "vault-change-inbox-x-md-abc");
+        assert_eq!(
+            slugify("vault-change:inbox/x.md:abc"),
+            "vault-change-inbox-x-md-abc"
+        );
         assert_eq!(slugify("simple"), "simple");
         assert_eq!(slugify(""), "");
         assert_eq!(slugify("::lead-dash"), "lead-dash");

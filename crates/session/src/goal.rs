@@ -456,4 +456,29 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn is_background_distinguishes_foreground_and_background() {
+        assert!(Visibility::Background.is_background());
+        assert!(!Visibility::Foreground.is_background());
+    }
+
+    #[test]
+    fn background_record_has_background_visibility() {
+        let rec = GoalSessionRecord::background(
+            GoalSpec {
+                id: None,
+                description: "cron".into(),
+                success_criteria: vec![],
+                domain: DomainHint::Coding,
+                max_turns: 5,
+                max_idle_secs: None,
+                origin: None,
+                profile: None,
+                payload: serde_json::json!({}),
+            },
+            SessionGrant::default(),
+        );
+        assert_eq!(rec.visibility, Visibility::Background);
+    }
 }

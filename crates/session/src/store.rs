@@ -587,4 +587,46 @@ mod tests {
             .await;
         assert_eq!(store.events("s3").await.unwrap().len(), 1);
     }
+
+    #[tokio::test]
+    async fn push_event_human_input_clears_awaiting_flag() {
+        let store = GoalSessionStore::new();
+        let id = "s4-awaiting-test";
+        store.insert(record(id, "test")).await;
+        store.set_status(id, SessionStatus::Running).await;
+
+        store
+            .push_event(SessionEvent::new(
+                id,
+                SessionEventKind::AwaitingInput {
+                    prompt: "title?".into(),
+                    options: vec![],
+                },
+            ))
+            .await;
+        assert!(store.get(id).await.unwrap().awaiting_input);
+
+        store
+            .push_event(SessionEvent::new(
+                id,
+                SessionEventKind::HumanInput {
+                    text: "answer".into(),
+                },
+            ))
+            .await;
+        assert!(!store.get(id).await.unwrap().awaiting_input);
+    }
+
+    #[test]
+    fn sanitize_id_preserves_allowed_chars() {
+        assert_eq!(sanitize_id("abc123"), "abc123");
+        assert_eq!(sanitize_id("a-b_c"), "a-b_c");
+    }
+
+    #[test]
+    fn sanitize_id_replaces_disallowed_chars() {
+        assert_eq!(sanitize_id("a/b.c"), "a_b_c");
+        assert_eq!(sanitize_id("hello world"), "hello_world");
+        assert_eq!(sanitize_id("a👋b"), "a_b");
+    }
 }

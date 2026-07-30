@@ -1283,4 +1283,81 @@ clarify_threshold_read = 0.8
             .expect_err("present-but-blank reads as an unfinished edit");
         assert!(err.to_string().contains("omit the key"), "got: {err}");
     }
+
+    /// The upper boundary is `> 50`; exactly 50 must be accepted.
+    #[test]
+    fn timeout_at_50_is_valid() {
+        let mut cfg = validatable();
+        cfg.tuning.telegram_approvals.getupdate_timeout_secs = 50;
+        assert!(
+            cfg.validate().is_ok(),
+            "50 is within the valid range (1-50)"
+        );
+    }
+
+    /// declares_authority uses `||` — a profile with only `read` set should still declare authority.
+    /// With `&&` it would be false.
+    #[test]
+    fn read_only_declares_authority() {
+        let mut profile = SessionProfile::empty("read-only");
+        profile.read = vec!["Work".into()];
+        assert!(profile.declares_authority());
+
+        let mut profile = SessionProfile::empty("write-only");
+        profile.write = vec!["Work".into()];
+        assert!(profile.declares_authority());
+    }
+
+    #[test]
+    fn write_class_returns_declared_value() {
+        let policy = Policy {
+            zones: vec![ZonePolicy {
+                zone: "Work".into(),
+                write_class: WriteClass::AgentWritable,
+            }],
+            ..Policy::default()
+        };
+        assert_eq!(
+            policy.write_class("Work"),
+            WriteClass::AgentWritable,
+            "a declared zone must return its class"
+        );
+        assert_eq!(
+            policy.write_class("Other"),
+            WriteClass::ProposalOnly,
+            "an undeclared zone falls back to the safe default"
+        );
+    }
+
+    #[test]
+    fn zero_coding_concurrency_fails_validate() {
+        let mut cfg = validatable();
+        cfg.tuning.dispatch.max_concurrent_coding_subagents = 0;
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("max_concurrent_coding_subagents"));
+    }
+
+    #[test]
+    fn zero_reaction_depth_fails_validate() {
+        let mut cfg = validatable();
+        cfg.tuning.concurrency.max_reaction_depth = 0;
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("max_reaction_depth"));
+    }
+
+    /// A session profile that declares authority and references a zone not in policy.zones.
+    #[test]
+    fn profile_referencing_undeclared_zone_fails_validate() {
+        let mut cfg = validatable();
+        cfg.topology.mcps.push(mcp("turbovault"));
+
+        let mut profile = SessionProfile::empty("reading");
+        profile.read = vec!["GhostTown".into()];
+        cfg.topology.session_profiles = vec![profile];
+
+        let err = cfg
+            .validate()
+            .expect_err("profile referencing an undeclared zone must fail");
+        assert!(err.to_string().contains("undeclared zone"), "got: {}", err);
+    }
 }

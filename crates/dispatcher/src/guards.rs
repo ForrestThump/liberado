@@ -728,12 +728,7 @@ mod tests {
         let tuning = DispatchTuning::default();
         let d = execute_direct("tasks-mcp:add", tuning.clarify_threshold_write);
         assert_eq!(
-            evaluate(
-                &d,
-                &req(granted("tasks-mcp"), 0),
-                &tuning,
-                4
-            ),
+            evaluate(&d, &req(granted("tasks-mcp"), 0), &tuning, 4),
             None
         );
     }

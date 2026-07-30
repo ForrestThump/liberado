@@ -795,10 +795,7 @@ mod tests {
         std::fs::write(dir.path().join("a.txt"), "a\n").unwrap();
         std::fs::write(dir.path().join("b.txt"), "b\n").unwrap();
 
-        let result = runtime
-            .invoke_json("list_files", json!({}))
-            .await
-            .unwrap();
+        let result = runtime.invoke_json("list_files", json!({})).await.unwrap();
 
         let files = result["files"]
             .as_array()
@@ -885,10 +882,7 @@ mod tests {
         let (dir, runtime) = runtime();
         std::fs::write(dir.path().join("new.txt"), "new file\n").unwrap();
 
-        let result = runtime
-            .invoke_json("git_status", json!({}))
-            .await
-            .unwrap();
+        let result = runtime.invoke_json("git_status", json!({})).await.unwrap();
 
         // Not in a git repo, so exit_code will be Some(128) but the tool should not crash.
         assert!(
@@ -900,12 +894,9 @@ mod tests {
     #[tokio::test]
     async fn git_diff_returns_result() {
         let _dir = tempfile::tempdir().unwrap();
-        let runtime = CodingToolRuntime::new(
-            _dir.path(),
-            CommandPolicy::default(),
-            PathPolicy::default(),
-        )
-        .unwrap();
+        let runtime =
+            CodingToolRuntime::new(_dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
 
         let result = runtime
             .invoke_json("git_diff", json!({"mode": "name_only"}))
@@ -961,12 +952,7 @@ mod tests {
         // Restrict writes to "src/**" only — anything else should be denied.
         let mut policy = PathPolicy::default();
         policy.allow_write_globs = vec!["src/**".to_string()];
-        let runtime = CodingToolRuntime::new(
-            dir.path(),
-            CommandPolicy::default(),
-            policy,
-        )
-        .unwrap();
+        let runtime = CodingToolRuntime::new(dir.path(), CommandPolicy::default(), policy).unwrap();
 
         let err = runtime
             .invoke_json("write_file", json!({"path": "README.md", "content": "x"}))
