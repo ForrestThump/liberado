@@ -1,8 +1,9 @@
 //! A scriptable mock provider for deterministic tests (Decision 16).
 //!
-//! Returns canned [`CompletionResponse`]s in order and records every [`CompletionRequest`] it
-//! received, so a scenario can assert *both* on what the system did with a response *and* on
-//! what it sent (e.g. that the dispatcher requested JSON output, or offered the right tools).
+//! Returns canned [`CompletionResponse`]s (and optionally errors) in order and records every
+//! [`CompletionRequest`] it received, so a scenario can assert *both* on what the system did with a
+//! response *and* on what it sent (e.g. that the dispatcher requested JSON output, or offered the
+//! right tools).
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -13,11 +14,17 @@ use crate::error::{ProviderError, ProviderResult};
 use crate::provider::Provider;
 use crate::types::{CompletionRequest, CompletionResponse};
 
-/// A test double for [`Provider`]. Hand it a script of responses; it pops one per `complete`
-/// call and remembers the requests.
+/// A single entry in the mock's script: either a success response or an error.
+enum ScriptEntry {
+    Ok(CompletionResponse),
+    Err(ProviderError),
+}
+
+/// A test double for [`Provider`]. Hand it a script of responses (and optionally errors); it pops
+/// one per `complete` call and remembers the requests.
 pub struct MockProvider {
     model: Mutex<String>,
-    scripted: Mutex<VecDeque<CompletionResponse>>,
+    scripted: Mutex<VecDeque<ScriptEntry>>,
     received: Mutex<Vec<CompletionRequest>>,
     /// Optional scripted catalog for [`Provider::list_models`] (tests / offline UI).
     models: Mutex<Vec<String>>,
@@ -53,7 +60,15 @@ impl MockProvider {
 
     /// Queue another response.
     pub fn push(&self, response: CompletionResponse) {
-        self.scripted.lock().unwrap().push_back(response);
+        self.scripted.lock().unwrap().push_back(ScriptEntry::Ok(response));
+    }
+
+    /// Queue an error to be returned on a subsequent `complete` call.
+    ///
+    /// Use this to test transport failures, rate limiting, empty responses, or invalid
+    /// requests without needing real network conditions.
+    pub fn push_error(&self, error: ProviderError) {
+        self.scripted.lock().unwrap().push_back(ScriptEntry::Err(error));
     }
 
     /// Number of scripted responses not yet consumed.
@@ -87,11 +102,11 @@ impl Provider for MockProvider {
 
     async fn complete(&self, request: CompletionRequest) -> ProviderResult<CompletionResponse> {
         self.received.lock().unwrap().push(request);
-        self.scripted
-            .lock()
-            .unwrap()
-            .pop_front()
-            .ok_or(ProviderError::MockExhausted)
+        match self.scripted.lock().unwrap().pop_front() {
+            Some(ScriptEntry::Ok(response)) => Ok(response),
+            Some(ScriptEntry::Err(error)) => Err(error),
+            None => Err(ProviderError::MockExhausted),
+        }
     }
 
     async fn list_models(&self) -> ProviderResult<Vec<String>> {
@@ -153,6 +168,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_models_is_returned_by_list_models() {
+        let mock = MockProvider::new("m");
+        mock.set_models(["a", "b"]);
+        let models = mock.list_models().await.unwrap();
+        assert_eq!(models, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn set_model_rejects_empty_string() {
+        let mock = MockProvider::new("original");
+        mock.set_model("".into());
+        assert_eq!(mock.model(), "original");
+        mock.set_model("new".into());
+        assert_eq!(mock.model(), "new");
+    }
+
+    #[tokio::test]
     async fn complete_json_deserializes_structured_output() {
         #[derive(Debug, PartialEq, Deserialize)]
         struct Decision {
@@ -190,5 +222,52 @@ mod tests {
             sent.response_format,
             crate::types::ResponseFormat::Json { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn push_error_script_injects_errors() {
+        let mock = MockProvider::new("m");
+        mock.push(CompletionResponse::text("ok"));
+        mock.push_error(ProviderError::RateLimited);
+
+        // First call: success.
+        let r1 = mock
+            .complete(CompletionRequest::new(vec![Message::user("hi")]))
+            .await
+            .unwrap();
+        assert_eq!(r1.content.as_deref(), Some("ok"));
+
+        // Second call: rate-limited.
+        let r2 = mock
+            .complete(CompletionRequest::new(vec![Message::user("again")]))
+            .await;
+        assert!(matches!(r2, Err(ProviderError::RateLimited)));
+
+        // Third call: exhausted.
+        let r3 = mock.complete(CompletionRequest::new(vec![])).await;
+        assert!(matches!(r3, Err(ProviderError::MockExhausted)));
+    }
+
+    #[tokio::test]
+    async fn push_error_mixed_script_interleaves_success_and_failure() {
+        let mock = MockProvider::new("m");
+        mock.push(CompletionResponse::text("first"));
+        mock.push_error(ProviderError::Transport("network down".into()));
+        mock.push(CompletionResponse::text("second"));
+
+        // first
+        mock.complete(CompletionRequest::new(vec![Message::user("a")]))
+            .await
+            .unwrap();
+        // transport error
+        assert!(matches!(
+            mock.complete(CompletionRequest::new(vec![Message::user("b")]))
+                .await,
+            Err(ProviderError::Transport(_))
+        ));
+        // second
+        mock.complete(CompletionRequest::new(vec![Message::user("c")]))
+            .await
+            .unwrap();
     }
 }
