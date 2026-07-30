@@ -273,12 +273,12 @@ Each step includes the exact command with crate-specific timeout flags. Avoid `-
 
 | Step | What | Status |
 |------|------|:------:|
-| 2a | Baseline: `cargo test -p liberado-coder-tools` | ⬜ |
-| 2b | Run: `cargo mutants -p liberado-coder-tools --cap-lints true --timeout 3.0 --minimum-test-timeout 30` | ⬜ |
-| 2c | Triage survivors | ⬜ |
-| 2d | Patch actionable misses | ⬜ |
-| 2e | Re-run to verify catch rate | ⬜ |
-| 2f | Report: `docs/mutation-testing-report-coder-tools.md` | ⬜ |
+| 2a | Baseline: `cargo test -p liberado-coder-tools` | ✓ |
+| 2b | Run: `cargo mutants -p liberado-coder-tools --cap-lints true --timeout 3.0 --minimum-test-timeout 30` | ✓ |
+| 2c | Triage survivors | ✓ |
+| 2d | Patch actionable misses | ✓ |
+| 2e | Re-run to verify catch rate | ✓ |
+| 2f | Report: `docs/mutation-testing-report-coder-tools.md` | ✓ |
 
 **What's inside** (`crates/coder-tools/src/lib.rs`): `list_files`, `search_text`, `read_file`,
 `write_file`, `edit_file`, `apply_patch`, `git_status`, `git_diff`, `run_command`, `validate`.
@@ -380,8 +380,8 @@ process own its lifetime.
 
 | Crate | Tests Before | Tests After | Catch Before | Catch After | Delta | Report |
 |-------|:------------:|:-----------:|:------------:|:-----------:|:-----:|--------|
-| coder-sandbox | 8 | 13 | —% | **87%** | — | `mutation-testing-report-coder-sandbox.md` |
-| coder-tools | — | — | —% | —% | — | `mutation-testing-report-coder-tools.md` |
+| coder-sandbox | 8 | 13 | —% | **97%** | — | `mutation-testing-report-coder-sandbox.md` |
+| coder-tools | 10 | 21 | —% | **93%** | — | `mutation-testing-report-coder-tools.md` |
 | daemon | — | — | —% | —% | — | `mutation-testing-report-daemon.md` |
 | server | — | — | —% | —% | — | `mutation-testing-report-server.md` |
 | coder-agent | — | — | —% | —% | — | `mutation-testing-report-coder-agent.md` |
