@@ -3151,3 +3151,119 @@ async fn guard_conformance_magnitude_agrees_on_sweeping_destructive() {
         "runtime must downgrade sweeping-destructive call to a proposal"
     );
 }
+
+#[tokio::test]
+async fn concurrent_park_and_cancel_do_not_deadlock() {
+    use liberado_session::{
+        GoalSessionHub, GoalSessionStore, SessionStatus, DomainHint, GoalSpec, SessionGrant,
+        DomainPackRunner, PackContext, GoalResult, PackError,
+        InputChannel, SessionEvent,
+    };
+    use std::sync::Arc;
+
+    struct ConcurrentSpyPack {
+        pub cancelled: Arc<std::sync::atomic::AtomicBool>,
+    }
+    #[async_trait::async_trait]
+    impl DomainPackRunner for ConcurrentSpyPack {
+        fn domain_id(&self) -> &str { "life" }
+        async fn run(
+            &self,
+            _id: &str,
+            _goal: &GoalSpec,
+            _ctx: &PackContext<'_>,
+            _events: tokio::sync::mpsc::Sender<SessionEvent>,
+            _inputs: InputChannel,
+            mut cancel: tokio::sync::watch::Receiver<bool>,
+        ) -> Result<GoalResult, PackError> {
+            loop {
+                tokio::select! {
+                    _ = cancel.changed() => {
+                        self.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+                        return Err(PackError::Cancelled);
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                }
+            }
+        }
+    }
+
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let pack = Arc::new(ConcurrentSpyPack { cancelled: cancelled.clone() });
+
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(pack);
+    let hub = Arc::new(hub);
+
+    let session_id = hub
+        .start_with_grant(
+            GoalSpec {
+                id: None, description: "concurrent test".into(),
+                success_criteria: vec![], domain: DomainHint::Life,
+                max_turns: 0, max_idle_secs: None, origin: None, profile: None,
+                payload: serde_json::json!({}),
+            },
+            SessionGrant {
+                capabilities: liberado_common::CapabilitySet::from_iter([
+                    liberado_common::Capability::AskHuman,
+                ]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("start session");
+
+    // Wait for Running via snapshot loop
+    for _ in 0..100 {
+        if let Some(snap) = hub.snapshot(&session_id).await {
+            if snap.session.status == SessionStatus::Running {
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // Spawn concurrent snapshot + cancel tasks
+    let hub_cancel = hub.clone();
+    let hub_poll = hub.clone();
+    let sid_kill = session_id.clone();
+    let sid_poll = session_id.clone();
+
+    let cancel_task = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let _ = hub_cancel.cancel(&sid_kill).await;
+    });
+    let poll_task = tokio::spawn(async move {
+        for _ in 0..100 {
+            if let Some(snap) = hub_poll.snapshot(&sid_poll).await {
+                if snap.session.status.is_terminal() {
+                    return;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let _ = tokio::join!(cancel_task, poll_task);
+    })
+    .await
+    .expect("concurrent snapshot + cancel must not deadlock");
+
+    // Ground truth: session reached terminal
+    let snap = hub.snapshot(&session_id).await.expect("snapshot");
+    assert!(
+        snap.session.status.is_terminal(),
+        "session must be terminal after concurrent park/cancel, got {:?}",
+        snap.session.status
+    );
+    assert_eq!(
+        snap.session.status,
+        SessionStatus::Cancelled,
+        "session must be Cancelled after concurrent cancel"
+    );
+    assert!(
+        cancelled.load(std::sync::atomic::Ordering::SeqCst),
+        "pack must have seen cancellation signal"
+    );
+}
