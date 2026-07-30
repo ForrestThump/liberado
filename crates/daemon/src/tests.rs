@@ -2379,3 +2379,124 @@ async fn l9_cron_event_becomes_joinable_dispatched_session() {
 
     handle.abort();
 }
+
+#[tokio::test]
+async fn stamp_local_time_is_attached_for_cron_events() {
+    use liberado_common::UserTimezone;
+
+    let (mut daemon, _dir) = temp_daemon().await;
+    daemon = daemon.with_user_timezone(UserTimezone::default());
+
+    let event = Event::trigger("CronFired", "cron:test", "cron:test:1", Default::default());
+    assert!(
+        daemon.stamp_local_time_if_needed(&event, "a goal").is_some(),
+        "cron events without a vault path should get a time stamp"
+    );
+
+    let event = Event::trigger(
+        "NoteChanged",
+        event_source::TURBOVAULT_SUBSCRIPTION,
+        "vault-change:1",
+        liberado_common::EventPayload {
+            path: Some("note.md".into()),
+            ..Default::default()
+        },
+    );
+    assert!(
+        daemon.stamp_local_time_if_needed(&event, "a goal").is_none(),
+        "vault change events with a path should NOT get a time stamp"
+    );
+
+    let (daemon_no_tz, _dir2) = temp_daemon().await;
+    let event = Event::trigger("CronFired", "cron:test", "cron:test:2", Default::default());
+    assert!(
+        daemon_no_tz
+            .stamp_local_time_if_needed(&event, "a goal")
+            .is_none(),
+        "no timezone configured → no stamp"
+    );
+}
+
+#[tokio::test]
+async fn handle_proposal_change_active_failed_not_expired_does_not_enter_expiry_path() {
+    use chrono::{Duration as ChronoDuration, Utc};
+    use liberado_common::{
+        Capability, GrantScope, Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall,
+        WriteProvenance, session_grants, DEFAULT_POOL,
+    };
+    use liberado_executor::SUBMIT_REPORT_TOOL;
+    use liberado_orchestrator::Orchestrator;
+    use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
+    use liberado_test_support::{InvocationRecordingFactory, InvocationRecordingRuntime};
+    use std::path::Path;
+    use std::sync::Arc;
+
+    let signer = ProposalSigner::random();
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let orch = Orchestrator::new(
+        Arc::new(MockProvider::with_script(
+            "mock",
+            [CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "c1",
+                SUBMIT_REPORT_TOOL,
+                serde_json::json!({ "outcome": "failed", "summary": "something went wrong" }),
+            )])],
+        )),
+        InvocationRecordingFactory { runtime },
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        signer.clone(),
+        "default",
+    );
+
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon
+        .with_orchestrator(orch)
+        .with_proposal_signer(signer.clone());
+
+    let proposals_dir = dir.path().join("proposals");
+    std::fs::create_dir_all(&proposals_dir).unwrap();
+
+    // Proposal is NOT expired (future deadline) — must pass step 4 in handle_proposal_change
+    // and reach the orchestrator. The orchestrator returns Failed but with a generic summary
+    // that does NOT match the expiry refusal summary (lines 184-185).
+    let mut proposal = Proposal::pending(
+        "vault-change:gen-fail:1",
+        "vault-change:gen-fail:1",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "test" }),
+        }]),
+        "generic failure test",
+    )
+    .with_requested_grant(Capability::Write(liberado_common::Zone::vault("sandbox")));
+    proposal.pool = Some(DEFAULT_POOL.to_string());
+    proposal.expires = Some(Utc::now() + ChronoDuration::hours(1));
+    proposal.approved_scope = Some(GrantScope::Session);
+    let mut proposal = signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+
+    let rel = Path::new("proposals/gen-fail.md");
+    let prov = WriteProvenance::agent("test", "c1");
+    daemon
+        .vault
+        .write(rel, &proposal.to_note(), None, &prov)
+        .await
+        .unwrap();
+
+    let _outcome = daemon.handle_proposal_change(rel).await.unwrap();
+    assert!(
+        invoked.lock().unwrap().len() >= 1,
+        "tools should have run — the orchestrator returned Failed but not with the expiry refusal"
+    );
+    let grant = session_grants::session_grant(DEFAULT_POOL);
+    assert!(
+        !grant.capabilities.is_empty(),
+        "session grant must be applied when the failed outcome is not the expiry refusal"
+    );
+}

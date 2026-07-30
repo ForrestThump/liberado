@@ -110,3 +110,28 @@ pub(crate) fn slugify(id: &str) -> String {
     }
     out.trim_matches('-').to_string()
 }
+
+#[cfg(test)]
+mod helper_tests {
+    use super::*;
+    use liberado_common::ProposalStatus;
+
+    #[test]
+    fn archive_outcome_subdir_maps_terminal_statuses() {
+        assert_eq!(archive_outcome_subdir(ProposalStatus::Done), Some("approved"));
+        assert_eq!(archive_outcome_subdir(ProposalStatus::Rejected), Some("rejected"));
+        assert_eq!(archive_outcome_subdir(ProposalStatus::Expired), Some("expired"));
+        assert_eq!(archive_outcome_subdir(ProposalStatus::Pending), None);
+        assert_eq!(archive_outcome_subdir(ProposalStatus::Approved), None);
+    }
+
+    #[test]
+    fn slugify_collapses_non_alphanumeric() {
+        assert_eq!(slugify("vault-change:inbox/x.md:abc"), "vault-change-inbox-x-md-abc");
+        assert_eq!(slugify("simple"), "simple");
+        assert_eq!(slugify(""), "");
+        assert_eq!(slugify("::lead-dash"), "lead-dash");
+        assert_eq!(slugify("trail-dash::"), "trail-dash");
+        assert_eq!(slugify("multi___underscore"), "multi-underscore");
+    }
+}

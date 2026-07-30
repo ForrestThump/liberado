@@ -291,11 +291,11 @@ hangs. The existing 10 tests (`tool_schemas_are_non_empty`, path validation, etc
 
 | Step | What | Status |
 |------|------|:------:|
-| 3a | Baseline: `cargo test -p liberado-daemon` | ⬜ |
-| 3b | Run: `cargo mutants -p liberado-daemon --cap-lints true --timeout 4.0 --minimum-test-timeout 60` | ⬜ |
-| 3c | Triage survivors | ⬜ |
-| 3d | Patch actionable misses | ⬜ |
-| 3e | Re-run to verify catch rate | ⬜ |
+| 3a | Baseline: `cargo test -p liberado-daemon` | ✓ |
+| 3b | Run: `cargo mutants -p liberado-daemon --cap-lints true --timeout 4.0 --minimum-test-timeout 60` | ✓ |
+| 3c | Triage survivors | ✓ |
+| 3d | Patch actionable misses | ✓ |
+| 3e | Re-run to verify catch rate | ✓ |
 | 3f | Report: `docs/mutation-testing-report-daemon.md` | ⬜ |
 
 **What's inside** (`crates/daemon/src/`): `lib.rs` (29 tests — daemon bootstrap, pool routing,
@@ -382,6 +382,7 @@ process own its lifetime.
 |-------|:------------:|:-----------:|:------------:|:-----------:|:-----:|--------|
 | coder-sandbox | 8 | 13 | —% | **97%** | — | `mutation-testing-report-coder-sandbox.md` |
 | coder-tools | 10 | 21 | —% | **93%** | — | `mutation-testing-report-coder-tools.md` |
+| daemon | 38 | 42 | —% | **51%** | — | `mutation-testing-report-daemon.md` |
 | daemon | — | — | —% | —% | — | `mutation-testing-report-daemon.md` |
 | server | — | — | —% | —% | — | `mutation-testing-report-server.md` |
 | coder-agent | — | — | —% | —% | — | `mutation-testing-report-coder-agent.md` |
