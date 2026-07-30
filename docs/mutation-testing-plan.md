@@ -344,13 +344,13 @@ so hung tests don't accumulate, but let the process run for hours to cover the f
 
 | Step | What | Status |
 |------|------|:------:|
-| 5a | Baseline: `cargo test -p liberado-coder-agent` | ⬜ |
-| 5b | Run: `cargo mutants -p liberado-coder-agent --cap-lints true --timeout 3.0 --minimum-test-timeout 30` | ⬜ |
-| 5c | If any test hangs consistently, `#[ignore]` it and re-run | ⬜ |
-| 5d | Triage survivors | ⬜ |
-| 5e | Patch actionable misses | ⬜ |
-| 5f | Re-run to verify catch rate | ⬜ |
-| 5g | Report: `docs/mutation-testing-report-coder-agent.md` | ⬜ |
+| 5a | Baseline: `cargo test -p liberado-coder-agent` | ✓ |
+| 5b | Run: `cargo mutants -p liberado-coder-agent --cap-lints true --timeout 3.0 --minimum-test-timeout 90 -- --lib` | ✓ |
+| 5c | If any test hangs consistently, `#[ignore]` it and re-run | ✓ (mock_intake_e2e hangs in cargo-mutants env; `-- --lib` works) |
+| 5d | Triage survivors | ✓ |
+| 5e | Patch actionable misses | — |
+| 5f | Re-run to verify catch rate | — |
+| 5g | Report: `docs/mutation-testing-report-coder-agent.md` | ✓ |
 
 **What's inside** (`crates/coder-agent/src/`): 16 source files — `lib.rs`, `completion_gate.rs`
 (5 tests), `gates.rs` (2), `planner.rs` (1), `intake_session.rs` (1), `repair_feedback.rs`
@@ -384,6 +384,7 @@ process own its lifetime.
 | coder-tools | 10 | 21 | —% | **93%** | — | `mutation-testing-report-coder-tools.md` |
 | daemon | 38 | 42 | —% | **51%** | — | `mutation-testing-report-daemon.md` |
 | server | 56 | 56 | —% | **27%** | — | `mutation-testing-report-server.md` |
+| coder-agent | 84 (64+12+8) | 64 (lib only) | —% | **54%** | — | `mutation-testing-report-coder-agent.md` |
 | daemon | — | — | —% | —% | — | `mutation-testing-report-daemon.md` |
 | server | — | — | —% | —% | — | `mutation-testing-report-server.md` |
 | coder-agent | — | — | —% | —% | — | `mutation-testing-report-coder-agent.md` |
