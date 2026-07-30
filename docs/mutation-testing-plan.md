@@ -315,12 +315,12 @@ and they manifest as silent failures, not panic stacks.
 
 | Step | What | Status |
 |------|------|:------:|
-| 4a | Baseline: `cargo test -p liberado-server` | ⬜ |
-| 4b | Run: `cargo mutants -p liberado-server --cap-lints true --timeout 5.0 --minimum-test-timeout 90` | ⬜ |
-| 4c | Triage survivors | ⬜ |
-| 4d | Patch actionable misses | ⬜ |
-| 4e | Re-run to verify catch rate | ⬜ |
-| 4f | Report: `docs/mutation-testing-report-server.md` | ⬜ |
+| 4a | Baseline: `cargo test -p liberado-server` | ✓ |
+| 4b | Run: `cargo mutants -p liberado-server --cap-lints true --timeout 5.0 --minimum-test-timeout 90` | ✓ |
+| 4c | Triage survivors | ✓ |
+| 4d | Patch actionable misses | — |
+| 4e | Re-run to verify catch rate | — |
+| 4f | Report: `docs/mutation-testing-report-server.md` | ✓ |
 
 **What's inside** (`crates/server/src/`): `t1_conformance.rs` (16 tests — Tier 1 live
 conformance L1–L10), `api/goals.rs` (12), `api/chat.rs` (7), `hooks.rs` (12),
@@ -383,6 +383,7 @@ process own its lifetime.
 | coder-sandbox | 8 | 13 | —% | **97%** | — | `mutation-testing-report-coder-sandbox.md` |
 | coder-tools | 10 | 21 | —% | **93%** | — | `mutation-testing-report-coder-tools.md` |
 | daemon | 38 | 42 | —% | **51%** | — | `mutation-testing-report-daemon.md` |
+| server | 56 | 56 | —% | **27%** | — | `mutation-testing-report-server.md` |
 | daemon | — | — | —% | —% | — | `mutation-testing-report-daemon.md` |
 | server | — | — | —% | —% | — | `mutation-testing-report-server.md` |
 | coder-agent | — | — | —% | —% | — | `mutation-testing-report-coder-agent.md` |
