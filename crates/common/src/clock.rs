@@ -2,67 +2,36 @@
 //! can be controlled deterministically in tests.
 //!
 //! Call [`now`] everywhere you would call [`std::time::Instant::now`]. In production it
-//! passes straight through; in `#[cfg(test)]` it respects a thread-local freeze set by tests.
+//! passes straight through; tests call [`test_freeze_at`] / [`test_thaw`] to control it.
 
-use std::time::Instant;
+use std::sync::LazyLock;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
-/// State that is only present in test builds.
-#[cfg(test)]
-mod frozen {
-    use super::*;
-    use std::sync::Mutex;
-    use std::sync::LazyLock;
+static FROZEN: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
 
-    static FROZEN: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
+/// Freeze the clock at the given instant. All subsequent [`now`] calls return this value.
+pub fn test_freeze_at(at: Instant) {
+    *FROZEN.lock().unwrap() = Some(at);
+}
 
-    /// Freeze the clock at the given instant. All subsequent [`super::now`] calls return this value.
-    pub fn freeze_at(at: Instant) {
-        *FROZEN.lock().unwrap() = Some(at);
-    }
+/// Resume normal wall-clock time.
+pub fn test_thaw() {
+    *FROZEN.lock().unwrap() = None;
+}
 
-    /// Resume normal wall-clock time.
-    pub fn thaw() {
-        *FROZEN.lock().unwrap() = None;
-    }
-
-    /// Advance the frozen clock by `d` (only effective when frozen).
-    pub fn advance(d: std::time::Duration) {
-        if let Some(ref mut at) = *FROZEN.lock().unwrap() {
-            *at += d;
-        }
-    }
-
-    pub fn now_inner() -> Option<Instant> {
-        *FROZEN.lock().unwrap()
+/// Advance the frozen clock by `d` (only effective when frozen).
+pub fn test_advance(d: Duration) {
+    if let Some(ref mut at) = *FROZEN.lock().unwrap() {
+        *at += d;
     }
 }
 
 /// A deterministic source of the current time. In production this is [`Instant::now`]; in tests it
 /// can be frozen via [`test_freeze_at`] / [`test_thaw`].
 pub fn now() -> Instant {
-    #[cfg(test)]
-    {
-        if let Some(at) = frozen::now_inner() {
-            return at;
-        }
+    if let Some(at) = *FROZEN.lock().unwrap() {
+        return at;
     }
     Instant::now()
-}
-
-/// Freeze time at the given instant. Only available in `#[cfg(test)]` builds.
-#[cfg(test)]
-pub fn test_freeze_at(at: Instant) {
-    frozen::freeze_at(at);
-}
-
-/// Resume normal wall-clock time. Only available in `#[cfg(test)]` builds.
-#[cfg(test)]
-pub fn test_thaw() {
-    frozen::thaw();
-}
-
-/// Advance the frozen clock by `d`. Only available in `#[cfg(test)]` builds.
-#[cfg(test)]
-pub fn test_advance(d: std::time::Duration) {
-    frozen::advance(d);
 }
