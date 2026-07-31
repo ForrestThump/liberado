@@ -76,7 +76,7 @@ twice *within one conversation* — harmless at this tier, worth a dedup only if
 ### Known residual gap (marker-before-tail partial failure)
 
 **Status: accepted residual of Tier 1; closed by construction in the CH3.1 viewport re-architecture
-— see [`../plans/context-compaction-viewport-rearchitecture.md`](./plans/context-compaction-viewport-rearchitecture.md).**
+— see [`context-compaction-viewport-rearchitecture.md`](./context-compaction-viewport-rearchitecture.md).**
 
 Failure modes **before** the marker is durable fail open (run uncompacted): summarizer empty/error,
 marker append failure. After the marker is durable, tail re-append is best-effort:
@@ -168,7 +168,7 @@ for a conversation changes.
 - **CH3.1 viewport / side-summary re-architecture** — full conversation stays one append-only
   spine; summary is a separate node; session viewport points at summary + `continue_from` for
   model context only. Removes tail re-append and the partial-failure residual above. Plan:
-  [`../plans/context-compaction-viewport-rearchitecture.md`](./plans/context-compaction-viewport-rearchitecture.md).
+  [`context-compaction-viewport-rearchitecture.md`](./context-compaction-viewport-rearchitecture.md).
 - **Mid-turn precheck** (OpenClaw-style: re-check pressure after each tool result inside the
   executor loop). Needs the executor to own compaction awareness; bigger intrusion, and chat turns
   in face-agent mode rarely loop enough to need it. Revisit if thick-mode chats overflow mid-turn.
