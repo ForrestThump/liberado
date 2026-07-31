@@ -629,4 +629,148 @@ mod tests {
         assert_eq!(sanitize_id("hello world"), "hello_world");
         assert_eq!(sanitize_id("a👋b"), "a_b");
     }
+
+    #[tokio::test]
+    async fn rehydration_tolerates_truncated_last_line() {
+        let dir =
+            std::env::temp_dir().join(format!("liberado-test-trunc-{}", ulid::Ulid::new()));
+        let _ = std::fs::create_dir_all(&dir);
+        let log = dir.join("s-trunc.jsonl");
+        let start_line = serde_json::to_string(&LogLine::Start {
+            record: Box::new(make_test_record("s-trunc")),
+        })
+        .unwrap();
+        let truncated = &start_line[..start_line.len() / 3];
+        std::fs::write(&log, format!("{}\n", truncated)).unwrap();
+
+        let store = GoalSessionStore::open(&dir).await;
+        assert!(store.get("s-trunc").await.is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn rehydration_flags_missing_finish_as_failed() {
+        let dir =
+            std::env::temp_dir().join(format!("liberado-test-missfin-{}", ulid::Ulid::new()));
+        let _ = std::fs::create_dir_all(&dir);
+        let log = dir.join("s-missfin.jsonl");
+        let mut lines = vec![serde_json::to_string(&LogLine::Start {
+            record: Box::new(make_test_record("s-missfin")),
+        })
+        .unwrap()];
+        lines.push(
+            serde_json::to_string(&LogLine::Status {
+                status: SessionStatus::Running,
+                finished_at: None,
+            })
+            .unwrap(),
+        );
+        std::fs::write(&log, lines.join("\n") + "\n").unwrap();
+
+        let store = GoalSessionStore::open(&dir).await;
+        let rec = store.get("s-missfin").await.expect("session must exist");
+        assert_eq!(rec.status, SessionStatus::Failed);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn rehydration_skips_duplicate_start() {
+        let dir =
+            std::env::temp_dir().join(format!("liberado-test-dup-{}", ulid::Ulid::new()));
+        let _ = std::fs::create_dir_all(&dir);
+        let log = dir.join("s-dup.jsonl");
+        let start = serde_json::to_string(&LogLine::Start {
+            record: Box::new(make_test_record("s-dup")),
+        })
+        .unwrap();
+        std::fs::write(&log, format!("{}\n{}\n", start, start)).unwrap();
+
+        let store = GoalSessionStore::open(&dir).await;
+        let rec = store.get("s-dup").await.expect("session must exist");
+        assert_eq!(rec.status, SessionStatus::Failed);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn rehydration_skips_unknown_tag() {
+        let dir =
+            std::env::temp_dir().join(format!("liberado-test-unknown-{}", ulid::Ulid::new()));
+        let _ = std::fs::create_dir_all(&dir);
+        let log = dir.join("s-unknown.jsonl");
+        let start = serde_json::to_string(&LogLine::Start {
+            record: Box::new(make_test_record("s-unknown")),
+        })
+        .unwrap();
+        let finish = serde_json::to_string(&LogLine::Finish {
+            status: SessionStatus::Succeeded,
+            result: crate::GoalResult {
+                terminal: crate::TerminalKind::Succeeded,
+                summary: "done".into(),
+                artifacts: vec![],
+                diagnostics: serde_json::json!({}),
+            },
+            finished_at: chrono::Utc::now(),
+        })
+        .unwrap();
+        std::fs::write(
+            &log,
+            format!(
+                "{}\n{}\n{}\n",
+                start,
+                r#"{"t":"future_feature","data":"hello"}"#,
+                finish,
+            ),
+        )
+        .unwrap();
+
+        let store = GoalSessionStore::open(&dir).await;
+        let rec = store.get("s-unknown").await.expect("session must exist");
+        assert_eq!(rec.status, SessionStatus::Succeeded);
+        assert_eq!(rec.finished_at.is_some(), true);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn rehydration_tolerates_scrambled_json_value() {
+        let dir =
+            std::env::temp_dir().join(format!("liberado-test-scram-{}", ulid::Ulid::new()));
+        let _ = std::fs::create_dir_all(&dir);
+        let log = dir.join("s-scrambled.jsonl");
+        let start = serde_json::to_string(&LogLine::Start {
+            record: Box::new(make_test_record("s-scrambled")),
+        })
+        .unwrap();
+        let mut corrupted = start.clone();
+        corrupted.replace_range(20..24, "!!!!");
+        std::fs::write(&log, format!("{}\n", corrupted)).unwrap();
+
+        let store = GoalSessionStore::open(&dir).await;
+        assert!(store.get("s-scrambled").await.is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn make_test_record(id: &str) -> crate::GoalSessionRecord {
+        crate::GoalSessionRecord {
+            id: id.into(),
+            goal: crate::GoalSpec {
+                id: None,
+                description: "test".into(),
+                success_criteria: vec![],
+                domain: crate::DomainHint::Life,
+                max_turns: 5,
+                max_idle_secs: None,
+                origin: None,
+                profile: None,
+                payload: serde_json::json!({}),
+            },
+            grant: Default::default(),
+            visibility: crate::Visibility::Foreground,
+            status: SessionStatus::Pending,
+            created_at: chrono::Utc::now(),
+            finished_at: None,
+            result: None,
+            event_count: 0,
+            awaiting_input: false,
+        }
+    }
 }
