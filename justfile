@@ -47,6 +47,11 @@ fmt:
 deny:
     cargo deny check
 
+# Verify every relative link in docs/ resolves to a real file.
+# Skips http(s) URLs and .secret files; CI gates on it (doc-links job).
+check-links:
+    {{ if os() == "windows" { "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-doc-links.ps1" } else { "pwsh -NoProfile -File scripts/check-doc-links.ps1" } }}
+
 # ── Mutation testing ─────────────────────────────────────────────────────────
 
 # Mutation-test one crate with hung-test protection:

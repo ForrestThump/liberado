@@ -92,3 +92,15 @@ jobs:
 
       - name: Deny check
         run: cargo deny check
+
+  doc-links:
+    name: Docs link check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Regex-based checker for relative markdown links in docs/. Skips http(s)
+      # URLs and .secret files; fails the job on broken links.
+      - name: Check docs links
+        shell: pwsh
+        run: ./scripts/check-doc-links.ps1
