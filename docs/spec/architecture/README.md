@@ -8,7 +8,7 @@ Living description of **how Liberado works today**. Historical plans belong in [
 | [sessions.md](sessions.md) | Unified `Session` model (D7) — load-bearing abstraction |
 | [contracts.md](contracts.md) | Narrow waists / frozen seams inventory |
 | [modularity.md](modularity.md) | Seam plan and “could someone use just this crate?” |
-| [failure-modes.md](failure-modes.md) | Five recurring bug classes (read before safety PRs) |
+| [failure-modes.md](failure-modes.md) | Six recurring bug classes (read before safety PRs) |
 | [agentic-loops.md](agentic-loops.md) | Kernel vs domain packs; goals, verifiers, subagents |
 | [positioning.md](positioning.md) | Why daemon → chat → coding sequencing |
 | [channels-and-interactivity.md](channels-and-interactivity.md) | Surfaces, AskHuman, messaging seams |

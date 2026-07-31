@@ -24,7 +24,7 @@ If you are an agent: start at the [roadmap](roadmap.md) → [architecture overvi
 2. [Architecture overview](spec/architecture/overview.md) — pillars, daemon-first loop, safety
 3. [Sessions](spec/architecture/sessions.md) — everything is a `Session` (D7)
 4. [Contracts](spec/architecture/contracts.md) — narrow waists / frozen seams
-5. [Failure modes](spec/architecture/failure-modes.md) — seven recurring bug classes
+5. [Failure modes](spec/architecture/failure-modes.md) — six recurring bug classes
 6. [Build & run](impl/agents.md) — workspace layout, commands, configuration
 7. [Developer workflow](impl/development-workflow.md) — how work gets done here
 8. [Handoff](project/handoff.md) — what is live on the homelab today

@@ -220,7 +220,7 @@ On 2026-07-22:
 
 - [`../architecture/overview.md`](../../../spec/architecture/overview.md) â€” cold-start map  
 - [`../architecture/contracts.md`](../../../spec/architecture/contracts.md) â€” narrow waists  
-- [`../architecture/failure-modes.md`](../../../spec/architecture/failure-modes.md) â€” five recurring bug classes  
+- [`../architecture/failure-modes.md`](../../../spec/architecture/failure-modes.md) â€” six recurring bug classes  
 - [`../architecture/modularity.md`](../../../spec/architecture/modularity.md) â€” seam plan  
 - [`../architecture/positioning.md`](../../../spec/architecture/positioning.md) â€” replacement priority  
 - [`../roadmap.md`](../../../roadmap.md) â€” open work order  
