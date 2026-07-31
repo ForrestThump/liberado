@@ -639,7 +639,7 @@ mod tests {
 
     #[async_trait]
     impl Notifier for NotifyOnlyNotifier {
-        async fn notify(&self, message: &str) -> Result<(), NotifyError> {
+        async fn notify(&self, _message: &str) -> Result<(), NotifyError> {
             Ok(())
         }
     }

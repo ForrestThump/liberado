@@ -367,6 +367,47 @@ impl SessionGrant {
     }
 }
 
+/// Test-only invariant check: asserts the session state machine's global invariants hold.
+/// Returns `Ok(())` if clean, or `Err(message)` on the first violation.
+pub fn check_session_invariants(record: &GoalSessionRecord) -> Result<(), String> {
+    let status = record.status;
+    let awaiting = record.awaiting_input;
+    let finished = record.finished_at.is_some();
+    let has_result = record.result.is_some();
+
+    if status.is_terminal() && awaiting {
+        return Err(format!("terminal {:?} must not be awaiting_input", status));
+    }
+    if status == SessionStatus::Parked {
+        if !awaiting {
+            return Err("Parked session must have awaiting_input true".into());
+        }
+        if finished {
+            return Err("Parked session must have finished_at None".into());
+        }
+    }
+    if status == SessionStatus::Cancelled && !finished {
+        return Err("Cancelled session must have finished_at Some".into());
+    }
+    if status == SessionStatus::Running && finished {
+        return Err("Running session must have finished_at None".into());
+    }
+    if status == SessionStatus::Pending && (finished || has_result) {
+        return Err("Pending session must have no result".into());
+    }
+    if record.visibility == Visibility::Background && awaiting {
+        return Err("Background session must not be awaiting_input".into());
+    }
+    if has_result != finished {
+        return Err(format!(
+            "result {:?} inconsistent with finished_at {}: both must be set or neither",
+            record.result.is_some(),
+            record.finished_at.is_some()
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,45 +522,4 @@ mod tests {
         );
         assert_eq!(rec.visibility, Visibility::Background);
     }
-}
-
-/// Test-only invariant check: asserts the session state machine's global invariants hold.
-/// Returns `Ok(())` if clean, or `Err(message)` on the first violation.
-pub fn check_session_invariants(record: &GoalSessionRecord) -> Result<(), String> {
-    let status = record.status;
-    let awaiting = record.awaiting_input;
-    let finished = record.finished_at.is_some();
-    let has_result = record.result.is_some();
-
-    if status.is_terminal() && awaiting {
-        return Err(format!("terminal {:?} must not be awaiting_input", status));
-    }
-    if status == SessionStatus::Parked {
-        if !awaiting {
-            return Err("Parked session must have awaiting_input true".into());
-        }
-        if finished {
-            return Err("Parked session must have finished_at None".into());
-        }
-    }
-    if status == SessionStatus::Cancelled && !finished {
-        return Err("Cancelled session must have finished_at Some".into());
-    }
-    if status == SessionStatus::Running && finished {
-        return Err("Running session must have finished_at None".into());
-    }
-    if status == SessionStatus::Pending && (finished || has_result) {
-        return Err("Pending session must have no result".into());
-    }
-    if record.visibility == Visibility::Background && awaiting {
-        return Err("Background session must not be awaiting_input".into());
-    }
-    if has_result != finished {
-        return Err(format!(
-            "result {:?} inconsistent with finished_at {}: both must be set or neither",
-            record.result.is_some(),
-            record.finished_at.is_some()
-        ));
-    }
-    Ok(())
 }

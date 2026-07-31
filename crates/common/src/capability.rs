@@ -886,8 +886,8 @@ mod instruction_scope_tests {
     /// An instruction with a Context: marker whose instruction part is exactly at the limit.
     #[test]
     fn context_marker_truncates_before_instruction_limit() {
-        let goal = format!("a goal under the limit\n\nContext: we deleted all the notes");
-        assert!(instruction_scope(&goal).len() < INSTRUCTION_SCAN_LIMIT);
+        let goal = "a goal under the limit\n\nContext: we deleted all the notes";
+        assert!(instruction_scope(goal).len() < INSTRUCTION_SCAN_LIMIT);
     }
 
     /// When the instruction scan limit lands mid-character, the snap loop must move `end` back to

@@ -950,8 +950,10 @@ mod tests {
     async fn write_blocked_by_path_policy() {
         let dir = tempfile::tempdir().unwrap();
         // Restrict writes to "src/**" only — anything else should be denied.
-        let mut policy = PathPolicy::default();
-        policy.allow_write_globs = vec!["src/**".to_string()];
+        let policy = PathPolicy {
+            allow_write_globs: vec!["src/**".to_string()],
+            ..PathPolicy::default()
+        };
         let runtime = CodingToolRuntime::new(dir.path(), CommandPolicy::default(), policy).unwrap();
 
         let err = runtime

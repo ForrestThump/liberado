@@ -632,8 +632,7 @@ mod tests {
 
     #[tokio::test]
     async fn rehydration_tolerates_truncated_last_line() {
-        let dir =
-            std::env::temp_dir().join(format!("liberado-test-trunc-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("liberado-test-trunc-{}", ulid::Ulid::new()));
         let _ = std::fs::create_dir_all(&dir);
         let log = dir.join("s-trunc.jsonl");
         let start_line = serde_json::to_string(&LogLine::Start {
@@ -650,14 +649,15 @@ mod tests {
 
     #[tokio::test]
     async fn rehydration_flags_missing_finish_as_failed() {
-        let dir =
-            std::env::temp_dir().join(format!("liberado-test-missfin-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("liberado-test-missfin-{}", ulid::Ulid::new()));
         let _ = std::fs::create_dir_all(&dir);
         let log = dir.join("s-missfin.jsonl");
-        let mut lines = vec![serde_json::to_string(&LogLine::Start {
-            record: Box::new(make_test_record("s-missfin")),
-        })
-        .unwrap()];
+        let mut lines = vec![
+            serde_json::to_string(&LogLine::Start {
+                record: Box::new(make_test_record("s-missfin")),
+            })
+            .unwrap(),
+        ];
         lines.push(
             serde_json::to_string(&LogLine::Status {
                 status: SessionStatus::Running,
@@ -675,8 +675,7 @@ mod tests {
 
     #[tokio::test]
     async fn rehydration_skips_duplicate_start() {
-        let dir =
-            std::env::temp_dir().join(format!("liberado-test-dup-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("liberado-test-dup-{}", ulid::Ulid::new()));
         let _ = std::fs::create_dir_all(&dir);
         let log = dir.join("s-dup.jsonl");
         let start = serde_json::to_string(&LogLine::Start {
@@ -693,8 +692,7 @@ mod tests {
 
     #[tokio::test]
     async fn rehydration_skips_unknown_tag() {
-        let dir =
-            std::env::temp_dir().join(format!("liberado-test-unknown-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("liberado-test-unknown-{}", ulid::Ulid::new()));
         let _ = std::fs::create_dir_all(&dir);
         let log = dir.join("s-unknown.jsonl");
         let start = serde_json::to_string(&LogLine::Start {
@@ -716,9 +714,7 @@ mod tests {
             &log,
             format!(
                 "{}\n{}\n{}\n",
-                start,
-                r#"{"t":"future_feature","data":"hello"}"#,
-                finish,
+                start, r#"{"t":"future_feature","data":"hello"}"#, finish,
             ),
         )
         .unwrap();
@@ -726,14 +722,13 @@ mod tests {
         let store = GoalSessionStore::open(&dir).await;
         let rec = store.get("s-unknown").await.expect("session must exist");
         assert_eq!(rec.status, SessionStatus::Succeeded);
-        assert_eq!(rec.finished_at.is_some(), true);
+        assert!(rec.finished_at.is_some());
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
     async fn rehydration_tolerates_scrambled_json_value() {
-        let dir =
-            std::env::temp_dir().join(format!("liberado-test-scram-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("liberado-test-scram-{}", ulid::Ulid::new()));
         let _ = std::fs::create_dir_all(&dir);
         let log = dir.join("s-scrambled.jsonl");
         let start = serde_json::to_string(&LogLine::Start {

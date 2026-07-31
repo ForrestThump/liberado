@@ -373,7 +373,6 @@ impl ToolRuntime for PermittedRuntime {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use std::sync::Arc;
 
     struct NoopRuntime;
     #[async_trait]

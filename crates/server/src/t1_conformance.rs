@@ -1468,7 +1468,7 @@ async fn l10_fork_via_http_works_for_goal_sessions_too() {
                 NewNode {
                     parent_id: parent,
                     author: Author::User,
-                    message: Message::user(&format!("goal-turn-{i}")),
+                    message: Message::user(format!("goal-turn-{i}")),
                 },
             )
             .await
@@ -1479,7 +1479,7 @@ async fn l10_fork_via_http_works_for_goal_sessions_too() {
                 NewNode {
                     parent_id: Some(u.id),
                     author: Author::Assistant,
-                    message: Message::assistant(&format!("goal-reply-{i}")),
+                    message: Message::assistant(format!("goal-reply-{i}")),
                 },
             )
             .await
@@ -1577,10 +1577,7 @@ async fn goals_park_unknown_id_is_404() {
 async fn goals_message_unknown_id_is_404() {
     let harness = T1Harness::with_life_pack().await;
     let (status, body) = harness
-        .post_json(
-            "/api/goals/does-not-exist/message",
-            r#"{"text":"hello"}"#,
-        )
+        .post_json("/api/goals/does-not-exist/message", r#"{"text":"hello"}"#)
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
 }
@@ -1602,8 +1599,6 @@ async fn sessions_fork_unknown_id_is_404() {
 #[tokio::test]
 async fn hooks_unknown_name_is_404() {
     let harness = T1Harness::with_life_pack().await;
-    let (status, body) = harness
-        .post_json("/api/hooks/no-such-hook", "{}")
-        .await;
+    let (status, body) = harness.post_json("/api/hooks/no-such-hook", "{}").await;
     assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
 }

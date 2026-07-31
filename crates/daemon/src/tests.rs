@@ -1375,7 +1375,9 @@ async fn daemon_executes_an_approved_proposal() {
         }]),
         "a test proposal",
     )
-    .with_requested_grant(liberado_common::Capability::Write(liberado_common::Zone::vault("tasks")));
+    .with_requested_grant(liberado_common::Capability::Write(
+        liberado_common::Zone::vault("tasks"),
+    ));
     let mut proposal = signer.sign(proposal);
     proposal.set_status(ProposalStatus::Approved);
     std::fs::write(proposals_dir.join("approved.md"), proposal.to_note()).unwrap();
@@ -1427,12 +1429,10 @@ async fn daemon_executes_an_approved_proposal() {
 #[tokio::test]
 async fn daemon_hub_proposal_lifecycle_applies_grant() {
     use liberado_common::{
-        GrantScope, Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall,
-        session_grants, DEFAULT_POOL,
+        DEFAULT_POOL, GrantScope, Proposal, ProposalSigner, ProposalStatus, ProposedAction,
+        ToolCall, session_grants,
     };
-    use liberado_executor::{
-        RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime,
-    };
+    use liberado_executor::{RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime};
     use liberado_orchestrator::Orchestrator;
     use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
     use liberado_session::{GoalSessionHub, GoalSessionStore};
@@ -1441,7 +1441,9 @@ async fn daemon_hub_proposal_lifecycle_applies_grant() {
     struct LpRuntime;
     #[async_trait::async_trait]
     impl ToolRuntime for LpRuntime {
-        fn catalog(&self) -> Vec<ToolDef> { Vec::new() }
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
         async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
             Ok("ok".into())
         }
@@ -1470,7 +1472,9 @@ async fn daemon_hub_proposal_lifecycle_applies_grant() {
         )),
         LpFactory,
         CapabilitySet::empty(),
-        Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
         std::env::temp_dir(),
         signer.clone(),
         "default",
@@ -1504,7 +1508,9 @@ async fn daemon_hub_proposal_lifecycle_applies_grant() {
         }]),
         "proposal lifecycle test",
     )
-    .with_requested_grant(liberado_common::Capability::Write(liberado_common::Zone::vault("lifecycle")));
+    .with_requested_grant(liberado_common::Capability::Write(
+        liberado_common::Zone::vault("lifecycle"),
+    ));
     proposal.pool = Some(DEFAULT_POOL.to_string());
     proposal.approved_scope = Some(GrantScope::Session);
     let mut proposal = signer.sign(proposal);
@@ -1523,7 +1529,9 @@ async fn daemon_hub_proposal_lifecycle_applies_grant() {
         "hub lifecycle: grant must be non-empty, got {grant:?}"
     );
     assert!(
-        grant.contains(&liberado_common::Capability::Write(liberado_common::Zone::vault("lifecycle"))),
+        grant.contains(&liberado_common::Capability::Write(
+            liberado_common::Zone::vault("lifecycle")
+        )),
         "hub lifecycle: grant must include Write(vault/\"lifecycle\"): {grant:?}"
     );
 
@@ -2624,7 +2632,7 @@ async fn handle_proposal_change_active_failed_not_expired_does_not_enter_expiry_
 
     let _outcome = daemon.handle_proposal_change(rel).await.unwrap();
     assert!(
-        invoked.lock().unwrap().len() >= 1,
+        !invoked.lock().unwrap().is_empty(),
         "tools should have run — the orchestrator returned Failed but not with the expiry refusal"
     );
     let grant = session_grants::session_grant(DEFAULT_POOL);
@@ -2801,9 +2809,7 @@ async fn l9_webhook_session_triggers_notifier_deliver_cron() {
     use liberado_common::{DispatchAction, DispatchDecision};
     use liberado_config_loader::DispatchTuning;
     use liberado_dispatch_pack::DispatchPack;
-    use liberado_executor::{
-        RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime,
-    };
+    use liberado_executor::{RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime};
     use liberado_notify::Notifier;
     use liberado_orchestrator::Orchestrator;
     use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
@@ -2813,7 +2819,9 @@ async fn l9_webhook_session_triggers_notifier_deliver_cron() {
     struct L9NotifyRuntime;
     #[async_trait::async_trait]
     impl ToolRuntime for L9NotifyRuntime {
-        fn catalog(&self) -> Vec<ToolDef> { Vec::new() }
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
         async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
             Ok("ok".into())
         }
@@ -2881,7 +2889,9 @@ async fn l9_webhook_session_triggers_notifier_deliver_cron() {
         )),
         L9NotifyFactory,
         CapabilitySet::empty(),
-        Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
         std::env::temp_dir(),
         ProposalSigner::random(),
         "default",
@@ -2979,7 +2989,7 @@ async fn l9_webhook_session_triggers_notifier_deliver_cron() {
 #[tokio::test]
 async fn guard_conformance_capability_gap_agrees_both_sides() {
     use liberado_common::{
-        Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision, BlockReason,
+        BlockReason, Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision,
         McpDescriptor, ToolCall,
     };
     use liberado_config_loader::DispatchTuning;
@@ -2990,21 +3000,33 @@ async fn guard_conformance_capability_gap_agrees_both_sides() {
 
     let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("tasks-mcp".into())]);
     let catalog = vec![McpDescriptor {
-        name: "email-mcp".into(), description: "email".into(), consequence: Consequence::Reversible,
-        provenance: None, default_zone: None, tool_zones: Vec::new(), zone_from_arg: None,
+        name: "email-mcp".into(),
+        description: "email".into(),
+        consequence: Consequence::Reversible,
+        provenance: None,
+        default_zone: None,
+        tool_zones: Vec::new(),
+        zone_from_arg: None,
         write_tools: Vec::new(),
     }];
 
     let decision = DispatchDecision {
         action: DispatchAction::ExecuteDirect {
-            seed_calls: vec![ToolCall { tool: "email-mcp:send".into(), args: serde_json::json!({}) }],
+            seed_calls: vec![ToolCall {
+                tool: "email-mcp:send".into(),
+                args: serde_json::json!({}),
+            }],
             relevant_mcps: Vec::new(),
         },
-        confidence: 0.95, rationale: "test".into(),
+        confidence: 0.95,
+        rationale: "test".into(),
     };
     let req = liberado_dispatcher::DispatchRequest {
-        goal: "send an email".into(), catalog, capabilities: caps.clone(),
-        reaction_depth: 0, zone_write_classes: Vec::new(),
+        goal: "send an email".into(),
+        catalog,
+        capabilities: caps.clone(),
+        reaction_depth: 0,
+        zone_write_classes: Vec::new(),
     };
     assert_eq!(
         evaluate(&decision, &req, &DispatchTuning::default(), 4),
@@ -3015,18 +3037,31 @@ async fn guard_conformance_capability_gap_agrees_both_sides() {
     struct NoopRt;
     #[async_trait::async_trait]
     impl ToolRuntime for NoopRt {
-        fn catalog(&self) -> Vec<ToolDef> { Vec::new() }
-        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> { Ok("ok".into()) }
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".into())
+        }
     }
     let rt = RiskGatedToolRuntime::new(
-        Arc::new(NoopRt), caps,
+        Arc::new(NoopRt),
+        caps,
         vec![("email-mcp".into(), Consequence::Reversible)],
-        Vec::new(), Vec::new(), std::env::temp_dir(),
-        "send an email".into(), "t1-guards-cap".into(),
-        ProposalSigner::random(), "default",
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        "send an email".into(),
+        "t1-guards-cap".into(),
+        ProposalSigner::random(),
+        "default",
     );
     let runtime_result = rt
-        .invoke(&ToolInvocation::new("c1", "email-mcp:send", serde_json::json!({})))
+        .invoke(&ToolInvocation::new(
+            "c1",
+            "email-mcp:send",
+            serde_json::json!({}),
+        ))
         .await;
     assert!(
         runtime_result.is_err(),
@@ -3037,7 +3072,7 @@ async fn guard_conformance_capability_gap_agrees_both_sides() {
 #[tokio::test]
 async fn guard_conformance_consequence_agrees_on_external_mcp() {
     use liberado_common::{
-        Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision, BlockReason,
+        BlockReason, Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision,
         McpDescriptor, ToolCall,
     };
     use liberado_config_loader::DispatchTuning;
@@ -3048,21 +3083,33 @@ async fn guard_conformance_consequence_agrees_on_external_mcp() {
 
     let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("email".into())]);
     let catalog = vec![McpDescriptor {
-        name: "email".into(), description: "send email".into(), consequence: Consequence::External,
-        provenance: None, default_zone: None, tool_zones: Vec::new(), zone_from_arg: None,
+        name: "email".into(),
+        description: "send email".into(),
+        consequence: Consequence::External,
+        provenance: None,
+        default_zone: None,
+        tool_zones: Vec::new(),
+        zone_from_arg: None,
         write_tools: Vec::new(),
     }];
 
     let decision = DispatchDecision {
         action: DispatchAction::ExecuteDirect {
-            seed_calls: vec![ToolCall { tool: "email:send".into(), args: serde_json::json!({}) }],
+            seed_calls: vec![ToolCall {
+                tool: "email:send".into(),
+                args: serde_json::json!({}),
+            }],
             relevant_mcps: Vec::new(),
         },
-        confidence: 0.95, rationale: "test".into(),
+        confidence: 0.95,
+        rationale: "test".into(),
     };
     let req = liberado_dispatcher::DispatchRequest {
-        goal: "email my boss".into(), catalog, capabilities: caps.clone(),
-        reaction_depth: 0, zone_write_classes: Vec::new(),
+        goal: "email my boss".into(),
+        catalog,
+        capabilities: caps.clone(),
+        reaction_depth: 0,
+        zone_write_classes: Vec::new(),
     };
     assert_eq!(
         evaluate(&decision, &req, &DispatchTuning::default(), 4),
@@ -3073,18 +3120,31 @@ async fn guard_conformance_consequence_agrees_on_external_mcp() {
     struct NoopRt2;
     #[async_trait::async_trait]
     impl ToolRuntime for NoopRt2 {
-        fn catalog(&self) -> Vec<ToolDef> { Vec::new() }
-        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> { Ok("ok".into()) }
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".into())
+        }
     }
     let rt = RiskGatedToolRuntime::new(
-        Arc::new(NoopRt2), caps,
+        Arc::new(NoopRt2),
+        caps,
         vec![("email".into(), Consequence::External)],
-        Vec::new(), Vec::new(), std::env::temp_dir(),
-        "email my boss".into(), "t1-guards-consequence".into(),
-        ProposalSigner::random(), "default",
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        "email my boss".into(),
+        "t1-guards-consequence".into(),
+        ProposalSigner::random(),
+        "default",
     );
     let runtime_result = rt
-        .invoke(&ToolInvocation::new("c1", "email:send", serde_json::json!({})))
+        .invoke(&ToolInvocation::new(
+            "c1",
+            "email:send",
+            serde_json::json!({}),
+        ))
         .await;
     assert!(
         runtime_result.is_ok() && runtime_result.unwrap().contains("PROPOSAL"),
@@ -3095,7 +3155,7 @@ async fn guard_conformance_consequence_agrees_on_external_mcp() {
 #[tokio::test]
 async fn guard_conformance_magnitude_agrees_on_sweeping_destructive() {
     use liberado_common::{
-        Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision, BlockReason,
+        BlockReason, Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision,
         McpDescriptor, ToolCall,
     };
     use liberado_config_loader::DispatchTuning;
@@ -3106,23 +3166,34 @@ async fn guard_conformance_magnitude_agrees_on_sweeping_destructive() {
 
     let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("vault".into())]);
     let catalog = vec![McpDescriptor {
-        name: "vault".into(), description: "git-tracked vault".into(),
+        name: "vault".into(),
+        description: "git-tracked vault".into(),
         consequence: Consequence::Reversible,
-        provenance: None, default_zone: None, tool_zones: Vec::new(), zone_from_arg: None,
+        provenance: None,
+        default_zone: None,
+        tool_zones: Vec::new(),
+        zone_from_arg: None,
         write_tools: Vec::new(),
     }];
     let goal = "delete all of my notes and erase everything";
 
     let decision = DispatchDecision {
         action: DispatchAction::ExecuteDirect {
-            seed_calls: vec![ToolCall { tool: "vault:write".into(), args: serde_json::json!({}) }],
+            seed_calls: vec![ToolCall {
+                tool: "vault:write".into(),
+                args: serde_json::json!({}),
+            }],
             relevant_mcps: Vec::new(),
         },
-        confidence: 0.95, rationale: "test".into(),
+        confidence: 0.95,
+        rationale: "test".into(),
     };
     let req = liberado_dispatcher::DispatchRequest {
-        goal: goal.into(), catalog, capabilities: caps.clone(),
-        reaction_depth: 0, zone_write_classes: Vec::new(),
+        goal: goal.into(),
+        catalog,
+        capabilities: caps.clone(),
+        reaction_depth: 0,
+        zone_write_classes: Vec::new(),
     };
     assert_eq!(
         evaluate(&decision, &req, &DispatchTuning::default(), 4),
@@ -3133,18 +3204,31 @@ async fn guard_conformance_magnitude_agrees_on_sweeping_destructive() {
     struct NoopRt3;
     #[async_trait::async_trait]
     impl ToolRuntime for NoopRt3 {
-        fn catalog(&self) -> Vec<ToolDef> { Vec::new() }
-        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> { Ok("ok".into()) }
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".into())
+        }
     }
     let rt = RiskGatedToolRuntime::new(
-        Arc::new(NoopRt3), caps,
+        Arc::new(NoopRt3),
+        caps,
         vec![("vault".into(), Consequence::Reversible)],
-        Vec::new(), Vec::new(), std::env::temp_dir(),
-        goal.into(), "t1-guards-magnitude".into(),
-        ProposalSigner::random(), "default",
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        goal.into(),
+        "t1-guards-magnitude".into(),
+        ProposalSigner::random(),
+        "default",
     );
     let runtime_result = rt
-        .invoke(&ToolInvocation::new("c1", "vault:write", serde_json::json!({})))
+        .invoke(&ToolInvocation::new(
+            "c1",
+            "vault:write",
+            serde_json::json!({}),
+        ))
         .await;
     assert!(
         runtime_result.is_ok() && runtime_result.unwrap().contains("PROPOSAL"),
@@ -3155,9 +3239,8 @@ async fn guard_conformance_magnitude_agrees_on_sweeping_destructive() {
 #[tokio::test]
 async fn concurrent_park_and_cancel_do_not_deadlock() {
     use liberado_session::{
-        GoalSessionHub, GoalSessionStore, SessionStatus, DomainHint, GoalSpec, SessionGrant,
-        DomainPackRunner, PackContext, GoalResult, PackError,
-        InputChannel, SessionEvent,
+        DomainHint, DomainPackRunner, GoalResult, GoalSessionHub, GoalSessionStore, GoalSpec,
+        InputChannel, PackContext, PackError, SessionEvent, SessionGrant, SessionStatus,
     };
     use std::sync::Arc;
 
@@ -3166,7 +3249,9 @@ async fn concurrent_park_and_cancel_do_not_deadlock() {
     }
     #[async_trait::async_trait]
     impl DomainPackRunner for ConcurrentSpyPack {
-        fn domain_id(&self) -> &str { "life" }
+        fn domain_id(&self) -> &str {
+            "life"
+        }
         async fn run(
             &self,
             _id: &str,
@@ -3189,7 +3274,9 @@ async fn concurrent_park_and_cancel_do_not_deadlock() {
     }
 
     let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let pack = Arc::new(ConcurrentSpyPack { cancelled: cancelled.clone() });
+    let pack = Arc::new(ConcurrentSpyPack {
+        cancelled: cancelled.clone(),
+    });
 
     let mut hub = GoalSessionHub::new(GoalSessionStore::new());
     hub.register_pack(pack);
@@ -3198,9 +3285,14 @@ async fn concurrent_park_and_cancel_do_not_deadlock() {
     let session_id = hub
         .start_with_grant(
             GoalSpec {
-                id: None, description: "concurrent test".into(),
-                success_criteria: vec![], domain: DomainHint::Life,
-                max_turns: 0, max_idle_secs: None, origin: None, profile: None,
+                id: None,
+                description: "concurrent test".into(),
+                success_criteria: vec![],
+                domain: DomainHint::Life,
+                max_turns: 0,
+                max_idle_secs: None,
+                origin: None,
+                profile: None,
                 payload: serde_json::json!({}),
             },
             SessionGrant {
@@ -3215,10 +3307,10 @@ async fn concurrent_park_and_cancel_do_not_deadlock() {
 
     // Wait for Running via snapshot loop
     for _ in 0..100 {
-        if let Some(snap) = hub.snapshot(&session_id).await {
-            if snap.session.status == SessionStatus::Running {
-                break;
-            }
+        if let Some(snap) = hub.snapshot(&session_id).await
+            && snap.session.status == SessionStatus::Running
+        {
+            break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -3235,10 +3327,10 @@ async fn concurrent_park_and_cancel_do_not_deadlock() {
     });
     let poll_task = tokio::spawn(async move {
         for _ in 0..100 {
-            if let Some(snap) = hub_poll.snapshot(&sid_poll).await {
-                if snap.session.status.is_terminal() {
-                    return;
-                }
+            if let Some(snap) = hub_poll.snapshot(&sid_poll).await
+                && snap.session.status.is_terminal()
+            {
+                return;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }

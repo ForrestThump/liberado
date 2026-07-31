@@ -332,8 +332,10 @@ mod tests {
 
     #[test]
     fn validation_rejects_empty_backend() {
-        let mut tuning = CoderTuning::default();
-        tuning.backend = String::new();
+        let tuning = CoderTuning {
+            backend: String::new(),
+            ..CoderTuning::default()
+        };
         assert!(tuning.validate().is_err());
     }
 
