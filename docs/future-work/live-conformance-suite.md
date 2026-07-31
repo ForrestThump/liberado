@@ -1,8 +1,8 @@
 # The live conformance suite
 
-**Status**: Tier-1 **complete** (levels L1–L10); **Tier 3 open** (live, per-path, against the
+**Status**: Tier-1 **complete** (levels L1–L11); **Tier 3 open** (live, per-path, against the
 deployed daemon — see below; added after three defects on 2026-07-28 that Tier 1 structurally could
-not see) — **L1–L8 / L10** in
+not see) — **L1–L8 / L10 / L11** in
 `crates/server/src/t1_conformance.rs` (in-process production-shaped goals surface, durable
 `SessionStore`, `MockProvider`; L6 via `RiskGatedToolRuntime` + spy write tool; L3/L4 via
 parked reopen + production `POST .../message` → resume; L7 via spy `SessionAlert` + real

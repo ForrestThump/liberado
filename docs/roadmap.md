@@ -15,7 +15,7 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`spec/
 | # | What | Why it matters |
 |---|---|---|
 | **Dogfood** | **Lean on Telegram harder** | Collect friction → fix real pain. Free-form sticky chat is the phone surface. |
-| **T1** | **Live conformance suite** — [`live-conformance-suite.md`](future-work/live-conformance-suite.md) | **L1–L10 landed.** **Open:** Tier 2 only. |
+| **T1** | **Live conformance suite** — [`live-conformance-suite.md`](future-work/live-conformance-suite.md) | **L1–L11 landed.** **Open:** Tier 3 (Tier 2 remains optional). |
 | **W1** | **Goal-session view in mobile WebUI** | Later phone surface beyond Telegram. See [`spec/architecture/session-surface-contract.md`](spec/architecture/session-surface-contract.md). |
 | **E5-b** | ~~Telegram session deep-link~~ | **Deprioritized** (prefer WebUI later). |
 
@@ -99,7 +99,7 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
   P1 daily-driver ──►  dogfood Telegram
                    ├── C1 done (interactive crons → AskHuman via session profiles)
                    ├── M1b done (pool + degraded routing + topology MCP hot-reload)
-                   └── T1 Tier-1 done (Tier 2 optional)
+                   └── T1 Tier-1 done (Tier 3 open; Tier 2 optional)
 
   Later ──► W1 mobile WebUI session view
   TurboVault (parallel) ──► vault_events · upstream land
@@ -120,4 +120,4 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
 
 See [`spec/architecture/sessions.md`](spec/architecture/sessions.md) for the session model history pointers.
 
-**Last updated:** 2026-07-24.
+**Last updated:** 2026-07-31.

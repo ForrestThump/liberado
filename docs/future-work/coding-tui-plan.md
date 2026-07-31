@@ -1,8 +1,10 @@
 # Agentic Coding TUI — Plan (goal-driven session surface + kernel completion gate)
 
-**Status**: plan, 2026-07-24 — no code yet. Pulled forward from Priority 3 by owner decision
-(2026-07-24): the daily-driver automation work continues in parallel; this is the chosen
-frontend-adjacent track because the TUI already exists and the engine underneath it is done.
+**Status**: plan, 2026-07-31 — **S1 (completion gate) landed; S2 (wire events + goal surface) partial;
+S3–S7 open** (slice tracking in [`roadmap.md`](../roadmap.md) §Priority 3). Pulled forward from
+Priority 3 by owner decision (2026-07-24): the daily-driver automation work continues in parallel;
+this is the chosen frontend-adjacent track because the TUI already exists and the engine underneath
+it is done.
 **Umbrella architecture**: [`agentic-loops.md`](../spec/architecture/agentic-loops.md) (kernel vs pack),
 [`rust-native-agentic-coder-plan.md`](rust-native-agentic-coder-plan.md) (the coding pack roadmap —
 this plan is its **surface + completion-gate chapter**, not a replacement),

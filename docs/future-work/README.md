@@ -5,7 +5,7 @@ Index of forward-looking work.
 | Doc | Role |
 |-----|------|
 | **[roadmap.md](../roadmap.md)** | **Living scoreboard** — open work in priority order, recently landed |
-| [live-conformance-suite.md](live-conformance-suite.md) | T1 reliability suite (L1–L10 landed; Tier 2 optional) |
+| [live-conformance-suite.md](live-conformance-suite.md) | T1 reliability suite (L1–L11 landed; Tier 3 open — Tier 2 optional) |
 | Active plans below | Still drive near-term work (status in each file header when set) |
 | [archive/](archive/README.md) | Finished plans, closed audits — **not current truth** |
 
@@ -22,7 +22,7 @@ Index of forward-looking work.
 | [rust-native-agentic-coder-plan.md](rust-native-agentic-coder-plan.md) | Coding pack roadmap |
 | [tui-maturity-roadmap.md](tui-maturity-roadmap.md) | TUI surface |
 | [turbovault-modules-integration-roadmap.md](turbovault-modules-integration-roadmap.md) | TurboVault plugins umbrella |
-| [session-profiles-plan.md](session-profiles-plan.md) | Per-conversation tool authority (steps 1–4 landed on `feat/session-profiles`, parked) |
+| [session-profiles-plan.md](session-profiles-plan.md) | Per-conversation tool authority (steps 1–6 landed on `feat/session-profiles`, parked) |
 | [turbovault-vault-events-plugin-plan.md](turbovault-vault-events-plugin-plan.md) | vault_events module |
 | [mcp-forge-backlog.md](mcp-forge-backlog.md) | MCP forge service |
 | [mcp-suite-standardization.md](mcp-suite-standardization.md) | Peer MCP suite norms |
@@ -30,5 +30,10 @@ Index of forward-looking work.
 | [heuristics-tuning-engine-plan.md](heuristics-tuning-engine-plan.md) | Heuristics tuner tooling |
 | [coder-eval-curriculum.md](coder-eval-curriculum.md) | Coding quality instrument |
 | [pr-dispatch-vtcode-no-write-finding.md](pr-dispatch-vtcode-no-write-finding.md) | Open PR-dispatch bug |
+
+### Coding pack / TUI
+- [`rust-native-agentic-coder-plan.md`](rust-native-agentic-coder-plan.md) — umbrella design
+- [`coding-tui-plan.md`](coding-tui-plan.md) — surface + completion-gate slices S1–S7
+- [`tui-maturity-roadmap.md`](tui-maturity-roadmap.md) — TUI maturity audit
 
 Start every planning session at [roadmap.md](../roadmap.md).

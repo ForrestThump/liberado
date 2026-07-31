@@ -1,3 +1,5 @@
+> 🐛 Open bug finding — tracked pending write-guard completion. See [`docs/roadmap.md`](../roadmap.md) for status.
+
 # PR-dispatch pipeline reliability — vtcode never writes files (in progress)
 
 **Status**: Root cause not yet found. Narrowed conclusively to vtcode itself (not the model, not our
