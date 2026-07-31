@@ -10,7 +10,7 @@ aren't re-investigated next time).
 
 ## Already fixed this session (quick items, done before this doc was written)
 
-1. Three cold-start docs (`overview.md`, `current.md`, `contributing/agents.md`) still described
+1. Three cold-start docs (`overview.md`, `current.md`, `impl/AGENTS.md`) still described
    `provider-deepseek`/`provider-openrouter` as separate crates — collapsed into
    `provider-openai-compat` a while back. Fixed.
 2. `RiskGatedToolRuntime::invoke`'s `consequence_catalog` lookup miss silently defaulted to

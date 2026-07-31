@@ -277,7 +277,7 @@ Unchanged core strength:
 
 **Crate / Binary Layout (Cargo workspace recommended)**:
 
-> **Note**: this is the original planned layout (v0.3). The actual crate map is in `AGENTS.md`
+> **Note**: this is the original planned layout (v0.3). The actual crate map is in `../impl/AGENTS.md`
 > (Workspace layout section) and `ARCHITECTURE.md` (Crate map table).
 
 ```

@@ -305,7 +305,7 @@ Total eval scenarios: 12 → 18. No changes needed to `main.rs` — `scenarios()
 
 | File | Change |
 |------|--------|
-| `docs/impl/agents.md` | Added full self-extension workflow section: prerequisites, flow diagram, human wire-in steps, safety properties, tuning, and how to test the loop |
+| `docs/impl/AGENTS.md` | Added full self-extension workflow section: prerequisites, flow diagram, human wire-in steps, safety properties, tuning, and how to test the loop |
 | `docs/spec/architecture/overview.md` | Added items 11–12 (self-extension + Provider trait in riggers) to "Done" list; removed from "Not yet built" |
 | `docs/roadmap.md` | Marked Phase 2 as ✅ done (June 2026); all 3 slices marked complete with summary |
 | `crates/common/ARCHITECTURE.md` | Added `catalog` module row documenting `McpDescriptor.provenance` for self-extension traceability |
@@ -335,7 +335,7 @@ Total eval scenarios: 12 → 18. No changes needed to `main.rs` — `scenarios()
 | 8 | Daemon never writes config | ✅ — verified by code review: the only `fs::write` calls in daemon code are test fixtures writing vault notes/proposals into temp dirs; nothing writes `topology.toml`. |
 | 9 | Resource cap is configurable | ✅ — `max_concurrent_coding_subagents` defined on `DispatchTuning` (default 2), visible in `tuning.toml` example. **Not yet wired** — no code enforces the cap (same status as Phase 1's `dispatch_parallel`). Marked `TODO(phase-2)` in code; the existing `max_concurrent_subagents` gates all in-flight subagents uniformly in the meantime. |
 | 10 | No regressions | ✅ — `cargo test --workspace` green, 0 failures |
-| 11 | Human wire-in is documented | ✅ — `docs/impl/agents.md` self-extension section |
+| 11 | Human wire-in is documented | ✅ — `docs/impl/AGENTS.md` self-extension section |
 
 ---
 

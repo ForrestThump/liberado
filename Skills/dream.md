@@ -26,7 +26,7 @@ the `docs/` wiki (see `docs/README.md`).
 - `docs/specs/liberado-architecture-decisions.md` — the **numbered Decision log** (load-bearing and
   authoritative). Treat resolved Decisions as history: you may de-stale a reference, fix a broken
   link, or add a dated clarification, but do **not** rewrite a Decision's meaning.
-- `docs/contributing/agents.md` — build / run / extend guide (the `liberado` binary, env vars, endpoints).
+- `docs/impl/AGENTS.md` — build / run / extend guide (the `liberado` binary, env vars, endpoints).
 - `docs/roadmap/current.md` — forward work + nice-to-haves.
 - `docs/reference/api.md` — the chat HTTP/SSE contract + interface roadmap.
 - `docs/project/handoff.md` — the current-state handoff (historical snapshot: `docs/future-work/ideas/archive/handoff.md`).

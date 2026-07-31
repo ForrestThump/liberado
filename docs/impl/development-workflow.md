@@ -2,7 +2,7 @@
 
 **Audience**: a fresh planning/architectural agent (or human) picking up this project cold, with no
 memory of prior sessions, who needs to independently research, plan, delegate to subagents, implement,
-and ship work at the same quality bar this project has been held to. `docs/impl/agents.md`
+and ship work at the same quality bar this project has been held to. `docs/impl/AGENTS.md`
 covers *build/run mechanics*; `docs/spec/architecture/*.md` covers *what's built*; this doc covers *how work
 here actually gets done* — the process, judgment calls, and conventions that produced the work recorded
 in `docs/future-work/`. Read this before touching code on a new branch.
@@ -202,7 +202,7 @@ Don't duplicate what already exists elsewhere — this doc is process, not archi
 | What is this system, at a high level? | `docs/spec/architecture/overview.md` |
 | Why does it exist / how does it compare to alternatives? | `docs/spec/architecture/positioning.md` |
 | The seam/modularity plan | `docs/spec/architecture/modularity.md` |
-| How do I build/run/configure it? | `docs/impl/agents.md` |
+| How do I build/run/configure it? | `docs/impl/AGENTS.md` |
 | What's the phased roadmap, what's landed, what's next? | `docs/roadmap.md` |
 | Why was decision N made? | `docs/spec/architecture-decisions.md` |
 | Per-crate design detail | `crates/<name>/ARCHITECTURE.md` (each crate has one) |

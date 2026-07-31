@@ -10,7 +10,7 @@ If you are an agent: start at the [roadmap](roadmap.md) → [architecture overvi
 
 | Folder | Contents |
 |--------|----------|
-| **`spec/`** | Frozen specs, architecture decisions, reference docs — the foundational truth |
+| **`spec/`** | Design specs, living architecture narrative, reference docs — the truth about how the system works |
 | **`impl/`** | Developer guides, setup, contribution workflow — how to build and work here |
 | **`future-work/`** | Forward-looking: roadmap, plans, ideas, research — what might happen next |
 | **`validation/`** | Correctness: mutation testing reports, coverage analysis, invariants |
@@ -25,7 +25,7 @@ If you are an agent: start at the [roadmap](roadmap.md) → [architecture overvi
 3. [Sessions](spec/architecture/sessions.md) — everything is a `Session` (D7)
 4. [Contracts](spec/architecture/contracts.md) — narrow waists / frozen seams
 5. [Failure modes](spec/architecture/failure-modes.md) — six recurring bug classes
-6. [Build & run](impl/agents.md) — workspace layout, commands, configuration
+6. [Build & run](impl/AGENTS.md) — workspace layout, commands, configuration
 7. [Developer workflow](impl/development-workflow.md) — how work gets done here
 8. [Handoff](project/handoff.md) — what is live on the homelab today
 
@@ -44,7 +44,7 @@ Per-crate detail: generated [crate map](spec/reference/crate-map.md) + each crat
 | **Dispatch logic** | [spec/dispatch-logic-spec.md](spec/dispatch-logic-spec.md) | Dispatcher design |
 | **API reference** | [spec/reference/api.md](spec/reference/api.md) | HTTP/SSE surface |
 | **Tuning** | [spec/reference/tuning.md](spec/reference/tuning.md) | All behavioral knobs |
-| **Mutation testing** | [validation/mutation-testing-plan.md](validation/mutation-testing-plan.md) | Plan + results across 12 crates |
+| **Mutation testing** | [validation/mutation-testing-plan.md](validation/mutation-testing-plan.md) | Plan + results across 13 crates |
 | **Coverage gaps** | [validation/coverage-gaps.md](validation/coverage-gaps.md) | Known uncovered paths |
 | **Invariants** | [spec/architecture/failure-modes.md](spec/architecture/failure-modes.md) §6 | "Two things that should agree" |
 
@@ -54,7 +54,7 @@ Per-crate detail: generated [crate map](spec/reference/crate-map.md) + each crat
 
 Liberado is sequenced **daemon (life-ops) → chat surface → coding pack**, not "three products at once."
 
-**Recently hardened (2026-07-30):** complete mutation testing pass (12 crates), Tier-1 conformance suite (L1–L11), dual-guard conformance tests, negative-case API tests, cargo-deny CI gate, session state-machine invariants, JSONL rehydration fuzzing, provider wire-body seam tests. See [roadmap.md](roadmap.md) and [validation/](validation/).
+**Recently hardened (2026-07-30):** complete mutation testing pass (13 crates), Tier-1 conformance suite (L1–L11), dual-guard conformance tests, negative-case API tests, cargo-deny CI gate, session state-machine invariants, JSONL rehydration fuzzing, provider wire-body seam tests. See [roadmap.md](roadmap.md) and [validation/](validation/).
 
 ---
 

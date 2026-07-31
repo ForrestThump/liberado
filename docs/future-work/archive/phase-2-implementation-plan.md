@@ -299,7 +299,7 @@ Static (human-configured) MCPs have `provenance: None`. Self-extended MCPs have 
 #### 3e. Architecture and decision doc updates
 
 - **`docs/spec/architecture/overview.md`** — update "Not yet built" section; record the single-gate external-MCP design
-- **`docs/impl/agents.md`** — riggers setup (`riggers.yaml`, `topology.toml` entry, `policy.toml` grant); wire-in workflow (merge → config edit → restart); provenance
+- **`docs/impl/AGENTS.md`** — riggers setup (`riggers.yaml`, `topology.toml` entry, `policy.toml` grant); wire-in workflow (merge → config edit → restart); provenance
 - **`crates/common/ARCHITECTURE.md`** — document `McpDescriptor.provenance`
 - **`docs/roadmap.md`** — update Phase 2 status
 
@@ -312,7 +312,7 @@ Static (human-configured) MCPs have `provenance: None`. Self-extended MCPs have 
 - `crates/server/src/api.rs` — include `provenance` in `GET /api/catalog` response
 - `crates/server/src/lib.rs` — no structural changes; provenance flows through existing catalog path
 - `docs/spec/architecture/overview.md` — update
-- `docs/impl/agents.md` — wire-in workflow
+- `docs/impl/AGENTS.md` — wire-in workflow
 - `docs/roadmap.md` — status update
 
 **Tests:**
@@ -474,7 +474,7 @@ Slice 2 tasks that are independent within the slice (triage logic vs. vtcode loo
 | `crates/eval/src/scenarios.rs` | 3 | Add `code_dispatch_*` eval scenarios |
 | `crates/eval/src/main.rs` | 3 | Register new scenarios (if needed) |
 | `docs/spec/architecture/overview.md` | 3 | Update "Not yet built" section; record single-gate external-MCP design |
-| `docs/impl/agents.md` | 3 | riggers setup; wire-in workflow (merge → config edit → restart); provenance |
+| `docs/impl/AGENTS.md` | 3 | riggers setup; wire-in workflow (merge → config edit → restart); provenance |
 | `docs/roadmap.md` | 3 | Update Phase 2 status |
 | `riggers/` (sibling repo) | 1, 2 | MCP wrapper binary; Provider trait integration; triage logic; greenfield scaffold; vtcode + cargo test gate; new-repo + draft-PR creation |
 | `riggers/Cargo.toml` | 1 | Add `liberado-provider` dep |
@@ -518,7 +518,7 @@ Phase 2 is complete when all of the following are true:
 
 4. **Greenfield self-improvement works end-to-end.** A chat message requesting a tool absent from catalog routes through `code-dispatch`, riggers triage returns `create`, the `vtcode` loop runs with `cargo test` gating, a draft PR is opened on a new repo under the `ForrestThump` fork. Validated by integration test with mock `cargo test` and mock GitHub API.
 
-5. **The human wire-in path is documented and tested.** `docs/impl/agents.md` describes merge → `topology.toml` edit → restart. The daemon does not write config. Validated by documentation review and the `code_dispatch_missing` integration test (graceful error when MCP not configured post-merge).
+5. **The human wire-in path is documented and tested.** `docs/impl/AGENTS.md` describes merge → `topology.toml` edit → restart. The daemon does not write config. Validated by documentation review and the `code_dispatch_missing` integration test (graceful error when MCP not configured post-merge).
 
 6. **Self-extension is capability-gated.** Without `ExecuteMcp("code-dispatch")` grant, the dispatcher cannot route to `code-dispatch`. Validated by eval scenario `code_dispatch_no_grant`.
 

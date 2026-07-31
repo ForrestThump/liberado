@@ -2,7 +2,7 @@
 
 Correctness artifacts for the Liberado workspace: mutation-testing reports, coverage analysis, and test-infrastructure design.
 
-**Summary document — start here:** [`mutation-testing-plan.md`](mutation-testing-plan.md). It holds the master plan and Phase 1–5 results across all 12 hardened crates (run order, methodology, catch rates, survivor triage, Phase 5 roadmap). The per-crate reports below are supporting detail.
+**Summary document — start here:** [`mutation-testing-plan.md`](mutation-testing-plan.md). It holds the master plan and Phase 1–5 results across all 13 hardened crates (run order, methodology, catch rates, survivor triage, Phase 5 roadmap). The per-crate reports below are supporting detail.
 
 ## Layout
 

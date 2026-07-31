@@ -26,7 +26,7 @@ Rust-native **personal AI Life OS** and **agentic orchestration** substrate: one
 ## Development
 
 - Workspace: Cargo crates under [`crates/`](crates/)
-- Agent build/run notes: [docs/impl/agents.md](docs/impl/agents.md)
+- Agent build/run notes: [docs/impl/AGENTS.md](docs/impl/AGENTS.md)
 - Layer rules (mechanical): `crates/test-support/tests/layer_rules.rs`
 - Example config: [`config.example/`](config.example/)
 
