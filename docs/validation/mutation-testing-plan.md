@@ -81,7 +81,7 @@ Avoid `--in-place` on Windows (risk of `os error 1224` mid-restore corruption; s
 3. Triage survivors: classify as false positive or actionable miss
 4. Patch actionable misses with targeted tests
 5. Re-run mutants to verify catch rate improvement
-6. Write crate-specific report in `docs/mutation-testing-report-<name>.md`
+6. Write crate-specific report in `docs/validation/mutation-testing/mutation-testing-report-<name>.md`
 
 ---
 
@@ -89,14 +89,14 @@ Avoid `--in-place` on Windows (risk of `os error 1224` mid-restore corruption; s
 
 | Crate | Tests Before | Tests After | Catch Before | Catch After | Delta | Report |
 |-------|:------------:|:-----------:|:------------:|:-----------:|:-----:|--------|
-| dispatcher | 48 | 60 | 72.7% | **96.4%** | +23.7pp | `mutation-testing-report-dispatcher.md` |
-| provider | 39 | 59 | 62.2% | **88.7%** | +26.5pp | `mutation-testing-report-provider.md` |
-| common | 102 | 117 | 83.8% | **94.1%** | +10.3pp | `mutation-testing-report-common.md` |
-| config-loader | 106 | 116 | 81.3% | **87.1%** | +5.8pp | `mutation-testing-report-config-loader.md` |
-| session | 36 | 41 | 73.8% | **79.9%** | +6.1pp | `mutation-testing-report-session.md` |
-| config | 24 | 27 | 50.0% | **52.2%** | +2.2pp | `mutation-testing-report-config.md` |
-| executor | 72 | 78 | 80.4% | **82.7%** | +2.3pp | `mutation-testing-report-executor.md` |
-| orchestrator | 70 | 77 | 86.9% | **92.9%** | +6.0pp | `mutation-testing-report-orchestrator.md` |
+| dispatcher | 48 | 60 | 72.7% | **96.4%** | +23.7pp | `mutation-testing/mutation-testing-report-dispatcher.md` |
+| provider | 39 | 59 | 62.2% | **88.7%** | +26.5pp | `mutation-testing/mutation-testing-report-provider.md` |
+| common | 102 | 117 | 83.8% | **94.1%** | +10.3pp | `mutation-testing/mutation-testing-report-common.md` |
+| config-loader | 106 | 116 | 81.3% | **87.1%** | +5.8pp | `mutation-testing/mutation-testing-report-config-loader.md` |
+| session | 36 | 41 | 73.8% | **79.9%** | +6.1pp | `mutation-testing/mutation-testing-report-session.md` |
+| config | 24 | 27 | 50.0% | **52.2%** | +2.2pp | `mutation-testing/mutation-testing-report-config.md` |
+| executor | 72 | 78 | 80.4% | **82.7%** | +2.3pp | `mutation-testing/mutation-testing-report-executor.md` |
+| orchestrator | 70 | 77 | 86.9% | **92.9%** | +6.0pp | `mutation-testing/mutation-testing-report-orchestrator.md` |
 | **Total** | **497** | **575** | — | — | — | |
 
 ---
@@ -110,7 +110,7 @@ real network/process infrastructure.
 **Decision:** Build a mock harness in `liberado-test-support` and `liberado-common` to
 unblock ~35 testable gaps.
 
-### Harness Implementation (see `docs/mock-harness-scope.md` for full checklist)
+### Harness Implementation (see `docs/impl/mock-harness-scope.md` for full checklist)
 
 | Step | What | Status |
 |------|------|:------:|
@@ -311,7 +311,7 @@ Each step includes the exact command with crate-specific timeout flags. Avoid `-
 | 1c | Triage survivors | ✓ |
 | 1d | Patch actionable misses | ✓ |
 | 1e | Re-run to verify catch rate | ✓ |
-| 1f | Report: `docs/mutation-testing-report-coder-sandbox.md` | ⬜ |
+| 1f | Report: `docs/validation/mutation-testing/mutation-testing-report-coder-sandbox.md` | ⬜ |
 
 **What's inside** (`crates/coder-sandbox/src/lib.rs`): `HostWorkspace`, `DockerWorkspace`,
 `PathPolicy`, shadow-git checkpoint scaffold, workspace-relative path validation.
@@ -327,7 +327,7 @@ Each step includes the exact command with crate-specific timeout flags. Avoid `-
 | 2c | Triage survivors | ✓ |
 | 2d | Patch actionable misses | ✓ |
 | 2e | Re-run to verify catch rate | ✓ |
-| 2f | Report: `docs/mutation-testing-report-coder-tools.md` | ✓ |
+| 2f | Report: `docs/validation/mutation-testing/mutation-testing-report-coder-tools.md` | ✓ |
 
 **What's inside** (`crates/coder-tools/src/lib.rs`): `list_files`, `search_text`, `read_file`,
 `write_file`, `edit_file`, `apply_patch`, `git_status`, `git_diff`, `run_command`, `validate`.
@@ -345,7 +345,7 @@ hangs. The existing 10 tests (`tool_schemas_are_non_empty`, path validation, etc
 | 3c | Triage survivors | ✓ |
 | 3d | Patch actionable misses | ✓ |
 | 3e | Re-run to verify catch rate | ✓ |
-| 3f | Report: `docs/mutation-testing-report-daemon.md` | ⬜ |
+| 3f | Report: `docs/validation/mutation-testing/mutation-testing-report-daemon.md` | ⬜ |
 
 **What's inside** (`crates/daemon/src/`): `lib.rs` (29 tests — daemon bootstrap, pool routing,
 schedule wiring), `proposals.rs` (7 tests — expiry reaper, proposal lifecycle),
@@ -369,7 +369,7 @@ and they manifest as silent failures, not panic stacks.
 | 4c | Triage survivors | ✓ |
 | 4d | Patch actionable misses | — |
 | 4e | Re-run to verify catch rate | — |
-| 4f | Report: `docs/mutation-testing-report-server.md` | ✓ |
+| 4f | Report: `docs/validation/mutation-testing/mutation-testing-report-server.md` | ✓ |
 
 **What's inside** (`crates/server/src/`): `t1_conformance.rs` (16 tests — Tier 1 live
 conformance L1–L10), `api/goals.rs` (12), `api/chat.rs` (7), `hooks.rs` (12),
@@ -399,7 +399,7 @@ so hung tests don't accumulate, but let the process run for hours to cover the f
 | 5d | Triage survivors | ✓ |
 | 5e | Patch actionable misses | — |
 | 5f | Re-run to verify catch rate | — |
-| 5g | Report: `docs/mutation-testing-report-coder-agent.md` | ✓ |
+| 5g | Report: `docs/validation/mutation-testing/mutation-testing-report-coder-agent.md` | ✓ |
 
 **What's inside** (`crates/coder-agent/src/`): 16 source files — `lib.rs`, `completion_gate.rs`
 (5 tests), `gates.rs` (2), `planner.rs` (1), `intake_session.rs` (1), `repair_feedback.rs`
@@ -429,11 +429,11 @@ process own its lifetime.
 
 | Crate | Tests Before | Tests After | Catch Before | Catch After | Delta | Report |
 |-------|:------------:|:-----------:|:------------:|:-----------:|:-----:|--------|
-| coder-sandbox | 8 | 13 | —% | **97%** | — | `mutation-testing-report-coder-sandbox.md` |
-| coder-tools | 10 | 21 | —% | **93%** | — | `mutation-testing-report-coder-tools.md` |
-| daemon | 38 | 47† | —% | **51%** | — | `mutation-testing-report-daemon.md` |
-| server | 56 | 57†† | —% | **27%** | — | `mutation-testing-report-server.md` |
-| coder-agent | 84 (64+12+8) | 64 (lib only) | —% | **54%** | — | `mutation-testing-report-coder-agent.md` |
+| coder-sandbox | 8 | 13 | —% | **97%** | — | `mutation-testing/mutation-testing-report-coder-sandbox.md` |
+| coder-tools | 10 | 21 | —% | **93%** | — | `mutation-testing/mutation-testing-report-coder-tools.md` |
+| daemon | 38 | 47† | —% | **51%** | — | `mutation-testing/mutation-testing-report-daemon.md` |
+| server | 56 | 57†† | —% | **27%** | — | `mutation-testing/mutation-testing-report-server.md` |
+| coder-agent | 84 (64+12+8) | 64 (lib only) | —% | **54%** | — | `mutation-testing/mutation-testing-report-coder-agent.md` |
 
 † Includes 3 wiring tests (L9 webhook, notifier, proposal lifecycle) and 2 debounce boundary tests added after the mutant run.
 †† Includes 1 wiring test (L10 fork goal session) added after the mutant run.
