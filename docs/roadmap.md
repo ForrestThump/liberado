@@ -1,6 +1,6 @@
 # Liberado — Roadmap
 
-**What is not done yet.** Future-looking work only. What *is* built is described in [`spec/architecture/overview.md`](spec/architecture/overview.md); finished plans and closed audits are in [`future-work/archive/`](future-work/archive/README.md). Index of forward plans: [`future-work/README.md`](future-work/README.md).
+**What is not done yet.** Future-looking work only. What *is* built is described in [`spec/architecture/overview.md`](spec/architecture/overview.md); finished plans and closed audits are in [`future-work/archive/`](future-work/archive/README.md). Future work index: [`future-work/README.md`](future-work/README.md).
 
 Before starting anything, read [`spec/architecture/failure-modes.md`](spec/architecture/failure-modes.md) — six bug classes this codebase produces over and over. Operator knobs (and which are compiled in) are in [`spec/reference/tuning.md`](spec/reference/tuning.md). Every one of them shipped with a green test suite.
 

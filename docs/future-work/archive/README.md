@@ -38,4 +38,4 @@ Everything here is in git history regardless; the archive just keeps it reachabl
 | [webui-flesh-out-plan.md](webui-flesh-out-plan.md) | WebUI flesh-out — all 5 phases implemented; design reference only |
 | *Other hygiene/hardening audits and phase reports* | Same directory — treat as historical |
 
-Living roadmap: [`../current.md`](../../roadmap.md) · roadmap index: [`../README.md`](../README.md).
+Living roadmap: [`../current.md`](../../roadmap.md) · Future work index: [`../README.md`](../README.md).
