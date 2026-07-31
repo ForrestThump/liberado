@@ -13,7 +13,7 @@ Rust-native **personal AI Life OS** and **agentic orchestration** substrate: one
 | Sessions model | [docs/architecture/sessions.md](docs/architecture/sessions.md) |
 | Frozen seams | [docs/architecture/contracts.md](docs/architecture/contracts.md) |
 | What to build next | [docs/roadmap/current.md](docs/roadmap/current.md) |
-| Live homelab status | [docs/handoff.md](docs/handoff.md) |
+| Live homelab status | [docs/project/handoff.md](docs/project/handoff.md) |
 | HTTP/SSE API | [docs/reference/api.md](docs/reference/api.md) |
 | Crate inventory | [docs/reference/crate-map.md](docs/reference/crate-map.md) |
 | Failure-modes checklist | [docs/architecture/failure-modes.md](docs/architecture/failure-modes.md) |

@@ -1,4 +1,6 @@
-﻿# Liberado â€” Handoff (2026-07-08)
+﻿> ⚠️ Archive — see living copy at `docs/project/handoff.md`. This file is preserved for historical reference only.
+
+# Liberado â€” Handoff (2026-07-08)
 
 Current-state handoff. Kept in sync after each session arc. For the authoritative system map read
 [`docs/architecture/overview.md`](../../../spec/architecture/overview.md); for build/run/configure read

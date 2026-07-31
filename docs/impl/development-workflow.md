@@ -208,10 +208,10 @@ Don't duplicate what already exists elsewhere — this doc is process, not archi
 | Per-crate design detail | `crates/<name>/ARCHITECTURE.md` (each crate has one) |
 | The chat/SSE API contract | `docs/reference/api.md` |
 | Past hygiene/hardening audit findings (including deferred items) | `docs/roadmap/*-audit-*.md` |
-| Point-in-time state snapshots from past sessions | `docs/ideas/archive/handoff.md` (snapshot, not a
+| Point-in-time state snapshots from past sessions | `docs/future-work/ideas/archive/handoff.md` (snapshot, not a
   process doc — expect it to be stale; this file you're reading now is the durable one) |
 
-**A note on staleness**: `docs/ideas/archive/handoff.md` and parts of `docs/architecture/overview.md`'s "Current
+**A note on staleness**: `docs/future-work/ideas/archive/handoff.md` and parts of `docs/architecture/overview.md`'s "Current
 status" section were found to be out of date during this session's own work (describing phases as
 not-yet-done that had, in fact, shipped). That's expected drift for point-in-time docs — treat any
 "current status"-shaped doc as a snapshot to verify against the actual code, not a ground truth, and fix
