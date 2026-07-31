@@ -1,0 +1,34 @@
+# cargo-deny configuration — RUSTSEC advisories, license compliance, duplicate deps.
+# Install: `cargo install cargo-deny`
+# Run:     `cargo deny check`
+
+[advisories]
+yanked = "warn"
+# `paste` (RUSTSEC-2024-0436) is unmaintained with no safe upgrade, pulled in transitively
+# by fastembed/tokenizers (vector search) and ratatui (TUI). Pinned at its final version;
+# revisit when an upstream dependency drops it.
+ignore = [
+    "RUSTSEC-2024-0436",
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "BSD-2-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "0BSD",
+    "MPL-2.0",
+    "NCSA",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+]
+# The workspace's own crates carry their licenses in Cargo.toml; don't double-check them.
+private = { ignore = true }
+
+[bans]
+multiple-versions = "warn"

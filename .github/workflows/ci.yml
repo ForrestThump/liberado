@@ -79,3 +79,16 @@ jobs:
 
       - name: Tests (includes layer-rules gate)
         run: cargo test --workspace
+
+  audit:
+    name: cargo-deny (advisories + licenses)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+
+      - name: Deny check
+        run: cargo deny check
