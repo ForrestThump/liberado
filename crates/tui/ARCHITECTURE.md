@@ -2,7 +2,7 @@
 
 A native terminal UI for Liberado that attaches to a running daemon server over the
 **same shared HTTP/SSE contract** as the web UI and the `liberado chat` REPL
-(`docs/reference/api.md`). It is the primary interactive surface for daily use.
+(`docs/spec/reference/api.md`). It is the primary interactive surface for daily use.
 
 ## Principle: the TUI proves the API is client-agnostic
 
@@ -16,7 +16,7 @@ daemon-first (Decision 2).
 Action→state reducers must live in **shared crates** (`chat-client-contract` and/or a future
 `liberado-client-core`). This crate owns **ratatui paint + terminal I/O only**. Do not grow
 goal/chat business logic only in `tui` — WebUI must import the same brain. See
-[`docs/roadmap/tui-maturity-roadmap.md`](../../docs/roadmap/tui-maturity-roadmap.md) §1.1.
+[`docs/future-work/tui-maturity-roadmap.md`](../../docs/future-work/tui-maturity-roadmap.md) §1.1.
 
 ## Views
 
@@ -65,7 +65,7 @@ liberado-tui ──HTTP──▶ liberado-server (:4201)
 All endpoints share one `reqwest::Client`. The incremental SSE byte-stream decoder
 (`SseDecoder`/`SseEvent`) itself lives in `chat_client_contract::native`, shared with the
 `liberado chat` CLI client (which used to carry its own separate copy) — see
-`docs/roadmap/tui-shared-code-extraction-plan.md`. This crate's own `src/sse.rs` only converts a
+`docs/future-work/archive/tui-shared-code-extraction-plan.md`. This crate's own `src/sse.rs` only converts a
 decoded `SseEvent` into this crate's `Action` enum (a `ToAction` trait, since Rust's orphan rules
 don't allow an inherent `impl` on a foreign type).
 
@@ -152,7 +152,7 @@ This TUI is a **strong chat + daemon client**, not yet peer-class with Claude Co
 OpenCode for **agent/goal UX**. Backend goal sessions exist (`POST /api/goals`, SSE); the TUI does
 not consume them yet.
 
-**Living roadmap:** [`docs/roadmap/tui-maturity-roadmap.md`](../../docs/roadmap/tui-maturity-roadmap.md)
+**Living roadmap:** [`docs/future-work/tui-maturity-roadmap.md`](../../docs/future-work/tui-maturity-roadmap.md)
 
 ### Landed (engineering)
 

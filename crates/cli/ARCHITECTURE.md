@@ -15,7 +15,7 @@ liberado chat [session]  ──►  chat_client::run(session)     (streaming HTT
 ```
 
 `serve` runs in the foreground, hosting the daemon and API until killed. `chat` is a thin native
-(`reqwest`/SSE) client of a separately-running server (`docs/reference/api.md`) — no agent logic, no
+(`reqwest`/SSE) client of a separately-running server (`docs/spec/reference/api.md`) — no agent logic, no
 provider, no store; it just streams `/api/chat/stream` and prints it.
 
 ## Arguments & environment
@@ -38,7 +38,7 @@ The daemon's operating mode (watch-only / decide-only / act) is selected by the 
 
 The SSE decoder itself now lives in `chat-client-contract`'s `native::SseDecoder` (shared with the
 TUI, extracted from what used to be a `chat_client`-local parser — see
-`docs/roadmap/tui-shared-code-extraction-plan.md`), with its own test suite there; `chat_client.rs`
+`docs/future-work/archive/tui-shared-code-extraction-plan.md`), with its own test suite there; `chat_client.rs`
 imports it rather than re-implementing it. The rest of this binary's behavior is exercised through
 the library crates and verified by live smoke runs (`cargo build --bin liberado`, then `liberado
 serve` against a scratch vault with a `chat` client attached).

@@ -5,7 +5,7 @@ kernel. It deliberately owns no model loop, file mutation, sandbox lifecycle, fo
 PR creation logic.
 
 Canonical architecture:
-[`docs/architecture/agentic-loops.md`](../../docs/architecture/agentic-loops.md).
+[`docs/spec/architecture/agentic-loops.md`](../../docs/spec/architecture/agentic-loops.md).
 These types specialize the logical Goal / Session / Event / Terminal vocabulary. Promote into
 `liberado-common` or a session crate when a second domain would otherwise depend on this crate for
 non-coding work (see modularity extraction trigger).

@@ -8,25 +8,25 @@ Rust-native **personal AI Life OS** and **agentic orchestration** substrate: one
 
 | For… | Go to… |
 |------|--------|
-| First run | [docs/getting-started/quickstart.md](docs/getting-started/quickstart.md) |
-| How it works | [docs/architecture/overview.md](docs/architecture/overview.md) |
-| Sessions model | [docs/architecture/sessions.md](docs/architecture/sessions.md) |
-| Frozen seams | [docs/architecture/contracts.md](docs/architecture/contracts.md) |
-| What to build next | [docs/roadmap/current.md](docs/roadmap/current.md) |
+| First run | [docs/impl/getting-started/quickstart.md](docs/impl/getting-started/quickstart.md) |
+| How it works | [docs/spec/architecture/overview.md](docs/spec/architecture/overview.md) |
+| Sessions model | [docs/spec/architecture/sessions.md](docs/spec/architecture/sessions.md) |
+| Frozen seams | [docs/spec/architecture/contracts.md](docs/spec/architecture/contracts.md) |
+| What to build next | [docs/roadmap.md](docs/roadmap.md) |
 | Live homelab status | [docs/project/handoff.md](docs/project/handoff.md) |
-| HTTP/SSE API | [docs/reference/api.md](docs/reference/api.md) |
-| Crate inventory | [docs/reference/crate-map.md](docs/reference/crate-map.md) |
-| Failure-modes checklist | [docs/architecture/failure-modes.md](docs/architecture/failure-modes.md) |
-| Open design questions | [docs/design_questions_for_the_user.md](docs/design_questions_for_the_user.md) |
+| HTTP/SSE API | [docs/spec/reference/api.md](docs/spec/reference/api.md) |
+| Crate inventory | [docs/spec/reference/crate-map.md](docs/spec/reference/crate-map.md) |
+| Failure-modes checklist | [docs/spec/architecture/failure-modes.md](docs/spec/architecture/failure-modes.md) |
+| Open design questions | [docs/project/design_questions.md](docs/project/design_questions.md) |
 
 ## Strategy (short)
 
-**Daemon (life-ops) first → chat surface → coding pack.** Sequencing and competitive framing: [docs/architecture/positioning.md](docs/architecture/positioning.md).
+**Daemon (life-ops) first → chat surface → coding pack.** Sequencing and competitive framing: [docs/spec/architecture/positioning.md](docs/spec/architecture/positioning.md).
 
 ## Development
 
 - Workspace: Cargo crates under [`crates/`](crates/)
-- Agent build/run notes: [docs/contributing/agents.md](docs/contributing/agents.md)
+- Agent build/run notes: [docs/impl/agents.md](docs/impl/agents.md)
 - Layer rules (mechanical): `crates/test-support/tests/layer_rules.rs`
 - Example config: [`config.example/`](config.example/)
 
@@ -36,4 +36,4 @@ Nested MCP checkouts (`liberado-*-mcp/`, `turbovault/`, …) may appear for co-d
 
 See [LICENSE](LICENSE).
 
-**Last updated:** 2026-07-23 — docs hub reorg; architecture hardening (module splits, T1 partial, MCP pooling) on branch.
+**Last updated:** 2026-07-31 — docs hub reorg; architecture hardening (module splits, T1 partial, MCP pooling) on branch.

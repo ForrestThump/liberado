@@ -1,9 +1,18 @@
-# check-doc-links.ps1 — regex-based markdown link checker for docs/.
+# check-doc-links.ps1 — regex-based markdown link checker for repo docs.
 #
-# Extracts `[text](target)` links from every *.md file under the docs root
-# (default: <repo>/docs) using the same simple regex the docs audit used, and
-# verifies that every relative target resolves to a real file on disk,
-# resolved from the directory of the file that links to it.
+# Extracts `[text](target)` links from every scanned markdown file using the
+# same simple regex the docs audit used, and verifies that every relative target
+# resolves to a real file on disk, resolved from the directory of the file that
+# links to it.
+#
+# Scans, by default:
+#   - docs/                      (whole tree, recursively)
+#   - README.md                  (repo root)
+#   - crates/*/ARCHITECTURE.md   (every crate architecture doc)
+#
+# The scanned roots are configurable via -Paths; each entry is resolved
+# relative to the repo root and may be a directory (walked recursively), a file,
+# or a wildcard glob (e.g. crates/*/ARCHITECTURE.md).
 #
 # Skipped (never requires network access):
 #   - http://, https://, and other external/protocol URLs
@@ -14,12 +23,15 @@
 #
 # Usage:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-doc-links.ps1
+#   powershell ... -File scripts/check-doc-links.ps1 -Paths README.md, docs/
 #   just check-links
 #   (CI: .github/workflows/ci.yml -> "doc-links" job)
 
 param(
-    # Root directory to walk for markdown files. Defaults to <repo>/docs.
-    [string]$DocsRoot = (Join-Path (Split-Path -Parent $PSScriptRoot) 'docs')
+    # Files, directories, or globs to scan for markdown links. Directories are
+    # walked recursively; globs are expanded. All paths resolve from the repo
+    # root (the parent of scripts/).
+    [string[]]$Paths = @('docs', 'README.md', 'crates/*/ARCHITECTURE.md')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,18 +61,56 @@ function ConvertTo-RepoRelative {
     return $FullPath
 }
 
-$docsDir = [System.IO.Path]::GetFullPath($DocsRoot)
-if (-not (Test-Path -LiteralPath $docsDir -PathType Container)) {
-    Write-Error "Docs root not found: $docsDir"
-    exit 2
+function Get-ScannedFiles {
+    param([string[]]$Specs, [string]$RepoRoot)
+    $result = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+    foreach ($spec in $Specs) {
+        if ([string]::IsNullOrWhiteSpace($spec)) { continue }
+        if ($spec -match '[\*\?\[\]]') {
+            # Wildcard glob — expand it against the repo root. Globs that match
+            # nothing are a warning, not a hard error, so a mistyped extra path
+            # doesn't silently pass, but defaults can never trip it.
+            $glob = Join-Path $RepoRoot $spec
+            $hits = @(Get-ChildItem -Path $glob -File -ErrorAction SilentlyContinue)
+            if ($hits.Count -eq 0) {
+                Write-Warning "Path glob matches no files: $spec"
+            }
+            foreach ($hit in $hits) {
+                if ($hit.Extension -ieq '.md' -and $hit.Name -notmatch '\.secret$') {
+                    $result.Add($hit)
+                }
+            }
+        } else {
+            $full = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $spec))
+            if (Test-Path -LiteralPath $full -PathType Container) {
+                # Directory — walk it recursively.
+                $inner = @(Get-ChildItem -LiteralPath $full -Recurse -File -ErrorAction SilentlyContinue)
+                foreach ($hit in $inner) {
+                    if ($hit.Extension -ieq '.md' -and $hit.Name -notmatch '\.secret$') {
+                        $result.Add($hit)
+                    }
+                }
+            } elseif (Test-Path -LiteralPath $full -PathType Leaf) {
+                # Single file.
+                $item = Get-Item -LiteralPath $full
+                if ($item.Extension -ieq '.md' -and $item.Name -notmatch '\.secret$') {
+                    $result.Add($item)
+                }
+            } else {
+                Write-Warning "Path spec matches nothing: $spec"
+            }
+        }
+    }
+    return @($result | Sort-Object FullName -Unique)
 }
 
 $repoRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+$files = Get-ScannedFiles -Specs $Paths -RepoRoot $repoRoot
 
-# Only *.md files; .secret files are never linted.
-$files = @(Get-ChildItem -LiteralPath $docsDir -Recurse -File | Where-Object {
-    $_.Extension -ieq '.md' -and $_.Name -notmatch '\.secret$'
-} | Sort-Object FullName)
+if ($files.Count -eq 0) {
+    Write-Error "No markdown files matched the given paths: $($Paths -join ', ')"
+    exit 2
+}
 
 $broken = [System.Collections.Generic.List[string]]::new()
 $linkCount = 0
@@ -120,9 +170,8 @@ foreach ($file in $files) {
     }
 }
 
-$relDocs = ConvertTo-RepoRelative $docsDir $repoRoot
 Write-Host ''
-Write-Host "Docs link check: $($files.Count) file(s), $linkCount link(s) checked under $relDocs"
+Write-Host "Docs link check: $($files.Count) file(s), $linkCount link(s) checked (paths: $($Paths -join ', '))"
 if ($broken.Count -gt 0) {
     Write-Host ''
     Write-Host 'Broken links:'

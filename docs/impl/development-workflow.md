@@ -199,19 +199,19 @@ Don't duplicate what already exists elsewhere — this doc is process, not archi
 
 | Question | Where |
 |---|---|
-| What is this system, at a high level? | `docs/architecture/overview.md` |
-| Why does it exist / how does it compare to alternatives? | `docs/architecture/positioning.md` |
-| The seam/modularity plan | `docs/architecture/modularity.md` |
-| How do I build/run/configure it? | `docs/contributing/agents.md` |
-| What's the phased roadmap, what's landed, what's next? | `docs/roadmap/roadmap.md` |
-| Why was decision N made? | `docs/specs/liberado-architecture-decisions.md` |
+| What is this system, at a high level? | `docs/spec/architecture/overview.md` |
+| Why does it exist / how does it compare to alternatives? | `docs/spec/architecture/positioning.md` |
+| The seam/modularity plan | `docs/spec/architecture/modularity.md` |
+| How do I build/run/configure it? | `docs/impl/agents.md` |
+| What's the phased roadmap, what's landed, what's next? | `docs/roadmap.md` |
+| Why was decision N made? | `docs/spec/architecture-decisions.md` |
 | Per-crate design detail | `crates/<name>/ARCHITECTURE.md` (each crate has one) |
-| The chat/SSE API contract | `docs/reference/api.md` |
-| Past hygiene/hardening audit findings (including deferred items) | `docs/roadmap/*-audit-*.md` |
+| The chat/SSE API contract | `docs/spec/reference/api.md` |
+| Past hygiene/hardening audit findings (including deferred items) | `docs/future-work/archive/*-audit-*.md` |
 | Point-in-time state snapshots from past sessions | `docs/future-work/ideas/archive/handoff.md` (snapshot, not a
   process doc — expect it to be stale; this file you're reading now is the durable one) |
 
-**A note on staleness**: `docs/future-work/ideas/archive/handoff.md` and parts of `docs/architecture/overview.md`'s "Current
+**A note on staleness**: `docs/future-work/ideas/archive/handoff.md` and parts of `docs/spec/architecture/overview.md`'s "Current
 status" section were found to be out of date during this session's own work (describing phases as
 not-yet-done that had, in fact, shipped). That's expected drift for point-in-time docs — treat any
 "current status"-shaped doc as a snapshot to verify against the actual code, not a ground truth, and fix
