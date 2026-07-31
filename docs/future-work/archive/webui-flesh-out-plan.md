@@ -82,7 +82,7 @@ history list to the sidebar.
    - `.sidebar-toggle` button styles
    - Remove top-level `.chat { height: â€¦ }`, replace with `.main-content { display: flex; flex-direction: column; height: 100vh; }` so the chat fills the right pane
 
-5. **Stop button** â€” add a Stop (â¹) button next to Send in the input bar. During streaming (`sending() == true`), clicking it closes the EventSource and sets `sending(false)`. This wires up the backend stop/cancel primitive already documented in `docs/reference/api.md`.
+5. **Stop button** â€” add a Stop (â¹) button next to Send in the input bar. During streaming (`sending() == true`), clicking it closes the EventSource and sets `sending(false)`. This wires up the backend stop/cancel primitive already documented in `docs/spec/reference/api.md`.
 
 **Verification:** `dx serve` shows sidebar on left, chats load, clicking a conversation loads its history, Stop button works mid-stream.
 

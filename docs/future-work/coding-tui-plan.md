@@ -285,7 +285,7 @@ for agent-created loops); whether a human-typed `/loop new …` may also write o
 > serially — so the workspace race is prevented only by the *absence* of concurrency. Closing any
 > one of those gaps without `WorktreeWorkspace` reproduces Bun's failure: agents sharing a git
 > workspace overwrite each other, silently. Full audit and the fixed 3-step sequence:
-> `docs/architecture/agentic-loops.md` §Concurrency.
+> `docs/spec/architecture/agentic-loops.md` §Concurrency.
 
 - `delegate` gains a coding route: when the face agent (or a coding worker, one level deep max)
   delegates with `domain:"coding"`, the hub starts a child coding session with a narrowed grant

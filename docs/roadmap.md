@@ -6,7 +6,7 @@ Before starting anything, read [`spec/architecture/failure-modes.md`](spec/archi
 
 ## Open now — in priority order
 
-The order is deliberate: **automation daemon → chat → coding.** Why: [`../architecture/positioning.md`](spec/architecture/positioning.md).
+The order is deliberate: **automation daemon → chat → coding.** Why: [`spec/architecture/positioning.md`](spec/architecture/positioning.md).
 
 ### Priority 1 — the autonomous life-OS daemon
 
@@ -16,7 +16,7 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 |---|---|---|
 | **Dogfood** | **Lean on Telegram harder** | Collect friction → fix real pain. Free-form sticky chat is the phone surface. |
 | **T1** | **Live conformance suite** — [`live-conformance-suite.md`](future-work/live-conformance-suite.md) | **L1–L10 landed.** **Open:** Tier 2 only. |
-| **W1** | **Goal-session view in mobile WebUI** | Later phone surface beyond Telegram. See [`../architecture/session-surface-contract.md`](spec/architecture/session-surface-contract.md). |
+| **W1** | **Goal-session view in mobile WebUI** | Later phone surface beyond Telegram. See [`spec/architecture/session-surface-contract.md`](spec/architecture/session-surface-contract.md). |
 | **E5-b** | ~~Telegram session deep-link~~ | **Deprioritized** (prefer WebUI later). |
 
 ### Priority 2 — lean chat surface
@@ -80,8 +80,8 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
 ### Cross-cutting
 
 - **External dependency audit** — audit all `Cargo.toml` entries across crates for unnecessary duplication, unused deps, version drift, and opportunities to share/slim. Goal: reduce compile wall-clock without breaking anything.
-- **Modularity** remains the enabler: [`../architecture/modularity.md`](spec/architecture/modularity.md). Hot-path **module splits** landed (server API, daemon, config-loader model, executor budget).
-- **A4 dual-store hub tests** (2026-07-23): list / cancel / park→resume / rehydrate via real `GoalSessionHub` on production `SessionStore` — `crates/session-store/tests/hub_dual_store.rs` (see [`../architecture/failure-modes.md`](spec/architecture/failure-modes.md) §1).
+- **Modularity** remains the enabler: [`spec/architecture/modularity.md`](spec/architecture/modularity.md). Hot-path **module splits** landed (server API, daemon, config-loader model, executor budget).
+- **A4 dual-store hub tests** (2026-07-23): list / cancel / park→resume / rehydrate via real `GoalSessionHub` on production `SessionStore` — `crates/session-store/tests/hub_dual_store.rs` (see [`spec/architecture/failure-modes.md`](spec/architecture/failure-modes.md) §1).
 - **TurboVault modules**: vector + tasks paying back; remaining **`vault_events`** and upstream merge. Umbrella: [`turbovault-modules-integration-roadmap.md`](future-work/turbovault-modules-integration-roadmap.md).
 - **Redundant tool calls hidden by the doom-loop guard** (found 2026-07-28 in the passing
   `evening-debrief` live run, build `66b5771`). The subagent called `liberado-caldav-mcp:list_events`
@@ -118,6 +118,6 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
 | **2026-07-18** | Cron → Telegram delivery; OpenClaw brief cutover; sticky session persistence |
 | **Earlier** | Unified Session (D7); one execution engine; `Write` at MCP boundary (F1); etc. |
 
-See [`../architecture/sessions.md`](spec/architecture/sessions.md) for the session model history pointers.
+See [`spec/architecture/sessions.md`](spec/architecture/sessions.md) for the session model history pointers.
 
 **Last updated:** 2026-07-24.

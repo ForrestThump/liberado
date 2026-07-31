@@ -34,7 +34,7 @@ Layer vocabulary used below (and in every crate's `[package.metadata.liberado] r
 | [`SessionRecordStore`](#conversationstore) | trait | `liberado-session` | the kernel lens onto a session |
 | [`ConfigSource`](#configsource--opaque-pack-sections) | trait | `liberado-config-loader` | layered config loading |
 | [`Notifier`](#notifier) | trait | `liberado-notify` | human-facing notification channels |
-| [HTTP/SSE wire contract](#the-httpsse-wire-contract) | DTOs + endpoints | `chat-client-contract` + `docs/reference/api.md` | every surface ↔ the daemon |
+| [HTTP/SSE wire contract](#the-httpsse-wire-contract) | DTOs + endpoints | `chat-client-contract` + `docs/spec/reference/api.md` | every surface ↔ the daemon |
 | [MCP + `WriteProvenance`](#mcp--writeprovenance) | protocol + `_meta` | `liberado-mcp` / Turbomcp | agent ↔ external tools; loop-breaking |
 | [`CapabilitySet` narrowing](#capabilityset-narrowing) | semantics | `liberado-common` | authority only ever shrinks |
 
@@ -135,7 +135,7 @@ not an accident of history; it is a layer rule doing its job. See [`sessions.md`
 
 ## The HTTP/SSE wire contract
 
-- **Defined**: `chat-client-contract` (wire DTOs + `SseDecoder`) and `docs/reference/api.md`
+- **Defined**: `chat-client-contract` (wire DTOs + `SseDecoder`) and `docs/spec/reference/api.md`
   (endpoints: chat, stream, conversations, models, goals, hooks).
 - **Consumed by**: TUI, WebUI, CLI, any future surface (ACP adapter would sit here too).
 - **Promise**: **surfaces are clients.** A surface's only internal dependencies are `client`-role

@@ -308,7 +308,7 @@ Closing full core-tool → envelope correlation may require a small host change 
 | Debounce + standardized `Event` | Daemon mesh; `EventSource` trait (vault + cron) |
 | Decision 5 / concurrency spec | Loop-break, idempotency, fail-open |
 
-Code anchors: `crates/vault/`, `crates/daemon/src/vault_source.rs`, `docs/specs/liberado-vault-concurrency-spec.md`.
+Code anchors: `crates/vault/`, `crates/daemon/src/vault_source.rs`, `docs/spec/vault-concurrency-spec.md`.
 
 ### Dual-plugin stories (do not confuse)
 
@@ -519,9 +519,9 @@ Mutation / property ideas (optional): drop counter monotonicity; never attribute
 
 ### Liberado
 
-- `docs/specs/liberado-vault-concurrency-spec.md` — Decision 5, Approach A, zones, idempotency.  
-- `docs/specs/liberado-architecture-decisions.md` — Decisions 5, 6, 18, 19.  
-- `docs/specs/life-os-architecture.md` §5 — triggering layer (update when plugin lands).  
+- `docs/spec/vault-concurrency-spec.md` — Decision 5, Approach A, zones, idempotency.  
+- `docs/spec/architecture-decisions.md` — Decisions 5, 6, 18, 19.  
+- `docs/spec/life-os-architecture.md` §5 — triggering layer (update when plugin lands).  
 - `crates/vault/` — attribution + write adapter.  
 - `crates/daemon/src/vault_source.rs` — production EventSource fallback.
 

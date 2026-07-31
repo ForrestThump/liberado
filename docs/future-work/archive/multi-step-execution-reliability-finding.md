@@ -3,7 +3,7 @@
 **Status**: Substantially resolved (2026-07-04 follow-up session, below) — live-verified 0/6 → 5/6 on
 the scenario that originally surfaced this. Originally surfaced 2026-07-06 [sic — see follow-up
 session note] by `liberado-heuristics-tuner`'s executor/subagent-layer live tuning
-(`docs/roadmap/heuristics-tuning-engine-plan.md`'s "Executor-layer live smoke tests" and
+(`docs/future-work/heuristics-tuning-engine-plan.md`'s "Executor-layer live smoke tests" and
 "Subagent-layer" sections carry the raw run-by-run data the first half of this doc summarizes). The
 original session found and fixed one real bug (`REPORT_NUDGE`) but left the core gap open and not
 fully understood; a follow-up session (same doc, "Follow-up" section below) found the actual root
@@ -15,7 +15,7 @@ just unit tests. The one remaining open item is a fast-finish timing gap, not a 
 
 Liberado's whole dispatch architecture rests on a division of labor: `ExecuteDirect` handles simple,
 few-step goals; `DispatchSubagent` hands complex, multi-step goals to a narrowly-scoped subagent with
-more room to work (`docs/architecture/overview.md`'s three pillars, `crates/dispatcher/ARCHITECTURE.md`).
+more room to work (`docs/spec/architecture/overview.md`'s three pillars, `crates/dispatcher/ARCHITECTURE.md`).
 Both routes terminate in the *same* engine — `liberado_executor::Executor::execute` — just with
 different seed prompts (`DIRECT_INSTRUCTIONS`/`SUBAGENT_PREAMBLE`, `crates/orchestrator/src/lib.rs`)
 and turn budgets (4 vs. 8). If that shared engine cannot reliably chain two sequential, clearly-stated
@@ -228,7 +228,7 @@ not just on a diff or when samples disagree — read that directly rather than r
 
 ## Cross-references
 
-- Full run-by-run data and narrative (original session): `docs/roadmap/heuristics-tuning-engine-plan.md`'s
+- Full run-by-run data and narrative (original session): `docs/future-work/heuristics-tuning-engine-plan.md`'s
   "Executor-layer live smoke tests" and "Subagent-layer" sections.
 - The original fix: `crates/executor/src/lib.rs`'s `REPORT_NUDGE`.
 - The follow-up session's fixes: `crates/executor/src/lib.rs`'s `is_doom_loop`, `detect_short_cycle`,

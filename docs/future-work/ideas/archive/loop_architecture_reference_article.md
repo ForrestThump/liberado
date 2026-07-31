@@ -2,8 +2,8 @@
 
 **Role in Liberado**: design-input scrapbook, not project law. The authoritative synthesis of these
 ideas into Liberado's architecture is
-[`docs/architecture/agentic-loops.md`](../../../spec/architecture/agentic-loops.md). Implementation roadmap:
-[`docs/roadmap/rust-native-agentic-coder-plan.md`](../../../future-work/rust-native-agentic-coder-plan.md).
+[`../../../spec/architecture/agentic-loops.md`](../../../spec/architecture/agentic-loops.md). Implementation roadmap:
+[`../../../future-work/rust-native-agentic-coder-plan.md`](../../../future-work/rust-native-agentic-coder-plan.md).
 
 Captured concepts used by Liberado:
 

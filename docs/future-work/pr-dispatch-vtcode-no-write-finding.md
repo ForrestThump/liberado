@@ -321,6 +321,6 @@ tests: it says the remaining gap is very unlikely to be in request-level paramet
 
 ## Related docs
 
-- [`docs/handoff.md`](../project/handoff.md) — live ops handoff (not the archived ideas/handoff snapshot).
-- [`docs/roadmap/archive/human-todo.md`](archive/human-todo.md) — archived operator checklist (uncommitted work,
+- [`docs/project/handoff.md`](../project/handoff.md) — live ops handoff (not the archived ideas/handoff snapshot).
+- [`archive/human-todo.md`](archive/human-todo.md) — archived operator checklist (uncommitted work,
   PR review, etc.).

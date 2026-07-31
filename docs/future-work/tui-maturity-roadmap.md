@@ -3,7 +3,7 @@
 **Status**: audit 2026-07-10 · living roadmap  
 **Crate**: [`crates/tui`](../../crates/tui/)  
 **Peers (UX bar)**: Claude Code, Grok Build, OpenCode, KiloCode, VTCode  
-**Related**: [`crates/tui/ARCHITECTURE.md`](../../crates/tui/ARCHITECTURE.md), [`crates/tui/ROADMAP.md`](../../crates/tui/ROADMAP.md) (historical), [`docs/reference/api.md`](../spec/reference/api.md), goal sessions (`liberado-session` / `/api/goals*`), agentic mesh (`docs/architecture/agentic-loops.md`), WebUI [`crates/webui`](../../crates/webui/)
+**Related**: [`crates/tui/ARCHITECTURE.md`](../../crates/tui/ARCHITECTURE.md), [`crates/tui/ROADMAP.md`](../../crates/tui/ROADMAP.md) (historical), [`../spec/reference/api.md`](../spec/reference/api.md), goal sessions (`liberado-session` / `/api/goals*`), agentic mesh (`docs/spec/architecture/agentic-loops.md`), WebUI [`crates/webui`](../../crates/webui/)
 
 **Non-negotiable:** Logical code stays **loosely coupled** so **TUI and WebUI share client logic** — only rendering shells differ. See §1.1.
 
@@ -75,7 +75,7 @@ Key/Mouse → handlers → App::update/handle_* → Vec<Effect>
 EffectRunner → HTTP/SSE → Action channel → App::update → redraw
 ```
 
-- **Thin client** over `docs/reference/api.md` — correct mesh posture (Decision 2).
+- **Thin client** over `docs/spec/reference/api.md` — correct mesh posture (Decision 2).
 - **Shared contracts**: `chat-client-contract`, `liberado-commands`, `liberado-markdown`, `liberado-theme`.
 - **Decomposed** `handlers/` + `render/` (~5k LOC + 1.7k tests in `app/tests.rs`).
 - **Production hygiene** already landed: parking_lot, SSE timeout, backpressure channel, SIGTERM, message cap, mouse hit-testing.

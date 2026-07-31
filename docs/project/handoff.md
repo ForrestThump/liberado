@@ -1,6 +1,6 @@
 # Handoff — Liberado is the daily-driver life OS (Telegram + TurboVault plugins)
 
-Docs map: [`README.md`](../README.md) · open work: [`roadmap/roadmap.md`](../roadmap.md).
+Docs map: [`README.md`](../README.md) · open work: [`../roadmap.md`](../roadmap.md).
 
 ## 2026-07-26 update (engineering + dogfood — report delivery, authority, deploy hygiene)
 
@@ -85,7 +85,7 @@ with two chatty turns. Subagents now inherit pool zone grants — defensible, un
 - **Doctrine:** [`architecture/failure-modes.md`](../spec/architecture/failure-modes.md) — live-verify
   every change against the real daemon.
 
-**What's next is in [`roadmap/roadmap.md`](../roadmap.md).** Short version below.
+**What's next is in [`../roadmap.md`](../roadmap.md).** Short version below.
 
 ---
 
@@ -132,9 +132,9 @@ Work lives in the `turbovault/` sibling (not the life-os workspace). High level:
 | **Plugin API** (`turbovault-plugin-api`) | Landed (#39) | Boundary Liberado plugins use |
 | **`vector`** | On fork `develop` (prototype Phases 1–4 done); live on homelab with `--features vector` | Semantic vault search from Telegram / briefs |
 | **`tasks`** | `feat/plugin-tasks` (extraction + self-tuning + recurrence); core task tools also on `develop` | Life-OS todo surface; briefs already depend on tasks |
-| **`vault_events`** | Planned — [`roadmap/turbovault-vault-events-plugin-plan.md`](../future-work/turbovault-vault-events-plugin-plan.md) | Optional L1 perception; not blocking Liberado P1 |
+| **`vault_events`** | Planned — [`../future-work/turbovault-vault-events-plugin-plan.md`](../future-work/turbovault-vault-events-plugin-plan.md) | Optional L1 perception; not blocking Liberado P1 |
 
-Umbrella: [`roadmap/turbovault-modules-integration-roadmap.md`](../future-work/turbovault-modules-integration-roadmap.md).
+Umbrella: [`../future-work/turbovault-modules-integration-roadmap.md`](../future-work/turbovault-modules-integration-roadmap.md).
 
 ### Provider / Telegram / timezone (done — keep these constraints)
 
@@ -168,7 +168,7 @@ ssh shiloh@homelab-node-ai 'cd ~/liberado-build && setsid bash -c "docker build 
 ## What's next for Liberado (priority order)
 
 Strategy is still **daemon → chat → coding**. Modules and MCP breadth *support* the daemon daily-driver
-bar; they do not replace it. Full table: [`roadmap/roadmap.md`](../roadmap.md).
+bar; they do not replace it. Full table: [`../roadmap.md`](../roadmap.md).
 
 ### Priority 1 — daily-drive the autonomous life OS
 
@@ -212,8 +212,8 @@ bar; they do not replace it. Full table: [`roadmap/roadmap.md`](../roadmap.md).
 2. [`architecture/overview.md`](../spec/architecture/overview.md)
 3. [`architecture/sessions.md`](../spec/architecture/sessions.md)
 4. [`architecture/positioning.md`](../spec/architecture/positioning.md)
-5. [`roadmap/roadmap.md`](../roadmap.md) — open work in priority order
-6. [`roadmap/turbovault-modules-integration-roadmap.md`](../future-work/turbovault-modules-integration-roadmap.md)
+5. [`../roadmap.md`](../roadmap.md) — open work in priority order
+6. [`../future-work/turbovault-modules-integration-roadmap.md`](../future-work/turbovault-modules-integration-roadmap.md)
 7. [`architecture/session-surface-contract.md`](../spec/architecture/session-surface-contract.md)
 
 **Repo notes:** origin may lag local work; do not push unless asked. Local `turbovault` sibling is

@@ -8,7 +8,7 @@ and verified live against the real daemon + a real chat turn (see Verification b
 Three things came out of a roadmap-reading conversation, in an order that turned out to be
 load-bearing, not arbitrary:
 
-1. **Chat bypassed the dispatcher.** `docs/roadmap/current.md`'s Phase 1 said so directly: "Today
+1. **Chat bypassed the dispatcher.** `docs/roadmap.md`'s Phase 1 said so directly: "Today
    chat drives the executor directly, bypassing the tool-advisor, the guards, and sub-delegation."
    Confirmed in code: `ChatSessions::turn`/`turn_stream` called `Conversation::turn`/`turn_stream`,
    which called `Executor::converse_stream` directly — `Dispatcher`/`Orchestrator` never entered

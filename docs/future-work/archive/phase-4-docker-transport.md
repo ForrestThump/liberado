@@ -4,9 +4,9 @@
 
 ## Why
 
-`docs/roadmap/current.md`'s Phase 4 named "an `ExecutionEnvironment` trait (Local / Docker /
+`docs/roadmap.md`'s Phase 4 named "an `ExecutionEnvironment` trait (Local / Docker /
 serverless hibernation)" as the last remaining gap against this project's own competitive thesis
-(`docs/architecture/positioning.md`): Hermes is only "still ahead" until Liberado closes
+(`docs/spec/architecture/positioning.md`): Hermes is only "still ahead" until Liberado closes
 self-improvement (done, `riggers`), cron (done), subagents (mostly done), and execution environments
 (this slice). Before this, every `topology.toml`-declared MCP either ran as a local child process
 (`McpTransport::Stdio`) or was a remote HTTP server (`McpTransport::Http`) — no way to run an MCP
@@ -117,5 +117,5 @@ these are dev-machine caveats, not production concerns:
   config round-trip tests for the new TOML shape (minimal and fully-populated), a validation test
   rejecting a blank `image`, and a `mcp_registry_from_config` test confirming a Docker-transport MCP
   registers under its name.
-- Live end-to-end smoke test: see `docs/roadmap/archive/human-todo.md` — needs Docker Desktop running on
+- Live end-to-end smoke test: see `docs/future-work/archive/human-todo.md` — needs Docker Desktop running on
   this Windows dev machine, which this session doesn't have set up yet.

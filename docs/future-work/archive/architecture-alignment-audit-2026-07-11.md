@@ -119,7 +119,7 @@ Ranked by leverage; 1–3 are cheap and concrete.
 2. **Name the narrow waists as the architecture.** The system's stability comes from roughly nine
    frozen contracts: `Provider`, `ToolRuntime`, `EventSource`, `Notifier`, `ConversationStore`,
    `ConfigSource`, `DomainPackRunner`, the `Verifier` trait (landing), and the HTTP/SSE wire
-   contract. Everything else is replaceable. A one-page `docs/architecture/contracts.md` listing
+   contract. Everything else is replaceable. A one-page `docs/spec/architecture/contracts.md` listing
    them, their stability promise, and who may implement them would do more for new-model onboarding
    than any prose — and gives every future "should X depend on Y?" question a fast answer: *if the
    dependency isn't one of the waists, justify it.*
@@ -142,8 +142,8 @@ Ranked by leverage; 1–3 are cheap and concrete.
 |---|---|---|---|
 | 1 | Drop `config-loader → coder-core` | S | ✅ done — by **inversion**, not extraction: `[tuning.coder]` is an opaque `toml::Value` in config-loader; `CoderTuning` (struct/defaults/validation) moved to `coder-core::tuning`, parsed via `CoderTuning::from_value` at composition time. Deeper than first scoped: the edge carried the whole coder config vocabulary, not just verify DTOs |
 | 2 | Add the mechanical layer-rule test to CI | S | ✅ done — `crates/test-support/tests/layer_rules.rs` over `[package.metadata.liberado] role` tags on all 40 crates (pack containment, surface thinness, client/foundation purity, dep budget, mandatory tagging); runs in `cargo test --workspace`, wired into `.github/workflows/ci.yml` |
-| 3 | Write `docs/architecture/contracts.md` | S | ✅ done — 10-contract narrow-waist inventory; depth stays in crate ARCHITECTURE.mds |
-| 4 | Generate the crate map | M | ✅ done — `scripts/gen-crate-map.ps1` → `docs/reference/crate-map.md` from manifest `description` + `role` (same tags as the layer test, so graph and map cannot drift apart silently) |
+| 3 | Write `docs/spec/architecture/contracts.md` | S | ✅ done — 10-contract narrow-waist inventory; depth stays in crate ARCHITECTURE.mds |
+| 4 | Generate the crate map | M | ✅ done — `scripts/gen-crate-map.ps1` → `docs/spec/reference/crate-map.md` from manifest `description` + `role` (same tags as the layer test, so graph and map cannot drift apart silently) |
 | 5 | Converge `AgentEvent`/`SessionEvent` envelopes before more TUI session UI | M | ✅ done same-day — one wire `SessionEvent`/`SessionEventKind` in `chat-client-contract` decodes both `/api/chat/stream` and `/api/goals/{id}/stream`; kernel kind gained `Token`, `Error`→`Failed` (EventSource-safe tag); chat SSE renamed `tool`/`tool_result`/`done` → `tool_started`/`tool_finished`/`session_finished` with all in-repo clients moved atomically (`ChatEvent` deleted; CLI moved onto the typed decoder too). `AgentEvent` stays the executor's in-process tap, mapped at the server boundary like `CoderEvent` → `SessionEvent` |
 | 6 | Vocabulary shift "mesh" → kernel · domain packs · stores · surfaces | ongoing | ✅ canonical docs done (overview vocabulary section, agentic-loops, modularity, positioning, verifiers, README, roadmap top); historical/dated docs keep the old word with a pointer |
 | 7 | `.gitignore` the `tmp-liberado-*.log` files | XS | ✅ done + untracked |

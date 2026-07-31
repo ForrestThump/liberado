@@ -4,7 +4,7 @@
 **Date**: 2026-07-22  
 **Branch context**: After merging `prototype/turbovault-plugin-integration` into `main`; working tip `dev/post-turbovault-merge` at `1d082f5`.  
 **Scope**: Critical review of Liberado's existing architecture and code shape â€” not a rewrite plan. Recommendations are ordered by leverage against the stated strategy (**daemon â†’ chat â†’ coding**).  
-**Primary sources**: `docs/architecture/{overview,contracts,modularity,failure-modes,positioning}.md`, `docs/roadmap.md`, `docs/handoff.md`, crate map, `layer_rules.rs`, hot-path crates (`server`, `daemon`, `mcp`, `executor`, `bootstrap`, `config-loader`, `messaging`).
+**Primary sources**: `docs/spec/architecture/{overview,contracts,modularity,failure-modes,positioning}.md`, `docs/roadmap.md`, `docs/project/handoff.md`, crate map, `layer_rules.rs`, hot-path crates (`server`, `daemon`, `mcp`, `executor`, `bootstrap`, `config-loader`, `messaging`).
 
 ---
 
@@ -43,7 +43,7 @@ It does **not** recommend a peer agent mesh, absorbing every MCP into the worksp
 
 ### 2.1 Narrow-waist contracts are real
 
-Frozen seams in `docs/architecture/contracts.md` â€” `Provider`, `ToolRuntime`/`RuntimeFactory`, `EventSource`, `DomainPackRunner`, dual session lenses, HTTP/SSE wire contract, `CapabilitySet` narrowing, MCP + `WriteProvenance` â€” are not slogans. `crates/test-support/tests/layer_rules.rs` mechanically enforces pack containment, surface thinness, client purity, foundation purity, and dependency budgets.
+Frozen seams in `docs/spec/architecture/contracts.md` â€” `Provider`, `ToolRuntime`/`RuntimeFactory`, `EventSource`, `DomainPackRunner`, dual session lenses, HTTP/SSE wire contract, `CapabilitySet` narrowing, MCP + `WriteProvenance` â€” are not slogans. `crates/test-support/tests/layer_rules.rs` mechanically enforces pack containment, surface thinness, client purity, foundation purity, and dependency budgets.
 
 ### 2.2 Safety is engineered, not prompted
 
@@ -55,7 +55,7 @@ One daemon; surfaces and MCPs attach; pools do not peer-coordinate. Agent-pools 
 
 ### 2.4 Failure-modes doctrine
 
-`docs/architecture/failure-modes.md` is institutional memory worth more than most audits:
+`docs/spec/architecture/failure-modes.md` is institutional memory worth more than most audits:
 
 1. Test pointed at the wrong object  
 2. Guard that was off by default  
@@ -142,7 +142,7 @@ Pattern: gitignored sibling checkouts (`liberado-*-mcp/`, `turbovault/`, `turbom
 | `server/src/api.rs` | ~1500 | entire surface API |
 | `tui` crate | ~8900 | OK if surface-isolated |
 
-Split by **lifecycle phase** (watch / react / proposals / pools; loop / doom / budget / report; API route groups matching `docs/reference/api.md`). Contracts already allow it.
+Split by **lifecycle phase** (watch / react / proposals / pools; loop / doom / budget / report; API route groups matching `docs/spec/reference/api.md`). Contracts already allow it.
 
 ### 3.8 Latency instrumented, not closed-loop
 
@@ -197,7 +197,7 @@ Compatible with P1 order in `docs/roadmap.md`.
 
 ## 6. Crate / layer snapshot (for orientation)
 
-Layer vocabulary: **foundation â†’ kernel â†’ stores / packs â†’ services / surfaces â†’ composition roots**. Generated inventory: `docs/reference/crate-map.md`.
+Layer vocabulary: **foundation â†’ kernel â†’ stores / packs â†’ services / surfaces â†’ composition roots**. Generated inventory: `docs/spec/reference/crate-map.md`.
 
 Largest source trees observed (approx line counts, 2026-07-22): tui ~9k, heuristics-tuner ~5.6k, coder-agent ~5k, server ~3.6k, executor ~3.6k, config-loader ~2.9k, session ~2.8k, daemon ~2.7k, common ~2.5k.
 
@@ -218,13 +218,13 @@ On 2026-07-22:
 
 ## 8. Related docs
 
-- [`../architecture/overview.md`](../../../spec/architecture/overview.md) â€” cold-start map  
-- [`../architecture/contracts.md`](../../../spec/architecture/contracts.md) â€” narrow waists  
-- [`../architecture/failure-modes.md`](../../../spec/architecture/failure-modes.md) â€” six recurring bug classes  
-- [`../architecture/modularity.md`](../../../spec/architecture/modularity.md) â€” seam plan  
-- [`../architecture/positioning.md`](../../../spec/architecture/positioning.md) â€” replacement priority  
-- [`../roadmap.md`](../../../roadmap.md) â€” open work order  
-- [`../handoff.md`](../../../project/handoff.md) â€” live ops  
+- [`../../../spec/architecture/overview.md`](../../../spec/architecture/overview.md) â€” cold-start map  
+- [`../../../spec/architecture/contracts.md`](../../../spec/architecture/contracts.md) â€” narrow waists  
+- [`../../../spec/architecture/failure-modes.md`](../../../spec/architecture/failure-modes.md) â€” six recurring bug classes  
+- [`../../../spec/architecture/modularity.md`](../../../spec/architecture/modularity.md) â€” seam plan  
+- [`../../../spec/architecture/positioning.md`](../../../spec/architecture/positioning.md) â€” replacement priority  
+- [`../../../roadmap.md`](../../../roadmap.md) â€” open work order  
+- [`../../../project/handoff.md`](../../../project/handoff.md) â€” live ops  
 - [`../ideas/vs-grok-build.md`](../../ideas/vs-grok-build.md) â€” TUI coding gaps (separate product frame)
 
 ---

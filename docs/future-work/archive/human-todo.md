@@ -147,7 +147,7 @@ new unit tests passing (config round-trip, validation, `docker_argv`, registry r
 
 Built `util::read_repo_context` (reads whichever `AGENT_CONTEXT_PATHS` files exist in a task's
 fresh clone â€” default list covers `CLAUDE.md`/`AGENTS.md`/`ARCHITECTURE.md`/
-`docs/architecture/overview.md`/`docs/contributing/agents.md` â€” caps at `AGENT_CONTEXT_MAX_BYTES`)
+`docs/spec/architecture/overview.md`/`docs/impl/agents.md` â€” caps at `AGENT_CONTEXT_MAX_BYTES`)
 and wired it into both the normal and revision coding prompts, merged with the task's own
 `context` rather than replacing it. Full design + rationale in
 `liberado-pr-dispatch-mcp/ARCHITECTURE.md`'s "Per-repo agent context" section (still under its old

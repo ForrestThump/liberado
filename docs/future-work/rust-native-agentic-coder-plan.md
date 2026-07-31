@@ -4,9 +4,9 @@
 > mesh**; coding is the first **domain pack**, not the product identity.
 
 **Status**: implementation in progress, 2026-07-10  
-**Architecture**: [`docs/architecture/agentic-loops.md`](../spec/architecture/agentic-loops.md)  
+**Architecture**: [`../spec/architecture/agentic-loops.md`](../spec/architecture/agentic-loops.md)  
 **Hygiene audit**: [`agentic-mesh-hygiene-audit-2026-07-10.md`](archive/agentic-mesh-hygiene-audit-2026-07-10.md)  
-**Modularity**: [`docs/architecture/modularity.md`](../spec/architecture/modularity.md)  
+**Modularity**: [`../spec/architecture/modularity.md`](../spec/architecture/modularity.md)  
 **Design inputs**:
 [`loop_architecture_reference_article.md`](./ideas/archive/loop_architecture_reference_article.md),
 [`doomloop_research.md`](./ideas/archive/doomloop_research.md),

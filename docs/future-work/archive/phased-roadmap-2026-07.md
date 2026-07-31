@@ -4,8 +4,8 @@ Phases 1â€“4 as originally sequenced, with the completion notes written as 
 substantially done.** This is kept for the *reasoning* â€” why the sequence was chosen, what each phase
 was for, and what was deliberately deferred â€” not as a description of current work.
 
-For what is actually true now, see [`../current.md`](../../roadmap.md) and
-[`../../architecture/overview.md`](../../spec/architecture/overview.md).
+For what is actually true now, see [`../../roadmap.md`](../../roadmap.md) and
+[`../../spec/architecture/overview.md`](../../spec/architecture/overview.md).
 
 ---
 
@@ -385,7 +385,7 @@ vault-watch are interchangeable event-sources; a second dispatcher/executor is c
 - âœ… **Catalog population** â€” done; this entry used to describe an open TODO ("the live daemon
   dispatches against an *empty* MCP catalog today") that was stale â€” `topology.mcps` has been the
   single source for both the dispatcher's catalog and the runtime's MCP connection since Phase 1.
-  See [`../architecture/overview.md`](../../spec/architecture/overview.md)'s "Current status" item 9.
+  See [`../../spec/architecture/overview.md`](../../spec/architecture/overview.md)'s "Current status" item 9.
 - âœ… **Runtime tool gating** â€” done, see "Per-call runtime enforcement" above (same item, noted twice
   in this doc).
 - **Shared wire-type + slash-command extraction across clients** â€” TUI, WebUI, and CLI now share

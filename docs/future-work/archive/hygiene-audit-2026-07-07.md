@@ -147,6 +147,6 @@ Where this pass changes the picture:
   items closed out above) and [`hygiene-audit-2026-07-05.md`](hygiene-audit-2026-07-05.md).
 - [`crate-modularity-audit.md`](crate-modularity-audit.md) — item 3 (the `common` split) discussed
   above, still deferred.
-- [`../architecture/positioning.md`](../../spec/architecture/positioning.md) and
+- [`../../spec/architecture/positioning.md`](../../spec/architecture/positioning.md) and
   [`../ideas/vs-hermes.md`](../ideas/vs-hermes.md) — the competitive framing behind the Phase 4
   recommendation.

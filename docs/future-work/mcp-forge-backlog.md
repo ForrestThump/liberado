@@ -37,7 +37,7 @@ amount of ceremony:
   `code-dispatch`, `consequence = reversible`). Every entry below should look like this when
   finished: its own repo, registered by name, human-authored `description`/`consequence` in
   `topology.toml`, never auto-merging anything.
-- **A cron/scheduling MCP** (Phase 3's "cron as a bus listener," `docs/roadmap/roadmap.md`) — the
+- **A cron/scheduling MCP** (Phase 3's "cron as a bus listener," `docs/roadmap.md`) — the
   *inbound trigger* half (a cron tick firing) is an event source, not an MCP (see "Core" below),
   but a **task-management surface** for the agent to itself schedule/cancel future wake-ups
   (the equivalent of this session's own `ScheduleWakeup`) is genuinely model-invoked, capability-
@@ -58,7 +58,7 @@ amount of ceremony:
   into the MCP transport. The *outbound-delegate* capability the dispatcher sees, though, can still
   be exposed to the model the same way any other capability is.
 - **Future real-world MCPs already flagged as pending**: caldav, calorie-counter, weather (blocked
-  on an upstream stdio fix per `docs/roadmap/roadmap.md`'s Phase 1 section) — same pattern as
+  on an upstream stdio fix per `docs/roadmap.md`'s Phase 1 section) — same pattern as
   everything else already `mcp-forge`-managed.
 
 ## Core, tightly coupled — not `mcp-forge` material
@@ -84,7 +84,7 @@ central":
   overhead buys nothing here.
 - **Cron/hooks, the *inbound* trigger side** — an event firing and re-activating a dormant
   daemon/dispatch loop is not "a tool call an active loop makes," it's the thing that starts a loop.
-  Fits the `event_source` trait direction already in `docs/architecture/overview.md`
+  Fits the `event_source` trait direction already in `docs/spec/architecture/overview.md`
   ("MCPs vs hooks" — hooks are event sources that *push* into the daemon, not tools the agent
   *calls*) and Phase 3's plan (cron and vault-watch as interchangeable event sources). The
   standardized-envelope gap this needs (see the MCP/A2A/hooks conversation) is closer to
@@ -103,7 +103,7 @@ central":
   doom-loop finding doc) — not scheduled.
 - Whether `liberado_common::Event` should be reshaped toward CloudEvents' envelope, or stay
   bespoke, is undecided — matters most once hooks/cron/A2A-inbound all need to share one shape.
-- Cron's own phased placement is already decided (Phase 3, `docs/roadmap/roadmap.md`) — this doc
+- Cron's own phased placement is already decided (Phase 3, `docs/roadmap.md`) — this doc
   doesn't move that up, just clarifies which *half* of it (inbound trigger vs. agent-scheduled
   wake-up) is core vs. `mcp-forge` material once it's picked up.
 - A2A is explicitly "not before Phase 3" per `a2a-protocol-idea.md` — this doc doesn't change that
@@ -116,7 +116,7 @@ central":
   this backlog's sorting test is grounded in.
 - `docs/ideas/archive/doomloop_research.md` — the "external working memory" research point behind the
   task-tracking entry above.
-- `docs/roadmap/roadmap.md` — Phase 3 (cron, vault-decoupling) and the general phased sequence.
+- `docs/roadmap.md` — Phase 3 (cron, vault-decoupling) and the general phased sequence.
 - `crates/mcp-forge/ARCHITECTURE.md` — the actual mechanism ("wire in via mcp-forge" means this).
-- `docs/architecture/overview.md` — "MCPs vs hooks," the existing decided distinction this backlog
+- `docs/spec/architecture/overview.md` — "MCPs vs hooks," the existing decided distinction this backlog
   extends rather than replaces.

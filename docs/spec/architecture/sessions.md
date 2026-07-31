@@ -3,8 +3,8 @@
 **Status**: living architecture. Landed 2026-07-12/13 (session-focus slices S1–S7, S5′, forking).
 **Related**: [`agentic-loops.md`](agentic-loops.md) (kernel vs packs) ·
 [`channels-and-interactivity.md`](channels-and-interactivity.md) (the three channels; interactivity
-as a capability) · [`contracts.md`](contracts.md) · [`../reference/api.md`](../../spec/reference/api.md) ·
-[`../roadmap/archive/session-focus-plan.md`](../../future-work/archive/session-focus-plan.md) (how it was built, slice by
+as a capability) · [`contracts.md`](contracts.md) · [`../../spec/reference/api.md`](../../spec/reference/api.md) ·
+[`../../future-work/archive/session-focus-plan.md`](../../future-work/archive/session-focus-plan.md) (how it was built, slice by
 slice — history, not the model itself)
 
 ---
@@ -112,7 +112,7 @@ pack, not a fake.
 | cron / webhook / vault reaction | `dispatch` | `ReactionOutcome::Dispatched { session_id }` |
 | face-agent `delegate` | `dispatch` | Awaits terminal inside the chat turn; no `AskHuman` (D-e) |
 
-See [`../roadmap/archive/one-execution-engine-plan.md`](../../future-work/archive/one-execution-engine-plan.md) for the
+See [`../../future-work/archive/one-execution-engine-plan.md`](../../future-work/archive/one-execution-engine-plan.md) for the
 convergence (E1–E7).
 
 ## Authority (S6)
@@ -171,7 +171,7 @@ the transcript, not the goal, because a goal session that no pack is running is 
 | `GET /api/goals[/{id}]` | The **kernel lens** — only goal-bearing sessions. |
 
 The two older endpoints are not legacy: they are the two lenses, and a caller often legitimately wants
-exactly one of them. See [`../reference/api.md`](../../spec/reference/api.md).
+exactly one of them. See [`../../spec/reference/api.md`](../../spec/reference/api.md).
 
 ## What a surface owes the user
 

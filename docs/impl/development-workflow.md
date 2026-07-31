@@ -2,10 +2,10 @@
 
 **Audience**: a fresh planning/architectural agent (or human) picking up this project cold, with no
 memory of prior sessions, who needs to independently research, plan, delegate to subagents, implement,
-and ship work at the same quality bar this project has been held to. `docs/contributing/agents.md`
-covers *build/run mechanics*; `docs/architecture/*.md` covers *what's built*; this doc covers *how work
+and ship work at the same quality bar this project has been held to. `docs/impl/agents.md`
+covers *build/run mechanics*; `docs/spec/architecture/*.md` covers *what's built*; this doc covers *how work
 here actually gets done* — the process, judgment calls, and conventions that produced the work recorded
-in `docs/roadmap/`. Read this before touching code on a new branch.
+in `docs/future-work/`. Read this before touching code on a new branch.
 
 **Origin**: written 2026-07-02, distilled from a single long session that shipped two safety fixes
 (MCP connection isolation, runtime-level tool gating), a three-tier hygiene pass (crate coupling,
@@ -18,19 +18,19 @@ actually works.
 
 ## The governing philosophy
 
-Three principles from `docs/architecture/overview.md` shape every decision here, and are worth
+Three principles from `docs/spec/architecture/overview.md` shape every decision here, and are worth
 internalizing before anything else:
 
 1. **Safety is engineered, not prompted.** The LLM proposes; deterministic code disposes, only ever
    toward *less* autonomy. When you find a safety mechanism that doesn't fully close a gap (see the
-   proposal-integrity work in `docs/roadmap/archive/hardening-audit-2026-07-02.md`), **say so explicitly rather
+   proposal-integrity work in `docs/future-work/archive/hardening-audit-2026-07-02.md`), **say so explicitly rather
    than shipping something that looks like a fix but isn't.** A partial mitigation described honestly is
    more valuable than a full mitigation oversold.
 2. **Capability only narrows, never widens**, down any delegation chain (`CapabilitySet::narrow`,
    Decision 4). Any new code that hands authority to a subagent, a tool call, or a spawned process should
    be checked against this invariant on sight.
 3. **Numbered "Decision N" ledger.** Load-bearing architectural choices are tracked in
-   `docs/specs/liberado-architecture-decisions.md`, referenced by number throughout the codebase's doc
+   `docs/spec/architecture-decisions.md`, referenced by number throughout the codebase's doc
    comments (e.g. "Decision 4 narrowing," "Decision 11 proposal loop," "Decision 18 incremental mesh").
    When you make a comparably load-bearing choice, add it to that ledger rather than letting the
    reasoning live only in a commit message or a chat transcript that will eventually compact away.
@@ -49,7 +49,7 @@ Before proposing a fix, confirm the premise against the actual code, not against
 summary, or your own intuition claims. This session's clearest example: an audit finding said
 `liberado-theme`/`liberado-markdown`/`liberado-commands` were "three tiny crates, always used together" —
 a plausible-sounding claim that turned out **false on both counts** the moment `wc -l` and each
-consumer's actual `Cargo.toml` were checked directly (`docs/roadmap/archive/hygiene-audit-2026-07-02.md`, item
+consumer's actual `Cargo.toml` were checked directly (`docs/future-work/archive/hygiene-audit-2026-07-02.md`, item
 9). The merge was dropped, and a more valuable, real finding (webui bypassing `liberado-markdown` for its
 own hand-rolled renderer) surfaced *while checking the premise*. **A finding that turns out wrong is a
 success of the process, not a wasted step — say so and change course, don't push through to save face.**
@@ -68,7 +68,7 @@ otherwise be guessing at the user's intent. Skip it for single-line fixes or cha
 reasonable shape.
 
 **What a good plan looks like** (see any of this session's plan files, or the shape of
-`docs/roadmap/archive/hardening-audit-2026-07-02.md`'s scope-decision section for a written example): a Context
+`docs/future-work/archive/hardening-audit-2026-07-02.md`'s scope-decision section for a written example): a Context
 section that explains *why*, not just *what* — including any premise you had to correct along the way —
 followed by a concrete design with exact file paths, and a Verification section that names the actual
 commands to run. **Write the plan as if the reader will judge whether you actually understood the
@@ -83,7 +83,7 @@ plan look OK?" — that's what presenting the plan for approval is for.
 
 - **Move code, don't duplicate it, when relocating for architectural reasons.** When `RuntimeFactory`
   moved from `liberado-orchestrator` to `liberado-executor` to break a near-circular crate dependency
-  (`docs/roadmap/archive/hygiene-audit-2026-07-02.md`, item 6), every call site was updated in the same pass, not
+  (`docs/future-work/archive/hygiene-audit-2026-07-02.md`, item 6), every call site was updated in the same pass, not
   left as a re-export shim indefinitely (a re-export was used *temporarily* in one case —
   `liberado-bootstrap` re-exporting `liberado-config`'s surface — specifically because dozens of existing
   call sites had no reason to change and re-exporting was the correct, deliberate choice there, not a
@@ -121,19 +121,19 @@ plan look OK?" — that's what presenting the plan for approval is for.
 
 ### 5. Documentation discipline
 
-- **Record findings before fixing them**, in `docs/roadmap/`, especially for audit-shaped work (a broad
+- **Record findings before fixing them**, in `docs/future-work/`, especially for audit-shaped work (a broad
   investigation producing a prioritized backlog). This project's convention: one doc per audit pass,
   named `<topic>-audit-<date>.md`, with a Purpose/Method header, findings organized by severity/tier with
   file:line references and an explicit verdict per item (real gap, or confirmed-fine-with-reasoning), and
-  a "Recommended sequencing" close. See `docs/roadmap/archive/hygiene-audit-2026-07-02.md` and
-  `docs/roadmap/archive/hardening-audit-2026-07-02.md` for the concrete shape. **This matters beyond the current
+  a "Recommended sequencing" close. See `docs/future-work/archive/hygiene-audit-2026-07-02.md` and
+  `docs/future-work/archive/hardening-audit-2026-07-02.md` for the concrete shape. **This matters beyond the current
   conversation**: it's what lets a differently-scoped session (or a different agent entirely) resume the
   backlog without re-deriving it, and it survives context compaction that a chat transcript doesn't.
 - **Cross-link related docs both directions.** When this session's work re-confirmed an already-recorded
   finding in `crate-modularity-audit.md`, both docs were updated with a link to the other — not just the
   new one.
 - **Fix stale status markers when you find them, even if that's not what you set out to do.**
-  `docs/roadmap/roadmap.md` had a "Landed" bullet describing runtime tool gating as an open gap after it
+  `docs/roadmap.md` had a "Landed" bullet describing runtime tool gating as an open gap after it
   had actually shipped earlier the same session — a one-paragraph courtesy fix, done in passing, not
   deferred as out-of-scope.
 - **Don't retroactively pad or invent numbers.** A commit message in this project once cited "194 tests"

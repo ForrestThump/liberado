@@ -19,7 +19,7 @@ wire DTOs shared between server, TUI, WebUI, and CLI. Fix type drift before it w
 
 ## 1. Motivation
 
-Three clients (TUI, WebUI, CLI) call the same HTTP/SSE API (`docs/reference/api.md`), but every
+Three clients (TUI, WebUI, CLI) call the same HTTP/SSE API (`docs/spec/reference/api.md`), but every
 endpoint type is defined independently — the TUI in `tui/src/api.rs`, the WebUI in
 `webui/src/types.rs`, and the server in `server/src/state.rs` / inline `json!()` — and they
 have already diverged. The `chat-client-contract` crate exists with the right doc-comment

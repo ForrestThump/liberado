@@ -115,7 +115,7 @@ the first thing read and usually becomes the fixture that pins the corrected beh
 rate, the UNSAFE-acts-must-never-increase gate) and automated prompt-A/B tooling
 (`liberado-heuristics-tuner`, 2026-07-03 — automates exactly the "run eval → tweak prompt → run
 again" loop this spec describes doing by hand, now extended past the dispatcher to the executor and
-subagent layers too). Full design and live-run findings: `docs/roadmap/heuristics-tuning-engine-plan.md`.
+subagent layers too). Full design and live-run findings: `docs/future-work/heuristics-tuning-engine-plan.md`.
 
 **Still deferred**: dashboards. (The safety-regression metric was defined early specifically so it
 was never an afterthought, even while the suite was still small.)

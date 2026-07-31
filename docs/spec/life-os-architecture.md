@@ -2,11 +2,11 @@
 
 **Version**: v0.3 (June 2026)  
 **Status**: Historical vision document — **superseded as the cold-start reference** by
-[`docs/architecture/overview.md`](architecture/overview.md). This v0.3 draft predates the actual
+[`architecture/overview.md`](architecture/overview.md). This v0.3 draft predates the actual
 crate layout: names like `liberado-dispatcher`, `liberado-memory-mcp`, and `liberado-tool-helper-mcp`
 below are the *proposed* names, not what shipped (the real crates are `dispatcher`, `mcp`, etc. — see
 `overview.md`'s crate table). Kept for the rationale and vision behind decisions that did land
-(cross-referenced in [`liberado-architecture-decisions.md`](architecture-decisions.md)); do
+(cross-referenced in [`architecture-decisions.md`](architecture-decisions.md)); do
 not treat the crate/module names or file layout below as current.  
 **Owner**: Shiloh Mangus  
 **Goal**: A minimal, security-first, token-efficient, fully auditable personal AI Life OS in Rust. It replaces heavier plugin-marketplace systems (e.g. OpenClaw) with curated, hand-audited components while enabling real background autonomy and loose coupling. Built directly on existing Turbovault + liberado-tool-helper-mcp work.

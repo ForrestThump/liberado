@@ -37,17 +37,17 @@ The **general agentic orchestration kernel** (goal sessions, verifiers, subagent
 [`sessions.md`](sessions.md)). As of 2026-07-19 the **homelab daemon is live** (Telegram sticky chat,
 OpenClaw briefings cut over, TurboVault peer with **vector search + tasks**). As of 2026-07-23
 engineering hardened **module boundaries**, **MCP connection pooling** (default on), and a **partial
-Tier-1 live conformance suite** (see [`../roadmap/roadmap.md`](../../roadmap.md)). Effort still
+Tier-1 live conformance suite** (see [`../../roadmap.md`](../../roadmap.md)). Effort still
 follows a deliberate **replacement priority**: **autonomous life-OS daemon → chat → coding** — the
 remaining P1 gap is the **phone-grade interfacing loop** (session WebUI later; not Telegram multiplexing),
 not storage
 or basic MCP reach. The order and its rationale are in [`positioning.md`](positioning.md); the
-concrete work items, in priority order, are in [`../roadmap/roadmap.md`](../../roadmap.md).
+concrete work items, in priority order, are in [`../../roadmap.md`](../../roadmap.md).
 Coding is a **domain pack** on a domain-neutral kernel, not the product identity, and explicitly
 *good-enough-and-integrated* rather than a Claude Code / Kilo rival. The coding pack is home-spun
 Liberado (`Provider` + `Executor` + `ToolRuntime` + `coder-*`) — not a VTCode wrap. Surfaces (TUI,
 WebUI, CLI, PR factory) are session clients; they do not own the loop. Architecture:
-[`agentic-loops.md`](agentic-loops.md). Live ops status: [`../handoff.md`](../../project/handoff.md).
+[`agentic-loops.md`](agentic-loops.md). Live ops status: [`../../project/handoff.md`](../../project/handoff.md).
 
 **Operational data** (the runtime trace — Decision 12; conversation history — Decision 17)
 deliberately lives *outside* the vault as append-only JSONL, so high-volume writes don't pollute the
@@ -134,7 +134,7 @@ Bottom-up (each depends roughly on those above it):
 | Client | [`theme`](../../../crates/theme/Cargo.toml) | Shared color-token `Theme`/`ThemeRegistry` + `settings.toml` UI prefs (active theme name) under the platform config dir. |
 | Client | [`tui`](../../../crates/tui/ARCHITECTURE.md) | ratatui TUI: sparse chat layout, `/session` browser, `/model` hot-swap picker, slash palette, SSE streaming. |
 | Root | [`cli`](../../../crates/cli/ARCHITECTURE.md) | The single `liberado` binary — client + launcher (`serve` runs the daemon, `chat` streams). |
-| Server | [`server`](../../../crates/server/Cargo.toml) | The daemon process — watch loop + chat + HTTP/SSE API (`docs/reference/api.md`); run via `liberado serve`. Also hosts `POST /api/hooks/{name}` (`src/hooks.rs`) — the external-webhook event source, the push-style counterpart to `cron`'s pull-style one; injects into the daemon's reactive channel via `Daemon::event_sender()`. |
+| Server | [`server`](../../../crates/server/Cargo.toml) | The daemon process — watch loop + chat + HTTP/SSE API (`docs/spec/reference/api.md`); run via `liberado serve`. Also hosts `POST /api/hooks/{name}` (`src/hooks.rs`) — the external-webhook event source, the push-style counterpart to `cron`'s pull-style one; injects into the daemon's reactive channel via `Daemon::event_sender()`. |
 | Web UI | [`webui`](../../../crates/webui/Cargo.toml) | Dioxus WASM frontend — dashboard, reactions feed, vault panel, streaming chat. Excluded from workspace native builds; built with `dx build`. |
 | Eval | [`eval`](../../../crates/eval/Cargo.toml) | Real-model routing/safety eval suite (routing accuracy, safe-default rate, UNSAFE-acts that must never increase). Not a build dependency of the system. |
 | Tooling | [`heuristics-tuner`](../../../crates/heuristics-tuner/ARCHITECTURE.md) | Automates the eval-and-tweak loop for the dispatcher/executor/subagent prompts via beam search — proposes a diff + rubric, never auto-merges. Not a build dependency of the system. |
@@ -204,15 +204,15 @@ converged execution engine expose the same session/event backend to every surfac
 **autonomous life-OS daemon → chat → coding** — sequencing effort to get one thing over the
 daily-driver line rather than three half-built. The order and rationale are in
 [`positioning.md`](positioning.md); the work items, in that order, in
-[`../roadmap/roadmap.md`](../../roadmap.md).
+[`../../roadmap.md`](../../roadmap.md).
 
 **Done:**
 1. ✅ **Reactive pipeline** — daemon watches → attributes → dispatches → orchestrates → executes, end-to-end wired and tested.
 2. ✅ **Concrete `RuntimeFactory`** — `liberado-mcp`'s `TurbomcpRuntimeFactory` connects via stdio, builds a provenance-bound `TurbomcpRuntime`, scopes it to allowed MCPs.
-3. ✅ **Daemon → hub** — `react()` starts a **hosted background session** on the `GoalSessionHub`, run by the `dispatch` pack (the dispatcher + orchestrator pair as a `DomainPackRunner`). `Reaction` carries `ReactionOutcome` (`Observed` / `Decided` / `Acted(Disposition)` / `Dispatched { session_id }`) — and `Dispatched` is the one that matters: a reaction is now a real session you can **join, watch and cancel**, not a fire-and-forget run recorded after the fact. The server assembles each pool's orchestrator from the enabled `[[mcps]]` in `topology.toml`, each connected by `transport` (`crates/bootstrap`'s `mcp_registry_from_config`). See [`../roadmap/archive/one-execution-engine-plan.md`](../../future-work/archive/one-execution-engine-plan.md).
+3. ✅ **Daemon → hub** — `react()` starts a **hosted background session** on the `GoalSessionHub`, run by the `dispatch` pack (the dispatcher + orchestrator pair as a `DomainPackRunner`). `Reaction` carries `ReactionOutcome` (`Observed` / `Decided` / `Acted(Disposition)` / `Dispatched { session_id }`) — and `Dispatched` is the one that matters: a reaction is now a real session you can **join, watch and cancel**, not a fire-and-forget run recorded after the fact. The server assembles each pool's orchestrator from the enabled `[[mcps]]` in `topology.toml`, each connected by `transport` (`crates/bootstrap`'s `mcp_registry_from_config`). See [`../../future-work/archive/one-execution-engine-plan.md`](../../future-work/archive/one-execution-engine-plan.md).
 4. ✅ **Single-binary consolidation** — one `liberado` binary with subcommands: `liberado serve [vault]` (daemon + chat + HTTP/SSE API), `liberado chat [session]` (client), bare `liberado <vault>` aliases `serve`. `crates/server` (`liberado-server`) is a **library** exposing `pub async fn run(vault)`, not a binary. This concretely realizes daemon-first (Decision 2): one process hosts everything; every interface is a client.
-5. ✅ **Web UI** — `liberado-server` (Axum, `:4201`, run via `liberado serve`) hosts the daemon and serves a JSON API; `liberado-webui` (Dioxus WASM) is the browser dashboard showing daemon status, reactions, and vault info. LAN-accessible. Build with `dx build --release --package liberado-webui --web` (see [`../contributing/agents.md`](../../impl/agents.md)).
-6. ✅ **Conversational chat loop** — `crates/main-agent`'s `Conversation` drives the executor's conversational tool-calling loop with context carried across turns. Served over the shared chat/SSE contract (`docs/reference/api.md`): `POST /api/chat` and the streaming `GET`/`POST /api/chat/stream` with token streaming, tool-call visibility (`tool`/`tool_result`), and stop/cancel (close the stream → turn aborts + history rolls back, persisting nothing).
+5. ✅ **Web UI** — `liberado-server` (Axum, `:4201`, run via `liberado serve`) hosts the daemon and serves a JSON API; `liberado-webui` (Dioxus WASM) is the browser dashboard showing daemon status, reactions, and vault info. LAN-accessible. Build with `dx build --release --package liberado-webui --web` (see [`../../impl/agents.md`](../../impl/agents.md)).
+6. ✅ **Conversational chat loop** — `crates/main-agent`'s `Conversation` drives the executor's conversational tool-calling loop with context carried across turns. Served over the shared chat/SSE contract (`docs/spec/reference/api.md`): `POST /api/chat` and the streaming `GET`/`POST /api/chat/stream` with token streaming, tool-call visibility (`tool`/`tool_result`), and stop/cancel (close the stream → turn aborts + history rolls back, persisting nothing).
 7. ✅ **Session persistence** — Decision 17, then **converged** (D7, 2026-07-13): every session — chat, goal session, background run — is one append-only JSONL log of DAG message-nodes *and* pack events, under `<LIBERADO_DATA_DIR>/sessions`, outside the vault. ULIDs are minted **monotonically** at append time, so file-order == id-order. `main-agent`'s `ChatSessions` rehydrates per turn from the store and **persists only on success**, so the server holds no in-memory conversation cache and a cancelled turn is a clean on-disk no-op. `GET /api/sessions` is the one list; `/api/conversations` and `/api/goals` remain as the chat and kernel lenses. The pre-convergence `conversations/` and `goal-sessions/` directories are left on disk but no longer read. **See [`sessions.md`](sessions.md)** — the Session model is the load-bearing abstraction of the whole system.
 8. ✅ **`liberado chat` CLI client** — a `reqwest`/SSE terminal REPL (`crates/cli/chat_client.rs`), the first native (non-browser) client of the shared chat API.
 9. ✅ **Config-driven substrate** — the daemon boots on one validated `Config` (Decision 14, `crates/bootstrap`): the dispatcher holds `policy.toml`'s grants as its base authority, and `topology.mcps` is now the **single source** for both the dispatcher's catalog AND the runtime's MCP connection. Each `[[mcps]]` entry declares a required `description` (routing), `consequence` (the risk gate), and `transport` (`stdio` command/args or `http` url — how the runtime reaches it); the dispatcher routes over the enabled MCPs and the orchestrator connects to those same names by transport, so a routed name is always a name the runtime can reach (slice 2b done — no env path remains).
@@ -262,7 +262,7 @@ pipeline picks up the write and archives it — closed the gap where an expired-
 - Rust-native agentic coder crates and PR-factory integration; see
   [`rust-native-agentic-coder-plan.md`](../../future-work/rust-native-agentic-coder-plan.md).
 - Tier 2 live conformance (model-in-the-loop) — optional;
-  [`../roadmap/live-conformance-suite.md`](../../future-work/live-conformance-suite.md).
+  [`../../future-work/live-conformance-suite.md`](../../future-work/live-conformance-suite.md).
 - Splitting `liberado-common`'s grab-bag along its natural boundaries — partially underway (`config`
   and `config-loader` have already been carved off into their own crates), but `common` still has
   eight modules (`provenance`, `capability`, `catalog`, `dispatch`, `event`, `model`,
@@ -294,7 +294,7 @@ pipeline picks up the write and archives it — closed the gap where an expired-
 4. [`dispatcher`](../../../crates/dispatcher/ARCHITECTURE.md) → [`orchestrator`](../../../crates/orchestrator/ARCHITECTURE.md)
    → [`executor`](../../../crates/executor/ARCHITECTURE.md) — the decide→act path.
 5. [`daemon`](../../../crates/daemon/ARCHITECTURE.md) — how it all runs.
-6. [`../contributing/development-workflow.md`](../../impl/development-workflow.md) — before
+6. [`../../impl/development-workflow.md`](../../impl/development-workflow.md) — before
    starting non-trivial work: the research/plan/implement/test/document/commit process this project is
    held to, and how to delegate to subagents effectively.
 

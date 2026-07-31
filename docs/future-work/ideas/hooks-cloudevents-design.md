@@ -3,7 +3,7 @@
 **Status**: Design, not yet implemented — captured per explicit direction ("spec out and design the
 hook system before we write code for it"). `crates/common/src/event.rs`'s current `Event`/
 `EventPayload` types are unchanged; this doc is the target shape for when hooks/cron
-(`docs/roadmap.md`'s Phase 3, `docs/roadmap/mcp-forge-backlog.md`'s inbound-trigger entries)
+(`docs/roadmap.md`'s Phase 3, `docs/future-work/mcp-forge-backlog.md`'s inbound-trigger entries)
 are actually picked up.
 
 ## Why CloudEvents, and why this isn't solved by MCP or A2A
@@ -139,9 +139,9 @@ while the daemon-originated (vault-watch) path can populate the richer conventio
   that started this thread.
 - `docs/ideas/archive/grok_take_on_hooks.md` — independent corroboration (different LLM) of the same
   conclusion: no wake-protocol standard exists, CloudEvents is the right foundation layer.
-- `docs/roadmap/mcp-forge-backlog.md` — where hooks/cron's inbound-vs-outbound, core-vs-mcp-forge
+- `docs/future-work/mcp-forge-backlog.md` — where hooks/cron's inbound-vs-outbound, core-vs-mcp-forge
   split is sorted; this doc is the envelope shape for whichever pieces of that get built.
 - `docs/roadmap.md` — Phase 3 (cron as a bus listener, vault-decoupling behind an
   event-source/hook trait) — the roadmap slot this design is for.
-- `docs/architecture/overview.md` — "MCPs vs hooks," the existing decided distinction this design
+- `docs/spec/architecture/overview.md` — "MCPs vs hooks," the existing decided distinction this design
   extends.

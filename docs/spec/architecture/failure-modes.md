@@ -1,7 +1,7 @@
 # How this system fails
 
 **Status**: living. Distilled 2026-07-14 from twelve audits and findings in
-[`../roadmap/archive/`](../../future-work/archive/), plus the live runs of 2026-07-13/14. Class 6 added
+[`../../future-work/archive/`](../../future-work/archive/), plus the live runs of 2026-07-13/14. Class 6 added
 2026-07-26 from a dogfooding session that produced five instances of it in one sitting.
 
 Twelve separate audits, spread over two weeks, kept finding **the same handful of bugs wearing
@@ -194,7 +194,7 @@ And when a live run does find something, **fix the test that should have caught 
 same class returns wearing different clothes, which is precisely what those twelve audits are.
 
 > **The remedy, planned but not built**:
-> [`../roadmap/live-conformance-suite.md`](../../future-work/live-conformance-suite.md). The live checks that
+> [`../../future-work/live-conformance-suite.md`](../../future-work/live-conformance-suite.md). The live checks that
 > caught all of this currently exist only as commands somebody typed once. The key realisation is that
 > *most of them do not need a live model* — the ask seam, the parked session, the unenforced `Write`,
 > the no-op `cancel` are all **plumbing**, and a real daemon with a `MockProvider` catches every one.

@@ -12,7 +12,7 @@ contract**. Contrast with:
 |----------|------|
 | [roadmap.md](../../roadmap.md) | Product scoreboard + active/shipped roadmap plans |
 | [architecture/](../../spec/architecture/README.md) | How the system works **now** |
-| [specs/](../../spec/README.md) | Frozen decisions |
+| [../../spec/README.md](../../spec/README.md) | Frozen decisions |
 | Active plans in [`../`](../README.md) | Forward design for a known next evolution — not current truth until landed |
 
 ## Plan that used to live here

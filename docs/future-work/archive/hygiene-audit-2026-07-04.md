@@ -165,7 +165,7 @@ in each are pre-existing, in untouched production-code lines).
 
 ## Coupling — no real violations found
 
-The documented bottom-up layering (`docs/architecture/overview.md`'s crate map) holds: no lower crate
+The documented bottom-up layering (`docs/spec/architecture/overview.md`'s crate map) holds: no lower crate
 imports a higher one. Two minor, acceptable-as-is notes: `conversation-store` depends on `provider`
 for `Message`/`Role` (the store needs LLM-message vocabulary to serialize; would be cleaner if those
 types lived in `common`, but not worth moving today), and `config-loader` depends on `common` for

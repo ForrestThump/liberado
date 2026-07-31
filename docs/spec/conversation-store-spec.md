@@ -15,7 +15,7 @@ with no schema change; the v1 impl honors it.
 
 **Last Updated**: July 13, 2026
 
-> ### ⚠️ Superseded in part (2026-07-13) — read [`../architecture/sessions.md`](architecture/sessions.md) first
+> ### ⚠️ Superseded in part (2026-07-13) — read [`architecture/sessions.md`](architecture/sessions.md) first
 >
 > **The node schema (§3) is intact and still honored** — that is the part this spec asked the first
 > line of storage code to get right, and the bet paid: branching and **forking landed as additions,
@@ -266,5 +266,5 @@ exists:
 - **Decision 12** (`liberado-architecture-decisions.md`) — append-only JSONL outside the vault; this
   spec is the conversation-shaped instance of the same rule.
 - **Decision 17** (`liberado-architecture-decisions.md`) — the log entry this spec resolves.
-- `docs/reference/api.md` — the chat API/SSE contract; "Sessions / Persistence" on its roadmap is this
+- `docs/spec/reference/api.md` — the chat API/SSE contract; "Sessions / Persistence" on its roadmap is this
   store surfacing through the API.

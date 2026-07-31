@@ -2,7 +2,7 @@
 
 **What any surface that shows sessions owes the user** — the TUI, the WebUI, a phone browser, a
 future anything. Derived from what the TUI already does (it is a complete session client today) plus
-[`../reference/api.md`](../../spec/reference/api.md), and stated once, here, so the WebUI does not have to be
+[`../../spec/reference/api.md`](../../spec/reference/api.md), and stated once, here, so the WebUI does not have to be
 reverse-engineered out of `crates/tui/`.
 
 **Status**: 2026-07-14. The TUI satisfies most of this. The WebUI has **no session view at all** —
@@ -12,7 +12,7 @@ it has `chat.rs` and nothing else, so it satisfies none of it.
 
 It is **not a layout spec**, and it is deliberately not derived from the TUI's *interaction* design.
 This project already tested the theory that surfaces can share interaction abstractions: the
-`ChatClient` trait in [`../roadmap/archive/tui-shared-code-extraction-plan.md`](../../future-work/archive/tui-shared-code-extraction-plan.md)
+`ChatClient` trait in [`../../future-work/archive/tui-shared-code-extraction-plan.md`](../../future-work/archive/tui-shared-code-extraction-plan.md)
 was proposed, never adopted, and **deleted** — "TUI and CLI's actual transport needs (blocking REPL
 vs. non-blocking render loop) diverge too much for one shared trait to be worth forcing." What
 survived was the narrow thing: shared wire types and one SSE decoder.
@@ -139,7 +139,7 @@ rather than narrowing it. The spec already fell out. This document *is* it.
   surface learned what it means. (Same shape as the bug where the API told a parked session it "had
   already finished" — a state nobody taught the system to describe.)
 - **The WebUI has no session view**, which is what blocks E5-b (the deep link into a session from the
-  out-of-band ping). See [`../roadmap/archive/one-execution-engine-live-test.md`](../../future-work/archive/one-execution-engine-live-test.md) § E5-b.
+  out-of-band ping). See [`../../future-work/archive/one-execution-engine-live-test.md`](../../future-work/archive/one-execution-engine-live-test.md) § E5-b.
 - **`public_base_url` does not exist in config**, and deliberately should not until there is a page to
   link to — an unused config key is a lie about what the system can do.
 

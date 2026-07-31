@@ -85,7 +85,7 @@ re-authorise itself. This is an authority-channel act, not an information-channe
 ([`channels-and-interactivity.md`](../spec/architecture/channels-and-interactivity.md)).
 
 Do not rest that claim on "no tool does this" alone — see the loopback exposure in
-[`../reference/api.md`](../spec/reference/api.md#trust-boundary-the-api-is-unauthenticated-and-agent-reachable).
+[`../spec/reference/api.md`](../spec/reference/api.md#trust-boundary-the-api-is-unauthenticated-and-agent-reachable).
 A granted web-fetching MCP can `GET` the daemon's own API. `POST` is out of reach of a GET-only
 fetcher, which is why the switch is a `POST` — an incidental defence, but a real one. **Tracked
 separately; not part of this plan.**

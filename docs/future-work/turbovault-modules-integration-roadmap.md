@@ -263,7 +263,7 @@ interfacing**, not vault storage. Concretely:
 | **P1 daily-driver (W1, E5-b, T1, M1)** | **Still the front of the queue.** Modules are live capability, not a reason to delay the session WebUI. |
 | **P1 perception (vault watcher)** | `vault_events` still a future `L1` path; **`L0` stays authoritative**. |
 | **CH2 — chat history search** ([`chat-search-plan.md`](chat-search-plan.md)) | Tier 3 (vector) is **subsumed by the `vector` module**. Keep Tier 1 (ripgrep) as planned. |
-| **Context policy** ([`liberado-context-policy-spec.md`](../spec/context-policy-spec.md)) | Real retrieval backend via live `vector_*`. |
+| **Context policy** ([`../spec/context-policy-spec.md`](../spec/context-policy-spec.md)) | Real retrieval backend via live `vector_*`. |
 | **Agent memory / `memory-mcp`, `memory-store`** | Still evaluate overlap with standalone qdrant / memories before consolidating. |
 | **Life-OS todos** | **Live** — briefs and chat drive tasks through TurboVault. |
 | **Nice-to-have: A2A / mesh** | Unchanged. |

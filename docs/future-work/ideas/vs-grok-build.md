@@ -3,7 +3,7 @@
 **Status**: research note, 2026-07-21 (updated same day: `/goal` harness + `/loop`/cron).  
 **Scope**: highest-leverage gaps if Liberado’s TUI is to be a *daily-driver agentic coding surface*, not a product-market comparison of “who wins coding agents.” Also covers **goal-achievement harness robustness** (Grok `/goal`) and **recurring work** (Grok `/loop` vs Liberado cron + series-loops plan).  
 **Sources**: [xai-org/grok-build](https://github.com/xai-org/grok-build), [docs.x.ai/build](https://docs.x.ai/build/overview), [Background Tasks](https://docs.x.ai/build/features/background-tasks) (`/loop`), public writeups on goal mode (June 2026), Liberado architecture (`agentic-loops.md`, `session-surface-contract.md`, `positioning.md`, `roadmap.md`, `verifiers.md`, [`loops-plan.md`](../loops-plan.md)), coding pack crates (`coder-*`), `liberado-cron`, TUI client (`crates/tui`).  
-**Related**: [`vs-hermes.md`](vs-hermes.md) (life-OS / skills / cron gaps), [`../architecture/positioning.md`](../../spec/architecture/positioning.md) (coding is P3: *good enough + integrated*, not best-in-class), [`loop_architecture_reference_article.md`](archive/loop_architecture_reference_article.md).
+**Related**: [`vs-hermes.md`](vs-hermes.md) (life-OS / skills / cron gaps), [`../../spec/architecture/positioning.md`](../../spec/architecture/positioning.md) (coding is P3: *good enough + integrated*, not best-in-class), [`loop_architecture_reference_article.md`](archive/loop_architecture_reference_article.md).
 
 ---
 
@@ -366,14 +366,14 @@ Assume life-OS dogfood continues as P1. This track is **parallel-safe** only whe
 |---|---|
 | Mid-build resume | `docs/roadmap.md` E6-c(b) |
 | Coding pack “not done” (worktree, Docker smoke, streaming) | `crates/coder-agent/ARCHITECTURE.md` |
-| Surfaces render diffs; don’t own loop | `docs/architecture/agentic-loops.md` Surfaces table |
-| Session surface obligations | `docs/architecture/session-surface-contract.md` |
-| Coding is P3, good-enough + integrated | `docs/architecture/positioning.md`, `docs/roadmap.md` Priority 3 |
+| Surfaces render diffs; don’t own loop | `docs/spec/architecture/agentic-loops.md` Surfaces table |
+| Session surface obligations | `docs/spec/architecture/session-surface-contract.md` |
+| Coding is P3, good-enough + integrated | `docs/spec/architecture/positioning.md`, `docs/roadmap.md` Priority 3 |
 | Skills / self-extension (life-OS angle) | `docs/ideas/vs-hermes.md` §1 — different mechanism (`ProposeMcp` vs markdown skills) |
 | ACP | Named future surface in architecture overview |
-| Goal / turn / loop vocabulary | `docs/architecture/agentic-loops.md` §Vocabulary |
-| Verifiers + criteria intake | `docs/architecture/verifiers.md` |
-| Series loops (not yet built) | `docs/roadmap/loops-plan.md` (L1–L6) |
+| Goal / turn / loop vocabulary | `docs/spec/architecture/agentic-loops.md` §Vocabulary |
+| Verifiers + criteria intake | `docs/spec/architecture/verifiers.md` |
+| Series loops (not yet built) | `docs/future-work/loops-plan.md` (L1–L6) |
 | One-shot cron (shipped) | `liberado-cron`, topology `[[schedules]]`, Telegram delivery |
 | Cron dogfood / AskHuman crons | `docs/roadmap.md` Priority 1 (C1) |
 

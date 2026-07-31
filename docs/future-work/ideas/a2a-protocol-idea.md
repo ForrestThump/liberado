@@ -71,12 +71,12 @@ by design** — the seams were built for exactly this shape of extension, per De
 
 ## What's actually new (the real gap)
 
-Two new protocol *surfaces*, distinct from anything in `docs/reference/api.md` today:
+Two new protocol *surfaces*, distinct from anything in `docs/spec/reference/api.md` today:
 
 1. **Inbound**: an A2A server exposing an `AgentCard` + `Task` endpoints so external agents can
    discover Liberado's capabilities and hand it work. This is a new client-facing protocol
    alongside the existing HTTP/SSE chat contract — not a replacement for it (the design rule in
-   `docs/reference/api.md` — "no client-specific endpoints" — still applies to Liberado's *own*
+   `docs/spec/reference/api.md` — "no client-specific endpoints" — still applies to Liberado's *own*
    clients; A2A is a peer protocol, a different consumer class).
 2. **Outbound**: Liberado *as an A2A client*, delegating a goal to a remote peer agent. This is
    conceptually a sibling to the `Provider` trait (Decision 13) — a narrow-waist abstraction for

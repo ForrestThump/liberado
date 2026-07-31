@@ -1,7 +1,7 @@
 # model-reasoning-introspection-idea.md — Read real reasoning; don't mistake rationalization for it
 
 **Status**: Idea, not decided. Captured 2026-07-06 during live executor-layer tuning
-(`docs/roadmap/heuristics-tuning-engine-plan.md`'s "Executor-layer live smoke tests" section) so it
+(`docs/future-work/heuristics-tuning-engine-plan.md`'s "Executor-layer live smoke tests" section) so it
 isn't lost — nothing here is scheduled or designed in detail yet. **Revised same day**: the two
 mechanisms below are not equally sound — see the caveat under mechanism 1.
 

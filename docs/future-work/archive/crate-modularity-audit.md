@@ -76,7 +76,7 @@ independently define `SseEvent` / `SseDecoder` / `parse_block` / `strip_one_spac
 names, same incremental string-framing algorithm, same edge cases covered by near-duplicate test
 suites (multi-line `data:`, split-across-chunks, comment lines, CRLF).
 
-**This is already tracked, just not finished**: `docs/roadmap/tui-shared-code-extraction-plan.md`
+**This is already tracked, just not finished**: `docs/future-work/archive/tui-shared-code-extraction-plan.md`
 (written earlier) calls this out explicitly in its Step 4 — "Update \[the CLI\] to: Import
 `SseDecoder` from `chat_client_contract::native::SseDecoder` instead of maintaining a private
 copy... Delete the private `SseDecoder`, `SseEvent`, `parse_block`, and `strip_one_space`

@@ -1,7 +1,7 @@
 # Liberado — Agent & Build Guide
 
 This file is the single source of truth for agents and contributors on how to build, run, and
-extend Liberado. Read [`docs/architecture/overview.md`](../spec/architecture/overview.md) for the system
+extend Liberado. Read [`../spec/architecture/overview.md`](../spec/architecture/overview.md) for the system
 overview and current status, and
 [`development-workflow.md`](development-workflow.md) for *how work here actually gets done* —
 research/plan/implement/test/document/commit discipline, subagent delegation patterns, and the
@@ -92,7 +92,7 @@ Reactions are logged to stderr. The daemon runs until killed.
 ## CLI chat client
 
 `liberado chat [session-id]` is a terminal REPL for the conversational agent. It is a **client** of
-the shared chat API — a thin `reqwest`/SSE consumer of `POST /api/chat/stream` (`docs/reference/api.md`),
+the shared chat API — a thin `reqwest`/SSE consumer of `POST /api/chat/stream` (`docs/spec/reference/api.md`),
 the first native (non-browser) client of that contract. It embeds no agent logic; the daemon server
 owns the conversation, provider, and store.
 
@@ -198,7 +198,7 @@ The server listens on `0.0.0.0:4201` (LAN-accessible). Set `LIBERADO_PORT` to ch
 | `DEEPSEEK_API_KEY`  | —       | Enables provider (DeepSeek); see also OpenRouter profiles |
 | `DEEPSEEK_MODEL`    | `deepseek-chat` | Boot default model (hot-swappable after start via API/TUI) |
 
-**API endpoints** (full contract: [`docs/reference/api.md`](../spec/reference/api.md)):
+**API endpoints** (full contract: [`../spec/reference/api.md`](../spec/reference/api.md)):
 
 | Endpoint                    | Description                                      |
 |-----------------------------|--------------------------------------------------|
@@ -320,5 +320,5 @@ Config is a **mesh**: each file (`topology.toml`, `policy.toml`, `tuning.toml`) 
 
 Later layers win at the TOML table/key level. Per-value provenance is reported by `liberado config check`.
 
-See [`docs/specs/liberado-config-spec.md`](../spec/config-spec.md) for the full rationale,
+See [`../spec/config-spec.md`](../spec/config-spec.md) for the full rationale,
 file layout, and validation contract.

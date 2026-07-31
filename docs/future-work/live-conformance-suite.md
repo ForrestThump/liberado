@@ -10,7 +10,7 @@ parked reopen + production `POST .../message` → resume; L7 via spy `SessionAle
 `liberado-daemon` test `l9_cron_event_becomes_joinable_dispatched_session` (cron/webhook-class
 event → `ReactionOutcome::Dispatched { session_id }` + joinable hub session). Tier 2
 (model-in-the-loop) remains optional / `#[ignore]`d.
-**Why**: [`../architecture/failure-modes.md`](../spec/architecture/failure-modes.md) — the meta-lesson.
+**Why**: [`../spec/architecture/failure-modes.md`](../spec/architecture/failure-modes.md) — the meta-lesson.
 
 ## The case
 

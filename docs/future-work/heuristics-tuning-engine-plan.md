@@ -21,7 +21,7 @@ regression net so the re-tune doesn't quietly break what already worked.
 that by hand today. This plan automates it: generate diverse test goals, run them against a real
 system entry point, score the results, propose targeted prompt tweaks, and iterate — surfacing
 weak points in routing and tool-use before they show up in real dogfooding.
-[`liberado-testing-and-eval-spec.md`](../spec/testing-and-eval-spec.md) §4.2 ("Real-model
+[`../spec/testing-and-eval-spec.md`](../spec/testing-and-eval-spec.md) §4.2 ("Real-model
 eval suite") and §5 ("Logging Is the Fixture Pipeline") already describe the scoring dimensions and
 the traced-run → fixture pipeline this plan builds on rather than replaces.
 
