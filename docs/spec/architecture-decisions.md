@@ -456,8 +456,8 @@ Decision 17: **An append-only log of message *nodes*, JSONL outside the vault, b
   > chat / conversation-store) is vault-agnostic; the vault's coupling is isolated to the reactive
   > subsystem (watch + provenance loop-breaking), which becomes the vault plugin behind an
   > event-source trait (Decisions 18, 19). See the three pillars in
-  > [`docs/architecture/overview.md`](spec/architecture/overview.md) and
-  > [`docs/architecture/positioning.md`](spec/architecture/positioning.md). Wherever an earlier
+  > [`docs/architecture/overview.md`](architecture/overview.md) and
+  > [`docs/architecture/positioning.md`](architecture/positioning.md). Wherever an earlier
   > decision in this log says "the vault is the source of truth," read it through this clarification.
 - **One log, everything else is a rebuildable projection** — the line-offset index, the leaf-path
   slice the executor consumes, the Markdown export, the vector index, the recency/list index are all
@@ -503,10 +503,10 @@ DuckDB impls, and the branching/debate/parallel UX.
 These two decisions record the matured architectural vision agreed in the 2026-06-26 planning
 session. They are load-bearing because they reframe the substrate (event-driven, vault-optional) that
 every later feature builds on. See the three pillars in
-[`docs/architecture/overview.md`](spec/architecture/overview.md), the thesis in
-[`docs/architecture/positioning.md`](spec/architecture/positioning.md), the seam plan in
-[`docs/architecture/modularity.md`](spec/architecture/modularity.md), and the mesh source in
-[`docs/ideas/archive/meshify.md`](future-work/ideas/archive/meshify.md).
+[`docs/architecture/overview.md`](architecture/overview.md), the thesis in
+[`docs/architecture/positioning.md`](architecture/positioning.md), the seam plan in
+[`docs/architecture/modularity.md`](architecture/modularity.md), and the mesh source in
+[`docs/ideas/archive/meshify.md`](../future-work/ideas/archive/meshify.md).
 
 ### 18. Incremental Event-Bus Mesh (with checkpoints)
 **Why it matters**: The single enabler for the whole modularity vision — vault-optional, multiple
@@ -514,7 +514,7 @@ dispatchers/executors, cron, partial deploys, self-improvement-as-a-service — is
 publish/subscribe events rather than calling each other directly. *How* we get there determines
 whether the substrate ships at all.
 
-**Decision**: Adopt [`meshify.md`](future-work/ideas/archive/meshify.md)'s direction — components publish/subscribe
+**Decision**: Adopt [`meshify.md`](../future-work/ideas/archive/meshify.md)'s direction — components publish/subscribe
 events rather than calling each other — but **incrementally**, NOT as a big-bang refactor. Wrap seams
 behind an `EventBus` trait **as they are touched**; **new components are bus-native from day one**;
 old ones migrate when next touched (the chat -> dispatcher wiring in roadmap Phase 1 is the first
@@ -578,8 +578,8 @@ destination the mesh (Decision 18) reaches; vault-decoupling lands in roadmap Ph
 
 **Supersedes**: the earlier framing that "the vault is the source of truth" as a system-wide
 invariant (see the dated clarifying note on Decision 17 above). Pillar 1 in
-[`docs/architecture/overview.md`](spec/architecture/overview.md) now reads "vault = default
-perception+storage plugin"; [`docs/architecture/positioning.md`](spec/architecture/positioning.md)
+[`docs/architecture/overview.md`](architecture/overview.md) now reads "vault = default
+perception+storage plugin"; [`docs/architecture/positioning.md`](architecture/positioning.md)
 states the differentiation this unlocks.
 
 **Status**: Decided (2026-06-26). ? **Event-source trait built (2026-07-04)** — the vault's reactive
@@ -593,7 +593,7 @@ not removing the vault.
 ## Tier 4: Lower-Regret / Polish Decisions
 
 - **A2A (Agent2Agent) protocol interop** — not yet a decision, captured as
-  [`a2a-protocol-idea.md`](future-work/ideas/a2a-protocol-idea.md) (2026-07-01). Preliminary read: the
+  [`a2a-protocol-idea.md`](../future-work/ideas/a2a-protocol-idea.md) (2026-07-01). Preliminary read: the
   Decision 17 conversation-store seams (`author`, lineage) and the Decision 18 mesh direction
   already carry most of the data-model need; the open gap is a new inbound protocol surface and
   an outbound peer-delegation capability, gated like any other MCP/subagent trust boundary. Not

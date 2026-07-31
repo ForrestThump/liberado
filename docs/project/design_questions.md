@@ -12,7 +12,7 @@ Each item points at the docs (or code areas) that disagree or leave a gap.
 
 **Why it matters:** [handoff.md](handoff.md) still describes the 2026-07-19 image as the ops truth; pooling and T1 only help production after deploy.
 
-**Related:** [roadmap/roadmap.md](roadmap/roadmap.md), [handoff.md](handoff.md).
+**Related:** [roadmap/roadmap.md](../roadmap.md), [handoff.md](handoff.md).
 
 ---
 
@@ -26,9 +26,9 @@ MCPs; hand-edited `topology.toml` remains the operator surface.
 
 ## 3. Spec vs living architecture as source of truth
 
-**Question:** When a file under [specs/](specs/README.md) disagrees with [architecture/](spec/architecture/README.md) or with code (e.g. older conversation-store wording vs D7 `SessionStore`), should the default rule be **code + architecture README wins**, with specs marked “historical depth only”?
+**Question:** When a file under [specs/](../spec/README.md) disagrees with [architecture/](../spec/architecture/README.md) or with code (e.g. older conversation-store wording vs D7 `SessionStore`), should the default rule be **code + architecture README wins**, with specs marked “historical depth only”?
 
-**Related:** [specs/README.md](specs/README.md), [specs/liberado-conversation-store-spec.md](specs/liberado-conversation-store-spec.md), [architecture/sessions.md](spec/architecture/sessions.md), [architecture/contracts.md](spec/architecture/contracts.md).
+**Related:** [specs/README.md](../spec/README.md), [specs/liberado-conversation-store-spec.md](../spec/conversation-store-spec.md), [architecture/sessions.md](../spec/architecture/sessions.md), [architecture/contracts.md](../spec/architecture/contracts.md).
 
 ---
 
@@ -36,23 +36,23 @@ MCPs; hand-edited `topology.toml` remains the operator surface.
 
 **Question:** Is finishing Telegram extraction behind `liberado-messaging` (sticky + free-form out of server composition root) still deferred until after C1/T1 remainder, or should it block multi-channel work?
 
-**Related:** [architecture/channels-and-interactivity.md](spec/architecture/channels-and-interactivity.md), [ideas/matrix-chat-surface.md](ideas/matrix-chat-surface.md), server modules `sticky` / `telegram`.
+**Related:** [architecture/channels-and-interactivity.md](../spec/architecture/channels-and-interactivity.md), [ideas/matrix-chat-surface.md](../future-work/ideas/matrix-chat-surface.md), server modules `sticky` / `telegram`.
 
 ---
 
 ## 5. Coding pack priority vs “not replacing Claude Code”
 
-**Question:** [positioning.md](spec/architecture/positioning.md) and [roadmap/roadmap.md](roadmap/roadmap.md) deprioritize coding polish, but [rust-native-agentic-coder-plan.md](roadmap/rust-native-agentic-coder-plan.md) and [pr-dispatch-vtcode-no-write-finding.md](roadmap/pr-dispatch-vtcode-no-write-finding.md) still look like large active programs. Confirm coding remains **integration-only** until P1 daily-drive bar is met.
+**Question:** [positioning.md](../spec/architecture/positioning.md) and [roadmap/roadmap.md](../roadmap.md) deprioritize coding polish, but [rust-native-agentic-coder-plan.md](../future-work/rust-native-agentic-coder-plan.md) and [pr-dispatch-vtcode-no-write-finding.md](../future-work/pr-dispatch-vtcode-no-write-finding.md) still look like large active programs. Confirm coding remains **integration-only** until P1 daily-drive bar is met.
 
-**Related:** those files + [architecture/agentic-loops.md](spec/architecture/agentic-loops.md).
+**Related:** those files + [architecture/agentic-loops.md](../spec/architecture/agentic-loops.md).
 
 ---
 
 ## 6. Ideas vs commitments
 
-**Question:** Should anything still in [ideas/](ideas/README.md) (e.g. turn-budget battery, Matrix) be promoted to an active roadmap row in this quarter, or stay pure backlog?
+**Question:** Should anything still in [ideas/](../future-work/ideas/README.md) (e.g. turn-budget battery, Matrix) be promoted to an active roadmap row in this quarter, or stay pure backlog?
 
-**Related:** [ideas/turn-budget-battery-idea.md](ideas/turn-budget-battery-idea.md), [ideas/matrix-chat-surface.md](ideas/matrix-chat-surface.md), [roadmap/latency-and-routing-observability-plan.md](roadmap/latency-and-routing-observability-plan.md).
+**Related:** [ideas/turn-budget-battery-idea.md](../future-work/ideas/turn-budget-battery-idea.md), [ideas/matrix-chat-surface.md](../future-work/ideas/matrix-chat-surface.md), [roadmap/latency-and-routing-observability-plan.md](../future-work/latency-and-routing-observability-plan.md).
 
 ---
 

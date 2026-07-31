@@ -4,7 +4,7 @@
 terminal coding-agent scaffold like Claude Code out of these components, but I'd like to be able
 to."* This is a dependency-graph and coupling audit of the whole workspace against that bar, plus
 the duplication it turned up along the way. Companion to
-[`modularity.md`](../../architecture/modularity.md) (the seam/mesh plan) and
+[`modularity.md`](../../spec/architecture/modularity.md) (the seam/mesh plan) and
 [`tui-shared-code-extraction-plan.md`](tui-shared-code-extraction-plan.md) (an earlier, narrower
 extraction effort this audit builds on).
 

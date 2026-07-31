@@ -870,7 +870,7 @@ phase**, and **no kernel dependency on cargo/git**.
 2. ✅ Intake `run_intake` / `freeze_if_ready` / `apply_to_request` + profiles (`rust-check`, …)  
 3. ✅ Mock-safe test ladder before live: fixtures + `tests/mock_intake_e2e.rs` (intake→freeze→apply→pipeline),
    ignored hybrid/live scaffold in `tests/live_scaffold.rs` — see
-   [`liberado-coder-agent` ARCHITECTURE](../../crates/coder-agent/ARCHITECTURE.md#tests-escalation-ladder)  
+   [`liberado-coder-agent` ARCHITECTURE](../../../crates/coder-agent/ARCHITECTURE.md#tests-escalation-ladder)  
 4. ✅ PR-dispatch freeze-before-queue + liberado-loop sole path (`goal_contract` on tasks)  
 5. ✅ Production verifier profiles on factory tasks (`dispatch.yaml` `verify:` + `LIBERADO_VERIFY_PROFILE` + `VALIDATE_CMD` → contract)  
 6. ⏳ Product freeze UI (human edit/accept surface beyond policy auto)  

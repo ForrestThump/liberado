@@ -47,7 +47,7 @@ Coding is a **domain pack** on a domain-neutral kernel, not the product identity
 *good-enough-and-integrated* rather than a Claude Code / Kilo rival. The coding pack is home-spun
 Liberado (`Provider` + `Executor` + `ToolRuntime` + `coder-*`) — not a VTCode wrap. Surfaces (TUI,
 WebUI, CLI, PR factory) are session clients; they do not own the loop. Architecture:
-[`agentic-loops.md`](agentic-loops.md). Live ops status: [`../handoff.md`](../handoff.md).
+[`agentic-loops.md`](agentic-loops.md). Live ops status: [`../handoff.md`](../../project/handoff.md).
 
 **Operational data** (the runtime trace — Decision 12; conversation history — Decision 17)
 deliberately lives *outside* the vault as append-only JSONL, so high-volume writes don't pollute the
@@ -104,55 +104,55 @@ Bottom-up (each depends roughly on those above it):
 
 | Layer | Crate | Role |
 |---|---|---|
-| Types | [`common`](../../crates/common/ARCHITECTURE.md) | Shared vocabulary: provenance, capability, catalog, dispatch, event, model, config, proposal. No logic. |
-| Config | [`config`](../../crates/config/Cargo.toml) | Config-file loader/validator (Decision 14): resolves the config dir, reads the three optional TOML files, assembles + validates a `Config`. Dependency-light on purpose, so tools that only need config/paths (`mcp-forge`) don't pull in the whole assembly stack. |
-| Config | [`config-loader`](../../crates/config-loader/Cargo.toml) | The layer beneath `config`: `ConfigSource` trait + `ChainLoader` merging TOML sources in precedence order. |
-| Inference | [`provider`](../../crates/provider/ARCHITECTURE.md) | The `Provider` narrow waist + `MockProvider`. `model()` / `set_model()` / `list_models()`. No HTTP. |
-| Inference | [`provider-openai-compat`](../../crates/provider-openai-compat) | One config-driven OpenAI-compatible backend. Model id is interior-mutable (`RwLock`) for hot-swap. Implements `GET /models` listing. |
-| Vault | [`vault`](../../crates/vault/ARCHITECTURE.md) | Turbovault adapter: provenance writes, hash-join attribution (loop-breaking), and path-traversal validation (rejects `..`/absolute/prefix on every entry point). |
-| Perceive | [`cron`](../../crates/cron/Cargo.toml) | `EventSource` (from `common`) that fires on a schedule instead of a file change — cron and vault-watch are interchangeable event-sources (Decision 18 checkpoint #3). Deliberately vault-agnostic: no `liberado-vault` dependency. |
-| Decide | [`dispatcher`](../../crates/dispatcher/ARCHITECTURE.md) | classify (LLM) → guards (deterministic, downgrade-only) → `DispatchDecision`. |
-| Act | [`executor`](../../crates/executor/ARCHITECTURE.md) | The agent loop: drive a `Provider` over a `ToolRuntime` to a `Report`. MCP-agnostic. |
-| Act | [`scratchpad`](../../crates/scratchpad/Cargo.toml) | Per-execution todo-list tool for the executor's report-mode loop — "external working memory" (a doom-loop mitigation), implemented as engine state rather than a standalone MCP. |
-| Act | [`mcp`](../../crates/mcp/ARCHITECTURE.md) | MCP runtime: `TurbomcpRuntime` (the `ToolRuntime` over real MCP tools; injects provenance into `_meta`), connection pooling (M1), degraded-catalog routing, and hot-reload (`POST /api/mcp/reload` — no process restart). |
-| Act | [`orchestrator`](../../crates/orchestrator/ARCHITECTURE.md) | Bridges a `DispatchDecision` to an execution; chooses the provenance correlation. |
-| Notify | [`notify`](../../crates/notify/Cargo.toml) | `Notifier` trait for events a human should know about even unattended (the cron/Phase-3 case); `TelegramNotifier` is the first implementation. `notify_proposal` sends Approve/Revise/Reject buttons on channels that support them. |
-| Notify | [`telegram-approvals`](../../crates/telegram-approvals/Cargo.toml) | `ApprovalBot`: answers those buttons. Approve/Reject are pure code (no LLM) — flip `status` in `proposals/{stem}.md`, tagged `WriteProvenance::human()` so the daemon's own attribution reacts to it like an Obsidian edit. Revise is the one LLM-touching path, and it can only redraft content, never grant approval — see `roadmap.md`'s "Before Phase 3" section. |
-| Converse | [`main-agent`](../../crates/main-agent/Cargo.toml) | Multi-turn `Conversation` + `ChatSessions`: face-agent mode (`delegate` → dispatcher/orchestrator) or legacy thick chat. Streams `AgentEvent`s; persists only on success. Dispatch journals for delegation handoffs. **Context compaction** (CH3): over a token threshold, older history rolls into a persisted summary marker (`Author::Named("compaction")`) — the model resumes from summary + verbatim tail; the full transcript stays on disk. |
-| Store | [`session-store`](../../crates/session-store/Cargo.toml) | **The** store (D7 — see [`sessions.md`](sessions.md)): one append-only JSONL log per *session*, holding both message nodes (the DAG) and pack events. Chats, goal sessions and background runs all live here, in one id space. Implements both `ConversationStore` and `SessionRecordStore` — two typed lenses over one engine. |
-| Store | [`conversation-store`](../../crates/conversation-store/Cargo.toml) | The Decision-17 *contract*: the `ConversationStore` trait + the message-node DAG types. Its own `JsonlStore` is the pre-convergence implementation and is now test-only. |
-| Store | [`chat-search`](../../crates/chat-search/Cargo.toml) | Full-text/regex search — it scans the session JSONL logs directly. One implementation behind both `GET /api/conversations/search` and the `chat-search-mcp` MCP. |
-| Store | [`chat-search-mcp`](../../crates/chat-search-mcp/Cargo.toml) | MCP wrapper over `chat-search` so the dispatcher can search chat history mid-reasoning. |
-| Store | [`memory-store`](../../crates/memory-store/Cargo.toml) | Vault-backed general + procedural memory (cleartext Markdown as source of truth; semantic recall via `turbovault-vector`) for `memory-mcp` and the dispatcher. |
-| Store | [`memory-mcp`](../../crates/memory-mcp/Cargo.toml) | MCP exposing `memory-store` to agents. |
-| Kernel | [`session`](../../crates/session/ARCHITECTURE.md) | Domain-neutral goal-session kernel: `GoalSpec`, `SessionEvent`, store/hub, `DomainPackRunner`; `LifeOpsDemoRunner` is the second-domain proof. Served as `/api/goals*`. |
-| Core | [`daemon`](../../crates/daemon/ARCHITECTURE.md) | The long-running watch→debounce→attribute→react loop: vault-watch + cron + hooks fan into one channel; proposal handling (approve/execute, expiry reaper, archive); session profile narrowing for interactive crons (C1). |
-| Compose | [`bootstrap`](../../crates/bootstrap/Cargo.toml) | Builds provider/dispatcher/orchestrator from the environment — the shared composition logic for the `cli` and server binaries. |
-| Client | [`chat-client-contract`](../../crates/chat-client-contract/Cargo.toml) | Shared HTTP/SSE wire types + the `SseDecoder` incremental parser, so TUI/WebUI/CLI don't each hand-roll their own (a `ChatClient` trait was tried and deleted 2026-07-05 — TUI/CLI's transport needs diverged too much to share one). |
-| Client | [`liberado-commands`](../../crates/liberado-commands/Cargo.toml) | Shared slash-command parser + handlers (`/help`, `/new`, `/model`, ...) for all chat clients via a `CommandContext` trait. |
-| Client | [`markdown`](../../crates/markdown/Cargo.toml) | Lightweight, UI-agnostic Markdown parser (no external dep) — one parser shared by ratatui, Dioxus, and terminal output. |
-| Client | [`theme`](../../crates/theme/Cargo.toml) | Shared color-token `Theme`/`ThemeRegistry` + `settings.toml` UI prefs (active theme name) under the platform config dir. |
-| Client | [`tui`](../../crates/tui/ARCHITECTURE.md) | ratatui TUI: sparse chat layout, `/session` browser, `/model` hot-swap picker, slash palette, SSE streaming. |
-| Root | [`cli`](../../crates/cli/ARCHITECTURE.md) | The single `liberado` binary — client + launcher (`serve` runs the daemon, `chat` streams). |
-| Server | [`server`](../../crates/server/Cargo.toml) | The daemon process — watch loop + chat + HTTP/SSE API (`docs/reference/api.md`); run via `liberado serve`. Also hosts `POST /api/hooks/{name}` (`src/hooks.rs`) — the external-webhook event source, the push-style counterpart to `cron`'s pull-style one; injects into the daemon's reactive channel via `Daemon::event_sender()`. |
-| Web UI | [`webui`](../../crates/webui/Cargo.toml) | Dioxus WASM frontend — dashboard, reactions feed, vault panel, streaming chat. Excluded from workspace native builds; built with `dx build`. |
-| Eval | [`eval`](../../crates/eval/Cargo.toml) | Real-model routing/safety eval suite (routing accuracy, safe-default rate, UNSAFE-acts that must never increase). Not a build dependency of the system. |
-| Tooling | [`heuristics-tuner`](../../crates/heuristics-tuner/ARCHITECTURE.md) | Automates the eval-and-tweak loop for the dispatcher/executor/subagent prompts via beam search — proposes a diff + rubric, never auto-merges. Not a build dependency of the system. |
-| Tooling | [`mcp-forge`](../../crates/mcp-forge/ARCHITECTURE.md) | Builds/installs Liberado MCP servers from git URLs (`cargo install --git`), keyed by `mcp-sources.toml`. |
-| Testing | [`test-support`](../../crates/test-support/Cargo.toml) | Dev-dependency-only: shared `ToolRuntime`/`RuntimeFactory` test doubles, consolidating what used to be duplicated across `orchestrator`/`daemon` test modules. |
+| Types | [`common`](../../../crates/common/ARCHITECTURE.md) | Shared vocabulary: provenance, capability, catalog, dispatch, event, model, config, proposal. No logic. |
+| Config | [`config`](../../../crates/config/Cargo.toml) | Config-file loader/validator (Decision 14): resolves the config dir, reads the three optional TOML files, assembles + validates a `Config`. Dependency-light on purpose, so tools that only need config/paths (`mcp-forge`) don't pull in the whole assembly stack. |
+| Config | [`config-loader`](../../../crates/config-loader/Cargo.toml) | The layer beneath `config`: `ConfigSource` trait + `ChainLoader` merging TOML sources in precedence order. |
+| Inference | [`provider`](../../../crates/provider/ARCHITECTURE.md) | The `Provider` narrow waist + `MockProvider`. `model()` / `set_model()` / `list_models()`. No HTTP. |
+| Inference | [`provider-openai-compat`](../../../crates/provider-openai-compat) | One config-driven OpenAI-compatible backend. Model id is interior-mutable (`RwLock`) for hot-swap. Implements `GET /models` listing. |
+| Vault | [`vault`](../../../crates/vault/ARCHITECTURE.md) | Turbovault adapter: provenance writes, hash-join attribution (loop-breaking), and path-traversal validation (rejects `..`/absolute/prefix on every entry point). |
+| Perceive | [`cron`](../../../crates/cron/Cargo.toml) | `EventSource` (from `common`) that fires on a schedule instead of a file change — cron and vault-watch are interchangeable event-sources (Decision 18 checkpoint #3). Deliberately vault-agnostic: no `liberado-vault` dependency. |
+| Decide | [`dispatcher`](../../../crates/dispatcher/ARCHITECTURE.md) | classify (LLM) → guards (deterministic, downgrade-only) → `DispatchDecision`. |
+| Act | [`executor`](../../../crates/executor/ARCHITECTURE.md) | The agent loop: drive a `Provider` over a `ToolRuntime` to a `Report`. MCP-agnostic. |
+| Act | [`scratchpad`](../../../crates/scratchpad/Cargo.toml) | Per-execution todo-list tool for the executor's report-mode loop — "external working memory" (a doom-loop mitigation), implemented as engine state rather than a standalone MCP. |
+| Act | [`mcp`](../../../crates/mcp/ARCHITECTURE.md) | MCP runtime: `TurbomcpRuntime` (the `ToolRuntime` over real MCP tools; injects provenance into `_meta`), connection pooling (M1), degraded-catalog routing, and hot-reload (`POST /api/mcp/reload` — no process restart). |
+| Act | [`orchestrator`](../../../crates/orchestrator/ARCHITECTURE.md) | Bridges a `DispatchDecision` to an execution; chooses the provenance correlation. |
+| Notify | [`notify`](../../../crates/notify/Cargo.toml) | `Notifier` trait for events a human should know about even unattended (the cron/Phase-3 case); `TelegramNotifier` is the first implementation. `notify_proposal` sends Approve/Revise/Reject buttons on channels that support them. |
+| Notify | [`telegram-approvals`](../../../crates/telegram-approvals/Cargo.toml) | `ApprovalBot`: answers those buttons. Approve/Reject are pure code (no LLM) — flip `status` in `proposals/{stem}.md`, tagged `WriteProvenance::human()` so the daemon's own attribution reacts to it like an Obsidian edit. Revise is the one LLM-touching path, and it can only redraft content, never grant approval — see `roadmap.md`'s "Before Phase 3" section. |
+| Converse | [`main-agent`](../../../crates/main-agent/Cargo.toml) | Multi-turn `Conversation` + `ChatSessions`: face-agent mode (`delegate` → dispatcher/orchestrator) or legacy thick chat. Streams `AgentEvent`s; persists only on success. Dispatch journals for delegation handoffs. **Context compaction** (CH3): over a token threshold, older history rolls into a persisted summary marker (`Author::Named("compaction")`) — the model resumes from summary + verbatim tail; the full transcript stays on disk. |
+| Store | [`session-store`](../../../crates/session-store/Cargo.toml) | **The** store (D7 — see [`sessions.md`](sessions.md)): one append-only JSONL log per *session*, holding both message nodes (the DAG) and pack events. Chats, goal sessions and background runs all live here, in one id space. Implements both `ConversationStore` and `SessionRecordStore` — two typed lenses over one engine. |
+| Store | [`conversation-store`](../../../crates/conversation-store/Cargo.toml) | The Decision-17 *contract*: the `ConversationStore` trait + the message-node DAG types. Its own `JsonlStore` is the pre-convergence implementation and is now test-only. |
+| Store | [`chat-search`](../../../crates/chat-search/Cargo.toml) | Full-text/regex search — it scans the session JSONL logs directly. One implementation behind both `GET /api/conversations/search` and the `chat-search-mcp` MCP. |
+| Store | [`chat-search-mcp`](../../../crates/chat-search-mcp/Cargo.toml) | MCP wrapper over `chat-search` so the dispatcher can search chat history mid-reasoning. |
+| Store | [`memory-store`](../../../crates/memory-store/Cargo.toml) | Vault-backed general + procedural memory (cleartext Markdown as source of truth; semantic recall via `turbovault-vector`) for `memory-mcp` and the dispatcher. |
+| Store | [`memory-mcp`](../../../crates/memory-mcp/Cargo.toml) | MCP exposing `memory-store` to agents. |
+| Kernel | [`session`](../../../crates/session/ARCHITECTURE.md) | Domain-neutral goal-session kernel: `GoalSpec`, `SessionEvent`, store/hub, `DomainPackRunner`; `LifeOpsDemoRunner` is the second-domain proof. Served as `/api/goals*`. |
+| Core | [`daemon`](../../../crates/daemon/ARCHITECTURE.md) | The long-running watch→debounce→attribute→react loop: vault-watch + cron + hooks fan into one channel; proposal handling (approve/execute, expiry reaper, archive); session profile narrowing for interactive crons (C1). |
+| Compose | [`bootstrap`](../../../crates/bootstrap/Cargo.toml) | Builds provider/dispatcher/orchestrator from the environment — the shared composition logic for the `cli` and server binaries. |
+| Client | [`chat-client-contract`](../../../crates/chat-client-contract/Cargo.toml) | Shared HTTP/SSE wire types + the `SseDecoder` incremental parser, so TUI/WebUI/CLI don't each hand-roll their own (a `ChatClient` trait was tried and deleted 2026-07-05 — TUI/CLI's transport needs diverged too much to share one). |
+| Client | [`liberado-commands`](../../../crates/liberado-commands/Cargo.toml) | Shared slash-command parser + handlers (`/help`, `/new`, `/model`, ...) for all chat clients via a `CommandContext` trait. |
+| Client | [`markdown`](../../../crates/markdown/Cargo.toml) | Lightweight, UI-agnostic Markdown parser (no external dep) — one parser shared by ratatui, Dioxus, and terminal output. |
+| Client | [`theme`](../../../crates/theme/Cargo.toml) | Shared color-token `Theme`/`ThemeRegistry` + `settings.toml` UI prefs (active theme name) under the platform config dir. |
+| Client | [`tui`](../../../crates/tui/ARCHITECTURE.md) | ratatui TUI: sparse chat layout, `/session` browser, `/model` hot-swap picker, slash palette, SSE streaming. |
+| Root | [`cli`](../../../crates/cli/ARCHITECTURE.md) | The single `liberado` binary — client + launcher (`serve` runs the daemon, `chat` streams). |
+| Server | [`server`](../../../crates/server/Cargo.toml) | The daemon process — watch loop + chat + HTTP/SSE API (`docs/reference/api.md`); run via `liberado serve`. Also hosts `POST /api/hooks/{name}` (`src/hooks.rs`) — the external-webhook event source, the push-style counterpart to `cron`'s pull-style one; injects into the daemon's reactive channel via `Daemon::event_sender()`. |
+| Web UI | [`webui`](../../../crates/webui/Cargo.toml) | Dioxus WASM frontend — dashboard, reactions feed, vault panel, streaming chat. Excluded from workspace native builds; built with `dx build`. |
+| Eval | [`eval`](../../../crates/eval/Cargo.toml) | Real-model routing/safety eval suite (routing accuracy, safe-default rate, UNSAFE-acts that must never increase). Not a build dependency of the system. |
+| Tooling | [`heuristics-tuner`](../../../crates/heuristics-tuner/ARCHITECTURE.md) | Automates the eval-and-tweak loop for the dispatcher/executor/subagent prompts via beam search — proposes a diff + rubric, never auto-merges. Not a build dependency of the system. |
+| Tooling | [`mcp-forge`](../../../crates/mcp-forge/ARCHITECTURE.md) | Builds/installs Liberado MCP servers from git URLs (`cargo install --git`), keyed by `mcp-sources.toml`. |
+| Testing | [`test-support`](../../../crates/test-support/Cargo.toml) | Dev-dependency-only: shared `ToolRuntime`/`RuntimeFactory` test doubles, consolidating what used to be duplicated across `orchestrator`/`daemon` test modules. |
 
 Orchestration kernel: shared pieces are `provider`, `executor`, `orchestrator`, `common`, and
-[`session`](../../crates/session/ARCHITECTURE.md) (the domain-neutral goal-session crate — goal
+[`session`](../../../crates/session/ARCHITECTURE.md) (the domain-neutral goal-session crate — goal
 specs, event envelope, hub; `LifeOpsDemoRunner` proves a non-coding pack runs on it). The **coding
 domain pack** (first pack — not the product center; see [`agentic-loops.md`](agentic-loops.md)):
 
 | Layer | Crate | Role |
 |---|---|---|
-| Pack contracts | [`coder-core`](../../crates/coder-core/ARCHITECTURE.md) | Coding specialization of goal/session vocabulary: backend trait, events, sandbox specs, traces. Maps to kernel `Report`/`Outcome`. |
-| Pack env | [`coder-sandbox`](../../crates/coder-sandbox/ARCHITECTURE.md) | Workspace/command isolation (host-local + Docker scaffold). |
-| Pack tools | [`coder-tools`](../../crates/coder-tools/ARCHITECTURE.md) | Coding `ToolRuntime` (discrete file/search/git/command/validate). |
-| Pack session | [`coder-agent`](../../crates/coder-agent/ARCHITECTURE.md) | Coding goal-session composition: worker/repair, progress guards, critic, deterministic gates, attempts. |
-| Pack adapter | [`coder-runner`](../../crates/coder-runner/ARCHITECTURE.md) | Process boundary for nested consumers (PR factory). |
+| Pack contracts | [`coder-core`](../../../crates/coder-core/ARCHITECTURE.md) | Coding specialization of goal/session vocabulary: backend trait, events, sandbox specs, traces. Maps to kernel `Report`/`Outcome`. |
+| Pack env | [`coder-sandbox`](../../../crates/coder-sandbox/ARCHITECTURE.md) | Workspace/command isolation (host-local + Docker scaffold). |
+| Pack tools | [`coder-tools`](../../../crates/coder-tools/ARCHITECTURE.md) | Coding `ToolRuntime` (discrete file/search/git/command/validate). |
+| Pack session | [`coder-agent`](../../../crates/coder-agent/ARCHITECTURE.md) | Coding goal-session composition: worker/repair, progress guards, critic, deterministic gates, attempts. |
+| Pack adapter | [`coder-runner`](../../../crates/coder-runner/ARCHITECTURE.md) | Process boundary for nested consumers (PR factory). |
 
 ## Cross-cutting concepts
 
@@ -289,11 +289,11 @@ pipeline picks up the write and archives it — closed the gap where an expired-
 ## Where to start reading
 
 1. This file.
-2. [`common`](../../crates/common/ARCHITECTURE.md) — the vocabulary everything speaks.
-3. [`vault`](../../crates/vault/ARCHITECTURE.md) — attribution / loop-breaking (the conceptual heart).
-4. [`dispatcher`](../../crates/dispatcher/ARCHITECTURE.md) → [`orchestrator`](../../crates/orchestrator/ARCHITECTURE.md)
-   → [`executor`](../../crates/executor/ARCHITECTURE.md) — the decide→act path.
-5. [`daemon`](../../crates/daemon/ARCHITECTURE.md) — how it all runs.
+2. [`common`](../../../crates/common/ARCHITECTURE.md) — the vocabulary everything speaks.
+3. [`vault`](../../../crates/vault/ARCHITECTURE.md) — attribution / loop-breaking (the conceptual heart).
+4. [`dispatcher`](../../../crates/dispatcher/ARCHITECTURE.md) → [`orchestrator`](../../../crates/orchestrator/ARCHITECTURE.md)
+   → [`executor`](../../../crates/executor/ARCHITECTURE.md) — the decide→act path.
+5. [`daemon`](../../../crates/daemon/ARCHITECTURE.md) — how it all runs.
 6. [`../contributing/development-workflow.md`](../../impl/development-workflow.md) — before
    starting non-trivial work: the research/plan/implement/test/document/commit process this project is
    held to, and how to delegate to subagents effectively.

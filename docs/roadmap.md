@@ -15,7 +15,7 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 | # | What | Why it matters |
 |---|---|---|
 | **Dogfood** | **Lean on Telegram harder** | Collect friction → fix real pain. Free-form sticky chat is the phone surface. |
-| **T1** | **Live conformance suite** — [`live-conformance-suite.md`](live-conformance-suite.md) | **L1–L10 landed.** **Open:** Tier 2 only. |
+| **T1** | **Live conformance suite** — [`live-conformance-suite.md`](future-work/live-conformance-suite.md) | **L1–L10 landed.** **Open:** Tier 2 only. |
 | **W1** | **Goal-session view in mobile WebUI** | Later phone surface beyond Telegram. See [`../architecture/session-surface-contract.md`](spec/architecture/session-surface-contract.md). |
 | **E5-b** | ~~Telegram session deep-link~~ | **Deprioritized** (prefer WebUI later). |
 
@@ -47,10 +47,10 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`../ar
 ### Priority 3 — coding pack (integration parity, not best-in-class)
 
 > **Pulled forward by owner decision (2026-07-24):** the agentic coding TUI track is now active
-> alongside P1/P2 — plan: [`coding-tui-plan.md`](coding-tui-plan.md) (goal-driven TUI surface +
+> alongside P1/P2 — plan: [`coding-tui-plan.md`](future-work/coding-tui-plan.md) (goal-driven TUI surface +
 > kernel completion gate, Grok Build-style disputed-claim completion, slices S1–S7).
 
-**Slice status** (plan: [`coding-tui-plan.md`](coding-tui-plan.md) §Slices):
+**Slice status** (plan: [`coding-tui-plan.md`](future-work/coding-tui-plan.md) §Slices):
 
 | Slice | State | Notes |
 |---|---|---|
@@ -72,17 +72,17 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
 
 | # | What | Why |
 |---|---|---|
-| **CT1** | **Agentic coding TUI** — [`coding-tui-plan.md`](coding-tui-plan.md) | `/goal` + critic-gated completion + `/loop`, on the existing TUI/hub/coding pack; loosely coupled kernel machinery. S1 done, S2 partial (see above) |
+| **CT1** | **Agentic coding TUI** — [`coding-tui-plan.md`](future-work/coding-tui-plan.md) | `/goal` + critic-gated completion + `/loop`, on the existing TUI/hub/coding pack; loosely coupled kernel machinery. S1 done, S2 partial (see above) |
 | **E6-c(b)** | Resume mid-build coding session | Design pass (git suspend point) |
-| — | [`pr-dispatch-vtcode-no-write-finding.md`](pr-dispatch-vtcode-no-write-finding.md) | Open bug |
-| — | [`coder-eval-curriculum.md`](coder-eval-curriculum.md) | After P1/P2 not bottleneck |
+| — | [`pr-dispatch-vtcode-no-write-finding.md`](future-work/pr-dispatch-vtcode-no-write-finding.md) | Open bug |
+| — | [`coder-eval-curriculum.md`](future-work/coder-eval-curriculum.md) | After P1/P2 not bottleneck |
 
 ### Cross-cutting
 
 - **External dependency audit** — audit all `Cargo.toml` entries across crates for unnecessary duplication, unused deps, version drift, and opportunities to share/slim. Goal: reduce compile wall-clock without breaking anything.
 - **Modularity** remains the enabler: [`../architecture/modularity.md`](spec/architecture/modularity.md). Hot-path **module splits** landed (server API, daemon, config-loader model, executor budget).
 - **A4 dual-store hub tests** (2026-07-23): list / cancel / park→resume / rehydrate via real `GoalSessionHub` on production `SessionStore` — `crates/session-store/tests/hub_dual_store.rs` (see [`../architecture/failure-modes.md`](spec/architecture/failure-modes.md) §1).
-- **TurboVault modules**: vector + tasks paying back; remaining **`vault_events`** and upstream merge. Umbrella: [`turbovault-modules-integration-roadmap.md`](turbovault-modules-integration-roadmap.md).
+- **TurboVault modules**: vector + tasks paying back; remaining **`vault_events`** and upstream merge. Umbrella: [`turbovault-modules-integration-roadmap.md`](future-work/turbovault-modules-integration-roadmap.md).
 - **Redundant tool calls hidden by the doom-loop guard** (found 2026-07-28 in the passing
   `evening-debrief` live run, build `66b5771`). The subagent called `liberado-caldav-mcp:list_events`
   **four times for two dates** — twice on turn 2, twice again on turn 3 — before the guard fired
@@ -109,8 +109,8 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
 
 | When | What |
 |------|------|
-| **2026-07-23** | **CH3 context compaction:** long chats roll older history into a persisted summary marker (`Author::Named("compaction")` in the session DAG) — the model resumes from the summary + a verbatim tail of the last K user turns; the full transcript stays on disk, rendered and searchable. `[main_agent.compaction]` knobs, default on. Plan + 4-project research (OpenCode/Kilo/LibreChat/OpenClaw): [`context-compaction-plan.md`](context-compaction-plan.md). **Known residual** (marker durable + partial tail re-append → next load can miss unpersisted tail): documented there; preferred fix is CH3.1 viewport/side-summary — [`../plans/context-compaction-viewport-rearchitecture.md`](future-work/plans/context-compaction-viewport-rearchitecture.md). |
-| **2026-07-05** | **CH2 chat history search Tier 1** *(landed then, recorded now — the entry sat open here by mistake)*: lexical AND/regex over the session JSONL logs behind `GET /api/conversations/search`, the webui sidebar search box, and the `chat-search` MCP for the dispatcher. [`chat-search-plan.md`](chat-search-plan.md). |
+| **2026-07-23** | **CH3 context compaction:** long chats roll older history into a persisted summary marker (`Author::Named("compaction")` in the session DAG) — the model resumes from the summary + a verbatim tail of the last K user turns; the full transcript stays on disk, rendered and searchable. `[main_agent.compaction]` knobs, default on. Plan + 4-project research (OpenCode/Kilo/LibreChat/OpenClaw): [`context-compaction-plan.md`](future-work/context-compaction-plan.md). **Known residual** (marker durable + partial tail re-append → next load can miss unpersisted tail): documented there; preferred fix is CH3.1 viewport/side-summary — [`../plans/context-compaction-viewport-rearchitecture.md`](future-work/plans/context-compaction-viewport-rearchitecture.md). |
+| **2026-07-05** | **CH2 chat history search Tier 1** *(landed then, recorded now — the entry sat open here by mistake)*: lexical AND/regex over the session JSONL logs behind `GET /api/conversations/search`, the webui sidebar search box, and the `chat-search` MCP for the dispatcher. [`chat-search-plan.md`](future-work/chat-search-plan.md). |
 | **2026-07-23** | **C1 interactive crons (AskHuman):** profile-narrowed session grants — a cron schedule naming a `[[session_profiles]]` entry whose component includes `AskHuman` gets an open input channel; unattended crons stay structurally non-interactive (D-d). |
 | **2026-07-23** | **M1b hot-reload** (`apply_mcp_peer_set` / `POST /api/mcp/reload`); **lock-poisoning recovery** (sessions + catalog); **proposal expiry reaper** (configurable, background); **vault path-traversal validation** (cross-platform); **MCP test double dedup** |
 | **2026-07-23** | **Architecture hardening:** god-module splits; **MCP pooling** (M1); **M1b degraded-catalog routing**; **T1** L1–L10; **A4** dual-store hub tests |

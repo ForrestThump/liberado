@@ -545,7 +545,7 @@ the multi-role machinery. Until then, coding config is enough.
 | [`agentic-loops.md`](../spec/architecture/agentic-loops.md) | Canonical loop architecture |
 | This plan | Implementation roadmap + checkpoints |
 | [`overview.md`](../spec/architecture/overview.md) | Crate map + status pointer |
-| [`roadmap.md`](roadmap.md) | High-level roadmap pointer |
+| [`roadmap.md`](../roadmap.md) | High-level roadmap pointer |
 | Per-crate `ARCHITECTURE.md` | Zoomed contracts |
 | `config.example/` | Knobs and prompts, not source constants |
 | Contributing docs | "How to run coder evals" once evaluator exists |

@@ -4,22 +4,22 @@ Phases 1â€“4 as originally sequenced, with the completion notes written as 
 substantially done.** This is kept for the *reasoning* â€” why the sequence was chosen, what each phase
 was for, and what was deliberately deferred â€” not as a description of current work.
 
-For what is actually true now, see [`../current.md`](../current.md) and
-[`../../architecture/overview.md`](../../architecture/overview.md).
+For what is actually true now, see [`../current.md`](../../roadmap.md) and
+[`../../architecture/overview.md`](../../spec/architecture/overview.md).
 
 ---
 
 ## The phased roadmap
 
-The matured vision (see [Positioning](../../architecture/positioning.md) and
-[Overview's three pillars](../../architecture/overview.md)) sequences the next work into four phases.
+The matured vision (see [Positioning](../../spec/architecture/positioning.md) and
+[Overview's three pillars](../../spec/architecture/overview.md)) sequences the next work into four phases.
 Each phase **ships value AND advances the modular substrate** â€” the substrate falls out of feature
 work rather than being built as a months-long plumbing project up front (see Decision 18, the
 incremental event-source/bus seams). The substrate work itself (config/policy, catalog, proposal
 loop â€” Decisions 11/14/17) is largely landed; this roadmap is what's next. (Vocabulary note,
 2026-07-11: "mesh" in older entries below means the kernel Â· domain packs Â· stores Â· surfaces
 architecture â€” a star around one daemon â€” not peer routing; see
-[contracts.md](../../architecture/contracts.md) and the
+[contracts.md](../../spec/architecture/contracts.md) and the
 [alignment audit](architecture-alignment-audit-2026-07-11.md).)
 
 ### Strategic pivot â€” Rust-native agentic orchestration (coding first)
@@ -32,7 +32,7 @@ agentic orchestration kernel** on `Provider` + `Executor` + `ToolRuntime`, with 
 domain and PR factory as the first consumer â€” keeping forge/task/approval pieces, replacing the
 coding engine entirely.
 
-Canonical architecture: [agentic-loops.md](../../architecture/agentic-loops.md).  
+Canonical architecture: [agentic-loops.md](../../spec/architecture/agentic-loops.md).  
 Master plan: [rust-native-agentic-coder-plan.md](../rust-native-agentic-coder-plan.md).  
 Mesh hygiene audit: [agentic-mesh-hygiene-audit-2026-07-10.md](agentic-mesh-hygiene-audit-2026-07-10.md).  
 Next interaction slice: [session-focus-plan.md](session-focus-plan.md) â€” interactive goal
@@ -40,7 +40,7 @@ sessions + UI focus switching ("specialist hats"), building directly on the conv
 vocabulary.  
 Recurrence slice: [loops-plan.md](../loops-plan.md) â€” *loops* (time-based series over goals; the
 `/goal` vs `/loop` vocabulary was fixed 2026-07-12 in
-[`agentic-loops.md`](../../architecture/agentic-loops.md) Â§Vocabulary).
+[`agentic-loops.md`](../../spec/architecture/agentic-loops.md) Â§Vocabulary).
 
 Short version: Liberado **owns** the coding engine. `coder-*` implement a coding **goal session**.
 PR factory **defaults to `liberado-loop`** (`liberado-coder-run`); VTCode is legacy-only. Next:
@@ -385,7 +385,7 @@ vault-watch are interchangeable event-sources; a second dispatcher/executor is c
 - âœ… **Catalog population** â€” done; this entry used to describe an open TODO ("the live daemon
   dispatches against an *empty* MCP catalog today") that was stale â€” `topology.mcps` has been the
   single source for both the dispatcher's catalog and the runtime's MCP connection since Phase 1.
-  See [`../architecture/overview.md`](../../architecture/overview.md)'s "Current status" item 9.
+  See [`../architecture/overview.md`](../../spec/architecture/overview.md)'s "Current status" item 9.
 - âœ… **Runtime tool gating** â€” done, see "Per-call runtime enforcement" above (same item, noted twice
   in this doc).
 - **Shared wire-type + slash-command extraction across clients** â€” TUI, WebUI, and CLI now share

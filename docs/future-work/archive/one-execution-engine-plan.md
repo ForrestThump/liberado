@@ -11,11 +11,11 @@ What remains deferred is narrower than it first looked — resuming a session **
 restart** while it was mid-build. E6 parks such a session honestly (`Parked`, `awaiting_input`
 preserved) rather than pretending; answering it after a restart does not yet resume the build. That
 is the case that needs a workspace checkpoint (E6-c).
-**Debt item**: #1 from the 2026-07-13 hygiene audit ([`current.md`](../current.md)).
-**Related**: [`../architecture/sessions.md`](../../architecture/sessions.md) ·
-[`agentic-loops.md`](../../architecture/agentic-loops.md) ·
-[`channels-and-interactivity.md`](../../architecture/channels-and-interactivity.md) ·
-[`verifiers.md`](../../architecture/verifiers.md)
+**Debt item**: #1 from the 2026-07-13 hygiene audit ([`current.md`](../../roadmap.md)).
+**Related**: [`../architecture/sessions.md`](../../spec/architecture/sessions.md) ·
+[`agentic-loops.md`](../../spec/architecture/agentic-loops.md) ·
+[`channels-and-interactivity.md`](../../spec/architecture/channels-and-interactivity.md) ·
+[`verifiers.md`](../../spec/architecture/verifiers.md)
 
 ---
 

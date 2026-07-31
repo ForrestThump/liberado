@@ -17,4 +17,4 @@ Living description of **how Liberado works today**. Historical plans belong in [
 
 **Crate-level docs:** [reference/crate-map.md](../../spec/reference/crate-map.md) and `crates/*/ARCHITECTURE.md`.
 
-**Related:** [specs/](spec/README.md) for decision log and detailed specs; [roadmap/roadmap.md](../../roadmap.md) for open work.
+**Related:** [specs/](../README.md) for decision log and detailed specs; [roadmap/roadmap.md](../../roadmap.md) for open work.

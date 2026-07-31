@@ -2,7 +2,7 @@
 
 | Doc | Role |
 |-----|------|
-| **[roadmap.md](roadmap.md)** | **Living scoreboard** — open work in priority order, recently landed |
+| **[roadmap.md](../roadmap.md)** | **Living scoreboard** — open work in priority order, recently landed |
 | [live-conformance-suite.md](live-conformance-suite.md) | T1 reliability suite (L1–L10 landed; Tier 2 optional) |
 | Active plans below | Still drive near-term work (status in each file header when set) |
 | [archive/](archive/README.md) | Finished plans, closed audits — **not current truth** |
@@ -14,7 +14,7 @@
 | [loops-plan.md](loops-plan.md) | Scheduled recurrence over goals |
 | [chat-search-plan.md](chat-search-plan.md) | History search tiers |
 | [context-compaction-plan.md](context-compaction-plan.md) | Chat context compaction (CH3 — Tier 1 landed; known residual documented) |
-| [roadmap.md](roadmap.md) **CH4** | Mid-session / per-conversation model switching (open; process-wide hot-swap already exists) |
+| [roadmap.md](../roadmap.md) **CH4** | Mid-session / per-conversation model switching (open; process-wide hot-swap already exists) |
 | [../plans/context-compaction-viewport-rearchitecture.md](./plans/context-compaction-viewport-rearchitecture.md) | CH3.1 proposed: side-summary + viewport (not shipped) |
 | [coding-tui-plan.md](coding-tui-plan.md) | Agentic coding TUI: goal surface + kernel completion gate (S1–S7) |
 | [rust-native-agentic-coder-plan.md](rust-native-agentic-coder-plan.md) | Coding pack roadmap |
@@ -29,4 +29,4 @@
 | [coder-eval-curriculum.md](coder-eval-curriculum.md) | Coding quality instrument |
 | [pr-dispatch-vtcode-no-write-finding.md](pr-dispatch-vtcode-no-write-finding.md) | Open PR-dispatch bug |
 
-Start every planning session at [roadmap.md](roadmap.md).
+Start every planning session at [roadmap.md](../roadmap.md).

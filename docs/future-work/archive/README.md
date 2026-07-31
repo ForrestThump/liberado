@@ -10,9 +10,9 @@ unfindable. A roadmap you cannot navigate is not a roadmap.
 
 **If you are looking for what is true today, none of this is it.** Start with:
 
-- [`../current.md`](../current.md) — what is live, what is next, what is known-broken.
-- [`../../architecture/overview.md`](../../architecture/overview.md) — the cold-start map.
-- [`../../architecture/failure-modes.md`](../../architecture/failure-modes.md) — **the distilled
+- [`../current.md`](../../roadmap.md) — what is live, what is next, what is known-broken.
+- [`../../architecture/overview.md`](../../spec/architecture/overview.md) — the cold-start map.
+- [`../../architecture/failure-modes.md`](../../spec/architecture/failure-modes.md) — **the distilled
   lessons from the audits in this directory.** Read this one. It is the reason it is safe to archive
   the rest: the individual audits found the same handful of bugs over and over, and that pattern —
   not the incident detail — is the part worth carrying forward.
@@ -38,4 +38,4 @@ Everything here is in git history regardless; the archive just keeps it reachabl
 | [webui-flesh-out-plan.md](webui-flesh-out-plan.md) | WebUI flesh-out — all 5 phases implemented; design reference only |
 | *Other hygiene/hardening audits and phase reports* | Same directory — treat as historical |
 
-Living roadmap: [`../current.md`](../current.md) · roadmap index: [`../README.md`](../README.md).
+Living roadmap: [`../current.md`](../../roadmap.md) · roadmap index: [`../README.md`](../README.md).

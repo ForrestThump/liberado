@@ -1,7 +1,7 @@
 # Context compaction re-architecture — viewport / side-summary model (CH3.1)
 
 **Status**: Proposed — not shipped.  
-**Depends on**: CH3 Tier 1 (persisted marker + tail re-append), shipped 2026-07-23 — see [`../roadmap/context-compaction-plan.md`](./context-compaction-plan.md).  
+**Depends on**: CH3 Tier 1 (persisted marker + tail re-append), shipped 2026-07-23 — see [`../roadmap/context-compaction-plan.md`](../context-compaction-plan.md).  
 **Motivation**: Close a known residual failure mode in the marker-before-tail design, remove tail duplication, and make “model context” an explicit viewport over an unbroken conversation log.
 
 ---
@@ -245,7 +245,7 @@ Still separate from this re-architecture (see original plan’s “Deliberately 
 
 ## 9. References
 
-- Shipped design: [`../roadmap/context-compaction-plan.md`](./context-compaction-plan.md)  
+- Shipped design: [`../roadmap/context-compaction-plan.md`](../context-compaction-plan.md)  
 - Code: `crates/main-agent/src/compaction.rs`, `crates/main-agent/src/sessions.rs` (`maybe_compact`, `elide_before_latest_marker`)  
-- Reliability doctrine: [`../architecture/failure-modes.md`](../spec/architecture/failure-modes.md) §1–§2 (real store tests; opt-in guards are off)  
+- Reliability doctrine: [`../architecture/failure-modes.md`](../../spec/architecture/failure-modes.md) §1–§2 (real store tests; opt-in guards are off)  
 - Peer survey summary (OpenCode / Kilo / OpenClaw / LibreChat): same roadmap plan §“Outside research”

@@ -2,7 +2,7 @@
 
 **Status**: living architecture, 2026-07-12.
 **Frame source**: the agent-pools research (four model passes) +
-[`agent_pools_research_results.md`](../../agent_pools_research_results.md) `# Followup` — the
+[`agent_pools_research_results.md`](../../future-work/research/agent_pools_research_results.md) `# Followup` — the
 **authority-graph vs information-graph** distinction.
 **Related**: [`agentic-loops.md`](agentic-loops.md) · [`contracts.md`](contracts.md)
 (`EventSource`, `CapabilitySet`, `DomainPackRunner`) ·

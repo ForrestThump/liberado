@@ -9,7 +9,7 @@ daemon working, staying loosely coupled, and minimizing upstream maintainer fric
 **Relationship to other docs**: this is the *umbrella*. The vault-events vertical already has a deep
 implementation plan — [`turbovault-vault-events-plugin-plan.md`](turbovault-vault-events-plugin-plan.md).
 This doc sits above it, tracks **tasks** / **vector** status, defines shared conventions, and ties
-into [`roadmap.md`](roadmap.md).
+into [`roadmap.md`](../roadmap.md).
 
 > If this conflicts with a newer maintainer comment on #33/#34/#39, the maintainer comment wins —
 > update this file.
@@ -36,7 +36,7 @@ into [`roadmap.md`](roadmap.md).
 - **None of the three blocks Liberado P1.** The daemon already perceives the vault via its own watcher
   (the `L0` fallback). Modules are a **consolidation + capability + synergy** play. With vector + tasks
   live, Liberado's *remaining* P1 is the phone-grade interfacing loop (W1 / E5-b), not vault storage —
-  see [`roadmap.md`](roadmap.md). *Don't let module polish derail the daily-driver bar.*
+  see [`roadmap.md`](../roadmap.md). *Don't let module polish derail the daily-driver bar.*
 - **Actual build order diverged productively:** scaffolding + **vector** landed on `develop` first
   (highest capability payoff once the engine existed); **tasks** completed as a clean extraction on
   `feat/plugin-tasks`. **Next module work: land tasks onto `develop`, then `vault_events`.**
@@ -263,12 +263,12 @@ interfacing**, not vault storage. Concretely:
 | **P1 daily-driver (W1, E5-b, T1, M1)** | **Still the front of the queue.** Modules are live capability, not a reason to delay the session WebUI. |
 | **P1 perception (vault watcher)** | `vault_events` still a future `L1` path; **`L0` stays authoritative**. |
 | **CH2 — chat history search** ([`chat-search-plan.md`](chat-search-plan.md)) | Tier 3 (vector) is **subsumed by the `vector` module**. Keep Tier 1 (ripgrep) as planned. |
-| **Context policy** ([`liberado-context-policy-spec.md`](spec/liberado-context-policy-spec.md)) | Real retrieval backend via live `vector_*`. |
+| **Context policy** ([`liberado-context-policy-spec.md`](../spec/context-policy-spec.md)) | Real retrieval backend via live `vector_*`. |
 | **Agent memory / `memory-mcp`, `memory-store`** | Still evaluate overlap with standalone qdrant / memories before consolidating. |
 | **Life-OS todos** | **Live** — briefs and chat drive tasks through TurboVault. |
 | **Nice-to-have: A2A / mesh** | Unchanged. |
 
-**Wired into [`roadmap.md`](roadmap.md)** (2026-07-19): cross-cutting TurboVault modules line +
+**Wired into [`roadmap.md`](../roadmap.md)** (2026-07-19): cross-cutting TurboVault modules line +
 "Recently landed" entry for live vector/tasks + "What's next" one-screen summary.
 
 ---

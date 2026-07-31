@@ -160,7 +160,7 @@ maps in `configure_chat`.
 
 **Note:** trigger resolution runs at chat configure (boot). Process-wide `POST /api/models/select`
 does **not** re-resolve the compaction threshold today. True mid-session / per-conversation model
-switching (roadmap **CH4** in [`roadmap.md`](roadmap.md)) should re-resolve when the face model
+switching (roadmap **CH4** in [`roadmap.md`](../roadmap.md)) should re-resolve when the face model
 for a conversation changes.
 
 ## Deliberately not built (follow-ups, unscheduled)

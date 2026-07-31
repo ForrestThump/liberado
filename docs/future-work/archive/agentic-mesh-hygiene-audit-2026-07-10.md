@@ -5,10 +5,10 @@ the agentic orchestration work.
 **Goals**: find duplication, tight coupling, decomposition opportunities, outdated docs; check that
 the plan does not pigeonhole Liberado into a coding-only product.
 
-Related: [`agentic-loops.md`](../../architecture/agentic-loops.md),
-[`modularity.md`](../../architecture/modularity.md),
+Related: [`agentic-loops.md`](../../spec/architecture/agentic-loops.md),
+[`modularity.md`](../../spec/architecture/modularity.md),
 [`rust-native-agentic-coder-plan.md`](../rust-native-agentic-coder-plan.md),
-[`meshify.md`](../../ideas/archive/meshify.md).
+[`meshify.md`](../ideas/archive/meshify.md).
 
 ---
 

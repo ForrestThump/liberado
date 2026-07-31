@@ -1,13 +1,13 @@
 ﻿# Liberado â€” Handoff (2026-07-08)
 
 Current-state handoff. Kept in sync after each session arc. For the authoritative system map read
-[`docs/architecture/overview.md`](../../architecture/overview.md); for build/run/configure read
-[`docs/contributing/agents.md`](../../contributing/agents.md); for the development process (how to
+[`docs/architecture/overview.md`](../../../spec/architecture/overview.md); for build/run/configure read
+[`docs/contributing/agents.md`](../../../impl/agents.md); for the development process (how to
 research, plan, delegate, test, commit) read
-[`docs/contributing/development-workflow.md`](../../contributing/development-workflow.md); for the chat
-API contract read [`docs/reference/api.md`](../../reference/api.md); for the rationale behind any
-"Decision N" read [`docs/specs/liberado-architecture-decisions.md`](../../specs/liberado-architecture-decisions.md);
-for open human-only action items read [`docs/roadmap/archive/human-todo.md`](../../roadmap/archive/human-todo.md) â€” it's
+[`docs/contributing/development-workflow.md`](../../../impl/development-workflow.md); for the chat
+API contract read [`docs/reference/api.md`](../../../spec/reference/api.md); for the rationale behind any
+"Decision N" read [`docs/specs/liberado-architecture-decisions.md`](../../../spec/architecture-decisions.md);
+for open human-only action items read [`docs/roadmap/archive/human-todo.md`](../../../future-work/archive/human-todo.md) â€” it's
 more current than this file on anything it covers, since it's updated the moment an item lands rather
 than at session-arc boundaries.
 
@@ -18,7 +18,7 @@ than at session-arc boundaries.
 
 ## What's built (as of 2026-07-08)
 
-All nineteen "Done" milestones in [`docs/architecture/overview.md`](../../architecture/overview.md) are
+All nineteen "Done" milestones in [`docs/architecture/overview.md`](../../../spec/architecture/overview.md) are
 shipped and `cargo test --workspace` is green (unchanged this session â€” no life-os source was
 touched; all work below happened in sibling/standalone repos and this session's own tooling setup).
 The system is:
@@ -36,8 +36,8 @@ The system is:
   (goal loops, verifiers, critics, subagents, session/events for TUI/WebUI) on `Provider` +
   `Executor` + `ToolRuntime`, with coding as the first domain. Crates:
   `coder-core`/`coder-tools`/`coder-agent`/`coder-sandbox`/`coder-runner`. Read
-  [`docs/architecture/agentic-loops.md`](../../architecture/agentic-loops.md) and
-  [`docs/roadmap/rust-native-agentic-coder-plan.md`](../../roadmap/rust-native-agentic-coder-plan.md)
+  [`docs/architecture/agentic-loops.md`](../../../spec/architecture/agentic-loops.md) and
+  [`docs/roadmap/rust-native-agentic-coder-plan.md`](../../../future-work/rust-native-agentic-coder-plan.md)
   before doing new PR-dispatch or coding-agent work.
 - **`liberado-pr-dispatch-mcp` proven end-to-end on Windows this session, with a real upstream bug
   found and fixed along the way** â€” see "This session's work" below. This validates Phase 2's
@@ -50,7 +50,7 @@ The system is:
 **Not yet built (next slice)**: the Rust-native coding backend described above, multi-MCP registry UX,
 connection pooling, and the remaining `liberado-common` decomposition. External webhook hooks are
 already built; an inbox-specific hook/workflow may still be future work depending on product direction.
-See [`docs/roadmap/current.md`](../../roadmap/current.md) for the full list.
+See [`docs/roadmap/current.md`](../../../roadmap.md) for the full list.
 
 ---
 
@@ -246,7 +246,7 @@ shape of gap the in-flight deliberation is aimed at.
   spawned processes). A co-resident MCP process can write directly to the vault â€” why writer-identity
   verification (hardening audit item 1) needs OS-level isolation, not a code patch.
 - **WASM builds need the rustup toolchain, not the standalone Rust install on PATH** â€” full
-  explanation: [`docs/contributing/agents.md`](../../contributing/agents.md#building-the-wasm-frontend).
+  explanation: [`docs/contributing/agents.md`](../../../impl/agents.md#building-the-wasm-frontend).
 
 ---
 

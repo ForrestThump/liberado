@@ -7,4 +7,4 @@
 | [spider-mcp-turbomcp-incompatibility.md](spider-mcp-turbomcp-incompatibility.md) | Peer MCP / turbomcp notes |
 | [subagent-manager-mcp-paradigms.md](subagent-manager-mcp-paradigms.md) | Subagent manager study |
 
-Status in these files may be stale; prefer code + [architecture/](../../architecture/README.md) + [roadmap/current.md](../../roadmap/current.md).
+Status in these files may be stale; prefer code + [architecture/](../../../spec/architecture/README.md) + [roadmap/current.md](../../../roadmap.md).

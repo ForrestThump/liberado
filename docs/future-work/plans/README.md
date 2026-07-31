@@ -5,8 +5,8 @@ Design and re-architecture plans that are **not yet the shipped contract**. Cont
 | Location | Role |
 |----------|------|
 | [roadmap/](./README.md) | Product scoreboard + active/shipped roadmap plans |
-| [architecture/](../spec/architecture/README.md) | How the system works **now** |
-| [specs/](spec/README.md) | Frozen decisions |
+| [architecture/](../../spec/architecture/README.md) | How the system works **now** |
+| [specs/](../../spec/README.md) | Frozen decisions |
 | **plans/** (here) | Forward design for a known next evolution — not current truth until landed |
 
 ## Active plans

@@ -19,7 +19,7 @@ autonomy boundary. Commits of record:
   live search).
 
 Architecture/decisions live in `turbovault-vector-module-plan.md`; Liberado-side
-"what's next" in [`current.md`](../current.md) and the modules
+"what's next" in [`current.md`](../../roadmap.md) and the modules
 [umbrella](../turbovault-modules-integration-roadmap.md).
 
 ## Goal

@@ -1,6 +1,6 @@
 # Handoff — Liberado is the daily-driver life OS (Telegram + TurboVault plugins)
 
-Docs map: [`README.md`](README.md) · open work: [`roadmap/roadmap.md`](roadmap/roadmap.md).
+Docs map: [`README.md`](../README.md) · open work: [`roadmap/roadmap.md`](../roadmap.md).
 
 ## 2026-07-26 update (engineering + dogfood — report delivery, authority, deploy hygiene)
 
@@ -44,7 +44,7 @@ deploy of an inert feature.
 
 **Prompt caching: already working.** Looked like the biggest unclaimed cost lever; measurement showed
 DeepSeek prefix caching at 93–98%. `Usage::cached_prompt_tokens` now records it.
-See [`research/orchestration-report-applied.md`](research/orchestration-report-applied.md).
+See [`research/orchestration-report-applied.md`](../future-work/research/orchestration-report-applied.md).
 
 *Known open, deliberately:* checkpointing for long runs (zero crashes observed in 5 deep runs — the
 report's 20%→72% figure is for dependent chains, not a ReAct gathering loop); a precise
@@ -81,11 +81,11 @@ with two chatty turns. Subagents now inherit pool zone grants — defensible, un
   Sticky id survives container restarts. Briefing reliability fixed (weather geocode, CalDAV
   relative hrefs) — live briefs return `Succeeded`.
 - **Strategy unchanged:** autonomous life-OS daemon first (replace OpenClaw/Hermes), then chat,
-  then coding. See [`architecture/positioning.md`](spec/architecture/positioning.md).
-- **Doctrine:** [`architecture/failure-modes.md`](spec/architecture/failure-modes.md) — live-verify
+  then coding. See [`architecture/positioning.md`](../spec/architecture/positioning.md).
+- **Doctrine:** [`architecture/failure-modes.md`](../spec/architecture/failure-modes.md) — live-verify
   every change against the real daemon.
 
-**What's next is in [`roadmap/roadmap.md`](roadmap/roadmap.md).** Short version below.
+**What's next is in [`roadmap/roadmap.md`](../roadmap.md).** Short version below.
 
 ---
 
@@ -132,9 +132,9 @@ Work lives in the `turbovault/` sibling (not the life-os workspace). High level:
 | **Plugin API** (`turbovault-plugin-api`) | Landed (#39) | Boundary Liberado plugins use |
 | **`vector`** | On fork `develop` (prototype Phases 1–4 done); live on homelab with `--features vector` | Semantic vault search from Telegram / briefs |
 | **`tasks`** | `feat/plugin-tasks` (extraction + self-tuning + recurrence); core task tools also on `develop` | Life-OS todo surface; briefs already depend on tasks |
-| **`vault_events`** | Planned — [`roadmap/turbovault-vault-events-plugin-plan.md`](roadmap/turbovault-vault-events-plugin-plan.md) | Optional L1 perception; not blocking Liberado P1 |
+| **`vault_events`** | Planned — [`roadmap/turbovault-vault-events-plugin-plan.md`](../future-work/turbovault-vault-events-plugin-plan.md) | Optional L1 perception; not blocking Liberado P1 |
 
-Umbrella: [`roadmap/turbovault-modules-integration-roadmap.md`](roadmap/turbovault-modules-integration-roadmap.md).
+Umbrella: [`roadmap/turbovault-modules-integration-roadmap.md`](../future-work/turbovault-modules-integration-roadmap.md).
 
 ### Provider / Telegram / timezone (done — keep these constraints)
 
@@ -168,7 +168,7 @@ ssh shiloh@homelab-node-ai 'cd ~/liberado-build && setsid bash -c "docker build 
 ## What's next for Liberado (priority order)
 
 Strategy is still **daemon → chat → coding**. Modules and MCP breadth *support* the daemon daily-driver
-bar; they do not replace it. Full table: [`roadmap/roadmap.md`](roadmap/roadmap.md).
+bar; they do not replace it. Full table: [`roadmap/roadmap.md`](../roadmap.md).
 
 ### Priority 1 — daily-drive the autonomous life OS
 
@@ -181,7 +181,7 @@ bar; they do not replace it. Full table: [`roadmap/roadmap.md`](roadmap/roadmap.
    AskHuman-capable schedules ("run this every morning, **ask me if unsure**") via session profiles.
 3. **M1b — done.** Pooling + degraded-catalog routing + topology MCP hot-reload. Peers stay
    hand-edited `topology.toml`; reload via `POST /api/mcp/reload`.
-4. **T1 — Live conformance suite** ([`live-conformance-suite.md`](roadmap/live-conformance-suite.md)).
+4. **T1 — Live conformance suite** ([`live-conformance-suite.md`](../future-work/live-conformance-suite.md)).
    **L1–L10 landed** (server suite + daemon L9). **Open:** Tier 2 only.
 5. **W1 later — mobile WebUI session view.** Homespun browser UI when Telegram's flat chat is no
    longer enough. **Not** deep-linking background sessions into Telegram (E5-b deprioritized).
@@ -194,7 +194,7 @@ bar; they do not replace it. Full table: [`roadmap/roadmap.md`](roadmap/roadmap.
 - **`vault_events`** module next in the modules sequence — consolidates perception; Liberado keeps
   L0 local watcher authoritative until L1 proves parity.
 - Optional: turn-budget "battery" for briefs that hit the turn wall
-  ([`ideas/turn-budget-battery-idea.md`](ideas/turn-budget-battery-idea.md)).
+  ([`ideas/turn-budget-battery-idea.md`](../future-work/ideas/turn-budget-battery-idea.md)).
 
 ### Priority 2 / 3 (after the daily-driver bar)
 
@@ -208,13 +208,13 @@ bar; they do not replace it. Full table: [`roadmap/roadmap.md`](roadmap/roadmap.
 
 ## Orientation for a fresh agent
 
-1. [`architecture/failure-modes.md`](spec/architecture/failure-modes.md) — **live-verify doctrine**
-2. [`architecture/overview.md`](spec/architecture/overview.md)
-3. [`architecture/sessions.md`](spec/architecture/sessions.md)
-4. [`architecture/positioning.md`](spec/architecture/positioning.md)
-5. [`roadmap/roadmap.md`](roadmap/roadmap.md) — open work in priority order
-6. [`roadmap/turbovault-modules-integration-roadmap.md`](roadmap/turbovault-modules-integration-roadmap.md)
-7. [`architecture/session-surface-contract.md`](spec/architecture/session-surface-contract.md)
+1. [`architecture/failure-modes.md`](../spec/architecture/failure-modes.md) — **live-verify doctrine**
+2. [`architecture/overview.md`](../spec/architecture/overview.md)
+3. [`architecture/sessions.md`](../spec/architecture/sessions.md)
+4. [`architecture/positioning.md`](../spec/architecture/positioning.md)
+5. [`roadmap/roadmap.md`](../roadmap.md) — open work in priority order
+6. [`roadmap/turbovault-modules-integration-roadmap.md`](../future-work/turbovault-modules-integration-roadmap.md)
+7. [`architecture/session-surface-contract.md`](../spec/architecture/session-surface-contract.md)
 
 **Repo notes:** origin may lag local work; do not push unless asked. Local `turbovault` sibling is
 co-developed — leave its branch alone unless the task is TurboVault work.

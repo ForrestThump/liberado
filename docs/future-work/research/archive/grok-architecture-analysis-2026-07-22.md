@@ -218,13 +218,13 @@ On 2026-07-22:
 
 ## 8. Related docs
 
-- [`../architecture/overview.md`](../../architecture/overview.md) â€” cold-start map  
-- [`../architecture/contracts.md`](../../architecture/contracts.md) â€” narrow waists  
-- [`../architecture/failure-modes.md`](../../architecture/failure-modes.md) â€” five recurring bug classes  
-- [`../architecture/modularity.md`](../../architecture/modularity.md) â€” seam plan  
-- [`../architecture/positioning.md`](../../architecture/positioning.md) â€” replacement priority  
-- [`../roadmap/current.md`](../../roadmap/current.md) â€” open work order  
-- [`../handoff.md`](../../handoff.md) â€” live ops  
+- [`../architecture/overview.md`](../../../spec/architecture/overview.md) â€” cold-start map  
+- [`../architecture/contracts.md`](../../../spec/architecture/contracts.md) â€” narrow waists  
+- [`../architecture/failure-modes.md`](../../../spec/architecture/failure-modes.md) â€” five recurring bug classes  
+- [`../architecture/modularity.md`](../../../spec/architecture/modularity.md) â€” seam plan  
+- [`../architecture/positioning.md`](../../../spec/architecture/positioning.md) â€” replacement priority  
+- [`../roadmap/current.md`](../../../roadmap.md) â€” open work order  
+- [`../handoff.md`](../../../project/handoff.md) â€” live ops  
 - [`../ideas/vs-grok-build.md`](../../ideas/vs-grok-build.md) â€” TUI coding gaps (separate product frame)
 
 ---

@@ -2,8 +2,8 @@
 
 **Status**: research note, 2026-07-21 (updated same day: `/goal` harness + `/loop`/cron).  
 **Scope**: highest-leverage gaps if Liberado’s TUI is to be a *daily-driver agentic coding surface*, not a product-market comparison of “who wins coding agents.” Also covers **goal-achievement harness robustness** (Grok `/goal`) and **recurring work** (Grok `/loop` vs Liberado cron + series-loops plan).  
-**Sources**: [xai-org/grok-build](https://github.com/xai-org/grok-build), [docs.x.ai/build](https://docs.x.ai/build/overview), [Background Tasks](https://docs.x.ai/build/features/background-tasks) (`/loop`), public writeups on goal mode (June 2026), Liberado architecture (`agentic-loops.md`, `session-surface-contract.md`, `positioning.md`, `current.md`, `verifiers.md`, [`loops-plan.md`](./loops-plan.md)), coding pack crates (`coder-*`), `liberado-cron`, TUI client (`crates/tui`).  
-**Related**: [`vs-hermes.md`](vs-hermes.md) (life-OS / skills / cron gaps), [`../architecture/positioning.md`](../spec/architecture/positioning.md) (coding is P3: *good enough + integrated*, not best-in-class), [`loop_architecture_reference_article.md`](archive/loop_architecture_reference_article.md).
+**Sources**: [xai-org/grok-build](https://github.com/xai-org/grok-build), [docs.x.ai/build](https://docs.x.ai/build/overview), [Background Tasks](https://docs.x.ai/build/features/background-tasks) (`/loop`), public writeups on goal mode (June 2026), Liberado architecture (`agentic-loops.md`, `session-surface-contract.md`, `positioning.md`, `current.md`, `verifiers.md`, [`loops-plan.md`](../loops-plan.md)), coding pack crates (`coder-*`), `liberado-cron`, TUI client (`crates/tui`).  
+**Related**: [`vs-hermes.md`](vs-hermes.md) (life-OS / skills / cron gaps), [`../architecture/positioning.md`](../../spec/architecture/positioning.md) (coding is P3: *good enough + integrated*, not best-in-class), [`loop_architecture_reference_article.md`](archive/loop_architecture_reference_article.md).
 
 ---
 
@@ -343,7 +343,7 @@ Assume life-OS dogfood continues as P1. This track is **parallel-safe** only whe
 | D2 Goal templates + `/goal` surface | `tests-green` / free-text intake → frozen `VerifierSpec`s; TUI/CLI entry |
 | D3 Checklist + verdict events | Partial progress visible; every outer cycle shows red/green checks |
 | D4 Build checkpoints | Git tip + contract + checklist cursor; mid-build resume |
-| D5 Series loops (L1–L6) | Implement [`loops-plan.md`](./loops-plan.md) on top of shipped cron |
+| D5 Series loops (L1–L6) | Implement [`loops-plan.md`](../loops-plan.md) on top of shipped cron |
 | D6 TUI/Telegram loop ops | List / pause / close series; pass = ordinary joinable goal session |
 
 **Exit criterion:** A template `/goal` reaches green without babysitting; a multi-day vault-grooming **series loop** compounds state across firings (not amnesiac cron).
@@ -567,7 +567,7 @@ Grok’s **`/loop`** and Liberado’s **cron** are easy to confuse with each oth
 |---|---|---|---|---|
 | **Goal** (`/goal`) | “Make this *true*” | Predicate holds (or hard fail/budget) | `/goal`, long autonomous run | Goal sessions + coding pack (under-productized as `/goal`) |
 | **One-shot scheduled goal** | “At 7am, do *this once*” | That firing’s goal terminals | Partial (less life-OS oriented) | **Shipped:** `liberado-cron` + `[[schedules]]` → event → goal session; Telegram brief delivery |
-| **Series loop** (`/loop`-class) | “Every interval, improve *this* a bit; remember last time” | Cap, green streak, or human close — **never “succeeded forever”** | `/loop 5m <prompt>` | **Planned:** [`loops-plan.md`](./loops-plan.md); **not built** — cron firings are amnesiac |
+| **Series loop** (`/loop`-class) | “Every interval, improve *this* a bit; remember last time” | Cap, green streak, or human close — **never “succeeded forever”** | `/loop 5m <prompt>` | **Planned:** [`loops-plan.md`](../loops-plan.md); **not built** — cron firings are amnesiac |
 | **Background task / monitor** | “Run this process / watch this stream” | Kill / expire | `/tasks`, monitors, bg commands | Not a first-class TUI tasks pane; daemon sources instead |
 
 From Grok docs ([Background Tasks](https://docs.x.ai/build/features/background-tasks)):
@@ -617,7 +617,7 @@ Honest split:
 
 ### 9.3 Liberado series loops (designed, not shipped)
 
-From [`loops-plan.md`](./loops-plan.md) — architecture decision:
+From [`loops-plan.md`](../loops-plan.md) — architecture decision:
 
 > **A loop is a scheduler for goals, not a fourth engine.**
 
