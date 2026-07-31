@@ -98,7 +98,7 @@ Two new protocol *surfaces*, distinct from anything in `docs/reference/api.md` t
 - What is the default consequence/zone posture for a request *arriving* from an external A2A
   peer? Almost certainly starts at `Clarify`/proposal-only until a specific peer is
   explicitly trusted — same fail-safe default as unlisted zones (Decision 15).
-- Where does this sit in the phased roadmap (`docs/roadmap/current.md`)? Best guess: **not before
+- Where does this sit in the phased roadmap (`docs/roadmap.md`)? Best guess: **not before
   Phase 3** — it is another event-source (inbound) and another externally-facing capability
   (outbound), the same category of work as vault-decoupling and cron, and shouldn't jump the
   queue ahead of the general-MCP-agent milestone (Phase 1) or self-improvement (Phase 2).

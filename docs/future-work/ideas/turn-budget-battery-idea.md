@@ -2,7 +2,7 @@
 
 **Status:** idea, captured 2026-07-18. Not scheduled. Related: [`doomloop_research.md`](archive/doomloop_research.md)
 (the retry-loop failure this mitigates), and the P1 automation-daemon reliability story in
-[`../roadmap/current.md`](../../roadmap.md) (C1 — crons that run your life unattended).
+[`../roadmap.md`](../../roadmap.md) (C1 — crons that run your life unattended).
 
 ## The problem this is for
 

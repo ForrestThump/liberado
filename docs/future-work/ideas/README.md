@@ -1,6 +1,6 @@
 # Ideas
 
-Forward-looking brainstorms and competitive notes. **Not** the roadmap — nothing here is committed until it appears in [roadmap/current.md](../../roadmap.md).
+Forward-looking brainstorms and competitive notes. **Not** the roadmap — nothing here is committed until it appears in [roadmap.md](../../roadmap.md).
 
 | Idea | Topic |
 |------|--------|

@@ -4,7 +4,7 @@
 **Date**: 2026-07-22  
 **Branch context**: After merging `prototype/turbovault-plugin-integration` into `main`; working tip `dev/post-turbovault-merge` at `1d082f5`.  
 **Scope**: Critical review of Liberado's existing architecture and code shape â€” not a rewrite plan. Recommendations are ordered by leverage against the stated strategy (**daemon â†’ chat â†’ coding**).  
-**Primary sources**: `docs/architecture/{overview,contracts,modularity,failure-modes,positioning}.md`, `docs/roadmap/current.md`, `docs/handoff.md`, crate map, `layer_rules.rs`, hot-path crates (`server`, `daemon`, `mcp`, `executor`, `bootstrap`, `config-loader`, `messaging`).
+**Primary sources**: `docs/architecture/{overview,contracts,modularity,failure-modes,positioning}.md`, `docs/roadmap.md`, `docs/handoff.md`, crate map, `layer_rules.rs`, hot-path crates (`server`, `daemon`, `mcp`, `executor`, `bootstrap`, `config-loader`, `messaging`).
 
 ---
 
@@ -169,7 +169,7 @@ Architecture writing is excellent; the ratio of plans/ideas/archive to "is the l
 
 ## 4. Suggested improvement roadmap
 
-Compatible with P1 order in `docs/roadmap/current.md`.
+Compatible with P1 order in `docs/roadmap.md`.
 
 | When | Improvement | Why |
 |---|---|---|
@@ -223,7 +223,7 @@ On 2026-07-22:
 - [`../architecture/failure-modes.md`](../../../spec/architecture/failure-modes.md) â€” five recurring bug classes  
 - [`../architecture/modularity.md`](../../../spec/architecture/modularity.md) â€” seam plan  
 - [`../architecture/positioning.md`](../../../spec/architecture/positioning.md) â€” replacement priority  
-- [`../roadmap/current.md`](../../../roadmap.md) â€” open work order  
+- [`../roadmap.md`](../../../roadmap.md) â€” open work order  
 - [`../handoff.md`](../../../project/handoff.md) â€” live ops  
 - [`../ideas/vs-grok-build.md`](../../ideas/vs-grok-build.md) â€” TUI coding gaps (separate product frame)
 

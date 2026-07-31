@@ -10,7 +10,7 @@ threading is a **deferred** follow-on.
 > a fresh "Telegram" conversation. Live-verified: brief → pointer on disk → restart → `restored sticky
 > Telegram session from disk` → post-restart brief appended to the same conversation. Related: the cron→telegram delivery
 (`daemon::maybe_deliver_cron_result`) and the sticky Telegram chat surface (`server/src/telegram.rs`),
-the P1 automation story in [`../roadmap/current.md`](../../roadmap.md) (C1), and E5-b (answer a
+the P1 automation story in [`../roadmap.md`](../../roadmap.md) (C1), and E5-b (answer a
 session from your phone).
 
 ## As implemented

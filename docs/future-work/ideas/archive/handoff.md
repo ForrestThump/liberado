@@ -50,7 +50,7 @@ The system is:
 **Not yet built (next slice)**: the Rust-native coding backend described above, multi-MCP registry UX,
 connection pooling, and the remaining `liberado-common` decomposition. External webhook hooks are
 already built; an inbox-specific hook/workflow may still be future work depending on product direction.
-See [`docs/roadmap/current.md`](../../../roadmap.md) for the full list.
+See [`docs/roadmap.md`](../../../roadmap.md) for the full list.
 
 ---
 
