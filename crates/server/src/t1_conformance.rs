@@ -187,6 +187,29 @@ impl T1Harness {
             String::from_utf8(bytes.to_vec()).unwrap_or_default(),
         )
     }
+
+    async fn get(&self, uri: &str) -> (StatusCode, String) {
+        let resp = self
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (
+            status,
+            String::from_utf8(bytes.to_vec()).unwrap_or_default(),
+        )
+    }
 }
 
 fn life_capabilities_with_ask_human() -> CapabilitySet {
@@ -1505,4 +1528,82 @@ async fn l10_fork_via_http_works_for_goal_sessions_too() {
             .any(|n| n.message.content == "goal-turn-4-after-fork"),
         "continuing the original must not move the fork"
     );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Phase 5: Negative-case API tests — garbage in, correct status out
+// ════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn goals_start_with_malformed_json_is_400() {
+    let harness = T1Harness::with_life_pack().await;
+    let (status, body) = harness.post_json("/api/goals", r#"{not valid json"#).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+}
+
+#[tokio::test]
+async fn goals_start_with_empty_body_is_400() {
+    let harness = T1Harness::with_life_pack().await;
+    let (status, body) = harness.post_json("/api/goals", "").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+}
+
+#[tokio::test]
+async fn goals_get_unknown_id_is_404() {
+    let harness = T1Harness::with_life_pack().await;
+    let (status, body) = harness.get("/api/goals/does-not-exist").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+}
+
+#[tokio::test]
+async fn goals_cancel_unknown_id_is_404() {
+    let harness = T1Harness::with_life_pack().await;
+    let (status, body) = harness
+        .post_json("/api/goals/does-not-exist/cancel", "{}")
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+}
+
+#[tokio::test]
+async fn goals_park_unknown_id_is_404() {
+    let harness = T1Harness::with_life_pack().await;
+    let (status, body) = harness
+        .post_json("/api/goals/does-not-exist/park", "{}")
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+}
+
+#[tokio::test]
+async fn goals_message_unknown_id_is_404() {
+    let harness = T1Harness::with_life_pack().await;
+    let (status, body) = harness
+        .post_json(
+            "/api/goals/does-not-exist/message",
+            r#"{"text":"hello"}"#,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+}
+
+#[tokio::test]
+async fn sessions_fork_unknown_id_is_404() {
+    let harness = T1Harness::with_life_pack().await;
+    // Well-formed ULID that does not exist in the store.
+    let missing = Ulid::new().to_string();
+    let (status, body) = harness
+        .post_json(
+            &format!("/api/sessions/{missing}/fork"),
+            r#"{"after_turn":1}"#,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+}
+
+#[tokio::test]
+async fn hooks_unknown_name_is_404() {
+    let harness = T1Harness::with_life_pack().await;
+    let (status, body) = harness
+        .post_json("/api/hooks/no-such-hook", "{}")
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
 }
