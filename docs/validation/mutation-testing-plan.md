@@ -72,7 +72,7 @@ dependency graph + source file count + test count.
 cargo mutants --package liberado-<name> --cap-lints true
 ```
 
-Avoid `--in-place` on Windows (risk of `os error 1224` mid-restore corruption; see v2 report).
+Avoid `--in-place` on Windows (risk of `os error 1224` mid-restore corruption; see the dispatcher report).
 
 ### Methodology
 
@@ -89,7 +89,7 @@ Avoid `--in-place` on Windows (risk of `os error 1224` mid-restore corruption; s
 
 | Crate | Tests Before | Tests After | Catch Before | Catch After | Delta | Report |
 |-------|:------------:|:-----------:|:------------:|:-----------:|:-----:|--------|
-| dispatcher | 48 | 60 | 72.7% | **96.4%** | +23.7pp | `mutation-testing-report-v2.md` |
+| dispatcher | 48 | 60 | 72.7% | **96.4%** | +23.7pp | `mutation-testing-report-dispatcher.md` |
 | provider | 39 | 59 | 62.2% | **88.7%** | +26.5pp | `mutation-testing-report-provider.md` |
 | common | 102 | 117 | 83.8% | **94.1%** | +10.3pp | `mutation-testing-report-common.md` |
 | config-loader | 106 | 116 | 81.3% | **87.1%** | +5.8pp | `mutation-testing-report-config-loader.md` |

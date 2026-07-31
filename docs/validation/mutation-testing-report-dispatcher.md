@@ -1,4 +1,4 @@
-# Mutation Testing Report v2 — `liberado-dispatcher`
+# Mutation Testing Report — `liberado-dispatcher`
 
 Generated 2026-07-29 using `cargo-mutants 27.1.0`.
 
