@@ -6,6 +6,7 @@ Index of forward-looking work.
 |-----|------|
 | **[roadmap.md](../roadmap.md)** | **Living scoreboard** — open work in priority order, recently landed |
 | [live-conformance-suite.md](live-conformance-suite.md) | T1 reliability suite (L1–L11 landed; Tier 3 open — Tier 2 optional) |
+| [live-conformance-tier3-build-spec.md](live-conformance-tier3-build-spec.md) | Build spec for Tier 3 — deliverables, safety envelope, per-path assertions |
 | Active plans below | Still drive near-term work (status in each file header when set) |
 | [archive/](archive/README.md) | Finished plans, closed audits — **not current truth** |
 
