@@ -68,6 +68,8 @@ tests whether the *model* can actually drive the machinery.
 ### Tier 3 — against the **deployed daemon**, one run per path, on a schedule
 
 **Status**: open, and the highest-value unbuilt thing here (added 2026-07-28).
+**Building it?** This section is the argument; the deliverables, safety envelope and per-path
+assertion contract are in [`live-conformance-tier3-build-spec.md`](live-conformance-tier3-build-spec.md).
 
 Tier 1 is in-process with a `MockProvider`. That is the right design and it is why it runs in CI —
 but it means Tier 1 cannot see anything that only exists on a real deployment: the actual config on
