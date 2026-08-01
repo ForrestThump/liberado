@@ -914,3 +914,220 @@ mod instruction_scope_tests {
         );
     }
 }
+
+/// Property tests for the goal-reading heuristics: scope must be a valid prefix, must be invariant
+/// under an appended `Context:` section, and must never panic on arbitrary (or pathological)
+/// Unicode. Plus the destructive classifiers' case-invariance and stem-detection guarantees.
+#[cfg(test)]
+mod goal_heuristics_proptest_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Arbitrary Unicode text, 0-200 chars, unioned with rare pathological seeds: empty,
+    /// whitespace-only, emoji-heavy (exercises char-boundary truncation), Zalgo combining-mark
+    /// text, and a multi-megabyte string well past the 600-byte `INSTRUCTION_SCAN_LIMIT`.
+    fn text_strategy() -> impl Strategy<Value = String> {
+        let arbitrary = proptest::collection::vec(proptest::char::any(), 0..=200)
+            .prop_map(|chars| chars.into_iter().collect::<String>());
+        prop_oneof![
+            10 => arbitrary,
+            1 => Just(String::new()),
+            1 => Just(" \t\r\n ".to_string()),
+            1 => Just("🎉".repeat(200)),
+            1 => Just(
+                "z\u{338}a\u{301}\u{300}l\u{338}g\u{323}\u{327}o\u{301} \
+                 t\u{338}e\u{301}x\u{338}t\u{301}"
+                    .to_string()
+            ),
+            1 => Just("x".repeat(2_000_000)),
+        ]
+    }
+
+    /// Short arbitrary Unicode stems for the known-stem property (it builds nine candidate words
+    /// per case; the multi-megabyte seed belongs only in `text_strategy`).
+    fn stem_strategy() -> impl Strategy<Value = String> {
+        proptest::collection::vec(proptest::char::any(), 0..=64)
+            .prop_map(|chars| chars.into_iter().collect::<String>())
+    }
+
+    /// The scope the heuristics inspect is always a prefix of the goal.
+    fn scope_is_valid_prefix(goal: String) -> bool {
+        let scope = instruction_scope(&goal);
+        goal.starts_with(scope)
+    }
+
+    /// None of the goal-reading functions may panic on arbitrary input.
+    fn scope_never_panics(goal: String) -> bool {
+        let _ = instruction_scope(&goal);
+        let _ = is_sweeping_destructive(&goal);
+        let _ = mentions_destructive(&goal);
+        true
+    }
+
+    /// Appending an explanatory `Context:` section never changes what the heuristics read.
+    fn scope_context_invariant(goal: String) -> bool {
+        let scope = instruction_scope(&goal);
+        let with_ctx = format!("{}\n\nContext: additional notes", goal);
+        instruction_scope(&with_ctx) == scope
+    }
+
+    /// The destructive classifiers do not depend on input casing.
+    fn case_invariant(text: String) -> bool {
+        is_sweeping_destructive(&text.to_lowercase()) == is_sweeping_destructive(&text)
+            && mentions_destructive(&text.to_lowercase()) == mentions_destructive(&text)
+    }
+
+    /// Every stem in `DESTRUCTIVE_STEMS`, followed by an arbitrary suffix, must be detected.
+    fn known_stems_detected(stem: String) -> bool {
+        let stems = [
+            "delet", "remov", "wipe", "purge", "eras", "destroy", "drop", "truncat", "overwrit",
+        ];
+        for s in &stems {
+            let word = format!("{}{}", s, &stem);
+            if word.contains(s) && !mentions_destructive(&word) {
+                return false;
+            }
+        }
+        true
+    }
+
+    proptest! {
+        #[test]
+        fn scope_is_a_valid_prefix(goal in text_strategy()) {
+            prop_assert!(scope_is_valid_prefix(goal));
+        }
+
+        #[test]
+        fn scope_and_classifiers_never_panic(goal in text_strategy()) {
+            prop_assert!(scope_never_panics(goal));
+        }
+
+        #[test]
+        fn scope_is_context_invariant(goal in text_strategy()) {
+            prop_assert!(scope_context_invariant(goal));
+        }
+
+        #[test]
+        fn destructive_classification_is_case_invariant(text in text_strategy()) {
+            prop_assert!(case_invariant(text));
+        }
+
+        #[test]
+        fn known_destructive_stems_are_detected(stem in stem_strategy()) {
+            prop_assert!(known_stems_detected(stem));
+        }
+    }
+}
+
+/// Property-based checks of the `narrow`-only invariants (Decision 4) and the algebraic shape of
+/// [`CapabilitySet::narrow`]. The input strategy is deliberately independent (no correlation between
+/// an `ExecuteMcp` name and an `ExecuteTool` prefix), so the non-trivial `ExecuteMcp ⊃ ExecuteTool`
+/// subsumption arm is hit only on exact string coincidence — the equality arms of `subsumes` carry
+/// these checks in practice. A correlated strategy (tool names derived from a generated MCP name)
+/// would exercise the partial order directly, at the cost of hitting an *ordering* artifact of the
+/// derived `PartialEq` (a `Vec` compare) that is not a semantic narrowing failure.
+///
+/// Note on variants: the requested list (`Read`, `Write(Zone)`, `ExecuteMcp`, `ExecuteTool`,
+/// `AskHuman`, `Delegate`, `PerformTask`) predates this codebase — the enum here has no `Delegate`
+/// or `PerformTask`. The generator covers the six variants that actually exist, including
+/// `ReadSummary(Zone)`.
+#[cfg(test)]
+mod proptest_tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    // ── Arbitrary impls ────────────────────────────────────────────────────────────────────────
+
+    impl Arbitrary for Capability {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Capability>;
+
+        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+            // A zone name: 1-20 alphanumeric or `/` chars, either flavor of zone.
+            let zone = prop_oneof![
+                "[a-zA-Z0-9/]{1,20}".prop_map(Zone::Vault),
+                "[a-zA-Z0-9/]{1,20}".prop_map(Zone::Named),
+            ];
+            prop_oneof![
+                zone.clone().prop_map(Capability::Read),
+                zone.clone().prop_map(Capability::Write),
+                zone.clone().prop_map(Capability::ReadSummary),
+                // An MCP name: 1-20 alphanumeric chars.
+                "[a-zA-Z0-9]{1,20}".prop_map(Capability::ExecuteMcp),
+                // A tool name: 1-20 chars; the `:` allows the documented `"<mcp>:<tool>"` form.
+                "[a-zA-Z0-9:]{1,20}".prop_map(Capability::ExecuteTool),
+                Just(Capability::AskHuman),
+            ]
+            .boxed()
+        }
+    }
+
+    impl Arbitrary for CapabilitySet {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<CapabilitySet>;
+
+        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+            // A raw 0-10 element bag, wrapped as-is (no `FromIterator` de-dup, so order and
+            // duplicates are part of what the properties see).
+            prop::collection::vec(any::<Capability>(), 0..10)
+                .prop_map(|capabilities| CapabilitySet { capabilities })
+                .boxed()
+        }
+    }
+
+    // ── Properties ──────────────────────────────────────────────────────────────────────────────
+
+    /// `narrow` is commutative: the result must not depend on which set is the narrowing.
+    fn narrow_commutative(a: CapabilitySet, b: CapabilitySet) -> bool {
+        a.narrow(&b) == b.narrow(&a)
+    }
+
+    /// `narrow` is idempotent for a fixed second operand: narrowing an already-narrowed set by the
+    /// same narrowing changes nothing.
+    fn narrow_idempotent(a: CapabilitySet, b: CapabilitySet) -> bool {
+        let n = a.narrow(&b);
+        n.narrow(&b) == n
+    }
+
+    /// The Decision 4 invariant, per element: whatever survives a narrowing is subsumed by something
+    /// on *both* sides — authority can only shrink, never be invented by the intersection.
+    fn narrow_never_widens(a: CapabilitySet, b: CapabilitySet) -> bool {
+        let result = a.narrow(&b);
+        result.capabilities.iter().all(|c| {
+            a.capabilities.iter().any(|aa| aa.subsumes(c))
+                && b.capabilities.iter().any(|bb| bb.subsumes(c))
+        })
+    }
+
+    /// `narrow` is associative. Note: the derived `PartialEq` compares `capabilities` as an ordered
+    /// `Vec`, and `narrow` emits in pair-iteration order, so an ordering mismatch between the two
+    /// evaluation orders can read as a failure even when the result *sets* agree. With the
+    /// uncorrelated name strategy above this is only reachable via the equality arms of `subsumes`,
+    /// under which associativity holds.
+    fn narrow_associative(a: CapabilitySet, b: CapabilitySet, c: CapabilitySet) -> bool {
+        a.narrow(&b).narrow(&c) == a.narrow(&b.narrow(&c))
+    }
+
+    proptest! {
+        #[test]
+        fn prop_narrow_commutative(a: CapabilitySet, b: CapabilitySet) {
+            prop_assert!(narrow_commutative(a, b));
+        }
+
+        #[test]
+        fn prop_narrow_idempotent(a: CapabilitySet, b: CapabilitySet) {
+            prop_assert!(narrow_idempotent(a, b));
+        }
+
+        #[test]
+        fn prop_narrow_never_widens(a: CapabilitySet, b: CapabilitySet) {
+            prop_assert!(narrow_never_widens(a, b));
+        }
+
+        #[test]
+        fn prop_narrow_associative(a: CapabilitySet, b: CapabilitySet, c: CapabilitySet) {
+            prop_assert!(narrow_associative(a, b, c));
+        }
+    }
+}

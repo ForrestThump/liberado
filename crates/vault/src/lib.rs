@@ -379,3 +379,100 @@ mod tests {
         }
     }
 }
+
+/// Property tests over [`Vault::validate_rel_path`], cross-checking the implementation against the
+/// independent `std::path::Component` view of the same string. `validate_rel_path` is a method that
+/// needs a genuine `vault_root` (for its belt-and-braces `starts_with` restatement), and proptest
+/// generates thousands of cases, so one real vault is opened once per test process — never per case.
+#[cfg(test)]
+mod proptest_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use std::sync::OnceLock;
+    use tempfile::TempDir;
+
+    fn test_vault() -> &'static Vault {
+        static VAULT: OnceLock<(TempDir, Vault)> = OnceLock::new();
+        let state = VAULT.get_or_init(|| {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime for proptest vault");
+            let dir = TempDir::new().expect("temp dir for proptest vault");
+            let vault = rt
+                .block_on(Vault::open("proptest-vault", dir.path()))
+                .expect("open proptest vault");
+            (dir, vault)
+        });
+        &state.1
+    }
+
+    /// Path strings, 1-100 chars, from the validation alphabet (`a-z`, `0-9`, `_ - . / \ :` and an
+    /// emoji — `..` arises naturally from `.`), unioned with rare pathological seeds: traversal
+    /// fragments and the Windows drive / UNC spellings the prefix filter must reject.
+    fn path_strategy() -> impl Strategy<Value = String> {
+        let alphabet: Vec<char> = vec![
+            'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q',
+            'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '0', '1', '2', '3', '4', '5', '6', '7',
+            '8', '9', '_', '-', '.', '/', '\\', ':', '🎉',
+        ];
+        let arbitrary = proptest::collection::vec(proptest::sample::select(alphabet), 1..=100)
+            .prop_map(|chars| chars.into_iter().collect::<String>());
+        prop_oneof![
+            8 => arbitrary,
+            1 => Just("..".to_string()),
+            1 => Just("C:\\foo".to_string()),
+            1 => Just("\\\\server\\share".to_string()),
+            1 => Just("C:foo".to_string()),
+            1 => Just("a/../../b".to_string()),
+            1 => Just("sub\\..\\..\\etc".to_string()),
+            1 => Just("/etc/passwd".to_string()),
+            1 => Just("./notes/hello.md".to_string()),
+            1 => Just("🎉/notes/📝.md".to_string()),
+            1 => Just("a\\..\\b".to_string()),
+        ]
+    }
+
+    /// A path made only of `Normal`/`CurDir` components always validates `Ok`.
+    fn accepts_safe_components(path: String) -> bool {
+        let components: Vec<_> = Path::new(&path).components().collect();
+        let all_safe = components
+            .iter()
+            .all(|c| matches!(c, Component::Normal(_) | Component::CurDir));
+        if all_safe {
+            test_vault().validate_rel_path(Path::new(&path)).is_ok()
+        } else {
+            true
+        }
+    }
+
+    /// A path containing `ParentDir`/`RootDir`/`Prefix` is always `PathTraversal`.
+    fn rejects_unsafe_components(path: String) -> bool {
+        let has_unsafe = Path::new(&path).components().any(|c| {
+            matches!(
+                c,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        });
+        if has_unsafe {
+            matches!(
+                test_vault().validate_rel_path(Path::new(&path)),
+                Err(VaultError::PathTraversal(_))
+            )
+        } else {
+            true
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn safe_components_always_validate(path in path_strategy()) {
+            prop_assert!(accepts_safe_components(path));
+        }
+
+        #[test]
+        fn unsafe_components_are_always_path_traversal(path in path_strategy()) {
+            prop_assert!(rejects_unsafe_components(path));
+        }
+    }
+}

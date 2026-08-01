@@ -31,6 +31,7 @@ e2e = ["dep:turbovault"]
 tempfile = { workspace = true }
 tokio = { workspace = true }
 turbomcp = { workspace = true }
+proptest = "1"
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)

@@ -1081,3 +1081,139 @@ trigger_tokens = 100000
         assert_eq!(source, CompactionTriggerSource::GlobalPct);
     }
 }
+
+#[cfg(test)]
+mod proptest_tests {
+    use super::*;
+    use liberado_common::catalog::{McpDescriptor, resolve_zone};
+    use proptest::prelude::*;
+
+    // ── Generation primitives ─────────────────────────────────────────────
+
+    /// A tool name as it appears in `tool_zones` / `write_tools` / `McpConfig::tools` keys.
+    const TOOL_NAME: &str = "[a-zA-Z0-9_/-]{1,20}";
+
+    /// A vault zone name: a plain 1–20 char alphanumeric string.
+    const ZONE_NAME: &str = "[a-zA-Z0-9]{1,20}";
+
+    /// One logical zone declaration, generated once and projected into both representations:
+    /// the common crate's `McpDescriptor` (what the runtime catalog sees) and config-loader's
+    /// `McpConfig` (what the operator declares). `zone_from_arg`/`write_tools` don't participate
+    /// in zone-name resolution, but they're carried through so the generated structs stay faithful
+    /// to the real shapes.
+    #[derive(Debug, Clone)]
+    struct ZoneDeclaration {
+        default_zone: Option<String>,
+        tool_zones: Vec<(String, Option<String>)>,
+        zone_from_arg: Option<String>,
+        write_tools: Vec<String>,
+    }
+
+    fn arb_zone_declaration() -> impl Strategy<Value = ZoneDeclaration> {
+        (
+            // `None` (no zone tracking) or a named zone — most MCPs aren't vault writers at all.
+            prop_oneof![1 => Just(None::<String>), 2 => ZONE_NAME.prop_map(Some)],
+            // Per-tool overrides. A listed tool with `zone: None` explicitly declares "not a zone
+            // write" even when `default_zone` is set — the case the unit tests pin separately.
+            proptest::collection::vec(
+                (
+                    TOOL_NAME,
+                    prop_oneof![1 => Just(None::<String>), 2 => ZONE_NAME.prop_map(Some)],
+                ),
+                0..3,
+            ),
+            // Path-addressed style (`write_target`'s branch), usually absent for fixed-zone MCPs.
+            prop_oneof![2 => Just(None::<String>), 1 => "[a-zA-Z0-9_-]{1,20}".prop_map(Some)],
+            // Only `write_target` consults this; kept for shape fidelity.
+            proptest::collection::vec(TOOL_NAME, 0..5),
+        )
+            .prop_map(|(default_zone, tool_zones, zone_from_arg, write_tools)| {
+                ZoneDeclaration {
+                    default_zone,
+                    tool_zones,
+                    zone_from_arg,
+                    write_tools,
+                }
+            })
+    }
+
+    /// Project one logical declaration into both representations, plus a tool name to query —
+    /// biased toward names actually listed in `tool_zones` so the per-tool override path (not
+    /// just the `default_zone` inheritance path) is exercised, not merely sampled by chance.
+    fn projected_pair() -> impl Strategy<Value = (McpDescriptor, McpConfig, String)> {
+        (
+            arb_zone_declaration(),
+            "[a-zA-Z0-9_-]{1,20}",  // name
+            "[a-zA-Z0-9_ -]{0,40}", // description
+        )
+            .prop_flat_map(|(declaration, name, description)| {
+                let listed: Vec<String> = declaration
+                    .tool_zones
+                    .iter()
+                    .map(|(tool, _)| tool.clone())
+                    .collect();
+                let tool = if listed.is_empty() {
+                    TOOL_NAME.boxed()
+                } else {
+                    prop_oneof![
+                        2 => TOOL_NAME,                         // unlisted: inherits default_zone
+                        3 => proptest::sample::select(listed), // listed: hits the override
+                    ]
+                    .boxed()
+                };
+                tool.prop_map(move |tool| {
+                    let descriptor = McpDescriptor {
+                        name: name.clone(),
+                        description: description.clone(),
+                        consequence: Consequence::Reversible,
+                        provenance: None,
+                        default_zone: declaration.default_zone.clone(),
+                        tool_zones: declaration.tool_zones.clone(),
+                        zone_from_arg: declaration.zone_from_arg.clone(),
+                        write_tools: declaration.write_tools.clone(),
+                    };
+                    let config = McpConfig {
+                        name: name.clone(),
+                        enabled: true,
+                        description: description.clone(),
+                        consequence: Consequence::Reversible,
+                        transport: McpTransport::Managed,
+                        default_zone: declaration.default_zone.clone(),
+                        tools: declaration
+                            .tool_zones
+                            .iter()
+                            .map(|(name, zone)| ToolImpact {
+                                name: name.clone(),
+                                zone: zone.clone(),
+                            })
+                            .collect(),
+                        zone_from_arg: declaration.zone_from_arg.clone(),
+                        write_tools: declaration.write_tools.clone(),
+                        writes_vault: None,
+                    };
+                    (descriptor, config, tool)
+                })
+            })
+    }
+
+    // ── The mirror property ──────────────────────────────────────────────
+
+    /// `resolve_zone`'s doc comment claims it "Mirrors `resolve_declared_zone` exactly." Both are
+    /// the same algorithm — first match in the per-tool overrides, else `default_zone` — but they
+    /// read different structs (`McpDescriptor` vs `McpConfig`). This property feeds both the same
+    /// logical declaration and asserts they never disagree.
+    fn zone_mirrors_agree(desc: McpDescriptor, mcp_config: McpConfig, tool: String) -> bool {
+        let from_descriptor = resolve_zone(&desc, &tool);
+        let from_config = resolve_declared_zone(&mcp_config, &tool);
+        from_descriptor == from_config
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_zone_resolution_mirrors_agree(
+            (desc, config, tool) in projected_pair(),
+        ) {
+            prop_assert!(zone_mirrors_agree(desc, config, tool));
+        }
+    }
+}
