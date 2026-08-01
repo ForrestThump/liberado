@@ -968,7 +968,7 @@ mod proptest_tests {
             let store = GoalSessionStore::new();
             for op in &ops {
                 match op {
-                    StoreOp::Insert(record) => store.insert((*record).clone()).await,
+                    StoreOp::Insert(record) => store.insert(record.as_ref().clone()).await,
                     StoreOp::SetStatus(id, status) => store.set_status(id, *status).await,
                     StoreOp::Finish(id, status, result) => {
                         store.finish(id, *status, result.clone()).await;
