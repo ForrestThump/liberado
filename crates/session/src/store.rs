@@ -799,11 +799,8 @@ mod proptest_tests {
     /// ops name the session they target.
     #[derive(Debug, Clone)]
     enum StoreOp {
-        /// Create (or reset) a session from a valid initial record.
-        Insert(GoalSessionRecord),
-        /// A non-terminal status transition on a session.
+        Insert(Box<GoalSessionRecord>),
         SetStatus(String, SessionStatus),
-        /// Terminate a session.
         Finish(String, SessionStatus, GoalResult),
     }
 
@@ -906,7 +903,7 @@ mod proptest_tests {
 
                     let insert_op = proptest::sample::select(ids.clone())
                         .prop_flat_map(record_for)
-                        .prop_map(StoreOp::Insert)
+                        .prop_map(|r| StoreOp::Insert(Box::new(r)))
                         .boxed();
                     let set_status_op: BoxedStrategy<StoreOp> = if status_ids.is_empty() {
                         Just(StoreOp::SetStatus(
@@ -971,7 +968,7 @@ mod proptest_tests {
             let store = GoalSessionStore::new();
             for op in &ops {
                 match op {
-                    StoreOp::Insert(record) => store.insert(record.clone()).await,
+                    StoreOp::Insert(record) => store.insert((*record).clone()).await,
                     StoreOp::SetStatus(id, status) => store.set_status(id, *status).await,
                     StoreOp::Finish(id, status, result) => {
                         store.finish(id, *status, result.clone()).await;
