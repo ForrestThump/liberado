@@ -157,6 +157,12 @@ Five instances in a single session (2026-07-26), which is what earns this its ow
   and built from another — and that stamp is the thing everyone trusts to know what is live.
 - **Guard vs guard.** The pre-flight magnitude check read `instruction_scope(goal)`; the runtime one
   read the raw goal. Same goal, same question, two answers.
+- **Exit code vs the log it printed** (added 2026-08-01). `dx build -r` emitted
+  `ERROR wasm-opt failed with status code exit code: 0xc0000409`, then
+  `Client build completed successfully`, then exited **0**. The deploy script trusted the exit code,
+  so an unoptimized wasm — 22% larger than it needed to be — shipped to the homelab for weeks while
+  the tool that built it was saying, in writing, that it had failed. Nothing was hidden; nothing
+  compared the two answers.
 
 The shape is not "a check was missing." Each pair had a correct value on both sides at some point,
 and nothing existed whose job was to notice when they diverged. That is why these survive: there is
