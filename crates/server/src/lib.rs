@@ -918,3 +918,288 @@ impl liberado_session::SessionAlert for NotifySessionAlert {
         }
     }
 }
+
+/// `liberado prompt [profile]` — print the system prompt a chat under `profile` would actually be
+/// given, composed from config alone.
+///
+/// # Why this exists
+///
+/// Three bugs in one evening (2026-07-28) were all the same question: *what is the model being told,
+/// and does it match what it is being handed?* A `basic-chat` session was handed the face-agent
+/// prompt while holding no `delegate`, so it announced work and did none; then it was told it had no
+/// tools while its grant plainly listed two. Each took a ~17-minute build and a live run to see.
+/// None of them needed a daemon to diagnose — every one was visible in the composed prompt.
+///
+/// This is the seam-sweep argument applied to prompts: stop deploying to find out what you are
+/// sending.
+///
+/// # What it can and cannot resolve
+///
+/// Config knows a per-tool grant exactly — `ExecuteTool("turbovault:tasks_list")` *is* the tool name.
+/// It cannot expand a whole-server grant, which becomes whatever that server currently advertises
+/// and is known only to a connected daemon. Those print as `<mcp>:*` and are marked, rather than
+/// quietly rendered as if they were resolved names: a debugging tool that hides its own uncertainty
+/// is worse than one that admits it. A `--live` variant against a running daemon can share this
+/// renderer later; the config version is the one that runs in CI and mid-debug, before deploying.
+///
+/// The prompt body comes from [`liberado_main_agent::tool_manifest`] — the same function the turn
+/// injects — so this cannot drift from what the model reads.
+pub fn show_prompt(
+    dir: Option<&Path>,
+    profile: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let resolved = dir
+        .map(Path::to_path_buf)
+        .or_else(liberado_bootstrap::config_dir);
+    let (config, _) = liberado_bootstrap::load_config(resolved.as_deref())?;
+    print!("{}", compose_chat_prompt(&config, profile)?.render());
+    Ok(())
+}
+
+/// The system-prompt view a chat under a given profile would be given.
+///
+/// Returned rather than printed so it can be asserted on. `show_prompt` is the thin printing
+/// wrapper; every property worth testing lives here. A composer that could only print would be
+/// checkable solely by running the binary and reading it — which is the situation this command
+/// exists to end, reproduced one level down.
+pub struct ChatPromptPreview {
+    pub profile: Option<String>,
+    pub delegation: bool,
+    pub model: Option<String>,
+    /// Whole-server grants, whose tool lists only a connected daemon can expand.
+    pub unresolved_mcps: Vec<String>,
+    /// The system messages the turn would assemble, **in order**: base prompt, the profile's nudge
+    /// if it has one, then the tool manifest. Mirrors what `ChatSessions` injects per turn.
+    pub system_messages: Vec<String>,
+}
+
+impl ChatPromptPreview {
+    /// The human-readable report `liberado prompt` prints.
+    pub fn render(&self) -> String {
+        use std::fmt::Write as _;
+        let rule = "─".repeat(76);
+        let mut out = String::new();
+        let label = self
+            .profile
+            .as_deref()
+            .unwrap_or("(no profile — the daemon default)");
+        let _ = writeln!(out, "system prompt for a chat under: {label}");
+        let _ = writeln!(out, "  delegation: {}", self.delegation);
+        if let Some(model) = &self.model {
+            let _ = writeln!(
+                out,
+                "  model:      {model}  (carried, not yet applied — CH4)"
+            );
+        }
+        for mcp in &self.unresolved_mcps {
+            let _ = writeln!(
+                out,
+                "  note:       '{mcp}' is a whole-server grant; its tools resolve at runtime"
+            );
+        }
+        let _ = writeln!(out, "\n{rule}");
+        let _ = writeln!(out, "{}", self.system_messages.join("\n\n"));
+        let _ = writeln!(out, "{rule}");
+        out
+    }
+}
+
+/// Compose what a chat under `profile` would be told, from `config` alone.
+///
+/// Mirrors the turn's own assembly order deliberately: base prompt, profile nudge, tool manifest
+/// last. If that order ever diverges from `ChatSessions`, this command starts lying — which is why
+/// the manifest text itself comes from [`liberado_main_agent::tool_manifest`] rather than being
+/// re-worded here.
+pub fn compose_chat_prompt(
+    config: &liberado_config::Config,
+    profile: Option<&str>,
+) -> Result<ChatPromptPreview, Box<dyn std::error::Error>> {
+    use liberado_common::Capability;
+
+    // "main-agent" is the fallback grant a chat with no profile runs under — the same component
+    // `run` reads at boot. A wrong fallback here would make the no-profile case a fiction.
+    let resolved = config.resolve_session_profile(profile, "main-agent")?;
+    let main_agent = &config.topology.main_agent;
+
+    // Delegation decides which built-in prompt applies, exactly as the daemon decides it: the
+    // profile's setting when it states one, else the daemon default.
+    let delegation = resolved.delegation.unwrap_or(main_agent.delegation_mode);
+    let base = main_agent.system_prompt.clone().unwrap_or_else(|| {
+        if delegation {
+            liberado_main_agent::HUMAN_INTERFACE_SYSTEM_PROMPT.to_string()
+        } else {
+            liberado_main_agent::DEFAULT_SYSTEM_PROMPT.to_string()
+        }
+    });
+
+    // Per-tool grants are exact; whole-server grants are not resolvable without a live catalog, so
+    // they print as `<mcp>:*` and are called out rather than quietly rendered as resolved names.
+    let mut names: Vec<String> = Vec::new();
+    let mut unresolved_mcps: Vec<String> = Vec::new();
+    for capability in &resolved.capabilities.capabilities {
+        match capability {
+            Capability::ExecuteTool(qualified) => names.push(qualified.clone()),
+            Capability::ExecuteMcp(mcp) => {
+                names.push(format!("{mcp}:*"));
+                unresolved_mcps.push(mcp.clone());
+            }
+            _ => {}
+        }
+    }
+    // `delegate` is not a granted MCP — it is built in, and only when the session may delegate.
+    if delegation {
+        names.insert(0, liberado_main_agent::DELEGATE_TOOL_NAME.to_string());
+    }
+
+    let mut system_messages = vec![base];
+    let nudge: Option<&str> = resolved.prompt_append.as_deref().map(str::trim);
+    if let Some(extra) = nudge.filter(|t| !t.is_empty()) {
+        system_messages.push(extra.to_string());
+    }
+    let borrowed: Vec<&str> = names.iter().map(String::as_str).collect();
+    system_messages.push(liberado_main_agent::tool_manifest(&borrowed));
+
+    Ok(ChatPromptPreview {
+        profile: profile.map(str::to_string),
+        delegation,
+        model: resolved.model,
+        unresolved_mcps,
+        system_messages,
+    })
+}
+
+#[cfg(test)]
+mod prompt_preview_tests {
+    use super::*;
+    use liberado_config::Config;
+
+    /// A config with one `basic-chat`-shaped profile: no dispatch, a nudge, one whole-server grant
+    /// and two named tools.
+    fn config_with_basic_chat() -> Config {
+        let toml = r#"
+vault_path = "/tmp/vault"
+
+[main_agent]
+delegation_mode = true
+
+# Declared because the loader refuses a profile naming an MCP that does not exist — the fail-closed
+# check that makes "config names a tool the toolset lacks" unrepresentable here.
+[[mcps]]
+name = "liberado-search-orchestrator-mcp"
+description = "search"
+consequence = "read_only"
+transport = { kind = "http", url = "http://search:8080" }
+
+[[mcps]]
+name = "turbovault"
+description = "vault"
+consequence = "read_only"
+transport = { kind = "http", url = "http://turbovault:3001" }
+
+[[session_profiles]]
+name          = "basic-chat"
+delegation    = false
+prompt_append = "Answer directly and briefly."
+read  = []
+write = []
+mcps  = [
+  "liberado-search-orchestrator-mcp",
+  { name = "turbovault", tools = ["tasks_list"] },
+]
+"#;
+        // Written to a real directory and loaded through the real loader, rather than assembled
+        // in memory: the point of this command is to report what the *config* produces, so a
+        // fixture that skipped parsing could pass while the file it stands for failed to load.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("topology.toml"), toml).expect("write topology");
+        let (config, _) = liberado_config::load_config(Some(dir.path())).expect("fixture config");
+        config
+    }
+
+    /// The bug this command exists for, catchable **from config, with no daemon**.
+    ///
+    /// Live on 2026-07-28 a `basic-chat` session was handed the face-agent prompt — "you are a face
+    /// agent, not a tool user… call the `delegate` tool" — while holding no `delegate`. It announced
+    /// work and did none. Finding that cost a 17-minute build and a browserless run. This assertion
+    /// is the same finding in milliseconds.
+    #[test]
+    fn a_non_delegating_profile_is_not_described_as_a_face_agent() {
+        let config = config_with_basic_chat();
+        let preview = compose_chat_prompt(&config, Some("basic-chat")).unwrap();
+
+        assert!(!preview.delegation);
+        assert_eq!(
+            preview.system_messages[0],
+            liberado_main_agent::DEFAULT_SYSTEM_PROMPT
+        );
+        assert!(
+            !preview.system_messages[0].contains("delegate"),
+            "a chat that cannot delegate must not be told to call `delegate`"
+        );
+        let manifest = preview.system_messages.last().unwrap();
+        assert!(
+            !manifest.contains("delegate"),
+            "and `delegate` must not appear in its tool list either: {manifest}"
+        );
+    }
+
+    /// The composed order must mirror what `ChatSessions` injects per turn — base, nudge, manifest.
+    /// If these diverge the command reports a prompt nobody is ever given.
+    #[test]
+    fn the_composed_order_mirrors_the_turn() {
+        let preview = compose_chat_prompt(&config_with_basic_chat(), Some("basic-chat")).unwrap();
+        assert_eq!(preview.system_messages.len(), 3);
+        assert_eq!(preview.system_messages[1], "Answer directly and briefly.");
+        assert!(
+            preview.system_messages[2].contains("available to you on this turn"),
+            "the manifest must be last, as it is in the turn"
+        );
+    }
+
+    /// Per-tool grants render exactly; whole-server grants cannot be resolved without a live daemon
+    /// and must say so rather than pretending to be a resolved name.
+    #[test]
+    fn whole_server_grants_are_marked_rather_than_faked() {
+        let preview = compose_chat_prompt(&config_with_basic_chat(), Some("basic-chat")).unwrap();
+        let manifest = preview.system_messages.last().unwrap();
+
+        assert!(manifest.contains("turbovault:tasks_list"), "{manifest}");
+        assert!(
+            manifest.contains("liberado-search-orchestrator-mcp:*"),
+            "an unexpandable grant must be visibly unexpanded: {manifest}"
+        );
+        assert_eq!(
+            preview.unresolved_mcps,
+            vec!["liberado-search-orchestrator-mcp".to_string()],
+            "and the caller must be told which names are approximate"
+        );
+    }
+
+    /// A chat naming no profile inherits the daemon's delegation mode and gets `delegate` — the
+    /// path every pre-existing conversation is on, so a regression here is the widest possible.
+    #[test]
+    fn no_profile_inherits_the_daemon_default() {
+        let preview = compose_chat_prompt(&config_with_basic_chat(), None).unwrap();
+        assert!(preview.delegation, "must inherit delegation_mode = true");
+        assert_eq!(
+            preview.system_messages[0],
+            liberado_main_agent::HUMAN_INTERFACE_SYSTEM_PROMPT
+        );
+        assert!(
+            preview
+                .system_messages
+                .last()
+                .unwrap()
+                .contains(liberado_main_agent::DELEGATE_TOOL_NAME),
+            "a delegating chat's one tool is `delegate`"
+        );
+    }
+
+    /// An unknown profile must be an error, not a silent fall-through to the default — the same
+    /// rule the switching endpoint enforces, for the same reason: a typo resolving to "no profile"
+    /// means quietly reporting the *wider* grant.
+    #[test]
+    fn an_unknown_profile_is_refused() {
+        assert!(compose_chat_prompt(&config_with_basic_chat(), Some("nope")).is_err());
+    }
+}

@@ -87,6 +87,32 @@ When work is delegated, say so briefly, then present the result clearly.
 
 You are the human's partner for understanding what they want. Delegation is how work gets done.";
 
+/// The exact text [`Conversation::apply_available_tools`] injects, rendered from tool names alone.
+///
+/// Public and name-based so the `liberado prompt` inspector prints **what the model is actually
+/// told**, not a paraphrase of it. An inspector rendering its own wording would be a debugging tool
+/// able to disagree with the thing it is debugging — this design's own failure mode, rebuilt inside
+/// the diagnostics.
+///
+/// Takes `&[&str]` rather than `&[ToolDef]` because the inspector works from config, where a
+/// whole-server grant is known only as `<mcp>:*` and carries no schema to offer.
+pub fn tool_manifest(tool_names: &[&str]) -> String {
+    if tool_names.is_empty() {
+        // A sentence, not an omission: silence here is what invites the model to promise a lookup
+        // it cannot perform.
+        "You have no tools on this turn. Answer from this conversation alone. Do not offer to look \
+         anything up, and do not say you will fetch, check, or retrieve anything — you cannot."
+            .to_string()
+    } else {
+        format!(
+            "The tools available to you on this turn are exactly: {}.\n\nThis list is current and \
+             complete. Any tool used earlier in this conversation that is absent here has since \
+             been withdrawn — trust this list over the transcript.",
+            tool_names.join(", ")
+        )
+    }
+}
+
 /// A multi-turn conversation: the system prompt plus every exchanged message, in order.
 pub struct Conversation {
     messages: Vec<Message>,
@@ -257,20 +283,8 @@ impl Conversation {
     /// conditional here is a variation point, and enough of them reproduce the failure this whole
     /// design is meant to avoid.
     pub fn apply_available_tools(&mut self, tools: &[ToolDef]) {
-        let body = if tools.is_empty() {
-            "You have no tools on this turn. Answer from this conversation alone. Do not offer to \
-             look anything up, and do not say you will fetch, check, or retrieve anything — you \
-             cannot."
-                .to_string()
-        } else {
-            let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-            format!(
-                "The tools available to you on this turn are exactly: {}.\n\nThis list is current \
-                 and complete. Any tool used earlier in this conversation that is absent here has \
-                 since been withdrawn — trust this list over the transcript.",
-                names.join(", ")
-            )
-        };
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        let body = tool_manifest(&names);
         let insert_at = self
             .messages
             .iter()
