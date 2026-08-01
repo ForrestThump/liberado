@@ -84,11 +84,38 @@ jobs:
     name: cargo-deny (advisories + licenses)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout liberado
         uses: actions/checkout@v4
 
+      # The siblings are checked out here for the same reason as in `test`, and it is easy to miss
+      # why: cargo-deny resolves the *whole* dependency graph, so it needs the path deps present
+      # even though it compiles nothing. Without these the job fails inside `cargo metadata`
+      # ("failed to load source for dependency `turbomcp`") before reading a single advisory — a
+      # red that looks like a dependency problem and is not one.
+      - name: Checkout turbovault (sibling path dep)
+        uses: actions/checkout@v4
+        with:
+          repository: ForrestThump/turbovault
+          ref: develop
+          path: turbovault
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+
+      - name: Checkout turbomcp (sibling path dep)
+        uses: actions/checkout@v4
+        with:
+          repository: ForrestThump/turbomcp
+          ref: develop
+          path: turbomcp
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+
+      # Deliberately not EmbarkStudios/cargo-deny-action: it runs inside a `rust:1.85-alpine`
+      # container, where `rust-toolchain.toml`'s 1.94.1 pin is an uninstalled override and rustup
+      # refuses to proceed. Installing the binary on the runner keeps every job on the one pinned
+      # toolchain, which is the whole point of that file.
       - name: Install cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
 
       - name: Deny check
         run: cargo deny check
