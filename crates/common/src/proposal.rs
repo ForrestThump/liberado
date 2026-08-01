@@ -736,7 +736,6 @@ mod proptest_tests {
     /// adapter (doc'd on `requested_grant`) sidesteps this only in `from_note` — the
     /// frontmatter path still routes through raw `serde_yaml`.
     fn arb_cap() -> impl Strategy<Value = Capability> {
-        let zone = ".{1,20}";
         prop_oneof![
             ".{1,20}".prop_map(Capability::ExecuteMcp),
             ".{1,20}".prop_map(Capability::ExecuteTool),
