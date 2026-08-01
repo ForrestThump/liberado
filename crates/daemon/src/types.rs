@@ -163,6 +163,11 @@ pub struct Daemon {
     /// wiring overrides it via [`with_proposal_signer`](Self::with_proposal_signer) with the same
     /// installation-wide signer every proposal-creation site uses, so signatures actually match.
     pub(crate) signer: ProposalSigner,
+    /// Where human approval decisions actually live — outside the vault, unreachable by any tool.
+    ///
+    /// `None` only in fixtures that never execute a proposal. In a built daemon it is always
+    /// present, and its absence refuses rather than permits: see `handle_proposal_change`.
+    pub(crate) approvals: Option<liberado_common::ApprovalLedger>,
     /// Told about every proposal this daemon writes (dispatcher pre-flight `Propose` path) —
     /// optional, `None` by default. Best-effort: a notification failure never blocks the write.
     pub(crate) notifier: Option<Arc<dyn Notifier>>,

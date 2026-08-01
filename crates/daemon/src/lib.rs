@@ -56,6 +56,7 @@ impl Daemon {
             session_profile_caps: HashMap::new(),
             pools: HashMap::new(),
             signer: ProposalSigner::random(),
+            approvals: None,
             notifier: None,
             cron_source: None,
             event_tx: Some(event_tx),
@@ -147,6 +148,17 @@ impl Daemon {
     /// `open()` generates by default. Production callers pass the same installation-wide signer
     /// every proposal-creation site (`Orchestrator`, `RiskGatedToolRuntime`) uses — see
     /// `liberado_bootstrap::configure_daemon`.
+    /// Attach the ledger the daemon consults before executing an approved proposal.
+    ///
+    /// Without it, nothing executes: a proposal note saying `status: approved` is a claim, and the
+    /// ledger is the only thing that corroborates it. A daemon built without one is a daemon that
+    /// approves nothing, which is the correct direction for a missing security dependency.
+    #[must_use]
+    pub fn with_approval_ledger(mut self, ledger: liberado_common::ApprovalLedger) -> Self {
+        self.approvals = Some(ledger);
+        self
+    }
+
     pub fn with_proposal_signer(mut self, signer: ProposalSigner) -> Self {
         self.signer = signer;
         self

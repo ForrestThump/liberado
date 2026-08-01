@@ -108,6 +108,7 @@ impl DispatchBridge {
                     capabilities,
                     profile: None,
                     overrides: serde_json::Value::Null,
+                    ..Default::default()
                 },
             )
             .await

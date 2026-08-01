@@ -13,6 +13,7 @@ async-trait = { workspace = true }
 liberado-common = { workspace = true }
 liberado-executor = { workspace = true }
 liberado-provider = { workspace = true }
+liberado-notify = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

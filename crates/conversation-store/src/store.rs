@@ -5,6 +5,7 @@
 //! ([`leaf_path`](ConversationStore::leaf_path)) and the control-plane random access
 //! ([`node`](ConversationStore::node)) are the only reads orchestration actually needs.
 
+use liberado_session::SessionGrant;
 use ulid::Ulid;
 
 use crate::error::StoreResult;
@@ -47,6 +48,18 @@ pub trait ConversationStore: Send + Sync {
     /// Used by: first-message default, future flash-title agent, `PATCH /api/conversations/{id}`,
     /// and a future `/title` slash command. Titles are display-only and always overwritable.
     async fn set_title(&self, conversation: Ulid, title: String) -> StoreResult<()>;
+
+    /// Replace the authority a conversation runs under — its session profile.
+    ///
+    /// **Replaces, not narrows.** A profile switch is a human re-authorising their own chat from
+    /// operator-authored config, which is a different act from delegation: narrow-only (Decision 4)
+    /// governs `base ∩ narrowing` when a session *spawns* another, and still does. Intersecting here
+    /// instead would mean a profile could never grant an MCP the chat's current grant lacks, which is
+    /// most of what profiles are for.
+    ///
+    /// The caller is responsible for the switch being a human act. Nothing about this method
+    /// enforces that, and nothing should register it as a tool.
+    async fn set_grant(&self, conversation: Ulid, grant: SessionGrant) -> StoreResult<()>;
 
     /// Permanently remove a conversation and every node in it.
     ///

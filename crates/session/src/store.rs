@@ -587,4 +587,408 @@ mod tests {
             .await;
         assert_eq!(store.events("s3").await.unwrap().len(), 1);
     }
+
+    #[tokio::test]
+    async fn push_event_human_input_clears_awaiting_flag() {
+        let store = GoalSessionStore::new();
+        let id = "s4-awaiting-test";
+        store.insert(record(id, "test")).await;
+        store.set_status(id, SessionStatus::Running).await;
+
+        store
+            .push_event(SessionEvent::new(
+                id,
+                SessionEventKind::AwaitingInput {
+                    prompt: "title?".into(),
+                    options: vec![],
+                },
+            ))
+            .await;
+        assert!(store.get(id).await.unwrap().awaiting_input);
+
+        store
+            .push_event(SessionEvent::new(
+                id,
+                SessionEventKind::HumanInput {
+                    text: "answer".into(),
+                },
+            ))
+            .await;
+        assert!(!store.get(id).await.unwrap().awaiting_input);
+    }
+
+    #[test]
+    fn sanitize_id_preserves_allowed_chars() {
+        assert_eq!(sanitize_id("abc123"), "abc123");
+        assert_eq!(sanitize_id("a-b_c"), "a-b_c");
+    }
+
+    #[test]
+    fn sanitize_id_replaces_disallowed_chars() {
+        assert_eq!(sanitize_id("a/b.c"), "a_b_c");
+        assert_eq!(sanitize_id("hello world"), "hello_world");
+        assert_eq!(sanitize_id("a👋b"), "a_b");
+    }
+
+    #[tokio::test]
+    async fn rehydration_tolerates_truncated_last_line() {
+        let dir = std::env::temp_dir().join(format!("liberado-test-trunc-{}", ulid::Ulid::new()));
+        let _ = std::fs::create_dir_all(&dir);
+        let log = dir.join("s-trunc.jsonl");
+        let start_line = serde_json::to_string(&LogLine::Start {
+            record: Box::new(make_test_record("s-trunc")),
+        })
+        .unwrap();
+        let truncated = &start_line[..start_line.len() / 3];
+        std::fs::write(&log, format!("{}\n", truncated)).unwrap();
+
+        let store = GoalSessionStore::open(&dir).await;
+        assert!(store.get("s-trunc").await.is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn rehydration_flags_missing_finish_as_failed() {
+        let dir = std::env::temp_dir().join(format!("liberado-test-missfin-{}", ulid::Ulid::new()));
+        let _ = std::fs::create_dir_all(&dir);
+        let log = dir.join("s-missfin.jsonl");
+        let mut lines = vec![
+            serde_json::to_string(&LogLine::Start {
+                record: Box::new(make_test_record("s-missfin")),
+            })
+            .unwrap(),
+        ];
+        lines.push(
+            serde_json::to_string(&LogLine::Status {
+                status: SessionStatus::Running,
+                finished_at: None,
+            })
+            .unwrap(),
+        );
+        std::fs::write(&log, lines.join("\n") + "\n").unwrap();
+
+        let store = GoalSessionStore::open(&dir).await;
+        let rec = store.get("s-missfin").await.expect("session must exist");
+        assert_eq!(rec.status, SessionStatus::Failed);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn rehydration_skips_duplicate_start() {
+        let dir = std::env::temp_dir().join(format!("liberado-test-dup-{}", ulid::Ulid::new()));
+        let _ = std::fs::create_dir_all(&dir);
+        let log = dir.join("s-dup.jsonl");
+        let start = serde_json::to_string(&LogLine::Start {
+            record: Box::new(make_test_record("s-dup")),
+        })
+        .unwrap();
+        std::fs::write(&log, format!("{}\n{}\n", start, start)).unwrap();
+
+        let store = GoalSessionStore::open(&dir).await;
+        let rec = store.get("s-dup").await.expect("session must exist");
+        assert_eq!(rec.status, SessionStatus::Failed);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn rehydration_skips_unknown_tag() {
+        let dir = std::env::temp_dir().join(format!("liberado-test-unknown-{}", ulid::Ulid::new()));
+        let _ = std::fs::create_dir_all(&dir);
+        let log = dir.join("s-unknown.jsonl");
+        let start = serde_json::to_string(&LogLine::Start {
+            record: Box::new(make_test_record("s-unknown")),
+        })
+        .unwrap();
+        let finish = serde_json::to_string(&LogLine::Finish {
+            status: SessionStatus::Succeeded,
+            result: crate::GoalResult {
+                terminal: crate::TerminalKind::Succeeded,
+                summary: "done".into(),
+                artifacts: vec![],
+                diagnostics: serde_json::json!({}),
+            },
+            finished_at: chrono::Utc::now(),
+        })
+        .unwrap();
+        std::fs::write(
+            &log,
+            format!(
+                "{}\n{}\n{}\n",
+                start, r#"{"t":"future_feature","data":"hello"}"#, finish,
+            ),
+        )
+        .unwrap();
+
+        let store = GoalSessionStore::open(&dir).await;
+        let rec = store.get("s-unknown").await.expect("session must exist");
+        assert_eq!(rec.status, SessionStatus::Succeeded);
+        assert!(rec.finished_at.is_some());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn rehydration_tolerates_scrambled_json_value() {
+        let dir = std::env::temp_dir().join(format!("liberado-test-scram-{}", ulid::Ulid::new()));
+        let _ = std::fs::create_dir_all(&dir);
+        let log = dir.join("s-scrambled.jsonl");
+        let start = serde_json::to_string(&LogLine::Start {
+            record: Box::new(make_test_record("s-scrambled")),
+        })
+        .unwrap();
+        let mut corrupted = start.clone();
+        corrupted.replace_range(20..24, "!!!!");
+        std::fs::write(&log, format!("{}\n", corrupted)).unwrap();
+
+        let store = GoalSessionStore::open(&dir).await;
+        assert!(store.get("s-scrambled").await.is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn make_test_record(id: &str) -> crate::GoalSessionRecord {
+        crate::GoalSessionRecord {
+            id: id.into(),
+            goal: crate::GoalSpec {
+                id: None,
+                description: "test".into(),
+                success_criteria: vec![],
+                domain: crate::DomainHint::Life,
+                max_turns: 5,
+                max_idle_secs: None,
+                origin: None,
+                profile: None,
+                payload: serde_json::json!({}),
+            },
+            grant: Default::default(),
+            visibility: crate::Visibility::Foreground,
+            status: SessionStatus::Pending,
+            created_at: chrono::Utc::now(),
+            finished_at: None,
+            result: None,
+            event_count: 0,
+            awaiting_input: false,
+        }
+    }
+}
+
+/// Property tests over [`GoalSessionStore`]'s mutation surface: after *every* op of any random
+/// (but legal) op sequence, every stored record must pass
+/// [`check_session_invariants`](crate::goal::check_session_invariants). The store's methods are
+/// async, but ops are in-process and fast, so a single current-thread Tokio runtime (via
+/// `block_on`) drives the whole fuzz cheaply.
+///
+/// # Why the op strategy is deliberately *legal*
+///
+/// `GoalSessionStore::set_status` can reach a state that `check_session_invariants` rejects —
+/// a terminal status sets `finished_at` but no `result` (violating "both must be set or neither"),
+/// and any status on an already-finished session violates the per-status rules. Those are real
+/// gaps in the store's surface, not the state machine's fault; the terminal path is `finish`, and
+/// this test only generates sequences that respect that split, so it verifies the *machine's*
+/// invariants hold rather than rediscovering the store's known escape hatches.
+#[cfg(test)]
+mod proptest_tests {
+    use proptest::prelude::*;
+    use std::sync::OnceLock;
+
+    use super::GoalSessionStore;
+    use crate::goal::{
+        DomainHint, GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionStatus,
+        TerminalKind, check_session_invariants,
+    };
+
+    /// One store mutation. `Insert` carries its session id inside the record; the status/finish
+    /// ops name the session they target.
+    #[derive(Debug, Clone)]
+    enum StoreOp {
+        Insert(Box<GoalSessionRecord>),
+        SetStatus(String, SessionStatus),
+        Finish(String, SessionStatus, GoalResult),
+    }
+
+    /// A session id drawn from a small fixed pool — the sequence "targets 1-3 session IDs".
+    fn session_id() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("session-1".to_string()),
+            Just("session-2".to_string()),
+            Just("session-3".to_string()),
+        ]
+    }
+
+    /// A valid initial record for `id`: `Pending`, no result, not finished, not awaiting input —
+    /// every `check_session_invariants` precondition. Randomizing the goal and visibility keeps
+    /// the store honest without ever inserting a record that starts out invalid.
+    fn record_for(id: String) -> impl Strategy<Value = GoalSessionRecord> {
+        ("[a-zA-Z0-9 ]{0,60}", 0u32..=10, any::<bool>()).prop_map(
+            move |(description, max_turns, background)| {
+                let goal = GoalSpec {
+                    id: Some(id.clone()),
+                    description,
+                    success_criteria: vec![],
+                    domain: DomainHint::Coding,
+                    max_turns,
+                    max_idle_secs: None,
+                    origin: None,
+                    profile: None,
+                    payload: serde_json::json!({}),
+                };
+                if background {
+                    GoalSessionRecord::background(goal, SessionGrant::default())
+                } else {
+                    GoalSessionRecord::new(goal)
+                }
+            },
+        )
+    }
+
+    /// Non-terminal statuses only. A terminal `set_status` would set `finished_at` without a
+    /// `result` (the store's terminal path is `finish`), and `Parked` requires `awaiting_input`,
+    /// which no op here can set — neither can ever satisfy `check_session_invariants`.
+    fn nonterminal_status() -> impl Strategy<Value = SessionStatus> {
+        prop_oneof![Just(SessionStatus::Pending), Just(SessionStatus::Running),]
+    }
+
+    /// A terminal finish: status and result paired from the same `TerminalKind` so the record
+    /// stays coherent.
+    fn finish_payload() -> impl Strategy<Value = (SessionStatus, GoalResult)> {
+        prop_oneof![
+            Just(TerminalKind::Succeeded),
+            Just(TerminalKind::Failed),
+            Just(TerminalKind::Cancelled),
+            Just(TerminalKind::BudgetExhausted),
+        ]
+        .prop_flat_map(|kind| {
+            (
+                "[a-zA-Z0-9 ]{0,60}",
+                proptest::collection::vec("[a-zA-Z0-9._/-]{0,40}", 0..5),
+            )
+                .prop_map(move |(summary, artifacts)| {
+                    let status = SessionStatus::from(kind);
+                    let result = GoalResult {
+                        terminal: kind,
+                        summary,
+                        artifacts,
+                        diagnostics: serde_json::json!({}),
+                    };
+                    (status, result)
+                })
+        })
+    }
+
+    /// Random ops over 1-3 session ids. Each id gets exactly one role — status-transitions OR
+    /// terminal-finish, never both — so a `SetStatus` can never land on a session that `Finish`
+    /// already made terminal (the one transition `set_status` cannot do without breaking
+    /// `check_session_invariants`). When a role pool comes up empty (a single id, or all ids the
+    /// same role), that op kind targets a missing id instead: always a no-op, always clean.
+    fn store_ops_strategy() -> impl Strategy<Value = Vec<StoreOp>> {
+        proptest::collection::vec(session_id(), 1..=3)
+            .prop_map(|mut ids| {
+                ids.sort();
+                ids.dedup();
+                ids
+            })
+            .prop_flat_map(|ids| {
+                let n = ids.len();
+                proptest::collection::vec(any::<bool>(), n).prop_flat_map(move |roles| {
+                    let status_ids: Vec<String> = ids
+                        .iter()
+                        .zip(&roles)
+                        .filter(|(_, status_role)| **status_role)
+                        .map(|(id, _)| id.clone())
+                        .collect();
+                    let finish_ids: Vec<String> = ids
+                        .iter()
+                        .zip(&roles)
+                        .filter(|(_, status_role)| !**status_role)
+                        .map(|(id, _)| id.clone())
+                        .collect();
+
+                    let insert_op = proptest::sample::select(ids.clone())
+                        .prop_flat_map(record_for)
+                        .prop_map(|r| StoreOp::Insert(Box::new(r)))
+                        .boxed();
+                    let set_status_op: BoxedStrategy<StoreOp> = if status_ids.is_empty() {
+                        Just(StoreOp::SetStatus(
+                            "ghost-session".into(),
+                            SessionStatus::Pending,
+                        ))
+                        .boxed()
+                    } else {
+                        proptest::sample::select(status_ids)
+                            .prop_flat_map(|id| {
+                                nonterminal_status()
+                                    .prop_map(move |status| StoreOp::SetStatus(id.clone(), status))
+                            })
+                            .boxed()
+                    };
+                    let finish_op: BoxedStrategy<StoreOp> = if finish_ids.is_empty() {
+                        Just(StoreOp::Finish(
+                            "ghost-session".into(),
+                            SessionStatus::Succeeded,
+                            GoalResult {
+                                terminal: TerminalKind::Succeeded,
+                                summary: "noop".into(),
+                                artifacts: vec![],
+                                diagnostics: serde_json::json!({}),
+                            },
+                        ))
+                        .boxed()
+                    } else {
+                        proptest::sample::select(finish_ids)
+                            .prop_flat_map(|id| {
+                                finish_payload().prop_map(move |(status, result)| {
+                                    StoreOp::Finish(id.clone(), status, result)
+                                })
+                            })
+                            .boxed()
+                    };
+
+                    proptest::collection::vec(
+                        prop_oneof![
+                            2 => insert_op,
+                            2 => set_status_op,
+                            1 => finish_op,
+                        ],
+                        0..=20,
+                    )
+                })
+            })
+            .boxed()
+    }
+
+    /// Apply the ops in order; after every op, every stored record must satisfy
+    /// `check_session_invariants`.
+    fn invariants_hold_after_random_ops(ops: Vec<StoreOp>) -> bool {
+        static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+        let rt = RT.get_or_init(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime for session-store proptests")
+        });
+        rt.block_on(async {
+            let store = GoalSessionStore::new();
+            for op in &ops {
+                match op {
+                    StoreOp::Insert(record) => store.insert(record.as_ref().clone()).await,
+                    StoreOp::SetStatus(id, status) => store.set_status(id, *status).await,
+                    StoreOp::Finish(id, status, result) => {
+                        store.finish(id, *status, result.clone()).await;
+                    }
+                }
+                for record in store.list().await {
+                    if let Err(msg) = check_session_invariants(&record) {
+                        eprintln!("invariant violated after {op:?}: {msg}\nrecord: {record:?}");
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_invariants_hold_after_random_ops(ops in store_ops_strategy()) {
+            prop_assert!(invariants_hold_after_random_ops(ops));
+        }
+    }
 }

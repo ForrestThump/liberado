@@ -389,4 +389,115 @@ mod tests {
         assert!(before.ends_with("\"b\": "), "got: {w}");
         assert!(after.starts_with('}'), "got: {w}");
     }
+
+    /// The line offset in window_around uses `line - 2`. When the error is on line 3, both `-` and
+    /// `/` produce the same result (`1`), so the existing multi-line test (line 3) wouldn't catch a
+    /// `-` → `/` mutation. Line 2 distinguishes them: `2 - 2 = 0` vs `2 / 2 = 1`.
+    #[test]
+    fn window_line_offset_on_line_2_is_correct() {
+        let reply = "{\n  \"b\": }\n}";
+        let err = serde_json::from_str::<serde_json::Value>(reply).unwrap_err();
+        assert_eq!(err.line(), 2, "precondition: failure on line 2");
+        let w = window_around(reply, err.line(), err.column());
+        let (before, after) = w.split_once("⟪HERE⟫").expect("marker present");
+        assert!(before.ends_with("\"b\": "), "got: {w}");
+        assert!(after.starts_with('}'), "got: {w}");
+    }
+
+    /// The ellipsis is shown when the content on either side of `⟪HERE⟫` exceeds `RADIUS` (160).
+    /// Mutations to the `>` operators on lines 254 and 260 (==, <, >=) change whether it appears.
+    #[test]
+    fn window_truncates_long_before_and_after() {
+        let long = format!("{}X{}", "a".repeat(200), "b".repeat(200));
+        let w = window_around(&long, 1, 200);
+        assert!(w.starts_with('…'), "long before should show ellipsis: {w}");
+        assert!(w.ends_with('…'), "long after should show ellipsis: {w}");
+        assert!(w.contains('X'), "offending token must be visible: {w}");
+    }
+
+    /// When the error is at exactly `RADIUS` characters from the start, `>` says no ellipsis
+    /// (160 > 160 is false) but `>=` would incorrectly show one.
+    #[test]
+    fn window_omits_ellipsis_at_exactly_radius() {
+        let s = format!("{}X{}", "a".repeat(160), "b".repeat(160));
+        let w = window_around(&s, 1, 161);
+        assert!(
+            !w.starts_with('…'),
+            "no ellipsis when before is exactly RADIUS: {w}"
+        );
+    }
+
+    #[test]
+    fn window_omits_tail_ellipsis_at_exactly_radius() {
+        let s = format!("{}X{}", "a".repeat(161), "b".repeat(159));
+        let w = window_around(&s, 1, 162);
+        assert!(
+            !w.ends_with('…'),
+            "no ellipsis when after is exactly RADIUS: {w}"
+        );
+    }
+
+    #[test]
+    fn has_json_schema_is_false_for_text_format() {
+        let req = CompletionRequest::new(vec![]);
+        assert!(!req.has_json_schema());
+    }
+
+    #[test]
+    fn has_json_schema_is_true_for_constraining_schema() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "action": { "type": "string" } },
+            "required": ["action"],
+        });
+        let req = CompletionRequest::new(vec![]).with_json_schema(schema);
+        assert!(req.has_json_schema());
+    }
+
+    #[test]
+    fn has_json_schema_is_false_for_shapeless_schema() {
+        for shapeless in [
+            serde_json::json!({ "type": "object" }),
+            serde_json::json!({}),
+            serde_json::json!(null),
+        ] {
+            let req = CompletionRequest::new(vec![]).with_json_schema(shapeless);
+            assert!(!req.has_json_schema());
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_stream_emits_no_tokens_for_empty_content() {
+        use futures::StreamExt;
+        let mock = crate::MockProvider::with_script("m", [crate::CompletionResponse::text("")]);
+        let mut stream = mock
+            .complete_stream(CompletionRequest::new(vec![]))
+            .await
+            .unwrap();
+        match stream.next().await {
+            Some(Ok(StreamItem::Done(_))) => {}
+            other => panic!("expected Done, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none(), "should only emit Done");
+    }
+
+    #[tokio::test]
+    async fn complete_stream_emits_no_tokens_for_pure_tool_calls() {
+        use futures::StreamExt;
+        let mock = crate::MockProvider::with_script(
+            "m",
+            [crate::CompletionResponse::tool_calls(vec![
+                crate::ToolInvocation::new("c1", "tool", serde_json::json!({})),
+            ])],
+        );
+        let mut stream = mock
+            .complete_stream(CompletionRequest::new(vec![]))
+            .await
+            .unwrap();
+        match stream.next().await {
+            Some(Ok(StreamItem::Done(_))) => {}
+            other => panic!("expected Done, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none(), "should only emit Done");
+    }
 }

@@ -409,6 +409,21 @@ pub enum ProposalNoteError {
     Yaml(#[from] serde_yaml::Error),
 }
 
+/// A pending proposal with canned values, for use by tests that need a valid `Proposal` without
+/// repeating construction boilerplate.
+pub fn sample_proposal() -> Proposal {
+    Proposal::pending(
+        "prop-sig",
+        "corr-sig",
+        "liberado",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "email:send".into(),
+            args: serde_json::json!({ "to": "boss@example.com" }),
+        }]),
+        "rationale",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,19 +530,6 @@ mod tests {
         let back: Proposal = serde_json::from_str(&json).unwrap();
         assert_eq!(p, back);
         assert_eq!(back.status, ProposalStatus::Pending);
-    }
-
-    fn sample_proposal() -> Proposal {
-        Proposal::pending(
-            "prop-sig",
-            "corr-sig",
-            "liberado",
-            ProposedAction::ToolCalls(vec![ToolCall {
-                tool: "email:send".into(),
-                args: serde_json::json!({ "to": "boss@example.com" }),
-            }]),
-            "rationale",
-        )
     }
 
     #[test]
@@ -653,5 +655,164 @@ mod tests {
         let signer_2 = ProposalSigner::new(key);
         let signed = signer_1.sign(sample_proposal());
         assert!(signer_2.verify(&signed));
+    }
+
+    #[test]
+    fn set_status_updates_status_in_place() {
+        let signer = ProposalSigner::random();
+        let mut signed = signer.sign(sample_proposal());
+        assert_eq!(signed.status, ProposalStatus::Pending);
+        signed.set_status(ProposalStatus::Approved);
+        assert_eq!(signed.status, ProposalStatus::Approved);
+    }
+}
+
+#[cfg(test)]
+mod proptest_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use proptest::strategy::Strategy;
+
+    fn arb_status() -> impl Strategy<Value = ProposalStatus> {
+        prop_oneof![
+            Just(ProposalStatus::Pending),
+            Just(ProposalStatus::Approved),
+            Just(ProposalStatus::Rejected),
+            Just(ProposalStatus::Expired),
+            Just(ProposalStatus::Done),
+        ]
+    }
+
+    fn arb_action() -> impl Strategy<Value = ProposedAction> {
+        let tool = (".{1,15}", arb_json()).prop_map(|(t, a)| ToolCall { tool: t, args: a });
+        let calls = proptest::collection::vec(tool, 0..3).prop_map(ProposedAction::ToolCalls);
+        let sub = (
+            ".{1,100}",
+            proptest::collection::vec(".{1,20}", 0..3),
+            proptest::collection::vec(".{1,20}", 0..2),
+            proptest::collection::vec(".{1,50}", 0..2),
+        )
+            .prop_map(
+                |(goal, mcps, all_mcps, criteria)| ProposedAction::Subagent {
+                    goal,
+                    capabilities: CapabilitySet::from_iter(
+                        mcps.into_iter().map(Capability::ExecuteMcp),
+                    ),
+                    allowed_mcps: all_mcps,
+                    success_criteria: criteria,
+                },
+            );
+        let vw = (".{1,20}", ".{1,200}").prop_map(|(path, cs)| ProposedAction::VaultWrite {
+            path,
+            content_summary: cs,
+        });
+        prop_oneof![5 => calls, 1 => sub, 1 => vw]
+    }
+
+    fn arb_json() -> impl Strategy<Value = serde_json::Value> {
+        let leaf = prop_oneof![
+            Just(serde_json::Value::Null),
+            any::<bool>().prop_map(serde_json::Value::Bool),
+            any::<f64>().prop_map(|n| serde_json::json!(n)),
+            ".{0,20}".prop_map(serde_json::Value::String),
+        ];
+        leaf.prop_recursive(2, 4, 3, |inner| {
+            prop_oneof![
+                proptest::collection::vec(inner.clone(), 0..3).prop_map(serde_json::Value::Array),
+                proptest::collection::vec((".{1,8}", inner.clone()), 0..3).prop_map(|pairs| {
+                    let mut m = serde_json::Map::new();
+                    for (k, v) in pairs {
+                        m.insert(k, v);
+                    }
+                    serde_json::Value::Object(m)
+                }),
+            ]
+        })
+    }
+
+    /// Only non-nested Capability variants (no Zone-applied Read/Write/ReadSummary) to avoid
+    /// `serde_yaml` panic on nested externally-tagged enums in `frontmatter.rs`.
+    /// ⚠️ Known defect: `Write(Zone)` panics `serde_yaml`. The `capability_json_string`
+    /// adapter (doc'd on `requested_grant`) sidesteps this only in `from_note` — the
+    /// frontmatter path still routes through raw `serde_yaml`.
+    fn arb_cap() -> impl Strategy<Value = Capability> {
+        prop_oneof![
+            ".{1,20}".prop_map(Capability::ExecuteMcp),
+            ".{1,20}".prop_map(Capability::ExecuteTool),
+            Just(Capability::AskHuman),
+        ]
+    }
+
+    /// Generate ASCII-only rationales to avoid `frontmatter.rs:19` byte-index panic
+    /// on multi-byte UTF-8 characters. ⚠️ Known defect: generating non-ASCII rationales
+    /// crashes `from_note`. See `docs/validation/property-testing-plan.md` §Tier 2 item #7.
+    fn arb_proposal() -> impl Strategy<Value = Proposal> {
+        (
+            "[a-zA-Z0-9]{26}",
+            "[a-zA-Z0-9-]{26}",
+            ".{1,50}",
+            "[ -~]{1,200}",
+            arb_action(),
+            arb_status(),
+            proptest::option::of(".{1,20}"), // pool
+            proptest::option::of(arb_cap()), // requested_grant
+            proptest::option::of(prop_oneof![
+                // approved_scope
+                Just(GrantScope::Once),
+                Just(GrantScope::Session),
+                Just(GrantScope::Everywhere),
+            ]),
+            proptest::option::of(
+                (-3600i64..3600i64).prop_map(|s| chrono::Utc::now() + chrono::Duration::seconds(s)),
+            ), // expires
+        )
+            .prop_map(
+                |(id, cid, src, rat, act, st, pool, grant, scope, expires)| Proposal {
+                    id,
+                    correlation_id: cid,
+                    source: src,
+                    proposed_action: act,
+                    rationale: rat,
+                    status: st,
+                    created: chrono::Utc::now(),
+                    integrity: String::new(),
+                    pool,
+                    requested_grant: grant,
+                    approved_scope: scope,
+                    expires,
+                },
+            )
+    }
+
+    proptest! {
+        #[test]
+        fn prop_proposal_note_roundtrip(p in arb_proposal()) {
+            let note = p.to_note();
+            let parsed = Proposal::from_note(&note).unwrap();
+            prop_assert_eq!(parsed.id, p.id);
+            prop_assert_eq!(parsed.proposed_action, p.proposed_action);
+            prop_assert_eq!(parsed.status, p.status);
+        }
+
+        #[test]
+        fn prop_signature_survives_note(p in arb_proposal()) {
+            let signer = ProposalSigner::random();
+            let signed = signer.sign(p.clone());
+            let note = signed.to_note();
+            let parsed = Proposal::from_note(&note).unwrap();
+            prop_assert!(signer.verify(&parsed));
+        }
+
+        #[test]
+        fn prop_edit_status_preserves_sig(p in arb_proposal()) {
+            if p.status != ProposalStatus::Pending { return Ok(()); }
+            let signer = ProposalSigner::random();
+            let signed = signer.sign(p);
+            let note = signed.to_note();
+            let edited = note.replacen("status: pending", "status: approved", 1);
+            let parsed = Proposal::from_note(&edited).unwrap();
+            prop_assert_eq!(parsed.status, ProposalStatus::Approved);
+            prop_assert!(signer.verify(&parsed));
+        }
     }
 }

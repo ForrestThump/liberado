@@ -368,3 +368,40 @@ impl ToolRuntime for PermittedRuntime {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+
+    struct NoopRuntime;
+    #[async_trait]
+    impl ToolRuntime for NoopRuntime {
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".into())
+        }
+    }
+    #[async_trait]
+    impl RebindableRuntime for NoopRuntime {
+        fn rebind_provenance(&mut self, _provenance: WriteProvenance) {}
+    }
+
+    #[test]
+    fn reap_idle_returns_zero_when_disabled() {
+        let policy = PoolPolicy {
+            enabled: false,
+            ..PoolPolicy::default()
+        };
+        let pool = ConnectionPool::new(policy);
+        assert_eq!(pool.reap_idle(), 0);
+    }
+
+    #[test]
+    fn connection_is_dead_defaults_to_false() {
+        let rt = NoopRuntime;
+        assert!(!rt.connection_is_dead());
+    }
+}

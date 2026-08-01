@@ -8,12 +8,14 @@
 //!   LIBERADO_VAULT=<vault> liberado  same, taking the vault from the environment
 //!   liberado chat [session-id]       the streaming terminal client of a running daemon
 //!   liberado config check            load + validate config, print a summary (or an error)
+//!   liberado prompt [profile]        print the system prompt a chat under <profile> would get
 //!
 //! `serve` runs in the foreground, hosting the vault watch loop and the chat/HTTP/SSE API until
 //! killed. `chat` is a thin HTTP/SSE client of a separately-running daemon (see [`chat_client`]).
 //! `config check` resolves the config dir (`LIBERADO_CONFIG_DIR` or the platform default) and runs
-//! the loader, reporting what it found or the first actionable error. Reactions are logged to stderr
-//! by the server; stdout is left for data.
+//! the loader, reporting what it found or the first actionable error. `prompt` composes the system
+//! prompt a chat would actually be given from that same config — the model's-eye view, without a
+//! daemon. Reactions are logged to stderr by the server; stdout is left for data.
 
 mod chat_client;
 
@@ -56,6 +58,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             _ => Err("usage: liberado config <check|explain>".into()),
         },
+        // `prompt [profile]` — what a chat under that profile is actually told, composed from
+        // config alone. No daemon, so it runs mid-debug and in CI, which is the point: the prompt
+        // and the tool list disagreeing is a class of bug that otherwise costs a deploy to see.
+        // A bare `prompt` shows the no-profile case.
+        Some("prompt") => liberado_server::show_prompt(None, args.next().as_deref()),
         Some("serve") => {
             let vault = args
                 .next()

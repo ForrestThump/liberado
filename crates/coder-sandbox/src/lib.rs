@@ -415,6 +415,32 @@ mod tests {
     }
 
     #[test]
+    fn capped_utf8_passes_through_at_exact_boundary() {
+        let text = capped_utf8(b"abc".to_vec(), 3);
+        assert_eq!(text, "abc");
+    }
+
+    #[test]
+    fn capped_utf8_passes_through_below_boundary() {
+        let text = capped_utf8(b"ab".to_vec(), 3);
+        assert_eq!(text, "ab");
+    }
+
+    #[test]
+    fn resolve_path_accepts_curdir_prefix() {
+        let (_dir, ws) = workspace();
+        let path = ws.resolve_path("./src/lib.rs").unwrap();
+        assert!(path.ends_with(Path::new("src/lib.rs")));
+    }
+
+    #[test]
+    fn resolve_path_accepts_intermediate_curdir() {
+        let (_dir, ws) = workspace();
+        let path = ws.resolve_path("src/./lib.rs").unwrap();
+        assert!(path.ends_with(Path::new("lib.rs")));
+    }
+
+    #[test]
     fn docker_workspace_builds_docker_run_args() {
         let dir = tempfile::tempdir().unwrap();
         let ws = DockerWorkspace::new(
@@ -458,6 +484,44 @@ mod tests {
                 "liberado-coder:latest".to_string()
             ]
         );
+
+        // Workspace volume mount at args[4] must reference /workspace.
+        assert!(
+            args[4].contains(":/workspace"),
+            "volume mount should reference /workspace, got: {0}",
+            args[4]
+        );
+        assert!(
+            !args[4].contains(":ro"),
+            "volume mount should not be read-only, got: {0}",
+            args[4]
+        );
+        let normalized_root = ws.root().to_string_lossy().replace('\\', "/");
+        assert!(
+            args[4].starts_with(&normalized_root),
+            "volume mount should start with host root, got: {0}",
+            args[4]
+        );
+    }
+
+    #[test]
+    fn docker_workspace_resolve_path_delegates_to_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = DockerWorkspace::new(
+            dir.path(),
+            DockerSandboxSpec {
+                image: "liberado-coder:latest".to_string(),
+                network: None,
+                env_allowlist: Vec::new(),
+                volumes: Vec::new(),
+                user: None,
+            },
+            CommandPolicy::default(),
+        )
+        .unwrap();
+        let path = ws.resolve_path("src/lib.rs").unwrap();
+        assert!(path.ends_with(Path::new("src/lib.rs")));
+        assert!(path.starts_with(ws.root()));
     }
 
     #[test]

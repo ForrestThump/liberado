@@ -46,8 +46,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use liberado_common::{
-    CapabilityCatalog, CapabilitySet, Consequence, DEFAULT_POOL, DispatchAction, McpDescriptor,
-    ProposalSigner, WriteClass,
+    Capability, CapabilityCatalog, CapabilitySet, Consequence, DEFAULT_POOL, DispatchAction,
+    McpDescriptor, ProposalSigner, WriteClass, mcp_of,
 };
 use liberado_conversation_store::{
     Author, ConversationHeader, ConversationStore, MessageNode, NewConversation, NewNode,
@@ -67,6 +67,13 @@ use crate::{Conversation, DEFAULT_SYSTEM_PROMPT, HUMAN_INTERFACE_SYSTEM_PROMPT};
 
 /// Max display length for the cheap first-line default title (UTF-8 chars).
 const DEFAULT_TITLE_MAX_CHARS: usize = 72;
+
+/// [`Author::Named`] identity of the note recording a session-profile switch.
+///
+/// Named rather than `Author::System` because a `system` node in this store is the face agent's
+/// prompt, and every reader drops those — the WebUI's history filter most visibly. A switch the
+/// human cannot see in the thread is not meaningfully recorded.
+pub const PROFILE_AUTHOR: &str = "profile";
 
 /// What the face agent's reply collapses to when its turn deferred a decision to the human
 /// out-of-band (Gap 2). The interactive proposal/permission notification is the real message;
@@ -109,6 +116,27 @@ pub fn default_conversation_title(user_text: &str) -> String {
         .collect();
     out.push('…');
     out
+}
+
+/// What one turn runs under, resolved from the session's profile (or the daemon's defaults).
+///
+/// A struct rather than three lookups so a profile switch cannot land between them — a turn running
+/// one profile's tools under another's delegation setting would be a genuinely confusing bug to
+/// chase, and the cost of preventing it is one type.
+struct TurnSettings {
+    capabilities: CapabilitySet,
+    /// Whether the face agent may `delegate`. Resolved: the profile's setting, else the daemon's.
+    delegation: bool,
+    /// Extra system-prompt text for this profile, injected per turn.
+    prompt_append: Option<String>,
+    /// The profile's name, for logging. `None` is "no profile named", which is distinct from a
+    /// profile that grants nothing — the distinction this plan keeps insisting on.
+    profile: Option<String>,
+    /// Model for this session's turns. `None` = the daemon's configured model.
+    ///
+    /// Resolved here with everything else for the reason this struct exists: a profile switch must
+    /// not land between two reads and give a turn one profile's model under another's tools.
+    model: Option<String>,
 }
 
 /// What can go wrong running a persisted turn: the agent loop failed, or the store did. Both are
@@ -402,7 +430,21 @@ impl ChatSessions {
     /// Persisting the prompt as the root (rather than re-injecting it on load) keeps the store the
     /// single source of truth for the whole history, system prompt included.
     pub async fn create(&self, title: Option<String>) -> SessionResult<Ulid> {
-        self.create_conversation(title, false).await
+        self.create_conversation(title, false, SessionGrant::default())
+            .await
+    }
+
+    /// Create a conversation running under an already-resolved session profile.
+    ///
+    /// The grant arrives resolved: turning a profile *name* into capabilities is
+    /// `Config::resolve_session_profile`'s job, and it fails closed on an unknown or disabled name,
+    /// so a typo can never reach here as "no profile" (which would silently mean the default grant).
+    pub async fn create_with_grant(
+        &self,
+        title: Option<String>,
+        grant: SessionGrant,
+    ) -> SessionResult<Ulid> {
+        self.create_conversation(title, false, grant).await
     }
 
     /// Create an **incognito** conversation: RAM only, never written to disk, never listed.
@@ -416,13 +458,15 @@ impl ChatSessions {
     /// incognito chat still writes what it writes — a vault note, a memory, an audit entry. What is
     /// ephemeral is the transcript, not the consequences.
     pub async fn create_incognito(&self, title: Option<String>) -> SessionResult<Ulid> {
-        self.create_conversation(title, true).await
+        self.create_conversation(title, true, SessionGrant::default())
+            .await
     }
 
     async fn create_conversation(
         &self,
         title: Option<String>,
         ephemeral: bool,
+        grant: SessionGrant,
     ) -> SessionResult<Ulid> {
         let header = self
             .store
@@ -431,6 +475,7 @@ impl ChatSessions {
                 parent_conversation: None,
                 spawned_by: None,
                 ephemeral,
+                grant,
             })
             .await?;
         self.store
@@ -444,6 +489,52 @@ impl ChatSessions {
             )
             .await?;
         Ok(header.id)
+    }
+
+    /// Switch a conversation onto a different session profile, and record that it happened.
+    ///
+    /// Two writes, both needed for different reasons:
+    ///
+    /// 1. **The header** carries the new grant, which is what the next turn reads. Append-only, so
+    ///    the previous header lines remain as the record of what ran before.
+    /// 2. **A transcript node**, so the switch is visible where the conversation is read and findable
+    ///    by `chat-search`. The header is authoritative but invisible — a change of authority the
+    ///    human cannot see in the thread is not meaningfully "recorded".
+    ///
+    /// Takes effect on the **next** turn: the tool runtime is rebuilt per turn from this grant, so an
+    /// in-flight turn finishes under the authority it started with rather than changing mid-flight.
+    ///
+    /// **Human-only by construction, not by check.** This is reachable from a surface endpoint and is
+    /// deliberately not registered as a tool anywhere, so no agent can re-authorise its own session.
+    /// If you are about to expose it to a model, that is the decision to revisit — not this method.
+    pub async fn set_profile(&self, conversation: Ulid, grant: SessionGrant) -> SessionResult<()> {
+        let label = grant.profile.clone();
+        self.store.set_grant(conversation, grant).await?;
+
+        // `Author::Named`, not `Author::System`: a `system` node in this store is the face agent's
+        // prompt, and every reader (the WebUI's history filter, compaction) drops those. A named
+        // author keeps the note visible and says who wrote it.
+        let parent_leaf = self
+            .store
+            .leaf_path(conversation, None)
+            .await?
+            .last()
+            .map(|n| n.id);
+        let note = match label {
+            Some(name) => format!("Session profile: {name}"),
+            None => "Session profile cleared — using the default grant.".to_string(),
+        };
+        self.store
+            .append(
+                conversation,
+                NewNode {
+                    parent_id: parent_leaf,
+                    author: Author::Named(PROFILE_AUTHOR.into()),
+                    message: Message::system(note),
+                },
+            )
+            .await?;
+        Ok(())
     }
 
     /// Fold a note into a conversation at its current leaf — the goal-session **return handoff**
@@ -489,12 +580,32 @@ impl ChatSessions {
         let (mut convo, parent_leaf) = self.maybe_compact(session, nodes, parent_leaf, user).await;
         let before = convo.len();
 
-        let reply = if self.uses_face_agent() {
+        // Read per turn, not cached: a profile switch mid-conversation takes effect on the next
+        // turn, which is the whole of "switchable" — no restart, no reconnect.
+        let settings = self.turn_settings(session).await;
+        // A profile's model applies to this turn only. Specialised per turn rather than set on the
+        // shared provider, so one chat choosing a model cannot change it for every other session.
+        let executor = self.executor.with_model(settings.model.clone());
+        // Resolved once: the prompt the model reads and the tools it is handed must agree, and
+        // deciding that twice is how they came apart in the first place.
+        let face_agent = self.uses_face_agent(settings.delegation);
+        if !face_agent {
+            convo.apply_direct_agent_prompt();
+        }
+        convo.apply_prompt_append(settings.prompt_append.as_deref());
+
+        let reply = if face_agent {
             let turn_deferral = Arc::new(AtomicBool::new(false));
-            let turn_runtime = self.build_face_runtime(user, session, turn_deferral.clone());
-            let reply = convo
-                .turn(&self.executor, turn_runtime.as_ref(), user)
-                .await?;
+            let turn_runtime = self.build_face_runtime(
+                user,
+                session,
+                settings.capabilities.clone(),
+                turn_deferral.clone(),
+            );
+            // Derived from the runtime the executor is about to be handed, never from a list built
+            // beside it — see `Conversation::apply_available_tools`.
+            self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
+            let reply = convo.turn(&executor, turn_runtime.as_ref(), user).await?;
             // Gap 2: if a `delegate` this turn deferred to the human out-of-band (an interactive
             // proposal/permission notification already landed on this surface), collapse the face
             // agent's now-redundant reply to a tiny pointer at that notification.
@@ -506,14 +617,18 @@ impl ChatSessions {
                     reply
                 }
                 DispatchOutcome::Proceed(relevant_mcps) => {
-                    let turn_runtime = self.build_turn_runtime(user, session, &relevant_mcps);
-                    convo
-                        .turn(&self.executor, turn_runtime.as_ref(), user)
-                        .await?
+                    let turn_runtime = self.build_turn_runtime(
+                        user,
+                        session,
+                        &relevant_mcps,
+                        &settings.capabilities,
+                    );
+                    self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
+                    convo.turn(&executor, turn_runtime.as_ref(), user).await?
                 }
             }
         };
-        self.persist_tail(session, &convo.history()[before..], parent_leaf)
+        self.persist_tail(session, convo.turn_tail(before), parent_leaf)
             .await?;
         Ok(reply)
     }
@@ -541,14 +656,31 @@ impl ChatSessions {
         let (mut convo, parent_leaf) = self.maybe_compact(session, nodes, parent_leaf, user).await;
         let before = convo.len();
 
-        if self.uses_face_agent() {
+        let settings = self.turn_settings(session).await;
+        let executor = self.executor.with_model(settings.model.clone());
+        let face_agent = self.uses_face_agent(settings.delegation);
+        if !face_agent {
+            convo.apply_direct_agent_prompt();
+        }
+        convo.apply_prompt_append(settings.prompt_append.as_deref());
+
+        if face_agent {
             // Streaming path (web-UI SSE): tokens are emitted live, so a post-turn deferral flag
             // can't retract an already-streamed reply — Gap 2 suppression is a buffered-`turn`
             // affordance (the Telegram surface). Pass a throwaway flag to satisfy the signature.
             let turn_deferral = Arc::new(AtomicBool::new(false));
-            let turn_runtime = self.build_face_runtime(user, session, turn_deferral);
+            // `settings.capabilities`, not a second lookup: `TurnSettings` exists so a profile
+            // switch cannot land between two reads of the same turn's authority, and this path was
+            // quietly doing exactly that.
+            let turn_runtime = self.build_face_runtime(
+                user,
+                session,
+                settings.capabilities.clone(),
+                turn_deferral,
+            );
+            self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
             convo
-                .turn_stream(&self.executor, turn_runtime.as_ref(), user, events)
+                .turn_stream(&executor, turn_runtime.as_ref(), user, events)
                 .await?;
         } else {
             match self.dispatch_turn(user).await {
@@ -559,20 +691,136 @@ impl ChatSessions {
                     let _ = events.send(AgentEvent::Token(reply)).await;
                 }
                 DispatchOutcome::Proceed(relevant_mcps) => {
-                    let turn_runtime = self.build_turn_runtime(user, session, &relevant_mcps);
+                    let turn_runtime = self.build_turn_runtime(
+                        user,
+                        session,
+                        &relevant_mcps,
+                        &settings.capabilities,
+                    );
+                    self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
                     convo
-                        .turn_stream(&self.executor, turn_runtime.as_ref(), user, events)
+                        .turn_stream(&executor, turn_runtime.as_ref(), user, events)
                         .await?;
                 }
             }
         }
-        self.persist_tail(session, &convo.history()[before..], parent_leaf)
+        self.persist_tail(session, convo.turn_tail(before), parent_leaf)
             .await?;
         Ok(())
     }
 
-    fn uses_face_agent(&self) -> bool {
-        self.delegation_mode && self.face_bridge.is_some()
+    /// Whether this turn runs as the face agent (delegating) rather than driving the dispatcher
+    /// directly.
+    ///
+    /// `delegation` is the **session's** resolved setting, not the process-wide flag: turning
+    /// dispatch off is most of what a "basic chat" profile means, and a profile that could only
+    /// shorten the tool list would leave the agent still handing work to the dispatcher.
+    ///
+    /// `face_bridge` still gates it. A daemon with no hub attached has no `delegate` tool to offer,
+    /// so a profile asking for delegation there gets the direct path rather than a tool that does
+    /// not exist.
+    fn uses_face_agent(&self, delegation: bool) -> bool {
+        delegation && self.face_bridge.is_some()
+    }
+
+    /// The capability set a turn in `session` runs under.
+    ///
+    /// **A session with no profile gets the process-wide grant**, which is every conversation that
+    /// existed before profiles and every one started without naming one. Falling back to the
+    /// session's empty default instead would have silently stripped the tools from every existing
+    /// chat the moment this shipped — a migration disguised as a feature.
+    ///
+    /// A *named* profile is authoritative even when its capability set is empty, so "this chat may
+    /// call nothing" stays sayable and distinct from "nothing was chosen". The name is what carries
+    /// the intent; an empty `capabilities` alone cannot.
+    ///
+    /// A session the store cannot produce a header for also falls back — a lookup failure must not
+    /// quietly become an authority change.
+    /// Test-only since the streaming path stopped re-reading the grant it had already resolved:
+    /// production reads authority exactly once per turn, through [`TurnSettings`]. Kept because four
+    /// resolution tests assert on it directly, and they are the tests that pin "no profile means the
+    /// process grant, an empty named profile means nothing".
+    #[cfg(test)]
+    async fn session_capabilities(&self, session: Ulid) -> CapabilitySet {
+        self.turn_settings(session).await.capabilities
+    }
+
+    /// Everything a turn in `session` runs under, resolved once per turn.
+    ///
+    /// One lookup rather than three: capabilities, delegation and the prompt nudge all come from the
+    /// same header read, and reading them separately would let a profile switch land *between* them —
+    /// a turn running one profile's tools under another's delegation setting.
+    async fn turn_settings(&self, session: Ulid) -> TurnSettings {
+        let header = match self.store.header(session).await {
+            Ok(header) => header,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    session = %session,
+                    "could not read session grant; falling back to the process-wide defaults"
+                );
+                return self.default_turn_settings();
+            }
+        };
+        // A *named* profile is authoritative; the absence of one means the daemon's defaults. See
+        // `ConversationHeader::grant` for why the name, not an empty capability set, is the signal.
+        if header.grant.profile.is_none() {
+            return self.default_turn_settings();
+        }
+        TurnSettings {
+            capabilities: header.grant.capabilities,
+            delegation: header.grant.delegation.unwrap_or(self.delegation_mode),
+            prompt_append: header.grant.prompt_append,
+            profile: header.grant.profile,
+            model: header.grant.model,
+        }
+    }
+
+    /// Log the tool surface this turn actually holds, then state it to the model.
+    ///
+    /// Both from one `catalog()` call on the runtime being handed to the executor, so the operator's
+    /// log line and the model's prompt can never describe different tool sets. Reading it twice
+    /// would reintroduce, in the diagnostics, exactly the drift the manifest exists to remove.
+    ///
+    /// At INFO because this is the line whose absence cost three debugging rounds: `tool surface
+    /// ready` fires once at boot with the daemon default, so nothing recorded what any individual
+    /// session was offered, and every profile failure had to be diagnosed through the store and the
+    /// source instead of the log.
+    fn state_tool_surface(
+        &self,
+        convo: &mut Conversation,
+        session: Ulid,
+        settings: &TurnSettings,
+        runtime: &dyn ToolRuntime,
+    ) {
+        let catalog = runtime.catalog();
+        let names: Vec<&str> = catalog.iter().map(|t| t.name.as_str()).collect();
+        tracing::info!(
+            session = %session,
+            profile = settings.profile.as_deref().unwrap_or("(none)"),
+            delegation = settings.delegation,
+            count = names.len(),
+            tools = ?names,
+            "chat turn: tool surface"
+        );
+        convo.apply_available_tools(&catalog);
+    }
+
+    /// The daemon-wide delegation default, for tests asserting the inherit path without hard-coding
+    /// what that default happens to be.
+    #[cfg(test)]
+    pub(crate) fn delegation_mode_for_test(&self) -> bool {
+        self.delegation_mode
+    }
+
+    fn default_turn_settings(&self) -> TurnSettings {
+        TurnSettings {
+            capabilities: self.capabilities.clone(),
+            delegation: self.delegation_mode,
+            prompt_append: None,
+            profile: None,
+            model: None,
+        }
     }
 
     /// Face-agent runtime: built-in `delegate` is never risk-gated by MCP name (it is core).
@@ -586,9 +834,10 @@ impl ChatSessions {
         &self,
         user: &str,
         session: Ulid,
+        capabilities: CapabilitySet,
         turn_deferral: Arc<AtomicBool>,
     ) -> Box<dyn ToolRuntime> {
-        let extras = self.scoped_extras_runtime(user, session);
+        let extras = self.scoped_extras_runtime(user, session, capabilities);
         Box::new(FaceRuntime::new(
             self.face_bridge.clone(),
             extras,
@@ -607,14 +856,29 @@ impl ChatSessions {
             || !self.zone_catalog.is_empty()
     }
 
-    /// Optional MCP tools granted to main-agent only (usually empty under the face design).
-    fn scoped_extras_runtime(&self, user: &str, session: Ulid) -> Arc<dyn ToolRuntime> {
-        let granted_mcps = self.capabilities.granted_mcps();
-        if granted_mcps.is_empty() {
+    /// The MCP tools this **session** may call directly.
+    ///
+    /// `capabilities` is the session's own grant — its profile — not the process-wide
+    /// `self.capabilities`. That is the whole of per-session tool scoping: the runtime was already
+    /// rebuilt per turn and already handed the session id, so the only thing missing was asking the
+    /// session what it is allowed to do.
+    ///
+    /// Built with `from_capabilities`, which enforces per **tool** and fails closed. The MCP-name
+    /// constructor could not express a partial grant, and its empty-list-means-everything default
+    /// would turn a restrictive profile into an unrestricted one.
+    fn scoped_extras_runtime(
+        &self,
+        user: &str,
+        session: Ulid,
+        capabilities: CapabilitySet,
+    ) -> Arc<dyn ToolRuntime> {
+        if capabilities.granted_mcps().is_empty() && capabilities.granted_tools().is_empty() {
             return Arc::new(NoToolsRuntime);
         }
-        let scoped: Arc<dyn ToolRuntime> =
-            Arc::new(ScopedRuntime::new(self.runtime.clone(), granted_mcps));
+        let scoped: Arc<dyn ToolRuntime> = Arc::new(ScopedRuntime::from_capabilities(
+            self.runtime.clone(),
+            capabilities.clone(),
+        ));
         // Never return raw scoped tools when a live catalog (or snapshot gate data) is configured:
         // empty boot-time `consequences` must not bypass Write(zone)/consequence after reload.
         if !self.risk_gate_enabled() {
@@ -791,6 +1055,7 @@ impl ChatSessions {
                     capabilities: grant_caps,
                     profile: None,
                     overrides: serde_json::Value::Null,
+                    ..Default::default()
                 },
             )
             .await
@@ -829,7 +1094,13 @@ impl ChatSessions {
         user: &str,
         session: Ulid,
         relevant_mcps: &[String],
+        capabilities: &CapabilitySet,
     ) -> Box<dyn ToolRuntime> {
+        // Deliberately still `self.capabilities`: this asks "is this daemon guarded at all", which is
+        // a property of the *process*, not of one session. Reading the session's set here would let a
+        // profile that legitimately grants nothing ("this chat may call nothing") fall into the
+        // unguarded fixture branch and be handed every tool — a fail-open in the one case that most
+        // needs to fail closed.
         if self.capabilities.capabilities.is_empty()
             && self.consequences.is_empty()
             && self.live_catalog.is_none()
@@ -838,31 +1109,51 @@ impl ChatSessions {
             return Box::new(PassThroughRuntime(self.runtime.clone()));
         }
 
-        // Capability scoping: surface only MCPs the chat agent is granted, every turn, regardless of
+        // Capability scoping: surface only what *this session* is granted, every turn, regardless of
         // how the message is phrased. The model sees the full granted tool set (robust — no missed
-        // requests). An empty grant set scopes to nothing (no tools visible).
-        let granted_mcps: Vec<String> = self.capabilities.granted_mcps();
-        // Dispatcher-narrowed tool surfacing (the token-efficiency piece — see module docs): when
-        // the dispatch step named specific relevant MCPs for this goal, further narrow within the
-        // granted ceiling instead of always surfacing every granted MCP's full tool schemas. Never
-        // widens — only names already in `granted_mcps` survive the intersection.
-        let scoped_mcps: Vec<String> = if relevant_mcps.is_empty() {
-            granted_mcps
+        // requests).
+        //
+        // Scoped by **capability, not by MCP name**. `granted_mcps()` reports only `ExecuteMcp`, so
+        // an `ExecuteTool("turbovault:tasks_list")` grant contributed nothing to an MCP-level
+        // allow-list and a per-tool profile surfaced no tools at all. `from_capabilities` is the
+        // constructor step 1 added for exactly this — "the only one that can express a partial grant
+        // over a single MCP" — and this path had never adopted it.
+        //
+        // And the session's set, not the process's. The face path has always passed the session
+        // grant explicitly; this one read `self.capabilities`, so a profile resolved into the
+        // header, showed up over the API, and then surfaced as nothing — on precisely the path its
+        // own `delegation = false` selects. An unprofiled session resolves to the process grant, so
+        // this is unchanged for every chat that names no profile.
+        //
+        // Dispatcher narrowing (the token-efficiency piece — see module docs) is applied *within*
+        // the grant and can only shrink it: a capability survives only if the goal's relevant MCPs
+        // mention its server. Non-execute capabilities pass through untouched — they say nothing
+        // about which tools to surface, and dropping them here would quietly narrow the risk gate.
+        let scope: CapabilitySet = if relevant_mcps.is_empty() {
+            capabilities.clone()
         } else {
-            granted_mcps
-                .into_iter()
-                .filter(|name| relevant_mcps.contains(name))
-                .collect()
+            CapabilitySet::from_iter(
+                capabilities
+                    .capabilities
+                    .iter()
+                    .filter(|c| match c {
+                        Capability::ExecuteMcp(name) => relevant_mcps.iter().any(|r| r == name),
+                        Capability::ExecuteTool(qualified) => {
+                            relevant_mcps.iter().any(|r| r == mcp_of(qualified))
+                        }
+                        _ => true,
+                    })
+                    .cloned(),
+            )
         };
-        // `ScopedRuntime` treats an empty allow-list as pass-through (its general-purpose default).
-        // For capability scoping that's the wrong sense — no grants must mean no tools — so route the
-        // empty case to a no-tools runtime instead of letting everything through.
-        let inner: Arc<dyn ToolRuntime> = if scoped_mcps.is_empty() {
-            Arc::new(NoToolsRuntime)
-        } else {
-            tracing::debug!(count = scoped_mcps.len(), mcps = ?scoped_mcps, "chat turn tool scope");
-            Arc::new(ScopedRuntime::new(self.runtime.clone(), scoped_mcps))
-        };
+        tracing::debug!(tools = ?scope.granted_tools(), "chat turn tool scope");
+        // Fails closed on an empty set by construction, so no no-tools special case is needed:
+        // `ScopedRuntime::new`'s empty allow-list means pass-through, which is the wrong sense for a
+        // grant and was previously guarded by hand.
+        let inner: Arc<dyn ToolRuntime> = Arc::new(ScopedRuntime::from_capabilities(
+            self.runtime.clone(),
+            scope,
+        ));
 
         // Wrap in RiskGatedToolRuntime for safety guards (capability / consequence / magnitude).
         // Chat isn't one of the daemon's named pools (it has its own separate "main-agent"
@@ -871,7 +1162,9 @@ impl ChatSessions {
         // pre-pool behavior (one orchestrator handled every approval, regardless of origin).
         let mut gated = RiskGatedToolRuntime::new(
             inner,
-            self.capabilities.clone(),
+            // The same set that scoped the surface above. Gating on the process grant while scoping
+            // on the session's would surface a profile's tool and then refuse the call.
+            capabilities.clone(),
             self.consequences.clone(),
             self.zone_catalog.clone(),
             self.zone_write_classes.clone(),

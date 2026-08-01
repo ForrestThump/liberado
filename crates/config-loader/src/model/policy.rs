@@ -58,3 +58,91 @@ pub struct Grant {
     pub component: String,
     pub capabilities: Vec<Capability>,
 }
+
+#[cfg(test)]
+mod proptest_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn arb_write_class() -> impl Strategy<Value = WriteClass> {
+        prop_oneof![
+            Just(WriteClass::AgentWritable),
+            Just(WriteClass::HumanOnly),
+            Just(WriteClass::ProposalOnly),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_write_class_first_match_wins(
+            zones in proptest::collection::vec(
+                ("[a-zA-Z0-9]{1,20}", arb_write_class()),
+                1..10,
+            ),
+            query_zone in "[a-zA-Z0-9]{1,20}",
+        ) {
+            let policy = Policy {
+                zones: zones.iter().map(|(name, class)| ZonePolicy {
+                    zone: name.clone(),
+                    write_class: *class,
+                }).collect(),
+                ..Policy::default()
+            };
+            let expected = zones.iter()
+                .find(|(name, _)| name == &query_zone)
+                .map(|(_, class)| *class)
+                .unwrap_or_default();
+            prop_assert_eq!(policy.write_class(&query_zone), expected);
+        }
+
+        #[test]
+        fn proptest_capabilities_for_union(
+            grants in proptest::collection::vec(
+                ("[a-z]{1,10}", proptest::collection::vec("[a-z]{1,10}", 1..5)),
+                1..5,
+            ),
+            component in "[a-z]{1,10}",
+        ) {
+            let all_grants: Vec<Grant> = grants.iter().map(|(comp, mcp_names)| Grant {
+                component: comp.clone(),
+                capabilities: mcp_names.iter()
+                    .map(|n| Capability::ExecuteMcp(n.clone()))
+                    .collect(),
+            }).collect();
+            let policy = Policy {
+                grants: all_grants.clone(),
+                ..Policy::default()
+            };
+            let caps = policy.capabilities_for(&component);
+            let expected: Vec<Capability> = all_grants.iter()
+                .filter(|g| g.component == component)
+                .flat_map(|g| g.capabilities.iter().cloned())
+                .collect();
+            prop_assert_eq!(caps.capabilities.len(), expected.len());
+            for c in &expected {
+                prop_assert!(caps.capabilities.contains(c));
+            }
+        }
+
+        #[test]
+        fn proptest_unlisted_zone_is_proposal_only(
+            zones in proptest::collection::vec(
+                ("[a-zA-Z0-9]{1,20}", arb_write_class()),
+                1..10,
+            ),
+        ) {
+            let policy = Policy {
+                zones: zones.iter().map(|(name, class)| ZonePolicy {
+                    zone: name.clone(),
+                    write_class: *class,
+                }).collect(),
+                ..Policy::default()
+            };
+            // A zone not in the list must return ProposalOnly (fail-safe default)
+            prop_assert_eq!(
+                policy.write_class("zzz-definitely-not-in-any-list"),
+                WriteClass::ProposalOnly
+            );
+        }
+    }
+}

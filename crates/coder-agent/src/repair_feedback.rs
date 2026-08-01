@@ -305,4 +305,123 @@ mod tests {
         assert!(block.contains("REPAIR attempt"));
         assert!(block.contains("no_changes"));
     }
+
+    #[test]
+    fn repair_focus_block_with_multiple_attempts() {
+        let prior = vec![
+            format_error_feedback(&CoderError::NoChanges),
+            format_pipeline_repair(&PipelineResult {
+                overall: VerdictStatus::Fail,
+                results: vec![],
+                combined_findings: vec![Finding {
+                    check_id: "paths".into(),
+                    kind: FindingKind::MissingPath,
+                    message: "missing".into(),
+                    detail: None,
+                }],
+                combined_signature: Some("def".into()),
+            }),
+        ];
+        let block = repair_focus_block(&prior).unwrap();
+        assert!(block.contains("attempt 1"), "got: {block}");
+    }
+
+    #[test]
+    fn as_str_and_repair_hint_all_variants() {
+        for class in [
+            FailureClass::NoChanges,
+            FailureClass::MissingPath,
+            FailureClass::ContentMismatch,
+            FailureClass::CommandFailed,
+            FailureClass::CommandTimeout,
+            FailureClass::EmptyDiff,
+            FailureClass::CriticRevision,
+            FailureClass::ValidationOther,
+            FailureClass::Other,
+        ] {
+            assert!(!class.as_str().is_empty(), "no as_str for {class:?}");
+            assert!(
+                !class.repair_hint().is_empty(),
+                "no repair_hint for {class:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_pipeline_content_mismatch() {
+        let pipeline = PipelineResult {
+            overall: VerdictStatus::Fail,
+            results: vec![],
+            combined_findings: vec![Finding {
+                check_id: "content".into(),
+                kind: FindingKind::ContentMismatch,
+                message: "missing 'TODO' in src/lib.rs".into(),
+                detail: None,
+            }],
+            combined_signature: Some("sig".into()),
+        };
+        assert_eq!(classify_pipeline(&pipeline), FailureClass::ContentMismatch);
+    }
+
+    #[test]
+    fn classify_pipeline_command_failed() {
+        let pipeline = PipelineResult {
+            overall: VerdictStatus::Fail,
+            results: vec![],
+            combined_findings: vec![Finding {
+                check_id: "cmd".into(),
+                kind: FindingKind::CommandFailed,
+                message: "cargo test failed".into(),
+                detail: None,
+            }],
+            combined_signature: Some("sig".into()),
+        };
+        assert_eq!(classify_pipeline(&pipeline), FailureClass::CommandFailed);
+    }
+
+    #[test]
+    fn classify_pipeline_falls_back_to_results_when_findings_empty() {
+        let pipeline = PipelineResult {
+            overall: VerdictStatus::Fail,
+            results: vec![NamedVerdict {
+                id: "git".into(),
+                kind: "git_nonempty_diff".into(),
+                verdict: Verdict::fail("nothing committed", vec![], None),
+            }],
+            combined_findings: vec![],
+            combined_signature: Some("sig".into()),
+        };
+        assert_eq!(classify_pipeline(&pipeline), FailureClass::EmptyDiff);
+    }
+
+    #[test]
+    fn classify_error_backend_with_critic_is_revision() {
+        let err = CoderError::Backend("critic flagged minor issues: trailing whitespace".into());
+        assert_eq!(classify_error(&err), FailureClass::CriticRevision);
+    }
+
+    #[test]
+    fn classify_message_parses_failure_class_tags() {
+        assert_eq!(
+            classify_message("FAILURE_CLASS: command_timeout\nsome details"),
+            FailureClass::CommandTimeout
+        );
+        assert_eq!(
+            classify_message("FAILURE_CLASS: content_mismatch"),
+            FailureClass::ContentMismatch
+        );
+        assert_eq!(
+            classify_message("FAILURE_CLASS: empty_diff"),
+            FailureClass::EmptyDiff
+        );
+        assert_eq!(
+            classify_message("FAILURE_CLASS: critic_revision"),
+            FailureClass::CriticRevision
+        );
+        assert_eq!(
+            classify_message("FAILURE_CLASS: validation_other"),
+            FailureClass::ValidationOther
+        );
+        assert_eq!(classify_message("no tags here"), FailureClass::Other);
+    }
 }

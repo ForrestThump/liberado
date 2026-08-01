@@ -139,6 +139,38 @@ pub fn write_target(
     }
 }
 
+/// Whether this call names **exactly one** write target, known from the declaration rather than
+/// guessed from text.
+///
+/// True only for the **path-addressed** style (`zone_from_arg` + `write_tools`) with the path
+/// argument actually present and naming a zone. There, the call carries its own target: one path,
+/// one note, bounded reach — and no amount of prose in the payload changes that.
+///
+/// False for the **fixed-zone** style, deliberately. There the zone comes from the *tool name*, so
+/// a resolved [`WriteTarget::Zone`] says which zone is touched but nothing about how much of it —
+/// "delete everything in tasks/" resolves the same as "write one task". Reach genuinely is unknown,
+/// and the text heuristic remains the only signal available.
+///
+/// # Why this exists
+///
+/// [`Magnitude`](crate::Magnitude) measures *reach*, and reach is usually structural. The risk gate
+/// was estimating it by scanning the whole arguments blob for destructive words, which for a write
+/// tool means scanning **the content being saved** — so a research report discussing organizations
+/// being "destroyed" and coalitions blocking "every" reform read as an order to delete everything,
+/// and a requested write-up became a permission prompt (homelab, `prop-1785557626819756862`,
+/// 2026-08-01). The payload is data, not an instruction; this is how the gate tells them apart.
+pub fn names_single_write_target(
+    descriptor: &McpDescriptor,
+    bare_tool_name: &str,
+    arguments: &serde_json::Value,
+) -> bool {
+    descriptor.zone_from_arg.is_some()
+        && matches!(
+            write_target(descriptor, bare_tool_name, arguments),
+            WriteTarget::Zone(_)
+        )
+}
+
 /// Resolve the target zone for `bare_tool_name` given `descriptor`'s zone declarations. `None`
 /// means "not a zone-write concern" — a declared read, or an MCP that hasn't opted into zone
 /// tracking at all — distinct from "a write whose zone is unknown," which callers (the zone-
@@ -218,7 +250,7 @@ impl CapabilityCatalog {
                 mcps: HashMap::new(),
                 degraded: HashMap::new(),
                 degraded_ttl: DEFAULT_DEGRADED_HALF_OPEN,
-                last_updated: Instant::now(),
+                last_updated: crate::clock::now(),
             })),
             updated: tx,
         }
@@ -239,7 +271,7 @@ impl CapabilityCatalog {
     pub fn register(&self, mcp: McpDescriptor) {
         let mut state = self.inner.write().unwrap_or_else(|e| e.into_inner());
         state.mcps.insert(mcp.name.clone(), mcp);
-        state.last_updated = Instant::now();
+        state.last_updated = crate::clock::now();
         let _ = self.updated.send(());
     }
 
@@ -249,7 +281,7 @@ impl CapabilityCatalog {
         let mut state = self.inner.write().unwrap_or_else(|e| e.into_inner());
         state.mcps.remove(name);
         state.degraded.remove(name);
-        state.last_updated = Instant::now();
+        state.last_updated = crate::clock::now();
         let _ = self.updated.send(());
     }
 
@@ -263,8 +295,8 @@ impl CapabilityCatalog {
         if !state.mcps.contains_key(name) {
             return;
         }
-        state.degraded.insert(name.to_string(), Instant::now());
-        state.last_updated = Instant::now();
+        state.degraded.insert(name.to_string(), crate::clock::now());
+        state.last_updated = crate::clock::now();
         let _ = self.updated.send(());
     }
 
@@ -272,7 +304,7 @@ impl CapabilityCatalog {
     pub fn mark_healthy(&self, name: &str) {
         let mut state = self.inner.write().unwrap_or_else(|e| e.into_inner());
         if state.degraded.remove(name).is_some() {
-            state.last_updated = Instant::now();
+            state.last_updated = crate::clock::now();
             let _ = self.updated.send(());
         }
     }
@@ -280,7 +312,7 @@ impl CapabilityCatalog {
     /// Drop degraded entries whose mark Instant is older than `degraded_ttl` (half-open).
     /// Returns whether any entry was removed (and subscribers were notified).
     fn purge_expired_degraded(&self) -> bool {
-        let now = Instant::now();
+        let now = crate::clock::now();
         {
             let state = self.inner.read().unwrap_or_else(|e| e.into_inner());
             let any_expired = state
@@ -298,7 +330,7 @@ impl CapabilityCatalog {
             .degraded
             .retain(|_, at| now.saturating_duration_since(*at) < ttl);
         if state.degraded.len() != before {
-            state.last_updated = Instant::now();
+            state.last_updated = crate::clock::now();
             let _ = self.updated.send(());
             true
         } else {
@@ -732,5 +764,291 @@ mod tests {
             &[("reviews".to_string(), WriteClass::ProposalOnly)],
         );
         assert_eq!(restriction, None);
+    }
+
+    #[test]
+    fn consequence_catalog_returns_all_consequences() {
+        let catalog = CapabilityCatalog::new();
+        let d1 = McpDescriptor {
+            name: "weather".into(),
+            consequence: Consequence::ReadOnly,
+            ..sample_descriptor("weather")
+        };
+        let d2 = McpDescriptor {
+            name: "email".into(),
+            consequence: Consequence::External,
+            ..sample_descriptor("email")
+        };
+        catalog.register(d1);
+        catalog.register(d2);
+
+        let catalog_result = catalog.consequence_catalog();
+        assert_eq!(catalog_result.len(), 2);
+        assert!(catalog_result.contains(&("weather".into(), Consequence::ReadOnly)));
+        assert!(catalog_result.contains(&("email".into(), Consequence::External)));
+    }
+
+    #[test]
+    fn write_target_empty_segment_is_not_a_zone() {
+        let d = path_addressed_descriptor();
+        // path starting with `//` → first split segments are empty.
+        // The correct `&&` skips empties to find "foo". A `||` mutation would match the
+        // empty string first and return `Zone("")` — a zone we cannot authorize.
+        let result = write_target(
+            &d,
+            "write_note",
+            &serde_json::json!({"path": "//foo/bar.md"}),
+        );
+        assert_eq!(
+            result,
+            WriteTarget::Zone("foo".into()),
+            "empty segments must be skipped to find the real zone: got {result:?}"
+        );
+    }
+
+    /// When purge_expired_degraded removes entries, it should send a notification. The
+    /// `!=` → `==` mutation on line 300 inverts this check.
+    #[test]
+    fn degraded_purge_sends_notification_on_expiry() {
+        let catalog = CapabilityCatalog::new();
+        catalog.register(sample_descriptor("weather"));
+        catalog.mark_degraded("weather");
+
+        // Subscribe after mark_degraded — rx sees the latest value.
+        let rx = catalog.subscribe();
+
+        catalog.set_degraded_half_open_ttl(Duration::ZERO);
+        // is_degraded calls purge_expired_degraded internally.
+        // With correct `!=`, it sends a notification after removing entries.
+        let _ = catalog.is_degraded("weather");
+
+        assert!(
+            rx.has_changed().unwrap(),
+            "purge must notify subscribers when entries are removed"
+        );
+    }
+
+    /// Freeze time, mark degraded, advance by exactly TTL — verifies the half-open boundary.
+    #[test]
+    fn degraded_entry_purged_at_exact_ttl_boundary() {
+        let catalog = CapabilityCatalog::new();
+        catalog.register(sample_descriptor("weather"));
+
+        let t0 = std::time::Instant::now();
+        let clock = crate::clock::test_freeze_at(t0);
+        catalog.mark_degraded("weather");
+        assert!(catalog.is_degraded("weather"));
+
+        let ttl = Duration::from_secs(5);
+        catalog.set_degraded_half_open_ttl(ttl);
+        clock.advance(ttl);
+
+        assert!(
+            !catalog.is_degraded("weather"),
+            "must be purged at exact TTL boundary"
+        );
+    }
+}
+
+#[cfg(test)]
+mod proptest_tests {
+    use std::slice;
+
+    use proptest::prelude::*;
+    use serde_json::Value;
+
+    use super::*;
+
+    // ── Generation primitives ─────────────────────────────────────────────
+
+    /// A tool name as it appears in `write_tools` / `tool_zones` keys.
+    const TOOL_NAME: &str = "[a-zA-Z0-9_/-]{1,20}";
+
+    /// A vault zone name: a plain 1–20 char alphanumeric string.
+    const ZONE_NAME: &str = "[a-zA-Z0-9]{1,20}";
+
+    /// A zone-name wrapper so generation carries intent. `McpDescriptor` stores zones as plain
+    /// `String`; this newtype only exists to give the strategy a name.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct Zone(String);
+
+    impl Arbitrary for Zone {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Zone>;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            ZONE_NAME.prop_map(Zone).boxed()
+        }
+    }
+
+    impl Arbitrary for WriteClass {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<WriteClass>;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            prop_oneof![
+                Just(WriteClass::HumanOnly),
+                Just(WriteClass::AgentWritable),
+                Just(WriteClass::ProposalOnly),
+                Just(WriteClass::Shared),
+            ]
+            .boxed()
+        }
+    }
+
+    impl Arbitrary for McpDescriptor {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<McpDescriptor>;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            // `write_tools` is only consulted by `write_target` inside the `zone_from_arg`
+            // (path-addressed) branch. A fixed-zone descriptor (`zone_from_arg: None`) ignores
+            // `write_tools` and resolves through `resolve_zone`, which reports `NotAWrite` for a
+            // tool with no default/tool zone. Correlating the two keeps "a declared write tool
+            // is never `NotAWrite`" a genuine invariant rather than a vacuous one.
+            let zone_from_arg_strategy = prop_oneof![
+                2 => Just(None::<String>),
+                3 => "[a-zA-Z0-9_-]{1,20}".prop_map(Some),
+            ];
+
+            zone_from_arg_strategy
+                .prop_flat_map(|zone_from_arg| {
+                    let write_tools: BoxedStrategy<Vec<String>> = match &zone_from_arg {
+                        Some(_) => proptest::collection::vec(TOOL_NAME, 0..5).boxed(),
+                        None => Just(Vec::<String>::new()).boxed(),
+                    };
+                    (
+                        "[a-zA-Z0-9_-]{1,20}",  // name
+                        "[a-zA-Z0-9_ -]{0,40}", // description
+                        prop_oneof![
+                            1 => Just(None::<String>),
+                            2 => any::<Zone>().prop_map(|z| Some(z.0)),
+                        ],
+                        proptest::collection::vec(
+                            (
+                                TOOL_NAME,
+                                prop_oneof![
+                                    1 => Just(None::<String>),
+                                    2 => any::<Zone>().prop_map(|z| Some(z.0)),
+                                ],
+                            ),
+                            0..3,
+                        ),
+                        write_tools,
+                    )
+                        .prop_map(
+                            move |(name, description, default_zone, tool_zones, write_tools)| {
+                                McpDescriptor {
+                                    name,
+                                    description,
+                                    consequence: Consequence::Reversible,
+                                    provenance: None,
+                                    default_zone,
+                                    tool_zones,
+                                    zone_from_arg: zone_from_arg.clone(),
+                                    write_tools,
+                                }
+                            },
+                        )
+                        .boxed()
+                })
+                .boxed()
+        }
+    }
+
+    /// A `serde_json::Value` strategy. `any::<serde_json::Value>()` requires proptest's optional
+    /// `serde_json` feature (not enabled here), so build one by hand: scalar leaves plus
+    /// recursive arrays/objects. String leaves deliberately allow `/` and `.` so `write_target`'s
+    /// path-segment logic is exercised.
+    fn arb_json_value() -> impl Strategy<Value = Value> {
+        let leaf = prop_oneof![
+            Just(Value::Null),
+            any::<bool>().prop_map(Value::Bool),
+            any::<i64>().prop_map(Value::from),
+            any::<f64>()
+                .prop_filter("finite", |f| f.is_finite())
+                .prop_map(Value::from),
+            "[a-zA-Z0-9_/.-]{0,30}".prop_map(Value::String),
+        ];
+        leaf.prop_recursive(4, 16, 8, |inner| {
+            prop_oneof![
+                proptest::collection::vec(inner.clone(), 0..5).prop_map(Value::Array),
+                proptest::collection::hash_map("[a-zA-Z0-9_-]{0,12}", inner, 0..5).prop_map(|m| {
+                    let mut map = serde_json::Map::new();
+                    for (k, v) in m {
+                        map.insert(k, v);
+                    }
+                    Value::Object(map)
+                },),
+            ]
+        })
+    }
+
+    /// A write class that does **not** allow direct agent writes. Test 2's guard-equivalence
+    /// property asserts `(Some(zone), Some(zone))` for every resolved zone — the fail-closed
+    /// behavior this guard is specified to have. The "agent may write, so no restriction"
+    /// outcome is a separate behavior already pinned by the unit tests in `tests`.
+    fn restricted_write_class() -> impl Strategy<Value = WriteClass> {
+        prop_oneof![Just(WriteClass::HumanOnly), Just(WriteClass::ProposalOnly)]
+    }
+
+    // ── Test 1: write_target never collapses a declared write tool to NotAWrite ──
+
+    fn write_target_never_notawrite(desc: McpDescriptor, tool: String, args: Value) -> bool {
+        if desc.write_tools.contains(&tool) {
+            !matches!(write_target(&desc, &tool, &args), WriteTarget::NotAWrite)
+        } else {
+            true
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_write_target_never_notawrite(
+            desc in any::<McpDescriptor>(),
+            tool in TOOL_NAME,
+            args in arb_json_value(),
+        ) {
+            prop_assert!(write_target_never_notawrite(desc, tool, args));
+        }
+    }
+
+    // ── Test 2: zone_write_restriction agrees with resolve_zone ──────────
+
+    /// `zone_write_restriction` looks its descriptor up by name in a *slice* catalog; the spec
+    /// check passes the single generated descriptor as that one-entry catalog
+    /// (`std::slice::from_ref`, adapting the real `&[McpDescriptor]` signature).
+    fn zone_write_restriction_agrees(
+        mcp: String,
+        tool: String,
+        desc: McpDescriptor,
+        zone_classes: Vec<(String, WriteClass)>,
+    ) -> bool {
+        let zone = resolve_zone(&desc, &tool);
+        let r = zone_write_restriction(&mcp, &tool, slice::from_ref(&desc), &zone_classes);
+        match (zone, r) {
+            (None, None) => true,
+            (Some(z), Some(rz)) => z == rz,
+            _ => false,
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_zone_write_restriction_agrees_with_resolve_zone(
+            // `mcp` must name the descriptor actually in the catalog, or the lookup is a
+            // no-op and the equivalence degenerates to "always `None`".
+            (mcp, desc) in any::<McpDescriptor>()
+                .prop_map(|desc| (desc.name.clone(), desc)),
+            tool in TOOL_NAME,
+            // Restricted classes only, so a resolved zone always yields `Some(zone)` — exactly
+            // the `(Some(z), Some(rz))` arm.
+            zone_classes in proptest::collection::vec(
+                (TOOL_NAME, restricted_write_class()),
+                0..4,
+            ),
+        ) {
+            prop_assert!(zone_write_restriction_agrees(mcp, tool, desc, zone_classes));
+        }
     }
 }

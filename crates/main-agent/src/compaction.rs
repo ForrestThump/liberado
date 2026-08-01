@@ -33,7 +33,7 @@ use liberado_provider::{CompletionRequest, Message, Role};
 /// identity — additive, no store schema change.
 ///
 /// CH3.1 removes the tail copies entirely (see
-/// `docs/plans/context-compaction-viewport-rearchitecture.md`); until then this is the seam.
+/// `docs/future-work/context-compaction-viewport-rearchitecture.md`); until then this is the seam.
 pub use liberado_conversation_store::{COMPACTION_AUTHOR, COMPACTION_TAIL_AUTHOR};
 
 /// First line of every marker message's content — identifies the bubble in rendered history and

@@ -18,6 +18,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+proptest = "1"
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)

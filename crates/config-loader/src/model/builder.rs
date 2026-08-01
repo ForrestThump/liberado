@@ -143,7 +143,7 @@ mod tests {
 
     use crate::model::policy::Policy;
     use crate::model::topology::{
-        McpTransport, PoolConfig, ProviderProfile, SessionProfile, Topology, empty_table,
+        McpGrant, McpTransport, PoolConfig, ProviderProfile, SessionProfile, Topology, empty_table,
     };
 
     #[test]
@@ -438,10 +438,11 @@ max_turns = 44
         SessionProfile {
             name: name.into(),
             enabled: true,
-            domain: domain.into(),
+            domain: Some(domain.into()),
             component: component.map(Into::into),
             max_idle_secs: None,
             overrides: empty_table(),
+            ..SessionProfile::empty(name)
         }
     }
 
@@ -469,12 +470,13 @@ max_turns = 44
     #[test]
     fn a_profile_resolves_to_its_pack_and_its_own_narrower_grant() {
         let cfg = config_with_profiles();
-        let (domain, caps, _overrides, _idle) = cfg
+        let resolved = cfg
             .resolve_session_profile(Some("research"), "coding")
             .expect("an enabled profile resolves");
+        let caps = &resolved.capabilities;
 
         // The profile picks the pack — the caller's fallback domain is overridden.
-        assert_eq!(domain, "life");
+        assert_eq!(resolved.domain.as_deref(), Some("life"));
         // ...and it holds strictly less than the default `life` grant: read-only, and crucially it
         // cannot interrupt a human.
         assert!(caps.contains(&Capability::Read(Zone::vault("tasks"))));
@@ -488,10 +490,11 @@ max_turns = 44
     #[test]
     fn no_profile_falls_back_to_the_grant_keyed_by_the_domain() {
         let cfg = config_with_profiles();
-        let (domain, caps, _, _) = cfg
+        let resolved = cfg
             .resolve_session_profile(None, "life")
             .expect("no profile is the documented domain-fallback path, not an error");
-        assert_eq!(domain, "life");
+        let caps = &resolved.capabilities;
+        assert_eq!(resolved.domain.as_deref(), Some("life"));
         assert!(caps.grants_ask_human(), "an attended life session may ask");
         assert!(caps.contains(&Capability::Write(Zone::vault("tasks"))));
     }
@@ -517,9 +520,10 @@ max_turns = 44
     #[test]
     fn a_domain_with_no_grant_at_all_resolves_to_zero_authority() {
         let cfg = config_with_profiles();
-        let (_, caps, _, _) = cfg
+        let caps = cfg
             .resolve_session_profile(None, "coding")
-            .expect("no profile falls back to the domain, even when that domain has no grant");
+            .expect("no profile falls back to the domain, even when that domain has no grant")
+            .capabilities;
         assert!(
             caps.capabilities.is_empty(),
             "fail safe: no grant, no authority"
@@ -1030,5 +1034,330 @@ clarify_threshold_read = 0.8
             .build()
             .expect("valid config");
         assert_eq!(cfg.tuning.dispatch.small_fanout, 99);
+    }
+
+    /// A config that already passes the *other* validations, so a profile test's assertion is about
+    /// the profile and not about `vault_path`.
+    fn validatable() -> Config {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/test/vault");
+        cfg
+    }
+
+    /// A minimal enabled MCP entry — profiles validate their `mcps` against `topology.mcps`, so a
+    /// test declaring a profile has to declare the servers it names.
+    fn mcp(name: &str) -> McpConfig {
+        McpConfig {
+            name: name.into(),
+            enabled: true,
+            description: "test".into(),
+            consequence: Consequence::ReadOnly,
+            transport: McpTransport::Stdio {
+                command: "true".into(),
+                args: Vec::new(),
+            },
+            default_zone: None,
+            tools: Vec::new(),
+            zone_from_arg: None,
+            write_tools: Vec::new(),
+            writes_vault: Some(false),
+        }
+    }
+
+    // == Self-declaring chat profiles (session profiles, step 3) =============================
+
+    /// The `basic-chat` profile from the plan, parsed from the TOML an operator actually writes.
+    ///
+    /// Written as a string rather than built with struct literals on purpose: the thing under test
+    /// is the *config surface* -- that a bare string means the whole server, a table means named
+    /// tools, and zones are named plainly. A struct literal would prove none of that.
+    fn basic_chat_toml() -> &'static str {
+        r#"
+        name        = "basic-chat"
+        description = "Quick answers. Web, search, read-only notes. No dispatch."
+        delegation  = false
+        model       = "deepseek/deepseek-v4-flash"
+        prompt_append = "Answer directly and briefly."
+        read  = ["Work", "Life"]
+        write = []
+        mcps  = [
+          "liberado-search-orchestrator-mcp",
+          { name = "turbovault", tools = ["read_note", "search_notes"] },
+        ]
+        "#
+    }
+
+    #[test]
+    fn a_chat_profile_parses_and_expands_to_the_capabilities_it_names() {
+        let profile: SessionProfile =
+            toml::from_str(basic_chat_toml()).expect("the documented shape must parse");
+
+        assert_eq!(profile.delegation, Some(false));
+        assert_eq!(profile.model.as_deref(), Some("deepseek/deepseek-v4-flash"));
+        assert!(profile.domain.is_none(), "a chat profile names no pack");
+        assert!(profile.declares_authority());
+
+        let caps = profile.declared_capabilities();
+        // A bare string is the whole server...
+        assert!(caps.grants_tool("liberado-search-orchestrator-mcp:anything"));
+        // ...a table is exactly the named tools.
+        assert!(caps.grants_tool("turbovault:read_note"));
+        assert!(caps.grants_tool("turbovault:search_notes"));
+        assert!(
+            !caps.grants_tool("turbovault:write_note"),
+            "the whole point: turbovault is granted in part, not whole"
+        );
+        // Zones expand to vault zones, and an empty `write` grants none.
+        assert!(caps.contains(&Capability::Read(Zone::vault("Work"))));
+        assert!(caps.contains(&Capability::Read(Zone::vault("Life"))));
+        assert!(
+            !caps
+                .capabilities
+                .iter()
+                .any(|c| matches!(c, Capability::Write(_))),
+            "`write = []` must mean no write authority, not 'unspecified'"
+        );
+    }
+
+    /// The ceiling is what keeps `policy.toml` authoritative once profiles can declare their own
+    /// tools. A profile may narrow within it and may not step outside it.
+    #[test]
+    fn a_ceiling_bounds_what_a_profile_can_declare() {
+        let mut cfg = Config::default();
+        cfg.policy.grants.push(Grant {
+            component: "chat-profiles".into(),
+            capabilities: vec![
+                Capability::ExecuteMcp("turbovault".into()),
+                Capability::Read(Zone::vault("Work")),
+            ],
+        });
+
+        let mut profile = SessionProfile::empty("bounded");
+        profile.ceiling = Some("chat-profiles".into());
+        profile.read = vec!["Work".into()];
+        profile.mcps = vec![
+            McpGrant::Whole("turbovault".into()),
+            McpGrant::Whole("email-mcp".into()),
+        ];
+        cfg.topology.session_profiles = vec![profile];
+
+        let caps = cfg
+            .resolve_session_profile(Some("bounded"), "life")
+            .expect("resolves")
+            .capabilities;
+
+        assert!(
+            caps.grants_tool("turbovault:read_note"),
+            "inside the ceiling"
+        );
+        assert!(
+            !caps.grants_mcp("email-mcp"),
+            "outside the ceiling: declaring it must not grant it"
+        );
+        assert!(caps.contains(&Capability::Read(Zone::vault("Work"))));
+    }
+
+    /// The case per-tool grants exist for, and the one that made step 1's subsumption work
+    /// necessary: the ceiling grants a whole server, the profile takes one of its tools.
+    #[test]
+    fn a_profile_may_narrow_a_whole_server_ceiling_to_named_tools() {
+        let mut cfg = Config::default();
+        cfg.policy.grants.push(Grant {
+            component: "chat-profiles".into(),
+            capabilities: vec![Capability::ExecuteMcp("turbovault".into())],
+        });
+
+        let mut profile = SessionProfile::empty("narrow");
+        profile.ceiling = Some("chat-profiles".into());
+        profile.mcps = vec![McpGrant::Narrowed {
+            name: "turbovault".into(),
+            tools: vec!["read_note".into()],
+        }];
+        cfg.topology.session_profiles = vec![profile];
+
+        let caps = cfg
+            .resolve_session_profile(Some("narrow"), "life")
+            .expect("resolves")
+            .capabilities;
+
+        assert!(caps.grants_tool("turbovault:read_note"));
+        assert!(
+            !caps.grants_tool("turbovault:write_note"),
+            "narrowing a server-wide ceiling to one tool must yield one tool, not the server"
+        );
+    }
+
+    /// Backward compatibility: the original two-file shape (`component` -> a policy grant) still
+    /// resolves exactly as it did. The live `research` profile uses it.
+    #[test]
+    fn a_component_profile_still_borrows_its_grant_wholesale() {
+        let cfg = config_with_profiles();
+        let resolved = cfg
+            .resolve_session_profile(Some("research"), "coding")
+            .expect("resolves");
+        assert!(!cfg.topology.session_profiles[0].declares_authority());
+        assert_eq!(
+            resolved.capabilities,
+            cfg.policy.capabilities_for("research"),
+            "a profile that declares nothing must be exactly its component's grant"
+        );
+    }
+
+    #[test]
+    fn declaring_authority_and_a_component_at_once_is_refused() {
+        let mut cfg = validatable();
+        cfg.topology.mcps.push(mcp("turbovault"));
+        cfg.policy.grants.push(Grant {
+            component: "somewhere".into(),
+            capabilities: vec![Capability::ExecuteMcp("turbovault".into())],
+        });
+        let mut profile = SessionProfile::empty("confused");
+        profile.component = Some("somewhere".into());
+        profile.mcps = vec![McpGrant::Whole("turbovault".into())];
+        cfg.topology.session_profiles = vec![profile];
+
+        let err = cfg
+            .validate()
+            .expect_err("two sources for one answer must not load");
+        assert!(err.to_string().contains("pick one"), "got: {err}");
+    }
+
+    /// A ceiling naming no grant narrows everything to nothing -- a profile that silently grants no
+    /// tools. Caught at load rather than discovered by an agent that can suddenly do nothing.
+    #[test]
+    fn a_ceiling_naming_no_grant_is_refused() {
+        let mut cfg = validatable();
+        cfg.topology.mcps.push(mcp("turbovault"));
+        let mut profile = SessionProfile::empty("dangling");
+        profile.ceiling = Some("nope".into());
+        profile.mcps = vec![McpGrant::Whole("turbovault".into())];
+        cfg.topology.session_profiles = vec![profile];
+
+        let err = cfg
+            .validate()
+            .expect_err("a dangling ceiling must not load");
+        assert!(err.to_string().contains("narrow to nothing"), "got: {err}");
+    }
+
+    #[test]
+    fn a_profile_naming_an_unknown_mcp_is_refused() {
+        let mut cfg = validatable();
+        let mut profile = SessionProfile::empty("typo");
+        profile.mcps = vec![McpGrant::Whole("turbovualt".into())];
+        cfg.topology.session_profiles = vec![profile];
+
+        let err = cfg.validate().expect_err("an unknown MCP must not load");
+        assert!(err.to_string().contains("turbovualt"), "got: {err}");
+    }
+
+    /// `{ name = "x", tools = [] }` grants nothing while looking like it grants something.
+    #[test]
+    fn a_narrowed_entry_with_no_tools_is_refused() {
+        let mut cfg = validatable();
+        cfg.topology.mcps.push(mcp("turbovault"));
+        let mut profile = SessionProfile::empty("empty-tools");
+        profile.mcps = vec![McpGrant::Narrowed {
+            name: "turbovault".into(),
+            tools: Vec::new(),
+        }];
+        cfg.topology.session_profiles = vec![profile];
+
+        let err = cfg
+            .validate()
+            .expect_err("an empty tool list must not load");
+        assert!(err.to_string().contains("lists no"), "got: {err}");
+    }
+
+    #[test]
+    fn a_chat_profile_needs_no_domain_but_a_blank_one_is_refused() {
+        let mut cfg = validatable();
+        cfg.topology.mcps.push(mcp("turbovault"));
+        let mut ok = SessionProfile::empty("chat-only");
+        ok.mcps = vec![McpGrant::Whole("turbovault".into())];
+        cfg.topology.session_profiles = vec![ok];
+        assert!(cfg.validate().is_ok(), "a chat profile may omit `domain`");
+
+        cfg.topology.session_profiles[0].domain = Some("   ".into());
+        let err = cfg
+            .validate()
+            .expect_err("present-but-blank reads as an unfinished edit");
+        assert!(err.to_string().contains("omit the key"), "got: {err}");
+    }
+
+    /// The upper boundary is `> 50`; exactly 50 must be accepted.
+    #[test]
+    fn timeout_at_50_is_valid() {
+        let mut cfg = validatable();
+        cfg.tuning.telegram_approvals.getupdate_timeout_secs = 50;
+        assert!(
+            cfg.validate().is_ok(),
+            "50 is within the valid range (1-50)"
+        );
+    }
+
+    /// declares_authority uses `||` — a profile with only `read` set should still declare authority.
+    /// With `&&` it would be false.
+    #[test]
+    fn read_only_declares_authority() {
+        let mut profile = SessionProfile::empty("read-only");
+        profile.read = vec!["Work".into()];
+        assert!(profile.declares_authority());
+
+        let mut profile = SessionProfile::empty("write-only");
+        profile.write = vec!["Work".into()];
+        assert!(profile.declares_authority());
+    }
+
+    #[test]
+    fn write_class_returns_declared_value() {
+        let policy = Policy {
+            zones: vec![ZonePolicy {
+                zone: "Work".into(),
+                write_class: WriteClass::AgentWritable,
+            }],
+            ..Policy::default()
+        };
+        assert_eq!(
+            policy.write_class("Work"),
+            WriteClass::AgentWritable,
+            "a declared zone must return its class"
+        );
+        assert_eq!(
+            policy.write_class("Other"),
+            WriteClass::ProposalOnly,
+            "an undeclared zone falls back to the safe default"
+        );
+    }
+
+    #[test]
+    fn zero_coding_concurrency_fails_validate() {
+        let mut cfg = validatable();
+        cfg.tuning.dispatch.max_concurrent_coding_subagents = 0;
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("max_concurrent_coding_subagents"));
+    }
+
+    #[test]
+    fn zero_reaction_depth_fails_validate() {
+        let mut cfg = validatable();
+        cfg.tuning.concurrency.max_reaction_depth = 0;
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("max_reaction_depth"));
+    }
+
+    /// A session profile that declares authority and references a zone not in policy.zones.
+    #[test]
+    fn profile_referencing_undeclared_zone_fails_validate() {
+        let mut cfg = validatable();
+        cfg.topology.mcps.push(mcp("turbovault"));
+
+        let mut profile = SessionProfile::empty("reading");
+        profile.read = vec!["GhostTown".into()];
+        cfg.topology.session_profiles = vec![profile];
+
+        let err = cfg
+            .validate()
+            .expect_err("profile referencing an undeclared zone must fail");
+        assert!(err.to_string().contains("undeclared zone"), "got: {}", err);
     }
 }

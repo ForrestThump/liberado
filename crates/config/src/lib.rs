@@ -1144,4 +1144,110 @@ transport = { kind = "stdio", command = "tasks-mcp", args = [] }
             "the base zone's protection must not be downgraded by the overlay"
         );
     }
+
+    #[test]
+    fn has_any_config_file_returns_true_for_single_file() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "topology.toml", "");
+        assert!(has_any_config_file(dir.path()));
+    }
+
+    #[test]
+    fn merge_overlay_into_appends_zones_and_grants() {
+        let mut policy = Policy::default();
+        let overlay = Policy {
+            zones: vec![ZonePolicy {
+                zone: "sandbox".into(),
+                write_class: WriteClass::AgentWritable,
+            }],
+            grants: vec![Grant {
+                component: "agent".into(),
+                capabilities: vec![Capability::Write(liberado_common::Zone::vault("sandbox"))],
+            }],
+            ..Policy::default()
+        };
+        merge_overlay_into(&mut policy, overlay);
+        assert!(policy.zones.iter().any(|z| z.zone == "sandbox"));
+        assert!(policy.grants.iter().any(|g| g.component == "agent"));
+    }
+
+    #[test]
+    fn append_grant_to_overlay_at_zone_dedup() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("grants.overlay.toml");
+        let cap = Capability::Write(liberado_common::Zone::vault("Work"));
+
+        // First append creates the zone and grant.
+        let changed = append_grant_to_overlay_at(&path, "agent", &cap).unwrap();
+        assert!(changed, "first append should be a change");
+
+        // Read back: zone should be declared exactly once.
+        let overlay = load_grants_overlay_at(&path);
+        assert_eq!(
+            overlay.zones.iter().filter(|z| z.zone == "Work").count(),
+            1,
+            "zone must not be duplicated on re-append"
+        );
+    }
+}
+
+#[cfg(test)]
+mod overlay_proptest {
+    use liberado_common::WriteClass;
+    use liberado_config_loader::{Policy, ZonePolicy};
+    use proptest::prelude::*;
+
+    fn arb_write_class() -> impl Strategy<Value = WriteClass> {
+        prop_oneof![
+            Just(WriteClass::AgentWritable),
+            Just(WriteClass::HumanOnly),
+            Just(WriteClass::ProposalOnly),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_overlay_never_downgrades_base_zone(
+            zones in proptest::collection::vec(
+                ("[a-zA-Z0-9]{1,20}", arb_write_class()),
+                1..10,
+            ),
+        ) {
+            let mut policy = Policy {
+                zones: zones.iter().map(|(name, class)| ZonePolicy {
+                    zone: name.clone(),
+                    write_class: *class,
+                }).collect(),
+                ..Policy::default()
+            };
+
+            let overlay_zones: Vec<ZonePolicy> = zones.iter()
+                .map(|(name, _)| ZonePolicy {
+                    zone: name.clone(),
+                    write_class: WriteClass::AgentWritable,
+                })
+                .collect();
+            let overlay = Policy {
+                zones: overlay_zones,
+                ..Policy::default()
+            };
+            crate::merge_overlay_into(&mut policy, overlay);
+
+            let unique: Vec<&(String, WriteClass)> = {
+                let mut seen = std::collections::HashSet::new();
+                zones.iter().filter(|(n, _)| seen.insert(n.clone())).collect()
+            };
+            for (zone_name, orig_class) in &unique {
+                let actual = policy.write_class(zone_name);
+                prop_assert_eq!(
+                    actual,
+                    *orig_class,
+                    "overlay must not downgrade zone '{}': expected {:?}, got {:?}",
+                    zone_name,
+                    orig_class,
+                    actual,
+                );
+            }
+        }
+    }
 }

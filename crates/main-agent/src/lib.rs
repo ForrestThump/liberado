@@ -16,7 +16,7 @@
 //! marker so the model-visible context stays under the context window.
 
 use liberado_executor::{AgentEvent, ExecError, Executor, ToolRuntime};
-use liberado_provider::Message;
+use liberado_provider::{Message, Role, ToolDef};
 use tokio::sync::mpsc::Sender;
 
 mod compaction;
@@ -27,7 +27,9 @@ mod sessions;
 pub use compaction::{COMPACTION_AUTHOR, CompactionConfig, SUMMARY_HEADER, estimate_tokens};
 pub use dispatch_journal::{dispatches_dir, journal_path};
 pub use face::{DELEGATE_TOOL_NAME, DispatchBridge, FaceRuntime};
-pub use sessions::{ChatSessions, SessionError, SessionResult, default_conversation_title};
+pub use sessions::{
+    ChatSessions, PROFILE_AUTHOR, SessionError, SessionResult, default_conversation_title,
+};
 
 /// Short legacy prompt (used when `delegation_mode = false` and no custom prompt is set).
 pub const DEFAULT_SYSTEM_PROMPT: &str = "\
@@ -85,9 +87,43 @@ When work is delegated, say so briefly, then present the result clearly.
 
 You are the human's partner for understanding what they want. Delegation is how work gets done.";
 
+/// The exact text [`Conversation::apply_available_tools`] injects, rendered from tool names alone.
+///
+/// Public and name-based so the `liberado prompt` inspector prints **what the model is actually
+/// told**, not a paraphrase of it. An inspector rendering its own wording would be a debugging tool
+/// able to disagree with the thing it is debugging — this design's own failure mode, rebuilt inside
+/// the diagnostics.
+///
+/// Takes `&[&str]` rather than `&[ToolDef]` because the inspector works from config, where a
+/// whole-server grant is known only as `<mcp>:*` and carries no schema to offer.
+pub fn tool_manifest(tool_names: &[&str]) -> String {
+    if tool_names.is_empty() {
+        // A sentence, not an omission: silence here is what invites the model to promise a lookup
+        // it cannot perform.
+        "You have no tools on this turn. Answer from this conversation alone. Do not offer to look \
+         anything up, do not say you will fetch, check, or retrieve anything, and do not suggest \
+         asking again later — you cannot, and a later turn may be no different. If earlier results \
+         appear in this conversation you may cite them, but say plainly that they are from before \
+         and not current."
+            .to_string()
+    } else {
+        format!(
+            "The tools available to you on this turn are exactly: {}.\n\nThis list is current and \
+             complete. Any tool used earlier in this conversation that is absent here has since \
+             been withdrawn — trust this list over the transcript.",
+            tool_names.join(", ")
+        )
+    }
+}
+
 /// A multi-turn conversation: the system prompt plus every exchanged message, in order.
 pub struct Conversation {
     messages: Vec<Message>,
+    /// How many **transient** system messages this view has had injected (profile nudge, tool
+    /// manifest). They are inserted near the front, ahead of the turn's new messages, so anything
+    /// slicing "what this turn added" by a pre-turn length must skip them — see
+    /// [`Conversation::turn_tail`].
+    transient: usize,
 }
 
 impl Conversation {
@@ -95,6 +131,7 @@ impl Conversation {
     pub fn new(system_prompt: impl Into<String>) -> Self {
         Self {
             messages: vec![Message::system(system_prompt)],
+            transient: 0,
         }
     }
 
@@ -102,7 +139,24 @@ impl Conversation {
     /// rehydrating from the store. Unlike `new`, it injects no system prompt; the caller supplies
     /// the full history.
     pub fn from_history(messages: Vec<Message>) -> Self {
-        Self { messages }
+        Self {
+            messages,
+            transient: 0,
+        }
+    }
+
+    /// The messages this turn *added*, given the view's length before it ran.
+    ///
+    /// Not `history()[before..]`. Transient system messages ([`apply_prompt_append`],
+    /// [`apply_available_tools`]) are inserted at the front of the view, which shifts every later
+    /// index right — so a naive slice starts inside the *old* history and re-persists messages that
+    /// are already on disk. That was latent while the only injector was a profile's optional nudge;
+    /// the tool manifest runs every turn, which turned it into a certainty.
+    ///
+    /// [`apply_prompt_append`]: Self::apply_prompt_append
+    /// [`apply_available_tools`]: Self::apply_available_tools
+    pub fn turn_tail(&self, before: usize) -> &[Message] {
+        &self.messages[(before + self.transient).min(self.messages.len())..]
     }
 
     /// One user turn: append the user's message, drive the executor's conversational loop over the
@@ -138,6 +192,109 @@ impl Conversation {
             .await;
         rollback.disarm();
         result
+    }
+
+    /// The model-visible view, for tests asserting where a message landed.
+    #[cfg(test)]
+    pub(crate) fn messages_for_test(&self) -> &[Message] {
+        &self.messages
+    }
+
+    /// Add a session profile's extra prompt text for this turn, if it has any.
+    ///
+    /// Appended as a **second system message** rather than edited into the first, for two reasons.
+    /// The first system message is the conversation's persisted root node — rewriting it would mean
+    /// rewriting history every time a profile changed, and the store is append-only. And the model
+    /// sees this view fresh each turn, so a profile switch takes effect immediately without any
+    /// stored message becoming wrong about which profile was in force when it was written.
+    ///
+    /// Placed right after the base prompt so it reads as a qualification of it rather than as
+    /// something the user said. Idempotent in practice because the view is rebuilt per turn; calling
+    /// it twice on one view would append twice, so don't.
+    pub fn apply_prompt_append(&mut self, extra: Option<&str>) {
+        let Some(text) = extra.map(str::trim).filter(|t| !t.is_empty()) else {
+            return;
+        };
+        let insert_at = self
+            .messages
+            .iter()
+            .position(|m| m.role != Role::System)
+            .unwrap_or(self.messages.len());
+        self.messages.insert(insert_at, Message::system(text));
+        self.transient += 1;
+    }
+
+    /// Swap a persisted **face-agent** system prompt for the direct tool-user one, for this turn's
+    /// view only.
+    ///
+    /// The root system message is chosen once at daemon construction from the process-wide
+    /// `delegation_mode` and persisted append-only, but `delegation` resolves **per turn** from the
+    /// session's profile. Without this, a session that does not delegate is handed
+    /// [`HUMAN_INTERFACE_SYSTEM_PROMPT`] — *"You are a face agent, not a tool user… call the
+    /// `delegate` tool"*, plus an instruction not to enumerate its own tools — while holding no
+    /// `delegate` and a profile's worth of real ones.
+    ///
+    /// That is not a cosmetic mismatch. Observed live on 2026-07-28: asked for its open tasks, a
+    /// `basic-chat` session answered *"I'll fetch your open tasks first."* and issued zero tool
+    /// calls. Models obey the prompt over the tool list, which is the correct behaviour on their
+    /// part — the contradiction was ours.
+    ///
+    /// **Replaces rather than appends.** A corrective second message would leave two contradictory
+    /// instructions in context, which is the confusion being fixed, not a fix for it.
+    ///
+    /// Only the *built-in* face prompt is swapped. An operator who set `main_agent.system_prompt`
+    /// chose that text deliberately for every session, and silently discarding it would be the same
+    /// class of drift in the other direction — the same conservatism
+    /// [`ChatSessions::with_delegation`] already applies when it upgrades the default prompt.
+    ///
+    /// In memory only: the stored root node is never rewritten, so nothing on disk becomes wrong
+    /// about which prompt was in force when it was written. Call before
+    /// [`apply_prompt_append`](Self::apply_prompt_append) so the profile's nudge stays last.
+    pub fn apply_direct_agent_prompt(&mut self) {
+        let Some(first) = self.messages.first_mut() else {
+            return;
+        };
+        if first.role == Role::System && first.content == HUMAN_INTERFACE_SYSTEM_PROMPT {
+            first.content = DEFAULT_SYSTEM_PROMPT.to_string();
+        }
+    }
+
+    /// State, as a derived fact, exactly which tools this turn holds — step 7's capability
+    /// statement, single-sourced.
+    ///
+    /// `tools` must be the catalog of the **same runtime handed to the executor**, not a list
+    /// assembled alongside it. That is the whole point: a prompt that names tools and a request that
+    /// carries them are then one value rendered twice, and cannot disagree. VTCode's `prompts.coder`
+    /// named `write_file` while its toolset shipped `unified_file`, because those were two lists
+    /// maintained separately; ours is one.
+    ///
+    /// Two problems this solves at once:
+    ///
+    /// 1. **Contradiction.** A session whose prompt describes capabilities it does not hold produces
+    ///    a model that announces work and does none (observed 2026-07-28 — see
+    ///    [`Self::apply_direct_agent_prompt`]).
+    /// 2. **Stale evidence.** Tool exchanges survive a profile switch verbatim: rehydration clones
+    ///    every message, so a model that watched itself succeed at a since-revoked tool still has
+    ///    that success in context. A current, complete list outranks it — which is why the closing
+    ///    sentence says so explicitly rather than leaving the model to infer precedence.
+    ///
+    /// Placed **last** among the system messages, after any profile nudge. Recency is the point: it
+    /// is competing with concrete tool successes further up the transcript, and being the final
+    /// instruction before the dialogue is most of what makes it win.
+    ///
+    /// Deliberately mechanical — a list and two flat sentences, no branching rhetoric. Every
+    /// conditional here is a variation point, and enough of them reproduce the failure this whole
+    /// design is meant to avoid.
+    pub fn apply_available_tools(&mut self, tools: &[ToolDef]) {
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        let body = tool_manifest(&names);
+        let insert_at = self
+            .messages
+            .iter()
+            .position(|m| m.role != Role::System)
+            .unwrap_or(self.messages.len());
+        self.messages.insert(insert_at, Message::system(body));
+        self.transient += 1;
     }
 
     /// Append a user message and a plain assistant reply directly, with no executor/tool

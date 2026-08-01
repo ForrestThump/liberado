@@ -446,6 +446,7 @@ mod tests {
                     capabilities: CapabilitySet::empty(),
                     profile: Some("read-only-cron".into()),
                     overrides: serde_json::Value::Null,
+                    ..Default::default()
                 },
             )
             .await

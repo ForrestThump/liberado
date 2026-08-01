@@ -366,6 +366,7 @@ mod tests {
             capabilities,
             profile: None,
             overrides: serde_json::Value::Null,
+            ..Default::default()
         }
     }
 
@@ -569,6 +570,7 @@ mod tests {
                     capabilities,
                     profile: Some("research".into()),
                     overrides: serde_json::Value::Null,
+                    ..Default::default()
                 },
             )
             .await

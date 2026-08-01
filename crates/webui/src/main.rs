@@ -105,6 +105,10 @@ fn App() -> Element {
     // which only Chat has) and `App` sets `dismissed` to close it — the same two-signal split any
     // layer whose visibility is derived would need.
     let palette_visible = use_signal(|| false);
+    // The session-profile picker, and which profile the open chat runs under. Both live here for
+    // the same reason the other pickers do: `App` owns the Back-gesture layer stack.
+    let profile_browser_open = use_signal(|| false);
+    let active_profile = use_signal(|| None::<String>);
     let palette_dismissed = use_signal(|| false);
     // `mut` because the header's menu button toggles it (see below).
     // Default collapsed on narrow (phone-width) viewports so the sidebar doesn't cover the chat
@@ -127,6 +131,7 @@ fn App() -> Element {
         let mut sidebar_collapsed = sidebar_collapsed;
         let mut model_browser_open = model_browser_open;
         let mut theme_browser_open = theme_browser_open;
+        let mut profile_browser_open = profile_browser_open;
         let mut palette_dismissed = palette_dismissed;
         back_nav::install(move || {
             // Innermost first: the palette hovers over the input, a picker sits on top of the
@@ -137,6 +142,8 @@ fn App() -> Element {
                 model_browser_open.set(false);
             } else if theme_browser_open() {
                 theme_browser_open.set(false);
+            } else if profile_browser_open() {
+                profile_browser_open.set(false);
             } else if !sidebar_collapsed() && is_narrow_viewport() {
                 sidebar_collapsed.set(true);
             } else if view() != "chat" {
@@ -150,6 +157,7 @@ fn App() -> Element {
             palette_visible(),
             model_browser_open(),
             theme_browser_open(),
+            profile_browser_open(),
             sidebar_is_a_layer(),
             view() != "chat",
         ]
@@ -226,6 +234,8 @@ fn App() -> Element {
                             theme_browser_open,
                             palette_dismissed,
                             palette_visible,
+                            profile_browser_open,
+                            active_profile,
                         }
                     } else {
                         Dashboard { api_base: base.clone() }

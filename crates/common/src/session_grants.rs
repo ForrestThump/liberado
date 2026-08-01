@@ -94,4 +94,16 @@ mod tests {
         // A different pool is unaffected.
         assert!(session_grant(&pool_b).capabilities.is_empty());
     }
+
+    #[test]
+    fn clear_empties_all_grants() {
+        let id = format!("{:?}", std::thread::current().id());
+        let pool = format!("pool-clear-{id}");
+        let cap = Capability::Write(Zone::vault("sandbox"));
+        grant_for_session(&pool, cap.clone());
+        assert!(session_grant(&pool).contains(&cap));
+
+        clear();
+        assert!(session_grant(&pool).capabilities.is_empty());
+    }
 }

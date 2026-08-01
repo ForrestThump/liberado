@@ -331,4 +331,43 @@ mod tests {
         assert_eq!(events[0].role, "face");
         assert_eq!(events[0].correlation, "-");
     }
+
+    #[tokio::test]
+    async fn metered_provider_forwards_model_getter_and_setter() {
+        let inner: Arc<dyn Provider> = Arc::new(MockProvider::new("original"));
+        let metered =
+            MeteredProvider::new(inner.clone(), AgentRole::Unknown, Arc::new(NoopRecorder));
+
+        assert_eq!(metered.model(), "original");
+
+        metered.set_model("updated".into());
+        assert_eq!(metered.model(), "updated");
+    }
+
+    #[tokio::test]
+    async fn complete_stream_records_ttft_and_final_event() {
+        use futures::StreamExt;
+
+        let rec = Arc::new(CapturingRecorder::default());
+        let inner: Arc<dyn Provider> = Arc::new(MockProvider::with_script(
+            "m",
+            [CompletionResponse::text("hello world")],
+        ));
+        let metered = MeteredProvider::new(inner, AgentRole::Orchestrator, rec.clone());
+
+        let stream = metered
+            .complete_stream(CompletionRequest::new(vec![Message::user("go")]))
+            .await
+            .unwrap();
+        let _items: Vec<_> = stream.collect().await;
+
+        let events = rec.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(
+            events[0].ttft_ms.is_some(),
+            "streamed call should record TTFT"
+        );
+        assert!(events[0].streamed);
+        assert_eq!(events[0].role, "orchestrator");
+    }
 }

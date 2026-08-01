@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc ec8bafee0838c77970daaea7ab2c0c645eb5f9775710c4b219f8dbdc4f9904c4 # shrinks to (a, b, c) = (Table({"a": String("")}), String(""), Table({}))

@@ -187,6 +187,29 @@ impl T1Harness {
             String::from_utf8(bytes.to_vec()).unwrap_or_default(),
         )
     }
+
+    async fn get(&self, uri: &str) -> (StatusCode, String) {
+        let resp = self
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (
+            status,
+            String::from_utf8(bytes.to_vec()).unwrap_or_default(),
+        )
+    }
 }
 
 fn life_capabilities_with_ask_human() -> CapabilitySet {
@@ -1049,6 +1072,7 @@ async fn l2_reopen_store_while_awaiting_input_is_parked_with_question() {
             capabilities: life_capabilities_with_ask_human(),
             profile: None,
             overrides: serde_json::Value::Null,
+            ..Default::default()
         };
         session_id = goals
             .start_with_grant(
@@ -1415,4 +1439,166 @@ async fn a_goal_on_a_domain_with_no_grant_is_refused_with_the_remedy() {
         )
         .await;
     assert_eq!(ok_status, StatusCode::ACCEPTED, "body: {ok_body}");
+}
+
+/// L10 extended: fork through the HTTP surface also works for goal-derived sessions — not just
+/// chat-derived sessions. The `POST /api/sessions/{conv_id}/fork` endpoint is session-agnostic
+/// and should serve both origins equally.
+#[tokio::test]
+async fn l10_fork_via_http_works_for_goal_sessions_too() {
+    use liberado_provider::Message;
+
+    let harness = T1Harness::with_life_pack().await;
+    let sessions = harness.sessions.as_ref();
+
+    // Build a session like a goal would produce
+    let conv = sessions
+        .create_session(liberado_session_store::NewSession {
+            title: Some("t1-goal-fork".into()),
+            ..Default::default()
+        })
+        .await
+        .id;
+
+    let mut parent = None;
+    for i in 1u32..=3u32 {
+        let u = sessions
+            .append(
+                conv,
+                NewNode {
+                    parent_id: parent,
+                    author: Author::User,
+                    message: Message::user(format!("goal-turn-{i}")),
+                },
+            )
+            .await
+            .unwrap();
+        let a = sessions
+            .append(
+                conv,
+                NewNode {
+                    parent_id: Some(u.id),
+                    author: Author::Assistant,
+                    message: Message::assistant(format!("goal-reply-{i}")),
+                },
+            )
+            .await
+            .unwrap();
+        parent = Some(a.id);
+    }
+
+    let (status, body) = harness
+        .post_json(&format!("/api/sessions/{conv}/fork"), r#"{"after_turn":2}"#)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let fork: chat_client_contract::ForkResponse = serde_json::from_str(&body).unwrap();
+    assert_eq!(fork.kept_turns, 2);
+    let fork_id: Ulid = fork.id.parse().unwrap();
+
+    let fork_path = sessions.leaf_path(fork_id, None).await.unwrap();
+    let texts: Vec<&str> = fork_path
+        .iter()
+        .map(|n| n.message.content.as_str())
+        .collect();
+    assert_eq!(
+        texts,
+        vec!["goal-turn-1", "goal-reply-1", "goal-turn-2", "goal-reply-2"],
+        "fork of goal-derived session must hold only the first 2 turns"
+    );
+
+    // Continue original — fork must not grow (copy semantics)
+    let original_path = sessions.leaf_path(conv, None).await.unwrap();
+    let leaf = original_path.last().unwrap().id;
+    sessions
+        .append(
+            conv,
+            NewNode {
+                parent_id: Some(leaf),
+                author: Author::User,
+                message: Message::user("goal-turn-4-after-fork"),
+            },
+        )
+        .await
+        .unwrap();
+
+    let fork_after = sessions.leaf_path(fork_id, None).await.unwrap();
+    assert!(
+        !fork_after
+            .iter()
+            .any(|n| n.message.content == "goal-turn-4-after-fork"),
+        "continuing the original must not move the fork"
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Phase 5: Negative-case API tests — garbage in, correct status out
+// ════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn goals_start_with_malformed_json_is_400() {
+    let harness = T1Harness::with_life_pack().await;
+    let (status, body) = harness.post_json("/api/goals", r#"{not valid json"#).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+}
+
+#[tokio::test]
+async fn goals_start_with_empty_body_is_400() {
+    let harness = T1Harness::with_life_pack().await;
+    let (status, body) = harness.post_json("/api/goals", "").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+}
+
+#[tokio::test]
+async fn goals_get_unknown_id_is_404() {
+    let harness = T1Harness::with_life_pack().await;
+    let (status, body) = harness.get("/api/goals/does-not-exist").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+}
+
+#[tokio::test]
+async fn goals_cancel_unknown_id_is_404() {
+    let harness = T1Harness::with_life_pack().await;
+    let (status, body) = harness
+        .post_json("/api/goals/does-not-exist/cancel", "{}")
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+}
+
+#[tokio::test]
+async fn goals_park_unknown_id_is_404() {
+    let harness = T1Harness::with_life_pack().await;
+    let (status, body) = harness
+        .post_json("/api/goals/does-not-exist/park", "{}")
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+}
+
+#[tokio::test]
+async fn goals_message_unknown_id_is_404() {
+    let harness = T1Harness::with_life_pack().await;
+    let (status, body) = harness
+        .post_json("/api/goals/does-not-exist/message", r#"{"text":"hello"}"#)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+}
+
+#[tokio::test]
+async fn sessions_fork_unknown_id_is_404() {
+    let harness = T1Harness::with_life_pack().await;
+    // Well-formed ULID that does not exist in the store.
+    let missing = Ulid::new().to_string();
+    let (status, body) = harness
+        .post_json(
+            &format!("/api/sessions/{missing}/fork"),
+            r#"{"after_turn":1}"#,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+}
+
+#[tokio::test]
+async fn hooks_unknown_name_is_404() {
+    let harness = T1Harness::with_life_pack().await;
+    let (status, body) = harness.post_json("/api/hooks/no-such-hook", "{}").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
 }

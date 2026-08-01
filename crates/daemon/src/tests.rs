@@ -64,8 +64,33 @@ fn format_cron_delivery_flags_non_success() {
 
 async fn temp_daemon() -> (Daemon, TempDir) {
     let dir = TempDir::new().unwrap();
-    let daemon = Daemon::open("test", dir.path()).await.unwrap();
+    let daemon = Daemon::open("test", dir.path())
+        .await
+        .unwrap()
+        // Approval authority lives outside the vault, so a fixture that executes proposals needs
+        // one attached — rooted inside the same temp dir so it dies with the test. A test that
+        // *approves* something calls `approve_in` for the matching decision; one that does not is
+        // asserting the refusal, which is the default.
+        .with_approval_ledger(test_ledger(&dir));
     (daemon, dir)
+}
+
+/// The ledger `temp_daemon` attaches, addressable from a test that needs to record a decision.
+fn test_ledger(dir: &TempDir) -> liberado_common::ApprovalLedger {
+    liberado_common::ApprovalLedger::new(dir.path().join(".approvals"))
+}
+
+/// Record the human approval a proposal needs before the daemon will run it — the ledger entry a
+/// Telegram tap would create. Without this the note's `status: approved` is only a claim.
+async fn approve_in(dir: &TempDir, proposal_id: &str) {
+    test_ledger(dir)
+        .record(
+            proposal_id,
+            liberado_common::ApprovalDecision::Approved,
+            "test",
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1358,6 +1383,8 @@ async fn daemon_executes_an_approved_proposal() {
     std::fs::create_dir_all(&proposals_dir).unwrap();
 
     let (tx, mut rx) = unbounded_channel();
+    // The note claims approval; this is the human decision that makes it real.
+    approve_in(&dir, "vault-change:test-proposal:abc").await;
     let handle = tokio::spawn(daemon.run(tx));
 
     // Let the watcher establish before writing the proposal file.
@@ -1374,7 +1401,10 @@ async fn daemon_executes_an_approved_proposal() {
             args: serde_json::json!({ "summary": "test task" }),
         }]),
         "a test proposal",
-    );
+    )
+    .with_requested_grant(liberado_common::Capability::Write(
+        liberado_common::Zone::vault("tasks"),
+    ));
     let mut proposal = signer.sign(proposal);
     proposal.set_status(ProposalStatus::Approved);
     std::fs::write(proposals_dir.join("approved.md"), proposal.to_note()).unwrap();
@@ -1416,6 +1446,143 @@ async fn daemon_executes_an_approved_proposal() {
     );
     let parsed = Proposal::from_note(&contents).unwrap();
     assert_eq!(parsed.status, ProposalStatus::Done);
+
+    handle.abort();
+}
+
+/// Full lifecycle through the hub path: vault watch → handle_proposal_change → execute
+/// → archive → grant. Unlike `daemon_executes_an_approved_proposal` (which uses the direct
+/// orchestrator path), this test attaches a hub so the session grant is applied.
+#[tokio::test]
+async fn daemon_hub_proposal_lifecycle_applies_grant() {
+    use liberado_common::{
+        DEFAULT_POOL, GrantScope, Proposal, ProposalSigner, ProposalStatus, ProposedAction,
+        ToolCall, session_grants,
+    };
+    use liberado_executor::{RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime};
+    use liberado_orchestrator::Orchestrator;
+    use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
+    use liberado_session::{GoalSessionHub, GoalSessionStore};
+    use std::sync::Arc;
+
+    struct LpRuntime;
+    #[async_trait::async_trait]
+    impl ToolRuntime for LpRuntime {
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".into())
+        }
+    }
+    struct LpFactory;
+    #[async_trait::async_trait]
+    impl RuntimeFactory for LpFactory {
+        async fn runtime_for(
+            &self,
+            _allowed_mcps: &[String],
+            _provenance: liberado_common::WriteProvenance,
+        ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+            Ok(Box::new(LpRuntime))
+        }
+    }
+
+    let signer = ProposalSigner::random();
+    let orch = Orchestrator::new(
+        Arc::new(MockProvider::with_script(
+            "mock",
+            [CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "c",
+                SUBMIT_REPORT_TOOL,
+                serde_json::json!({ "outcome": "succeeded", "summary": "proposal lifecycle" }),
+            )])],
+        )),
+        LpFactory,
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        signer.clone(),
+        "default",
+    );
+
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(Arc::new(liberado_session::LifeOpsDemoRunner));
+    let hub = Arc::new(hub);
+
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon
+        .with_debounce(Duration::from_millis(80))
+        .with_orchestrator(orch)
+        .with_proposal_signer(signer.clone())
+        .with_goal_hub(hub.clone());
+
+    let proposals_dir = dir.path().join("proposals");
+    std::fs::create_dir_all(&proposals_dir).unwrap();
+
+    let (tx, mut rx) = unbounded_channel();
+    // The note claims approval; this is the human decision that makes it real.
+    approve_in(&dir, "vault-change:lifecycle:1").await;
+
+    let handle = tokio::spawn(daemon.run(tx));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let mut proposal = Proposal::pending(
+        "vault-change:lifecycle:1",
+        "vault-change:lifecycle:1",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "lifecycle test" }),
+        }]),
+        "proposal lifecycle test",
+    )
+    .with_requested_grant(liberado_common::Capability::Write(
+        liberado_common::Zone::vault("lifecycle"),
+    ));
+    proposal.pool = Some(DEFAULT_POOL.to_string());
+    proposal.approved_scope = Some(GrantScope::Session);
+    let mut proposal = signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+    std::fs::write(proposals_dir.join("lifecycle.md"), proposal.to_note()).unwrap();
+
+    let _reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for reaction")
+        .expect("reaction channel closed");
+
+    // Grant applied.
+    let grant = session_grants::session_grant(DEFAULT_POOL);
+    assert!(
+        !grant.capabilities.is_empty(),
+        "hub lifecycle: grant must be non-empty, got {grant:?}"
+    );
+    assert!(
+        grant.contains(&liberado_common::Capability::Write(
+            liberado_common::Zone::vault("lifecycle")
+        )),
+        "hub lifecycle: grant must include Write(vault/\"lifecycle\"): {grant:?}"
+    );
+
+    // Proposal archived.
+    let archived = proposals_dir.join("archive/approved/lifecycle.md");
+    let mut found = false;
+    for _ in 0..50 {
+        if archived.exists() {
+            found = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(found, "proposal must be archived at {archived:?}");
+    assert!(
+        !proposals_dir.join("lifecycle.md").exists(),
+        "archived proposal must be removed from active proposals dir"
+    );
+    let archived_proposal =
+        Proposal::from_note(&std::fs::read_to_string(&archived).unwrap()).unwrap();
+    assert_eq!(archived_proposal.status, ProposalStatus::Done);
 
     handle.abort();
 }
@@ -1956,8 +2123,11 @@ async fn runtime_gated_downgrade_lands_in_the_vault_and_executes_once_approved()
     let handle = tokio::spawn(daemon.run(tx));
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // The human approves — status flips, signature (over the unchanged action/id/etc.) stays
-    // valid.
+    // The human approves. Two things now, and the order is the point: the decision is recorded in
+    // the ledger — outside the vault, where no tool reaches — and the note is updated as the
+    // human-readable view of it. Flipping the note alone would authorise nothing, which is the
+    // whole reason the ledger exists.
+    approve_in(&dir, &written.id).await;
     let mut approved = written;
     approved.status = ProposalStatus::Approved;
     std::fs::write(&proposal_path, approved.to_note()).unwrap();
@@ -2378,4 +2548,1021 @@ async fn l9_cron_event_becomes_joinable_dispatched_session() {
     );
 
     handle.abort();
+}
+
+#[tokio::test]
+async fn stamp_local_time_is_attached_for_cron_events() {
+    use liberado_common::UserTimezone;
+
+    let (mut daemon, _dir) = temp_daemon().await;
+    daemon = daemon.with_user_timezone(UserTimezone::default());
+
+    let event = Event::trigger("CronFired", "cron:test", "cron:test:1", Default::default());
+    assert!(
+        daemon
+            .stamp_local_time_if_needed(&event, "a goal")
+            .is_some(),
+        "cron events without a vault path should get a time stamp"
+    );
+
+    let event = Event::trigger(
+        "NoteChanged",
+        event_source::TURBOVAULT_SUBSCRIPTION,
+        "vault-change:1",
+        liberado_common::EventPayload {
+            path: Some("note.md".into()),
+            ..Default::default()
+        },
+    );
+    assert!(
+        daemon
+            .stamp_local_time_if_needed(&event, "a goal")
+            .is_none(),
+        "vault change events with a path should NOT get a time stamp"
+    );
+
+    let (daemon_no_tz, _dir2) = temp_daemon().await;
+    let event = Event::trigger("CronFired", "cron:test", "cron:test:2", Default::default());
+    assert!(
+        daemon_no_tz
+            .stamp_local_time_if_needed(&event, "a goal")
+            .is_none(),
+        "no timezone configured → no stamp"
+    );
+}
+
+#[tokio::test]
+async fn handle_proposal_change_active_failed_not_expired_does_not_enter_expiry_path() {
+    use chrono::{Duration as ChronoDuration, Utc};
+    use liberado_common::{
+        Capability, DEFAULT_POOL, GrantScope, Proposal, ProposalSigner, ProposalStatus,
+        ProposedAction, ToolCall, WriteProvenance, session_grants,
+    };
+    use liberado_executor::SUBMIT_REPORT_TOOL;
+    use liberado_orchestrator::Orchestrator;
+    use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
+    use liberado_test_support::{InvocationRecordingFactory, InvocationRecordingRuntime};
+    use std::path::Path;
+    use std::sync::Arc;
+
+    let signer = ProposalSigner::random();
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let orch = Orchestrator::new(
+        Arc::new(MockProvider::with_script(
+            "mock",
+            [CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "c1",
+                SUBMIT_REPORT_TOOL,
+                serde_json::json!({ "outcome": "failed", "summary": "something went wrong" }),
+            )])],
+        )),
+        InvocationRecordingFactory { runtime },
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        signer.clone(),
+        "default",
+    );
+
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon
+        .with_orchestrator(orch)
+        .with_proposal_signer(signer.clone());
+
+    let proposals_dir = dir.path().join("proposals");
+    std::fs::create_dir_all(&proposals_dir).unwrap();
+
+    // Proposal is NOT expired (future deadline) — must pass step 4 in handle_proposal_change
+    // and reach the orchestrator. The orchestrator returns Failed but with a generic summary
+    // that does NOT match the expiry refusal summary (lines 184-185).
+    let mut proposal = Proposal::pending(
+        "vault-change:gen-fail:1",
+        "vault-change:gen-fail:1",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "test" }),
+        }]),
+        "generic failure test",
+    )
+    .with_requested_grant(Capability::Write(liberado_common::Zone::vault("sandbox")));
+    proposal.pool = Some(DEFAULT_POOL.to_string());
+    proposal.expires = Some(Utc::now() + ChronoDuration::hours(1));
+    proposal.approved_scope = Some(GrantScope::Session);
+    let mut proposal = signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+
+    let rel = Path::new("proposals/gen-fail.md");
+    let prov = WriteProvenance::agent("test", "c1");
+    daemon
+        .vault
+        .write(rel, &proposal.to_note(), None, &prov)
+        .await
+        .unwrap();
+
+    // The note claims approval; this is the human decision that makes it real.
+    approve_in(&dir, "vault-change:gen-fail:1").await;
+
+    let _outcome = daemon.handle_proposal_change(rel).await.unwrap();
+    assert!(
+        !invoked.lock().unwrap().is_empty(),
+        "tools should have run — the orchestrator returned Failed but not with the expiry refusal"
+    );
+    let grant = session_grants::session_grant(DEFAULT_POOL);
+    assert!(
+        !grant.capabilities.is_empty(),
+        "session grant must be applied when the failed outcome is not the expiry refusal"
+    );
+}
+
+/// L9 extended: a webhook event (not cron) injected via the daemon's event_sender produces a
+/// joinable, terminal background session — proving the event→daemon→hub→session path is
+/// source-agnostic (webhook and cron share the same dispatch pipeline).
+#[tokio::test]
+async fn l9_webhook_event_becomes_joinable_dispatched_session() {
+    use liberado_common::{DispatchAction, DispatchDecision};
+    use liberado_config_loader::DispatchTuning;
+    use liberado_dispatch_pack::{DISPATCH_DOMAIN, DispatchPack};
+    use liberado_executor::{RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime};
+    use liberado_orchestrator::Orchestrator;
+    use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
+    use liberado_session::{
+        GoalSessionHub, GoalSessionStore, SessionStatus, TerminalKind, Visibility,
+    };
+    use std::sync::Arc;
+
+    struct WebhookL9Runtime;
+    #[async_trait::async_trait]
+    impl ToolRuntime for WebhookL9Runtime {
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".into())
+        }
+    }
+    struct WebhookL9Factory;
+    #[async_trait::async_trait]
+    impl RuntimeFactory for WebhookL9Factory {
+        async fn runtime_for(
+            &self,
+            _allowed_mcps: &[String],
+            _provenance: WriteProvenance,
+        ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+            Ok(Box::new(WebhookL9Runtime))
+        }
+    }
+
+    let (daemon, _dir) = temp_daemon().await;
+
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: Vec::new(),
+        },
+        confidence: 0.95,
+        rationale: "webhook task".into(),
+    };
+    let dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "dispatch",
+            [CompletionResponse::text(
+                serde_json::to_string(&decision).unwrap(),
+            )],
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    let orchestrator = Orchestrator::new(
+        Arc::new(MockProvider::with_script(
+            "exec",
+            [CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "c",
+                SUBMIT_REPORT_TOOL,
+                serde_json::json!({ "outcome": "succeeded", "summary": "webhook task done" }),
+            )])],
+        )),
+        WebhookL9Factory,
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    );
+
+    let pack = DispatchPack::new(
+        Arc::new(CapabilityCatalog::new()),
+        Vec::new(),
+        1,
+        std::env::temp_dir(),
+    )
+    .with_pool("default", dispatcher, orchestrator);
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(Arc::new(pack));
+    let hub = Arc::new(hub);
+
+    let grant_dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "unused",
+            Vec::<CompletionResponse>::new(),
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    let daemon = daemon
+        .with_dispatcher(
+            grant_dispatcher,
+            Arc::new(CapabilityCatalog::new()),
+            CapabilitySet::empty(),
+            Vec::new(),
+        )
+        .with_goal_hub(hub.clone());
+
+    let sender = daemon.event_sender();
+    let (tx, mut rx) = unbounded_channel();
+    let handle = tokio::spawn(daemon.run(tx));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Webhook event — same Event::trigger shape the production POST /api/hooks/{name} handler
+    // produces, but injected here to decouple the test from the HTTP layer (which is covered
+    // by the hooks.rs integration tests).
+    sender
+        .send(Event::trigger(
+            "WebhookFired",
+            "webhook:nightly-backup",
+            "webhook:nightly-backup:t1",
+            liberado_common::EventPayload {
+                summary: Some("back up the vault".into()),
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+
+    let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for webhook reaction")
+        .expect("reaction channel closed");
+    assert_eq!(reaction.event.source, "webhook:nightly-backup");
+
+    let session_id = match reaction.outcome {
+        ReactionOutcome::Dispatched { session_id } => session_id,
+        other => panic!("expected Dispatched for webhook, got {}", other.label()),
+    };
+
+    let snap = hub.await_terminal(&session_id).await.expect("terminal");
+    let row = &snap.session;
+
+    assert_eq!(row.visibility, Visibility::Background);
+    assert_eq!(row.goal.description, "back up the vault");
+    assert_eq!(row.status, SessionStatus::Succeeded);
+    assert_eq!(
+        row.result.as_ref().unwrap().terminal,
+        TerminalKind::Succeeded
+    );
+    assert!(
+        row.result.as_ref().unwrap().summary.contains("webhook"),
+        "session summary must contain the webhook work: {:?}",
+        row.result.as_ref().unwrap().summary
+    );
+    assert_eq!(
+        row.goal.domain.as_str(),
+        DISPATCH_DOMAIN,
+        "webhook reaction sessions run under the dispatch domain"
+    );
+
+    handle.abort();
+}
+
+/// L9 extended: notifier delivery confirmation — a webhook-triggered session calls
+/// `Notifier::deliver_cron` with the session's terminal summary once it completes.
+#[tokio::test]
+async fn l9_webhook_session_triggers_notifier_deliver_cron() {
+    use liberado_common::{DispatchAction, DispatchDecision};
+    use liberado_config_loader::DispatchTuning;
+    use liberado_dispatch_pack::DispatchPack;
+    use liberado_executor::{RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime};
+    use liberado_notify::Notifier;
+    use liberado_orchestrator::Orchestrator;
+    use liberado_provider::{CompletionResponse, MockProvider, ToolDef, ToolInvocation};
+    use liberado_session::{GoalSessionHub, GoalSessionStore, SessionStatus};
+    use std::sync::Arc;
+
+    struct L9NotifyRuntime;
+    #[async_trait::async_trait]
+    impl ToolRuntime for L9NotifyRuntime {
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".into())
+        }
+    }
+    struct L9NotifyFactory;
+    #[async_trait::async_trait]
+    impl RuntimeFactory for L9NotifyFactory {
+        async fn runtime_for(
+            &self,
+            _allowed_mcps: &[String],
+            _provenance: WriteProvenance,
+        ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+            Ok(Box::new(L9NotifyRuntime))
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingNotifier {
+        calls: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+    #[async_trait::async_trait]
+    impl Notifier for RecordingNotifier {
+        async fn notify(&self, _message: &str) -> Result<(), liberado_notify::NotifyError> {
+            Ok(())
+        }
+        async fn deliver_cron(&self, message: &str) -> Result<(), liberado_notify::NotifyError> {
+            self.calls.lock().unwrap().push(message.to_string());
+            Ok(())
+        }
+    }
+
+    let recorded_calls: Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let notifier = Arc::new(RecordingNotifier {
+        calls: recorded_calls.clone(),
+    });
+
+    let (daemon, _dir) = temp_daemon().await;
+
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: Vec::new(),
+        },
+        confidence: 0.95,
+        rationale: "notify task".into(),
+    };
+    let dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "dispatch",
+            [CompletionResponse::text(
+                serde_json::to_string(&decision).unwrap(),
+            )],
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    let orchestrator = Orchestrator::new(
+        Arc::new(MockProvider::with_script(
+            "exec",
+            [CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "c",
+                SUBMIT_REPORT_TOOL,
+                serde_json::json!({ "outcome": "succeeded", "summary": "notified task done" }),
+            )])],
+        )),
+        L9NotifyFactory,
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    );
+
+    let pack = DispatchPack::new(
+        Arc::new(CapabilityCatalog::new()),
+        Vec::new(),
+        1,
+        std::env::temp_dir(),
+    )
+    .with_pool("default", dispatcher, orchestrator);
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(Arc::new(pack));
+    let hub = Arc::new(hub);
+
+    let grant_dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "unused",
+            Vec::<CompletionResponse>::new(),
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    let daemon = daemon
+        .with_dispatcher(
+            grant_dispatcher,
+            Arc::new(CapabilityCatalog::new()),
+            CapabilitySet::empty(),
+            Vec::new(),
+        )
+        .with_goal_hub(hub.clone())
+        .with_notifier(notifier);
+
+    let sender = daemon.event_sender();
+    let (tx, mut rx) = unbounded_channel();
+    let handle = tokio::spawn(daemon.run(tx));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    sender
+        .send(Event::trigger(
+            "CronFired",
+            "cron:notify-test",
+            "cron:notify-test:t1",
+            liberado_common::EventPayload {
+                summary: Some("verify notifier delivery".into()),
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+
+    let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for reaction")
+        .expect("reaction channel closed");
+
+    let session_id = match reaction.outcome {
+        ReactionOutcome::Dispatched { session_id } => session_id,
+        other => panic!("expected Dispatched, got {}", other.label()),
+    };
+
+    let snap = hub.await_terminal(&session_id).await.expect("terminal");
+    assert_eq!(
+        snap.session.status,
+        SessionStatus::Succeeded,
+        "notifier-test session should succeed, got {:?}: result={:?}",
+        snap.session.status,
+        snap.session.result
+    );
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let recorded = recorded_calls.lock().unwrap();
+    assert_eq!(
+        recorded.len(),
+        1,
+        "deliver_cron must be called exactly once, got {:?}",
+        *recorded
+    );
+    assert!(
+        recorded[0].contains("notify-test"),
+        "notifier message must contain the schedule name, got: {:?}",
+        recorded[0]
+    );
+
+    handle.abort();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Phase 5: Guard Conformance — dispatcher pre-flight ↔ runtime enforcement
+// ════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn guard_conformance_capability_gap_agrees_both_sides() {
+    use liberado_common::{
+        BlockReason, Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision,
+        McpDescriptor, ToolCall,
+    };
+    use liberado_config_loader::DispatchTuning;
+    use liberado_dispatcher::guards::evaluate;
+    use liberado_executor::{RiskGatedToolRuntime, ToolRuntime};
+    use liberado_provider::{ToolDef, ToolInvocation};
+    use std::sync::Arc;
+
+    let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("tasks-mcp".into())]);
+    let catalog = vec![McpDescriptor {
+        name: "email-mcp".into(),
+        description: "email".into(),
+        consequence: Consequence::Reversible,
+        provenance: None,
+        default_zone: None,
+        tool_zones: Vec::new(),
+        zone_from_arg: None,
+        write_tools: Vec::new(),
+    }];
+
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: vec![ToolCall {
+                tool: "email-mcp:send".into(),
+                args: serde_json::json!({}),
+            }],
+            relevant_mcps: Vec::new(),
+        },
+        confidence: 0.95,
+        rationale: "test".into(),
+    };
+    let req = liberado_dispatcher::DispatchRequest {
+        goal: "send an email".into(),
+        catalog,
+        capabilities: caps.clone(),
+        reaction_depth: 0,
+        zone_write_classes: Vec::new(),
+    };
+    assert_eq!(
+        evaluate(&decision, &req, &DispatchTuning::default(), 4),
+        Some(BlockReason::CapabilityGap),
+        "dispatcher: ungranted MCP must be CapabilityGap"
+    );
+
+    struct NoopRt;
+    #[async_trait::async_trait]
+    impl ToolRuntime for NoopRt {
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".into())
+        }
+    }
+    let rt = RiskGatedToolRuntime::new(
+        Arc::new(NoopRt),
+        caps,
+        vec![("email-mcp".into(), Consequence::Reversible)],
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        "send an email".into(),
+        "t1-guards-cap".into(),
+        ProposalSigner::random(),
+        "default",
+    );
+    let runtime_result = rt
+        .invoke(&ToolInvocation::new(
+            "c1",
+            "email-mcp:send",
+            serde_json::json!({}),
+        ))
+        .await;
+    assert!(
+        runtime_result.is_err(),
+        "runtime must also reject ungranted MCP"
+    );
+}
+
+#[tokio::test]
+async fn guard_conformance_consequence_agrees_on_external_mcp() {
+    use liberado_common::{
+        BlockReason, Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision,
+        McpDescriptor, ToolCall,
+    };
+    use liberado_config_loader::DispatchTuning;
+    use liberado_dispatcher::guards::evaluate;
+    use liberado_executor::{RiskGatedToolRuntime, ToolRuntime};
+    use liberado_provider::{ToolDef, ToolInvocation};
+    use std::sync::Arc;
+
+    let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("email".into())]);
+    let catalog = vec![McpDescriptor {
+        name: "email".into(),
+        description: "send email".into(),
+        consequence: Consequence::External,
+        provenance: None,
+        default_zone: None,
+        tool_zones: Vec::new(),
+        zone_from_arg: None,
+        write_tools: Vec::new(),
+    }];
+
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: vec![ToolCall {
+                tool: "email:send".into(),
+                args: serde_json::json!({}),
+            }],
+            relevant_mcps: Vec::new(),
+        },
+        confidence: 0.95,
+        rationale: "test".into(),
+    };
+    let req = liberado_dispatcher::DispatchRequest {
+        goal: "email my boss".into(),
+        catalog,
+        capabilities: caps.clone(),
+        reaction_depth: 0,
+        zone_write_classes: Vec::new(),
+    };
+    assert_eq!(
+        evaluate(&decision, &req, &DispatchTuning::default(), 4),
+        Some(BlockReason::HighConsequence),
+        "dispatcher: External MCP must be HighConsequence"
+    );
+
+    struct NoopRt2;
+    #[async_trait::async_trait]
+    impl ToolRuntime for NoopRt2 {
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".into())
+        }
+    }
+    let rt = RiskGatedToolRuntime::new(
+        Arc::new(NoopRt2),
+        caps,
+        vec![("email".into(), Consequence::External)],
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        "email my boss".into(),
+        "t1-guards-consequence".into(),
+        ProposalSigner::random(),
+        "default",
+    );
+    let runtime_result = rt
+        .invoke(&ToolInvocation::new(
+            "c1",
+            "email:send",
+            serde_json::json!({}),
+        ))
+        .await;
+    assert!(
+        runtime_result.is_ok() && runtime_result.unwrap().contains("PROPOSAL"),
+        "runtime must downgrade External MCP to a proposal"
+    );
+}
+
+#[tokio::test]
+async fn guard_conformance_magnitude_agrees_on_sweeping_destructive() {
+    use liberado_common::{
+        BlockReason, Capability, CapabilitySet, Consequence, DispatchAction, DispatchDecision,
+        McpDescriptor, ToolCall,
+    };
+    use liberado_config_loader::DispatchTuning;
+    use liberado_dispatcher::guards::evaluate;
+    use liberado_executor::{RiskGatedToolRuntime, ToolRuntime};
+    use liberado_provider::{ToolDef, ToolInvocation};
+    use std::sync::Arc;
+
+    let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("vault".into())]);
+    let catalog = vec![McpDescriptor {
+        name: "vault".into(),
+        description: "git-tracked vault".into(),
+        consequence: Consequence::Reversible,
+        provenance: None,
+        default_zone: None,
+        tool_zones: Vec::new(),
+        zone_from_arg: None,
+        write_tools: Vec::new(),
+    }];
+    let goal = "delete all of my notes and erase everything";
+
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: vec![ToolCall {
+                tool: "vault:write".into(),
+                args: serde_json::json!({}),
+            }],
+            relevant_mcps: Vec::new(),
+        },
+        confidence: 0.95,
+        rationale: "test".into(),
+    };
+    let req = liberado_dispatcher::DispatchRequest {
+        goal: goal.into(),
+        catalog,
+        capabilities: caps.clone(),
+        reaction_depth: 0,
+        zone_write_classes: Vec::new(),
+    };
+    assert_eq!(
+        evaluate(&decision, &req, &DispatchTuning::default(), 4),
+        Some(BlockReason::HighConsequence),
+        "dispatcher: sweeping-destructive goal must be HighConsequence"
+    );
+
+    struct NoopRt3;
+    #[async_trait::async_trait]
+    impl ToolRuntime for NoopRt3 {
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok("ok".into())
+        }
+    }
+    let rt = RiskGatedToolRuntime::new(
+        Arc::new(NoopRt3),
+        caps,
+        vec![("vault".into(), Consequence::Reversible)],
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        goal.into(),
+        "t1-guards-magnitude".into(),
+        ProposalSigner::random(),
+        "default",
+    );
+    let runtime_result = rt
+        .invoke(&ToolInvocation::new(
+            "c1",
+            "vault:write",
+            serde_json::json!({}),
+        ))
+        .await;
+    assert!(
+        runtime_result.is_ok() && runtime_result.unwrap().contains("PROPOSAL"),
+        "runtime must downgrade sweeping-destructive call to a proposal"
+    );
+}
+
+#[tokio::test]
+async fn concurrent_park_and_cancel_do_not_deadlock() {
+    use liberado_session::{
+        DomainHint, DomainPackRunner, GoalResult, GoalSessionHub, GoalSessionStore, GoalSpec,
+        InputChannel, PackContext, PackError, SessionEvent, SessionGrant, SessionStatus,
+    };
+    use std::sync::Arc;
+
+    struct ConcurrentSpyPack {
+        pub cancelled: Arc<std::sync::atomic::AtomicBool>,
+    }
+    #[async_trait::async_trait]
+    impl DomainPackRunner for ConcurrentSpyPack {
+        fn domain_id(&self) -> &str {
+            "life"
+        }
+        async fn run(
+            &self,
+            _id: &str,
+            _goal: &GoalSpec,
+            _ctx: &PackContext<'_>,
+            _events: tokio::sync::mpsc::Sender<SessionEvent>,
+            _inputs: InputChannel,
+            mut cancel: tokio::sync::watch::Receiver<bool>,
+        ) -> Result<GoalResult, PackError> {
+            loop {
+                tokio::select! {
+                    _ = cancel.changed() => {
+                        self.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+                        return Err(PackError::Cancelled);
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                }
+            }
+        }
+    }
+
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let pack = Arc::new(ConcurrentSpyPack {
+        cancelled: cancelled.clone(),
+    });
+
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(pack);
+    let hub = Arc::new(hub);
+
+    let session_id = hub
+        .start_with_grant(
+            GoalSpec {
+                id: None,
+                description: "concurrent test".into(),
+                success_criteria: vec![],
+                domain: DomainHint::Life,
+                max_turns: 0,
+                max_idle_secs: None,
+                origin: None,
+                profile: None,
+                payload: serde_json::json!({}),
+            },
+            SessionGrant {
+                capabilities: liberado_common::CapabilitySet::from_iter([
+                    liberado_common::Capability::AskHuman,
+                ]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("start session");
+
+    // Wait for Running via snapshot loop
+    for _ in 0..100 {
+        if let Some(snap) = hub.snapshot(&session_id).await
+            && snap.session.status == SessionStatus::Running
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // Spawn concurrent snapshot + cancel tasks
+    let hub_cancel = hub.clone();
+    let hub_poll = hub.clone();
+    let sid_kill = session_id.clone();
+    let sid_poll = session_id.clone();
+
+    let cancel_task = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let _ = hub_cancel.cancel(&sid_kill).await;
+    });
+    let poll_task = tokio::spawn(async move {
+        for _ in 0..100 {
+            if let Some(snap) = hub_poll.snapshot(&sid_poll).await
+                && snap.session.status.is_terminal()
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let _ = tokio::join!(cancel_task, poll_task);
+    })
+    .await
+    .expect("concurrent snapshot + cancel must not deadlock");
+
+    // Ground truth: session reached terminal
+    let snap = hub.snapshot(&session_id).await.expect("snapshot");
+    assert!(
+        snap.session.status.is_terminal(),
+        "session must be terminal after concurrent park/cancel, got {:?}",
+        snap.session.status
+    );
+    assert_eq!(
+        snap.session.status,
+        SessionStatus::Cancelled,
+        "session must be Cancelled after concurrent cancel"
+    );
+    assert!(
+        cancelled.load(std::sync::atomic::Ordering::SeqCst),
+        "pack must have seen cancellation signal"
+    );
+    // State-machine invariants must hold after terminal.
+    liberado_session::check_session_invariants(&snap.session)
+        .expect("session invariants violated after concurrent cancel");
+}
+
+/// The approval field of the approval mechanism used to be writable by the thing being gated:
+/// `proposals/` is `agent_writable` in policy, and `status` sits outside the integrity signature so
+/// a human can flip it without invalidating the hash. Each is right alone. Together they meant a
+/// note claiming `status: approved` *was* the authorisation.
+///
+/// It no longer is. Authority is a ledger under `<LIBERADO_DATA_DIR>/`, which no MCP mounts and no
+/// tool addresses; the note is a view.
+#[tokio::test]
+async fn an_approved_note_without_a_recorded_decision_does_not_execute() {
+    use liberado_common::{
+        ApprovalDecision, ApprovalLedger, Proposal, ProposalSigner, ProposalStatus, ProposedAction,
+        ToolCall,
+    };
+
+    let signer = ProposalSigner::random();
+    let (daemon, dir) = temp_daemon().await;
+    let ledger_dir = tempfile::tempdir().unwrap();
+    let ledger = ApprovalLedger::new(ledger_dir.path());
+    let daemon = daemon
+        .with_proposal_signer(signer.clone())
+        .with_approval_ledger(ledger.clone());
+
+    std::fs::create_dir_all(dir.path().join("proposals")).unwrap();
+
+    let proposal = Proposal::pending(
+        "prop-forged",
+        "corr-forged",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "not authorised" }),
+        }]),
+        "an agent flipped this",
+    );
+    // Exactly what an agent's `edit_note` produces: a correctly-signed proposal whose `status` says
+    // approved. The signature still verifies — `status` was never covered by it, deliberately.
+    let mut proposal = signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+    assert!(
+        daemon.signer.verify(&proposal),
+        "the forged note must pass integrity — that is precisely why it needed a second check"
+    );
+
+    let rel = Path::new("proposals/prop-forged.md");
+    daemon
+        .vault
+        .write(
+            rel,
+            &proposal.to_note(),
+            None,
+            &WriteProvenance::agent("test", "c1"),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(
+            daemon.handle_proposal_change(rel).await.unwrap(),
+            ReactionOutcome::Observed
+        ),
+        "an approved-looking note with no human decision behind it must not execute"
+    );
+
+    // ...and a real decision *is* recorded and readable, so this is a gate rather than a blanket
+    // refusal that would break approvals entirely.
+    ledger
+        .record("prop-forged", ApprovalDecision::Approved, "telegram")
+        .await
+        .unwrap();
+    assert_eq!(
+        ledger.decision_for("prop-forged").await,
+        Some(ApprovalDecision::Approved),
+        "the recorded decision is what the daemon consults"
+    );
+}
+
+/// A daemon built without a ledger approves nothing: a missing security dependency must refuse
+/// rather than wave things through.
+#[tokio::test]
+async fn a_daemon_with_no_ledger_executes_nothing() {
+    use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall};
+
+    let signer = ProposalSigner::random();
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon.with_proposal_signer(signer.clone());
+    std::fs::create_dir_all(dir.path().join("proposals")).unwrap();
+
+    let proposal = Proposal::pending(
+        "prop-noledger",
+        "corr-noledger",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "x" }),
+        }]),
+        "no ledger attached",
+    );
+    let mut proposal = signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+
+    let rel = Path::new("proposals/prop-noledger.md");
+    daemon
+        .vault
+        .write(rel, &proposal.to_note(), None, &WriteProvenance::human())
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(
+            daemon.handle_proposal_change(rel).await.unwrap(),
+            ReactionOutcome::Observed
+        ),
+        "no ledger means no authority to execute under"
+    );
+}
+
+/// A **permission request** is a proposal, and `handle_proposal_change` is what runs the blocked
+/// call, so it passes the same ledger gate as any other. This nearly shipped broken: the ledger was
+/// wired into the bot's ordinary approve path and not its permission path, which would have flipped
+/// the note, then had the daemon refuse it — a tap that appeared to do nothing.
+#[tokio::test]
+async fn a_permission_request_also_needs_a_recorded_decision() {
+    use liberado_common::{
+        Capability, Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall, Zone,
+    };
+
+    let signer = ProposalSigner::random();
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon.with_proposal_signer(signer.clone());
+    std::fs::create_dir_all(dir.path().join("proposals")).unwrap();
+
+    let proposal = Proposal::pending(
+        "perm-gated",
+        "corr-perm",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "needs permission" }),
+        }]),
+        "a permission request",
+    )
+    .with_requested_grant(Capability::Write(Zone::vault("sandbox")));
+    let mut proposal = signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+
+    let rel = Path::new("proposals/perm-gated.md");
+    daemon
+        .vault
+        .write(rel, &proposal.to_note(), None, &WriteProvenance::human())
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(
+            daemon.handle_proposal_change(rel).await.unwrap(),
+            ReactionOutcome::Observed
+        ),
+        "an approved permission note with no recorded decision must not run the blocked call"
+    );
+
+    // With the decision recorded — what a Telegram tap now writes — it is no longer refused here.
+    approve_in(&dir, "perm-gated").await;
+    assert_eq!(
+        test_ledger(&dir).decision_for("perm-gated").await,
+        Some(liberado_common::ApprovalDecision::Approved),
+    );
 }

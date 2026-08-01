@@ -21,8 +21,11 @@ tokio = { workspace = true }
 futures = { workspace = true }
 
 [dev-dependencies]
+# Test-only: the freezable clock for the wall-clock-budget tests.
+liberado-common = { workspace = true, features = ["test-clock"] }
 tokio = { workspace = true }
 tempfile = { workspace = true }
+proptest = "1"
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)

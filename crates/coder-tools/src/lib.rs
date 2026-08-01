@@ -788,4 +788,205 @@ mod tests {
             .unwrap();
         assert_eq!(read["content"], "hello");
     }
+
+    #[tokio::test]
+    async fn list_files_returns_workspace_contents() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("a.txt"), "a\n").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "b\n").unwrap();
+
+        let result = runtime.invoke_json("list_files", json!({})).await.unwrap();
+
+        let files = result["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert!(files.contains(&"a.txt".to_string()), "should contain a.txt");
+        assert!(files.contains(&"b.txt".to_string()), "should contain b.txt");
+    }
+
+    #[tokio::test]
+    async fn list_files_respects_limit() {
+        let (dir, runtime) = runtime();
+        for i in 0..10 {
+            std::fs::write(dir.path().join(format!("f{i}.txt")), "x\n").unwrap();
+        }
+
+        let result = runtime
+            .invoke_json("list_files", json!({"limit": 3}))
+            .await
+            .unwrap();
+
+        assert_eq!(result["limit"], 3);
+        let files = result["files"].as_array().unwrap();
+        assert!(files.len() <= 3, "limit 3 should cap results");
+    }
+
+    #[tokio::test]
+    async fn search_text_respects_limit_and_multi_match_file() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("notes.txt"), "alpha\nalpha\nbeta\n").unwrap();
+
+        let result = runtime
+            .invoke_json("search_text", json!({"query": "alpha", "limit": 1}))
+            .await
+            .unwrap();
+
+        assert_eq!(result["matches"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn edit_file_writes_unique_old_text() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("doc.txt"), "original content\n").unwrap();
+
+        let result = runtime
+            .invoke_json(
+                "edit_file",
+                json!({"path": "doc.txt", "old": "original", "new": "REVISED"}),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result["replacements"], 1);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("doc.txt")).unwrap(),
+            "REVISED content\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_patch_rejects_ambiguous_edit() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("dup.txt"), "duplicate\nduplicate\n").unwrap();
+
+        let err = runtime
+            .invoke_json(
+                "apply_patch",
+                json!({
+                    "edits": [
+                        {"path": "dup.txt", "old": "duplicate", "new": "replaced"}
+                    ]
+                }),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("matched 2 times"));
+    }
+
+    #[tokio::test]
+    async fn git_status_returns_result() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("new.txt"), "new file\n").unwrap();
+
+        let result = runtime.invoke_json("git_status", json!({})).await.unwrap();
+
+        // Not in a git repo, so exit_code will be Some(128) but the tool should not crash.
+        assert!(
+            result["exit_code"].is_number() || result["timed_out"] == false,
+            "git_status should return exit_code and timed_out"
+        );
+    }
+
+    #[tokio::test]
+    async fn git_diff_returns_result() {
+        let _dir = tempfile::tempdir().unwrap();
+        let runtime =
+            CodingToolRuntime::new(_dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json("git_diff", json!({"mode": "name_only"}))
+            .await
+            .unwrap();
+
+        assert!(
+            result["mode"] == "name_only",
+            "git_diff should return the requested mode"
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_contains_expected_tools() {
+        let (_dir, runtime) = runtime();
+        let catalog = runtime.catalog();
+        let names: Vec<&str> = catalog.iter().map(|t| t.name.as_str()).collect();
+        for tool in &[
+            "list_files",
+            "search_text",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "apply_patch",
+            "git_status",
+            "git_diff",
+            "run_command",
+            "validate",
+        ] {
+            assert!(
+                names.contains(tool),
+                "catalog should contain {tool}, got: {names:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn invoke_round_trips_through_invoke_json() {
+        let (_dir, runtime) = runtime();
+        let call = liberado_provider::ToolInvocation {
+            id: "t1".to_string(),
+            name: "validate".to_string(),
+            arguments: json!({}),
+        };
+        let result = runtime.invoke(&call).await.unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["configured"], false);
+    }
+
+    #[tokio::test]
+    async fn write_blocked_by_path_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        // Restrict writes to "src/**" only — anything else should be denied.
+        let policy = PathPolicy {
+            allow_write_globs: vec!["src/**".to_string()],
+            ..PathPolicy::default()
+        };
+        let runtime = CodingToolRuntime::new(dir.path(), CommandPolicy::default(), policy).unwrap();
+
+        let err = runtime
+            .invoke_json("write_file", json!({"path": "README.md", "content": "x"}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ToolError::PathDenied(_)));
+
+        // Writing to src/ should be allowed.
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        let ok = runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "src/main.rs", "content": "fn main() {}"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ok["written"], true);
+    }
+
+    #[tokio::test]
+    async fn walk_files_respects_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..10 {
+            std::fs::write(dir.path().join(format!("f{i}.txt")), "x\n").unwrap();
+        }
+
+        let mut count = 0usize;
+        walk_files(dir.path(), 3, |_| {
+            count += 1;
+        })
+        .unwrap();
+
+        assert_eq!(count, 3, "walk_files should visit at most 3 files");
+    }
 }

@@ -488,7 +488,7 @@ mod wire_seam {
     use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
     /// Captures each request body it serves, so a test can assert on what was sent.
-    struct Capture {
+    pub(crate) struct Capture {
         bodies: Arc<Mutex<Vec<Value>>>,
         response: ResponseTemplate,
     }
@@ -504,7 +504,9 @@ mod wire_seam {
 
     /// A chat-completions server that records what it was sent. Returns the server (which must be
     /// kept alive for the duration of the call) and the handle the bodies land in.
-    async fn recording_server(response: ResponseTemplate) -> (MockServer, Arc<Mutex<Vec<Value>>>) {
+    pub(crate) async fn recording_server(
+        response: ResponseTemplate,
+    ) -> (MockServer, Arc<Mutex<Vec<Value>>>) {
         let server = MockServer::start().await;
         let bodies = Arc::new(Mutex::new(Vec::new()));
         Mock::given(method("POST"))
@@ -518,7 +520,7 @@ mod wire_seam {
         (server, bodies)
     }
 
-    fn ok_reply() -> ResponseTemplate {
+    pub(crate) fn ok_reply() -> ResponseTemplate {
         ResponseTemplate::new(200).set_body_json(json!({
             "choices": [{ "message": { "role": "assistant", "content": "ok" } }]
         }))
@@ -825,5 +827,64 @@ mod wire_seam {
             .await;
         provider_at(&server).complete(one_turn()).await.unwrap();
         // `expect(1)` is verified on drop — an unauthenticated request would not have matched.
+    }
+}
+
+/// CH4: a session profile's model must reach the wire without mutating the shared provider.
+#[cfg(test)]
+mod per_request_model {
+    use super::wire_seam::*;
+    use super::*;
+    use liberado_provider::Message;
+
+    #[tokio::test]
+    async fn a_request_model_overrides_the_providers_own() {
+        let (server, bodies) = recording_server(ok_reply()).await;
+        let provider = OpenAiCompatibleProvider::new("sk-test", "daemon-default", server.uri());
+        let request = CompletionRequest::new(vec![Message::user("hi")])
+            .with_model(Some("deepseek/deepseek-v4-flash".into()));
+
+        provider.complete(request).await.unwrap();
+
+        assert_eq!(
+            bodies.lock().unwrap()[0]["model"],
+            json!("deepseek/deepseek-v4-flash"),
+            "a profile naming a model must beat the daemon default"
+        );
+        assert_eq!(
+            provider.model(),
+            "daemon-default",
+            "and must not mutate the provider every other session shares"
+        );
+    }
+
+    #[tokio::test]
+    async fn without_a_request_model_the_provider_still_decides() {
+        let (server, bodies) = recording_server(ok_reply()).await;
+        let provider = OpenAiCompatibleProvider::new("sk-test", "daemon-default", server.uri());
+        provider
+            .complete(CompletionRequest::new(vec![Message::user("hi")]))
+            .await
+            .unwrap();
+        assert_eq!(bodies.lock().unwrap()[0]["model"], json!("daemon-default"));
+    }
+
+    /// The hot-swap (`/model` in the TUI) and a profile can disagree. The profile wins: naming a
+    /// model in config is an explicit per-session choice, the swap is a daemon-wide default.
+    #[tokio::test]
+    async fn a_request_model_also_beats_a_hot_swapped_one() {
+        let (server, bodies) = recording_server(ok_reply()).await;
+        let provider = OpenAiCompatibleProvider::new("sk-test", "original", server.uri());
+        provider.set_model("hot-swapped".into());
+
+        provider
+            .complete(
+                CompletionRequest::new(vec![Message::user("hi")])
+                    .with_model(Some("profile-model".into())),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(bodies.lock().unwrap()[0]["model"], json!("profile-model"));
     }
 }

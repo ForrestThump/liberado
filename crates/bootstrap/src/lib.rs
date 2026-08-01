@@ -457,7 +457,12 @@ pub fn configure_daemon(
             capabilities.clone(),
             guard.zone_write_classes.clone(),
         )
-        .with_proposal_signer(guard.signer.clone());
+        .with_proposal_signer(guard.signer.clone())
+        // Approval decisions live outside the vault, where no MCP mounts and no tool reaches. A
+        // daemon without this executes nothing — see `Daemon::with_approval_ledger`.
+        .with_approval_ledger(liberado_common::ApprovalLedger::new(
+            liberado_config::data_dir(),
+        ));
     let daemon = match &notifier {
         Some(n) => daemon.with_notifier(n.clone()),
         None => daemon,

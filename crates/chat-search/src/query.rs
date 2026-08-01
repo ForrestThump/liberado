@@ -175,3 +175,55 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod proptest_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn proptest_literal_matches_agrees_with_reference(
+            terms in proptest::collection::vec("[a-z]{1,6}", 1..5),
+            haystack in "[a-zA-Z ]{0,40}",
+        ) {
+            let input = terms.join(" ");
+            let Ok(q) = ParsedQuery::parse_literal(&input) else {
+                return Ok(());
+            };
+            let lower = haystack.to_lowercase();
+            let expected = terms.iter().all(|t| lower.contains(&t.to_lowercase()));
+            prop_assert_eq!(q.matches(&haystack), expected);
+        }
+
+        #[test]
+        fn proptest_find_start_consistency(
+            terms in proptest::collection::vec("[a-z]{2,6}", 1..4),
+            haystack in "[a-zA-Z ]{0,80}",
+        ) {
+            let input = terms.join(" ");
+            let Ok(q) = ParsedQuery::parse_literal(&input) else {
+                return Ok(());
+            };
+            if q.matches(&haystack) {
+                let start = q.find_start(&haystack);
+                prop_assert!(start.is_some());
+                prop_assert!(start.unwrap() <= haystack.len());
+            }
+        }
+
+        #[test]
+        fn proptest_regex_parse_no_panic(
+            pattern in ".{0,20}",
+        ) {
+            let _ = ParsedQuery::parse_regex(&pattern);
+        }
+
+        #[test]
+        fn proptest_literal_empty_rejected(
+            space in "\\s+",
+        ) {
+            prop_assert!(ParsedQuery::parse_literal(&space).is_err());
+        }
+    }
+}

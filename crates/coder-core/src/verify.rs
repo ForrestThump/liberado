@@ -340,4 +340,52 @@ mod tests {
         assert!(fb.contains("src/main.rs"));
         assert!(fb.contains("Fix these"));
     }
+
+    // ── Verdict constructors ────────────────────────────────────────────────
+
+    #[test]
+    fn verdict_pass_sets_status_and_summary() {
+        let v = Verdict::pass("all good");
+        assert_eq!(v.status, VerdictStatus::Pass);
+        assert_eq!(v.summary, "all good");
+        assert!(v.is_pass());
+        assert!(v.findings.is_empty());
+    }
+
+    #[test]
+    fn verdict_fail_sets_signature_and_findings() {
+        let findings = vec![Finding {
+            check_id: "paths".into(),
+            kind: FindingKind::MissingPath,
+            message: "missing".into(),
+            detail: None,
+        }];
+        let v = Verdict::fail("not ok", findings.clone(), Some("log text".into()));
+        assert_eq!(v.status, VerdictStatus::Fail);
+        assert!(!v.is_pass());
+        assert_eq!(v.findings.len(), 1);
+        assert!(v.signature.is_some());
+    }
+
+    #[test]
+    fn verdict_error_sets_signature_from_summary() {
+        let v = Verdict::error("command died");
+        assert_eq!(v.status, VerdictStatus::Error);
+        assert!(!v.is_pass());
+        assert_eq!(v.signature.as_deref(), Some("error:command died"));
+    }
+
+    #[test]
+    fn signature_for_stable_across_calls() {
+        let findings = vec![Finding {
+            check_id: "paths".into(),
+            kind: FindingKind::MissingPath,
+            message: "missing".into(),
+            detail: None,
+        }];
+        let sig1 = signature_for(&findings, Some("log"));
+        let sig2 = signature_for(&findings, Some("log"));
+        assert_eq!(sig1, sig2, "signature must be deterministic");
+        assert!(!sig1.is_empty());
+    }
 }

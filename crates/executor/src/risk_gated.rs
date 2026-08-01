@@ -44,7 +44,7 @@ use async_trait::async_trait;
 use liberado_common::{
     Capability, CapabilityCatalog, CapabilitySet, Consequence, McpDescriptor, Proposal,
     ProposalSigner, ProposedAction, WriteClass, WriteTarget, Zone, bare_tool_name,
-    is_sweeping_destructive, mcp_of, write_target,
+    is_sweeping_destructive, mcp_of, names_single_write_target, write_target,
 };
 use liberado_notify::Notifier;
 use liberado_provider::{ToolDef, ToolInvocation};
@@ -97,6 +97,10 @@ pub struct RiskGatedToolRuntime {
     /// failed — then the chat reply is the only signal and must NOT be suppressed. Defaults to a
     /// private, unshared flag (a runtime nobody wired one into simply never reports a deferral).
     notified_deferral: Arc<AtomicBool>,
+    /// Set `true` by tests to simulate `create_dir_all` failing on the next proposal downgrade.
+    pub fail_next_create_dir: Arc<AtomicBool>,
+    /// Set `true` by tests to simulate `write` failing on the next proposal downgrade.
+    pub fail_next_write: Arc<AtomicBool>,
 }
 
 impl RiskGatedToolRuntime {
@@ -141,6 +145,8 @@ impl RiskGatedToolRuntime {
             pool_name: pool_name.into(),
             notifier: None,
             notified_deferral: Arc::new(AtomicBool::new(false)),
+            fail_next_create_dir: Arc::new(AtomicBool::new(false)),
+            fail_next_write: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -219,16 +225,22 @@ impl RiskGatedToolRuntime {
         }
     }
 
-    fn write_target_of(&self, mcp_name: &str, call: &ToolInvocation) -> WriteTarget {
-        let descriptor = if let Some(cat) = &self.live_catalog {
+    /// The declaration this call is judged against — the live catalog when one is attached, else
+    /// the boot-time snapshot. Shared by the zone-write guard and the magnitude guard so both read
+    /// the same declaration for one call.
+    fn descriptor_of(&self, mcp_name: &str) -> Option<McpDescriptor> {
+        if let Some(cat) = &self.live_catalog {
             cat.get(mcp_name)
         } else {
             self.zone_catalog
                 .iter()
                 .find(|d| d.name == mcp_name)
                 .cloned()
-        };
-        descriptor
+        }
+    }
+
+    fn write_target_of(&self, mcp_name: &str, call: &ToolInvocation) -> WriteTarget {
+        self.descriptor_of(mcp_name)
             .map(|d| write_target(&d, bare_tool_name(&call.name), &call.arguments))
             .unwrap_or(WriteTarget::NotAWrite)
     }
@@ -422,16 +434,28 @@ impl ToolRuntime for RiskGatedToolRuntime {
             // other — and a goal carrying pasted content (a report to file, a note to save) tripped
             // this one on words from the content rather than the instruction.
             //
-            // The *arguments* are still scanned in full and deliberately so. That is where a real
-            // "delete all" actually appears at this layer, and it is the reason capping the goal
-            // text upstream stays safe.
-            let args_text = call.arguments.to_string();
+            // The arguments are scanned too — that is where a real "delete all" appears at this
+            // layer — **unless the call already names exactly one target**. `Magnitude` measures
+            // reach, and for a path-addressed write the reach is declared, not inferred: one path,
+            // one note. Scanning the payload there means scanning *the content being saved*, so a
+            // report discussing organizations being "destroyed" by "every" coalition read as an
+            // order to delete everything and a requested write-up became a permission prompt
+            // (`prop-1785557626819756862`, 2026-08-01).
+            //
+            // Structure first, prose only where reach is genuinely unknown: a fixed-zone tool, a
+            // missing path, an MCP that declares no zone at all. The goal is always read, so
+            // "delete all my notes" still gates however the call is shaped.
+            let names_one_target = self
+                .descriptor_of(&mcp_name)
+                .is_some_and(|d| names_single_write_target(&d, bare_tool_name(&call.name), &call.arguments));
             let full_context = format!(
                 "{} {}",
                 liberado_common::instruction_scope(&self.goal_context),
                 call.name
             );
-            if is_sweeping_destructive(&args_text) || is_sweeping_destructive(&full_context) {
+            let sweeping_payload =
+                !names_one_target && is_sweeping_destructive(&call.arguments.to_string());
+            if sweeping_payload || is_sweeping_destructive(&full_context) {
                 self.authority_decision(
                     "magnitude",
                     "proposal",
@@ -464,6 +488,47 @@ impl RiskGatedToolRuntime {
     /// therefore the user) that something is queued for approval when nothing was actually saved,
     /// with no way for either to notice. So a write failure here is a real tool-level error, fed
     /// back in-band like any other (`ToolRuntime::invoke`'s own contract), not swallowed.
+    /// An already-pending proposal for this exact call, if one exists.
+    ///
+    /// Matches on the proposed action — tool name and arguments — rather than on any id, because the
+    /// retry that creates the duplicate is a fresh attempt at the same action. Only `Pending`
+    /// counts: an approved-and-archived proposal is finished, and a rejected one must not silently
+    /// suppress a later request.
+    ///
+    /// A read failure is not an error here. If the directory cannot be scanned, falling through and
+    /// creating a new proposal is the safe direction — a duplicate notification is a nuisance, a
+    /// silently dropped approval request is a hole.
+    async fn pending_proposal_for(
+        &self,
+        proposals_subdir: &std::path::Path,
+        call: &ToolInvocation,
+    ) -> Option<PathBuf> {
+        let mut entries = tokio::fs::read_dir(proposals_subdir).await.ok()?;
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "md") {
+                continue;
+            }
+            let Ok(content) = tokio::fs::read_to_string(&path).await else {
+                continue;
+            };
+            let Ok(proposal) = liberado_common::Proposal::from_note(&content) else {
+                continue;
+            };
+            if proposal.status != liberado_common::ProposalStatus::Pending {
+                continue;
+            }
+            if let ProposedAction::ToolCalls(calls) = &proposal.proposed_action
+                && calls.len() == 1
+                && calls[0].tool == call.name
+                && calls[0].args == call.arguments
+            {
+                return Some(path);
+            }
+        }
+        None
+    }
+
     async fn write_proposal(
         &self,
         call: &ToolInvocation,
@@ -486,6 +551,22 @@ impl RiskGatedToolRuntime {
         // daemon's react() routes changes here into the same approve/execute pipeline the
         // dispatcher's own pre-flight proposals use.
         let proposals_subdir = self.proposals_dir.join(liberado_common::PROPOSALS_DIR);
+
+        // A gated call comes back as a tool *result*, so the model sees the action did not happen
+        // and tries again — reasonably. Without this, every attempt mints another proposal and the
+        // human gets another notification for one intent: three taps for one file, live on
+        // 2026-08-01 (`sub:30060787b5943f7b`, three proposals 43s apart, same path, same rationale).
+        //
+        // Identity is the *action* — same tool, same arguments, still pending — not the attempt.
+        if let Some(existing) = self.pending_proposal_for(&proposals_subdir, call).await {
+            tracing::info!(
+                path = %existing.display(),
+                tool = %call.name,
+                "an equivalent proposal is already awaiting approval; not creating another"
+            );
+            return Ok(existing);
+        }
+
         let proposal_path = proposals_subdir.join(format!("{proposal_id}.md"));
 
         let mut proposal = Proposal::pending(
@@ -504,6 +585,9 @@ impl RiskGatedToolRuntime {
         let note = proposal.to_note();
 
         // Create the proposals directory if it doesn't exist.
+        if self.fail_next_create_dir.swap(false, Ordering::Relaxed) {
+            return Err("simulated create_dir_all failure — proposal was NOT saved".into());
+        }
         if let Err(e) = tokio::fs::create_dir_all(&proposals_subdir).await {
             tracing::error!(
                 path = %proposals_subdir.display(),
@@ -518,6 +602,9 @@ impl RiskGatedToolRuntime {
             ));
         }
 
+        if self.fail_next_write.swap(false, Ordering::Relaxed) {
+            return Err("simulated write failure — proposal was NOT saved".into());
+        }
         if let Err(e) = tokio::fs::write(&proposal_path, &note).await {
             tracing::error!(
                 path = %proposal_path.display(),
@@ -654,12 +741,27 @@ fn permission_request_message(path: &std::path::Path, zone: &str) -> String {
     )
 }
 
-/// The tool *result* returned for a downgraded high-consequence/sweeping call. Phrased so the model
-/// relays it unambiguously: the action did NOT run and waits on human approval.
+/// The tool *result* returned for a downgraded high-consequence/sweeping call.
+///
+/// Addressed to the **model**, because that is who reads it — this is a tool result, not a
+/// notification. The previous wording ("it is high-consequence and needs *your* approval") was
+/// second person to a human, and produced exactly the two behaviours you would predict once a model
+/// reads it instead. It retried, because the action "was NOT executed" reads as a failure; and it
+/// tried to approve the proposal itself, because approval was described as its to give. Live on
+/// 2026-08-01, turn 7: *"I see - the system is gating write operations behind proposals. Let me
+/// approve the proposal by editing its status."* — followed by a `turbovault:edit_note` against the
+/// proposal file.
+///
+/// So state plainly that this is not a failure, that a human decides out of band, and that neither
+/// retrying nor editing the proposal will help — those being the two things it otherwise tries next.
 fn proposal_message(path: &std::path::Path) -> String {
     format!(
-        "PROPOSAL CREATED — the requested action was NOT executed. It is high-consequence and needs \
-         your approval. Proposal saved at {}. It will run only after you approve it.",
+        "PROPOSAL CREATED — this action is queued for a human to approve, and did not run now. This \
+         is not an error and not a failure of your request. A human approves or rejects it out of \
+         band, and it runs automatically if they approve. Do NOT retry this call, and do NOT edit \
+         the proposal: you cannot approve it yourself, and retrying only creates duplicate requests \
+         for the same action. Treat this step as handed off, say it is awaiting approval, and \
+         continue with any remaining work that does not depend on it. Proposal saved at {}.",
         path.display()
     )
 }
@@ -693,14 +795,14 @@ mod tests {
     use liberado_provider::ToolDef;
 
     /// A mock inner runtime that returns a canned result.
-    struct MockInner {
+    pub(crate) struct MockInner {
         tools: Vec<ToolDef>,
-        invoked: std::sync::Mutex<Vec<ToolInvocation>>,
+        pub(crate) invoked: std::sync::Mutex<Vec<ToolInvocation>>,
         result: Result<String, String>,
     }
 
     impl MockInner {
-        fn new(tool_names: &[&str], result: Result<String, String>) -> Self {
+        pub(crate) fn new(tool_names: &[&str], result: Result<String, String>) -> Self {
             let tools = tool_names
                 .iter()
                 .map(|n| ToolDef::new(*n, "test tool", serde_json::json!({ "type": "object" })))
@@ -839,7 +941,7 @@ mod tests {
         // A downgrade is a tool *result* (Ok), not an error — so the model relays it cleanly.
         let msg = result.expect("downgrade should be an Ok tool result, not an Err");
         assert!(
-            msg.contains("PROPOSAL CREATED") && msg.contains("NOT executed"),
+            msg.contains("PROPOSAL CREATED") && msg.contains("did not run"),
             "message must state the action did not run: {msg}"
         );
 
@@ -1060,7 +1162,7 @@ mod tests {
         let result = rt.invoke(&call).await;
         // A downgrade is a tool *result* (Ok), not an error.
         let msg = result.expect("downgrade should be an Ok tool result, not an Err");
-        assert!(msg.contains("PROPOSAL CREATED") && msg.contains("NOT executed"));
+        assert!(msg.contains("PROPOSAL CREATED") && msg.contains("did not run"));
         // The inner tool must NOT have run.
         assert!(
             inner.invoked.lock().unwrap().is_empty(),
@@ -1111,7 +1213,7 @@ mod tests {
         );
         let result = rt.invoke(&call).await;
         let msg = result.expect("downgrade should be an Ok tool result, not an Err");
-        assert!(msg.contains("PROPOSAL CREATED") && msg.contains("NOT executed"));
+        assert!(msg.contains("PROPOSAL CREATED") && msg.contains("did not run"));
         assert!(
             inner.invoked.lock().unwrap().is_empty(),
             "a zone-restricted call must not invoke the inner tool"
@@ -1411,5 +1513,288 @@ mod tests {
             .expect_err("no Write(sandbox) grant must be refused, not written");
         assert!(refused.contains("not authorized"), "{refused}");
         assert!(ungranted_inner.invoked.lock().unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod magnitude_reads_structure_first {
+    use super::tests::*;
+    use super::*;
+
+    /// The descriptor shape that makes reach knowable: path-addressed, so the call names its own
+    /// single target.
+    fn turbovault() -> McpDescriptor {
+        McpDescriptor {
+            name: "turbovault".into(),
+            description: "path-addressed vault".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: None,
+            tool_zones: Vec::new(),
+            zone_from_arg: Some("path".into()),
+            write_tools: vec!["write_note".into()],
+        }
+    }
+
+    fn gate(
+        dir: &std::path::Path,
+        inner: Arc<MockInner>,
+        descriptor: McpDescriptor,
+        goal: &str,
+    ) -> RiskGatedToolRuntime {
+        let mcp = descriptor.name.clone();
+        RiskGatedToolRuntime::new(
+            inner,
+            CapabilitySet::from_iter([
+                Capability::ExecuteMcp(mcp.clone()),
+                Capability::Write(Zone::vault("Learning")),
+            ]),
+            vec![(mcp, Consequence::Reversible)],
+            vec![descriptor],
+            vec![("Learning".to_string(), WriteClass::AgentWritable)],
+            dir.to_path_buf(),
+            goal.into(),
+            "test-magnitude".into(),
+            ProposalSigner::random(),
+            "default",
+        )
+    }
+
+    /// The live false positive, reduced: a research report whose *content* discusses destruction is
+    /// data being saved, not an action being ordered.
+    ///
+    /// `prop-1785557626819756862` (2026-08-01) gated a requested write-up on `destroyed` ×2,
+    /// `destroys`, `remove`, `every` ×12 and `all` ×6 — every one of them prose *about*
+    /// organizations, in a report the operator had asked for.
+    #[tokio::test]
+    async fn a_report_that_discusses_destruction_is_not_a_destructive_action() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(
+            &["turbovault:write_note"],
+            Ok("wrote".into()),
+        ));
+        let rt = gate(
+            dir.path(),
+            inner.clone(),
+            turbovault(),
+            "research nash equilibrium in organizations and write me a report",
+        );
+
+        let call = ToolInvocation::new(
+            "c1",
+            "turbovault:write_note",
+            serde_json::json!({
+                "path": "Learning/Nash Equilibrium - Research.md",
+                "content": "Olson showed that distributional coalitions are destroyed by war, \
+                            and that every entrenched group blocks all reform. Moloch destroys \
+                            every attempt to remove the entire coordination failure.",
+            }),
+        );
+
+        let msg = rt.invoke(&call).await.expect("the write should be allowed");
+        assert!(
+            !msg.contains("PROPOSAL CREATED"),
+            "a write naming one path must not be gated on words in its payload: {msg}"
+        );
+        assert_eq!(
+            inner.invoked.lock().unwrap().len(),
+            1,
+            "the report should have been written"
+        );
+    }
+
+    /// The guard's real target, unchanged: a sweeping-destructive *instruction* still gates, however
+    /// narrow the call that carries it.
+    #[tokio::test]
+    async fn a_sweeping_destructive_goal_still_gates_a_single_path_write() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(
+            &["turbovault:write_note"],
+            Ok("wrote".into()),
+        ));
+        let rt = gate(
+            dir.path(),
+            inner.clone(),
+            turbovault(),
+            "delete all my notes",
+        );
+
+        let call = ToolInvocation::new(
+            "c1",
+            "turbovault:write_note",
+            serde_json::json!({ "path": "Learning/x.md", "content": "harmless" }),
+        );
+
+        let msg = rt.invoke(&call).await.expect("downgrade is an Ok result");
+        assert!(
+            msg.contains("PROPOSAL CREATED"),
+            "the instruction is always read, whatever the call looks like: {msg}"
+        );
+        assert!(inner.invoked.lock().unwrap().is_empty());
+    }
+
+    /// Reach is only known for the **path-addressed** style. A fixed-zone tool's zone comes from its
+    /// *name*, so a resolved zone says which zone is touched and nothing about how much of it —
+    /// prose remains the only signal, and the payload is still scanned.
+    #[tokio::test]
+    async fn a_fixed_zone_tool_still_has_its_payload_scanned() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let descriptor = McpDescriptor {
+            name: "turbovault".into(),
+            description: "fixed-zone vault".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: Some("Learning".into()),
+            tool_zones: Vec::new(),
+            zone_from_arg: None,
+            write_tools: Vec::new(),
+        };
+        let inner = Arc::new(MockInner::new(
+            &["turbovault:write_note"],
+            Ok("wrote".into()),
+        ));
+        let rt = gate(dir.path(), inner.clone(), descriptor, "tidy up");
+
+        let call = ToolInvocation::new(
+            "c1",
+            "turbovault:write_note",
+            serde_json::json!({ "instruction": "delete every note" }),
+        );
+
+        let msg = rt.invoke(&call).await.expect("downgrade is an Ok result");
+        assert!(
+            msg.contains("PROPOSAL CREATED"),
+            "reach is unknown for a fixed-zone tool, so the payload must still be read: {msg}"
+        );
+        assert!(inner.invoked.lock().unwrap().is_empty());
+    }
+
+    /// A write whose path argument is missing is `Undeterminable`, not bounded — it must not buy the
+    /// payload exemption. (It is refused earlier by the zone guard; this pins that the magnitude
+    /// side does not treat it as safe either.)
+    #[tokio::test]
+    async fn a_write_with_no_resolvable_path_is_not_treated_as_bounded() {
+        let d = turbovault();
+        assert!(
+            !liberado_common::names_single_write_target(
+                &d,
+                "write_note",
+                &serde_json::json!({ "content": "delete every note" })
+            ),
+            "a missing path argument names no single target"
+        );
+        assert!(
+            liberado_common::names_single_write_target(
+                &d,
+                "write_note",
+                &serde_json::json!({ "path": "Learning/x.md" })
+            ),
+            "a resolved zone path does"
+        );
+    }
+}
+
+#[cfg(test)]
+mod one_intent_one_prompt {
+    use super::tests::*;
+    use super::*;
+
+    fn gate(dir: &std::path::Path, inner: Arc<MockInner>) -> RiskGatedToolRuntime {
+        RiskGatedToolRuntime::new(
+            inner,
+            CapabilitySet::from_iter([Capability::ExecuteMcp("vault-mcp".into())]),
+            vec![("vault-mcp".into(), Consequence::Reversible)],
+            Vec::new(),
+            Vec::new(),
+            dir.to_path_buf(),
+            "delete all notes".into(),
+            "test-dedup".into(),
+            ProposalSigner::random(),
+            "default",
+        )
+    }
+
+    /// One intent must cost the human one notification.
+    ///
+    /// A gated call returns as a tool *result*, so the model reads "did not run" and retries. Each
+    /// retry used to mint a fresh `prop-{nanos}`: live on 2026-08-01 a single subagent run produced
+    /// three proposals for the same write to the same path, 43s apart, and the operator was asked to
+    /// approve the same thing three times.
+    #[tokio::test]
+    async fn a_retried_call_reuses_its_pending_proposal() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(&["vault-mcp:delete"], Ok("done".into())));
+        let rt = gate(dir.path(), inner.clone());
+        let call = ToolInvocation::new(
+            "c1",
+            "vault-mcp:delete",
+            serde_json::json!({ "path": "all" }),
+        );
+
+        let first = rt.invoke(&call).await.expect("downgrade is an Ok result");
+        // The same action again, as a fresh attempt with a different call id — which is exactly what
+        // a retrying model sends.
+        let retry = ToolInvocation::new(
+            "c2",
+            "vault-mcp:delete",
+            serde_json::json!({ "path": "all" }),
+        );
+        let second = rt.invoke(&retry).await.expect("downgrade is an Ok result");
+
+        let count = std::fs::read_dir(dir.path().join(liberado_common::PROPOSALS_DIR))
+            .unwrap()
+            .count();
+        assert_eq!(count, 1, "a retry must not create a second proposal");
+        assert_eq!(
+            first, second,
+            "and the model must be pointed at the same one"
+        );
+        assert!(inner.invoked.lock().unwrap().is_empty());
+    }
+
+    /// Dedup keys on the action, so a *different* action still gets its own proposal — otherwise the
+    /// first gated call would silently swallow every later one.
+    #[tokio::test]
+    async fn a_different_action_still_gets_its_own_proposal() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(&["vault-mcp:delete"], Ok("done".into())));
+        let rt = gate(dir.path(), inner.clone());
+
+        rt.invoke(&ToolInvocation::new(
+            "c1",
+            "vault-mcp:delete",
+            serde_json::json!({ "path": "all" }),
+        ))
+        .await
+        .unwrap();
+        rt.invoke(&ToolInvocation::new(
+            "c2",
+            "vault-mcp:delete",
+            serde_json::json!({ "path": "everything else" }),
+        ))
+        .await
+        .unwrap();
+
+        let count = std::fs::read_dir(dir.path().join(liberado_common::PROPOSALS_DIR))
+            .unwrap()
+            .count();
+        assert_eq!(count, 2, "distinct actions need distinct approvals");
+    }
+
+    /// The message is read by the model, so it must not invite the two things the model otherwise
+    /// does: retry, and try to approve the proposal itself.
+    #[test]
+    fn the_gated_message_tells_the_model_not_to_retry_or_self_approve() {
+        let msg = proposal_message(std::path::Path::new("proposals/prop-1.md"));
+        assert!(msg.contains("Do NOT retry"), "{msg}");
+        assert!(msg.contains("do NOT edit the proposal"), "{msg}");
+        assert!(
+            msg.contains("cannot approve it yourself"),
+            "the old wording said approval was *yours* to give, and a model acted on that: {msg}"
+        );
+        assert!(
+            !msg.contains("your approval"),
+            "second-person-to-a-human phrasing is what caused the self-approval attempt: {msg}"
+        );
     }
 }

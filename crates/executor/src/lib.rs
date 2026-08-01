@@ -401,8 +401,11 @@ pub enum ExecError {
     Provider(#[from] ProviderError),
     #[error("the model's submit_report arguments did not match the Report schema: {0}")]
     Decode(String),
-    #[error("execution exceeded the {turns}-turn budget")]
-    BudgetExceeded { turns: u32 },
+    #[error("execution exceeded its {resource} budget after {turns} turn(s)")]
+    /// `resource` is the bound that actually ran out — `"turns"`, `"wall-clock"`, `"tokens"`.
+    /// Carried because the catch site files a report, and a report that always blames turns
+    /// misdirects whoever reads it, model or human.
+    BudgetExceeded { resource: &'static str, turns: u32 },
     #[error("internal executor invariant violated: {0}")]
     Internal(&'static str),
 }
@@ -424,11 +427,37 @@ enum Mode {
 pub struct Executor {
     provider: Arc<dyn Provider>,
     budget: Budget,
+    /// Model for the calls this executor makes. `None` = the provider's own.
+    ///
+    /// Held here rather than on the provider because a provider is shared by every session, and a
+    /// session profile naming a model must not change the model under everyone else. `Executor` is
+    /// `Clone` over two cheap fields, so a caller specialises one per turn.
+    model: Option<String>,
 }
 
 impl Executor {
     pub fn new(provider: Arc<dyn Provider>, budget: Budget) -> Self {
-        Self { provider, budget }
+        Self {
+            provider,
+            budget,
+            model: None,
+        }
+    }
+
+    /// A copy of this executor that runs its calls on `model`. `None` returns an equivalent
+    /// executor, so a caller can pass a session's setting through without branching.
+    #[must_use]
+    pub fn with_model(&self, model: Option<String>) -> Self {
+        Self {
+            model,
+            ..self.clone()
+        }
+    }
+
+    /// The model this executor's calls will actually run on — the override when set, else the
+    /// provider's. Used for logging, so a span never names a model the request did not use.
+    pub fn active_model(&self) -> String {
+        self.model.clone().unwrap_or_else(|| self.provider.model())
     }
 
     /// Run delegated work to a typed [`Report`] (report mode). The model finishes by calling
@@ -442,7 +471,7 @@ impl Executor {
         let span = tracing::info_span!(
             "execute",
             mode = "report",
-            model = %self.provider.model(),
+            model = %self.active_model(),
             goal = %task.goal,
             budget = self.budget.max_turns,
             has_seed = !task.seed_calls.is_empty(),
@@ -460,10 +489,16 @@ impl Executor {
                     tracing::Span::current().record("outcome", "internal_error");
                     Err(ExecError::Internal("report mode returned prose"))
                 }
-                Err(ExecError::BudgetExceeded { turns }) => {
+                Err(ExecError::BudgetExceeded { resource, turns }) => {
                     tracing::Span::current().record("outcome", "budget_exceeded");
-                    tracing::warn!(turns, "execution budget exceeded; returning failed report");
-                    Ok(budget_failed_report(turns))
+                    tracing::warn!(
+                        turns,
+                        resource,
+                        "execution budget exceeded; returning failed report"
+                    );
+                    // `_named` falls back to the turn wording when `resource` is "turns", so this
+                    // is a strict improvement rather than a second phrasing to keep in sync.
+                    Ok(budget_failed_report_named(resource, turns))
                 }
                 Err(e) => {
                     tracing::Span::current().record("outcome", "error");
@@ -486,7 +521,7 @@ impl Executor {
         let span = tracing::info_span!(
             "converse",
             mode = "conversational",
-            model = %self.provider.model(),
+            model = %self.active_model(),
             goal = %task.goal,
             budget = self.budget.max_turns,
             outcome = tracing::field::Empty,
@@ -561,7 +596,7 @@ impl Executor {
     ) -> Result<String, ExecError> {
         let span = tracing::info_span!(
             "converse_messages",
-            model = %self.provider.model(),
+            model = %self.active_model(),
             budget = self.budget.max_turns,
         );
         async {
@@ -606,14 +641,16 @@ impl Executor {
     ) -> Result<(), ExecError> {
         let span = tracing::info_span!(
             "converse_stream",
-            model = %self.provider.model(),
+            model = %self.active_model(),
             budget = self.budget.max_turns,
         );
         let _enter = span.enter();
-        tracing::debug!(model = %self.provider.model(), "starting conversational stream turn");
+        tracing::debug!(model = %self.active_model(), "starting conversational stream turn");
         let tools = runtime.catalog();
         for turn in 1..=self.budget.max_turns {
-            let request = CompletionRequest::new(messages.clone()).with_tools(tools.clone());
+            let request = CompletionRequest::new(messages.clone())
+                .with_tools(tools.clone())
+                .with_model(self.model.clone());
             let mut stream = self.provider.complete_stream(request).await?;
 
             let mut response = None;
@@ -660,7 +697,10 @@ impl Executor {
             tracing::info!(turn, tools = response.tool_calls.len(), "turn used tools");
         }
 
+        // This loop ends only by running out of turns; the extra limits are checked in
+        // `run_loop`, which names whichever of them fired.
         Err(ExecError::BudgetExceeded {
+            resource: "turns",
             turns: self.budget.max_turns,
         })
     }
@@ -703,13 +743,18 @@ impl Executor {
         let mut wrapping_up = false;
         let mut turn: u32 = 0;
         let mut usage = ResourceUsage::default();
-        let run_started = std::time::Instant::now();
+        let run_started = liberado_common::clock::now();
         // The loop yields the name of whatever ran out, so the exhaustion report below can say
         // which bound was hit rather than always blaming turns.
-        let exhausted_name: &str = 'turn_loop: loop {
+        let exhausted_name: &'static str = 'turn_loop: loop {
             turn += 1;
             usage.turns = turn;
-            usage.elapsed = run_started.elapsed();
+            // Both ends on the same clock. `run_started.elapsed()` measures against the real
+            // `Instant::now()` regardless of `clock::now()`, so the start was injectable and
+            // the end was not — freezing the clock moved neither, and no test could reach a
+            // non-zero wall-clock exhaustion. A half-injected timer is worse than none: it
+            // looks controllable and silently is not.
+            usage.elapsed = liberado_common::clock::now().duration_since(run_started);
             // Once the reserve is running, only its own turn cap applies. The extra limits are
             // spent by definition at that point, so re-checking them would end the reserve on its
             // first turn and it could never be used — the same trap that made the doom-loop
@@ -748,7 +793,9 @@ impl Executor {
                 finish_reason = tracing::field::Empty,
             );
             let response = async {
-                let request = CompletionRequest::new(messages.clone()).with_tools(tools.clone());
+                let request = CompletionRequest::new(messages.clone())
+                    .with_tools(tools.clone())
+                    .with_model(self.model.clone());
                 self.provider.complete(request).await
             }
             .instrument(tracing::debug_span!("provider_complete", turn))
@@ -962,7 +1009,13 @@ impl Executor {
                 max_turns,
                 &call_history,
             ))),
-            Mode::Conversational => Err(ExecError::BudgetExceeded { turns: max_turns }),
+            // `exhausted_name` is in scope and was being discarded here, so a wall-clock or token
+            // exhaustion surfaced as "exceeded the N-turn budget" — the wrong diagnosis, handed
+            // to whoever reads the report.
+            Mode::Conversational => Err(ExecError::BudgetExceeded {
+                resource: exhausted_name,
+                turns: max_turns,
+            }),
         }
     }
 
@@ -1420,6 +1473,31 @@ mod tests {
         let provider = Arc::new(MockProvider::with_script("mock", script));
         let exec = Executor::new(provider.clone(), budget);
         (provider, exec)
+    }
+
+    /// A provider that lets `step` of wall-clock elapse on every call, so a budget can be exhausted
+    /// *during* a run rather than before it starts.
+    ///
+    /// Needed because a test can only advance the clock before `execute` is entered, and
+    /// `run_started` is captured inside — so pre-advancing moves the start too and elapsed stays
+    /// zero. Time has to pass where the work happens, which is the provider call.
+    struct SlowProvider {
+        inner: Arc<MockProvider>,
+        step: std::time::Duration,
+    }
+
+    #[async_trait]
+    impl Provider for SlowProvider {
+        fn model(&self) -> String {
+            self.inner.model()
+        }
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse, liberado_provider::ProviderError> {
+            liberado_common::clock::test_advance(self.step);
+            self.inner.complete(request).await
+        }
     }
 
     fn offered_tools(provider: &MockProvider) -> Vec<String> {
@@ -2622,6 +2700,55 @@ mod tests {
         );
     }
 
+    /// Freeze the clock, advance by exactly the budget — pins the `>=` boundary at a *non-zero*
+    /// duration, which the `Duration::ZERO` test above cannot distinguish from "exhausted before
+    /// the first check".
+    ///
+    /// Was ignored on the belief that the clock could not inject time here. The real cause was that
+    /// `usage.elapsed` used `Instant::elapsed()` — real time — while `run_started` came from the
+    /// injectable clock, so advancing it moved nothing. With both ends on one clock the test runs.
+    #[tokio::test]
+    async fn wall_clock_limit_exhausts_at_exact_non_zero_boundary() {
+        let t0 = std::time::Instant::now();
+        let clock = liberado_common::clock::test_freeze_at(t0);
+
+        // One second elapses inside the provider call, so the budget is hit mid-run at exactly the
+        // boundary — `>=`, not `>`.
+        // A tool call first, so the run reaches a second turn: the budget is checked at the *top*
+        // of each iteration, so turn 1 always sees zero elapsed. The second check sees exactly the
+        // one second the provider consumed — the `>=` boundary this test exists to pin.
+        let inner = Arc::new(MockProvider::with_script(
+            "mock",
+            vec![call_tool("search"), submit(valid_report_args())],
+        ));
+        let exec = Executor::new(
+            Arc::new(SlowProvider {
+                inner,
+                step: std::time::Duration::from_secs(1),
+            }),
+            Budget::new(10).with_wall_clock(std::time::Duration::from_secs(1)),
+        );
+        let _ = &clock; // held for the run; thaws on drop
+
+        // The call fails, so nothing is salvageable and the run ends `Failed` rather than
+        // `PartiallySucceeded` — keeping this test on the plain exhaustion report, which is the one
+        // that has to name the resource.
+        let runtime = MockToolRuntime::new(&["search"], Err("boom".into()));
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .unwrap();
+
+        assert_eq!(report.outcome, Outcome::Failed);
+        // The assertion the original test was written to make, and was ignored for.
+        assert!(
+            report.summary.contains("wall-clock"),
+            "the report must name the bound that actually ran out, not blame turns: {}",
+            report.summary
+        );
+        // `clock` thaws on drop here — including if an assertion above panics.
+    }
+
     #[tokio::test]
     async fn token_limit_exhausts_once_accumulated_usage_crosses_it() {
         fn tool_call_with_usage(id: &str, tokens: u32) -> CompletionResponse {
@@ -2816,5 +2943,175 @@ mod tests {
             2,
             "both real search calls should have run"
         );
+    }
+
+    #[test]
+    fn cosine_of_identical_vectors_is_one() {
+        let mut v = std::collections::HashMap::new();
+        v.insert("hello".into(), 1.0);
+        v.insert("world".into(), 2.0);
+        assert!((cosine(&v, &v) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cosine_of_orthogonal_vectors_is_zero() {
+        let mut a = std::collections::HashMap::new();
+        a.insert("hello".into(), 1.0);
+        let mut b = std::collections::HashMap::new();
+        b.insert("world".into(), 1.0);
+        assert!((cosine(&a, &b) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cosine_of_zero_vector_is_zero() {
+        let a = std::collections::HashMap::new();
+        let mut b = std::collections::HashMap::new();
+        b.insert("hello".into(), 1.0);
+        assert!((cosine(&a, &b) - 0.0).abs() < 1e-6);
+        assert!((cosine(&b, &a) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn args_similarity_default_near_duplicates() {
+        let a = serde_json::json!({"q": "hello world"});
+        let b = serde_json::json!({"q": "hello world"});
+        let sim = args_similarity(&a, &b);
+        assert!(
+            sim > 0.9,
+            "identical plain text should be near-duplicate: {sim}"
+        );
+    }
+
+    #[test]
+    fn args_similarity_neutral_args_still_use_cosine() {
+        // Two non-empty, unequal argument sets with no overlap in tokens. The `&&` on line 1247
+        // correctly skips the early return to compute TF-IDF; with `||` it would return 0.0.
+        // Cosine is also 0.0 for orthogonal vectors, so we verify the function doesn't panic
+        // and returns a sub-1 value.
+        let a = serde_json::json!({"x": "hello"});
+        let b = serde_json::json!({"y": "world"});
+        let sim = args_similarity(&a, &b);
+        assert!(
+            sim < 1.0,
+            "different args must not be perfectly similar: {sim}"
+        );
+    }
+
+    #[test]
+    fn args_similarity_empty_one_is_not_one() {
+        let a = serde_json::json!({});
+        let b = serde_json::json!({"q": "hello"});
+        // When one is empty but the other has tokens, similarity must still be computed.
+        let sim = args_similarity(&a, &b);
+        assert!(
+            sim < 1.0,
+            "one empty should not produce perfect similarity: {sim}"
+        );
+    }
+
+    #[test]
+    fn tf_idf_smoke() {
+        let docs = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["b".to_string(), "c".to_string()],
+        ];
+        let vectors = tf_idf_vectors(&docs);
+        assert_eq!(vectors.len(), 2);
+        // Each vector has 2 entries.
+        assert_eq!(vectors[0].len(), 2);
+        assert_eq!(vectors[1].len(), 2);
+    }
+}
+
+/// Property tests over the doom-loop guard's similarity primitives — [`args_similarity`],
+/// [`cosine`], and [`tokenize`]. All three are small, pure, and deterministic, so proptest can
+/// fuzz them with arbitrary JSON argument trees: the caller of `run_loop` feeds real model output
+/// into these, so *any* shape must be safe to score, not just the hand-written calibration cases.
+#[cfg(test)]
+mod proptest_tests {
+    use proptest::prelude::*;
+    use serde_json::Value;
+
+    use super::args_similarity;
+    use super::tokenize;
+
+    /// Arbitrary JSON tool-argument trees, 0-4 levels deep, with numbers/strings/bools/arrays/
+    /// objects. Strings run 0-200 chars. `any::<f64>()` also draws NaN/±inf/-0.0/subnormals;
+    /// serde_json cannot represent a non-finite number, so `Value::from` collapses those to
+    /// `Null` (total, never panics) — the bit patterns still flow through every function under
+    /// test, which is the point: none of them may blow up on any input.
+    fn arb_json_value() -> impl Strategy<Value = Value> {
+        let leaf = prop_oneof![
+            Just(Value::Null),
+            any::<bool>().prop_map(Value::Bool),
+            any::<i64>().prop_map(Value::from),
+            any::<f64>().prop_map(Value::from),
+            proptest::collection::vec(proptest::char::range('\u{20}', '\u{7e}'), 0..=200)
+                .prop_map(|chars| Value::String(chars.into_iter().collect())),
+        ];
+        leaf.prop_recursive(4, 16, 8, |inner| {
+            prop_oneof![
+                proptest::collection::vec(inner.clone(), 0..8).prop_map(Value::Array),
+                proptest::collection::hash_map("[a-zA-Z0-9_-]{0,12}", inner, 0..8).prop_map(|m| {
+                    let mut map = serde_json::Map::new();
+                    for (k, v) in m {
+                        map.insert(k, v);
+                    }
+                    Value::Object(map)
+                }),
+            ]
+        })
+    }
+
+    /// `args_similarity` must not depend on which side is which — the doom-loop guard compares
+    /// calls in history order, so the score has to be order-agnostic. Both runs go through the
+    /// same TF-IDF/IDF computation, so the only way they differ is f32 summation order; 1e-5 is
+    /// comfortably above that noise.
+    fn similarity_symmetric(a: Value, b: Value) -> bool {
+        let s1 = args_similarity(&a, &b);
+        let s2 = args_similarity(&b, &a);
+        (s1 - s2).abs() < 1e-5
+    }
+
+    /// A value is always identical to itself — `args_similarity(x, x)` is the top of the scale.
+    fn similarity_reflexive(x: Value) -> bool {
+        (args_similarity(&x, &x) - 1.0).abs() < 1e-5
+    }
+
+    /// The output is a similarity: never negative, never above 1. (A cosine of two non-empty
+    /// vectors can round a hair past 1.0 in f32, but the tolerance-free bound here holds for
+    /// generated inputs because independent trees essentially never produce exactly-proportional
+    /// TF-IDF vectors.)
+    fn similarity_in_range(a: Value, b: Value) -> bool {
+        let s = args_similarity(&a, &b);
+        (0.0..=1.0).contains(&s)
+    }
+
+    /// `tokenize` is total: no JSON shape may make it panic.
+    fn tokenize_never_panics(v: Value) -> bool {
+        let _ = tokenize(&v);
+        true
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_args_similarity_is_symmetric(a in arb_json_value(), b in arb_json_value()) {
+            prop_assert!(similarity_symmetric(a, b));
+        }
+
+        #[test]
+        fn proptest_args_similarity_is_reflexive(x in arb_json_value()) {
+            prop_assert!(similarity_reflexive(x));
+        }
+
+        #[test]
+        fn proptest_args_similarity_stays_in_unit_range(a in arb_json_value(), b in arb_json_value()) {
+            prop_assert!(similarity_in_range(a, b));
+        }
+
+        #[test]
+        fn proptest_tokenize_never_panics(v in arb_json_value()) {
+            prop_assert!(tokenize_never_panics(v));
+        }
     }
 }

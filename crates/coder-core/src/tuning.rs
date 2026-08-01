@@ -321,4 +321,53 @@ mod tests {
         let err = tuning.validate().unwrap_err();
         assert!(err.to_string().contains("tuning.coder.progress"));
     }
+
+    #[test]
+    fn run_config_clones_all_fields() {
+        let tuning = CoderTuning::default();
+        let config = tuning.run_config();
+        assert_eq!(config.backend, tuning.backend);
+        assert_eq!(config.planner.model, tuning.planner.model);
+    }
+
+    #[test]
+    fn validation_rejects_empty_backend() {
+        let tuning = CoderTuning {
+            backend: String::new(),
+            ..CoderTuning::default()
+        };
+        assert!(tuning.validate().is_err());
+    }
+
+    #[test]
+    fn validation_rejects_zero_command_timeout() {
+        let mut tuning = CoderTuning::default();
+        tuning.command_policy.timeout_secs = 0;
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("command_policy.timeout_secs"));
+    }
+
+    #[test]
+    fn validation_rejects_zero_command_output_max_bytes() {
+        let mut tuning = CoderTuning::default();
+        tuning.command_policy.output_max_bytes = 0;
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("command_policy.output_max_bytes"));
+    }
+
+    #[test]
+    fn validation_rejects_zero_path_read_max_bytes() {
+        let mut tuning = CoderTuning::default();
+        tuning.path_policy.read_max_bytes = 0;
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("path_policy.read_max_bytes"));
+    }
+
+    #[test]
+    fn validation_rejects_zero_path_search_max_results() {
+        let mut tuning = CoderTuning::default();
+        tuning.path_policy.search_max_results = 0;
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("path_policy.search_max_results"));
+    }
 }

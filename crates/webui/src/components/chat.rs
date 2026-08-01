@@ -5,6 +5,7 @@ use chat_client_contract::ChatMessage;
 use crate::components::markdown::MarkdownText;
 use crate::components::model_browser::ModelBrowser;
 use crate::components::picker::Picker;
+use crate::components::profile_browser::ProfileBrowser;
 use crate::components::slash_palette::SlashPalette;
 
 // Slash commands only run in the browser — `submit` gates the whole block on wasm32, so gate the
@@ -77,7 +78,13 @@ impl ChatMsg {
 
 // ── History loading ─────────────────────────────────────────────────────────
 
-async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<Vec<ChatMsg>, String> {
+/// A loaded conversation: its visible messages, and the profile it runs under.
+struct LoadedConversation {
+    messages: Vec<ChatMsg>,
+    profile: Option<String>,
+}
+
+async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConversation, String> {
     let url = format!("{api_base}/api/conversations/{conv_id}");
     let resp = reqwest::get(&url)
         .await
@@ -93,12 +100,15 @@ async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<Vec<ChatMsg
     // own for slash-command output (`/help`, command errors — see components/slash_commands.rs), and
     // those must keep rendering. The distinction is provenance, not role, so it belongs at the point
     // the wire is decoded.
-    Ok(history
-        .messages
-        .iter()
-        .filter(|m| m.role != "system")
-        .map(ChatMsg::from_wire)
-        .collect())
+    Ok(LoadedConversation {
+        messages: history
+            .messages
+            .iter()
+            .filter(|m| m.role != "system")
+            .map(ChatMsg::from_wire)
+            .collect(),
+        profile: history.profile,
+    })
 }
 
 // ── Chat component ──────────────────────────────────────────────────────────
@@ -126,7 +136,16 @@ pub fn Chat(
     /// Written here, read by `App`: whether the palette is actually on screen. `App` cannot derive it
     /// — openness depends on the input text, which lives in this component.
     palette_visible: Signal<bool>,
+    /// The `/profile` picker. Same ownership story as the other pickers.
+    profile_browser_open: Signal<bool>,
+    /// Which session profile the open conversation runs under, for the picker's active badge and the
+    /// header chip. Loaded from the conversation, not guessed.
+    active_profile: Signal<Option<String>>,
 ) -> Element {
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut profile_browser_open = profile_browser_open;
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut active_profile = active_profile;
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut palette_dismissed = palette_dismissed;
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
@@ -160,6 +179,7 @@ pub fn Chat(
     let base_for_title = api_base.clone();
     let base_for_slash = api_base.clone();
     let base_for_models = api_base.clone();
+    let base_for_profiles = api_base.clone();
 
     use_effect(move || {
         if sending() {
@@ -173,13 +193,20 @@ pub fn Chat(
                 session.set(Some(conv_id.clone()));
                 let conv_id = conv_id.clone();
                 wasm_bindgen_futures::spawn_local(async move {
-                    if let Ok(msgs) = fetch_conversation(&base, &conv_id).await {
-                        messages.set(msgs);
+                    if let Ok(loaded) = fetch_conversation(&base, &conv_id).await {
+                        messages.set(loaded.messages);
+                        // From the conversation, not remembered client-side: opening a chat in a
+                        // second tab or after a restart must show the authority it actually runs
+                        // under, not whatever this tab last set.
+                        active_profile.set(loaded.profile);
                     }
                 });
             } else if ghost_session.read().is_none() {
                 messages.set(Vec::new());
                 session.set(None);
+                // A new chat starts on the default grant; leaving a stale chip up would claim
+                // otherwise.
+                active_profile.set(None);
             }
             // An incognito chat is deliberately *not* an `active_conv_id`: it is not in the sidebar,
             // so there is nothing there to highlight, and letting it set one would make the
@@ -336,6 +363,9 @@ pub fn Chat(
                         CommandResult::OpenThemeBrowser => {
                             theme_browser_open.set(true);
                         }
+                        CommandResult::OpenProfileBrowser => {
+                            profile_browser_open.set(true);
+                        }
                         // The command layer validated the name against the shared registry; all that
                         // is left is to render it and remember it.
                         CommandResult::ThemeChanged { name } => {
@@ -386,6 +416,9 @@ pub fn Chat(
             },
             &base_for_title,
             incognito(),
+            // Only meaningful when creating: an existing session's profile is already stored, and
+            // the daemon ignores the field when a session id is present.
+            active_profile(),
         );
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -429,6 +462,31 @@ pub fn Chat(
     rsx! {
         div {
             class: "{chat_cls}",
+
+            {
+                // **Always rendered**, including with no profile set. It used to appear only once a
+                // profile was chosen, which meant a new chat showed no control at all — you could
+                // change a profile you already had, and had no way to acquire one except by knowing
+                // `/profile` existed. A control that only exists after you have used it is not a
+                // control.
+                //
+                // Shown in the conversation rather than in a menu: a profile changes what this chat
+                // can do, and an authority you have to go looking for is one you will forget.
+                let name = active_profile();
+                let cls = if name.is_some() { "profile-chip set" } else { "profile-chip" };
+                let label = name.unwrap_or_else(|| "default".to_string());
+                rsx! {
+                    button {
+                        class: "{cls}",
+                        r#type: "button",
+                        title: "Session profile for this chat — click to change",
+                        onclick: move |_| profile_browser_open.set(true),
+                        span { class: "profile-chip-label", "profile" }
+                        span { class: "profile-chip-name", "{label}" }
+                        span { class: "profile-chip-caret", "\u{25BE}" }
+                    }
+                }
+            }
 
             if incognito() {
                 // Stated where the conversation is, not only on the button in the header — the
@@ -482,6 +540,31 @@ pub fn Chat(
                             .push(ChatMsg {
                                 role: "system",
                                 content: format!("Theme: {name}"),
+                                thinking_steps: Vec::new(),
+                            });
+                    },
+                }
+            }
+
+            if profile_browser_open() {
+                ProfileBrowser {
+                    api_base: base_for_profiles.clone(),
+                    session: session(),
+                    current: active_profile(),
+                    open: profile_browser_open,
+                    on_switched: move |name: Option<String>| {
+                        active_profile.set(name.clone());
+                        messages
+                            .write()
+                            .push(ChatMsg {
+                                role: "system",
+                                content: match name {
+                                    Some(n) => format!(
+                                        "Session profile: {n} — applies from your next message."
+                                    ),
+                                    None => "Session profile cleared — back to the default grant,                                              from your next message."
+                                        .to_string(),
+                                },
                                 thinking_steps: Vec::new(),
                             });
                     },
@@ -889,6 +972,8 @@ fn open_stream(
     targets: StreamTargets,
     api_base_for_title: &str,
     incognito: bool,
+    // A profile chosen before this conversation existed. Applied by the request that creates it.
+    pending_profile: Option<String>,
 ) {
     let StreamTargets {
         mut messages,
@@ -922,6 +1007,13 @@ fn open_stream(
         None if incognito => {
             format!("{api_base}/api/chat/stream?message={encoded}&incognito=true")
         }
+        // A profile picked before the first message has nowhere to be applied yet — the session it
+        // scopes does not exist. Carrying it on the request that *creates* the session is what makes
+        // the first turn run under it, which for a "basic chat" profile is the turn that matters.
+        None if pending_profile.is_some() => format!(
+            "{api_base}/api/chat/stream?message={encoded}&profile={}",
+            urlencoding::encode(pending_profile.as_deref().unwrap_or_default())
+        ),
         None => format!("{api_base}/api/chat/stream?message={encoded}"),
     };
     let ghost_base = api_base.to_string();

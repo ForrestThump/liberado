@@ -193,8 +193,9 @@ pub fn stream_sse_response(response: reqwest::Response, name_map: ToolNameMap) -
 
 /// Translate a normalized request into the OpenAI chat-completions request body.
 pub fn to_openai_request(model: &str, req: &CompletionRequest, name_map: &ToolNameMap) -> Value {
+    // `model` is the provider's configured default; the request may name its own for this call.
     let mut body = json!({
-        "model": model,
+        "model": req.model.as_deref().unwrap_or(model),
         "messages": req.messages.iter().map(|m| message_to_json(m, name_map)).collect::<Vec<_>>(),
     });
 
@@ -550,11 +551,123 @@ mod tests {
         });
         let req =
             CompletionRequest::new(vec![Message::user("hi")]).with_json_schema(schema.clone());
-
         let body = to_openai_request("test-model", &req, &empty_name_map());
         assert_eq!(body["response_format"]["type"], "json_schema");
         assert_eq!(body["response_format"]["json_schema"]["strict"], true);
         assert_eq!(body["response_format"]["json_schema"]["schema"], schema);
+    }
+
+    #[cfg(test)]
+    mod wire_body_seam_tests {
+        use super::*;
+        use crate::{CompletionRequest, Message, ResponseFormat, Role, ToolDef};
+
+        fn req() -> CompletionRequest {
+            CompletionRequest::new(vec![Message {
+                role: Role::User,
+                content: "hello".into(),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+            }])
+        }
+
+        #[test]
+        fn model_present() {
+            let body = to_openai_request("gpt-4", &req(), &ToolNameMap::default());
+            assert_eq!(body["model"], "gpt-4");
+        }
+
+        #[test]
+        fn messages_present() {
+            let body = to_openai_request("m", &req(), &ToolNameMap::default());
+            assert_eq!(body["messages"][0]["role"], "user");
+            assert_eq!(body["messages"][0]["content"], "hello");
+        }
+
+        #[test]
+        fn tools_present_when_non_empty() {
+            let mut r = req();
+            r.tools = vec![ToolDef {
+                name: "vault:read".into(),
+                description: "read".into(),
+                parameters: serde_json::json!({}),
+            }];
+            let nm = build_tool_name_map(&r.tools);
+            let body = to_openai_request("m", &r, &nm);
+            assert!(body["tools"].is_array());
+            assert!(
+                body["tools"][0]["function"]["name"]
+                    .as_str()
+                    .unwrap()
+                    .contains("vault")
+            );
+        }
+
+        #[test]
+        fn tools_absent_when_empty() {
+            let body = to_openai_request("m", &req(), &ToolNameMap::default());
+            assert!(body.get("tools").is_none());
+        }
+
+        #[test]
+        fn temperature_present_when_set() {
+            let mut r = req();
+            r.temperature = Some(0.3);
+            let body = to_openai_request("m", &r, &ToolNameMap::default());
+            let temp = body["temperature"].as_f64().unwrap();
+            assert!((temp - 0.3).abs() < 0.01);
+        }
+
+        #[test]
+        fn temperature_absent_when_none() {
+            assert!(
+                to_openai_request("m", &req(), &ToolNameMap::default())
+                    .get("temperature")
+                    .is_none()
+            );
+        }
+
+        #[test]
+        fn max_tokens_present_when_set() {
+            let mut r = req();
+            r.max_tokens = Some(4096);
+            let body = to_openai_request("m", &r, &ToolNameMap::default());
+            assert_eq!(body["max_tokens"], 4096);
+        }
+
+        #[test]
+        fn max_tokens_absent_when_none() {
+            assert!(
+                to_openai_request("m", &req(), &ToolNameMap::default())
+                    .get("max_tokens")
+                    .is_none()
+            );
+        }
+
+        #[test]
+        fn json_schema_when_constraining() {
+            let mut r = req();
+            r.response_format = ResponseFormat::Json {
+                schema: serde_json::json!({"type":"object","properties":{"x":{"type":"string"}}}),
+            };
+            let body = to_openai_request("m", &r, &ToolNameMap::default());
+            assert_eq!(body["response_format"]["type"], "json_schema");
+            assert_eq!(body["response_format"]["json_schema"]["strict"], true);
+            assert!(
+                body["response_format"]["json_schema"]["schema"]["properties"]["x"]["type"]
+                    == "string"
+            );
+        }
+
+        #[test]
+        fn json_object_when_empty_schema() {
+            let mut r = req();
+            r.response_format = ResponseFormat::Json {
+                schema: serde_json::json!({"type":"object"}),
+            };
+            let body = to_openai_request("m", &r, &ToolNameMap::default());
+            assert_eq!(body["response_format"]["type"], "json_object");
+        }
     }
 
     /// ...and a shapeless one must not, or a backend enforcing `strict` refuses the request outright
@@ -755,5 +868,85 @@ mod tests {
     #[test]
     fn parse_models_response_missing_data_is_empty() {
         assert_eq!(parse_models_response(&json!({})), Vec::<String>::new());
+    }
+
+    #[test]
+    fn map_finish_reason_recognizes_length() {
+        assert_eq!(map_finish_reason("length"), FinishReason::Length);
+    }
+
+    #[test]
+    fn map_finish_reason_recognizes_content_filter() {
+        assert_eq!(
+            map_finish_reason("content_filter"),
+            FinishReason::ContentFilter
+        );
+    }
+
+    #[test]
+    fn into_invocation_returns_none_for_empty_name() {
+        let acc = ToolAcc::default();
+        let map = ToolNameMap::default();
+        assert!(acc.into_invocation(&map).is_none());
+    }
+
+    #[test]
+    fn into_invocation_maps_name_through_reverse_map() {
+        let tools = vec![ToolDef::new("original:a", "", json!({}))];
+        let map = build_tool_name_map(&tools);
+        let acc = ToolAcc {
+            id: "call-1".into(),
+            name: "original_a".into(),
+            arguments: r#"{"x":1}"#.into(),
+        };
+        let inv = acc.into_invocation(&map).unwrap();
+        assert_eq!(inv.name, "original:a");
+        assert_eq!(inv.arguments["x"], 1);
+    }
+
+    #[test]
+    fn into_invocation_uses_raw_name_when_not_in_map() {
+        let map = ToolNameMap::default();
+        let acc = ToolAcc {
+            id: "c2".into(),
+            name: "unmapped_name".into(),
+            arguments: "{}".into(),
+        };
+        let inv = acc.into_invocation(&map).unwrap();
+        assert_eq!(inv.name, "unmapped_name");
+    }
+
+    #[test]
+    fn accumulate_tool_deltas_expands_slots_and_sets_fields() {
+        let mut acc = Vec::new();
+        let deltas: Vec<Value> = serde_json::from_str(
+            r#"[{"index":0,"id":"c1","function":{"name":"search","arguments":"{\"q\":"}}]"#,
+        )
+        .unwrap();
+        accumulate_tool_deltas(&mut acc, &deltas);
+        assert_eq!(acc.len(), 1);
+        assert_eq!(acc[0].id, "c1");
+        assert_eq!(acc[0].name, "search");
+        assert_eq!(acc[0].arguments, r#"{"q":"#);
+    }
+
+    #[test]
+    fn accumulate_tool_deltas_does_not_overwrite_with_empty_id_or_name() {
+        let mut acc = vec![ToolAcc {
+            id: "existing".into(),
+            name: "existing".into(),
+            arguments: String::new(),
+        }];
+        let deltas: Vec<Value> = serde_json::from_str(
+            r#"[{"index":0,"id":"","function":{"name":"","arguments":"more"}}]"#,
+        )
+        .unwrap();
+        accumulate_tool_deltas(&mut acc, &deltas);
+        assert_eq!(acc[0].id, "existing", "should not overwrite with empty id");
+        assert_eq!(
+            acc[0].name, "existing",
+            "should not overwrite with empty name"
+        );
+        assert_eq!(acc[0].arguments, "more", "arguments should still append");
     }
 }

@@ -36,7 +36,7 @@ use crate::DispatchRequest;
 ///
 /// Priority order — most fundamental first, so the reported reason is the most actionable:
 /// capability gap → reaction-depth limit → confidence floor.
-pub(crate) fn evaluate(
+pub fn evaluate(
     decision: &DispatchDecision,
     req: &DispatchRequest,
     tuning: &DispatchTuning,
@@ -721,5 +721,15 @@ mod tests {
             ..req(granted("tasks-mcp"), 0)
         };
         assert_eq!(evaluate(&d, &request, &DispatchTuning::default(), 4), None);
+    }
+
+    #[test]
+    fn confidence_at_the_write_threshold_is_not_low_confidence() {
+        let tuning = DispatchTuning::default();
+        let d = execute_direct("tasks-mcp:add", tuning.clarify_threshold_write);
+        assert_eq!(
+            evaluate(&d, &req(granted("tasks-mcp"), 0), &tuning, 4),
+            None
+        );
     }
 }

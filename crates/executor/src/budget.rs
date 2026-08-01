@@ -14,7 +14,10 @@ use crate::DEFAULT_MAX_TURNS;
 pub trait ResourceLimit: Send + Sync {
     /// Human-readable name for diagnostics ("wall-clock", "tokens") — surfaced in a budget-
     /// exceeded failure report so it names *which* resource ran out, not just "turns."
-    fn name(&self) -> &str;
+    /// A fixed label for this resource — `"wall-clock"`, `"tokens"`. `'static` because it has
+    /// to outlive the borrow of the limit: the name travels out in `ExecError::BudgetExceeded`
+    /// so the failed report can say which bound was actually hit.
+    fn name(&self) -> &'static str;
     /// Whether this resource has been exhausted given the current usage snapshot.
     fn is_exhausted(&self, usage: &ResourceUsage) -> bool;
 }
@@ -35,7 +38,7 @@ pub struct ResourceUsage {
 pub struct WallClockLimit(pub std::time::Duration);
 
 impl ResourceLimit for WallClockLimit {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "wall-clock"
     }
     fn is_exhausted(&self, usage: &ResourceUsage) -> bool {
@@ -53,7 +56,7 @@ impl ResourceLimit for WallClockLimit {
 pub struct TokenLimit(pub u64);
 
 impl ResourceLimit for TokenLimit {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "tokens"
     }
     fn is_exhausted(&self, usage: &ResourceUsage) -> bool {
@@ -111,7 +114,7 @@ impl Budget {
     /// The name of the first exhausted extra limit (wall-clock, tokens, ...), if any — `None`
     /// means none of the *extra* limits are exhausted (the turn cap is checked separately, since
     /// it's the loop's own mechanical bound, not one of these).
-    pub(crate) fn exhausted_extra(&self, usage: &ResourceUsage) -> Option<&str> {
+    pub(crate) fn exhausted_extra(&self, usage: &ResourceUsage) -> Option<&'static str> {
         self.extra_limits
             .iter()
             .find(|limit| limit.is_exhausted(usage))
@@ -122,5 +125,72 @@ impl Budget {
 impl Default for Budget {
     fn default() -> Self {
         Self::new(DEFAULT_MAX_TURNS)
+    }
+}
+
+#[cfg(test)]
+mod proptest_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn proptest_exhaustion_monotone(
+            (turns1, turns2) in (0u32..50, 0u32..50),
+            (elapsed1, elapsed2) in (0u64..300, 0u64..300),
+            (tokens1, tokens2) in (0u64..50000, 0u64..50000),
+            max_elapsed in 1u64..300,
+            max_tokens in 1u64..50000,
+        ) {
+            if turns1 <= turns2 && elapsed1 <= elapsed2 && tokens1 <= tokens2 {
+                let u1 = ResourceUsage {
+                    turns: turns1,
+                    elapsed: std::time::Duration::from_secs(elapsed1),
+                    tokens: tokens1,
+                };
+                let u2 = ResourceUsage {
+                    turns: turns2,
+                    elapsed: std::time::Duration::from_secs(elapsed2),
+                    tokens: tokens2,
+                };
+                let wall1 = WallClockLimit(std::time::Duration::from_secs(max_elapsed))
+                    .is_exhausted(&u1);
+                let wall2 = WallClockLimit(std::time::Duration::from_secs(max_elapsed))
+                    .is_exhausted(&u2);
+                let tok1 = TokenLimit(max_tokens).is_exhausted(&u1);
+                let tok2 = TokenLimit(max_tokens).is_exhausted(&u2);
+                if wall1 {
+                    prop_assert!(wall2);
+                }
+                if tok1 {
+                    prop_assert!(tok2);
+                }
+            }
+        }
+
+        #[test]
+        fn proptest_wall_clock_no_panic(
+            elapsed_secs in 0u64..,
+            limit_secs in 0u64..,
+        ) {
+            let usage = ResourceUsage {
+                elapsed: std::time::Duration::from_secs(elapsed_secs),
+                ..Default::default()
+            };
+            let _ = WallClockLimit(std::time::Duration::from_secs(limit_secs))
+                .is_exhausted(&usage);
+        }
+
+        #[test]
+        fn proptest_token_limit_no_panic(
+            tokens in 0u64..,
+            limit in 0u64..,
+        ) {
+            let usage = ResourceUsage {
+                tokens,
+                ..Default::default()
+            };
+            let _ = TokenLimit(limit).is_exhausted(&usage);
+        }
     }
 }

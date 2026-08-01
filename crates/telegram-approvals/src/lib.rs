@@ -48,6 +48,8 @@ pub struct ApprovalBot {
     signer: ProposalSigner,
     provider: Arc<dyn Provider>,
     tuning: TelegramApprovalsTuning,
+    /// Where a tap is recorded. The vault note is a view; this is the decision.
+    approvals: Option<liberado_common::ApprovalLedger>,
     /// Prompt id (from [`MessagingChannel::request_reply`]) → proposal stem being revised.
     /// Lost on restart — acceptable; a human can tap Revise again.
     pending_revisions: Mutex<HashMap<String, String>>,
@@ -91,6 +93,7 @@ impl ApprovalBot {
             signer,
             provider,
             tuning,
+            approvals: None,
             pending_revisions: Mutex::new(HashMap::new()),
             in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             latest_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -260,6 +263,28 @@ impl ApprovalBot {
         }
     }
 
+    /// Record approvals to `ledger` — the daemon will not execute without a matching entry.
+    #[must_use]
+    pub fn with_approval_ledger(mut self, ledger: liberado_common::ApprovalLedger) -> Self {
+        self.approvals = Some(ledger);
+        self
+    }
+
+    /// Which terminal state a proposal was archived into, if it was.
+    ///
+    /// The daemon files a finished proposal under `proposals/archive/<outcome>/`, so an absent
+    /// active note usually means *resolved*, not *missing*. Distinguishing them is what lets a
+    /// stale tap get a true answer instead of an alarming one.
+    async fn archived_outcome(&self, stem: &str) -> Option<&'static str> {
+        for outcome in ["approved", "rejected", "expired"] {
+            let path = format!("{PROPOSALS_DIR}/archive/{outcome}/{stem}.md");
+            if self.vault.read(&path).await.is_ok() {
+                return Some(outcome);
+            }
+        }
+        None
+    }
+
     async fn ack(&self, event_id: &str, text: &str) {
         if let Err(e) = self.channel.acknowledge(event_id, text).await {
             tracing::warn!(error = %e, "acknowledge failed");
@@ -343,6 +368,28 @@ impl ApprovalBot {
                 proposal.status = ProposalStatus::Approved;
             }
         }
+
+        // A permission request is a proposal, and `handle_proposal_change` is what runs the blocked
+        // call — so it passes the same ledger gate as any other. Recording here too is not optional:
+        // without it a tapped permission would flip the note, then be refused by the daemon, and the
+        // tap would appear to do nothing. Recorded before the note, for the same reason as
+        // `set_status` — the ledger is the decision, the note is its view.
+        if let Some(ledger) = &self.approvals {
+            let decision = match proposal.status {
+                ProposalStatus::Approved => Some(liberado_common::ApprovalDecision::Approved),
+                ProposalStatus::Rejected => Some(liberado_common::ApprovalDecision::Rejected),
+                _ => None,
+            };
+            if let Some(decision) = decision
+                && let Err(e) = ledger.record(&proposal.id, decision, "telegram").await
+            {
+                tracing::error!(stem, error = %e, "approval-bot: failed to record the decision");
+                self.ack(event_id, "Failed to record your decision — try again.")
+                    .await;
+                return;
+            }
+        }
+
         if let Err(e) = self
             .vault
             .write(&path, &proposal.to_note(), None, &WriteProvenance::human())
@@ -382,8 +429,26 @@ impl ApprovalBot {
         let content = match self.vault.read(&path).await {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!(stem, error = %e, "approval-bot: proposal not found");
-                self.ack(event_id, "Proposal not found.").await;
+                // The common case is not a missing file: the daemon archives a proposal the moment
+                // it reaches a terminal state, so a second tap on a notification that is still on
+                // screen reads the active dir and finds nothing. Reporting that as a vault I/O
+                // error sent a real debugging session (2026-08-01) looking for a storage fault that
+                // did not exist, and told the operator "Proposal not found" about a proposal that
+                // had been approved seconds earlier.
+                match self.archived_outcome(stem).await {
+                    Some(outcome) => {
+                        tracing::info!(
+                            stem,
+                            outcome,
+                            "approval-bot: proposal already resolved and archived; nothing to do"
+                        );
+                        self.ack(event_id, &format!("Already {outcome}.")).await;
+                    }
+                    None => {
+                        tracing::warn!(stem, error = %e, "approval-bot: proposal not found");
+                        self.ack(event_id, "Proposal not found.").await;
+                    }
+                }
                 return;
             }
         };
@@ -409,12 +474,33 @@ impl ApprovalBot {
             return;
         }
 
+        // The decision is recorded **before** the note is touched, and the note is only a view.
+        // A tap is the authenticated act; `proposals/` is agent-writable, so nothing written there
+        // authorises anything. If the ledger write fails, the decision did not happen — say so
+        // rather than leaving a note that claims otherwise.
+        if let Some(ledger) = &self.approvals {
+            let decision = match new_status {
+                ProposalStatus::Approved => Some(liberado_common::ApprovalDecision::Approved),
+                ProposalStatus::Rejected => Some(liberado_common::ApprovalDecision::Rejected),
+                _ => None,
+            };
+            if let Some(decision) = decision
+                && let Err(e) = ledger.record(&proposal.id, decision, "telegram").await
+            {
+                tracing::error!(stem, error = %e, "approval-bot: failed to record the decision");
+                self.ack(event_id, "Failed to record your decision — try again.")
+                    .await;
+                return;
+            }
+        }
+
         proposal.status = new_status;
         if let Err(e) = self
             .vault
             .write(&path, &proposal.to_note(), None, &WriteProvenance::human())
             .await
         {
+            // The decision stands — it is in the ledger. Only the human-readable view failed.
             tracing::error!(stem, error = %e, "approval-bot: failed to write status change");
             self.ack(event_id, "Failed to save — try again.").await;
             return;
@@ -856,6 +942,48 @@ mod tests {
         );
         let request = build_revision_request(&proposal, "a note", 0.4);
         assert_eq!(request.temperature, Some(0.4));
+    }
+
+    /// A tap on a notification whose proposal has since been archived is the *normal* case, not a
+    /// storage fault: the daemon archives the moment a proposal goes terminal, and the Telegram
+    /// message stays on screen. Live on 2026-08-01 this logged a vault I/O error three times and
+    /// told the operator "Proposal not found" about something approved seconds earlier.
+    #[tokio::test]
+    async fn an_archived_proposal_is_reported_as_resolved_not_missing() {
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open("test", dir.path()).await.unwrap();
+        let signer = ProposalSigner::random();
+        let bot = test_bot(
+            vault.clone(),
+            signer,
+            Arc::new(MockProvider::with_script(
+                "m",
+                Vec::<CompletionResponse>::new(),
+            )),
+        );
+
+        // Nothing anywhere yet: genuinely missing.
+        assert_eq!(bot.archived_outcome("prop-1").await, None);
+
+        // Archived where the daemon puts a terminal proposal.
+        vault
+            .write(
+                "proposals/archive/approved/prop-1.md",
+                "---
+id: prop-1
+---
+",
+                None,
+                &liberado_common::WriteProvenance::human(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            bot.archived_outcome("prop-1").await,
+            Some("approved"),
+            "an archived proposal must be recognised as resolved, so a stale tap gets a true answer"
+        );
     }
 
     fn test_bot(vault: Vault, signer: ProposalSigner, provider: Arc<dyn Provider>) -> ApprovalBot {

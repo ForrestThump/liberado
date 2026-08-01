@@ -361,4 +361,21 @@ mod tests {
         names.sort();
         assert_eq!(names, vec!["a".to_string(), "b".to_string()]);
     }
+
+    #[test]
+    fn replace_connectors_swaps_and_drops_removed_names() {
+        let reg = McpRegistry::new()
+            .register("a", NoopConnector)
+            .register("b", NoopConnector);
+
+        let mut new = HashMap::new();
+        new.insert("b".into(), Arc::new(NoopConnector) as Arc<dyn McpConnector>);
+        new.insert("c".into(), Arc::new(NoopConnector) as Arc<dyn McpConnector>);
+        reg.replace_connectors(new);
+
+        assert_eq!(reg.len(), 2);
+        let mut names = reg.names();
+        names.sort();
+        assert_eq!(names, vec!["b".to_string(), "c".to_string()]);
+    }
 }

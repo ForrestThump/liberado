@@ -27,8 +27,8 @@ use liberado_conversation_store::{
 };
 use liberado_provider::Message;
 use liberado_session::{
-    GoalResult, GoalSessionRecord, SessionEvent, SessionEventKind, SessionRecordStore,
-    SessionStatus, TurnAuthor,
+    GoalResult, GoalSessionRecord, SessionEvent, SessionEventKind, SessionGrant,
+    SessionRecordStore, SessionStatus, TurnAuthor,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, broadcast};
@@ -556,7 +556,9 @@ impl ConversationStore for SessionStore {
                 spawned_by: new.spawned_by,
                 correlation_id: None,
                 visibility: Default::default(),
-                grant: Default::default(),
+                // Carried through rather than defaulted: this is the line where a chat's chosen
+                // profile becomes the session's authority, and where it was previously dropped.
+                grant: new.grant,
                 ephemeral: new.ephemeral,
             })
             .await;
@@ -690,6 +692,22 @@ impl ConversationStore for SessionStore {
         // The header is line 0 and the log is append-only, so a title change is a *new* header line.
         // Replay takes the last one it sees, which makes the rewrite idempotent and keeps the log's
         // one invariant (never mutate what was written) intact.
+        self.append_line(conversation, &Record::Header(Box::new(header)));
+        Ok(())
+    }
+
+    async fn set_grant(&self, conversation: Ulid, grant: SessionGrant) -> StoreResult<()> {
+        let mut map = self.inner.lock().await;
+        let live = map
+            .get_mut(&conversation)
+            .ok_or_else(|| StoreError::NotFound(format!("session {conversation}")))?;
+        live.header.grant = grant;
+        let header = live.header.clone();
+        drop(map);
+        // A new header line, exactly as `set_title` does: the log is append-only, replay takes the
+        // last header it sees, and the earlier lines stay as the record of what the session ran
+        // under before. That last part is the point — the switch has to be *recorded*, not applied
+        // in place, or the transcript can no longer say which authority produced which turn.
         self.append_line(conversation, &Record::Header(Box::new(header)));
         Ok(())
     }

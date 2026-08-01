@@ -372,3 +372,35 @@ mod tests {
         assert_eq!(sr.total_found, 0);
     }
 }
+
+#[cfg(test)]
+mod proptest_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn proptest_snippet_never_panics(
+            content in "\\PC{0,200}",
+            terms in proptest::collection::vec("[a-z]{1,6}", 1..3),
+        ) {
+            let q = ParsedQuery::parse_literal(&terms.join(" ")).unwrap();
+            let _ = snippet(&content, &q);
+        }
+
+        #[test]
+        fn proptest_find_start_bounds_snippet(
+            terms in proptest::collection::vec("[a-z]{1,6}", 1..3),
+            haystack in "[a-zA-Z ]{0,200}",
+        ) {
+            let input = terms.join(" ");
+            let Ok(q) = ParsedQuery::parse_literal(&input) else {
+                return Ok(());
+            };
+            if q.matches(&haystack) {
+                let center = q.find_start(&haystack).unwrap_or(0);
+                prop_assert!(center <= haystack.len());
+            }
+        }
+    }
+}

@@ -236,6 +236,7 @@ async fn list_backfills_title_from_existing_user_message() {
             parent_conversation: None,
             spawned_by: None,
             ephemeral: false,
+            grant: Default::default(),
         })
         .await
         .unwrap();
@@ -1421,6 +1422,14 @@ impl ConversationStore for FailOnceContentStore {
         self.inner.set_title(conversation, title).await
     }
 
+    async fn set_grant(
+        &self,
+        conversation: Ulid,
+        grant: liberado_session::SessionGrant,
+    ) -> liberado_conversation_store::StoreResult<()> {
+        self.inner.set_grant(conversation, grant).await
+    }
+
     async fn delete(&self, conversation: Ulid) -> liberado_conversation_store::StoreResult<()> {
         self.inner.delete(conversation).await
     }
@@ -1802,5 +1811,676 @@ async fn compaction_tail_copies_are_not_visible_in_rendered_history() {
         user_turns_after,
         user_turns_before + 1,
         "compaction must not inflate the user-turn count that fork/rewind indexes against"
+    );
+}
+
+// ── Per-session grants (session profiles, step 2) ────────────────────────────────────────────
+//
+// `session_capabilities` decides what authority a turn runs under. Getting it wrong is invisible:
+// too narrow silently removes tools from working chats, too wide silently ignores a profile. Both
+// look like a normal turn.
+
+/// The migration case, and the one that would have broken every existing conversation. Chats created
+/// before profiles carry an empty default grant; reading that literally would leave them with no
+/// tools at all.
+#[tokio::test]
+async fn a_conversation_with_no_profile_runs_under_the_process_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let process_grant =
+        CapabilitySet::from_iter([liberado_common::Capability::ExecuteMcp("tasks-mcp".into())]);
+    let sessions = sessions_at(dir.path(), vec![]).await.with_guards(
+        Vec::new(),
+        process_grant.clone(),
+        PathBuf::new(),
+        ProposalSigner::random(),
+    );
+
+    let id = sessions.create(None).await.unwrap();
+
+    assert_eq!(
+        sessions.session_capabilities(id).await,
+        process_grant,
+        "an unprofiled chat must keep the daemon's grant, not inherit the store's empty default"
+    );
+}
+
+/// A named profile is the session's authority, replacing the process grant rather than intersecting
+/// with it — otherwise a profile could never add an MCP the face agent's own grant lacks, which is
+/// most of the point.
+#[tokio::test]
+async fn a_named_profile_replaces_the_process_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let process_grant =
+        CapabilitySet::from_iter([liberado_common::Capability::ExecuteMcp("tasks-mcp".into())]);
+    let sessions = sessions_at(dir.path(), vec![]).await.with_guards(
+        Vec::new(),
+        process_grant,
+        PathBuf::new(),
+        ProposalSigner::random(),
+    );
+
+    let profile = SessionGrant {
+        capabilities: CapabilitySet::from_iter([
+            liberado_common::Capability::ExecuteMcp("spider-mcp".into()),
+            liberado_common::Capability::ExecuteTool("turbovault:read_note".into()),
+        ]),
+        profile: Some("basic-chat".into()),
+        overrides: serde_json::Value::Null,
+        ..Default::default()
+    };
+    let id = sessions
+        .create_with_grant(None, profile.clone())
+        .await
+        .unwrap();
+
+    let effective = sessions.session_capabilities(id).await;
+    assert!(effective.grants_tool("spider-mcp:fetch"));
+    assert!(effective.grants_tool("turbovault:read_note"));
+    assert!(
+        !effective.grants_tool("turbovault:write_note"),
+        "the per-tool half of the profile must survive the round trip through the store"
+    );
+    assert!(
+        !effective.grants_tool("tasks-mcp:add"),
+        "the profile replaces the process grant; it does not add to it"
+    );
+}
+
+/// "This chat may call nothing" has to be sayable, and distinguishable from "no profile chosen".
+/// The profile *name* is what carries that intent — an empty capability set alone cannot.
+#[tokio::test]
+async fn a_named_profile_granting_nothing_is_honored_not_treated_as_unset() {
+    let dir = tempfile::tempdir().unwrap();
+    let process_grant =
+        CapabilitySet::from_iter([liberado_common::Capability::ExecuteMcp("tasks-mcp".into())]);
+    let sessions = sessions_at(dir.path(), vec![]).await.with_guards(
+        Vec::new(),
+        process_grant,
+        PathBuf::new(),
+        ProposalSigner::random(),
+    );
+
+    let id = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                capabilities: CapabilitySet::empty(),
+                profile: Some("no-tools".into()),
+                overrides: serde_json::Value::Null,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        sessions.session_capabilities(id).await,
+        CapabilitySet::empty()
+    );
+}
+
+/// The grant is on the header line, so it must survive a restart like any other session state.
+#[tokio::test]
+async fn a_profile_survives_reopening_the_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let grant = SessionGrant {
+        capabilities: CapabilitySet::from_iter([liberado_common::Capability::ExecuteTool(
+            "turbovault:read_note".into(),
+        )]),
+        profile: Some("basic-chat".into()),
+        overrides: serde_json::Value::Null,
+        ..Default::default()
+    };
+
+    let id = {
+        let sessions = sessions_at(dir.path(), vec![]).await;
+        sessions.create_with_grant(None, grant).await.unwrap()
+    };
+
+    let reopened = sessions_at(dir.path(), vec![]).await;
+    let header = reopened.store.header(id).await.unwrap();
+    assert_eq!(header.grant.profile.as_deref(), Some("basic-chat"));
+    assert!(
+        header
+            .grant
+            .capabilities
+            .grants_tool("turbovault:read_note")
+    );
+}
+
+/// A lookup failure must not quietly become an authority change in either direction.
+#[tokio::test]
+async fn an_unknown_session_falls_back_to_the_process_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let process_grant =
+        CapabilitySet::from_iter([liberado_common::Capability::ExecuteMcp("tasks-mcp".into())]);
+    let sessions = sessions_at(dir.path(), vec![]).await.with_guards(
+        Vec::new(),
+        process_grant.clone(),
+        PathBuf::new(),
+        ProposalSigner::random(),
+    );
+
+    assert_eq!(
+        sessions.session_capabilities(Ulid::new()).await,
+        process_grant
+    );
+}
+
+/// A profile that turns dispatch off must actually change the *shape* of the turn, not merely
+/// shorten the tool list â€” that is most of what "basic chat" means.
+#[tokio::test]
+async fn a_profile_can_switch_delegation_off_for_one_conversation() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = sessions_at(dir.path(), vec![]).await;
+
+    let default_on = sessions.create(None).await.unwrap();
+    let basic = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                capabilities: CapabilitySet::empty(),
+                profile: Some("basic-chat".into()),
+                delegation: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        sessions.turn_settings(default_on).await.delegation == sessions.delegation_mode_for_test(),
+        "no profile must inherit the daemon's setting, whatever it is"
+    );
+    assert!(
+        !sessions.turn_settings(basic).await.delegation,
+        "the profile's `delegation = false` must win for this conversation"
+    );
+}
+
+/// `None` means "inherit", not "off" â€” a profile that says nothing about delegation must not
+/// silently disable it.
+#[tokio::test]
+async fn a_profile_silent_on_delegation_inherits_the_daemon_setting() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = sessions_at(dir.path(), vec![]).await;
+    let id = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                profile: Some("quiet".into()),
+                delegation: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        sessions.turn_settings(id).await.delegation,
+        sessions.delegation_mode_for_test()
+    );
+}
+
+#[tokio::test]
+async fn a_profiles_prompt_append_reaches_the_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = sessions_at(dir.path(), vec![]).await;
+    let id = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                profile: Some("terse".into()),
+                prompt_append: Some("Answer in one sentence.".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        sessions.turn_settings(id).await.prompt_append.as_deref(),
+        Some("Answer in one sentence.")
+    );
+    // ...and an unprofiled chat gets none, rather than inheriting another session's.
+    let plain = sessions.create(None).await.unwrap();
+    assert!(sessions.turn_settings(plain).await.prompt_append.is_none());
+}
+
+/// The nudge must qualify the system prompt, not arrive as if the user said it â€” a model treats
+/// those very differently.
+#[test]
+fn a_prompt_append_lands_after_the_system_prompt_and_before_the_first_user_turn() {
+    let mut convo = Conversation::from_history(vec![
+        Message::system("base prompt"),
+        Message::user("hello"),
+        Message::assistant("hi"),
+    ]);
+    convo.apply_prompt_append(Some("Be terse."));
+
+    let roles: Vec<Role> = convo.messages_for_test().iter().map(|m| m.role).collect();
+    assert_eq!(
+        roles,
+        vec![Role::System, Role::System, Role::User, Role::Assistant],
+        "the nudge must sit with the system prompt, not among the dialogue"
+    );
+    assert_eq!(convo.messages_for_test()[1].content, "Be terse.");
+}
+
+#[test]
+fn an_absent_or_blank_prompt_append_changes_nothing() {
+    for extra in [None, Some(""), Some("   \n ")] {
+        let mut convo =
+            Conversation::from_history(vec![Message::system("base"), Message::user("q")]);
+        convo.apply_prompt_append(extra);
+        assert_eq!(
+            convo.messages_for_test().len(),
+            2,
+            "blank nudge must not add a message: {extra:?}"
+        );
+    }
+}
+
+// ── The prompt must follow the profile ───────────────────────────────────────────────────────────
+//
+// Found live on 2026-07-28, not by CI: a `basic-chat` session (delegation off, five real tools, no
+// `delegate`) was still handed the face-agent root prompt — "you are a face agent, not a tool user…
+// call the `delegate` tool", plus an instruction not to enumerate its own tools. Asked for its open
+// tasks it answered "I'll fetch your open tasks first." and called nothing. The prompt and the tool
+// surface were two sources of truth and they drifted the moment step 5 made the surface per-session
+// while the prompt stayed daemon-wide.
+
+/// The regression test that matters: assert on what the **provider actually received**, not on the
+/// helper that built it. A session that does not delegate must not be told to delegate.
+#[tokio::test]
+async fn a_non_delegating_session_is_not_told_it_is_a_face_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let provider = Arc::new(MockProvider::with_script(
+        "chat",
+        [CompletionResponse::text("ok")],
+    ));
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let executor = Executor::new(provider.clone(), Budget::default());
+    // Delegation mode on, so the *persisted root prompt* is the face-agent one — exactly the live
+    // configuration. No hub attached, so this turn does not run as the face agent.
+    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools)).with_delegation_mode(true);
+
+    let id = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                profile: Some("basic-chat".into()),
+                delegation: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    sessions
+        .turn(id, "What tasks do I have open?")
+        .await
+        .unwrap();
+
+    let sent = &provider.received_requests()[0].messages[0];
+    assert_eq!(sent.role, Role::System);
+    assert_ne!(
+        sent.content, HUMAN_INTERFACE_SYSTEM_PROMPT,
+        "a session that cannot delegate must not be handed the face-agent prompt"
+    );
+    assert!(
+        !sent.content.contains("delegate"),
+        "the model must not be instructed to call a tool it does not hold; got: {}",
+        &sent.content[..sent.content.len().min(200)]
+    );
+}
+
+/// The counterpart: a session that *does* delegate must keep the face-agent prompt. A fix that
+/// stripped it unconditionally would trade one drift for another.
+#[tokio::test]
+async fn a_delegating_session_keeps_the_face_agent_prompt() {
+    use liberado_session::{GoalSessionHub, GoalSessionStore};
+    let dir = tempfile::tempdir().unwrap();
+    let provider = Arc::new(MockProvider::with_script(
+        "chat",
+        [CompletionResponse::text("ok")],
+    ));
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let executor = Executor::new(provider.clone(), Budget::default());
+    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools))
+        .with_delegation_mode(true)
+        .with_goal_hub(Arc::new(GoalSessionHub::new(GoalSessionStore::new())));
+
+    let id = sessions.create(None).await.unwrap();
+    sessions.turn(id, "hello").await.unwrap();
+
+    assert_eq!(
+        provider.received_requests()[0].messages[0].content,
+        HUMAN_INTERFACE_SYSTEM_PROMPT,
+        "the face agent must still be told it is one"
+    );
+}
+
+#[test]
+fn the_swap_replaces_the_builtin_face_prompt_only() {
+    // The built-in face prompt is swapped...
+    let mut convo = Conversation::from_history(vec![
+        Message::system(HUMAN_INTERFACE_SYSTEM_PROMPT),
+        Message::user("q"),
+    ]);
+    convo.apply_direct_agent_prompt();
+    assert_eq!(convo.messages_for_test()[0].content, DEFAULT_SYSTEM_PROMPT);
+
+    // ...an operator's own prompt is not. They chose that text for every session, and discarding it
+    // silently would be the same class of bug pointing the other way.
+    let custom = "You are a narrow research assistant. Never speculate.";
+    let mut convo = Conversation::from_history(vec![Message::system(custom), Message::user("q")]);
+    convo.apply_direct_agent_prompt();
+    assert_eq!(convo.messages_for_test()[0].content, custom);
+
+    // ...and a prompt already correct for this path is left exactly as it is.
+    let mut convo = Conversation::from_history(vec![
+        Message::system(DEFAULT_SYSTEM_PROMPT),
+        Message::user("q"),
+    ]);
+    convo.apply_direct_agent_prompt();
+    assert_eq!(convo.messages_for_test()[0].content, DEFAULT_SYSTEM_PROMPT);
+}
+
+/// Order is load-bearing: the profile's nudge qualifies whichever base prompt ends up in force, so
+/// it has to stay last. Swapping the base after appending would put them the wrong way round.
+#[test]
+fn the_swap_leaves_the_profile_nudge_after_the_base_prompt() {
+    let mut convo = Conversation::from_history(vec![
+        Message::system(HUMAN_INTERFACE_SYSTEM_PROMPT),
+        Message::user("q"),
+    ]);
+    convo.apply_direct_agent_prompt();
+    convo.apply_prompt_append(Some("Answer directly and briefly."));
+
+    let msgs = convo.messages_for_test();
+    assert_eq!(msgs[0].content, DEFAULT_SYSTEM_PROMPT);
+    assert_eq!(msgs[1].content, "Answer directly and briefly.");
+    assert_eq!(msgs[2].role, Role::User);
+}
+
+#[test]
+fn the_swap_is_a_no_op_on_an_empty_or_headless_history() {
+    let mut empty = Conversation::from_history(vec![]);
+    empty.apply_direct_agent_prompt();
+    assert!(empty.messages_for_test().is_empty());
+
+    // A history whose first message is not a system prompt must not be rewritten into one.
+    let mut headless = Conversation::from_history(vec![Message::user("q")]);
+    headless.apply_direct_agent_prompt();
+    assert_eq!(headless.messages_for_test()[0].role, Role::User);
+    assert_eq!(headless.messages_for_test()[0].content, "q");
+}
+
+// ── The tool manifest: one value, two renderings ────────────────────────────────────────────────
+
+/// The property the whole design rests on: the tools **named in the prompt** and the tools **sent in
+/// the request** are the same list, because both come off the runtime handed to the executor.
+///
+/// Asserted as an equality between the two, not as "the prompt mentions calendar-mcp:list" — a
+/// substring check would still pass if the prompt named a tool the request omitted, which is exactly
+/// vtcode's `prompts.coder` naming `write_file` against a `unified_file` toolset.
+#[tokio::test]
+async fn the_prompt_names_exactly_the_tools_the_request_carries() {
+    use liberado_common::{Capability, CapabilitySet};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        [CompletionResponse::text("ok")],
+    ));
+    let executor = Executor::new(provider.clone(), Budget::default());
+    let sessions = ChatSessions::new(store, executor, Arc::new(OneTool("calendar-mcp:list")))
+        .with_guards(
+            vec![("calendar-mcp".into(), Consequence::Reversible)],
+            CapabilitySet::from_iter([Capability::ExecuteMcp("calendar-mcp".into())]),
+            dir.path().join("proposals"),
+            ProposalSigner::random(),
+        );
+
+    let id = sessions.create(None).await.unwrap();
+    sessions.turn(id, "what's on my calendar?").await.unwrap();
+
+    let request = &provider.received_requests()[0];
+    let carried: Vec<String> = request.tools.iter().map(|t| t.name.clone()).collect();
+    assert!(
+        !carried.is_empty(),
+        "fixture should carry at least one tool"
+    );
+
+    let manifest = request
+        .messages
+        .iter()
+        .filter(|m| m.role == Role::System)
+        .map(|m| m.content.as_str())
+        .find(|c| c.contains("available to you on this turn"))
+        .expect("the turn must state which tools it holds");
+
+    for name in &carried {
+        assert!(
+            manifest.contains(name.as_str()),
+            "tool {name} is in the request but missing from the prompt: {manifest}"
+        );
+    }
+    assert!(
+        !manifest.contains("write_file"),
+        "sanity: the manifest must not invent tools the request does not carry"
+    );
+}
+
+/// A turn with nothing to call must say so outright. Otherwise the model fills the silence by
+/// offering to look something up — the announce-then-stall failure, reached from the other side.
+#[test]
+fn a_toolless_turn_is_told_not_to_offer_lookups() {
+    let mut convo = Conversation::from_history(vec![Message::system("base"), Message::user("q")]);
+    convo.apply_available_tools(&[]);
+    let stated = &convo.messages_for_test()[1].content;
+    assert!(stated.contains("no tools"), "got: {stated}");
+    assert!(
+        stated.contains("cannot"),
+        "an empty manifest must forbid promising a lookup, not merely omit tools: {stated}"
+    );
+    // Measured live 2026-08-01. Told it had no tools "on this turn", the model deferred instead —
+    // "ask me again on the next turn and I'll do a fresh lookup" — which was untrue: the profile
+    // lacked the tool entirely, so no later turn would have differed. Accurate about the turn,
+    // misleading about the future, and the same announce-then-cannot shape as the original bug.
+    assert!(
+        stated.contains("asking again later"),
+        "an empty manifest must not invite a retry it cannot honour: {stated}"
+    );
+    // ...while still allowing honest use of what is already in the conversation, which is what the
+    // model got right unprompted: it cited the earlier result and labelled it as earlier.
+    assert!(stated.contains("not current"), "{stated}");
+}
+
+/// It has to beat concrete tool successes sitting further up the transcript, so it goes last —
+/// after the profile nudge, immediately before the dialogue.
+#[test]
+fn the_tool_manifest_is_the_last_word_before_the_dialogue() {
+    let mut convo = Conversation::from_history(vec![
+        Message::system(HUMAN_INTERFACE_SYSTEM_PROMPT),
+        Message::user("earlier"),
+        Message::assistant("earlier reply"),
+    ]);
+    convo.apply_direct_agent_prompt();
+    convo.apply_prompt_append(Some("Answer directly and briefly."));
+    convo.apply_available_tools(&[ToolDef::new(
+        "turbovault:tasks_list",
+        "list tasks",
+        serde_json::json!({ "type": "object" }),
+    )]);
+
+    let msgs = convo.messages_for_test();
+    assert_eq!(msgs[0].content, DEFAULT_SYSTEM_PROMPT);
+    assert_eq!(msgs[1].content, "Answer directly and briefly.");
+    assert!(msgs[2].content.contains("turbovault:tasks_list"));
+    assert_eq!(msgs[2].role, Role::System);
+    assert_eq!(
+        msgs[3].role,
+        Role::User,
+        "the manifest must be the final system message, not buried among the dialogue"
+    );
+}
+
+/// The stale-evidence case: a transcript containing a successful call to a since-revoked tool must
+/// be explicitly outranked, not merely contradicted by omission.
+#[test]
+fn the_manifest_tells_the_model_to_distrust_the_transcript() {
+    let mut convo = Conversation::from_history(vec![Message::system("base"), Message::user("q")]);
+    convo.apply_available_tools(&[ToolDef::new(
+        "search",
+        "search",
+        serde_json::json!({ "type": "object" }),
+    )]);
+    let stated = &convo.messages_for_test()[1].content;
+    assert!(
+        stated.contains("withdrawn") && stated.contains("trust this list"),
+        "a tool absent here but present in history must be addressed head-on: {stated}"
+    );
+}
+
+/// Transient system messages are injected at the *front* of the view, so slicing the turn's output
+/// by a pre-turn length walks back into history and re-persists messages already on disk.
+///
+/// Latent for as long as the only injector was a profile's optional nudge; the tool manifest runs
+/// every turn, which made it certain. Caught by an unrelated compaction test starting to fail —
+/// duplicated messages inflated the next load past the compaction trigger.
+#[tokio::test]
+async fn a_turn_persists_only_its_own_messages_not_the_injected_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = sessions_at(
+        dir.path(),
+        vec![
+            CompletionResponse::text("first answer"),
+            CompletionResponse::text("second answer"),
+        ],
+    )
+    .await;
+    let id = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                profile: Some("terse".into()),
+                prompt_append: Some("Be terse.".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    sessions.turn(id, "first question").await.unwrap();
+    sessions.turn(id, "second question").await.unwrap();
+
+    let history = sessions.history(id).await.unwrap();
+    for probe in ["first question", "first answer", "second question"] {
+        assert_eq!(
+            history.iter().filter(|m| m.content == probe).count(),
+            1,
+            "{probe:?} must be stored exactly once; history: {:?}",
+            history.iter().map(|m| &m.content).collect::<Vec<_>>()
+        );
+    }
+    // And the per-turn injections are views, never records.
+    for injected in ["Be terse.", "available to you on this turn"] {
+        assert!(
+            !history.iter().any(|m| m.content.contains(injected)),
+            "{injected:?} is a per-turn view and must not be persisted"
+        );
+    }
+}
+
+/// A profile's `mcps` must reach the **non-delegating** path — the one `delegation = false` selects,
+/// and therefore the only path a "basic chat" profile ever runs on.
+///
+/// It did not. `build_turn_runtime` scoped and gated against the process-wide grant, so a profile's
+/// tools resolved into the session header, showed up over the API, and then surfaced as nothing:
+/// `main-agent` deliberately holds no `ExecuteMcp` ("specialists stay on dispatcher"), so the
+/// intersection was always empty. Live, the model correctly reported it had no access to a tool the
+/// grant plainly listed.
+#[tokio::test]
+async fn a_profiles_tools_reach_a_non_delegating_turn() {
+    use liberado_common::{Capability, CapabilitySet};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        [CompletionResponse::text("ok")],
+    ));
+    let executor = Executor::new(provider.clone(), Budget::default());
+    // The process grant holds nothing executable — exactly like the live `main-agent` grant.
+    let sessions = ChatSessions::new(store, executor, Arc::new(OneTool("turbovault:tasks_list")))
+        .with_guards(
+            vec![("turbovault".into(), Consequence::Reversible)],
+            CapabilitySet::empty(),
+            dir.path().join("proposals"),
+            ProposalSigner::random(),
+        );
+
+    let id = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                capabilities: CapabilitySet::from_iter([Capability::ExecuteTool(
+                    "turbovault:tasks_list".into(),
+                )]),
+                profile: Some("basic-chat".into()),
+                delegation: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    sessions.turn(id, "what tasks are open?").await.unwrap();
+
+    let offered: Vec<String> = provider.received_requests()[0]
+        .tools
+        .iter()
+        .map(|t| t.name.clone())
+        .collect();
+    assert!(
+        offered.contains(&"turbovault:tasks_list".to_string()),
+        "the profile's tool must be surfaced on the path its own `delegation = false` selects; \
+         got {offered:?}"
+    );
+}
+
+/// The other direction: a session that names no profile must still see the process grant, so this
+/// cannot become a migration that silently strips tools from every pre-existing chat.
+#[tokio::test]
+async fn an_unprofiled_turn_still_sees_the_process_grant() {
+    use liberado_common::{Capability, CapabilitySet};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        [CompletionResponse::text("ok")],
+    ));
+    let executor = Executor::new(provider.clone(), Budget::default());
+    let sessions = ChatSessions::new(store, executor, Arc::new(OneTool("calendar-mcp:list")))
+        .with_guards(
+            vec![("calendar-mcp".into(), Consequence::Reversible)],
+            CapabilitySet::from_iter([Capability::ExecuteMcp("calendar-mcp".into())]),
+            dir.path().join("proposals"),
+            ProposalSigner::random(),
+        );
+
+    let id = sessions.create(None).await.unwrap();
+    sessions.turn(id, "what's on my calendar?").await.unwrap();
+
+    let offered: Vec<String> = provider.received_requests()[0]
+        .tools
+        .iter()
+        .map(|t| t.name.clone())
+        .collect();
+    assert!(
+        offered.contains(&"calendar-mcp:list".to_string()),
+        "an unprofiled chat must keep the process grant; got {offered:?}"
     );
 }

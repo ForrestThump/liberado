@@ -7,6 +7,7 @@
 //! exactly one definition of message content in the system.
 
 use liberado_provider::{Message, Role};
+use liberado_session::SessionGrant;
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
@@ -113,6 +114,18 @@ pub struct ConversationHeader {
     /// The message node that spawned this conversation, when applicable.
     pub spawned_by: Option<Ulid>,
     pub created_at: Timestamp,
+    /// **The authority this conversation runs under** — its session profile, resolved.
+    ///
+    /// On the chat lens because D7 says a conversation *is* a session, and authority is a session
+    /// attribute; `SessionHeader.grant` has carried this for goal sessions all along, while chats
+    /// were stamped with an empty default nobody read.
+    ///
+    /// An empty `capabilities` with `profile: None` means "no profile chosen" — the reader falls
+    /// back to the process-wide grant, which is every conversation that existed before profiles.
+    /// A *named* profile is authoritative even if its capability set is empty, so "this chat may
+    /// call nothing" is expressible and distinguishable from "unset".
+    #[serde(default)]
+    pub grant: SessionGrant,
 }
 
 /// The input to [`create`](crate::ConversationStore::create): the caller supplies only intent, not
@@ -127,6 +140,13 @@ pub struct NewConversation {
     /// disk and it never appears in a listing. A store with no durable tier at all may ignore this —
     /// it is already telling the truth.
     pub ephemeral: bool,
+    /// The session profile this conversation runs under, already resolved to capabilities by the
+    /// caller. `Default` (empty, unnamed) means "no profile" — see [`ConversationHeader::grant`].
+    ///
+    /// Resolved by the caller, not here: turning a profile *name* into a capability set is a config
+    /// question (`Config::resolve_session_profile`), and a store that reached for config would put
+    /// the whole config stack underneath the storage layer.
+    pub grant: SessionGrant,
 }
 
 /// The input to [`append`](crate::ConversationStore::append): a complete message plus its place in

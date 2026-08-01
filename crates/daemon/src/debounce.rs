@@ -104,4 +104,23 @@ mod tests {
         let d = Debouncer::new(Duration::from_millis(100));
         assert_eq!(d.next_deadline(), None);
     }
+
+    #[test]
+    fn zero_quiet_time_drains_immediately() {
+        let mut d = Debouncer::new(Duration::ZERO);
+        let t0 = Instant::now();
+        d.observe("z.md".into(), t0);
+        // With zero quiet time, deadline = t0, so drain_ready(t0) picks it up.
+        assert_eq!(d.drain_ready(t0), vec![PathBuf::from("z.md")]);
+    }
+
+    #[test]
+    fn large_quiet_time_does_not_overflow() {
+        let mut d = Debouncer::new(Duration::from_secs(100_000_000));
+        let t0 = Instant::now();
+        d.observe("big.md".into(), t0);
+        assert!(d.next_deadline().unwrap() > t0);
+        // Should not panic with no cases ready.
+        assert!(d.drain_ready(t0).is_empty());
+    }
 }

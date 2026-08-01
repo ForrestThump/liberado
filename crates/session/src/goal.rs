@@ -322,17 +322,41 @@ impl GoalSessionRecord {
 /// Defaults to zero authority and no overrides, so a session started without an explicit grant can
 /// do nothing — notably it cannot [`AskHuman`](liberado_common::Capability::AskHuman), so it can
 /// never block waiting on a person.
+///
+/// # It carries a little more than authority now
+///
+/// A chat profile also sets how the session *behaves*: which model, whether it may delegate, an
+/// extra line of prompt. Those are typed fields below rather than entries in
+/// [`overrides`](Self::overrides), because `overrides` is opaque by contract — the config stack
+/// never looks inside and only the owning pack parses it. A chat has no pack, so anything hidden in
+/// there would be read by nobody. Typed and named, they are read by the chat engine and checked by
+/// the compiler.
+///
+/// The type therefore means "what this session runs as", of which authority is the largest part.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SessionGrant {
     /// The session's authority ceiling.
     #[serde(default)]
     pub capabilities: CapabilitySet,
     /// The profile this grant came from, for display/audit. `None` = the bare domain.
+    ///
+    /// Load-bearing beyond display: a `Some` name is what distinguishes "this profile deliberately
+    /// grants nothing" from "no profile was chosen, use the default" — an empty capability set alone
+    /// cannot say which.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     /// Opaque, pack-parsed configuration.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub overrides: serde_json::Value,
+    /// Whether the face agent may `delegate` in this session. `None` = the daemon's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation: Option<bool>,
+    /// Model to run this session on. `None` = the daemon's current model for the role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Extra system-prompt text for this profile, appended to the base prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_append: Option<String>,
 }
 
 impl SessionGrant {
@@ -341,6 +365,47 @@ impl SessionGrant {
     pub fn grants_ask_human(&self) -> bool {
         self.capabilities.grants_ask_human()
     }
+}
+
+/// Test-only invariant check: asserts the session state machine's global invariants hold.
+/// Returns `Ok(())` if clean, or `Err(message)` on the first violation.
+pub fn check_session_invariants(record: &GoalSessionRecord) -> Result<(), String> {
+    let status = record.status;
+    let awaiting = record.awaiting_input;
+    let finished = record.finished_at.is_some();
+    let has_result = record.result.is_some();
+
+    if status.is_terminal() && awaiting {
+        return Err(format!("terminal {:?} must not be awaiting_input", status));
+    }
+    if status == SessionStatus::Parked {
+        if !awaiting {
+            return Err("Parked session must have awaiting_input true".into());
+        }
+        if finished {
+            return Err("Parked session must have finished_at None".into());
+        }
+    }
+    if status == SessionStatus::Cancelled && !finished {
+        return Err("Cancelled session must have finished_at Some".into());
+    }
+    if status == SessionStatus::Running && finished {
+        return Err("Running session must have finished_at None".into());
+    }
+    if status == SessionStatus::Pending && (finished || has_result) {
+        return Err("Pending session must have no result".into());
+    }
+    if record.visibility == Visibility::Background && awaiting {
+        return Err("Background session must not be awaiting_input".into());
+    }
+    if has_result != finished {
+        return Err(format!(
+            "result {:?} inconsistent with finished_at {}: both must be set or neither",
+            record.result.is_some(),
+            record.finished_at.is_some()
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -431,5 +496,30 @@ mod tests {
                 "{status:?} must not be reportable as a way the session ENDED. Parked is the whole                  reason this matters: it is a session waiting for you, and calling it finished is                  the difference between 'start over' and 'wait'."
             );
         }
+    }
+
+    #[test]
+    fn is_background_distinguishes_foreground_and_background() {
+        assert!(Visibility::Background.is_background());
+        assert!(!Visibility::Foreground.is_background());
+    }
+
+    #[test]
+    fn background_record_has_background_visibility() {
+        let rec = GoalSessionRecord::background(
+            GoalSpec {
+                id: None,
+                description: "cron".into(),
+                success_criteria: vec![],
+                domain: DomainHint::Coding,
+                max_turns: 5,
+                max_idle_secs: None,
+                origin: None,
+                profile: None,
+                payload: serde_json::json!({}),
+            },
+            SessionGrant::default(),
+        );
+        assert_eq!(rec.visibility, Visibility::Background);
     }
 }

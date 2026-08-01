@@ -602,4 +602,140 @@ mod tests {
         let b = contract_for_tamper_tests();
         assert_eq!(a.content_hash, b.content_hash);
     }
+
+    // ── StringOrVec visitor shapes ────────────────────────────────────────────
+    // success_criteria, out_of_scope, and assumed_defaults use a custom serde
+    // visitor that accepts many JSON shapes a model might emit.
+
+    #[test]
+    fn success_criteria_as_boolean() {
+        let raw = r#"{"status":"ready_for_freeze","draft":{"description":"x","success_criteria":true,"verifiers":[],"out_of_scope":"","assumed_defaults":""}}"#;
+        let outcome: IntakeOutcome = serde_json::from_str(raw).unwrap();
+        match outcome {
+            IntakeOutcome::ReadyForFreeze { draft, .. } => {
+                assert_eq!(draft.success_criteria, vec!["true"]);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn success_criteria_as_number() {
+        let raw = r#"{"status":"ready_for_freeze","draft":{"description":"x","success_criteria":42,"verifiers":[],"out_of_scope":"","assumed_defaults":""}}"#;
+        let outcome: IntakeOutcome = serde_json::from_str(raw).unwrap();
+        match outcome {
+            IntakeOutcome::ReadyForFreeze { draft, .. } => {
+                assert_eq!(draft.success_criteria, vec!["42"]);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn success_criteria_as_array_of_strings() {
+        let raw = r#"{"status":"ready_for_freeze","draft":{"description":"x","success_criteria":["a","b"],"verifiers":[],"out_of_scope":"","assumed_defaults":""}}"#;
+        let outcome: IntakeOutcome = serde_json::from_str(raw).unwrap();
+        match outcome {
+            IntakeOutcome::ReadyForFreeze { draft, .. } => {
+                assert_eq!(draft.success_criteria, vec!["a", "b"]);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn success_criteria_as_array_of_mixed_types() {
+        let raw = r#"{"status":"ready_for_freeze","draft":{"description":"x","success_criteria":["a",42,true,null,{}],"verifiers":[],"out_of_scope":"","assumed_defaults":""}}"#;
+        let outcome: IntakeOutcome = serde_json::from_str(raw).unwrap();
+        match outcome {
+            IntakeOutcome::ReadyForFreeze { draft, .. } => {
+                assert_eq!(draft.success_criteria, vec!["a", "42", "true", "{}"]);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn success_criteria_as_null() {
+        let raw = r#"{"status":"ready_for_freeze","draft":{"description":"x","success_criteria":null,"verifiers":[],"out_of_scope":"","assumed_defaults":""}}"#;
+        let outcome: IntakeOutcome = serde_json::from_str(raw).unwrap();
+        match outcome {
+            IntakeOutcome::ReadyForFreeze { draft, .. } => {
+                assert!(draft.success_criteria.is_empty());
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn success_criteria_as_empty_string() {
+        let raw = r#"{"status":"ready_for_freeze","draft":{"description":"x","success_criteria":"   ","verifiers":[],"out_of_scope":"","assumed_defaults":""}}"#;
+        let outcome: IntakeOutcome = serde_json::from_str(raw).unwrap();
+        match outcome {
+            IntakeOutcome::ReadyForFreeze { draft, .. } => {
+                assert!(draft.success_criteria.is_empty());
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sanitize_draft_drops_incomplete_verifiers() {
+        let mut draft = GoalContractDraft {
+            description: "x".into(),
+            success_criteria: vec![],
+            verifiers: vec![
+                VerifierSpec::Command {
+                    id: "empty".into(),
+                    program: String::new(),
+                    args: vec![],
+                    env: Default::default(),
+                    timeout_secs: None,
+                    output_max_bytes: None,
+                    network: false,
+                },
+                VerifierSpec::PathsExist {
+                    id: "p".into(),
+                    paths: vec![],
+                },
+                VerifierSpec::ContentContains {
+                    id: "bad-cc".into(),
+                    path: String::new(),
+                    must_include: vec!["something".into()],
+                },
+                VerifierSpec::GitNonemptyDiff { id: "diff".into() },
+            ],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        sanitize_draft(&mut draft);
+        assert_eq!(draft.verifiers.len(), 1);
+        assert_eq!(draft.verifiers[0].id(), "diff");
+    }
+
+    #[test]
+    fn validate_draft_content_contains_needs_fields() {
+        let draft = GoalContractDraft {
+            description: "x".into(),
+            success_criteria: vec![],
+            verifiers: vec![VerifierSpec::ContentContains {
+                id: "c".into(),
+                path: String::new(),
+                must_include: vec![String::new()],
+            }],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        assert!(validate_draft(&draft).is_err());
+    }
+
+    #[test]
+    fn node_test_profile_resolves() {
+        let profile = profile_verifiers("node-test");
+        assert!(profile.iter().any(|v| v.id() == "npm-test"));
+    }
 }

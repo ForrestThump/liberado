@@ -207,6 +207,93 @@ html {
     }
 }
 
+.profile-chip {
+    align-self: flex-start;
+    display: flex;
+    align-items: baseline;
+    gap: 0.4375rem;
+    padding: 0.1875rem 0.5rem;
+    border: 1px solid var(--lib-border);
+    border-radius: 999px;
+    background: var(--lib-surface);
+    color: var(--lib-sidebar-text);
+    font-family: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.profile-chip:hover {
+    border-color: var(--lib-accent);
+}
+
+.profile-chip-label {
+    opacity: 0.6;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.625rem;
+}
+
+.profile-chip-name {
+    font-weight: 600;
+    color: var(--lib-chat-assistant-text);
+}
+
+/* Unset reads quieter than set: "default" is the absence of a choice, and rendering it as loudly as
+   a chosen profile would make every new chat look configured. */
+.profile-chip:not(.set) .profile-chip-name {
+    font-weight: 500;
+    opacity: 0.7;
+}
+
+.profile-chip-caret {
+    opacity: 0.5;
+    font-size: 0.625rem;
+}
+
+/* ── Status: configured profiles (read-only) ─────────────────────────────── */
+
+.profile-row {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--lib-border);
+}
+
+.profile-row:last-of-type {
+    border-bottom: none;
+}
+
+.profile-row-top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.profile-row-name {
+    font-weight: 600;
+    color: var(--lib-chat-assistant-text);
+    font-size: 0.875rem;
+}
+
+.profile-row-routing {
+    flex-shrink: 0;
+    font-size: 0.75rem;
+    color: var(--lib-status-bar-text);
+}
+
+.profile-row-desc {
+    margin-top: 0.125rem;
+    font-size: 0.8125rem;
+    color: var(--lib-sidebar-text);
+    opacity: 0.85;
+}
+
+.profile-row-note {
+    margin-top: 0.75rem;
+    font-size: 0.75rem;
+    color: var(--lib-status-bar-text);
+}
+
 .incognito-banner {
     display: flex;
     align-items: flex-start;
