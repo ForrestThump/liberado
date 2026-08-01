@@ -488,6 +488,47 @@ impl RiskGatedToolRuntime {
     /// therefore the user) that something is queued for approval when nothing was actually saved,
     /// with no way for either to notice. So a write failure here is a real tool-level error, fed
     /// back in-band like any other (`ToolRuntime::invoke`'s own contract), not swallowed.
+    /// An already-pending proposal for this exact call, if one exists.
+    ///
+    /// Matches on the proposed action — tool name and arguments — rather than on any id, because the
+    /// retry that creates the duplicate is a fresh attempt at the same action. Only `Pending`
+    /// counts: an approved-and-archived proposal is finished, and a rejected one must not silently
+    /// suppress a later request.
+    ///
+    /// A read failure is not an error here. If the directory cannot be scanned, falling through and
+    /// creating a new proposal is the safe direction — a duplicate notification is a nuisance, a
+    /// silently dropped approval request is a hole.
+    async fn pending_proposal_for(
+        &self,
+        proposals_subdir: &std::path::Path,
+        call: &ToolInvocation,
+    ) -> Option<PathBuf> {
+        let mut entries = tokio::fs::read_dir(proposals_subdir).await.ok()?;
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "md") {
+                continue;
+            }
+            let Ok(content) = tokio::fs::read_to_string(&path).await else {
+                continue;
+            };
+            let Ok(proposal) = liberado_common::Proposal::from_note(&content) else {
+                continue;
+            };
+            if proposal.status != liberado_common::ProposalStatus::Pending {
+                continue;
+            }
+            if let ProposedAction::ToolCalls(calls) = &proposal.proposed_action
+                && calls.len() == 1
+                && calls[0].tool == call.name
+                && calls[0].args == call.arguments
+            {
+                return Some(path);
+            }
+        }
+        None
+    }
+
     async fn write_proposal(
         &self,
         call: &ToolInvocation,
@@ -510,6 +551,22 @@ impl RiskGatedToolRuntime {
         // daemon's react() routes changes here into the same approve/execute pipeline the
         // dispatcher's own pre-flight proposals use.
         let proposals_subdir = self.proposals_dir.join(liberado_common::PROPOSALS_DIR);
+
+        // A gated call comes back as a tool *result*, so the model sees the action did not happen
+        // and tries again — reasonably. Without this, every attempt mints another proposal and the
+        // human gets another notification for one intent: three taps for one file, live on
+        // 2026-08-01 (`sub:30060787b5943f7b`, three proposals 43s apart, same path, same rationale).
+        //
+        // Identity is the *action* — same tool, same arguments, still pending — not the attempt.
+        if let Some(existing) = self.pending_proposal_for(&proposals_subdir, call).await {
+            tracing::info!(
+                path = %existing.display(),
+                tool = %call.name,
+                "an equivalent proposal is already awaiting approval; not creating another"
+            );
+            return Ok(existing);
+        }
+
         let proposal_path = proposals_subdir.join(format!("{proposal_id}.md"));
 
         let mut proposal = Proposal::pending(
@@ -684,12 +741,27 @@ fn permission_request_message(path: &std::path::Path, zone: &str) -> String {
     )
 }
 
-/// The tool *result* returned for a downgraded high-consequence/sweeping call. Phrased so the model
-/// relays it unambiguously: the action did NOT run and waits on human approval.
+/// The tool *result* returned for a downgraded high-consequence/sweeping call.
+///
+/// Addressed to the **model**, because that is who reads it — this is a tool result, not a
+/// notification. The previous wording ("it is high-consequence and needs *your* approval") was
+/// second person to a human, and produced exactly the two behaviours you would predict once a model
+/// reads it instead. It retried, because the action "was NOT executed" reads as a failure; and it
+/// tried to approve the proposal itself, because approval was described as its to give. Live on
+/// 2026-08-01, turn 7: *"I see - the system is gating write operations behind proposals. Let me
+/// approve the proposal by editing its status."* — followed by a `turbovault:edit_note` against the
+/// proposal file.
+///
+/// So state plainly that this is not a failure, that a human decides out of band, and that neither
+/// retrying nor editing the proposal will help — those being the two things it otherwise tries next.
 fn proposal_message(path: &std::path::Path) -> String {
     format!(
-        "PROPOSAL CREATED — the requested action was NOT executed. It is high-consequence and needs \
-         your approval. Proposal saved at {}. It will run only after you approve it.",
+        "PROPOSAL CREATED — this action is queued for a human to approve, and did not run now. This \
+         is not an error and not a failure of your request. A human approves or rejects it out of \
+         band, and it runs automatically if they approve. Do NOT retry this call, and do NOT edit \
+         the proposal: you cannot approve it yourself, and retrying only creates duplicate requests \
+         for the same action. Treat this step as handed off, say it is awaiting approval, and \
+         continue with any remaining work that does not depend on it. Proposal saved at {}.",
         path.display()
     )
 }
@@ -869,7 +941,7 @@ mod tests {
         // A downgrade is a tool *result* (Ok), not an error — so the model relays it cleanly.
         let msg = result.expect("downgrade should be an Ok tool result, not an Err");
         assert!(
-            msg.contains("PROPOSAL CREATED") && msg.contains("NOT executed"),
+            msg.contains("PROPOSAL CREATED") && msg.contains("did not run"),
             "message must state the action did not run: {msg}"
         );
 
@@ -1090,7 +1162,7 @@ mod tests {
         let result = rt.invoke(&call).await;
         // A downgrade is a tool *result* (Ok), not an error.
         let msg = result.expect("downgrade should be an Ok tool result, not an Err");
-        assert!(msg.contains("PROPOSAL CREATED") && msg.contains("NOT executed"));
+        assert!(msg.contains("PROPOSAL CREATED") && msg.contains("did not run"));
         // The inner tool must NOT have run.
         assert!(
             inner.invoked.lock().unwrap().is_empty(),
@@ -1141,7 +1213,7 @@ mod tests {
         );
         let result = rt.invoke(&call).await;
         let msg = result.expect("downgrade should be an Ok tool result, not an Err");
-        assert!(msg.contains("PROPOSAL CREATED") && msg.contains("NOT executed"));
+        assert!(msg.contains("PROPOSAL CREATED") && msg.contains("did not run"));
         assert!(
             inner.invoked.lock().unwrap().is_empty(),
             "a zone-restricted call must not invoke the inner tool"
@@ -1618,6 +1690,111 @@ mod magnitude_reads_structure_first {
                 &serde_json::json!({ "path": "Learning/x.md" })
             ),
             "a resolved zone path does"
+        );
+    }
+}
+
+#[cfg(test)]
+mod one_intent_one_prompt {
+    use super::tests::*;
+    use super::*;
+
+    fn gate(dir: &std::path::Path, inner: Arc<MockInner>) -> RiskGatedToolRuntime {
+        RiskGatedToolRuntime::new(
+            inner,
+            CapabilitySet::from_iter([Capability::ExecuteMcp("vault-mcp".into())]),
+            vec![("vault-mcp".into(), Consequence::Reversible)],
+            Vec::new(),
+            Vec::new(),
+            dir.to_path_buf(),
+            "delete all notes".into(),
+            "test-dedup".into(),
+            ProposalSigner::random(),
+            "default",
+        )
+    }
+
+    /// One intent must cost the human one notification.
+    ///
+    /// A gated call returns as a tool *result*, so the model reads "did not run" and retries. Each
+    /// retry used to mint a fresh `prop-{nanos}`: live on 2026-08-01 a single subagent run produced
+    /// three proposals for the same write to the same path, 43s apart, and the operator was asked to
+    /// approve the same thing three times.
+    #[tokio::test]
+    async fn a_retried_call_reuses_its_pending_proposal() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(&["vault-mcp:delete"], Ok("done".into())));
+        let rt = gate(dir.path(), inner.clone());
+        let call = ToolInvocation::new(
+            "c1",
+            "vault-mcp:delete",
+            serde_json::json!({ "path": "all" }),
+        );
+
+        let first = rt.invoke(&call).await.expect("downgrade is an Ok result");
+        // The same action again, as a fresh attempt with a different call id — which is exactly what
+        // a retrying model sends.
+        let retry = ToolInvocation::new(
+            "c2",
+            "vault-mcp:delete",
+            serde_json::json!({ "path": "all" }),
+        );
+        let second = rt.invoke(&retry).await.expect("downgrade is an Ok result");
+
+        let count = std::fs::read_dir(dir.path().join(liberado_common::PROPOSALS_DIR))
+            .unwrap()
+            .count();
+        assert_eq!(count, 1, "a retry must not create a second proposal");
+        assert_eq!(
+            first, second,
+            "and the model must be pointed at the same one"
+        );
+        assert!(inner.invoked.lock().unwrap().is_empty());
+    }
+
+    /// Dedup keys on the action, so a *different* action still gets its own proposal — otherwise the
+    /// first gated call would silently swallow every later one.
+    #[tokio::test]
+    async fn a_different_action_still_gets_its_own_proposal() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(&["vault-mcp:delete"], Ok("done".into())));
+        let rt = gate(dir.path(), inner.clone());
+
+        rt.invoke(&ToolInvocation::new(
+            "c1",
+            "vault-mcp:delete",
+            serde_json::json!({ "path": "all" }),
+        ))
+        .await
+        .unwrap();
+        rt.invoke(&ToolInvocation::new(
+            "c2",
+            "vault-mcp:delete",
+            serde_json::json!({ "path": "everything else" }),
+        ))
+        .await
+        .unwrap();
+
+        let count = std::fs::read_dir(dir.path().join(liberado_common::PROPOSALS_DIR))
+            .unwrap()
+            .count();
+        assert_eq!(count, 2, "distinct actions need distinct approvals");
+    }
+
+    /// The message is read by the model, so it must not invite the two things the model otherwise
+    /// does: retry, and try to approve the proposal itself.
+    #[test]
+    fn the_gated_message_tells_the_model_not_to_retry_or_self_approve() {
+        let msg = proposal_message(std::path::Path::new("proposals/prop-1.md"));
+        assert!(msg.contains("Do NOT retry"), "{msg}");
+        assert!(msg.contains("do NOT edit the proposal"), "{msg}");
+        assert!(
+            msg.contains("cannot approve it yourself"),
+            "the old wording said approval was *yours* to give, and a model acted on that: {msg}"
+        );
+        assert!(
+            !msg.contains("your approval"),
+            "second-person-to-a-human phrasing is what caused the self-approval attempt: {msg}"
         );
     }
 }
