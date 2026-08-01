@@ -2985,7 +2985,7 @@ mod proptest_tests {
     /// TF-IDF vectors.)
     fn similarity_in_range(a: Value, b: Value) -> bool {
         let s = args_similarity(&a, &b);
-        s >= 0.0 && s <= 1.0
+        (0.0..=1.0).contains(&s)
     }
 
     /// `tokenize` is total: no JSON shape may make it panic.
