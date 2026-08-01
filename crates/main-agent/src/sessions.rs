@@ -834,9 +834,11 @@ impl ChatSessions {
 
     /// Which model this turn runs on, in precedence order.
     ///
-    /// 1. **A pending pick** — a human chose a model for *this* conversation and has not sent a
-    ///    message since. Held in memory only, because until a turn runs there is nothing to record;
-    ///    the pick becomes durable the moment the user node is stamped with it.
+    /// 1. **A pending pick** — a human chose a model for *this* conversation. Either they asked
+    ///    ahead of time (`POST /api/models/select` with a `conversation`) or the choice arrived on
+    ///    the message itself (`model` on the chat request, which is how a pick made *before* the
+    ///    conversation existed gets here). Held in memory only, because until a turn runs there is
+    ///    nothing to record; the pick becomes durable the moment the user node is stamped with it.
     /// 2. **The profile's model**, when a session profile names one. Operator-declared.
     /// 3. **What this conversation last ran on**, read back off its own log. This is the sticky
     ///    behaviour: a conversation stays on the model that has been answering it, rather than

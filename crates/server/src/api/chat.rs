@@ -49,6 +49,21 @@ pub struct ChatRequest {
     /// the turn you wanted scoped.
     #[serde(default)]
     pub profile: Option<String>,
+    /// Run **this turn** on this model.
+    ///
+    /// Unlike `incognito` and `profile`, this is honoured whether or not `session` is set: a model is
+    /// a property of a turn, not of how a conversation was opened. The turn stamps it onto the log,
+    /// after which the conversation stays there on its own and this field is only needed to *change*
+    /// the answer.
+    ///
+    /// It exists because a chat has no id until its first message creates one, so a client cannot
+    /// scope a model to a conversation that does not exist yet — the same gap `profile` above was
+    /// added to close, and for the same reason. Without it the only thing a client could do with a
+    /// pick made before the first message was swap the daemon-wide default, which silently retuned
+    /// every *other* conversation. Carrying the choice on the message that opens the chat means the
+    /// common path — new chat, pick a model, type — never touches global state at all.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// Streaming chat â€” the shared client contract (see `docs/reference/api.md`). Returns
@@ -61,7 +76,15 @@ pub async fn chat_stream_post(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ChatRequest>,
 ) -> Sse<SseBody> {
-    chat_stream_core(state, req.message, req.session, req.incognito, req.profile).await
+    chat_stream_core(
+        state,
+        req.message,
+        req.session,
+        req.incognito,
+        req.profile,
+        req.model,
+    )
+    .await
 }
 
 /// `GET /api/chat/stream?message=â€¦` â€” the `EventSource`-friendly variant (browsers can't `POST` an
@@ -70,7 +93,15 @@ pub async fn chat_stream_get(
     State(state): State<Arc<AppState>>,
     Query(req): Query<ChatRequest>,
 ) -> Sse<SseBody> {
-    chat_stream_core(state, req.message, req.session, req.incognito, req.profile).await
+    chat_stream_core(
+        state,
+        req.message,
+        req.session,
+        req.incognito,
+        req.profile,
+        req.model,
+    )
+    .await
 }
 
 /// The SSE item stream `chat_stream_core` returns. Boxed because the function has several early
@@ -84,6 +115,7 @@ async fn chat_stream_core(
     session: Option<Ulid>,
     incognito: bool,
     profile: Option<String>,
+    model: Option<String>,
 ) -> Sse<SseBody> {
     let (tx, rx) = mpsc::channel::<AgentEvent>(64);
 
@@ -148,6 +180,16 @@ async fn chat_stream_core(
             }
         },
     };
+
+    // Now that the conversation has an id, a model asked for on the request becomes a pick scoped to
+    // it. Recorded through the same seam `POST /api/models/select` uses, rather than a second way of
+    // saying the same thing: the turn below consumes it and stamps it onto the log.
+    //
+    // This is deliberately after creation, which is the whole point — before it there is no id to
+    // scope to, and that is what made a client reach for the daemon-wide default instead.
+    if let Some(model) = model {
+        sessions.select_model(session, model);
+    }
 
     // `turn_tx` drives the turn; `tx` is kept to detect the client leaving and to send the terminal
     // event. Cloning is cheap and keeps the two uses from tangling borrows below.
@@ -252,6 +294,13 @@ pub async fn chat(
             Err(e) => return chat_error(e),
         },
     };
+
+    // Same rule as the streaming path: the model rides the message, scoped to the conversation the
+    // message belongs to. Both handlers honour it or neither should — a field that works on one of
+    // two endpoints is a trap for whoever uses the other.
+    if let Some(model) = req.model {
+        sessions.select_model(session, model);
+    }
 
     match sessions.turn(session, &req.message).await {
         Ok(reply) => Json(chat_client_contract::ChatResponse {
@@ -647,6 +696,7 @@ mod tests {
     use axum::Router;
     use axum::body::Body;
     use axum::http::Request;
+    use liberado_conversation_store::ConversationStore;
     use liberado_executor::{Budget, Executor};
     use liberado_main_agent::ChatSessions;
     use liberado_provider::MockProvider;
@@ -665,10 +715,15 @@ mod tests {
     }
 
     async fn harness() -> Harness {
+        harness_scripted(vec![]).await
+    }
+
+    /// A harness whose provider will actually answer, for the tests that need a turn to complete.
+    async fn harness_scripted(script: Vec<liberado_provider::CompletionResponse>) -> Harness {
         let dir = tempfile::tempdir().unwrap();
         let sessions = Arc::new(SessionStore::open(dir.path()).await);
         let executor = Executor::new(
-            Arc::new(MockProvider::with_script("mock", vec![])),
+            Arc::new(MockProvider::with_script("mock", script)),
             Budget::default(),
         );
         let chat = Arc::new(ChatSessions::new(
@@ -686,6 +741,7 @@ mod tests {
                 "/api/conversations/{id}",
                 axum::routing::delete(super::delete_conversation),
             )
+            .route("/api/chat", axum::routing::post(super::chat))
             .with_state(state.clone());
         Harness {
             app,
@@ -708,6 +764,100 @@ mod tests {
             .await
             .unwrap()
             .status()
+    }
+
+    // ── `model` on the request ───────────────────────────────────────────────────────────────
+
+    /// A model asked for on the message must reach the turn — asserted on the **stamp the turn
+    /// left**, not on the request parsing, because parsing correctly and then being ignored is
+    /// exactly how this failed live: the field existed nowhere, the picker fell back to the
+    /// daemon-wide swap, and every other conversation moved with it.
+    #[tokio::test]
+    async fn a_model_on_the_request_is_the_model_the_turn_runs_on() {
+        let h = harness_scripted(vec![liberado_provider::CompletionResponse::text("ok")]).await;
+        let id = h.chat.create(None).await.unwrap();
+
+        let resp = h
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"message":"hi","session":"{id}","model":"picked/one"}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let nodes = h.sessions.leaf_path(id, None).await.unwrap();
+        let user = nodes
+            .iter()
+            .find(|n| matches!(n.author, liberado_conversation_store::Author::User))
+            .expect("the user message is persisted before inference");
+        assert_eq!(
+            user.model.as_deref(),
+            Some("picked/one"),
+            "the turn ran on the daemon default instead of the model the request asked for"
+        );
+    }
+
+    /// The positive control for the test above. Without it, a handler that stamped every turn with
+    /// some fixed string would pass — and so would one that ignored `model` while the default
+    /// happened to match it, which is precisely the confound that made the first live test of this
+    /// feature unreadable.
+    #[tokio::test]
+    async fn no_model_on_the_request_leaves_the_default_alone() {
+        let h = harness_scripted(vec![liberado_provider::CompletionResponse::text("ok")]).await;
+        let id = h.chat.create(None).await.unwrap();
+
+        let resp = h
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"message":"hi","session":"{id}"}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let nodes = h.sessions.leaf_path(id, None).await.unwrap();
+        let user = nodes
+            .iter()
+            .find(|n| matches!(n.author, liberado_conversation_store::Author::User))
+            .unwrap();
+        assert_eq!(
+            user.model.as_deref(),
+            Some("mock"),
+            "with nothing asked for, the turn takes the provider's own model"
+        );
+    }
+
+    /// Both transports, because `EventSource` can only `GET` and so the WebUI's picks arrive as a
+    /// query parameter while every other client sends JSON. A field that works on one of the two is
+    /// worse than one that works on neither, because it looks fine wherever you happen to test it.
+    #[test]
+    fn model_parses_from_both_the_query_string_and_json() {
+        let q: ChatRequest = serde_urlencoded::from_str("message=hi&model=vendor%2Fslug").unwrap();
+        assert_eq!(q.model.as_deref(), Some("vendor/slug"));
+
+        let j: ChatRequest =
+            serde_json::from_str(r#"{"message":"hi","model":"vendor/slug"}"#).unwrap();
+        assert_eq!(j.model.as_deref(), Some("vendor/slug"));
+
+        let absent: ChatRequest = serde_urlencoded::from_str("message=hi").unwrap();
+        assert!(absent.model.is_none());
     }
 
     /// The guard that turns "a client sent the wrong id" from permanent data loss into a no-op.
