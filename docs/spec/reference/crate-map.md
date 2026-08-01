@@ -5,7 +5,7 @@
 > Layer semantics and dependency rules: [contracts.md](../../spec/architecture/contracts.md) and
 > `crates/test-support/tests/layer_rules.rs` (the same role tags, mechanically enforced).
 
-42 workspace crates as of 2026-07-13.
+43 workspace crates as of 2026-07-31 (excluding `liberado-webui`).
 
 ## foundation
 
@@ -15,6 +15,7 @@ The bottom layer: vocabulary and narrow-waist traits. Depends on nothing above i
 |---|---|---|
 | [`liberado-common`](../../../crates/common/) | *none* | Shared types for the Liberado system: capabilities/zones, write provenance, events, dispatch decisions, proposals, and model profiles. |
 | [`liberado-config-loader`](../../../crates/config-loader/) | `liberado-common` | ConfigSource trait + ChainLoader for layered Liberado configuration loading. |
+| [`liberado-messaging`](../../../crates/messaging/) | *none* | Channel-agnostic messaging traits for Liberado chat clients (Telegram today; Matrix, Signal, Discord later). Transport only — no network deps. |
 | [`liberado-notify`](../../../crates/notify/) | *none* | A minimal, pluggable notification sink for events a human should know about even when nothing else in the daemon's own surfaces is open in front of them right now — the motivating case is an unattended (cron-triggered, Phase 3) proposal nobody's watching for. Telegram is the first implementation (free, mature); the Notifier trait exists so it isn't the only one. |
 | [`liberado-provider`](../../../crates/provider/) | *none* | The provider-agnostic inference interface for Liberado: a narrow async `Provider` trait (tool-calling + structured output) plus a scriptable mock for deterministic tests. |
 

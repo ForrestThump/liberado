@@ -12,9 +12,9 @@ If you are an agent: start at the [roadmap](roadmap.md) → [architecture overvi
 |--------|----------|
 | **`spec/`** | Design specs, living architecture narrative, reference docs — the truth about how the system works |
 | **`impl/`** | Developer guides, setup, contribution workflow — how to build and work here |
-| **`future-work/`** | Forward-looking: roadmap, plans, ideas, research — what might happen next |
-| **`validation/`** | Correctness: mutation testing reports, coverage analysis, invariants |
-| **`project/`** | Meta: handoffs, design questions, historical audits |
+| **`future-work/`** | Forward-looking: plans, ideas, research, historical archives — what might happen next |
+| **`validation/`** | Correctness: mutation testing reports, coverage analysis |
+| **`project/`** | Meta: handoffs, design questions |
 
 ---
 

@@ -13,7 +13,7 @@ Correctness artifacts for the Liberado workspace: mutation-testing reports, cove
 
 | Doc | Role |
 |-----|------|
-| [mutation-testing-plan.md](mutation-testing-plan.md) | **Summary** — master plan + Phase 1–5 results across 12 crates |
+| [mutation-testing-plan.md](mutation-testing-plan.md) | **Summary** — master plan + Phase 1–5 results across 13 crates |
 | [mutation-testing/](mutation-testing/) | Per-crate mutation-testing reports (Phase 1 + Phase 4) |
 | [coverage-gaps.md](coverage-gaps.md) | Known uncovered code paths — IO/network/clock-gated, tracing-only, defaults |
 | [impl/mock-harness-scope.md](../impl/mock-harness-scope.md) | Test-infrastructure design — scriptable error mocks, FrozenClock, filesystem stubs |

@@ -41,9 +41,34 @@ crates/
   mcp-forge/            # Builds/installs Liberado MCP servers from git URLs
   test-support/         # Dev-dependency-only shared ToolRuntime/RuntimeFactory test doubles
 
+  # Coder pack (roadmap Priority 3)
+  coder-core/           # Provider-agnostic coder contracts: tasks, backend trait, sandbox specs, events, reports, traces
+  coder-agent/          # Coding domain pack: goal-session backend over Executor + coding tools
+  coder-runner/         # Process boundary for the coder: the liberado-coder-run subprocess bridge
+  coder-sandbox/        # Workspace and command sandbox abstractions for the Rust-native coder
+  coder-tools/          # Executor ToolRuntime implementation for the Rust-native coder
+
+  # Session kernel
+  session/              # Session kernel (D7): GoalSpec, GoalSessionHub, SessionEvent, DomainPackRunner
+  session-store/        # Converged session store (D7): one JSONL log; ConversationStore + SessionRecordStore lenses
+
+  # Infrastructure
+  cron/                 # Cron as an EventSource (D18/19) — schedule fires like vault-watch, vault-agnostic
+  messaging/            # Channel-agnostic messaging traits for chat clients (Telegram today; Matrix/Signal/Discord later)
+  notify/               # Pluggable notification sink for events a human should know about (Telegram first)
+  scratchpad/           # Per-execution scratchpad (todo-list) tool — engine-injected, not an MCP
+  dispatch-pack/        # Domain pack running dispatcher + orchestrator as a GoalSessionHub pack (E2 convergence)
+  chat-search/          # Full-text/regex search over session history (shared by REST endpoint + MCP tool)
+  chat-search-mcp/      # MCP server exposing conversation-history search as a tool (stdio)
+  memory-mcp/           # MCP server exposing general + procedural memory as tools, backed by memory-store
+  memory-store/         # Vault-backed general/procedural memory stores with turbovault-vector semantic recall
+  telegram-approvals/   # Approval/chat bot: Approve/Reject/Revise taps ? proposal frontmatter edits
+
 turbovault/          # Co-developed path dep (sibling repo, not a workspace member)
 turbomcp/            # Co-developed path dep (sibling repo, not a workspace member)
 ```
+
+Full generated inventory: [`docs/spec/reference/crate-map.md`](../spec/reference/crate-map.md) — regenerate with `scripts/gen-crate-map.ps1`.
 
 ---
 
