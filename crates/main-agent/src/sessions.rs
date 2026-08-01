@@ -132,6 +132,11 @@ struct TurnSettings {
     /// The profile's name, for logging. `None` is "no profile named", which is distinct from a
     /// profile that grants nothing — the distinction this plan keeps insisting on.
     profile: Option<String>,
+    /// Model for this session's turns. `None` = the daemon's configured model.
+    ///
+    /// Resolved here with everything else for the reason this struct exists: a profile switch must
+    /// not land between two reads and give a turn one profile's model under another's tools.
+    model: Option<String>,
 }
 
 /// What can go wrong running a persisted turn: the agent loop failed, or the store did. Both are
@@ -578,6 +583,9 @@ impl ChatSessions {
         // Read per turn, not cached: a profile switch mid-conversation takes effect on the next
         // turn, which is the whole of "switchable" — no restart, no reconnect.
         let settings = self.turn_settings(session).await;
+        // A profile's model applies to this turn only. Specialised per turn rather than set on the
+        // shared provider, so one chat choosing a model cannot change it for every other session.
+        let executor = self.executor.with_model(settings.model.clone());
         // Resolved once: the prompt the model reads and the tools it is handed must agree, and
         // deciding that twice is how they came apart in the first place.
         let face_agent = self.uses_face_agent(settings.delegation);
@@ -597,9 +605,7 @@ impl ChatSessions {
             // Derived from the runtime the executor is about to be handed, never from a list built
             // beside it — see `Conversation::apply_available_tools`.
             self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
-            let reply = convo
-                .turn(&self.executor, turn_runtime.as_ref(), user)
-                .await?;
+            let reply = convo.turn(&executor, turn_runtime.as_ref(), user).await?;
             // Gap 2: if a `delegate` this turn deferred to the human out-of-band (an interactive
             // proposal/permission notification already landed on this surface), collapse the face
             // agent's now-redundant reply to a tiny pointer at that notification.
@@ -618,9 +624,7 @@ impl ChatSessions {
                         &settings.capabilities,
                     );
                     self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
-                    convo
-                        .turn(&self.executor, turn_runtime.as_ref(), user)
-                        .await?
+                    convo.turn(&executor, turn_runtime.as_ref(), user).await?
                 }
             }
         };
@@ -653,6 +657,7 @@ impl ChatSessions {
         let before = convo.len();
 
         let settings = self.turn_settings(session).await;
+        let executor = self.executor.with_model(settings.model.clone());
         let face_agent = self.uses_face_agent(settings.delegation);
         if !face_agent {
             convo.apply_direct_agent_prompt();
@@ -675,7 +680,7 @@ impl ChatSessions {
             );
             self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
             convo
-                .turn_stream(&self.executor, turn_runtime.as_ref(), user, events)
+                .turn_stream(&executor, turn_runtime.as_ref(), user, events)
                 .await?;
         } else {
             match self.dispatch_turn(user).await {
@@ -694,7 +699,7 @@ impl ChatSessions {
                     );
                     self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
                     convo
-                        .turn_stream(&self.executor, turn_runtime.as_ref(), user, events)
+                        .turn_stream(&executor, turn_runtime.as_ref(), user, events)
                         .await?;
                 }
             }
@@ -767,6 +772,7 @@ impl ChatSessions {
             delegation: header.grant.delegation.unwrap_or(self.delegation_mode),
             prompt_append: header.grant.prompt_append,
             profile: header.grant.profile,
+            model: header.grant.model,
         }
     }
 
@@ -813,6 +819,7 @@ impl ChatSessions {
             delegation: self.delegation_mode,
             prompt_append: None,
             profile: None,
+            model: None,
         }
     }
 

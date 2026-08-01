@@ -988,7 +988,7 @@ impl ChatPromptPreview {
         if let Some(model) = &self.model {
             let _ = writeln!(
                 out,
-                "  model:      {model}  (carried, not yet applied — CH4)"
+                "  model:      {model}  (this profile's turns run on it)"
             );
         }
         for mcp in &self.unresolved_mcps {

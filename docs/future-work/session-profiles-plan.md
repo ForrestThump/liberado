@@ -185,9 +185,14 @@ mcps  = [
   profile change. It sits with the system prompt, not among the dialogue.
 - One `turn_settings` lookup resolves all three, so a switch cannot land *between* them and produce a
   turn running one profile's tools under another's delegation setting.
-- **`model` is deferred to CH4**, not done. The model lives on the provider, not the request, so
-  per-session selection needs a per-call model field or a provider pool. The field is carried and
-  persisted; nothing reads it.
+- **`model` — landed.** Was deferred: the model lives on the provider, not the request, so
+  per-session selection needed a per-call field or a provider pool. Took the first, because for an
+  OpenAI-compatible backend the model is simply a body field. `CompletionRequest.model` wins over
+  the provider's own, including one hot-swapped via the TUI's `/model` — naming a model in a profile
+  is an explicit per-session choice, a swap is a daemon-wide default. `Executor` is `Clone` over two
+  cheap fields, so `ChatSessions` specialises one per turn via `with_model` rather than mutating a
+  provider every other session shares. `TurnSettings` carries it with the rest, so a switch cannot
+  land between two reads and give a turn one profile's model under another's tools.
 
 ### 6. Surfaces — **landed**
 

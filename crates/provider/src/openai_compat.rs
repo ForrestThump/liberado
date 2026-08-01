@@ -193,8 +193,9 @@ pub fn stream_sse_response(response: reqwest::Response, name_map: ToolNameMap) -
 
 /// Translate a normalized request into the OpenAI chat-completions request body.
 pub fn to_openai_request(model: &str, req: &CompletionRequest, name_map: &ToolNameMap) -> Value {
+    // `model` is the provider's configured default; the request may name its own for this call.
     let mut body = json!({
-        "model": model,
+        "model": req.model.as_deref().unwrap_or(model),
         "messages": req.messages.iter().map(|m| message_to_json(m, name_map)).collect::<Vec<_>>(),
     });
 

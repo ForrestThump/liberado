@@ -427,11 +427,37 @@ enum Mode {
 pub struct Executor {
     provider: Arc<dyn Provider>,
     budget: Budget,
+    /// Model for the calls this executor makes. `None` = the provider's own.
+    ///
+    /// Held here rather than on the provider because a provider is shared by every session, and a
+    /// session profile naming a model must not change the model under everyone else. `Executor` is
+    /// `Clone` over two cheap fields, so a caller specialises one per turn.
+    model: Option<String>,
 }
 
 impl Executor {
     pub fn new(provider: Arc<dyn Provider>, budget: Budget) -> Self {
-        Self { provider, budget }
+        Self {
+            provider,
+            budget,
+            model: None,
+        }
+    }
+
+    /// A copy of this executor that runs its calls on `model`. `None` returns an equivalent
+    /// executor, so a caller can pass a session's setting through without branching.
+    #[must_use]
+    pub fn with_model(&self, model: Option<String>) -> Self {
+        Self {
+            model,
+            ..self.clone()
+        }
+    }
+
+    /// The model this executor's calls will actually run on — the override when set, else the
+    /// provider's. Used for logging, so a span never names a model the request did not use.
+    pub fn active_model(&self) -> String {
+        self.model.clone().unwrap_or_else(|| self.provider.model())
     }
 
     /// Run delegated work to a typed [`Report`] (report mode). The model finishes by calling
@@ -445,7 +471,7 @@ impl Executor {
         let span = tracing::info_span!(
             "execute",
             mode = "report",
-            model = %self.provider.model(),
+            model = %self.active_model(),
             goal = %task.goal,
             budget = self.budget.max_turns,
             has_seed = !task.seed_calls.is_empty(),
@@ -495,7 +521,7 @@ impl Executor {
         let span = tracing::info_span!(
             "converse",
             mode = "conversational",
-            model = %self.provider.model(),
+            model = %self.active_model(),
             goal = %task.goal,
             budget = self.budget.max_turns,
             outcome = tracing::field::Empty,
@@ -570,7 +596,7 @@ impl Executor {
     ) -> Result<String, ExecError> {
         let span = tracing::info_span!(
             "converse_messages",
-            model = %self.provider.model(),
+            model = %self.active_model(),
             budget = self.budget.max_turns,
         );
         async {
@@ -615,14 +641,16 @@ impl Executor {
     ) -> Result<(), ExecError> {
         let span = tracing::info_span!(
             "converse_stream",
-            model = %self.provider.model(),
+            model = %self.active_model(),
             budget = self.budget.max_turns,
         );
         let _enter = span.enter();
-        tracing::debug!(model = %self.provider.model(), "starting conversational stream turn");
+        tracing::debug!(model = %self.active_model(), "starting conversational stream turn");
         let tools = runtime.catalog();
         for turn in 1..=self.budget.max_turns {
-            let request = CompletionRequest::new(messages.clone()).with_tools(tools.clone());
+            let request = CompletionRequest::new(messages.clone())
+                .with_tools(tools.clone())
+                .with_model(self.model.clone());
             let mut stream = self.provider.complete_stream(request).await?;
 
             let mut response = None;
@@ -765,7 +793,9 @@ impl Executor {
                 finish_reason = tracing::field::Empty,
             );
             let response = async {
-                let request = CompletionRequest::new(messages.clone()).with_tools(tools.clone());
+                let request = CompletionRequest::new(messages.clone())
+                    .with_tools(tools.clone())
+                    .with_model(self.model.clone());
                 self.provider.complete(request).await
             }
             .instrument(tracing::debug_span!("provider_complete", turn))

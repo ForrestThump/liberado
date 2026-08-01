@@ -107,6 +107,15 @@ pub struct CompletionRequest {
     pub temperature: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// The model to run **this call** on. `None` = whatever the provider is configured with.
+    ///
+    /// Per-request rather than per-provider because for an OpenAI-compatible backend the model is
+    /// just a body field, and a session profile choosing a model must not mutate a provider shared
+    /// by every other session. Takes precedence over the provider's own model, including one
+    /// hot-swapped via `set_model`: naming a model in a profile is an explicit choice and should
+    /// beat the daemon default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 impl CompletionRequest {
@@ -118,12 +127,19 @@ impl CompletionRequest {
             response_format: ResponseFormat::Text,
             temperature: None,
             max_tokens: None,
+            model: None,
         }
     }
 
     /// Offer the model a tool catalog.
     pub fn with_tools(mut self, tools: Vec<ToolDef>) -> Self {
         self.tools = tools;
+        self
+    }
+
+    /// Run this call on `model` instead of the provider's configured one. `None` leaves it alone.
+    pub fn with_model(mut self, model: Option<String>) -> Self {
+        self.model = model;
         self
     }
 
