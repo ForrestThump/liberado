@@ -10,7 +10,7 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`spec/
 
 ### Priority 1 — the autonomous life-OS daemon
 
-*Already in hand:* TurboVault storage + live plugins (vector + tasks); cron; Telegram free-form sticky chat + cron delivery; **C1 interactive crons (AskHuman)**; capability boundary; OpenClaw briefing cutover with `Succeeded` briefs; **MCP connection pooling (M1)** default-on; **M1b hot-reload**; **degraded-catalog routing**; **Tier-1 live conformance L1–L10**; **proposal expiry reaper**; **vault path-traversal guard**.
+*Already in hand:* TurboVault storage + live plugins (vector + tasks); cron; Telegram free-form sticky chat + cron delivery; **C1 interactive crons (AskHuman)**; capability boundary; **session profiles** (per-conversation authority: tools, delegation, model, prompt nudge); **approval ledger** (human decisions live outside the vault); OpenClaw briefing cutover with `Succeeded` briefs; **MCP connection pooling (M1)** default-on; **M1b hot-reload**; **degraded-catalog routing**; **Tier-1 live conformance L1–L10**; **proposal expiry reaper**; **vault path-traversal guard**.
 
 | # | What | Why it matters |
 |---|---|---|
@@ -24,25 +24,24 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`spec/
 | # | What | Why |
 |---|---|---|
 | **CH1** | WebUI chat maturity | Daily usable chat beyond session view (history, UX) |
-| **CH4** | **Mid-session / per-conversation model switching** | See below — not the same as process-wide hot-swap |
+| **CH4** | ~~Mid-session / per-conversation model switching~~ | **Mechanism landed** (2026-07-31, `bd4f67a`); two gaps left — see below |
 
-**CH4 — mid-session model switching (open)**
+**CH4 — mid-session model switching (mechanism landed, surface + re-resolve open)**
 
-*What we already have (process-wide, not per chat):* `GET /api/models` + `POST /api/models/select` (and TUI `/model`, Telegram model select) call `Provider::set_model` on the shared face provider. That hot-swaps the **daemon-wide** active model for *subsequent* completions — no restart. Every conversation shares that one current model; there is no per-session binding.
+*What we already have (process-wide, not per chat):* `GET /api/models` + `POST /api/models/select` (and TUI `/model`, Telegram model select) call `Provider::set_model` on the shared face provider. That hot-swaps the **daemon-wide** active model for *subsequent* completions — no restart.
 
-*What we do not have yet:*
+*What landed (2026-07-31):* a session profile may name a `model`, and that binding is now honoured end to end. `TurnSettings.model` comes off the conversation header ([`sessions.rs:775`](../crates/main-agent/src/sessions.rs#L775)) and `Executor::with_model` specialises an executor **per turn** ([`sessions.rs:588`](../crates/main-agent/src/sessions.rs#L588)), so one conversation choosing a model cannot change it for anyone else. `CompletionRequest.model` is honoured at the wire and beats a hot-swapped provider default — covered by the provider seam tests (`provider-openai-compat`, `per_request_model`). Because the profile lives on the persisted header, the preference survives reload and restart. Five tracing spans that reported the *provider's* model — not the one the request used — were fixed in the same pass.
+
+*What is still open:*
 
 | Gap | Why it matters |
 |-----|----------------|
-| **Per-conversation model** | Switch model for *this* chat only; other chats keep theirs |
-| **Sticky preference** | Persist chosen model on the conversation (or session header) across reloads / restarts |
-| **Surface UX** | Explicit mid-chat “use model X for this thread” in WebUI (CH1) and consistent TUI/Telegram semantics |
-| **Dependent re-resolve** | On switch: recompute CH3 compaction trigger (`trigger_pct` × new model’s `context_window` / per-model overrides), status `model_name`, any role display — today resolve is boot-time for compaction |
-| **Role clarity** | Face vs dispatcher/subagent: mid-session switch is about the **chat face** unless we later add per-role runtime swap |
+| **Surface UX** | You pick a **profile** that names a model, not a model directly. Explicit mid-chat “use model X for this thread” in WebUI (CH1), with consistent TUI/Telegram semantics, does not exist. |
+| **Dependent re-resolve** | CH3's compaction trigger is still **one shared number**: `resync_compaction_trigger_for_face_model` ([`state.rs:88`](../crates/server/src/state.rs#L88)) writes a single `trigger_tokens` on the shared engine ([`sessions.rs:279`](../crates/main-agent/src/sessions.rs#L279)). A conversation on a 200k model and one on a 64k model therefore compact at the same threshold. Fixing it means the trigger becoming per-conversation, which is CH3.1 territory. |
+
+*Resolved by the above, no longer gaps:* per-conversation model, sticky preference, and role clarity (the binding is the **chat face**, by construction).
 
 *Not a substitute:* boot-time `[roles.main_agent] model = "…"` in `topology.toml` (edit + restart). That is fixed wiring, not mid-session.
-
-*Suggested acceptance (when scheduled):* pick model mid-chat → only that conversation’s next turns use it; other conversations unchanged; preference survives reopen; compaction/status track the active face model for that chat.
 
 ### Priority 3 — coding pack (integration parity, not best-in-class)
 
@@ -109,6 +108,7 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
 
 | When | What |
 |------|------|
+| **2026-08-01** | **Session profiles** (PR #21): per-conversation authority — a profile narrows tools, delegation, model, and prompt nudge for one conversation, and a turn may hold fewer capabilities than the profile's ceiling after per-goal narrowing. Includes **CH4's mechanism** (above), the **approval ledger** — a human's approve/reject now lives in an append-only log under `<LIBERADO_DATA_DIR>/` that no MCP mounts and no tool addresses, so editing a proposal note's `status:` authorises nothing — and the policy change that took `Write` on `proposals/` away from every agent grant. Plus the tool manifest (the model is told its exact tool surface each turn, beating stale transcript evidence), a provider-seam test sweep asserting on the serialized request body, and test-clock hardening (frozen state can no longer leak between tests, and the controls compile out of production builds). |
 | **2026-07-23** | **CH3 context compaction:** long chats roll older history into a persisted summary marker (`Author::Named("compaction")` in the session DAG) — the model resumes from the summary + a verbatim tail of the last K user turns; the full transcript stays on disk, rendered and searchable. `[main_agent.compaction]` knobs, default on. Plan + 4-project research (OpenCode/Kilo/LibreChat/OpenClaw): [`context-compaction-plan.md`](future-work/context-compaction-plan.md). **Known residual** (marker durable + partial tail re-append → next load can miss unpersisted tail): documented there; preferred fix is CH3.1 viewport/side-summary — [`context-compaction-viewport-rearchitecture.md`](future-work/context-compaction-viewport-rearchitecture.md). |
 | **2026-07-05** | **CH2 chat history search Tier 1** *(landed then, recorded now — the entry sat open here by mistake)*: lexical AND/regex over the session JSONL logs behind `GET /api/conversations/search`, the webui sidebar search box, and the `chat-search` MCP for the dispatcher. [`chat-search-plan.md`](future-work/chat-search-plan.md). |
 | **2026-07-23** | **C1 interactive crons (AskHuman):** profile-narrowed session grants — a cron schedule naming a `[[session_profiles]]` entry whose component includes `AskHuman` gets an open input channel; unattended crons stay structurally non-interactive (D-d). |
@@ -120,4 +120,4 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
 
 See [`spec/architecture/sessions.md`](spec/architecture/sessions.md) for the session model history pointers.
 
-**Last updated:** 2026-07-31.
+**Last updated:** 2026-08-01.
