@@ -401,8 +401,11 @@ pub enum ExecError {
     Provider(#[from] ProviderError),
     #[error("the model's submit_report arguments did not match the Report schema: {0}")]
     Decode(String),
-    #[error("execution exceeded the {turns}-turn budget")]
-    BudgetExceeded { turns: u32 },
+    #[error("execution exceeded its {resource} budget after {turns} turn(s)")]
+    /// `resource` is the bound that actually ran out — `"turns"`, `"wall-clock"`, `"tokens"`.
+    /// Carried because the catch site files a report, and a report that always blames turns
+    /// misdirects whoever reads it, model or human.
+    BudgetExceeded { resource: &'static str, turns: u32 },
     #[error("internal executor invariant violated: {0}")]
     Internal(&'static str),
 }
@@ -460,10 +463,16 @@ impl Executor {
                     tracing::Span::current().record("outcome", "internal_error");
                     Err(ExecError::Internal("report mode returned prose"))
                 }
-                Err(ExecError::BudgetExceeded { turns }) => {
+                Err(ExecError::BudgetExceeded { resource, turns }) => {
                     tracing::Span::current().record("outcome", "budget_exceeded");
-                    tracing::warn!(turns, "execution budget exceeded; returning failed report");
-                    Ok(budget_failed_report(turns))
+                    tracing::warn!(
+                        turns,
+                        resource,
+                        "execution budget exceeded; returning failed report"
+                    );
+                    // `_named` falls back to the turn wording when `resource` is "turns", so this
+                    // is a strict improvement rather than a second phrasing to keep in sync.
+                    Ok(budget_failed_report_named(resource, turns))
                 }
                 Err(e) => {
                     tracing::Span::current().record("outcome", "error");
@@ -660,7 +669,10 @@ impl Executor {
             tracing::info!(turn, tools = response.tool_calls.len(), "turn used tools");
         }
 
+        // This loop ends only by running out of turns; the extra limits are checked in
+        // `run_loop`, which names whichever of them fired.
         Err(ExecError::BudgetExceeded {
+            resource: "turns",
             turns: self.budget.max_turns,
         })
     }
@@ -706,10 +718,15 @@ impl Executor {
         let run_started = liberado_common::clock::now();
         // The loop yields the name of whatever ran out, so the exhaustion report below can say
         // which bound was hit rather than always blaming turns.
-        let exhausted_name: &str = 'turn_loop: loop {
+        let exhausted_name: &'static str = 'turn_loop: loop {
             turn += 1;
             usage.turns = turn;
-            usage.elapsed = run_started.elapsed();
+            // Both ends on the same clock. `run_started.elapsed()` measures against the real
+            // `Instant::now()` regardless of `clock::now()`, so the start was injectable and
+            // the end was not — freezing the clock moved neither, and no test could reach a
+            // non-zero wall-clock exhaustion. A half-injected timer is worse than none: it
+            // looks controllable and silently is not.
+            usage.elapsed = liberado_common::clock::now().duration_since(run_started);
             // Once the reserve is running, only its own turn cap applies. The extra limits are
             // spent by definition at that point, so re-checking them would end the reserve on its
             // first turn and it could never be used — the same trap that made the doom-loop
@@ -962,7 +979,13 @@ impl Executor {
                 max_turns,
                 &call_history,
             ))),
-            Mode::Conversational => Err(ExecError::BudgetExceeded { turns: max_turns }),
+            // `exhausted_name` is in scope and was being discarded here, so a wall-clock or token
+            // exhaustion surfaced as "exceeded the N-turn budget" — the wrong diagnosis, handed
+            // to whoever reads the report.
+            Mode::Conversational => Err(ExecError::BudgetExceeded {
+                resource: exhausted_name,
+                turns: max_turns,
+            }),
         }
     }
 
@@ -1420,6 +1443,31 @@ mod tests {
         let provider = Arc::new(MockProvider::with_script("mock", script));
         let exec = Executor::new(provider.clone(), budget);
         (provider, exec)
+    }
+
+    /// A provider that lets `step` of wall-clock elapse on every call, so a budget can be exhausted
+    /// *during* a run rather than before it starts.
+    ///
+    /// Needed because a test can only advance the clock before `execute` is entered, and
+    /// `run_started` is captured inside — so pre-advancing moves the start too and elapsed stays
+    /// zero. Time has to pass where the work happens, which is the provider call.
+    struct SlowProvider {
+        inner: Arc<MockProvider>,
+        step: std::time::Duration,
+    }
+
+    #[async_trait]
+    impl Provider for SlowProvider {
+        fn model(&self) -> String {
+            self.inner.model()
+        }
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse, liberado_provider::ProviderError> {
+            liberado_common::clock::test_advance(self.step);
+            self.inner.complete(request).await
+        }
     }
 
     fn offered_tools(provider: &MockProvider) -> Vec<String> {
@@ -2622,32 +2670,53 @@ mod tests {
         );
     }
 
-    /// Freeze clock, advance by exactly the non-zero budget — verifies the `>=` boundary at
-    /// `Duration::from_secs(1)`. Currently ignored because the FrozenClock cannot inject time
-    /// between `run_started` capture and the budget check within the same loop iteration, and
-    /// `budget_failed_report` hardcodes "turns" regardless of which resource exhausted (see
-    /// docs/coverage-gaps.md).
+    /// Freeze the clock, advance by exactly the budget — pins the `>=` boundary at a *non-zero*
+    /// duration, which the `Duration::ZERO` test above cannot distinguish from "exhausted before
+    /// the first check".
+    ///
+    /// Was ignored on the belief that the clock could not inject time here. The real cause was that
+    /// `usage.elapsed` used `Instant::elapsed()` — real time — while `run_started` came from the
+    /// injectable clock, so advancing it moved nothing. With both ends on one clock the test runs.
     #[tokio::test]
-    #[ignore = "FrozenClock limitation + budget_failed_report bug (see docs/coverage-gaps.md)"]
     async fn wall_clock_limit_exhausts_at_exact_non_zero_boundary() {
         let t0 = std::time::Instant::now();
         let clock = liberado_common::clock::test_freeze_at(t0);
 
-        let (_provider, exec) = executor(
-            vec![submit(valid_report_args())],
+        // One second elapses inside the provider call, so the budget is hit mid-run at exactly the
+        // boundary — `>=`, not `>`.
+        // A tool call first, so the run reaches a second turn: the budget is checked at the *top*
+        // of each iteration, so turn 1 always sees zero elapsed. The second check sees exactly the
+        // one second the provider consumed — the `>=` boundary this test exists to pin.
+        let inner = Arc::new(MockProvider::with_script(
+            "mock",
+            vec![call_tool("search"), submit(valid_report_args())],
+        ));
+        let exec = Executor::new(
+            Arc::new(SlowProvider {
+                inner,
+                step: std::time::Duration::from_secs(1),
+            }),
             Budget::new(10).with_wall_clock(std::time::Duration::from_secs(1)),
         );
+        let _ = &clock; // held for the run; thaws on drop
 
-        clock.advance(std::time::Duration::from_secs(1));
-
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        // The call fails, so nothing is salvageable and the run ends `Failed` rather than
+        // `PartiallySucceeded` — keeping this test on the plain exhaustion report, which is the one
+        // that has to name the resource.
+        let runtime = MockToolRuntime::new(&["search"], Err("boom".into()));
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
             .await
             .unwrap();
 
         assert_eq!(report.outcome, Outcome::Failed);
-        // `clock` thaws on drop here — including if the assertion above panics.
+        // The assertion the original test was written to make, and was ignored for.
+        assert!(
+            report.summary.contains("wall-clock"),
+            "the report must name the bound that actually ran out, not blame turns: {}",
+            report.summary
+        );
+        // `clock` thaws on drop here — including if an assertion above panics.
     }
 
     #[tokio::test]

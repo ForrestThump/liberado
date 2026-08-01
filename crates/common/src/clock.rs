@@ -71,6 +71,18 @@ mod controllable {
         }
     }
 
+    /// Advance the frozen instant by `d`, from anywhere. No-op when the clock is not frozen.
+    ///
+    /// A free function as well as [`FrozenClock::advance`] because time often has to move from
+    /// *inside* the code under test — a provider double standing in for a slow call — where the
+    /// guard is not in scope. This cannot leak state: only freezing can, and that still requires
+    /// the guard.
+    pub fn test_advance(d: Duration) {
+        if let Some(at) = frozen().as_mut() {
+            *at += d;
+        }
+    }
+
     /// The frozen instant, if one is held. See [`super::now`].
     pub(super) fn frozen_now() -> Option<Instant> {
         *frozen()
@@ -78,7 +90,7 @@ mod controllable {
 }
 
 #[cfg(any(test, feature = "test-clock"))]
-pub use controllable::{FrozenClock, test_freeze_at};
+pub use controllable::{FrozenClock, test_advance, test_freeze_at};
 
 /// A deterministic source of the current time.
 ///

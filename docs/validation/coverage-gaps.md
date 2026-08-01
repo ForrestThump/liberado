@@ -92,7 +92,7 @@ Code that is exercised by the daemon binary, not by unit/integration tests.
 
 ## Real Bugs Found During Coverage Analysis
 
-### `budget_failed_report` ignores `exhausted_name` (executor/src/lib.rs:1079)
+### ~~`budget_failed_report` ignores `exhausted_name`~~ — **fixed 2026-07-31**
 
 Discovered while writing the non-zero wall-clock budget test below. The test expected `"wall-clock"` in the report summary, but `budget_failed_report` hardcodes `"turns"` regardless of which resource actually exhausted.
 
@@ -143,7 +143,26 @@ async fn wall_clock_limit_exhausts_at_exact_non_zero_boundary() {
 
 **Impact:** When wall-clock or token budget is exhausted, the report claims the turn budget ran out instead of the actual resource. A developer debugging the report or a model reading it would misdiagnose the failure.
 
-**Fix:** Change line 463-467 to pass `exhausted_name` through to the error (e.g. `ExecError::BudgetExceeded { resource: &'static str, turns: u32 }`) and call `budget_failed_report_named` with the real resource name.
+**Fixed**, and the diagnosis needed one correction. `Mode::Report` — the path `execute` takes — was
+already correct: it calls `budget_failed_report_with_progress(exhausted_name, …)`, which is why the
+`Duration::ZERO` test asserting `"wall-clock"` passed all along. The name was dropped only on
+`Mode::Conversational`, which raises `ExecError::BudgetExceeded` and reaches chat as *"exceeded the
+N-turn budget"* however the run actually ended. Real, user-visible, and in a different place than
+written up here. `BudgetExceeded` now carries `resource: &'static str`, and `ResourceLimit::name`
+returns `&'static str` so the label can outlive the borrow of the limit.
+
+**The reason the test could not be un-ignored was separate and larger.** `usage.elapsed` was
+`run_started.elapsed()` — real time — while `run_started` came from `clock::now()`. The timer was
+half-injected: freezing moved the start and not the end, so advancing the clock changed nothing and
+no wall-clock exhaustion was reachable in a test. That is worse than an uninjected timer, because it
+looks controllable. Both ends are now on `clock::now()`, and the test is un-ignored and passing —
+verified to fail again if only that line is reverted.
+
+Two things the test needed beyond the fix, both properties of the loop rather than bugs: the budget
+is checked at the *top* of an iteration, so turn 1 always sees zero elapsed and the run must reach a
+second turn; and time has to pass *inside* the run, since a test can only advance the clock before
+`execute` is entered, which moves `run_started` with it. A `SlowProvider` double consumes the budget
+where the work happens.
 
 ## Test-Code Deduplication Analysis (2026-07-30)
 

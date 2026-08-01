@@ -14,7 +14,10 @@ use crate::DEFAULT_MAX_TURNS;
 pub trait ResourceLimit: Send + Sync {
     /// Human-readable name for diagnostics ("wall-clock", "tokens") — surfaced in a budget-
     /// exceeded failure report so it names *which* resource ran out, not just "turns."
-    fn name(&self) -> &str;
+    /// A fixed label for this resource — `"wall-clock"`, `"tokens"`. `'static` because it has
+    /// to outlive the borrow of the limit: the name travels out in `ExecError::BudgetExceeded`
+    /// so the failed report can say which bound was actually hit.
+    fn name(&self) -> &'static str;
     /// Whether this resource has been exhausted given the current usage snapshot.
     fn is_exhausted(&self, usage: &ResourceUsage) -> bool;
 }
@@ -35,7 +38,7 @@ pub struct ResourceUsage {
 pub struct WallClockLimit(pub std::time::Duration);
 
 impl ResourceLimit for WallClockLimit {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "wall-clock"
     }
     fn is_exhausted(&self, usage: &ResourceUsage) -> bool {
@@ -53,7 +56,7 @@ impl ResourceLimit for WallClockLimit {
 pub struct TokenLimit(pub u64);
 
 impl ResourceLimit for TokenLimit {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "tokens"
     }
     fn is_exhausted(&self, usage: &ResourceUsage) -> bool {
@@ -111,7 +114,7 @@ impl Budget {
     /// The name of the first exhausted extra limit (wall-clock, tokens, ...), if any — `None`
     /// means none of the *extra* limits are exhausted (the turn cap is checked separately, since
     /// it's the loop's own mechanical bound, not one of these).
-    pub(crate) fn exhausted_extra(&self, usage: &ResourceUsage) -> Option<&str> {
+    pub(crate) fn exhausted_extra(&self, usage: &ResourceUsage) -> Option<&'static str> {
         self.extra_limits
             .iter()
             .find(|limit| limit.is_exhausted(usage))
