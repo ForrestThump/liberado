@@ -42,6 +42,10 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         context_window: None,
         chat_tools: state.chat_tools,
         chat_tool_names: state.chat_tool_names.clone(),
+        // The config enum is the source; the wire carries the one bit it means. Asked of the type
+        // that owns it rather than re-derived here, so `[webui] enter_key` cannot come to disagree
+        // with what the browser does.
+        enter_sends: state.config.topology.webui.enter_sends(),
     })
 }
 

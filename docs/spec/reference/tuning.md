@@ -95,6 +95,29 @@ Omit the section entirely and vault delivery is unavailable — every report is 
 agent instead. Boot-validated: a sink naming a missing, disabled, read-only, or non-writing tool
 refuses to start.
 
+### WebUI composer — `topology.toml`
+
+```toml
+[webui]
+enter_key = "send"      # send | newline
+```
+
+What the Enter key does in the browser chat composer.
+
+| value | Enter | how you send |
+|---|---|---|
+| `"send"` (default) | sends the message | Enter; Shift+Enter for a newline |
+| `"newline"` | inserts a newline | the Send button, or Ctrl/Cmd+Enter |
+
+Exactly one of the two, never both — the setting exists because Enter was doing both on mobile. In
+`"newline"` mode nothing reachable by a single keypress can send, which is usually what you want on a
+phone, where Enter is the easiest key to hit and a mis-send cannot be taken back.
+
+Presentation only: it grants no authority and changes nothing about what an agent may do, which is
+why it sits at the top level rather than under `[main_agent]`. The WebUI reads it from
+`GET /api/status`; a daemon that does not report it is treated as `"send"`. Applies on reload, not
+restart — it is read by the browser, not baked into the bundle.
+
 ### MCPs — `topology.toml`
 
 ```toml

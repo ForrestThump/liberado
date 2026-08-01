@@ -215,6 +215,22 @@ pub struct DaemonStatus {
     /// Names of the tools the chat agent can call.
     #[serde(default)]
     pub chat_tool_names: Vec<String>,
+    /// Whether Enter sends the composer's message (`true`) or inserts a newline (`false`), from
+    /// `[webui] enter_key` in topology.toml.
+    ///
+    /// A bool rather than a mirror of the config's `EnterKey` enum, for two reasons. The behaviours
+    /// are mutually exclusive — that is the whole point of the setting, and one bit says so without
+    /// a parse step that could meet a variant it does not know. And `chat-client-contract` is the
+    /// wasm-clean crate: importing the config's enum would mean depending on the crate that owns it,
+    /// which drags tokio and chrono-tz into a browser bundle to carry two states.
+    ///
+    /// Defaults to `true` so a daemon predating this field keeps the behaviour it already had.
+    #[serde(default = "default_enter_sends")]
+    pub enter_sends: bool,
+}
+
+fn default_enter_sends() -> bool {
+    true
 }
 
 /// Response shape from `GET /api/models` — live catalog from the provider's
@@ -647,6 +663,7 @@ mod tests {
             context_window: Some(128000),
             chat_tools: 1,
             chat_tool_names: vec!["tasks:add".into()],
+            enter_sends: false,
         };
         let json = serde_json::to_value(&status).unwrap();
         let back: DaemonStatus = serde_json::from_value(json).unwrap();
@@ -655,6 +672,27 @@ mod tests {
         assert_eq!(back.uptime_seconds, 3600);
         assert_eq!(back.reactions_seen, 42);
         assert_eq!(back.model_name, Some("deepseek-chat".into()));
+        assert!(
+            !back.enter_sends,
+            "the non-default value must survive the wire"
+        );
+    }
+
+    /// A daemon built before `enter_sends` existed sends no such field. The client must read that
+    /// as "Enter sends" — the behaviour those daemons have — rather than silently flipping every
+    /// composer to newline mode on a version skew.
+    #[test]
+    fn absent_enter_sends_defaults_to_sending() {
+        let json = serde_json::json!({
+            "running": true,
+            "vault_path": "/v",
+            "watcher_active": true,
+            "dispatcher_attached": false,
+            "orchestrator_attached": false,
+            "reactions_seen": 0,
+        });
+        let status: DaemonStatus = serde_json::from_value(json).unwrap();
+        assert!(status.enter_sends);
     }
 
     #[test]
