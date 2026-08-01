@@ -595,14 +595,26 @@ pub fn Chat(
                 ModelBrowser {
                     api_base: base_for_models.clone(),
                     open: model_browser_open,
+                    // Scope the pick to this chat once it has an id. A conversation that has not
+                    // sent anything yet has none, and takes the daemon default anyway.
+                    conversation: session(),
                     on_switched: move |model: String| {
-                        messages
-                            .write()
-                            .push(ChatMsg {
-                                role: "system",
-                                content: format!("Model switched to {model} (hot-swap, no restart)."),
-                                thinking_steps: Vec::new(),
-                            });
+                        // Say which of the two happened. "Hot-swap" was accurate when every switch
+                        // was daemon-wide; now it is only true of the unscoped case, and a message
+                        // claiming the wrong scope is worse than none.
+                        let content = match session() {
+                            Some(_) => format!(
+                                "Model set to {model} for this conversation. Other chats are unaffected."
+                            ),
+                            None => format!(
+                                "Model switched to {model} daemon-wide (this chat has not started yet)."
+                            ),
+                        };
+                        messages.write().push(ChatMsg {
+                            role: "system",
+                            content,
+                            thinking_steps: Vec::new(),
+                        });
                     },
                 }
             }

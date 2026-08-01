@@ -872,6 +872,7 @@ mod goal_message_tests {
                         parent_id: parent,
                         author: Author::User,
                         message: Message::user(*q),
+                        model: None,
                     },
                 )
                 .await
@@ -883,6 +884,7 @@ mod goal_message_tests {
                         parent_id: Some(u.id),
                         author: Author::Assistant,
                         message: Message::assistant(*a),
+                        model: None,
                     },
                 )
                 .await

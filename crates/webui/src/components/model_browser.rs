@@ -23,11 +23,25 @@ async fn fetch_models(api_base: String) -> Result<ModelsResponse, String> {
         .map_err(|e| format!("Bad response: {e}"))
 }
 
-async fn select_model(api_base: String, model: String) -> Result<ModelsResponse, String> {
+/// Switch the model — for `conversation` when there is one, daemon-wide otherwise.
+///
+/// A chat that has not sent its first message has no id yet, so there is nothing to scope the
+/// choice to; that case falls back to the global swap, which is also harmless there because a
+/// conversation with no history takes the daemon default anyway. The caller narrates which of the
+/// two happened, so the difference is never silent.
+async fn select_model(
+    api_base: String,
+    model: String,
+    conversation: Option<String>,
+) -> Result<ModelsResponse, String> {
     let url = format!("{api_base}/api/models/select");
+    let mut body = serde_json::json!({ "model": model });
+    if let Some(id) = conversation {
+        body["conversation"] = serde_json::Value::String(id);
+    }
     let resp = reqwest::Client::new()
         .post(&url)
-        .json(&serde_json::json!({ "model": model }))
+        .json(&body)
         .send()
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
@@ -46,6 +60,9 @@ async fn select_model(api_base: String, model: String) -> Result<ModelsResponse,
 pub fn ModelBrowser(
     api_base: String,
     open: Signal<bool>,
+    /// The conversation to scope the choice to. `None` before a chat has sent anything — see
+    /// [`select_model`].
+    conversation: Option<String>,
     /// Reports back so the chat can record the switch as a system message — the same place every
     /// other slash-command outcome is narrated.
     on_switched: EventHandler<String>,
@@ -72,6 +89,7 @@ pub fn ModelBrowser(
     // answers, so a refusal is shown rather than swallowed by a panel that already closed.
     let switch_to = {
         let base = api_base.clone();
+        let scope = conversation.clone();
         use_callback(move |model: String| {
             if busy() {
                 return;
@@ -79,9 +97,10 @@ pub fn ModelBrowser(
             busy.set(true);
             error.set(None);
             let base = base.clone();
+            let scope = scope.clone();
             #[cfg(target_arch = "wasm32")]
             wasm_bindgen_futures::spawn_local(async move {
-                match select_model(base, model.clone()).await {
+                match select_model(base, model.clone(), scope).await {
                     Ok(_) => {
                         busy.set(false);
                         on_switched.call(model);
@@ -95,7 +114,7 @@ pub fn ModelBrowser(
             });
             #[cfg(not(target_arch = "wasm32"))]
             {
-                let _ = (base, model);
+                let _ = (base, model, scope);
                 busy.set(false);
             }
         })

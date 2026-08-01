@@ -444,6 +444,7 @@ impl SessionStore {
                         parent_id: previous,
                         author: node.author.clone(),
                         message: node.message.clone(),
+                        model: None,
                     },
                 )
                 .await?;
@@ -584,6 +585,7 @@ impl ConversationStore for SessionStore {
             author: node.author,
             created_at: Utc::now(),
             message: node.message,
+            model: node.model,
         };
         live.nodes.push(persisted.clone());
         drop(map);
@@ -913,6 +915,7 @@ impl SessionRecordStore for SessionStore {
                     parent_id,
                     author,
                     message,
+                    model: None,
                 },
             )
             .await

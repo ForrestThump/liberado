@@ -10,6 +10,7 @@ Forward-looking brainstorms and competitive notes. **Not** the roadmap — nothi
 | [liberado-permissions-idea.md](liberado-permissions-idea.md) | Permissions UX |
 | [matrix-chat-surface.md](matrix-chat-surface.md) | Matrix as messaging channel |
 | [model-reasoning-introspection-idea.md](model-reasoning-introspection-idea.md) | Reasoning introspection |
+| [per-model-turn-budgets-idea.md](per-model-turn-budgets-idea.md) | Budgets sized per model, not per role |
 | [turn-budget-battery-idea.md](turn-budget-battery-idea.md) | Unattended turn “battery” |
 | [vs-grok-build.md](vs-grok-build.md) | Vs Grok Build TUI |
 | [vs-hermes.md](vs-hermes.md) | Vs Hermes |

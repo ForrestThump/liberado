@@ -46,6 +46,7 @@ fn user_node(parent: Option<ulid::Ulid>, content: &str) -> NewNode {
         parent_id: parent,
         author: Author::User,
         message: Message::user(content),
+        model: None,
     }
 }
 
@@ -208,6 +209,7 @@ async fn tool_call_messages_round_trip() {
                 parent_id: None,
                 author: Author::Assistant,
                 message: assistant,
+                model: None,
             },
         )
         .await
@@ -221,6 +223,7 @@ async fn tool_call_messages_round_trip() {
                 parent_id: Some(asst_node.id),
                 author: Author::Tool,
                 message: Message::tool_result("call_1", "{\"hits\":3}"),
+                model: None,
             },
         )
         .await
