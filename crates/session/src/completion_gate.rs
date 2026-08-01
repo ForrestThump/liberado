@@ -814,3 +814,233 @@ mod tests {
         assert!(!e.verifiers_all_passed());
     }
 }
+
+/// Property-based checks of the gate's quorum math and fail-closed invariants.
+///
+/// These run through the real async [`CompletionGate::evaluate`] on a current-thread Tokio runtime,
+/// so the generated inputs exercise the same code path as production: the gatekeeper veto, the
+/// configured-vs-supplied fresh quorum (missing slots coerced to refutations), and failing
+/// reviewers.
+#[cfg(test)]
+mod proptest_tests {
+    use proptest::prelude::*;
+    use std::sync::OnceLock;
+
+    use super::*;
+
+    // ── fixtures ─────────────────────────────────────────────────────────────────────
+
+    /// A reviewer with a scripted answer. Mirrors the `Scripted` helper in `tests`, kept local so
+    /// the two suites stay independent.
+    struct Scripted {
+        name: String,
+        answer: Result<ReviewVote, GateError>,
+    }
+
+    #[async_trait]
+    impl Reviewer for Scripted {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        async fn review(
+            &self,
+            _evidence: &GateEvidence,
+            _fresh: bool,
+        ) -> Result<ReviewVote, GateError> {
+            self.answer.clone()
+        }
+    }
+
+    fn evidence() -> GateEvidence {
+        GateEvidence {
+            contract_summary: "add a --version flag".to_string(),
+            artifact_evidence: "diff --git a/src/main.rs".to_string(),
+            verifier_verdicts: vec![VerifierVerdict {
+                id: "build".to_string(),
+                status: VerifierStatus::Pass,
+                summary: "cargo build ok".to_string(),
+            }],
+            prior_refutations: Vec::new(),
+            attempt: 1,
+        }
+    }
+
+    /// Run the real gate with scripted reviewers. Fresh slots beyond `fresh.len()` are *not
+    /// supplied*, so the gate records them as coerced refutations — the "missing reviewer" case.
+    fn run_gate(
+        fresh_reviewers: u8,
+        gatekeeper: Result<ReviewVote, GateError>,
+        fresh: &[Result<ReviewVote, GateError>],
+    ) -> GateOutcome {
+        static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+        let rt = RT.get_or_init(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime for completion gate proptests")
+        });
+
+        let gate = CompletionGate {
+            fresh_reviewers,
+            ..CompletionGate::default()
+        };
+        let keeper = Scripted {
+            name: "skeptic-0".to_string(),
+            answer: gatekeeper,
+        };
+        let fresh_scripts: Vec<Scripted> = fresh
+            .iter()
+            .enumerate()
+            .map(|(i, answer)| Scripted {
+                name: format!("fresh-{i}"),
+                answer: answer.clone(),
+            })
+            .collect();
+        let fresh_refs: Vec<&dyn Reviewer> =
+            fresh_scripts.iter().map(|s| s as &dyn Reviewer).collect();
+
+        rt.block_on(gate.evaluate(&evidence(), &keeper, &fresh_refs, &()))
+    }
+
+    // ── generators ────────────────────────────────────────────────────────────────────
+
+    fn review_vote_strategy() -> impl Strategy<Value = ReviewVote> {
+        prop_oneof![
+            Just(ReviewVote::Approve),
+            prop::collection::vec("[a-z]{0,8}", 0..=3)
+                .prop_map(|issues| ReviewVote::Refute { issues }),
+        ]
+    }
+
+    fn gate_error_strategy() -> impl Strategy<Value = GateError> {
+        prop_oneof![
+            any::<String>().prop_map(GateError::Backend),
+            any::<String>().prop_map(GateError::Malformed),
+            any::<u64>().prop_map(GateError::Timeout),
+        ]
+    }
+
+    /// A reviewer outcome: a real vote, or a failure the gate must coerce to a refutation.
+    fn reviewer_outcome_strategy() -> impl Strategy<Value = Result<ReviewVote, GateError>> {
+        prop_oneof![
+            3 => review_vote_strategy().prop_map(Ok),
+            1 => gate_error_strategy().prop_map(Err),
+        ]
+    }
+
+    // ── properties ────────────────────────────────────────────────────────────────────
+
+    /// `approvals_required` is a strict majority of the *configured* count: `r` clears half, and
+    /// `r - 1` does not.
+    fn quorum_is_strict_majority(n: u8) -> bool {
+        let r = Quorum::StrictMajorityOfFresh.approvals_required(n);
+        (r as u16 * 2 > n as u16) && (n == 0 || (r as u16 - 1) * 2 <= n as u16)
+    }
+
+    /// A larger configured quorum never demands fewer approvals — the gate cannot get looser as it
+    /// gets bigger.
+    fn quorum_monotone(a: u8, b: u8) -> bool {
+        if a <= b {
+            Quorum::StrictMajorityOfFresh.approvals_required(a)
+                <= Quorum::StrictMajorityOfFresh.approvals_required(b)
+        } else {
+            true
+        }
+    }
+
+    /// Fail-closed: a coerced or missing reviewer can never raise the approval count.
+    ///
+    /// The gate substitutes refutations for missing or failing reviewers. Two claims must hold on
+    /// every input:
+    ///
+    /// 1. No recorded vote is both coerced and approving — a sick reviewer is never consent.
+    /// 2. If the gate approves, the gatekeeper genuinely approved and the *fresh* approvals met
+    ///    the configured quorum.
+    ///
+    /// Note the deliberate wording of claim 2: approval needs a strict majority of the configured
+    /// quorum to genuinely approve, but a coerced refutation does not itself block an otherwise
+    /// met quorum (2 of 3 configured approve, the third is down — the gate rightly approves,
+    /// because the outage did not lower the bar). What an outage must never do is *count*.
+    fn gate_fail_closed(
+        fresh_reviewers: u8,
+        gatekeeper: Result<ReviewVote, GateError>,
+        fresh: Vec<Result<ReviewVote, GateError>>,
+    ) -> bool {
+        let outcome = run_gate(fresh_reviewers, gatekeeper, &fresh);
+
+        // Claim 1: coercion only ever produces refutations.
+        if outcome
+            .votes
+            .iter()
+            .any(|v| v.was_coerced() && v.vote.is_approve())
+        {
+            return false;
+        }
+
+        if outcome.verdict.is_approved() {
+            // The gatekeeper's recorded vote is first; a coerced gatekeeper vote is a refutation,
+            // so an approving first vote means the gatekeeper genuinely approved.
+            let gatekeeper_approved = outcome
+                .votes
+                .first()
+                .map(|v| v.vote.is_approve())
+                .unwrap_or(false);
+            let required = Quorum::StrictMajorityOfFresh.approvals_required(fresh_reviewers);
+            let fresh_approvals = outcome
+                .votes
+                .iter()
+                .filter(|v| v.kind == ReviewerKind::Fresh && v.vote.is_approve())
+                .count() as u32;
+            gatekeeper_approved && fresh_approvals >= required
+        } else {
+            true
+        }
+    }
+
+    /// A non-approving gatekeeper — a refutation, or a failure coerced to one — always forces
+    /// [`GateVerdict::Refuted`], no matter what the fresh quorum says.
+    fn gatekeeper_veto(
+        fresh_reviewers: u8,
+        gatekeeper: Result<ReviewVote, GateError>,
+        fresh: Vec<ReviewVote>,
+    ) -> bool {
+        let approving = gatekeeper.as_ref().map(|v| v.is_approve()).unwrap_or(false);
+        if !approving {
+            let fresh: Vec<Result<ReviewVote, GateError>> = fresh.into_iter().map(Ok).collect();
+            let outcome = run_gate(fresh_reviewers, gatekeeper, &fresh);
+            matches!(outcome.verdict, GateVerdict::Refuted { .. })
+        } else {
+            true
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_quorum_is_strict_majority(n in 0u8..=u8::MAX) {
+            prop_assert!(quorum_is_strict_majority(n));
+        }
+
+        #[test]
+        fn prop_quorum_is_monotone(a in 0u8..=u8::MAX, b in 0u8..=u8::MAX) {
+            prop_assert!(quorum_monotone(a, b));
+        }
+
+        #[test]
+        fn prop_gate_fail_closed(
+            fresh_reviewers in 0u8..=5,
+            gatekeeper in reviewer_outcome_strategy(),
+            fresh in prop::collection::vec(reviewer_outcome_strategy(), 0..=5),
+        ) {
+            prop_assert!(gate_fail_closed(fresh_reviewers, gatekeeper, fresh));
+        }
+
+        #[test]
+        fn prop_gatekeeper_veto(
+            fresh_reviewers in 0u8..=5,
+            gatekeeper in reviewer_outcome_strategy(),
+            fresh in prop::collection::vec(review_vote_strategy(), 0..=5),
+        ) {
+            prop_assert!(gatekeeper_veto(fresh_reviewers, gatekeeper, fresh));
+        }
+    }
+}

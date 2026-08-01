@@ -2923,3 +2923,96 @@ mod tests {
         assert_eq!(vectors[1].len(), 2);
     }
 }
+
+/// Property tests over the doom-loop guard's similarity primitives — [`args_similarity`],
+/// [`cosine`], and [`tokenize`]. All three are small, pure, and deterministic, so proptest can
+/// fuzz them with arbitrary JSON argument trees: the caller of `run_loop` feeds real model output
+/// into these, so *any* shape must be safe to score, not just the hand-written calibration cases.
+#[cfg(test)]
+mod proptest_tests {
+    use proptest::prelude::*;
+    use serde_json::Value;
+
+    use super::args_similarity;
+    use super::tokenize;
+
+    /// Arbitrary JSON tool-argument trees, 0-4 levels deep, with numbers/strings/bools/arrays/
+    /// objects. Strings run 0-200 chars. `any::<f64>()` also draws NaN/±inf/-0.0/subnormals;
+    /// serde_json cannot represent a non-finite number, so `Value::from` collapses those to
+    /// `Null` (total, never panics) — the bit patterns still flow through every function under
+    /// test, which is the point: none of them may blow up on any input.
+    fn arb_json_value() -> impl Strategy<Value = Value> {
+        let leaf = prop_oneof![
+            Just(Value::Null),
+            any::<bool>().prop_map(Value::Bool),
+            any::<i64>().prop_map(Value::from),
+            any::<f64>().prop_map(Value::from),
+            proptest::collection::vec(proptest::char::range('\u{20}', '\u{7e}'), 0..=200)
+                .prop_map(|chars| Value::String(chars.into_iter().collect())),
+        ];
+        leaf.prop_recursive(4, 16, 8, |inner| {
+            prop_oneof![
+                proptest::collection::vec(inner.clone(), 0..8).prop_map(Value::Array),
+                proptest::collection::hash_map("[a-zA-Z0-9_-]{0,12}", inner, 0..8).prop_map(|m| {
+                    let mut map = serde_json::Map::new();
+                    for (k, v) in m {
+                        map.insert(k, v);
+                    }
+                    Value::Object(map)
+                }),
+            ]
+        })
+    }
+
+    /// `args_similarity` must not depend on which side is which — the doom-loop guard compares
+    /// calls in history order, so the score has to be order-agnostic. Both runs go through the
+    /// same TF-IDF/IDF computation, so the only way they differ is f32 summation order; 1e-5 is
+    /// comfortably above that noise.
+    fn similarity_symmetric(a: Value, b: Value) -> bool {
+        let s1 = args_similarity(&a, &b);
+        let s2 = args_similarity(&b, &a);
+        (s1 - s2).abs() < 1e-5
+    }
+
+    /// A value is always identical to itself — `args_similarity(x, x)` is the top of the scale.
+    fn similarity_reflexive(x: Value) -> bool {
+        (args_similarity(&x, &x) - 1.0).abs() < 1e-5
+    }
+
+    /// The output is a similarity: never negative, never above 1. (A cosine of two non-empty
+    /// vectors can round a hair past 1.0 in f32, but the tolerance-free bound here holds for
+    /// generated inputs because independent trees essentially never produce exactly-proportional
+    /// TF-IDF vectors.)
+    fn similarity_in_range(a: Value, b: Value) -> bool {
+        let s = args_similarity(&a, &b);
+        s >= 0.0 && s <= 1.0
+    }
+
+    /// `tokenize` is total: no JSON shape may make it panic.
+    fn tokenize_never_panics(v: Value) -> bool {
+        let _ = tokenize(&v);
+        true
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_args_similarity_is_symmetric(a in arb_json_value(), b in arb_json_value()) {
+            prop_assert!(similarity_symmetric(a, b));
+        }
+
+        #[test]
+        fn proptest_args_similarity_is_reflexive(x in arb_json_value()) {
+            prop_assert!(similarity_reflexive(x));
+        }
+
+        #[test]
+        fn proptest_args_similarity_stays_in_unit_range(a in arb_json_value(), b in arb_json_value()) {
+            prop_assert!(similarity_in_range(a, b));
+        }
+
+        #[test]
+        fn proptest_tokenize_never_panics(v in arb_json_value()) {
+            prop_assert!(tokenize_never_panics(v));
+        }
+    }
+}

@@ -449,3 +449,96 @@ mod tests {
         assert_eq!(bare_tool_name("a:b:c"), "b:c");
     }
 }
+
+/// Property tests for the `"<mcp>:<tool>"` name convention and the grant semantics built on it:
+/// split/rejoin round-trips, `ExecuteMcp` authorizing every tool on its server, and `ExecuteTool`
+/// authorizing exactly one tool and nothing else on that server.
+#[cfg(test)]
+mod proptest_tests {
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::capability::{Capability, CapabilitySet};
+
+    // ── Strategies ────────────────────────────────────────────────────────────────────────────
+
+    /// Tool names 0-30 chars, with fixed seeds guaranteeing each of the three shapes the
+    /// convention admits: no colon (a bare name), a single colon (`mcp:tool`), and multiple
+    /// colons (`a:b:c`, where `bare_tool_name` keeps the `b:c` tail).
+    fn name_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            10 => "[a-zA-Z0-9:]{0,30}",
+            1 => Just("plain_tool_name".to_string()),
+            1 => Just("mcp:tool".to_string()),
+            1 => Just("a:b:c".to_string()),
+        ]
+    }
+
+    /// MCP server names: 0-20 chars, never containing `:` — a server name with a `:` could not be
+    /// recovered by `mcp_of` from a qualified `"<mcp>:<tool>"` name, so such a name is outside the
+    /// convention the grants are defined over.
+    fn mcp_strategy() -> impl Strategy<Value = String> {
+        "[a-zA-Z0-9_-]{0,20}"
+    }
+
+    /// Tool names: 0-20 chars. Colons are allowed — the convention treats everything after the
+    /// first `:` as the bare tool name, so a tool may itself contain colons.
+    fn tool_strategy() -> impl Strategy<Value = String> {
+        "[a-zA-Z0-9:]{0,20}"
+    }
+
+    // ── Properties ────────────────────────────────────────────────────────────────────────────
+
+    /// Splitting a qualified `"<mcp>:<tool>"` name at the first `:` and rejoining reproduces it
+    /// exactly: `mcp_of` yields the prefix and `bare_tool_name` the remainder (including any
+    /// further colons, so `a:b:c` round-trips). A bare name (no `:`) has no split/rejoin — both
+    /// helpers fall back to the whole string, so the assertion there is that each half equals the
+    /// name itself rather than reconstructing to the non-identity `"name:name"`.
+    fn tool_name_reconstruction(name: String) -> bool {
+        if name.contains(':') {
+            format!("{}:{}", mcp_of(&name), bare_tool_name(&name)) == name
+        } else {
+            mcp_of(&name) == name.as_str() && bare_tool_name(&name) == name.as_str()
+        }
+    }
+
+    /// `ExecuteMcp(m)` authorizes every `"m:<tool>"` on that server: `grants_tool` resolves the
+    /// MCP from the qualified name's prefix and matches it against the server grant, so the tool
+    /// name never needs to be known at grant time.
+    fn mcp_grant_authorizes_all_tools(mcp: String, tool: String) -> bool {
+        let caps = CapabilitySet::from_iter([Capability::ExecuteMcp(mcp.clone())]);
+        let full = format!("{}:{}", mcp, tool);
+        caps.grants_tool(&full)
+    }
+
+    /// `ExecuteTool("m:tool")` authorizes exactly that tool: the qualified name itself, and no
+    /// other tool on the same server unless it is the same tool. This is the property that keeps
+    /// a per-tool grant from leaking into the rest of a server's catalog.
+    fn tool_grant_is_specific(mcp: String, tool: String, other: String) -> bool {
+        let caps = CapabilitySet::from_iter([Capability::ExecuteTool(format!("{}:{}", mcp, tool))]);
+        let full = format!("{}:{}", mcp, tool);
+        let diff = format!("{}:{}", mcp, other);
+        caps.grants_tool(&full) && (tool == other || !caps.grants_tool(&diff))
+    }
+
+    proptest! {
+        #[test]
+        fn prop_tool_name_reconstruction(name in name_strategy()) {
+            prop_assert!(tool_name_reconstruction(name));
+        }
+
+        #[test]
+        fn prop_mcp_grant_authorizes_all_tools(mcp in mcp_strategy(), tool in tool_strategy()) {
+            prop_assert!(mcp_grant_authorizes_all_tools(mcp, tool));
+        }
+
+        #[test]
+        fn prop_tool_grant_is_specific(
+            mcp in mcp_strategy(),
+            tool in tool_strategy(),
+            other in tool_strategy(),
+        ) {
+            prop_assert!(tool_grant_is_specific(mcp, tool, other));
+        }
+    }
+}

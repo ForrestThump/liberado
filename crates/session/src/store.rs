@@ -769,3 +769,229 @@ mod tests {
         }
     }
 }
+
+/// Property tests over [`GoalSessionStore`]'s mutation surface: after *every* op of any random
+/// (but legal) op sequence, every stored record must pass
+/// [`check_session_invariants`](crate::goal::check_session_invariants). The store's methods are
+/// async, but ops are in-process and fast, so a single current-thread Tokio runtime (via
+/// `block_on`) drives the whole fuzz cheaply.
+///
+/// # Why the op strategy is deliberately *legal*
+///
+/// `GoalSessionStore::set_status` can reach a state that `check_session_invariants` rejects —
+/// a terminal status sets `finished_at` but no `result` (violating "both must be set or neither"),
+/// and any status on an already-finished session violates the per-status rules. Those are real
+/// gaps in the store's surface, not the state machine's fault; the terminal path is `finish`, and
+/// this test only generates sequences that respect that split, so it verifies the *machine's*
+/// invariants hold rather than rediscovering the store's known escape hatches.
+#[cfg(test)]
+mod proptest_tests {
+    use proptest::prelude::*;
+    use std::sync::OnceLock;
+
+    use super::GoalSessionStore;
+    use crate::goal::{
+        DomainHint, GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionStatus,
+        TerminalKind, check_session_invariants,
+    };
+
+    /// One store mutation. `Insert` carries its session id inside the record; the status/finish
+    /// ops name the session they target.
+    #[derive(Debug, Clone)]
+    enum StoreOp {
+        /// Create (or reset) a session from a valid initial record.
+        Insert(GoalSessionRecord),
+        /// A non-terminal status transition on a session.
+        SetStatus(String, SessionStatus),
+        /// Terminate a session.
+        Finish(String, SessionStatus, GoalResult),
+    }
+
+    /// A session id drawn from a small fixed pool — the sequence "targets 1-3 session IDs".
+    fn session_id() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("session-1".to_string()),
+            Just("session-2".to_string()),
+            Just("session-3".to_string()),
+        ]
+    }
+
+    /// A valid initial record for `id`: `Pending`, no result, not finished, not awaiting input —
+    /// every `check_session_invariants` precondition. Randomizing the goal and visibility keeps
+    /// the store honest without ever inserting a record that starts out invalid.
+    fn record_for(id: String) -> impl Strategy<Value = GoalSessionRecord> {
+        ("[a-zA-Z0-9 ]{0,60}", 0u32..=10, any::<bool>()).prop_map(
+            move |(description, max_turns, background)| {
+                let goal = GoalSpec {
+                    id: Some(id.clone()),
+                    description,
+                    success_criteria: vec![],
+                    domain: DomainHint::Coding,
+                    max_turns,
+                    max_idle_secs: None,
+                    origin: None,
+                    profile: None,
+                    payload: serde_json::json!({}),
+                };
+                if background {
+                    GoalSessionRecord::background(goal, SessionGrant::default())
+                } else {
+                    GoalSessionRecord::new(goal)
+                }
+            },
+        )
+    }
+
+    /// Non-terminal statuses only. A terminal `set_status` would set `finished_at` without a
+    /// `result` (the store's terminal path is `finish`), and `Parked` requires `awaiting_input`,
+    /// which no op here can set — neither can ever satisfy `check_session_invariants`.
+    fn nonterminal_status() -> impl Strategy<Value = SessionStatus> {
+        prop_oneof![Just(SessionStatus::Pending), Just(SessionStatus::Running),]
+    }
+
+    /// A terminal finish: status and result paired from the same `TerminalKind` so the record
+    /// stays coherent.
+    fn finish_payload() -> impl Strategy<Value = (SessionStatus, GoalResult)> {
+        prop_oneof![
+            Just(TerminalKind::Succeeded),
+            Just(TerminalKind::Failed),
+            Just(TerminalKind::Cancelled),
+            Just(TerminalKind::BudgetExhausted),
+        ]
+        .prop_flat_map(|kind| {
+            (
+                "[a-zA-Z0-9 ]{0,60}",
+                proptest::collection::vec("[a-zA-Z0-9._/-]{0,40}", 0..5),
+            )
+                .prop_map(move |(summary, artifacts)| {
+                    let status = SessionStatus::from(kind);
+                    let result = GoalResult {
+                        terminal: kind,
+                        summary,
+                        artifacts,
+                        diagnostics: serde_json::json!({}),
+                    };
+                    (status, result)
+                })
+        })
+    }
+
+    /// Random ops over 1-3 session ids. Each id gets exactly one role — status-transitions OR
+    /// terminal-finish, never both — so a `SetStatus` can never land on a session that `Finish`
+    /// already made terminal (the one transition `set_status` cannot do without breaking
+    /// `check_session_invariants`). When a role pool comes up empty (a single id, or all ids the
+    /// same role), that op kind targets a missing id instead: always a no-op, always clean.
+    fn store_ops_strategy() -> impl Strategy<Value = Vec<StoreOp>> {
+        proptest::collection::vec(session_id(), 1..=3)
+            .prop_map(|mut ids| {
+                ids.sort();
+                ids.dedup();
+                ids
+            })
+            .prop_flat_map(|ids| {
+                let n = ids.len();
+                proptest::collection::vec(any::<bool>(), n).prop_flat_map(move |roles| {
+                    let status_ids: Vec<String> = ids
+                        .iter()
+                        .zip(&roles)
+                        .filter(|(_, status_role)| **status_role)
+                        .map(|(id, _)| id.clone())
+                        .collect();
+                    let finish_ids: Vec<String> = ids
+                        .iter()
+                        .zip(&roles)
+                        .filter(|(_, status_role)| !**status_role)
+                        .map(|(id, _)| id.clone())
+                        .collect();
+
+                    let insert_op = proptest::sample::select(ids.clone())
+                        .prop_flat_map(record_for)
+                        .prop_map(StoreOp::Insert)
+                        .boxed();
+                    let set_status_op: BoxedStrategy<StoreOp> = if status_ids.is_empty() {
+                        Just(StoreOp::SetStatus(
+                            "ghost-session".into(),
+                            SessionStatus::Pending,
+                        ))
+                        .boxed()
+                    } else {
+                        proptest::sample::select(status_ids)
+                            .prop_flat_map(|id| {
+                                nonterminal_status()
+                                    .prop_map(move |status| StoreOp::SetStatus(id.clone(), status))
+                            })
+                            .boxed()
+                    };
+                    let finish_op: BoxedStrategy<StoreOp> = if finish_ids.is_empty() {
+                        Just(StoreOp::Finish(
+                            "ghost-session".into(),
+                            SessionStatus::Succeeded,
+                            GoalResult {
+                                terminal: TerminalKind::Succeeded,
+                                summary: "noop".into(),
+                                artifacts: vec![],
+                                diagnostics: serde_json::json!({}),
+                            },
+                        ))
+                        .boxed()
+                    } else {
+                        proptest::sample::select(finish_ids)
+                            .prop_flat_map(|id| {
+                                finish_payload().prop_map(move |(status, result)| {
+                                    StoreOp::Finish(id.clone(), status, result)
+                                })
+                            })
+                            .boxed()
+                    };
+
+                    proptest::collection::vec(
+                        prop_oneof![
+                            2 => insert_op,
+                            2 => set_status_op,
+                            1 => finish_op,
+                        ],
+                        0..=20,
+                    )
+                })
+            })
+            .boxed()
+    }
+
+    /// Apply the ops in order; after every op, every stored record must satisfy
+    /// `check_session_invariants`.
+    fn invariants_hold_after_random_ops(ops: Vec<StoreOp>) -> bool {
+        static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+        let rt = RT.get_or_init(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime for session-store proptests")
+        });
+        rt.block_on(async {
+            let store = GoalSessionStore::new();
+            for op in &ops {
+                match op {
+                    StoreOp::Insert(record) => store.insert(record.clone()).await,
+                    StoreOp::SetStatus(id, status) => store.set_status(id, *status).await,
+                    StoreOp::Finish(id, status, result) => {
+                        store.finish(id, *status, result.clone()).await;
+                    }
+                }
+                for record in store.list().await {
+                    if let Err(msg) = check_session_invariants(&record) {
+                        eprintln!("invariant violated after {op:?}: {msg}\nrecord: {record:?}");
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_invariants_hold_after_random_ops(ops in store_ops_strategy()) {
+            prop_assert!(invariants_hold_after_random_ops(ops));
+        }
+    }
+}
