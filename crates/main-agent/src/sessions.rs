@@ -10,10 +10,17 @@
 //! * **The store is the source of truth.** Every turn rehydrates the conversation from the store
 //!   (the server holds no conversation state), so any host instance over the same store sees the
 //!   same history — horizontal scaling and process restarts are free.
-//! * **A turn persists only on success.** New messages are written *after* the turn returns `Ok`, so
-//!   a cancelled or errored turn writes nothing. The in-memory [`Conversation`] already rolls a
-//!   dropped streaming turn back to a clean history; pairing that with append-on-success means the
-//!   store can never hold a half-finished turn (e.g. an assistant `tool_calls` with no results).
+//! * **A turn's *reply* persists only on success.** The assistant/tool tail is written *after* the
+//!   turn returns `Ok`, so a cancelled or errored turn leaves no partial answer. The in-memory
+//!   [`Conversation`] already rolls a dropped streaming turn back to a clean history; pairing that
+//!   with append-on-success means the store can never hold a half-finished turn (e.g. an assistant
+//!   `tool_calls` with no results).
+//!
+//!   **The user's own message is the exception, and is written before the turn runs.** It used to be
+//!   part of the same all-or-nothing tail, which meant an abandoned turn discarded the one thing in
+//!   the exchange nobody can reproduce — what the person typed. A lone user message cannot create
+//!   the incoherence this rule guards against; it is simply an unanswered question. See
+//!   [`ChatSessions::persist_user_message`].
 //!
 //! We depend on the [`ConversationStore`] *trait*, never a concrete store: the composition root
 //! injects the engine (JSONL today, SQLite/Postgres later) so it stays swappable.
@@ -568,7 +575,9 @@ impl ChatSessions {
     }
 
     /// One non-streaming turn: rehydrate, run the agent over the full history, and — on success —
-    /// persist the turn's new messages. A failed turn (the `?` short-circuit) persists nothing.
+    /// persist the turn's new messages. A failed turn (the `?` short-circuit) persists no *reply*;
+    /// the user's own message is already durable by then, deliberately — see
+    /// [`persist_user_message`](Self::persist_user_message).
     ///
     /// When guard configuration is attached, the tool-advisor runs before the turn to select
     /// relevant MCPs, and the runtime is wrapped in [`RiskGatedToolRuntime`] for safety checks.
@@ -579,6 +588,11 @@ impl ChatSessions {
         let (nodes, parent_leaf) = self.load(session).await?;
         let (mut convo, parent_leaf) = self.maybe_compact(session, nodes, parent_leaf, user).await;
         let before = convo.len();
+        // Before a single token is spent: whatever happens to this turn, what the human typed
+        // survives it. The replies still chain off this node, so ordering is unchanged.
+        let parent_leaf = self
+            .persist_user_message(session, user, parent_leaf)
+            .await?;
 
         // Read per turn, not cached: a profile switch mid-conversation takes effect on the next
         // turn, which is the whole of "switchable" — no restart, no reconnect.
@@ -628,8 +642,12 @@ impl ChatSessions {
                 }
             }
         };
-        self.persist_tail(session, convo.turn_tail(before), parent_leaf)
-            .await?;
+        self.persist_tail(
+            session,
+            tail_after_user(convo.turn_tail(before)),
+            parent_leaf,
+        )
+        .await?;
         Ok(reply)
     }
 
@@ -637,9 +655,13 @@ impl ChatSessions {
     /// but emits [`AgentEvent`]s over `events` as the turn runs.
     ///
     /// On cancellation the caller drops this whole future before `persist_tail` runs, so — exactly
-    /// as in the non-streaming path — nothing is written. The in-memory rollback in
-    /// [`Conversation::turn_stream`] keeps the local history clean too; together they guarantee a
-    /// stopped turn is a no-op against the store.
+    /// as in the non-streaming path — no *reply* is written. The in-memory rollback in
+    /// [`Conversation::turn_stream`] keeps the local history clean too.
+    ///
+    /// The user's message is the deliberate exception: it is written before the turn starts, so
+    /// closing the tab mid-answer no longer discards the question. This is the path that made that
+    /// necessary — a browser `EventSource` closes when its component unmounts, which switching to
+    /// another tab in the WebUI does, and every such turn used to vanish entirely.
     ///
     /// When guard configuration is attached, the tool-advisor runs before the turn to select
     /// relevant MCPs, and the runtime is wrapped in [`RiskGatedToolRuntime`] for safety checks.
@@ -655,6 +677,11 @@ impl ChatSessions {
         let (nodes, parent_leaf) = self.load(session).await?;
         let (mut convo, parent_leaf) = self.maybe_compact(session, nodes, parent_leaf, user).await;
         let before = convo.len();
+        // Durable before the first token is streamed — a turn the client abandons still leaves the
+        // question behind it.
+        let parent_leaf = self
+            .persist_user_message(session, user, parent_leaf)
+            .await?;
 
         let settings = self.turn_settings(session).await;
         let executor = self.executor.with_model(settings.model.clone());
@@ -704,8 +731,12 @@ impl ChatSessions {
                 }
             }
         }
-        self.persist_tail(session, convo.turn_tail(before), parent_leaf)
-            .await?;
+        self.persist_tail(
+            session,
+            tail_after_user(convo.turn_tail(before)),
+            parent_leaf,
+        )
+        .await?;
         Ok(())
     }
 
@@ -1359,6 +1390,41 @@ impl ChatSessions {
 
     /// Append a turn's new messages as a linear chain off `parent`, threading each appended node's
     /// id as the next one's parent so the on-disk DAG stays a straight line for a linear chat.
+    /// Write the human's message the moment it arrives, before any inference runs, and return the
+    /// node it became so the turn's replies chain onto it.
+    ///
+    /// This is the one exception to persist-on-success (see the module docs), and it exists because
+    /// the rule had an asymmetric cost. A turn that never finishes — the browser tab switched away,
+    /// the phone slept, the connection dropped — used to write nothing, which threw away the only
+    /// part of the exchange that cannot be regenerated: what the person typed. Observed live
+    /// 2026-08-01: a conversation whose log held a header, a system prompt, and a title *derived
+    /// from* a user message that was never stored, so the sidebar advertised a chat with no content.
+    ///
+    /// The property persist-on-success actually protects is transcript coherence — never an
+    /// assistant `tool_calls` with no matching results. A lone user message does not threaten that:
+    /// it is an unanswered question, which is a legal transcript and a true account of what
+    /// happened. The assistant/tool tail still lands only on success.
+    async fn persist_user_message(
+        &self,
+        session: Ulid,
+        user: &str,
+        parent: Option<Ulid>,
+    ) -> SessionResult<Option<Ulid>> {
+        let message = Message::user(user);
+        let node = self
+            .store
+            .append(
+                session,
+                NewNode {
+                    parent_id: parent,
+                    author: Author::from_role(message.role),
+                    message,
+                },
+            )
+            .await?;
+        Ok(Some(node.id))
+    }
+
     async fn persist_tail(
         &self,
         session: Ulid,
@@ -1380,6 +1446,20 @@ impl ChatSessions {
             parent = Some(node.id);
         }
         Ok(())
+    }
+}
+
+/// A turn's tail with the leading user message dropped, because it is already durable —
+/// [`ChatSessions::persist_user_message`] wrote it before the turn ran.
+///
+/// Every path into a turn (`Conversation::turn`, `turn_stream`, `answer`) pushes the user's message
+/// first, and `turn_tail` already accounts for transient system injections, so the head of the tail
+/// is that message. If it somehow is not, the whole tail is kept: a duplicated message is a visible,
+/// recoverable annoyance, and a dropped one is silent data loss.
+fn tail_after_user(tail: &[Message]) -> &[Message] {
+    match tail.split_first() {
+        Some((first, rest)) if first.role == Role::User => rest,
+        _ => tail,
     }
 }
 
