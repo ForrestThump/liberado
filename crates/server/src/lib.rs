@@ -997,6 +997,14 @@ impl ChatPromptPreview {
                 "  note:       '{mcp}' is a whole-server grant; its tools resolve at runtime"
             );
         }
+        // Says ceiling, not turn. `chat turn: tool surface` logs what a turn *actually* held after
+        // the dispatcher narrows to the goal's relevant MCPs, and the two legitimately differ — a
+        // basic-chat profile listing three tools ran a turn holding two (live, 2026-08-01). Without
+        // this line, someone comparing the two concludes the inspector is lying.
+        let _ = writeln!(
+            out,
+            "  scope:      the profile's ceiling; a turn may hold fewer after per-goal narrowing"
+        );
         let _ = writeln!(out, "\n{rule}");
         let _ = writeln!(out, "{}", self.system_messages.join("\n\n"));
         let _ = writeln!(out, "{rule}");

@@ -260,6 +260,21 @@ impl ApprovalBot {
         }
     }
 
+    /// Which terminal state a proposal was archived into, if it was.
+    ///
+    /// The daemon files a finished proposal under `proposals/archive/<outcome>/`, so an absent
+    /// active note usually means *resolved*, not *missing*. Distinguishing them is what lets a
+    /// stale tap get a true answer instead of an alarming one.
+    async fn archived_outcome(&self, stem: &str) -> Option<&'static str> {
+        for outcome in ["approved", "rejected", "expired"] {
+            let path = format!("{PROPOSALS_DIR}/archive/{outcome}/{stem}.md");
+            if self.vault.read(&path).await.is_ok() {
+                return Some(outcome);
+            }
+        }
+        None
+    }
+
     async fn ack(&self, event_id: &str, text: &str) {
         if let Err(e) = self.channel.acknowledge(event_id, text).await {
             tracing::warn!(error = %e, "acknowledge failed");
@@ -382,8 +397,26 @@ impl ApprovalBot {
         let content = match self.vault.read(&path).await {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!(stem, error = %e, "approval-bot: proposal not found");
-                self.ack(event_id, "Proposal not found.").await;
+                // The common case is not a missing file: the daemon archives a proposal the moment
+                // it reaches a terminal state, so a second tap on a notification that is still on
+                // screen reads the active dir and finds nothing. Reporting that as a vault I/O
+                // error sent a real debugging session (2026-08-01) looking for a storage fault that
+                // did not exist, and told the operator "Proposal not found" about a proposal that
+                // had been approved seconds earlier.
+                match self.archived_outcome(stem).await {
+                    Some(outcome) => {
+                        tracing::info!(
+                            stem,
+                            outcome,
+                            "approval-bot: proposal already resolved and archived; nothing to do"
+                        );
+                        self.ack(event_id, &format!("Already {outcome}.")).await;
+                    }
+                    None => {
+                        tracing::warn!(stem, error = %e, "approval-bot: proposal not found");
+                        self.ack(event_id, "Proposal not found.").await;
+                    }
+                }
                 return;
             }
         };
@@ -856,6 +889,48 @@ mod tests {
         );
         let request = build_revision_request(&proposal, "a note", 0.4);
         assert_eq!(request.temperature, Some(0.4));
+    }
+
+    /// A tap on a notification whose proposal has since been archived is the *normal* case, not a
+    /// storage fault: the daemon archives the moment a proposal goes terminal, and the Telegram
+    /// message stays on screen. Live on 2026-08-01 this logged a vault I/O error three times and
+    /// told the operator "Proposal not found" about something approved seconds earlier.
+    #[tokio::test]
+    async fn an_archived_proposal_is_reported_as_resolved_not_missing() {
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open("test", dir.path()).await.unwrap();
+        let signer = ProposalSigner::random();
+        let bot = test_bot(
+            vault.clone(),
+            signer,
+            Arc::new(MockProvider::with_script(
+                "m",
+                Vec::<CompletionResponse>::new(),
+            )),
+        );
+
+        // Nothing anywhere yet: genuinely missing.
+        assert_eq!(bot.archived_outcome("prop-1").await, None);
+
+        // Archived where the daemon puts a terminal proposal.
+        vault
+            .write(
+                "proposals/archive/approved/prop-1.md",
+                "---
+id: prop-1
+---
+",
+                None,
+                &liberado_common::WriteProvenance::human(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            bot.archived_outcome("prop-1").await,
+            Some("approved"),
+            "an archived proposal must be recognised as resolved, so a stale tap gets a true answer"
+        );
     }
 
     fn test_bot(vault: Vault, signer: ProposalSigner, provider: Arc<dyn Provider>) -> ApprovalBot {
