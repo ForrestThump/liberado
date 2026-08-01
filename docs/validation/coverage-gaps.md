@@ -1,0 +1,213 @@
+# Coverage Gaps — Analysis
+
+Generated 2026-07-29 from `cargo llvm-cov` on the 8 hardened crates.
+
+## Real Logic Gaps (closed)
+
+Three testable gaps were identified and closed with targeted tests:
+
+| File | Lines | Gap | Fix |
+|------|-------|-----|-----|
+| `config-loader/model/config.rs:235-237` | `max_concurrent_coding_subagents == 0` validation | `zero_coding_concurrency_fails_validate` |
+| `config-loader/model/config.rs:240-242` | `max_reaction_depth == 0` validation | `zero_reaction_depth_fails_validate` |
+| `config-loader/model/config.rs:494-498` | Profile-scoped undeclared zone rejection | `profile_referencing_undeclared_zone_fails_validate` |
+
+The `OrchestratorInfra` constructor/builder methods (orchestrator/src/lib.rs:306-366) are also uncovered but are exercised by the daemon boot path, not by unit/integration tests which construct `Orchestrator` directly.
+
+## Infrastructure-Bound Gaps (would need new test scaffolding)
+
+These are real code paths uncovered because they depend on I/O, network, or process state that current test infrastructure cannot mock.
+
+### IO / Filesystem
+
+| Crate | Lines | What it needs |
+|-------|-------|---------------|
+| `config/src/lib.rs` | ~90 lines | `config_dir`, `load_section`, `load_or_create_proposal_key`, grant overlay read/write — all read from env vars (`CONFIG_DIR`, `HOME`/`APPDATA`) and the real filesystem |
+| `executor/risk_gated.rs:507-532` | ~20 lines | Proposal `create_dir_all` / `write` failure paths — would need `tempfile` + injectable I/O errors |
+| `session/store.rs:92-151` | ~15 lines | Disk rehydration — log file reads, truncation handling |
+| `session/store.rs:236,252,284` | ~5 lines | File I/O error branches during durable writes |
+| `config-loader/file_source.rs:36-38` | 3 lines | `std::fs::read_to_string` error path |
+
+### Network / API Dependencies
+
+| Crate | Lines | What it needs |
+|-------|-------|---------------|
+| `provider/latency.rs:148-169` | ~8 lines | `MeteredProvider::wrap` + `list_models` passthrough — exercised only with a live Provider |
+| `session/hub.rs:72` | 1 line | `SendInputError::Closed` Display impl — only reachable after the input channel is explicitly closed |
+| `notify/src/lib.rs` | ~112 lines | 49 functions uncovered — all go through the real Telegram API (captured via config-gated `#[cfg(test)]` flag) |
+
+### Clock / Timer
+
+| Crate | Lines | What it needs |
+|-------|-------|---------------|
+| `common/catalog.rs:138,305,394-396,661` | 6 lines | `degraded` TTL purge — `Instant::now()` comparison at exact boundaries |
+| `executor/lib.rs:799-803` | 3 lines | Tracing guard around model reasoning log — `tool_count > 0` |
+| `session/hub.rs:249-282` | ~15 lines | `await_terminal` — subscription + timeout loop; needs concurrent event injection |
+
+## Tracing / Diagnostic Only
+
+These are `tracing::info!`, `tracing::warn!`, or format-string-only functions. They have no return value and no behavioral effect outside the log. Catching them would require a log-capture framework.
+
+| Crate | Lines | What |
+|-------|-------|------|
+| `orchestrator/lib.rs:600-604` | 5 lines | Delivery downgrade info log |
+| `executor/risk_gated.rs:182-191` | 10 lines | `authority_decision` — structured security log |
+| `executor/risk_gated.rs:196-203` | 5 lines | MCP missing-from-catalog warning |
+| `executor/lib.rs:799-803` | 3 lines | Model reasoning tracing guard |
+| `common/dispatch.rs:160-166,221-226` | 12 lines | `Depth::label`, `Delivery::label` |
+| `provider/latency.rs:42,116,252` | 3 lines | `AgentRole::as_str` Display, `NoopRecorder` record |
+
+## Defaults / Serde Helpers
+
+Constant functions used as `#[serde(default = "...")]` field defaults or getter shorthands. Testing them would mean duplicating the constant in test code, which asserts nothing.
+
+| Crate | Lines | What |
+|-------|-------|------|
+| `config-loader/topology.rs:119-125` | 5 lines | `default_path_arg` ("path"), `default_content_arg` ("content") |
+| `config-loader/builder.rs:83-86` | 4 lines | `ConfigBuilder::schedule` — unused builder setter |
+| `common/model.rs:36-43` | 7 lines | `ReasoningLevel::as_str` — each variant's string label |
+| `common/session_grants.rs:85-88` | 3 lines | `SessionRecordStore` trait default impls |
+
+## Dead Code in Test Context
+
+Code that is exercised by the daemon binary, not by unit/integration tests.
+
+| Crate | Lines | What |
+|-------|-------|------|
+| `orchestrator/lib.rs:306-366` | 60 lines | `OrchestratorInfra::new`, `with_report_sink`, `with_research_max_turns`, `for_pool` |
+| `provider/provider.rs:38-40,69,71` | 5 lines | `Provider::set_model` default no-op, `list_models` default |
+| `provider/types.rs:156-163` | 7 lines | `without_json_schema` — the degraded retry path for a backend that rejects `json_schema` |
+| `session/record_store.rs:85-88` | 3 lines | Trait default `subscribe`/`live_subscriber_count` |
+
+## Summary
+
+| Category | Lines | What it needs |
+|----------|-------|--------------|
+| **Real logic gaps** (closed) | 9 lines | Targeted unit tests |
+| **IO / filesystem** | ~140 lines | Filesystem/environment mocking |
+| **Network / API** | ~120 lines | HTTP server stubs, live API tokens |
+| **Tracing-only** | ~30 lines | Log-capture framework |
+| **Defaults / serde** | ~20 lines | Duplicate constants in tests (no value) |
+| **Dead code in tests** | ~80 lines | Integration test covering daemon composition root |
+
+## Real Bugs Found During Coverage Analysis
+
+### ~~`budget_failed_report` ignores `exhausted_name`~~ — **fixed 2026-07-31**
+
+Discovered while writing the non-zero wall-clock budget test below. The test expected `"wall-clock"` in the report summary, but `budget_failed_report` hardcodes `"turns"` regardless of which resource actually exhausted.
+
+The turn loop computes `exhausted_name` (turns, wall-clock, or tokens) but the `execute` method's catch block at line 463 calls `budget_failed_report(turns)` which discards the resource name:
+
+```rust
+// lib.rs:463 (currently)
+Err(ExecError::BudgetExceeded { turns }) => {
+    Ok(budget_failed_report(turns))
+}
+```
+
+`budget_failed_report_named(resource, turns)` exists at line 1094 but is only used in `budget_failed_report_with_progress` — never in the primary `execute` path.
+
+**Test that caught it:**
+
+```rust
+#[tokio::test]
+async fn wall_clock_limit_exhausts_at_exact_non_zero_boundary() {
+    let t0 = std::time::Instant::now();
+    liberado_common::clock::test_freeze_at(t0);
+
+    let (provider, exec) = executor(
+        vec![submit(valid_report_args())],
+        Budget::new(10).with_wall_clock(std::time::Duration::from_secs(1)),
+    );
+
+    liberado_common::clock::test_advance(std::time::Duration::from_secs(1));
+
+    let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+    let report = exec
+        .execute(&runtime, Task::new("worker", "do it"))
+        .await
+        .unwrap();
+
+    assert_eq!(report.outcome, Outcome::Failed);
+    // BUG: budget_failed_report hardcodes "turns" — this assertion fails
+    // because the report says "turns" even though wall-clock was the real
+    // exhausted resource.
+    //
+    // Expected but not yet true:
+    //   assert!(report.summary.contains("wall-clock"));
+    liberado_common::clock::test_thaw();
+}
+```
+
+**Note:** The FrozenClock cannot inject time between `run_started` capture and the budget check within the same loop iteration, so this test relies on the zero-boundary behavior (same as `Duration::ZERO`). A true mid-run exhaustion test would require structural changes to the loop.
+
+**Impact:** When wall-clock or token budget is exhausted, the report claims the turn budget ran out instead of the actual resource. A developer debugging the report or a model reading it would misdiagnose the failure.
+
+**Fixed**, and the diagnosis needed one correction. `Mode::Report` — the path `execute` takes — was
+already correct: it calls `budget_failed_report_with_progress(exhausted_name, …)`, which is why the
+`Duration::ZERO` test asserting `"wall-clock"` passed all along. The name was dropped only on
+`Mode::Conversational`, which raises `ExecError::BudgetExceeded` and reaches chat as *"exceeded the
+N-turn budget"* however the run actually ended. Real, user-visible, and in a different place than
+written up here. `BudgetExceeded` now carries `resource: &'static str`, and `ResourceLimit::name`
+returns `&'static str` so the label can outlive the borrow of the limit.
+
+**The reason the test could not be un-ignored was separate and larger.** `usage.elapsed` was
+`run_started.elapsed()` — real time — while `run_started` came from `clock::now()`. The timer was
+half-injected: freezing moved the start and not the end, so advancing the clock changed nothing and
+no wall-clock exhaustion was reachable in a test. That is worse than an uninjected timer, because it
+looks controllable. Both ends are now on `clock::now()`, and the test is un-ignored and passing —
+verified to fail again if only that line is reverted.
+
+Two things the test needed beyond the fix, both properties of the loop rather than bugs: the budget
+is checked at the *top* of an iteration, so turn 1 always sees zero elapsed and the run must reach a
+second turn; and time has to pass *inside* the run, since a test can only advance the clock before
+`execute` is entered, which moves `run_started` with it. A `SlowProvider` double consumes the budget
+where the work happens.
+
+## Test-Code Deduplication Analysis (2026-07-30)
+
+`cargo dupes` found 244 exact-duplicate groups (6,351 lines) and 66 near-duplicate groups (1,729 lines) across the workspace.
+
+### Approaches Evaluated
+
+#### Option A: Move test doubles into `liberado-common`
+
+**Pro:** Every crate already depends on common — zero new dev-deps required.
+**Con:** Common has zero workspace deps today. Adding test doubles that need `liberado-executor`,
+`liberado-provider`, `liberado-notify`, or `liberado-messaging` creates a circular dependency
+(those crates depend on common).
+
+**Verdict:** Infeasible for anything beyond common's own types (`SampleProposal`, `SampleMcpDescriptor`).
+
+#### Option B: Keep the dedicated `liberado-test-support` crate (current approach)
+
+**Pro:** Clean dependency graph. 6 crates already use it (orchestrator, daemon, server, telegram-approvals,
+dispatch-pack, test-support itself). Zero production code pollution.
+**Con:** Every consuming crate must add the dev-dep manually. Orphan-rule friction when a local trait
+(`RebindableRuntime` in mcp) needs to be implemented on a test-support type.
+
+**Verdict:** Best option available. The remaining test-code duplication is all in test modules that
+would need local trait impls regardless of where the struct lives.
+
+### Remaining Duplication in Hardened Crates
+
+| Pattern | Copies | Why not consolidated |
+|---------|:------:|---------------------|
+| `NoopRuntime` + `impl ToolRuntime` | 5+ | Already in test-support; local copies where test-support isn't a dev-dep (mcp, main-agent) |
+| `vault_descriptor` | 3 | Private test helper; extractable as `pub fn sample_vault_descriptor() -> McpDescriptor` in common |
+| `NoopFactory` | 2 | Semantically different: one returns `unreachable!()`, other returns `Err(...)` |
+| `granted_tools`/`granted_mcps` | 1 | **Fixed** — consolidated via `matching_names` helper |
+
+### Production Dedup Applied
+
+`CapabilitySet::granted_tools` and `CapabilitySet::granted_mcps` were 14 lines of near-identical
+code differing only by variant name. Consolidated via a private `matching_names` helper that takes
+a predicate.
+
+### Code Decomposition for Testability
+
+The `looks_like_a_path` closure (12 lines, pure, zero captures) was extracted from inside
+`scope_names_a_file` into a named function. The extraction itself yielded no new mutation kills —
+it confirmed that the surviving operators (`>`, `!=`, `&&`) are false positives because no valid
+filename input can distinguish them — but it makes the function testable when future boundary
+conditions are added.

@@ -47,7 +47,7 @@ and **hands back** the structured artifact in one event — no second "structuri
   actually remove the offending tool(s) from what's callable for the rest of the task (with a
   one-time, bounded turn-budget top-up — `DOOM_LOOP_RECOVERY_BONUS_TURNS` — since removal arriving on
   the very last turn can never pay off otherwise), then give up honestly if it still persists. See
-  `docs/roadmap/multi-step-execution-reliability-finding.md`'s "Follow-up session" for the live
+  `docs/future-work/archive/multi-step-execution-reliability-finding.md`'s "Follow-up session" for the live
   evidence (real models get stuck this way; a nudge alone doesn't reliably redirect them) and why
   each step is shaped the way it is.
 - **Seed calls** — `ExecuteDirect`'s opening move is executed as a synthetic first turn, then the
@@ -82,4 +82,4 @@ stuck repeating the same tool call with reworded-but-same-intent arguments — a
 with the doom-loop guard described above, live-verified going from 0/6 to 5/6 on the original failing
 scenario across two models. Full narrative, evidence, and the one remaining open gap (a fast-finish
 timing case, not a loop) in
-[`docs/roadmap/multi-step-execution-reliability-finding.md`](../../docs/roadmap/multi-step-execution-reliability-finding.md).
+[`docs/future-work/archive/multi-step-execution-reliability-finding.md`](../../docs/future-work/archive/multi-step-execution-reliability-finding.md).

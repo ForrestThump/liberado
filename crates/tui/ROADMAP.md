@@ -1,7 +1,7 @@
 # liberado-tui — Roadmap
 
 **Canonical maturity plan (2026-07-10):**  
-[`docs/roadmap/tui-maturity-roadmap.md`](../../docs/roadmap/tui-maturity-roadmap.md)
+[`docs/future-work/tui-maturity-roadmap.md`](../../docs/future-work/tui-maturity-roadmap.md)
 
 That document is the living audit vs Claude Code / Grok Build / OpenCode / KiloCode / VTCode and the
 phased plan (T0–T8): performance, **goal-session mode**, freeze/verifiers UI, coding density, palette,

@@ -3,8 +3,8 @@
 **Role in the system:** this crate is the **coding domain pack's** goal-session composition — not
 Liberado's orchestration kernel. Shared kernel pieces are `liberado-executor`, `liberado-provider`,
 `liberado-common`, and (later) domain-neutral session types. See
-[`docs/architecture/agentic-loops.md`](../../docs/architecture/agentic-loops.md) and
-[`docs/roadmap/agentic-mesh-hygiene-audit-2026-07-10.md`](../../docs/roadmap/agentic-mesh-hygiene-audit-2026-07-10.md).
+[`docs/spec/architecture/agentic-loops.md`](../../docs/spec/architecture/agentic-loops.md) and
+[`docs/future-work/archive/agentic-mesh-hygiene-audit-2026-07-10.md`](../../docs/future-work/archive/agentic-mesh-hygiene-audit-2026-07-10.md).
 
 Implements `CoderBackend`: multi-attempt outer loop over `Executor`, coding tools, deterministic
 gates, progress guards, optional critic. UIs and the PR factory must not reimplement this loop.

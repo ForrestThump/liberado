@@ -19,7 +19,7 @@ two or more crates, it lives here.
 | `error` | `Error`, `Result` | — |
 
 The typed config model (`Config`/`Topology`/`Policy`/`Tuning`) used to live here as a `config`
-module — moved to `liberado-config-loader` 2026-07-04 (`docs/roadmap/hygiene-audit-2026-07-04.md`,
+module — moved to `liberado-config-loader` 2026-07-04 (`docs/future-work/archive/hygiene-audit-2026-07-04.md`,
 re-exported from `liberado-config`) to avoid a dependency cycle: `liberado-config-loader`'s own
 cross-cutting validation needs the type, and `liberado-config` already depends on
 `liberado-config-loader`. Nothing in this crate reaches for it, so it doesn't belong in the shared

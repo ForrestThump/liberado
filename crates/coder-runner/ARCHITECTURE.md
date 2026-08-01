@@ -7,7 +7,7 @@ The binary accepts a serialized `CoderRunRequest` from `liberado-coder-core` and
 `CoderRunResult` to stdout. Diagnostics and tracing logs go to stderr. This keeps process callers
 such as `liberado-pr-dispatch-mcp` from linking directly against the in-process loop stack, while the
 future TUI/API can still use `liberado-coder-agent` as a normal library (see
-[`docs/architecture/agentic-loops.md`](../../docs/architecture/agentic-loops.md)).
+[`docs/spec/architecture/agentic-loops.md`](../../docs/spec/architecture/agentic-loops.md)).
 
 ## Current Contract
 
