@@ -670,7 +670,6 @@ mod tests {
 #[cfg(test)]
 mod proptest_tests {
     use super::*;
-    use crate::Zone;
     use proptest::prelude::*;
     use proptest::strategy::Strategy;
 
