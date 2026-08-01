@@ -8,6 +8,11 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+# Exposes the freezable clock to *other* crates' tests via a dev-dependency. Never enable in a
+# normal build: it puts a lock on every `clock::now()` and makes TTL expiry freezable at runtime.
+test-clock = []
+
 [dependencies]
 async-trait = { workspace = true }
 serde = { workspace = true }

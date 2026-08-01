@@ -2631,14 +2631,14 @@ mod tests {
     #[ignore = "FrozenClock limitation + budget_failed_report bug (see docs/coverage-gaps.md)"]
     async fn wall_clock_limit_exhausts_at_exact_non_zero_boundary() {
         let t0 = std::time::Instant::now();
-        liberado_common::clock::test_freeze_at(t0);
+        let clock = liberado_common::clock::test_freeze_at(t0);
 
         let (_provider, exec) = executor(
             vec![submit(valid_report_args())],
             Budget::new(10).with_wall_clock(std::time::Duration::from_secs(1)),
         );
 
-        liberado_common::clock::test_advance(std::time::Duration::from_secs(1));
+        clock.advance(std::time::Duration::from_secs(1));
 
         let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
         let report = exec
@@ -2647,7 +2647,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(report.outcome, Outcome::Failed);
-        liberado_common::clock::test_thaw();
+        // `clock` thaws on drop here — including if the assertion above panics.
     }
 
     #[tokio::test]

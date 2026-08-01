@@ -803,20 +803,18 @@ mod tests {
         catalog.register(sample_descriptor("weather"));
 
         let t0 = std::time::Instant::now();
-        crate::clock::test_freeze_at(t0);
+        let clock = crate::clock::test_freeze_at(t0);
         catalog.mark_degraded("weather");
         assert!(catalog.is_degraded("weather"));
 
         let ttl = Duration::from_secs(5);
         catalog.set_degraded_half_open_ttl(ttl);
-        crate::clock::test_advance(ttl);
+        clock.advance(ttl);
 
         assert!(
             !catalog.is_degraded("weather"),
             "must be purged at exact TTL boundary"
         );
-
-        crate::clock::test_thaw();
     }
 }
 
