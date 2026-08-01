@@ -3514,3 +3514,55 @@ async fn a_daemon_with_no_ledger_executes_nothing() {
         "no ledger means no authority to execute under"
     );
 }
+
+/// A **permission request** is a proposal, and `handle_proposal_change` is what runs the blocked
+/// call, so it passes the same ledger gate as any other. This nearly shipped broken: the ledger was
+/// wired into the bot's ordinary approve path and not its permission path, which would have flipped
+/// the note, then had the daemon refuse it — a tap that appeared to do nothing.
+#[tokio::test]
+async fn a_permission_request_also_needs_a_recorded_decision() {
+    use liberado_common::{
+        Capability, Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall, Zone,
+    };
+
+    let signer = ProposalSigner::random();
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon.with_proposal_signer(signer.clone());
+    std::fs::create_dir_all(dir.path().join("proposals")).unwrap();
+
+    let proposal = Proposal::pending(
+        "perm-gated",
+        "corr-perm",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "needs permission" }),
+        }]),
+        "a permission request",
+    )
+    .with_requested_grant(Capability::Write(Zone::vault("sandbox")));
+    let mut proposal = signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+
+    let rel = Path::new("proposals/perm-gated.md");
+    daemon
+        .vault
+        .write(rel, &proposal.to_note(), None, &WriteProvenance::human())
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(
+            daemon.handle_proposal_change(rel).await.unwrap(),
+            ReactionOutcome::Observed
+        ),
+        "an approved permission note with no recorded decision must not run the blocked call"
+    );
+
+    // With the decision recorded — what a Telegram tap now writes — it is no longer refused here.
+    approve_in(&dir, "perm-gated").await;
+    assert_eq!(
+        test_ledger(&dir).decision_for("perm-gated").await,
+        Some(liberado_common::ApprovalDecision::Approved),
+    );
+}

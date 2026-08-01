@@ -368,6 +368,28 @@ impl ApprovalBot {
                 proposal.status = ProposalStatus::Approved;
             }
         }
+
+        // A permission request is a proposal, and `handle_proposal_change` is what runs the blocked
+        // call — so it passes the same ledger gate as any other. Recording here too is not optional:
+        // without it a tapped permission would flip the note, then be refused by the daemon, and the
+        // tap would appear to do nothing. Recorded before the note, for the same reason as
+        // `set_status` — the ledger is the decision, the note is its view.
+        if let Some(ledger) = &self.approvals {
+            let decision = match proposal.status {
+                ProposalStatus::Approved => Some(liberado_common::ApprovalDecision::Approved),
+                ProposalStatus::Rejected => Some(liberado_common::ApprovalDecision::Rejected),
+                _ => None,
+            };
+            if let Some(decision) = decision
+                && let Err(e) = ledger.record(&proposal.id, decision, "telegram").await
+            {
+                tracing::error!(stem, error = %e, "approval-bot: failed to record the decision");
+                self.ack(event_id, "Failed to record your decision — try again.")
+                    .await;
+                return;
+            }
+        }
+
         if let Err(e) = self
             .vault
             .write(&path, &proposal.to_note(), None, &WriteProvenance::human())
