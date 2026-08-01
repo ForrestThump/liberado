@@ -115,8 +115,15 @@ phone, where Enter is the easiest key to hit and a mis-send cannot be taken back
 
 Presentation only: it grants no authority and changes nothing about what an agent may do, which is
 why it sits at the top level rather than under `[main_agent]`. The WebUI reads it from
-`GET /api/status`; a daemon that does not report it is treated as `"send"`. Applies on reload, not
-restart — it is read by the browser, not baked into the bundle.
+`GET /api/status`; a daemon that does not report it is treated as `"send"`.
+
+**Takes a daemon restart, then a page reload — both.** Config is read at boot, so editing this file
+alone changes nothing: `/api/status` keeps reporting the old value until the container is recreated
+(verified 2026-08-01, where it did exactly that). The browser then needs a reload to pick the new
+value up. It is not baked into the wasm bundle, so no rebuild or redeploy of the WebUI is involved.
+
+`enterkeyhint` on the composer follows this setting, so a phone keyboard's action key changes with
+it — a return arrow in `"newline"`, a send glyph in `"send"`.
 
 ### MCPs — `topology.toml`
 
