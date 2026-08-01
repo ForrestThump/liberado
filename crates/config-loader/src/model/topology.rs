@@ -624,6 +624,93 @@ impl SessionProfile {
     }
 }
 
+#[cfg(test)]
+mod compaction_proptest {
+    use super::*;
+    use liberado_common::ModelTier;
+    use proptest::prelude::*;
+
+    fn model(name: &str, window: u32) -> ModelProfile {
+        ModelProfile {
+            name: name.into(),
+            tool_calling: true,
+            structured_output: false,
+            context_window: window,
+            tier: ModelTier::WorkPlane,
+            cost: None,
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_pct_of_window_bounds(
+            (window, pct) in (0u32..100000, 0.0f32..1.0),
+        ) {
+            let result = pct_of_window(window, pct);
+            prop_assert!(result >= 1);
+            prop_assert!(result <= window.max(1));
+        }
+
+        #[test]
+        fn proptest_trigger_resolution_never_panics(
+            face_model in proptest::option::of("[a-z/-]{1,20}"),
+            window in 1000u32..200000,
+            global_pct in 0.0f32..1.0,
+            global_abs in proptest::option::of(1u32..100000),
+        ) {
+            let c = CompactionSettings {
+                trigger_pct: global_pct,
+                trigger_tokens: global_abs,
+                ..CompactionSettings::default()
+            };
+            let models = if let Some(ref name) = face_model {
+                vec![model(name, window)]
+            } else {
+                vec![]
+            };
+            let result = c.resolve_trigger_tokens(face_model.as_deref(), &models);
+            prop_assert!(result >= 1);
+        }
+
+        #[test]
+        fn proptest_trigger_with_source_priority(
+            face_name in "[a-z]{1,10}",
+            window in 1000u32..200000,
+            per_abs in proptest::option::of(1u32..100000),
+            per_pct in proptest::option::of(0.0f32..1.0),
+            global_abs in proptest::option::of(1u32..100000),
+            global_pct in 0.0f32..1.0,
+        ) {
+            let mut settings = CompactionSettings {
+                trigger_pct: global_pct,
+                trigger_tokens: global_abs,
+                ..CompactionSettings::default()
+            };
+            if let Some(pct) = per_pct {
+                settings.models.insert(
+                    face_name.clone(),
+                    ModelCompactionSettings {
+                        trigger_pct: Some(pct),
+                        trigger_tokens: per_abs,
+                    },
+                );
+            } else if let Some(abs) = per_abs {
+                settings.models.insert(
+                    face_name.clone(),
+                    ModelCompactionSettings {
+                        trigger_pct: None,
+                        trigger_tokens: Some(abs),
+                    },
+                );
+            }
+            let models = vec![model(&face_name, window)];
+            let (tokens, _source) = settings
+                .resolve_trigger_tokens_with_source(Some(&face_name), &models);
+            prop_assert!(tokens >= 1);
+        }
+    }
+}
+
 /// A configured cron schedule: wiring only (Decision 14) — the daemon-assembly layer
 /// (`liberado-bootstrap`) translates enabled entries into `liberado-cron`'s runtime `Schedule`
 /// type. `cron_expr` uses the `cron` crate's 6/7-field syntax (**seconds first** — not standard

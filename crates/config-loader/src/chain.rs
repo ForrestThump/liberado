@@ -365,3 +365,40 @@ mod tests {
         assert!(value.is_some(), "pushed source should produce content");
     }
 }
+
+#[cfg(test)]
+mod proptest_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn arb_toml_value() -> BoxedStrategy<toml::Value> {
+        let leaf = prop_oneof![
+            any::<String>().prop_map(toml::Value::String),
+            any::<i64>().prop_map(toml::Value::Integer),
+            any::<bool>().prop_map(toml::Value::Boolean),
+        ];
+        let base = leaf.clone();
+        base.prop_recursive(3, 10, 5, move |inner| {
+            let table =
+                proptest::collection::vec(("[a-z]{1,6}", inner.clone()), 0..4).prop_map(|pairs| {
+                    let mut map = toml::map::Map::new();
+                    for (k, v) in pairs {
+                        map.insert(k, v);
+                    }
+                    toml::Value::Table(map)
+                });
+            let array = proptest::collection::vec(inner, 0..4).prop_map(toml::Value::Array);
+            prop_oneof![leaf.clone(), table, array].boxed()
+        })
+        .boxed()
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_merge_idempotent(v in arb_toml_value()) {
+            let mut base = v.clone();
+            merge_tables(&mut base, v.clone());
+            prop_assert_eq!(base, v);
+        }
+    }
+}

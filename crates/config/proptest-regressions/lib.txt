@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 3a2ac0b657ca45b34760f40c8b528161da1a4d4601ca54800bc6bfe2459af090 # shrinks to base_zones = [("4", AgentWritable), ("4", HumanOnly)], overlay_zones = []

@@ -1190,3 +1190,64 @@ transport = { kind = "stdio", command = "tasks-mcp", args = [] }
         );
     }
 }
+
+#[cfg(test)]
+mod overlay_proptest {
+    use liberado_common::WriteClass;
+    use liberado_config_loader::{Policy, ZonePolicy};
+    use proptest::prelude::*;
+
+    fn arb_write_class() -> impl Strategy<Value = WriteClass> {
+        prop_oneof![
+            Just(WriteClass::AgentWritable),
+            Just(WriteClass::HumanOnly),
+            Just(WriteClass::ProposalOnly),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_overlay_never_downgrades_base_zone(
+            zones in proptest::collection::vec(
+                ("[a-zA-Z0-9]{1,20}", arb_write_class()),
+                1..10,
+            ),
+        ) {
+            let mut policy = Policy {
+                zones: zones.iter().map(|(name, class)| ZonePolicy {
+                    zone: name.clone(),
+                    write_class: *class,
+                }).collect(),
+                ..Policy::default()
+            };
+
+            let overlay_zones: Vec<ZonePolicy> = zones.iter()
+                .map(|(name, _)| ZonePolicy {
+                    zone: name.clone(),
+                    write_class: WriteClass::AgentWritable,
+                })
+                .collect();
+            let overlay = Policy {
+                zones: overlay_zones,
+                ..Policy::default()
+            };
+            crate::merge_overlay_into(&mut policy, overlay);
+
+            let unique: Vec<&(String, WriteClass)> = {
+                let mut seen = std::collections::HashSet::new();
+                zones.iter().filter(|(n, _)| seen.insert(n.clone())).collect()
+            };
+            for (zone_name, orig_class) in &unique {
+                let actual = policy.write_class(zone_name);
+                prop_assert_eq!(
+                    actual,
+                    *orig_class,
+                    "overlay must not downgrade zone '{}': expected {:?}, got {:?}",
+                    zone_name,
+                    orig_class,
+                    actual,
+                );
+            }
+        }
+    }
+}

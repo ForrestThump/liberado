@@ -476,6 +476,65 @@ impl CapabilitySet {
                     narrowed.grant(mine.clone());
                 }
             }
+
+            #[cfg(test)]
+            mod destructive_proptest {
+                use super::*;
+                use proptest::prelude::*;
+
+                proptest! {
+                    #[test]
+                    fn proptest_destructive_stems_always_detected(
+                        stem in proptest::sample::select(DESTRUCTIVE_STEMS),
+                        suffix in "[a-z]{0,10}",
+                    ) {
+                        let word = format!("{stem}{suffix}");
+                        prop_assert!(mentions_destructive(&word));
+                    }
+
+                    #[test]
+                    fn proptest_clear_verb_detected(
+                        follower in proptest::sample::select(CLEAR_VERB_FOLLOWERS),
+                    ) {
+                        let phrase = format!("clear {} inbox", follower);
+                        prop_assert!(mentions_destructive(&phrase));
+                    }
+
+                    #[test]
+                    fn proptest_sweeping_words_detected(
+                        word in proptest::sample::select(SWEEPING_WORDS),
+                    ) {
+                        prop_assert_eq!(assess_magnitude(word), Magnitude::Sweeping);
+                    }
+
+                    #[test]
+                    fn proptest_sweeping_destructive_combines(
+                        stem in proptest::sample::select(DESTRUCTIVE_STEMS),
+                        sweeping in proptest::sample::select(SWEEPING_WORDS),
+                    ) {
+                        let phrase = format!("{} {} notes", stem, sweeping);
+                        prop_assert!(is_sweeping_destructive(&phrase));
+                    }
+
+                    #[test]
+                    fn proptest_sweeping_without_destructive_is_false(
+                        sweeping in proptest::sample::select(SWEEPING_WORDS),
+                    ) {
+                        let phrase = format!("summarize {} my notes", sweeping);
+                        prop_assert!(!is_sweeping_destructive(&phrase));
+                    }
+
+                    #[test]
+                    fn proptest_mentions_destructive_case_insensitive(
+                        text in "[a-zA-Z ]{1,40}",
+                    ) {
+                        prop_assert_eq!(
+                            mentions_destructive(&text.to_lowercase()),
+                            mentions_destructive(&text)
+                        );
+                    }
+                }
+            }
         }
         narrowed
     }

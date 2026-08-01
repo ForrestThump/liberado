@@ -197,3 +197,58 @@ mod tests {
         assert!(UserTimezone::from_str("UTC").is_ok());
     }
 }
+
+#[cfg(test)]
+mod proptest_tests {
+    use super::*;
+    use chrono::TimeZone;
+    use proptest::prelude::*;
+    use std::str::FromStr;
+
+    static KNOWN_ZONES: &[&str] = &[
+        "UTC",
+        "America/Chicago",
+        "America/Denver",
+        "America/New_York",
+        "Europe/London",
+        "Asia/Tokyo",
+    ];
+
+    proptest! {
+        #[test]
+        fn proptest_known_zones_roundtrip(
+            name in proptest::sample::select(KNOWN_ZONES),
+        ) {
+            let tz = UserTimezone::parse(name).unwrap();
+            prop_assert_eq!(UserTimezone::parse(tz.iana_name()).unwrap(), tz);
+        }
+
+        #[test]
+        fn proptest_empty_or_whitespace_rejected(
+            spaces in "\\s+",
+        ) {
+            prop_assert!(UserTimezone::parse(&spaces).is_err());
+            prop_assert!(UserTimezone::from_str(&spaces).is_err());
+        }
+
+        #[test]
+        fn proptest_context_line_at_deterministic(
+            utc_secs in -2000000000i64..2000000000i64,
+        ) {
+            let tz = UserTimezone::default_zone();
+            let Some(dt) = chrono::Utc.timestamp_opt(utc_secs, 0).single() else {
+                return Ok(());
+            };
+            prop_assert_eq!(tz.context_line_at(dt), tz.context_line_at(dt));
+        }
+
+        #[test]
+        fn proptest_iana_name_roundtrip(
+            name in "[A-Z][A-Za-z0-9_/-]{1,30}",
+        ) {
+            if let Ok(tz) = UserTimezone::parse(&name) {
+                prop_assert_eq!(UserTimezone::parse(tz.iana_name()).unwrap(), tz);
+            }
+        }
+    }
+}
