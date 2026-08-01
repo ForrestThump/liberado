@@ -62,6 +62,18 @@ function Invoke-Native([string]$Exe, [string[]]$Arguments) {
     return $LASTEXITCODE
 }
 
+# Same, but also hands the combined output back so the caller can inspect it. Needed because dx
+# reports some failures only in its log text while still exiting 0 -- see the wasm-opt check below.
+function Invoke-NativeCapture([string]$Exe, [string[]]$Arguments) {
+    $ErrorActionPreference = "Continue"
+    $lines = & $Exe @Arguments 2>&1 | ForEach-Object {
+        $s = "$_"
+        Write-Host $s
+        $s
+    }
+    return [pscustomobject]@{ Code = $LASTEXITCODE; Text = ($lines -join "`n") }
+}
+
 $dist = Join-Path $root "target\dx\liberado-webui\release\web\public"
 
 if (-not $SkipBuild) {
@@ -78,14 +90,42 @@ if (-not $SkipBuild) {
     # has no wasm32 std, and the failure is the misleading "can't find crate for `core`".
     $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
     # dx exits 0 even when the cargo build inside it fails, so the exit code is discarded and the
-    # artifact check below is what decides. It still has to go through Invoke-Native, or dx's stderr
-    # warnings terminate the script before that check ever runs.
-    $null = Invoke-Native "dx" @("build", "-r", "-p", "liberado-webui", "--web")
+    # checks below are what decide. It still has to go through the capture helper, or dx's stderr
+    # warnings terminate the script before those checks ever run.
+    $build = Invoke-NativeCapture "dx" @("build", "-r", "-p", "liberado-webui", "--web")
+
+    # dx treats a wasm-opt crash as non-fatal: it logs `ERROR wasm-opt failed with status code ...`
+    # and then prints "Client build completed successfully" and exits 0. The bundle is still
+    # written, just unoptimized -- which is how an unoptimized wasm shipped for weeks without
+    # anyone noticing (found 2026-08-01). The log line is the only build-time signal, so read it.
+    if ($build.Text -match "wasm-opt failed") {
+        throw "dx's wasm-opt step failed - the bundle would ship unoptimized. dx reports this as an error and then exits 0, so nothing else will stop it. See the dx output above."
+    }
 }
 
 $index = Join-Path $dist "index.html"
 if (-not (Test-Path $index)) {
     throw "No bundle at $dist - the build failed. Read the dx output above for the cargo errors."
+}
+
+# Structural backstop for the check above, and the one that still applies under -SkipBuild.
+#
+# It does not depend on dx's wording: a release wasm must carry no DWARF. `.debug_*` sections mean
+# `[profile.wasm-release] strip` in the root Cargo.toml stopped taking effect -- and their presence
+# is *also* what makes binaryen crash (0xC0000409 on read, before any pass), so this one condition
+# catches both the size regression and the cause of the unoptimized bundle.
+$wasm = @(Get-ChildItem (Join-Path $dist "assets") -Filter "*.wasm" -ErrorAction SilentlyContinue)
+if ($wasm.Count -eq 0) {
+    throw "No .wasm in $dist\assets - the build produced no bundle."
+}
+foreach ($w in $wasm) {
+    # ISO-8859-1 so every byte maps to one char and the offsets stay honest; the needle is ASCII.
+    $bytes = [System.IO.File]::ReadAllBytes($w.FullName)
+    $text = [System.Text.Encoding]::GetEncoding(28591).GetString($bytes)
+    if ($text.Contains(".debug_")) {
+        throw "$($w.Name) still carries DWARF debug sections. Check that [profile.wasm-release] in Cargo.toml sets strip = `"debuginfo`" -- without it the bundle is ~22% larger and wasm-opt crashes on it."
+    }
+    Write-Host ("  {0}  {1:N0} bytes, no DWARF" -f $w.Name, $w.Length) -ForegroundColor DarkGray
 }
 
 Write-Step "Pack bundle"

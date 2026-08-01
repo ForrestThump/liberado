@@ -128,3 +128,25 @@ turbomcp-types = { path = "turbomcp/crates/turbomcp-types" }
 [profile.release]
 lto = true
 codegen-units = 1
+
+
+# The wasm bundle's profile. dx (Dioxus CLI) builds `--profile wasm-release` and injects a
+# definition for it when the manifest has none; declaring it here is the only way to add a key dx
+# does not set, and the reason we need one is `strip`.
+#
+# Without it the release wasm carried ~271 KB of DWARF — 15% of what browsers download, and
+# unreadable there. Worse, binaryen chokes on it: dx's `wasm-opt` step died with 0xC0000409
+# (STATUS_STACK_BUFFER_OVERRUN) on *read*, before running a single pass, and dx logs that as ERROR
+# and then reports "Client build completed successfully" with exit 0 — so the unoptimized bundle
+# shipped and nothing said so. Verified by bisection: wasm-opt crashes on this module at every
+# optimization level including none, and succeeds once the `.debug_*` sections are removed.
+#
+# Every key below must match what dx would otherwise inject, because declaring the profile
+# suppresses its definition entirely. `opt-level = "s"` in particular is NOT release's default of 3
+# — inheriting release without restating it grew the code section by 250 KB, a size regression
+# hidden underneath the DWARF the same change removed. Check against dx with:
+#   python -c "import json,glob; print(json.load(open(glob.glob('target/dx/.captured-args/*/liberado_webui.bin.json')[0]))['args'])"
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"   # dx's value; release's 3 costs ~250 KB here
+strip = "debuginfo"
