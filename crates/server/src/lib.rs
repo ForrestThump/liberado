@@ -302,6 +302,13 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
             p.clone(),
             config.tuning.telegram_approvals.clone(),
         )
+        // The same ledger the daemon reads. A tap is the authenticated act; the vault note it also
+        // updates is only the human-readable view of a decision recorded here.
+        .map(|b| {
+            b.with_approval_ledger(liberado_common::ApprovalLedger::new(
+                liberado_config::data_dir(),
+            ))
+        })
     {
         if state.chat.is_some() {
             // The shared slash-command catalog (also used by the TUI/WebUI), curated to the

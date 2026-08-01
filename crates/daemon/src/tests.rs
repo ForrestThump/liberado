@@ -64,8 +64,33 @@ fn format_cron_delivery_flags_non_success() {
 
 async fn temp_daemon() -> (Daemon, TempDir) {
     let dir = TempDir::new().unwrap();
-    let daemon = Daemon::open("test", dir.path()).await.unwrap();
+    let daemon = Daemon::open("test", dir.path())
+        .await
+        .unwrap()
+        // Approval authority lives outside the vault, so a fixture that executes proposals needs
+        // one attached — rooted inside the same temp dir so it dies with the test. A test that
+        // *approves* something calls `approve_in` for the matching decision; one that does not is
+        // asserting the refusal, which is the default.
+        .with_approval_ledger(test_ledger(&dir));
     (daemon, dir)
+}
+
+/// The ledger `temp_daemon` attaches, addressable from a test that needs to record a decision.
+fn test_ledger(dir: &TempDir) -> liberado_common::ApprovalLedger {
+    liberado_common::ApprovalLedger::new(dir.path().join(".approvals"))
+}
+
+/// Record the human approval a proposal needs before the daemon will run it — the ledger entry a
+/// Telegram tap would create. Without this the note's `status: approved` is only a claim.
+async fn approve_in(dir: &TempDir, proposal_id: &str) {
+    test_ledger(dir)
+        .record(
+            proposal_id,
+            liberado_common::ApprovalDecision::Approved,
+            "test",
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1358,6 +1383,8 @@ async fn daemon_executes_an_approved_proposal() {
     std::fs::create_dir_all(&proposals_dir).unwrap();
 
     let (tx, mut rx) = unbounded_channel();
+    // The note claims approval; this is the human decision that makes it real.
+    approve_in(&dir, "vault-change:test-proposal:abc").await;
     let handle = tokio::spawn(daemon.run(tx));
 
     // Let the watcher establish before writing the proposal file.
@@ -1495,6 +1522,9 @@ async fn daemon_hub_proposal_lifecycle_applies_grant() {
     std::fs::create_dir_all(&proposals_dir).unwrap();
 
     let (tx, mut rx) = unbounded_channel();
+    // The note claims approval; this is the human decision that makes it real.
+    approve_in(&dir, "vault-change:lifecycle:1").await;
+
     let handle = tokio::spawn(daemon.run(tx));
     tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -2093,8 +2123,11 @@ async fn runtime_gated_downgrade_lands_in_the_vault_and_executes_once_approved()
     let handle = tokio::spawn(daemon.run(tx));
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // The human approves — status flips, signature (over the unchanged action/id/etc.) stays
-    // valid.
+    // The human approves. Two things now, and the order is the point: the decision is recorded in
+    // the ledger — outside the vault, where no tool reaches — and the note is updated as the
+    // human-readable view of it. Flipping the note alone would authorise nothing, which is the
+    // whole reason the ledger exists.
+    approve_in(&dir, &written.id).await;
     let mut approved = written;
     approved.status = ProposalStatus::Approved;
     std::fs::write(&proposal_path, approved.to_note()).unwrap();
@@ -2629,6 +2662,9 @@ async fn handle_proposal_change_active_failed_not_expired_does_not_enter_expiry_
         .write(rel, &proposal.to_note(), None, &prov)
         .await
         .unwrap();
+
+    // The note claims approval; this is the human decision that makes it real.
+    approve_in(&dir, "vault-change:gen-fail:1").await;
 
     let _outcome = daemon.handle_proposal_change(rel).await.unwrap();
     assert!(
@@ -3361,4 +3397,120 @@ async fn concurrent_park_and_cancel_do_not_deadlock() {
     // State-machine invariants must hold after terminal.
     liberado_session::check_session_invariants(&snap.session)
         .expect("session invariants violated after concurrent cancel");
+}
+
+/// The approval field of the approval mechanism used to be writable by the thing being gated:
+/// `proposals/` is `agent_writable` in policy, and `status` sits outside the integrity signature so
+/// a human can flip it without invalidating the hash. Each is right alone. Together they meant a
+/// note claiming `status: approved` *was* the authorisation.
+///
+/// It no longer is. Authority is a ledger under `<LIBERADO_DATA_DIR>/`, which no MCP mounts and no
+/// tool addresses; the note is a view.
+#[tokio::test]
+async fn an_approved_note_without_a_recorded_decision_does_not_execute() {
+    use liberado_common::{
+        ApprovalDecision, ApprovalLedger, Proposal, ProposalSigner, ProposalStatus, ProposedAction,
+        ToolCall,
+    };
+
+    let signer = ProposalSigner::random();
+    let (daemon, dir) = temp_daemon().await;
+    let ledger_dir = tempfile::tempdir().unwrap();
+    let ledger = ApprovalLedger::new(ledger_dir.path());
+    let daemon = daemon
+        .with_proposal_signer(signer.clone())
+        .with_approval_ledger(ledger.clone());
+
+    std::fs::create_dir_all(dir.path().join("proposals")).unwrap();
+
+    let proposal = Proposal::pending(
+        "prop-forged",
+        "corr-forged",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "not authorised" }),
+        }]),
+        "an agent flipped this",
+    );
+    // Exactly what an agent's `edit_note` produces: a correctly-signed proposal whose `status` says
+    // approved. The signature still verifies — `status` was never covered by it, deliberately.
+    let mut proposal = signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+    assert!(
+        daemon.signer.verify(&proposal),
+        "the forged note must pass integrity — that is precisely why it needed a second check"
+    );
+
+    let rel = Path::new("proposals/prop-forged.md");
+    daemon
+        .vault
+        .write(
+            rel,
+            &proposal.to_note(),
+            None,
+            &WriteProvenance::agent("test", "c1"),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(
+            daemon.handle_proposal_change(rel).await.unwrap(),
+            ReactionOutcome::Observed
+        ),
+        "an approved-looking note with no human decision behind it must not execute"
+    );
+
+    // ...and a real decision *is* recorded and readable, so this is a gate rather than a blanket
+    // refusal that would break approvals entirely.
+    ledger
+        .record("prop-forged", ApprovalDecision::Approved, "telegram")
+        .await
+        .unwrap();
+    assert_eq!(
+        ledger.decision_for("prop-forged").await,
+        Some(ApprovalDecision::Approved),
+        "the recorded decision is what the daemon consults"
+    );
+}
+
+/// A daemon built without a ledger approves nothing: a missing security dependency must refuse
+/// rather than wave things through.
+#[tokio::test]
+async fn a_daemon_with_no_ledger_executes_nothing() {
+    use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall};
+
+    let signer = ProposalSigner::random();
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon.with_proposal_signer(signer.clone());
+    std::fs::create_dir_all(dir.path().join("proposals")).unwrap();
+
+    let proposal = Proposal::pending(
+        "prop-noledger",
+        "corr-noledger",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "x" }),
+        }]),
+        "no ledger attached",
+    );
+    let mut proposal = signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+
+    let rel = Path::new("proposals/prop-noledger.md");
+    daemon
+        .vault
+        .write(rel, &proposal.to_note(), None, &WriteProvenance::human())
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(
+            daemon.handle_proposal_change(rel).await.unwrap(),
+            ReactionOutcome::Observed
+        ),
+        "no ledger means no authority to execute under"
+    );
 }

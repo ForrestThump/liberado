@@ -48,6 +48,8 @@ pub struct ApprovalBot {
     signer: ProposalSigner,
     provider: Arc<dyn Provider>,
     tuning: TelegramApprovalsTuning,
+    /// Where a tap is recorded. The vault note is a view; this is the decision.
+    approvals: Option<liberado_common::ApprovalLedger>,
     /// Prompt id (from [`MessagingChannel::request_reply`]) → proposal stem being revised.
     /// Lost on restart — acceptable; a human can tap Revise again.
     pending_revisions: Mutex<HashMap<String, String>>,
@@ -91,6 +93,7 @@ impl ApprovalBot {
             signer,
             provider,
             tuning,
+            approvals: None,
             pending_revisions: Mutex::new(HashMap::new()),
             in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             latest_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -258,6 +261,13 @@ impl ApprovalBot {
             }
             _ => tracing::warn!(action, "unknown messaging action"),
         }
+    }
+
+    /// Record approvals to `ledger` — the daemon will not execute without a matching entry.
+    #[must_use]
+    pub fn with_approval_ledger(mut self, ledger: liberado_common::ApprovalLedger) -> Self {
+        self.approvals = Some(ledger);
+        self
     }
 
     /// Which terminal state a proposal was archived into, if it was.
@@ -442,12 +452,33 @@ impl ApprovalBot {
             return;
         }
 
+        // The decision is recorded **before** the note is touched, and the note is only a view.
+        // A tap is the authenticated act; `proposals/` is agent-writable, so nothing written there
+        // authorises anything. If the ledger write fails, the decision did not happen — say so
+        // rather than leaving a note that claims otherwise.
+        if let Some(ledger) = &self.approvals {
+            let decision = match new_status {
+                ProposalStatus::Approved => Some(liberado_common::ApprovalDecision::Approved),
+                ProposalStatus::Rejected => Some(liberado_common::ApprovalDecision::Rejected),
+                _ => None,
+            };
+            if let Some(decision) = decision
+                && let Err(e) = ledger.record(&proposal.id, decision, "telegram").await
+            {
+                tracing::error!(stem, error = %e, "approval-bot: failed to record the decision");
+                self.ack(event_id, "Failed to record your decision — try again.")
+                    .await;
+                return;
+            }
+        }
+
         proposal.status = new_status;
         if let Err(e) = self
             .vault
             .write(&path, &proposal.to_note(), None, &WriteProvenance::human())
             .await
         {
+            // The decision stands — it is in the ledger. Only the human-readable view failed.
             tracing::error!(stem, error = %e, "approval-bot: failed to write status change");
             self.ack(event_id, "Failed to save — try again.").await;
             return;

@@ -124,10 +124,42 @@ impl Daemon {
             return Ok(ReactionOutcome::Observed);
         }
 
-        // 5. Only Approved is actionable — the human edited something other than approving.
+        // 5. Only Approved is actionable — the note claims something other than approval.
         if !proposal.status.is_actionable() {
             tracing::debug!(status = ?proposal.status, "proposal is not actionable");
             return Ok(ReactionOutcome::Observed);
+        }
+
+        // 5.5. ...and the note's claim is not sufficient. `status` lives in `proposals/`, which
+        //      policy declares `agent_writable`, and it is deliberately outside the integrity
+        //      signature so a human can flip it without invalidating the hash. Both are right
+        //      alone; together they left the approval field of the approval mechanism writable by
+        //      the thing being gated. Provenance cannot rescue it either — MCP tool writes carry
+        //      none into the audit log, so an agent's `edit_note` attributes as `External`, which
+        //      this system reads as *human*.
+        //
+        //      So the authority is the ledger under `<LIBERADO_DATA_DIR>/`, which no MCP mounts and
+        //      no tool addresses. The note is a view. Absent, unreadable, or corrupt, it authorises
+        //      nothing — a proposal needing re-approval is a far better failure than one that runs
+        //      because a file could not be read.
+        let Some(ledger) = &self.approvals else {
+            tracing::warn!(
+                proposal_id = %proposal.id,
+                "no approval ledger attached; refusing to execute (build the daemon with                  `with_approval_ledger`)"
+            );
+            return Ok(ReactionOutcome::Observed);
+        };
+        match ledger.decision_for(&proposal.id).await {
+            Some(liberado_common::ApprovalDecision::Approved) => {}
+            other => {
+                tracing::warn!(
+                    proposal_id = %proposal.id,
+                    ledger_decision = ?other,
+                    path = %rel_path.display(),
+                    "proposal note says approved but no human approval is recorded — refusing.                      The note is a view; approval is recorded out of band."
+                );
+                return Ok(ReactionOutcome::Observed);
+            }
         }
 
         // 6. Execute — via the *same* pool this proposal was proposed under (Decision 18

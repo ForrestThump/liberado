@@ -33,9 +33,12 @@
 //! from `liberado-config`. Nothing here reaches for it, so it doesn't belong in the shared
 //! vocabulary every crate compiles against regardless of whether it touches config.
 
+pub mod approval_ledger;
 pub mod capability;
 pub mod catalog;
 pub mod clock;
+
+pub use approval_ledger::{ApprovalDecision, ApprovalLedger, ApprovalRecord};
 pub mod dispatch;
 pub mod error;
 pub mod event;
