@@ -101,7 +101,10 @@ pub fn tool_manifest(tool_names: &[&str]) -> String {
         // A sentence, not an omission: silence here is what invites the model to promise a lookup
         // it cannot perform.
         "You have no tools on this turn. Answer from this conversation alone. Do not offer to look \
-         anything up, and do not say you will fetch, check, or retrieve anything — you cannot."
+         anything up, do not say you will fetch, check, or retrieve anything, and do not suggest \
+         asking again later — you cannot, and a later turn may be no different. If earlier results \
+         appear in this conversation you may cite them, but say plainly that they are from before \
+         and not current."
             .to_string()
     } else {
         format!(

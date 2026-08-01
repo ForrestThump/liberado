@@ -378,7 +378,33 @@ which blocks `basic-chat` on step 7.
   typed fields on `SessionGrant` are the likely answer — decided in step 4/5.
 - `may_delegate_to` — deferred, shape sketched above.
 
-### Stale tool exchanges survive a profile switch
+### ~~Stale tool exchanges survive a profile switch~~ — measured 2026-08-01, closed
+
+**The manifest is sufficient. Do not build the history rewrite.**
+
+Measured rather than reasoned about. A chat under `basic-chat` called `turbovault:tasks_list` and
+got real data; the profile was switched to a `search-only` profile with no vault access; the next
+turn asked for something the earlier result could not answer — *"re-check my open tasks right now and
+tell me whether anything changed"* — so answering from memory was unavailable and the model had to
+decide whether it still held the tool. Daemon logs confirm the setup: `count=2` then `count=0`.
+
+It answered: *"I can't re-check right now — I don't have access to tools on this turn. **The last
+result I saw showed** 8 open tasks…"* It refused, and marked the stale data as stale unprompted.
+A current, complete list stated in the system position beats a successful tool call sitting in the
+transcript.
+
+So option 3 (rewrite historical exchanges) is unnecessary, and with it the cache cost that was the
+main objection. Option 1 (do nothing) was never quite right either — the manifest *is* the fix, it
+just already exists.
+
+One defect the measurement did surface, since fixed: the empty manifest said "no tools **on this
+turn**", and the model deferred — *"ask me again on the next turn and I'll do a fresh lookup"* —
+which was untrue, the profile lacking the tool entirely. Accurate about the turn, misleading about
+the future, and the same announce-then-cannot shape as the bug the manifest was written for. It now
+forbids suggesting a retry, while explicitly permitting honest citation of earlier results as
+earlier — which the model had already got right on its own.
+
+### Original analysis
 
 Raised by the operator 2026-07-28, after the prompt fix: a conversation that used profile A's tools
 and then switches to profile B still carries A's `tool_calls` and tool results verbatim. Rehydration

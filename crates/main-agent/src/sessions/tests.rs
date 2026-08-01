@@ -2285,6 +2285,17 @@ fn a_toolless_turn_is_told_not_to_offer_lookups() {
         stated.contains("cannot"),
         "an empty manifest must forbid promising a lookup, not merely omit tools: {stated}"
     );
+    // Measured live 2026-08-01. Told it had no tools "on this turn", the model deferred instead —
+    // "ask me again on the next turn and I'll do a fresh lookup" — which was untrue: the profile
+    // lacked the tool entirely, so no later turn would have differed. Accurate about the turn,
+    // misleading about the future, and the same announce-then-cannot shape as the original bug.
+    assert!(
+        stated.contains("asking again later"),
+        "an empty manifest must not invite a retry it cannot honour: {stated}"
+    );
+    // ...while still allowing honest use of what is already in the conversation, which is what the
+    // model got right unprompted: it cited the earlier result and labelled it as earlier.
+    assert!(stated.contains("not current"), "{stated}");
 }
 
 /// It has to beat concrete tool successes sitting further up the transcript, so it goes last —
