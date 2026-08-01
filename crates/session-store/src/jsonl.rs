@@ -665,11 +665,23 @@ impl ConversationStore for SessionStore {
         Ok(kids)
     }
 
+    /// The **chat** lens onto the store: conversations a human is having, newest first.
+    ///
+    /// Background sessions are excluded, and that word is doing the work. One store holds every
+    /// session under D7, so a chat that delegates spawns dispatch sessions right beside it —
+    /// `visibility: Background`, `parent_session` set, `domain: "dispatch"`. Those are machinery,
+    /// not conversations: nobody typed them and nobody is attending them.
+    ///
+    /// Listing them here put an agent's internal prompts in the human's sidebar, indistinguishable
+    /// from their own chats and often outnumbering them — one question produced three. The session
+    /// lens ([`list_sessions`](Self::list_sessions)) still returns everything, which is what it is
+    /// for; this is the view that had no business showing it.
     async fn list(&self) -> StoreResult<Vec<ConversationHeader>> {
         Ok(self
             .list_sessions()
             .await
             .iter()
+            .filter(|h| !h.visibility.is_background())
             .map(SessionHeader::to_conversation_header)
             .collect())
     }

@@ -130,8 +130,15 @@ async fn context_carries_across_turns_via_rehydration() {
     );
 }
 
+/// A turn the client abandons keeps the question and drops the half-answer.
+///
+/// This asserted "persists nothing" until 2026-08-01, when that cost a real conversation: switching
+/// WebUI tabs unmounts the chat component, which closes the `EventSource`, which drops the turn —
+/// and the user's message went with it, leaving a titled conversation containing only a system
+/// prompt. The reply must still not persist; a partial answer is the thing the rule exists to
+/// prevent. The question is not.
 #[tokio::test]
-async fn cancelled_stream_persists_nothing() {
+async fn cancelled_stream_keeps_the_user_message_and_no_reply() {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(SessionStore::open(dir.path()).await);
     let executor = Executor::new(Arc::new(PendingProvider), Budget::default());
@@ -151,10 +158,69 @@ async fn cancelled_stream_persists_nothing() {
         );
     } // fut dropped here
 
-    // The store holds only the system prompt — the cancelled turn wrote nothing.
     let history = sessions.history(id).await.unwrap();
-    assert_eq!(history.len(), 1);
-    assert_eq!(history[0].role, Role::System);
+    assert_eq!(
+        history.iter().map(|m| m.role).collect::<Vec<_>>(),
+        vec![Role::System, Role::User],
+        "an abandoned turn must keep exactly the system prompt and the question"
+    );
+    assert_eq!(history[1].content, "hi");
+    assert!(
+        !history.iter().any(|m| m.role == Role::Assistant),
+        "no part of an unfinished reply may be persisted"
+    );
+}
+
+/// The message is durable *before* the model is called, not merely by the time the turn ends —
+/// otherwise a client that leaves during a slow first token still loses it. `PendingProvider` never
+/// answers, so reaching a persisted user node proves the write happened ahead of inference.
+#[tokio::test]
+async fn the_user_message_is_durable_before_the_provider_answers() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let executor = Executor::new(Arc::new(PendingProvider), Budget::default());
+    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools));
+
+    let id = sessions.create(None).await.unwrap();
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+    let fut = sessions.turn_stream(id, "still in flight", &tx);
+    tokio::pin!(fut);
+    assert!(futures::poll!(fut.as_mut()).is_pending());
+
+    // Read while the turn is *still running* — the future above is deliberately not dropped.
+    let history = sessions.history(id).await.unwrap();
+    assert!(
+        history.iter().any(|m| m.content == "still in flight"),
+        "the question must be on disk before the answer exists, not after"
+    );
+}
+
+/// A completed turn writes the user message exactly once. The up-front write and the post-turn tail
+/// are two different code paths appending to one log, which is precisely how a message gets stored
+/// twice.
+#[tokio::test]
+async fn a_successful_turn_does_not_duplicate_the_user_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = sessions_at(dir.path(), vec![CompletionResponse::text("sure")]).await;
+
+    let id = sessions.create(None).await.unwrap();
+    sessions.turn(id, "only once please").await.unwrap();
+
+    let history = sessions.history(id).await.unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .filter(|m| m.content == "only once please")
+            .count(),
+        1,
+        "the user message was persisted twice"
+    );
+    assert_eq!(
+        history.iter().map(|m| m.role).collect::<Vec<_>>(),
+        vec![Role::System, Role::User, Role::Assistant],
+        "a normal turn's shape must be unchanged by the early write"
+    );
 }
 
 #[tokio::test]

@@ -857,3 +857,71 @@ async fn deleting_a_missing_conversation_is_not_found() {
         "second delete should be NotFound, got {again:?}"
     );
 }
+
+/// The chat sidebar shows conversations, not the machinery a conversation spawns.
+///
+/// One store holds every session (D7), so a chat that delegates sits in the same id space as the
+/// dispatch sessions it spawns. Until 2026-08-01 the chat lens returned all of them: asking one
+/// question put four rows in the sidebar — the question, and three internal agent prompts
+/// indistinguishable from it. The session lens must still see everything; that is its job.
+#[tokio::test]
+async fn the_chat_lens_hides_background_sessions() {
+    let store = SessionStore::new();
+    let chat = store
+        .create_session(NewSession {
+            title: Some("what's in the news?".into()),
+            ..Default::default()
+        })
+        .await;
+    let dispatched = store
+        .create_session(NewSession {
+            goal: Some(goal_spec("Get the latest top news headlines right now.")),
+            parent_session: Some(chat.id),
+            visibility: Visibility::Background,
+            ..Default::default()
+        })
+        .await;
+
+    let sidebar = ConversationStore::list(&store).await.unwrap();
+    let ids: Vec<_> = sidebar.iter().map(|h| h.id).collect();
+    assert!(
+        ids.contains(&chat.id),
+        "the human's own chat must be listed"
+    );
+    assert!(
+        !ids.contains(&dispatched.id),
+        "a background dispatch session must not appear as a conversation"
+    );
+
+    // The session lens is unchanged — hiding it from the sidebar must not make it unobservable.
+    let all: Vec<_> = store.list_sessions().await.iter().map(|h| h.id).collect();
+    assert!(all.contains(&chat.id) && all.contains(&dispatched.id));
+}
+
+/// A foreground session with a parent is still a conversation. The filter keys on visibility, not
+/// on having been spawned — a session promoted from a branch, or an interactive specialist a human
+/// is attending, has a parent and still belongs in the sidebar.
+#[tokio::test]
+async fn a_foreground_child_still_lists_as_a_conversation() {
+    let store = SessionStore::new();
+    let parent = store.create_session(NewSession::default()).await;
+    let attended = store
+        .create_session(NewSession {
+            goal: Some(goal_spec("interactive specialist the human joined")),
+            parent_session: Some(parent.id),
+            visibility: Visibility::Foreground,
+            ..Default::default()
+        })
+        .await;
+
+    let ids: Vec<_> = ConversationStore::list(&store)
+        .await
+        .unwrap()
+        .iter()
+        .map(|h| h.id)
+        .collect();
+    assert!(
+        ids.contains(&attended.id),
+        "being spawned is not what disqualifies a session — being unattended is"
+    );
+}

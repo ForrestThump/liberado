@@ -181,6 +181,26 @@ pub fn Chat(
     let base_for_models = api_base.clone();
     let base_for_profiles = api_base.clone();
 
+    // `[webui] enter_key` from the daemon, read once. `true` until it answers — that is the
+    // historical behaviour, so a slow or unreachable status endpoint degrades to what this composer
+    // did before the setting existed rather than to the other mode.
+    let base_for_enter = api_base.clone();
+    let enter_cfg = use_resource(move || {
+        let base = base_for_enter.clone();
+        async move {
+            reqwest::Client::new()
+                .get(format!("{base}/api/status"))
+                .send()
+                .await
+                .ok()?
+                .json::<chat_client_contract::DaemonStatus>()
+                .await
+                .ok()
+                .map(|s| s.enter_sends)
+        }
+    });
+    let enter_sends = move || enter_cfg.read().as_ref().and_then(|v| *v).unwrap_or(true);
+
     use_effect(move || {
         if sending() {
             return;
@@ -636,6 +656,10 @@ pub fn Chat(
                         // The palette is a completion aid, not a listbox the caret moves into, so the
                         // textarea keeps focus and announces the relationship instead.
                         autocomplete: "off",
+                        // Labels the virtual keyboard's action key to match what it will actually
+                        // do. Cosmetic on a desktop; on a phone it is the difference between a key
+                        // marked "send" that sends and one marked "return" that does not.
+                        enterkeyhint: if enter_sends() { "send" } else { "enter" },
                         oninput: move |e| {
                             input.set(e.value());
                             // A changed query invalidates the old selection: `/s` selecting the third
@@ -676,7 +700,26 @@ pub fn Chat(
                                     e.prevent_default();
                                     palette_dismissed.set(true);
                                 }
-                                Key::Enter if !e.modifiers().contains(Modifiers::SHIFT) => {
+                                // `[webui] enter_key = "send"` — Enter submits, Shift+Enter is the
+                                // newline. The historical behaviour and the default.
+                                Key::Enter
+                                    if enter_sends()
+                                        && !e.modifiers().contains(Modifiers::SHIFT) =>
+                                {
+                                    e.prevent_default();
+                                    submit.call(());
+                                }
+                                // `enter_key = "newline"` — Ctrl/Cmd+Enter is the deliberate send.
+                                // Plain Enter deliberately matches *no* arm below, so it falls to
+                                // the browser's own newline and this handler never submits. That is
+                                // the point of the setting: on a phone Enter is the easiest key to
+                                // hit and a mis-send cannot be taken back, so in this mode nothing
+                                // reachable by one keypress can send.
+                                Key::Enter
+                                    if !enter_sends()
+                                        && (e.modifiers().contains(Modifiers::CONTROL)
+                                            || e.modifiers().contains(Modifiers::META)) =>
+                                {
                                     e.prevent_default();
                                     submit.call(());
                                 }

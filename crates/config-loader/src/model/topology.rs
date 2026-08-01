@@ -66,6 +66,10 @@ pub struct Topology {
     /// How the conversational main agent presents itself and which tools it sees.
     /// Default: human-interfacer + built-in `delegate` tool (specialist MCPs stay on the dispatcher).
     pub main_agent: MainAgentConfig,
+    /// Browser-surface behaviour (`[webui]`). Presentation only — nothing here grants authority or
+    /// changes what an agent may do, which is why it sits outside `main_agent`.
+    #[serde(default)]
+    pub webui: WebUiConfig,
     /// Per-role provider/model/sampling overrides (the execution-path tuning knobs). Keyed by
     /// [`ModelRole`] (`main_agent` = chat face, `dispatcher` = router, `subagent` = orchestrator/
     /// worker). Each field is optional and falls back to [`Self::provider`] + that provider's
@@ -166,6 +170,46 @@ pub struct MainAgentConfig {
     /// `docs/roadmap/context-compaction-plan.md`). All fields defaulted; an absent table is the
     /// shipped behavior (compaction on).
     pub compaction: CompactionSettings,
+}
+
+/// What the Enter key does in the WebUI chat composer (`[webui] enter_key`).
+///
+/// The two behaviours are mutually exclusive by construction — this is an enum rather than two
+/// booleans precisely because the bug that prompted it was Enter doing *both*: inserting a newline
+/// and sending the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnterKey {
+    /// Enter sends; Shift+Enter inserts a newline. The historical behaviour, so it is the default —
+    /// a config knob that changes what an existing install does on upgrade is a bug of its own.
+    #[default]
+    Send,
+    /// Enter inserts a newline; the Send button or Ctrl/Cmd+Enter sends. Usually what you want on a
+    /// phone, where Enter is the keyboard's most reachable key and a mis-send is unrecoverable.
+    Newline,
+}
+
+/// Browser-surface behaviour (`[webui]`).
+///
+/// Deliberately not under `main_agent`: nothing here affects authority, tools, or what any agent
+/// may do. It only decides how the browser composer behaves, and it is read by the WebUI off
+/// `GET /api/status` rather than through any capability path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebUiConfig {
+    /// What Enter does in the chat composer. See [`EnterKey`].
+    pub enter_key: EnterKey,
+}
+
+impl WebUiConfig {
+    /// Whether Enter sends, as the single bit the wire carries (`DaemonStatus::enter_sends`).
+    ///
+    /// The mapping lives here, beside the enum, so there is exactly one place that decides what a
+    /// variant means. A caller reaching for `matches!(.., EnterKey::Send)` of its own would be a
+    /// second definition, and adding a variant would then change one and not the other.
+    pub fn enter_sends(&self) -> bool {
+        matches!(self.enter_key, EnterKey::Send)
+    }
 }
 
 /// Absolute estimated-token trigger used when no model window / percentage can be resolved
@@ -352,6 +396,7 @@ impl Default for Topology {
             pools: Vec::new(),
             session_profiles: Vec::new(),
             main_agent: MainAgentConfig::default(),
+            webui: WebUiConfig::default(),
             roles: HashMap::new(),
         }
     }
@@ -621,6 +666,59 @@ impl SessionProfile {
             }
         }
         set
+    }
+}
+
+#[cfg(test)]
+mod webui_config {
+    use super::*;
+
+    /// The TOML spellings are the operator-facing contract. Renaming a variant without a `rename`
+    /// would silently stop matching an existing `topology.toml`, and serde's failure here is a
+    /// parse error the operator sees as "unknown variant" long after they wrote the line.
+    #[test]
+    fn both_spellings_parse_from_toml() {
+        let send: WebUiConfig = toml::from_str(r#"enter_key = "send""#).unwrap();
+        assert_eq!(send.enter_key, EnterKey::Send);
+        let newline: WebUiConfig = toml::from_str(r#"enter_key = "newline""#).unwrap();
+        assert_eq!(newline.enter_key, EnterKey::Newline);
+    }
+
+    /// An absent `[webui]` table, and an empty one, must both mean the behaviour installs already
+    /// had. A config knob that changes what an existing deployment does on upgrade is a bug.
+    #[test]
+    fn absent_or_empty_means_send() {
+        assert_eq!(WebUiConfig::default().enter_key, EnterKey::Send);
+        let empty: WebUiConfig = toml::from_str("").unwrap();
+        assert_eq!(empty.enter_key, EnterKey::Send);
+        assert!(empty.enter_sends());
+    }
+
+    /// The whole point of the setting: exactly one of the two behaviours, never both. This asserts
+    /// the mapping the wire carries is a true partition of the enum.
+    #[test]
+    fn enter_sends_is_exactly_the_send_variant() {
+        for (key, expected) in [(EnterKey::Send, true), (EnterKey::Newline, false)] {
+            assert_eq!(WebUiConfig { enter_key: key }.enter_sends(), expected);
+        }
+    }
+
+    /// `[webui]` is reachable from a whole topology document, not just the sub-table in isolation —
+    /// the field could parse alone and still be unwired from `Topology`.
+    #[test]
+    fn reachable_from_a_topology_document() {
+        let doc = r#"
+            vault_path = "/tmp/vault"
+            [webui]
+            enter_key = "newline"
+        "#;
+        let topo: Topology = toml::from_str(doc).unwrap();
+        assert_eq!(topo.webui.enter_key, EnterKey::Newline);
+        assert!(!topo.webui.enter_sends());
+
+        // ...and a document that never mentions it still lands on Send.
+        let bare: Topology = toml::from_str(r#"vault_path = "/tmp/vault""#).unwrap();
+        assert!(bare.webui.enter_sends());
     }
 }
 

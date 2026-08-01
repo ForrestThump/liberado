@@ -33,6 +33,15 @@ tool = "write_note"
 path_arg = "path"
 content_arg = "content"
 
+# What Enter does in the browser chat composer. `newline` because this box is driven from a phone:
+# Enter is the easiest key to hit there and a mis-send cannot be taken back, so nothing reachable by
+# a single keypress sends. Ctrl/Cmd+Enter and the Send button do.
+#
+# The default is `send` (Enter sends, Shift+Enter newlines) — this line is what makes it otherwise.
+# Read by the browser off `GET /api/status`, so it applies on page reload, not on daemon restart.
+[webui]
+enter_key = "newline"
+
 # --- Per-role model tiering (latency knobs; edit on the box + `up -d --force-recreate`, NO rebuild) --
 # Roles: main_agent (chat face), dispatcher (router), subagent (orchestrator/worker). All fields
 # optional; omitted = inherit `provider` + its model. temperature (when set) overrides the per-call
