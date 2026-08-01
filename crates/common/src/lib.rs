@@ -53,8 +53,8 @@ pub use capability::{
     instruction_scope, is_sweeping_destructive, mentions_destructive,
 };
 pub use catalog::{
-    CapabilityCatalog, McpDescriptor, WriteTarget, resolve_zone, write_target,
-    zone_write_restriction,
+    CapabilityCatalog, McpDescriptor, WriteTarget, names_single_write_target, resolve_zone,
+    write_target, zone_write_restriction,
 };
 pub use dispatch::{
     BlockReason, Delivery, Depth, DispatchAction, DispatchDecision, ExecMode, JobHandle, JobStatus,

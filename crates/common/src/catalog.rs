@@ -139,6 +139,38 @@ pub fn write_target(
     }
 }
 
+/// Whether this call names **exactly one** write target, known from the declaration rather than
+/// guessed from text.
+///
+/// True only for the **path-addressed** style (`zone_from_arg` + `write_tools`) with the path
+/// argument actually present and naming a zone. There, the call carries its own target: one path,
+/// one note, bounded reach — and no amount of prose in the payload changes that.
+///
+/// False for the **fixed-zone** style, deliberately. There the zone comes from the *tool name*, so
+/// a resolved [`WriteTarget::Zone`] says which zone is touched but nothing about how much of it —
+/// "delete everything in tasks/" resolves the same as "write one task". Reach genuinely is unknown,
+/// and the text heuristic remains the only signal available.
+///
+/// # Why this exists
+///
+/// [`Magnitude`](crate::Magnitude) measures *reach*, and reach is usually structural. The risk gate
+/// was estimating it by scanning the whole arguments blob for destructive words, which for a write
+/// tool means scanning **the content being saved** — so a research report discussing organizations
+/// being "destroyed" and coalitions blocking "every" reform read as an order to delete everything,
+/// and a requested write-up became a permission prompt (homelab, `prop-1785557626819756862`,
+/// 2026-08-01). The payload is data, not an instruction; this is how the gate tells them apart.
+pub fn names_single_write_target(
+    descriptor: &McpDescriptor,
+    bare_tool_name: &str,
+    arguments: &serde_json::Value,
+) -> bool {
+    descriptor.zone_from_arg.is_some()
+        && matches!(
+            write_target(descriptor, bare_tool_name, arguments),
+            WriteTarget::Zone(_)
+        )
+}
+
 /// Resolve the target zone for `bare_tool_name` given `descriptor`'s zone declarations. `None`
 /// means "not a zone-write concern" — a declared read, or an MCP that hasn't opted into zone
 /// tracking at all — distinct from "a write whose zone is unknown," which callers (the zone-

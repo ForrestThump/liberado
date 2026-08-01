@@ -44,7 +44,7 @@ use async_trait::async_trait;
 use liberado_common::{
     Capability, CapabilityCatalog, CapabilitySet, Consequence, McpDescriptor, Proposal,
     ProposalSigner, ProposedAction, WriteClass, WriteTarget, Zone, bare_tool_name,
-    is_sweeping_destructive, mcp_of, write_target,
+    is_sweeping_destructive, mcp_of, names_single_write_target, write_target,
 };
 use liberado_notify::Notifier;
 use liberado_provider::{ToolDef, ToolInvocation};
@@ -225,16 +225,22 @@ impl RiskGatedToolRuntime {
         }
     }
 
-    fn write_target_of(&self, mcp_name: &str, call: &ToolInvocation) -> WriteTarget {
-        let descriptor = if let Some(cat) = &self.live_catalog {
+    /// The declaration this call is judged against — the live catalog when one is attached, else
+    /// the boot-time snapshot. Shared by the zone-write guard and the magnitude guard so both read
+    /// the same declaration for one call.
+    fn descriptor_of(&self, mcp_name: &str) -> Option<McpDescriptor> {
+        if let Some(cat) = &self.live_catalog {
             cat.get(mcp_name)
         } else {
             self.zone_catalog
                 .iter()
                 .find(|d| d.name == mcp_name)
                 .cloned()
-        };
-        descriptor
+        }
+    }
+
+    fn write_target_of(&self, mcp_name: &str, call: &ToolInvocation) -> WriteTarget {
+        self.descriptor_of(mcp_name)
             .map(|d| write_target(&d, bare_tool_name(&call.name), &call.arguments))
             .unwrap_or(WriteTarget::NotAWrite)
     }
@@ -428,16 +434,28 @@ impl ToolRuntime for RiskGatedToolRuntime {
             // other — and a goal carrying pasted content (a report to file, a note to save) tripped
             // this one on words from the content rather than the instruction.
             //
-            // The *arguments* are still scanned in full and deliberately so. That is where a real
-            // "delete all" actually appears at this layer, and it is the reason capping the goal
-            // text upstream stays safe.
-            let args_text = call.arguments.to_string();
+            // The arguments are scanned too — that is where a real "delete all" appears at this
+            // layer — **unless the call already names exactly one target**. `Magnitude` measures
+            // reach, and for a path-addressed write the reach is declared, not inferred: one path,
+            // one note. Scanning the payload there means scanning *the content being saved*, so a
+            // report discussing organizations being "destroyed" by "every" coalition read as an
+            // order to delete everything and a requested write-up became a permission prompt
+            // (`prop-1785557626819756862`, 2026-08-01).
+            //
+            // Structure first, prose only where reach is genuinely unknown: a fixed-zone tool, a
+            // missing path, an MCP that declares no zone at all. The goal is always read, so
+            // "delete all my notes" still gates however the call is shaped.
+            let names_one_target = self
+                .descriptor_of(&mcp_name)
+                .is_some_and(|d| names_single_write_target(&d, bare_tool_name(&call.name), &call.arguments));
             let full_context = format!(
                 "{} {}",
                 liberado_common::instruction_scope(&self.goal_context),
                 call.name
             );
-            if is_sweeping_destructive(&args_text) || is_sweeping_destructive(&full_context) {
+            let sweeping_payload =
+                !names_one_target && is_sweeping_destructive(&call.arguments.to_string());
+            if sweeping_payload || is_sweeping_destructive(&full_context) {
                 self.authority_decision(
                     "magnitude",
                     "proposal",
@@ -705,14 +723,14 @@ mod tests {
     use liberado_provider::ToolDef;
 
     /// A mock inner runtime that returns a canned result.
-    struct MockInner {
+    pub(crate) struct MockInner {
         tools: Vec<ToolDef>,
-        invoked: std::sync::Mutex<Vec<ToolInvocation>>,
+        pub(crate) invoked: std::sync::Mutex<Vec<ToolInvocation>>,
         result: Result<String, String>,
     }
 
     impl MockInner {
-        fn new(tool_names: &[&str], result: Result<String, String>) -> Self {
+        pub(crate) fn new(tool_names: &[&str], result: Result<String, String>) -> Self {
             let tools = tool_names
                 .iter()
                 .map(|n| ToolDef::new(*n, "test tool", serde_json::json!({ "type": "object" })))
@@ -1423,5 +1441,183 @@ mod tests {
             .expect_err("no Write(sandbox) grant must be refused, not written");
         assert!(refused.contains("not authorized"), "{refused}");
         assert!(ungranted_inner.invoked.lock().unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod magnitude_reads_structure_first {
+    use super::tests::*;
+    use super::*;
+
+    /// The descriptor shape that makes reach knowable: path-addressed, so the call names its own
+    /// single target.
+    fn turbovault() -> McpDescriptor {
+        McpDescriptor {
+            name: "turbovault".into(),
+            description: "path-addressed vault".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: None,
+            tool_zones: Vec::new(),
+            zone_from_arg: Some("path".into()),
+            write_tools: vec!["write_note".into()],
+        }
+    }
+
+    fn gate(
+        dir: &std::path::Path,
+        inner: Arc<MockInner>,
+        descriptor: McpDescriptor,
+        goal: &str,
+    ) -> RiskGatedToolRuntime {
+        let mcp = descriptor.name.clone();
+        RiskGatedToolRuntime::new(
+            inner,
+            CapabilitySet::from_iter([
+                Capability::ExecuteMcp(mcp.clone()),
+                Capability::Write(Zone::vault("Learning")),
+            ]),
+            vec![(mcp, Consequence::Reversible)],
+            vec![descriptor],
+            vec![("Learning".to_string(), WriteClass::AgentWritable)],
+            dir.to_path_buf(),
+            goal.into(),
+            "test-magnitude".into(),
+            ProposalSigner::random(),
+            "default",
+        )
+    }
+
+    /// The live false positive, reduced: a research report whose *content* discusses destruction is
+    /// data being saved, not an action being ordered.
+    ///
+    /// `prop-1785557626819756862` (2026-08-01) gated a requested write-up on `destroyed` ×2,
+    /// `destroys`, `remove`, `every` ×12 and `all` ×6 — every one of them prose *about*
+    /// organizations, in a report the operator had asked for.
+    #[tokio::test]
+    async fn a_report_that_discusses_destruction_is_not_a_destructive_action() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(
+            &["turbovault:write_note"],
+            Ok("wrote".into()),
+        ));
+        let rt = gate(
+            dir.path(),
+            inner.clone(),
+            turbovault(),
+            "research nash equilibrium in organizations and write me a report",
+        );
+
+        let call = ToolInvocation::new(
+            "c1",
+            "turbovault:write_note",
+            serde_json::json!({
+                "path": "Learning/Nash Equilibrium - Research.md",
+                "content": "Olson showed that distributional coalitions are destroyed by war, \
+                            and that every entrenched group blocks all reform. Moloch destroys \
+                            every attempt to remove the entire coordination failure.",
+            }),
+        );
+
+        let msg = rt.invoke(&call).await.expect("the write should be allowed");
+        assert!(
+            !msg.contains("PROPOSAL CREATED"),
+            "a write naming one path must not be gated on words in its payload: {msg}"
+        );
+        assert_eq!(
+            inner.invoked.lock().unwrap().len(),
+            1,
+            "the report should have been written"
+        );
+    }
+
+    /// The guard's real target, unchanged: a sweeping-destructive *instruction* still gates, however
+    /// narrow the call that carries it.
+    #[tokio::test]
+    async fn a_sweeping_destructive_goal_still_gates_a_single_path_write() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(
+            &["turbovault:write_note"],
+            Ok("wrote".into()),
+        ));
+        let rt = gate(
+            dir.path(),
+            inner.clone(),
+            turbovault(),
+            "delete all my notes",
+        );
+
+        let call = ToolInvocation::new(
+            "c1",
+            "turbovault:write_note",
+            serde_json::json!({ "path": "Learning/x.md", "content": "harmless" }),
+        );
+
+        let msg = rt.invoke(&call).await.expect("downgrade is an Ok result");
+        assert!(
+            msg.contains("PROPOSAL CREATED"),
+            "the instruction is always read, whatever the call looks like: {msg}"
+        );
+        assert!(inner.invoked.lock().unwrap().is_empty());
+    }
+
+    /// Reach is only known for the **path-addressed** style. A fixed-zone tool's zone comes from its
+    /// *name*, so a resolved zone says which zone is touched and nothing about how much of it —
+    /// prose remains the only signal, and the payload is still scanned.
+    #[tokio::test]
+    async fn a_fixed_zone_tool_still_has_its_payload_scanned() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let descriptor = McpDescriptor {
+            name: "turbovault".into(),
+            description: "fixed-zone vault".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: Some("Learning".into()),
+            tool_zones: Vec::new(),
+            zone_from_arg: None,
+            write_tools: Vec::new(),
+        };
+        let inner = Arc::new(MockInner::new(
+            &["turbovault:write_note"],
+            Ok("wrote".into()),
+        ));
+        let rt = gate(dir.path(), inner.clone(), descriptor, "tidy up");
+
+        let call = ToolInvocation::new(
+            "c1",
+            "turbovault:write_note",
+            serde_json::json!({ "instruction": "delete every note" }),
+        );
+
+        let msg = rt.invoke(&call).await.expect("downgrade is an Ok result");
+        assert!(
+            msg.contains("PROPOSAL CREATED"),
+            "reach is unknown for a fixed-zone tool, so the payload must still be read: {msg}"
+        );
+        assert!(inner.invoked.lock().unwrap().is_empty());
+    }
+
+    /// A write whose path argument is missing is `Undeterminable`, not bounded — it must not buy the
+    /// payload exemption. (It is refused earlier by the zone guard; this pins that the magnitude
+    /// side does not treat it as safe either.)
+    #[tokio::test]
+    async fn a_write_with_no_resolvable_path_is_not_treated_as_bounded() {
+        let d = turbovault();
+        assert!(
+            !liberado_common::names_single_write_target(
+                &d,
+                "write_note",
+                &serde_json::json!({ "content": "delete every note" })
+            ),
+            "a missing path argument names no single target"
+        );
+        assert!(
+            liberado_common::names_single_write_target(
+                &d,
+                "write_note",
+                &serde_json::json!({ "path": "Learning/x.md" })
+            ),
+            "a resolved zone path does"
+        );
     }
 }
