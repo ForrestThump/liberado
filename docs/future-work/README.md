@@ -1,0 +1,39 @@
+# Future Work
+
+Index of forward-looking work.
+
+| Doc | Role |
+|-----|------|
+| **[roadmap.md](../roadmap.md)** | **Living scoreboard** — open work in priority order, recently landed |
+| [live-conformance-suite.md](live-conformance-suite.md) | T1 reliability suite (L1–L11 landed; Tier 3 open — Tier 2 optional) |
+| Active plans below | Still drive near-term work (status in each file header when set) |
+| [archive/](archive/README.md) | Finished plans, closed audits — **not current truth** |
+
+## Active plans (not archived)
+
+| Plan | Domain |
+|------|--------|
+| [loops-plan.md](loops-plan.md) | Scheduled recurrence over goals |
+| [chat-search-plan.md](chat-search-plan.md) | History search tiers |
+| [context-compaction-plan.md](context-compaction-plan.md) | Chat context compaction (CH3 — Tier 1 landed; known residual documented) |
+| [roadmap.md](../roadmap.md) **CH4** | Mid-session / per-conversation model switching (open; process-wide hot-swap already exists) |
+| [context-compaction-viewport-rearchitecture.md](context-compaction-viewport-rearchitecture.md) | CH3.1 proposed: side-summary + viewport (not shipped) |
+| [coding-tui-plan.md](coding-tui-plan.md) | Agentic coding TUI: goal surface + kernel completion gate (S1–S7) |
+| [rust-native-agentic-coder-plan.md](rust-native-agentic-coder-plan.md) | Coding pack roadmap |
+| [tui-maturity-roadmap.md](tui-maturity-roadmap.md) | TUI surface |
+| [turbovault-modules-integration-roadmap.md](turbovault-modules-integration-roadmap.md) | TurboVault plugins umbrella |
+| [session-profiles-plan.md](session-profiles-plan.md) | Per-conversation tool authority (steps 1–6 landed on `feat/session-profiles`, parked) |
+| [turbovault-vault-events-plugin-plan.md](turbovault-vault-events-plugin-plan.md) | vault_events module |
+| [mcp-forge-backlog.md](mcp-forge-backlog.md) | MCP forge service |
+| [mcp-suite-standardization.md](mcp-suite-standardization.md) | Peer MCP suite norms |
+| [latency-and-routing-observability-plan.md](latency-and-routing-observability-plan.md) | Latency journal → policy |
+| [heuristics-tuning-engine-plan.md](heuristics-tuning-engine-plan.md) | Heuristics tuner tooling |
+| [coder-eval-curriculum.md](coder-eval-curriculum.md) | Coding quality instrument |
+| [pr-dispatch-vtcode-no-write-finding.md](pr-dispatch-vtcode-no-write-finding.md) | Open PR-dispatch bug |
+
+### Coding pack / TUI
+- [`rust-native-agentic-coder-plan.md`](rust-native-agentic-coder-plan.md) — umbrella design
+- [`coding-tui-plan.md`](coding-tui-plan.md) — surface + completion-gate slices S1–S7
+- [`tui-maturity-roadmap.md`](tui-maturity-roadmap.md) — TUI maturity audit
+
+Start every planning session at [roadmap.md](../roadmap.md).

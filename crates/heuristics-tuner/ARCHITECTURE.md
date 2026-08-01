@@ -5,7 +5,7 @@ Automates the manual "run eval → read the misses → tweak a role's system pro
 beam-search-with-restarts loop, then propose the best candidate as a diff + rubric for a human to
 review. **Never writes to a real prompt const** — a human hand-adopts a winning candidate, the same
 trust boundary as riggers' draft-PR pattern (Decision 14: agents don't write config/prompts). Full
-design and live-run findings: `docs/roadmap/heuristics-tuning-engine-plan.md`.
+design and live-run findings: `docs/future-work/heuristics-tuning-engine-plan.md`.
 
 ## Three tunable layers, one config selector
 
@@ -22,7 +22,7 @@ session tunes:
 The dispatcher path is cheap (no execution needed — deterministic classification vs. a fixed label);
 the executor/subagent paths are materially more expensive and slower (a real, if mocked, multi-turn
 tool loop per trial) and were added later, deliberately kept *parallel to*, not a generalization of,
-the dispatcher path's types — see `docs/roadmap/heuristics-tuning-engine-plan.md`'s executor/subagent
+the dispatcher path's types — see `docs/future-work/heuristics-tuning-engine-plan.md`'s executor/subagent
 extension for why some duplication (`select_beam`/`select_beam_executor`,
 `advance_beam`/`advance_beam_executor`) was an accepted tradeoff while the elitism logic was new and
 unproven.
@@ -58,7 +58,7 @@ Live tuning found and fixed two real bugs beyond prompt wording itself:
    continuing a multi-step plan. Fixed in `liberado-executor` directly (benefits every consumer of
    `Executor::execute`, not just this tuner). The underlying reliability gap this partially fixed —
    multi-step tool chaining still isn't fully reliable — is a project-level open finding, not just a
-   tuner curiosity: `docs/roadmap/multi-step-execution-reliability-finding.md`.
+   tuner curiosity: `docs/future-work/archive/multi-step-execution-reliability-finding.md`.
 
 ## Dependencies
 
