@@ -3908,6 +3908,7 @@ dependencies = [
  "chat-client-contract",
  "chrono",
  "futures",
+ "http-body-util",
  "liberado-bootstrap",
  "liberado-chat-search",
  "liberado-coder-agent",

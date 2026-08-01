@@ -75,7 +75,7 @@ pub struct ChatRequest {
 pub async fn chat_stream_post(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ChatRequest>,
-) -> Sse<SseBody> {
+) -> axum::response::Response {
     chat_stream_core(
         state,
         req.message,
@@ -92,7 +92,7 @@ pub async fn chat_stream_post(
 pub async fn chat_stream_get(
     State(state): State<Arc<AppState>>,
     Query(req): Query<ChatRequest>,
-) -> Sse<SseBody> {
+) -> axum::response::Response {
     chat_stream_core(
         state,
         req.message,
@@ -109,6 +109,29 @@ pub async fn chat_stream_get(
 /// differ â€” one named type lets them share a return.
 type SseBody = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
 
+/// The heartbeat every SSE response here carries.
+///
+/// A turn that delegates sends **nothing** between the `delegate` tool starting and the subagent
+/// finishing — observed at 3m28s on 2026-08-01, and there is no upper bound on it. Without a
+/// heartbeat that is an idle connection, and every idle timeout between the browser and the daemon
+/// (proxy, mobile radio, load balancer) is free to close it. When one does, the turn is cancelled
+/// and its answer discarded, so the cost of a missing keep-alive is the whole reply.
+///
+/// The payload is an SSE comment: `EventSource` ignores it per spec, and the native parser skips
+/// comment-only blocks (`chat_client_contract::native` — `comments_only_block_returns_nothing`), so
+/// no client sees a frame for it.
+pub(super) fn keep_alive() -> axum::response::sse::KeepAlive {
+    axum::response::sse::KeepAlive::new().interval(KEEP_ALIVE_INTERVAL)
+}
+
+/// How often an otherwise-silent stream emits a heartbeat.
+///
+/// Named so it is a decision rather than a literal: it has to stay comfortably under the shortest
+/// idle timeout anywhere between a browser and the daemon — proxies commonly use 60s — with room to
+/// miss a tick. Raising it past that silently reintroduces the disconnect it exists to prevent, and
+/// nothing else in the system would notice.
+pub(super) const KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+
 async fn chat_stream_core(
     state: Arc<AppState>,
     message: String,
@@ -116,7 +139,7 @@ async fn chat_stream_core(
     incognito: bool,
     profile: Option<String>,
     model: Option<String>,
-) -> Sse<SseBody> {
+) -> axum::response::Response {
     let (tx, rx) = mpsc::channel::<AgentEvent>(64);
 
     let Some(sessions) = state.chat.clone() else {
@@ -128,7 +151,9 @@ async fn chat_stream_core(
                 ))
                 .await;
         });
-        return Sse::new(stream_with_session(None, rx));
+        return Sse::new(stream_with_session(None, rx))
+            .keep_alive(keep_alive())
+            .into_response();
     };
 
     // Resolve the session up front (creating one on the first message), so we can announce it to the
@@ -156,7 +181,9 @@ async fn chat_stream_core(
                 tokio::spawn(async move {
                     let _ = tx.send(AgentEvent::Error(msg)).await;
                 });
-                return Sse::new(stream_with_session(None, rx));
+                return Sse::new(stream_with_session(None, rx))
+                    .keep_alive(keep_alive())
+                    .into_response();
             }
         },
     };
@@ -176,7 +203,9 @@ async fn chat_stream_core(
                 tokio::spawn(async move {
                     let _ = tx.send(AgentEvent::Error(e.to_string())).await;
                 });
-                return Sse::new(stream_with_session(None, rx));
+                return Sse::new(stream_with_session(None, rx))
+                    .keep_alive(keep_alive())
+                    .into_response();
             }
         },
     };
@@ -223,6 +252,8 @@ async fn chat_stream_core(
     });
 
     Sse::new(stream_with_session(Some(session), rx))
+        .keep_alive(keep_alive())
+        .into_response()
 }
 
 /// Prepend a `session` SSE event (the conversation id) ahead of the agent event stream, so the
@@ -764,6 +795,59 @@ mod tests {
             .await
             .unwrap()
             .status()
+    }
+
+    /// The heartbeat, on the real response the handler returns.
+    ///
+    /// Asserted because its absence is invisible: a stream with no keep-alive looks identical to one
+    /// with a keep-alive that has simply not ticked yet, and the symptom shows up minutes later as a
+    /// dropped connection on someone else's machine. On 2026-08-01 a delegated turn sent nothing for
+    /// 3m28s and the connection died before the answer arrived.
+    ///
+    /// `start_paused` runs tokio's clock on demand: the stream below never yields, so time advances
+    /// straight to the heartbeat's timer and the test finishes instantly rather than waiting the real
+    /// 15 seconds.
+    #[tokio::test(start_paused = true)]
+    async fn an_idle_stream_still_sends_a_heartbeat() {
+        use http_body_util::BodyExt;
+
+        let idle = Box::pin(futures::stream::pending::<Result<Event, Infallible>>()) as SseBody;
+        let response = Sse::new(idle)
+            .keep_alive(super::keep_alive())
+            .into_response();
+
+        // Bounded, so losing the keep-alive fails this test instead of hanging it. Without a
+        // heartbeat the body never yields, and an unbounded await would block CI rather than report.
+        // The bound is virtual time too, and later than the heartbeat, so the heartbeat still wins.
+        let frame =
+            tokio::time::timeout(super::KEEP_ALIVE_INTERVAL * 4, response.into_body().frame())
+                .await
+                .expect("no heartbeat arrived: an idle stream produced nothing before the deadline")
+                .expect("an idle stream must still produce a frame")
+                .expect("the heartbeat frame must not be an error");
+        let bytes = frame.into_data().expect("a data frame");
+
+        // An SSE comment: the wire form every client already ignores.
+        assert_eq!(
+            &bytes[..],
+            b":
+
+",
+            "expected a keep-alive comment, got {:?}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+
+    /// The interval is a decision, not a literal. Too long and it stops clearing the idle timeouts it
+    /// exists for — proxies commonly close at 60s — and nothing else in the system would notice.
+    #[test]
+    fn the_heartbeat_stays_inside_common_idle_timeouts() {
+        assert!(
+            super::KEEP_ALIVE_INTERVAL >= std::time::Duration::from_secs(1)
+                && super::KEEP_ALIVE_INTERVAL <= std::time::Duration::from_secs(30),
+            "keep-alive interval {:?} is outside the range that clears a 60s proxy timeout",
+            super::KEEP_ALIVE_INTERVAL
+        );
     }
 
     // ── `model` on the request ───────────────────────────────────────────────────────────────

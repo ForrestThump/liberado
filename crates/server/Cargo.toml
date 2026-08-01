@@ -51,6 +51,12 @@ thiserror = { workspace = true }
 serde_urlencoded = "0.7"
 liberado-test-support = { workspace = true }
 tempfile = { workspace = true }
+# Pulls single frames off a streaming response body, so the SSE heartbeat test can observe one
+# heartbeat instead of collecting a body that never ends.
+http-body-util = "0.1"
+# `start_paused` — runs the SSE heartbeat test on a virtual clock so it observes a 15s interval
+# without taking 15 seconds.
+tokio = { workspace = true, features = ["test-util"] }
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)

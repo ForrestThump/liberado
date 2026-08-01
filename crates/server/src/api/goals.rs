@@ -389,7 +389,12 @@ pub async fn goals_stream(
         }
     };
 
-    Sse::new(Box::pin(stream) as SseBody).into_response()
+    // Same heartbeat as the chat stream, for the same reason: a session watching a long tool call
+    // emits no events for as long as that tool takes, and an idle connection is one an intermediary
+    // may close. See `super::chat::keep_alive`.
+    Sse::new(Box::pin(stream) as SseBody)
+        .keep_alive(super::chat::keep_alive())
+        .into_response()
 }
 
 /// Encode a kernel [`liberado_session::SessionEvent`] as SSE. Event names are the kind's serde
