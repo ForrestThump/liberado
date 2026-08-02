@@ -87,8 +87,50 @@ pub struct AppState {
     pub drain: DrainGate,
 }
 
-/// Re-resolve chat compaction `trigger_tokens` for the live face model after a hot-swap.
+/// Build the kernel [`liberado_main_agent::CompactionConfig`] from topology: absolute triggers
+/// resolved **per declared model** (and the live face slug), plus a daemon-default for chats with
+/// no model of their own.
+///
+/// Call once at chat boot (`lib.rs`); face hot-swap only updates the default via
+/// [`resync_compaction_trigger_for_face_model`].
+pub fn compaction_config_for_face(
+    config: &Config,
+    face_model: &str,
+) -> liberado_main_agent::CompactionConfig {
+    let compact = &config.topology.main_agent.compaction;
+    let models = &config.topology.models;
+    let default_trigger = compact.resolve_trigger_tokens(Some(face_model), models);
+    let mut model_trigger_tokens = std::collections::HashMap::new();
+    for m in models {
+        model_trigger_tokens.insert(
+            m.name.clone(),
+            compact.resolve_trigger_tokens(Some(m.name.as_str()), models),
+        );
+    }
+    // Face slug may not be a declared [[models]] entry (free-form provider model).
+    model_trigger_tokens
+        .entry(face_model.to_string())
+        .or_insert(default_trigger);
+    // Same absolute `resolve_trigger_tokens` would return for an undeclared conversation model.
+    let unknown_model_trigger_tokens =
+        compact.resolve_trigger_tokens(Some("__liberado_unknown_model__"), models);
+    liberado_main_agent::CompactionConfig {
+        enabled: compact.enabled,
+        trigger_tokens: default_trigger,
+        model_trigger_tokens,
+        unknown_model_trigger_tokens,
+        keep_recent_turns: compact.keep_recent_turns as usize,
+        summary_max_tokens: compact.summary_max_tokens,
+        tool_result_max_chars: compact.tool_result_max_chars as usize,
+    }
+}
+
+/// Re-resolve the **daemon-default** chat compaction threshold after a face-model hot-swap.
+///
 /// Uses config-tier `CompactionSettings::resolve_trigger_tokens` (per-model pct / absolute).
+/// Only conversations with no model of their own observe the new value — per-conversation
+/// model thresholds stay fixed in the trigger table wired at boot (the shared-number bug was
+/// that this path retuned every chat).
 pub fn resync_compaction_trigger_for_face_model(state: &AppState, face_model: &str) {
     let Some(chat) = state.chat.as_ref() else {
         return;

@@ -831,6 +831,7 @@ transport = { kind = "docker", image = "liberado-tasks-mcp:latest", command = "n
             context_window: 8000,
             tier: ModelTier::ControlPlane,
             cost: None,
+            prices: Default::default(),
         });
         cfg.topology
             .model_roles
@@ -956,6 +957,7 @@ clarify_threshold_read = 0.8
                 context_window: 16000,
                 tier: ModelTier::ControlPlane,
                 cost: None,
+                prices: Default::default(),
             })
             .model_role(ModelRole::Dispatcher, "my-model")
             .build()

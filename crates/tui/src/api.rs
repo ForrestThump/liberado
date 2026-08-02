@@ -82,12 +82,13 @@ pub async fn fetch_conversations(
     resp.json().await
 }
 
-/// Fetch `GET /api/conversations/{id}` and return the message history.
+/// Fetch `GET /api/conversations/{id}` — messages plus turn lifecycle flags
+/// (`turn_running` / `turn_unanswered`) the open path needs for reattach vs dead-turn notice.
 pub async fn fetch_conversation_history(
     client: &Client,
     server: &str,
     id: &str,
-) -> Result<Option<Vec<ChatMessage>>, reqwest::Error> {
+) -> Result<Option<ConversationHistoryResponse>, reqwest::Error> {
     let resp = client
         .get(format!("{server}/api/conversations/{id}"))
         .send()
@@ -96,8 +97,7 @@ pub async fn fetch_conversation_history(
         return Ok(None);
     }
     resp.error_for_status_ref()?;
-    let history: ConversationHistoryResponse = resp.json().await?;
-    Ok(Some(history.messages))
+    Ok(Some(resp.json().await?))
 }
 
 /// Fetch `GET /api/models` — live provider catalog + current model.
@@ -114,19 +114,59 @@ pub async fn fetch_models(client: &Client, server: &str) -> Result<ModelsRespons
     resp.json().await
 }
 
-/// `POST /api/models/select` — hot-swap the daemon's active model for subsequent turns.
+/// `POST /api/models/select` — hot-swap model for subsequent turns.
+///
+/// When `conversation` is `Some`, the pick is scoped to that chat only (WebUI contract). When
+/// `None`, the daemon-wide default changes — historical TUI behaviour for no open conversation.
 pub async fn select_model(
     client: &Client,
     server: &str,
     model: &str,
+    conversation: Option<&str>,
 ) -> Result<ModelsResponse, reqwest::Error> {
+    let body = match conversation {
+        Some(id) => serde_json::json!({ "model": model, "conversation": id }),
+        None => serde_json::json!({ "model": model }),
+    };
     let resp = client
         .post(format!("{server}/api/models/select"))
-        .json(&serde_json::json!({ "model": model }))
+        .json(&body)
         .send()
         .await?;
     resp.error_for_status_ref()?;
     resp.json().await
+}
+
+/// `POST /api/conversations/{id}/cancel` — stop an in-flight durable turn.
+///
+/// Closing the local SSE stream alone no longer cancels (turns outlive the connection). This is
+/// the same endpoint the WebUI uses; a cancelled turn persists nothing on the server.
+pub async fn cancel_conversation(
+    client: &Client,
+    server: &str,
+    id: &str,
+) -> Result<(), reqwest::Error> {
+    let resp = client
+        .post(format!("{server}/api/conversations/{id}/cancel"))
+        .send()
+        .await?;
+    resp.error_for_status_ref()?;
+    Ok(())
+}
+
+/// `GET /api/conversations/{id}/attach` — rejoin a turn already running for this conversation.
+///
+/// Returns the SSE response for the shared decoder (`SessionEvent::from_sse_data`); replay of
+/// what has already happened arrives first, then live events — same vocabulary as chat stream.
+pub async fn attach_conversation_stream(
+    client: &Client,
+    server: &str,
+    id: &str,
+) -> Result<reqwest::Response, reqwest::Error> {
+    client
+        .get(format!("{server}/api/conversations/{id}/attach"))
+        .send()
+        .await
 }
 
 /// Fetch `GET /api/sessions` — **every** session (newest first): chats and goal sessions in one

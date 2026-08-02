@@ -69,7 +69,9 @@ use thiserror::Error;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::Sender;
 
-use crate::compaction::{self, COMPACTION_AUTHOR, COMPACTION_TAIL_AUTHOR, CompactionConfig};
+use crate::compaction::{
+    self, COMPACTION_AUTHOR, COMPACTION_TAIL_AUTHOR, CompactionConfig, CompactionTriggerTable,
+};
 use crate::face::{DispatchBridge, FaceRuntime};
 use crate::{Conversation, DEFAULT_SYSTEM_PROMPT, HUMAN_INTERFACE_SYSTEM_PROMPT};
 
@@ -284,13 +286,22 @@ pub struct ChatSessions {
 /// summarization completion per compaction (the chat face's own provider in production — see
 /// `docs/roadmap/context-compaction-plan.md` for why no dedicated summarizer model yet).
 ///
-/// `trigger_tokens` is held under a mutex so face-model hot-swap can re-resolve the threshold
-/// without rebuilding `ChatSessions` (process-wide `POST /api/models/select` / Telegram `/model`).
+/// Thresholds live in [`CompactionTriggerTable`] under a mutex: the **default** entry is updated
+/// on daemon-wide face-model hot-swap ([`ChatSessions::set_compaction_trigger_tokens`]); per-model
+/// entries are fixed at wiring time so a global resync cannot retune a conversation that pinned
+/// its own model.
+/// Whether resolving a conversation's model should take the pending pick (a real turn, which makes
+/// the choice durable) or leave it alone (a query about what the next turn would do).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConsumePending {
+    Yes,
+    No,
+}
+
 struct CompactionEngine {
     config: CompactionConfig,
-    /// Live absolute trigger; starts as `config.trigger_tokens`, updated by
-    /// [`ChatSessions::set_compaction_trigger_tokens`].
-    trigger_tokens: std::sync::Mutex<u32>,
+    /// Live table: default + per-model absolutes. See [`CompactionTriggerTable::for_model`].
+    triggers: std::sync::Mutex<CompactionTriggerTable>,
     provider: Arc<dyn Provider>,
 }
 
@@ -330,48 +341,70 @@ impl ChatSessions {
 
     /// Enable automatic context compaction (CH3) with `config`; `provider` runs the one
     /// summarization completion per compaction. Per turn, when the estimated size of history +
-    /// the incoming message exceeds `config.trigger_tokens`, everything older than the last
-    /// `keep_recent_turns` user turns is rolled into a persisted summary marker
-    /// ([`COMPACTION_AUTHOR`]) and the model-visible history resumes from it. A failed summary
-    /// never fails the turn — it runs uncompacted instead.
+    /// the incoming message exceeds the **conversation's** resolved trigger (per-model table, else
+    /// the daemon default), everything older than the last `keep_recent_turns` user turns is
+    /// rolled into a persisted summary marker ([`COMPACTION_AUTHOR`]) and the model-visible
+    /// history resumes from it. A failed summary never fails the turn — it runs uncompacted instead.
     pub fn with_compaction(
         mut self,
         config: CompactionConfig,
         provider: Arc<dyn Provider>,
     ) -> Self {
-        let trigger_tokens = std::sync::Mutex::new(config.trigger_tokens);
+        let triggers = std::sync::Mutex::new(CompactionTriggerTable::from_config(&config));
         self.compaction = Some(CompactionEngine {
             config,
-            trigger_tokens,
+            triggers,
             provider,
         });
         self
     }
 
-    /// Update the live compaction threshold (absolute estimated tokens) after a face-model
-    /// hot-swap. No-op when compaction was never wired. Concurrent with turns: the next
-    /// `maybe_compact` observes the new value.
+    /// Update the **daemon-default** compaction threshold after a face-model hot-swap.
+    ///
+    /// Only conversations with **no** model of their own observe this value. Conversations that
+    /// resolved a per-conversation model keep the absolute from the model table — that is the fix
+    /// for the shared-number bug (`resync_compaction_trigger_for_face_model` used to retune every
+    /// chat). No-op when compaction was never wired.
     pub fn set_compaction_trigger_tokens(&self, tokens: u32) {
         if let Some(engine) = &self.compaction {
-            *engine
-                .trigger_tokens
+            engine
+                .triggers
                 .lock()
-                .unwrap_or_else(|p| p.into_inner()) = tokens;
+                .unwrap_or_else(|p| p.into_inner())
+                .default = tokens;
             tracing::info!(
                 trigger_tokens = tokens,
-                "chat compaction: trigger_tokens updated for face model change"
+                "chat compaction: default trigger_tokens updated for face model change \
+                 (per-conversation models unchanged)"
             );
         }
     }
 
-    /// Current live compaction threshold, if compaction is enabled on this host.
+    /// Current **daemon-default** compaction threshold, if compaction is enabled.
+    ///
+    /// Prefer [`Self::compaction_trigger_for_session`] when asserting a specific conversation's
+    /// effective threshold (default vs pinned model).
     pub fn compaction_trigger_tokens(&self) -> Option<u32> {
         self.compaction.as_ref().map(|engine| {
-            *engine
-                .trigger_tokens
+            engine
+                .triggers
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
+                .default
         })
+    }
+
+    /// Effective absolute compaction trigger for `session` — same resolution `maybe_compact` uses
+    /// (conversation model via pending pick / profile / last-used, then the trigger table).
+    ///
+    /// Does **not** consume a pending model pick (unlike a real turn). `None` when compaction is
+    /// not wired. Drives tests that two conversations on different models must not share one
+    /// threshold, and that a daemon-wide resync must not retune a pinned conversation.
+    pub async fn compaction_trigger_for_session(&self, session: Ulid) -> Option<u32> {
+        let engine = self.compaction.as_ref()?;
+        let model = self.peek_turn_model(session).await;
+        let table = engine.triggers.lock().unwrap_or_else(|p| p.into_inner());
+        Some(table.for_model(model.as_deref()))
     }
 
     /// Override the system prompt written as the root node of new conversations.
@@ -692,14 +725,17 @@ impl ChatSessions {
         let _guard = lock.lock().await;
         self.maybe_seed_default_title(session, user).await?;
         let (nodes, parent_leaf) = self.load(session).await?;
-        let (mut convo, parent_leaf) = self.maybe_compact(session, nodes, parent_leaf, user).await;
-        let before = convo.len();
 
         // Read per turn, not cached: a profile switch mid-conversation takes effect on the next
         // turn, which is the whole of "switchable" — no restart, no reconnect. Resolved *before*
-        // the user node is written, because that node is stamped with the model this turn will run
-        // on and the answer has to be known first.
+        // compaction and the user node: the compact threshold tracks this conversation's model,
+        // and the user node is stamped with the same id.
         let settings = self.turn_settings(session).await;
+        let (mut convo, parent_leaf) = self
+            .maybe_compact(session, nodes, parent_leaf, user, settings.model.as_deref())
+            .await;
+        let before = convo.len();
+
         // A profile's model applies to this turn only. Specialised per turn rather than set on the
         // shared provider, so one chat choosing a model cannot change it for every other session.
         let executor = self.executor.with_model(settings.model.clone());
@@ -789,12 +825,14 @@ impl ChatSessions {
         let _guard = lock.lock().await;
         self.maybe_seed_default_title(session, user).await?;
         let (nodes, parent_leaf) = self.load(session).await?;
-        let (mut convo, parent_leaf) = self.maybe_compact(session, nodes, parent_leaf, user).await;
+        // Resolved once per turn (pending model is consumed here): compaction and the user-node
+        // stamp must agree on the same model.
+        let settings = self.turn_settings(session).await;
+        let (mut convo, parent_leaf) = self
+            .maybe_compact(session, nodes, parent_leaf, user, settings.model.as_deref())
+            .await;
         let before = convo.len();
 
-        // Resolved before the user node is written: that node carries the model this turn runs on,
-        // which is what makes the choice durable without a second place to store it.
-        let settings = self.turn_settings(session).await;
         let executor = self.executor.with_model(settings.model.clone());
         let turn_model = executor.active_model();
 
@@ -915,6 +953,7 @@ impl ChatSessions {
         };
         // A *named* profile is authoritative; the absence of one means the daemon's defaults. See
         // `ConversationHeader::grant` for why the name, not an empty capability set, is the signal.
+        let from_profile = Self::profile_model(&header);
         let mut settings = if header.grant.profile.is_none() {
             self.default_turn_settings()
         } else {
@@ -926,7 +965,7 @@ impl ChatSessions {
                 model: header.grant.model,
             }
         };
-        settings.model = self.resolve_turn_model(session, settings.model).await;
+        settings.model = self.resolve_turn_model(session, from_profile).await;
         settings
     }
 
@@ -953,13 +992,58 @@ impl ChatSessions {
         session: Ulid,
         from_profile: Option<String>,
     ) -> Option<String> {
-        if let Some(pending) = self.pending_model(session) {
+        self.model_precedence(session, from_profile, ConsumePending::Yes)
+            .await
+    }
+
+    /// The precedence chain above, in one place.
+    ///
+    /// Taking the pending pick is the *only* thing that differs between a real turn and a query
+    /// that reports which model a turn would use. Sharing the body is deliberate: this logic
+    /// existed twice, and a compaction threshold asserted against a second copy of the rule would
+    /// keep passing while the turn drifted away from it — §6 of `failure-modes.md`.
+    async fn model_precedence(
+        &self,
+        session: Ulid,
+        from_profile: Option<String>,
+        consume: ConsumePending,
+    ) -> Option<String> {
+        let pending = match consume {
+            ConsumePending::Yes => self.pending_model(session),
+            ConsumePending::No => self.peek_pending_model(session),
+        };
+        if let Some(pending) = pending {
             return Some(pending);
         }
         if from_profile.is_some() {
             return from_profile;
         }
         self.model_last_used(session).await
+    }
+
+    /// Which model this conversation's *next* turn would run on, without consuming the pending
+    /// pick — so asking the question cannot steal the answer from the turn that follows.
+    ///
+    /// Same precedence as [`Self::turn_settings`], including on a header read failure: that path
+    /// pins no profile model but must still honour a pending pick.
+    async fn peek_turn_model(&self, session: Ulid) -> Option<String> {
+        let from_profile = match self.store.header(session).await {
+            Ok(header) => Self::profile_model(&header),
+            Err(_) => None,
+        };
+        self.model_precedence(session, from_profile, ConsumePending::No)
+            .await
+    }
+
+    /// The model a *named* session profile pins. No named profile means the daemon's defaults,
+    /// which pin nothing — see [`Self::turn_settings`] for why the name is the signal rather than
+    /// an empty capability set.
+    fn profile_model(header: &ConversationHeader) -> Option<String> {
+        if header.grant.profile.is_none() {
+            None
+        } else {
+            header.grant.model.clone()
+        }
     }
 
     /// The model that most recently ran in this conversation, from the log itself.
@@ -1141,12 +1225,21 @@ impl ChatSessions {
     }
 
     /// Take the pending pick for `conversation`, if any. Removing on read is what makes the
-    /// hand-off to the log clean: it is consumed exactly when it becomes durable.
+    /// hand-off to the log clean: it is consumed exactly when it becomes durable (once per turn).
     fn pending_model(&self, conversation: Ulid) -> Option<String> {
         self.pending_models
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(&conversation)
+    }
+
+    /// Peek without consuming — for trigger queries that must not steal the pick from the next turn.
+    fn peek_pending_model(&self, conversation: Ulid) -> Option<String> {
+        self.pending_models
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&conversation)
+            .cloned()
     }
 
     /// Log the tool surface this turn actually holds, then state it to the model.
@@ -1636,6 +1729,9 @@ impl ChatSessions {
         nodes: Vec<MessageNode>,
         parent_leaf: Option<Ulid>,
         incoming_user: &str,
+        // Model this turn already resolved (same as the stamp on the user node). Drives the
+        // per-conversation threshold — never a second independent lookup that could disagree.
+        turn_model: Option<&str>,
     ) -> (Conversation, Option<Ulid>) {
         let messages: Vec<Message> = nodes.iter().map(|n| n.message.clone()).collect();
         let pass_through = || (Conversation::from_history(messages.clone()), parent_leaf);
@@ -1647,10 +1743,12 @@ impl ChatSessions {
             return pass_through();
         }
 
-        let trigger_tokens = *engine
-            .trigger_tokens
+        // Threshold tracks *this* conversation's model — not a process-wide face-model number.
+        let trigger_tokens = engine
+            .triggers
             .lock()
-            .unwrap_or_else(|p| p.into_inner());
+            .unwrap_or_else(|p| p.into_inner())
+            .for_model(turn_model);
 
         let estimate = compaction::estimate_tokens(&messages)
             + compaction::estimate_tokens(&[Message::user(incoming_user)]);
@@ -1666,6 +1764,7 @@ impl ChatSessions {
             tracing::debug!(
                 estimate,
                 trigger = trigger_tokens,
+                model = turn_model.unwrap_or("(daemon-default)"),
                 "chat compaction: over trigger but nothing elidable"
             );
             return pass_through();

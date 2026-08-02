@@ -320,6 +320,7 @@ fn model_without_tool_calling_fails_agent_roles() {
         context_window: 32_000,
         tier: ModelTier::ControlPlane,
         cost: None,
+        prices: Default::default(),
     };
     assert!(!p.meets(ModelRole::MainAgent));
     assert!(!p.meets(ModelRole::Subagent));
@@ -394,6 +395,7 @@ fn validate_accepts_well_formed_model_assignment() {
         context_window: 64_000,
         tier: ModelTier::ControlPlane,
         cost: None,
+        prices: Default::default(),
     });
     cfg.topology
         .model_roles

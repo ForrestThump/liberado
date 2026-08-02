@@ -188,6 +188,41 @@ Until the TUI **drives goal sessions**, dogfooding the agentic stack stays on CL
 8. **ARCHITECTURE shortcuts table** incomplete vs actual keybinds (Ctrl+S, mouse, etc.).  
 9. **No goal session list** despite server support.  
 10. **Fork** command exists as stub while server support was “pending” — dead ends hurt trust.
+11. **Network calls in the effect loop have no timeout** — the stop button is the one that hurts.
+    See §5.1.1.
+
+#### 5.1.1 The effect loop can block on an unresponsive daemon
+
+**Open**, noted 2026-08-02 while reviewing the durable-turn TUI work (PR #30).
+
+`EffectRunner` builds its HTTP client with `reqwest::Client::new()`, which sets **no default
+timeout**, and several effects are `.await`ed inline in the event loop rather than spawned —
+`select_model`, `fork_conversation`, `cancel_stream`, the `goal_action` family. While one is in
+flight the TUI does not repaint or accept input.
+
+For most of these it is a latency annoyance. For **cancel** it is a design inversion: Ctrl+S exists
+for the case where the daemon is misbehaving, and that is exactly the case where the cancel POST
+can hang. The surface that lets you escape a stuck turn is the one that freezes when the turn is
+stuck. This became reachable when durable turns made cancel a network call at all — before that,
+stopping was a local `AbortHandle::abort()` that could not block.
+
+**Fix, in shape.** A timeout on the client covers the whole surface at once rather than each call
+site separately:
+
+```rust
+reqwest::Client::builder().timeout(Duration::from_secs(30)).build()
+```
+
+`liberado-conformance`'s `DaemonClient` already does exactly this — the same defaulting mistake was
+already found and fixed one crate over, which is the argument for the client-level fix rather than a
+per-effect one. Streaming effects (`start_chat_stream`, `attach_conversation_stream`,
+`join_goal_session`) must **not** inherit a total-request timeout: they are long-lived by design and
+already bounded by `tuning::SSE_STREAM_TIMEOUT` per chunk. Either use `connect_timeout` on the shared
+client, or hold a second client for streams.
+
+**Not a regression**, so it did not block PR #30: `select_model` and friends have always behaved
+this way. Written down because the cancel case makes it newly consequential, and because a
+half-second stall on a healthy daemon hides how badly it degrades on a sick one.
 
 ### 5.2 Peer UX principles to copy (not clone)
 

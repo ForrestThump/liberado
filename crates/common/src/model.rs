@@ -43,6 +43,36 @@ impl ReasoningLevel {
     }
 }
 
+/// Optional per-million-token USD rates for a model (`[[models]]` D1 cost accounting).
+///
+/// All fields optional and load-bearing as such: an unpriced model must report tokens with
+/// **unknown** cost, never a silent `0.0`. Applied at read time over the latency journal — never
+/// baked into event records.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ModelTokenPrices {
+    /// USD per 1_000_000 input (non-cached prompt) tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<f64>,
+    /// USD per 1_000_000 output (completion) tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<f64>,
+    /// USD per 1_000_000 cached prompt tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_input: Option<f64>,
+}
+
+impl ModelTokenPrices {
+    /// True when no rate is set — the model is unpriced for cost queries.
+    pub fn is_empty(&self) -> bool {
+        self.input.is_none() && self.output.is_none() && self.cached_input.is_none()
+    }
+
+    /// True when at least one rate is present (model participates in pricing).
+    pub fn is_priced(&self) -> bool {
+        !self.is_empty()
+    }
+}
+
 /// Declared capabilities of a concrete model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelProfile {
@@ -56,8 +86,14 @@ pub struct ModelProfile {
     pub context_window: u32,
     pub tier: ModelTier,
     /// Optional relative cost hint (e.g. USD per Mtok), for per-dispatch selection.
+    ///
+    /// Distinct from [`ModelTokenPrices`]: a single scalar for coarse ranking, not money.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<f32>,
+    /// Optional per-million USD rates (`input` / `output` / `cached_input` on `[[models]]`).
+    /// Flattened so operators write the three keys at the model table root.
+    #[serde(flatten, default)]
+    pub prices: ModelTokenPrices,
 }
 
 /// The minimum capabilities a role demands. The hard floor for *every* role is tool-calling
@@ -145,7 +181,45 @@ mod tests {
             context_window: 32_000,
             tier,
             cost: None,
+            prices: ModelTokenPrices::default(),
         }
+    }
+
+    #[test]
+    fn model_token_prices_load_from_flat_keys() {
+        let p: ModelProfile = toml::from_str(
+            r#"
+            name = "deepseek-v4-pro"
+            tool_calling = true
+            structured_output = true
+            context_window = 128000
+            tier = "control_plane"
+            input = 0.14
+            output = 0.28
+            cached_input = 0.014
+            "#,
+        )
+        .unwrap();
+        assert_eq!(p.prices.input, Some(0.14));
+        assert_eq!(p.prices.output, Some(0.28));
+        assert_eq!(p.prices.cached_input, Some(0.014));
+        assert!(p.prices.is_priced());
+    }
+
+    #[test]
+    fn unpriced_model_has_empty_prices() {
+        let p: ModelProfile = toml::from_str(
+            r#"
+            name = "mystery"
+            tool_calling = true
+            structured_output = false
+            context_window = 64000
+            tier = "work_plane"
+            "#,
+        )
+        .unwrap();
+        assert!(p.prices.is_empty());
+        assert!(!p.prices.is_priced());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! One module per path (P1a–P5).
+//! One module per path (P1a–P6).
 
 mod p1a;
 mod p1b;
@@ -6,6 +6,7 @@ mod p2;
 mod p3;
 mod p4;
 mod p5;
+mod p6;
 
 use std::time::Instant;
 
@@ -38,6 +39,7 @@ pub async fn run_path(
         PathId::P3 => p3::run(client, cfg, timeout).await,
         PathId::P4 => p4::run(client, cfg, timeout).await,
         PathId::P5 => p5::run(client, cfg, timeout).await,
+        PathId::P6 => p6::run(client, cfg, timeout).await,
     };
     let _ = start;
     result

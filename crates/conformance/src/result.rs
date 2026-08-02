@@ -11,6 +11,8 @@ pub enum PathId {
     P3,
     P4,
     P5,
+    /// Durable turn outlives connection + attach + cancel rollback (parallel deliverable §5).
+    P6,
 }
 
 impl PathId {
@@ -22,6 +24,7 @@ impl PathId {
             Self::P3 => "p3",
             Self::P4 => "p4",
             Self::P5 => "p5",
+            Self::P6 => "p6",
         }
     }
 
@@ -38,11 +41,13 @@ impl PathId {
             "p3" | "3" => Some(Self::P3),
             "p4" | "4" => Some(Self::P4),
             "p5" | "5" => Some(Self::P5),
+            "p6" | "6" => Some(Self::P6),
             _ => None,
         }
     }
 
     pub fn all_default() -> Vec<Self> {
+        // P5 stays opt-in (advisory / model flaky). P6 is gating when listed or selected.
         vec![Self::P1a, Self::P1b, Self::P2, Self::P3, Self::P4]
     }
 }
@@ -158,6 +163,15 @@ mod tests {
     #[test]
     fn non_advisory_fail_blocks() {
         let r = PathResult::fail(PathId::P1b, "artifact", 1, serde_json::json!({}));
+        assert!(r.is_blocking_fail(false));
+    }
+
+    #[test]
+    fn p6_is_registered_and_not_advisory() {
+        assert_eq!(PathId::parse("p6"), Some(PathId::P6));
+        assert_eq!(PathId::P6.as_str(), "p6");
+        assert!(!PathId::P6.is_advisory());
+        let r = PathResult::fail(PathId::P6, "durable", 1, serde_json::json!({}));
         assert!(r.is_blocking_fail(false));
     }
 }
