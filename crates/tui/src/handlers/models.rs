@@ -65,21 +65,35 @@ fn select_model(app: &mut App) -> Vec<Effect> {
     let Some(name) = filtered.get(app.sidebar_selection).cloned() else {
         return vec![Effect::None];
     };
+    // Scope to the open conversation when one is selected (WebUI contract); otherwise
+    // daemon-wide — two meanings of the same command depending on whether a chat is open.
+    let conversation = app.session.clone();
     let current = app
         .status
         .as_ref()
         .and_then(|s| s.model_name.clone())
         .unwrap_or_else(|| "(unknown)".into());
-    if name == current {
+    // Daemon-wide "already active" only applies when not scoping to a conversation — a chat
+    // may want a model that differs from the process default.
+    if conversation.is_none() && name == current {
         app.close_model_browser();
         app.messages
             .push(Message::System(format!("Model: {name}  (already active)")));
         app.scroll_offset = 0;
         return vec![Effect::None];
     }
-    app.messages.push(Message::System(format!(
-        "Switching active model to `{name}`…"
-    )));
+    if conversation.is_some() {
+        app.messages.push(Message::System(format!(
+            "Setting model for this conversation to `{name}`…"
+        )));
+    } else {
+        app.messages.push(Message::System(format!(
+            "Switching active model to `{name}`…"
+        )));
+    }
     app.scroll_offset = 0;
-    vec![Effect::SelectModel(name)]
+    vec![Effect::SelectModel {
+        model: name,
+        conversation,
+    }]
 }

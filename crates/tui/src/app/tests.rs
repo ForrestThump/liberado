@@ -268,7 +268,11 @@ fn slash_works_during_streaming() {
     assert!(app.session.is_none());
     assert!(!app.streaming);
     assert!(app.input.is_empty());
-    assert!(effects.iter().any(|e| matches!(e, Effect::CancelStream)));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::CancelStream { .. }))
+    );
 }
 #[test]
 fn pgup_scrolls_up() {
@@ -305,6 +309,8 @@ fn history_loaded_renders_tool_calls() {
             tool_call_id: None,
             model: None,
         }],
+        turn_running: false,
+        turn_unanswered: false,
     });
     assert_eq!(app.messages.len(), 1);
     assert!(matches!(app.messages[0], Message::ToolCall(_)));
@@ -333,6 +339,8 @@ fn history_loaded_mixed_content_and_tools() {
                 model: None,
             },
         ],
+        turn_running: false,
+        turn_unanswered: false,
     });
     assert_eq!(app.messages.len(), 3);
     assert!(matches!(app.messages[0], Message::User(_)));
@@ -355,6 +363,8 @@ fn history_loaded_enforces_message_cap() {
     app.update(Action::HistoryLoaded {
         id: "big-conv".into(),
         messages: many_messages,
+        turn_running: false,
+        turn_unanswered: false,
     });
     // After pruning: 500 messages kept + 1 system marker = 501 total
     assert_eq!(app.messages.len(), 501);
@@ -390,25 +400,44 @@ fn sse_failed_clears_partial_assistant_buf() {
 #[test]
 fn esc_during_streaming_cancels() {
     let mut app = test_app();
+    app.session = Some("conv-1".into());
     app.streaming = true;
     app.assistant_buf = "partial response".into();
     let effects = app.handle_key(key(KeyCode::Esc));
     assert!(!app.streaming);
     assert!(app.assistant_buf.is_empty());
+    // Cancel persists nothing — partial is dropped, not kept as an assistant message.
+    assert!(
+        !app.messages
+            .iter()
+            .any(|m| matches!(m, Message::Assistant(_))),
+        "must not keep a partial reply after cancel"
+    );
     assert!(matches!(app.messages.last(), Some(Message::System(m)) if m.contains("cancelled")));
     assert_eq!(effects.len(), 1);
-    assert!(matches!(effects[0], Effect::CancelStream));
+    match &effects[0] {
+        Effect::CancelStream { conversation } => {
+            assert_eq!(conversation.as_deref(), Some("conv-1"));
+        }
+        other => panic!("expected CancelStream with conversation, got {other:?}"),
+    }
 }
 #[test]
 fn ctrl_s_stops_streaming() {
     let mut app = test_app();
+    app.session = Some("conv-2".into());
     app.streaming = true;
     app.assistant_buf = "partial".into();
     let effects = app.handle_key(ctrl_key(KeyCode::Char('s')));
     assert!(!app.streaming);
     assert!(app.assistant_buf.is_empty());
     assert!(matches!(app.messages.last(), Some(Message::System(m)) if m.contains("stopped")));
-    assert!(matches!(effects[0], Effect::CancelStream));
+    match &effects[0] {
+        Effect::CancelStream { conversation } => {
+            assert_eq!(conversation.as_deref(), Some("conv-2"));
+        }
+        other => panic!("expected CancelStream with conversation, got {other:?}"),
+    }
 }
 #[test]
 fn ctrl_s_without_streaming_does_nothing() {
@@ -455,8 +484,159 @@ fn pending_load_cleared_on_history_loaded() {
     app.update(Action::HistoryLoaded {
         id: "c1".into(),
         messages: vec![],
+        turn_running: false,
+        turn_unanswered: false,
     });
     assert!(app.pending_load.is_none());
+}
+
+/// Opening a conversation with a live turn reattaches rather than showing idle silence.
+#[test]
+fn history_loaded_turn_running_emits_attach() {
+    let mut app = test_app();
+    app.pending_load = Some("live-1".into());
+    let effects = app.update(Action::HistoryLoaded {
+        id: "live-1".into(),
+        messages: vec![ChatMessage {
+            role: "user".into(),
+            content: "still working?".into(),
+            tool_calls: None,
+            tool_call_id: None,
+            model: None,
+        }],
+        turn_running: true,
+        turn_unanswered: false,
+    });
+    assert!(app.streaming, "attach path must show streaming state");
+    assert_eq!(app.session.as_deref(), Some("live-1"));
+    assert!(
+        app.messages
+            .iter()
+            .any(|m| matches!(m, Message::System(s) if s.contains("reattach"))),
+        "should announce reattach"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::AttachConversationStream(id) if id == "live-1")),
+        "must emit AttachConversationStream, got {effects:?}"
+    );
+}
+
+/// A dead turn must be named, not left as a question followed by silence.
+#[test]
+fn history_loaded_turn_unanswered_surfaces_death_message() {
+    let mut app = test_app();
+    app.pending_load = Some("dead-1".into());
+    let effects = app.update(Action::HistoryLoaded {
+        id: "dead-1".into(),
+        messages: vec![ChatMessage {
+            role: "user".into(),
+            content: "where did my answer go?".into(),
+            tool_calls: None,
+            tool_call_id: None,
+            model: None,
+        }],
+        turn_running: false,
+        turn_unanswered: true,
+    });
+    assert!(!app.streaming);
+    assert!(
+        app.messages.iter().any(|m| matches!(
+            m,
+            Message::System(s) if s.contains("without a reply") || s.contains("re-send")
+        )),
+        "must tell the human the turn died; messages={:?}",
+        app.messages
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::AttachConversationStream(_))),
+        "must not attach when nothing is running"
+    );
+}
+
+/// `/model` with an open conversation scopes the SelectModel effect to that id.
+#[test]
+fn model_browser_select_with_open_conversation_scopes_request() {
+    let mut app = test_app();
+    app.session = Some("open-conv".into());
+    app.focus = Focus::ModelBrowser;
+    app.models = vec!["alpha".into(), "beta".into()];
+    app.sidebar_selection = 1;
+    let effects = crate::handlers::models::handle(&mut app, key(KeyCode::Enter));
+    match effects.as_slice() {
+        [
+            Effect::SelectModel {
+                model,
+                conversation: Some(c),
+            },
+        ] => {
+            assert_eq!(model, "beta");
+            assert_eq!(c, "open-conv");
+        }
+        other => panic!("expected SelectModel with conversation, got {other:?}"),
+    }
+}
+
+/// `/model` with no open conversation stays daemon-wide (no conversation field).
+#[test]
+fn model_browser_select_without_conversation_is_daemon_wide() {
+    let mut app = test_app();
+    app.session = None;
+    app.focus = Focus::ModelBrowser;
+    app.models = vec!["alpha".into()];
+    app.sidebar_selection = 0;
+    // Different from current so it doesn't early-return as "already active".
+    app.status = Some(DaemonStatus {
+        running: true,
+        vault_path: "/v".into(),
+        uptime_seconds: 1,
+        watcher_active: false,
+        dispatcher_attached: false,
+        orchestrator_attached: false,
+        reactions_seen: 0,
+        model_name: Some("other".into()),
+        token_usage_total: None,
+        context_window: None,
+        chat_tools: 0,
+        chat_tool_names: vec![],
+        enter_sends: true,
+    });
+    let effects = crate::handlers::models::handle(&mut app, key(KeyCode::Enter));
+    match effects.as_slice() {
+        [
+            Effect::SelectModel {
+                model,
+                conversation: None,
+            },
+        ] => assert_eq!(model, "alpha"),
+        other => panic!("expected daemon-wide SelectModel, got {other:?}"),
+    }
+}
+
+#[test]
+fn help_text_does_not_promise_partial_response_on_stop() {
+    let mut app = test_app();
+    let _ = app.handle_slash_command("/help");
+    let help: String = app
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            Message::System(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !help.to_lowercase().contains("keep partial"),
+        "help must not promise a partial reply is kept: {help}"
+    );
+    assert!(
+        help.to_lowercase().contains("cancel") || help.to_lowercase().contains("stop"),
+        "help should still document stop/cancel"
+    );
 }
 #[test]
 fn pending_load_cleared_on_sse_failed() {
@@ -1029,6 +1209,8 @@ fn history_loaded_stale_response_rejected() {
             tool_call_id: None,
             model: None,
         }],
+        turn_running: false,
+        turn_unanswered: false,
     });
     assert!(matches!(app.messages[0], Message::User(ref m) if m == "current"));
     assert!(effects.is_empty() || effects.iter().all(|e| matches!(e, Effect::None)));
@@ -1256,7 +1438,11 @@ fn cmd_new_without_streaming_no_cancel() {
     app.streaming = false;
     app.input = "/new".into();
     let effects = app.handle_key(key(KeyCode::Enter));
-    assert!(!effects.iter().any(|e| matches!(e, Effect::CancelStream)));
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::CancelStream { .. }))
+    );
     assert!(
         effects
             .iter()

@@ -821,7 +821,9 @@ impl App {
                 liberado_commands::CommandResult::NewConversation { was_streaming } => {
                     effects.push(Effect::RefreshConversations);
                     if *was_streaming {
-                        effects.push(Effect::CancelStream);
+                        effects.push(Effect::CancelStream {
+                            conversation: self.session.clone(),
+                        });
                     }
                 }
                 liberado_commands::CommandResult::SessionSwitched { id } => {
@@ -975,7 +977,7 @@ impl App {
 Keybindings:
   Enter       send / accept slash ghost · expand tool in chat
   Ctrl+C      clear input, or quit when empty (press twice to exit)
-  Ctrl+S      stop streaming (keep partial response)
+  Ctrl+S      stop / cancel the in-flight turn (nothing is kept — cancel discards)
   Tab         input ↔ chat history (or slash complete)
   Esc         clear input / cancel stream / leave a browser
   /sessions   switch sessions (primary chat + goal sessions)
@@ -1047,15 +1049,21 @@ Keybindings:
         self.end_stream("[stopped]")
     }
 
+    /// Stop watching and cancel the durable turn on the daemon.
+    ///
+    /// Pre-durable-turns, closing the SSE stream was enough to cancel. Turns now outlive the
+    /// connection, so local teardown alone only hides the work while it keeps running and
+    /// billing. [`Effect::CancelStream`] posts `POST /api/conversations/{id}/cancel` (and aborts
+    /// the local reader). The daemon persists **nothing** for a cancelled turn — drop any partial
+    /// assistant buffer rather than pretending a reply was kept.
     fn end_stream(&mut self, label: &str) -> Vec<Effect> {
         self.streaming = false;
-        if !self.assistant_buf.is_empty() {
-            self.messages
-                .push(Message::Assistant(std::mem::take(&mut self.assistant_buf)));
-        }
+        self.assistant_buf.clear();
         self.messages.push(Message::System(label.into()));
         self.scroll_offset = 0;
-        vec![Effect::CancelStream]
+        vec![Effect::CancelStream {
+            conversation: self.session.clone(),
+        }]
     }
 }
 
@@ -1080,11 +1088,16 @@ pub enum Action {
     ModelSelected {
         model: String,
         error: Option<String>,
+        /// Whether the pick was scoped to one conversation (`true`) or daemon-wide (`false`).
+        conversation_scoped: bool,
     },
-    /// Full message history loaded for a conversation.
+    /// Full message history loaded for a conversation, plus turn lifecycle flags from the same
+    /// response (`turn_running` / `turn_unanswered`).
     HistoryLoaded {
         id: String,
         messages: Vec<ChatMessage>,
+        turn_running: bool,
+        turn_unanswered: bool,
     },
     /// Conversation session id from the first SSE event.
     SseSession(String),
@@ -1152,9 +1165,18 @@ pub enum Effect {
     LoadConversationHistory(String),
     /// Fetch `GET /api/models` for the model browser.
     FetchModels,
-    /// Hot-swap the daemon's active model (`POST /api/models/select`).
-    SelectModel(String),
-    CancelStream,
+    /// Hot-swap model (`POST /api/models/select`). `conversation` scopes to one chat when set.
+    SelectModel {
+        model: String,
+        conversation: Option<String>,
+    },
+    /// Abort local SSE reader and, when `conversation` is set, `POST …/cancel` on the daemon
+    /// (durable turns outlive the connection — local teardown alone is not enough).
+    CancelStream {
+        conversation: Option<String>,
+    },
+    /// Rejoin a turn already in flight (`GET /api/conversations/{id}/attach`).
+    AttachConversationStream(String),
     /// Branch a conversation, keeping the original (`POST /api/sessions/{id}/fork`).
     ForkConversation {
         parent_id: String,
@@ -1234,18 +1256,29 @@ impl App {
                 self.mark_dirty();
                 vec![Effect::None]
             }
-            Action::ModelSelected { model, error } => {
+            Action::ModelSelected {
+                model,
+                error,
+                conversation_scoped,
+            } => {
                 if let Some(err) = error {
                     self.messages
                         .push(Message::System(format!("Failed to switch model: {err}")));
                 } else {
-                    if let Some(st) = self.status.as_mut() {
-                        st.model_name = Some(model.clone());
+                    if conversation_scoped {
+                        self.messages.push(Message::System(format!(
+                            "Model `{model}` set for this conversation — its next turn uses it \
+                             (other chats unchanged)."
+                        )));
+                    } else {
+                        if let Some(st) = self.status.as_mut() {
+                            st.model_name = Some(model.clone());
+                        }
+                        self.messages.push(Message::System(format!(
+                            "Active model switched to `{model}` — next chat turns use it \
+                             (no daemon restart)."
+                        )));
                     }
-                    self.messages.push(Message::System(format!(
-                        "Active model switched to `{model}` — next chat turns use it \
-                         (no daemon restart)."
-                    )));
                     self.close_model_browser();
                 }
                 self.scroll_offset = 0;
@@ -1274,11 +1307,16 @@ impl App {
                     Effect::RefreshSessions,
                 ]
             }
-            Action::HistoryLoaded { id, messages } => {
+            Action::HistoryLoaded {
+                id,
+                messages,
+                turn_running,
+                turn_unanswered,
+            } => {
                 if self.pending_load.as_deref() != Some(&id) {
                     return vec![Effect::None]; // stale — newer request superseded this one
                 }
-                self.session = Some(id);
+                self.session = Some(id.clone());
                 self.pending_load = None;
                 self.messages.clear();
                 self.chat_cursor = 0;
@@ -1318,10 +1356,32 @@ impl App {
                         Message::System(format!("... {removed} earlier messages omitted")),
                     );
                 }
+                // Turn lifecycle: a missing reply is either still coming or permanently lost.
+                // Silence is the wrong reading of either — attach, or say the turn died.
+                let mut follow_up = Vec::new();
+                if turn_running {
+                    self.streaming = true;
+                    self.messages.push(Message::System(
+                        "A turn is still running — reattaching…".into(),
+                    ));
+                    follow_up.push(Effect::AttachConversationStream(id));
+                } else if turn_unanswered {
+                    self.streaming = false;
+                    self.messages.push(Message::System(
+                        "The last turn ended without a reply (usually the daemon restarted \
+                         mid-inference). Nothing is still running — re-send your question to \
+                         try again."
+                            .into(),
+                    ));
+                }
                 self.scroll_offset = 0;
                 self.focus = Focus::Input;
                 self.mark_dirty();
-                vec![Effect::None]
+                if follow_up.is_empty() {
+                    vec![Effect::None]
+                } else {
+                    follow_up
+                }
             }
             Action::SseSession(id) => {
                 if self.session.is_none() {
