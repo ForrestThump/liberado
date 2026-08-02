@@ -213,6 +213,39 @@ transport = { kind = "http", url = "https://mcp.deepwiki.com" }
 # "Send to user" is gone: the daemon delivers the session summary automatically.
 # =============================================================================
 
+# =============================================================================
+# Session profiles + Tier 3 conformance hook
+# =============================================================================
+# The live conformance suite (liberado-conformance) needs a named profile that is *narrower*
+# than the domain fallback, and a hook that stamps that profile onto the reaction event.
+# See docs/future-work/live-conformance-tier3-build-spec.md.
+
+[[session_profiles]]
+name = "conformance"
+enabled = true
+description = "Tier 3 live suite — write only under the conformance vault zone"
+domain = "dispatch"
+component = "conformance"
+# No AskHuman — unattended probe. No delegation — stays inside the envelope.
+
+[[hooks]]
+name = "conformance"
+enabled = true
+# Env var on the box (Decision 10). Set LIBERADO_HOOK_CONFORMANCE_SECRET before boot.
+secret_ref = "LIBERADO_HOOK_CONFORMANCE_SECRET"
+profile = "conformance"
+goal = """
+You are a live-conformance probe. Do exactly this and nothing else:
+
+1. From the "Additional context from the trigger" line, read the run_id value
+   (the token after "run_id=").
+2. Using turbovault write_note, create exactly one note:
+   - path: conformance/artifacts/<run_id>.md
+   - body: a single line exactly: CONFORMANCE_OK <run_id>
+3. Do not write any other path. Do not ask the human. Do not search the web.
+4. When the write succeeds, finish with a one-line summary that repeats the path.
+"""
+
 [[schedules]]
 name = "daily-planning"
 enabled = true

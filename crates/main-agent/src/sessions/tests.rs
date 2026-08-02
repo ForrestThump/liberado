@@ -302,6 +302,7 @@ async fn list_backfills_title_from_existing_user_message() {
             parent_conversation: None,
             spawned_by: None,
             ephemeral: false,
+            visibility: Default::default(),
             grant: Default::default(),
         })
         .await

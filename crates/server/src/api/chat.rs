@@ -38,6 +38,14 @@ pub struct ChatRequest {
     /// ignored rather than quietly half-honored.
     #[serde(default)]
     pub incognito: bool,
+    /// Open this chat as [`Visibility::Background`](liberado_session::Visibility::Background):
+    /// durable, but filtered out of the sidebar. Same rule as `incognito` / `profile` — only
+    /// consulted when `session` is absent (it describes how to *create* one).
+    ///
+    /// Live conformance (and any other machinery that must not pollute the human's chat list) sets
+    /// this rather than inventing a parallel session path.
+    #[serde(default)]
+    pub background: bool,
     /// Session profile for a chat being **created** by this request.
     ///
     /// Same rule as `incognito`: consulted only when `session` is absent, because it describes how to
@@ -81,6 +89,7 @@ pub async fn chat_stream_post(
         req.message,
         req.session,
         req.incognito,
+        req.background,
         req.profile,
         req.model,
     )
@@ -98,6 +107,7 @@ pub async fn chat_stream_get(
         req.message,
         req.session,
         req.incognito,
+        req.background,
         req.profile,
         req.model,
     )
@@ -137,6 +147,7 @@ async fn chat_stream_core(
     message: String,
     session: Option<Ulid>,
     incognito: bool,
+    background: bool,
     profile: Option<String>,
     model: Option<String>,
 ) -> axum::response::Response {
@@ -190,24 +201,33 @@ async fn chat_stream_core(
 
     let session = match session {
         Some(id) => id,
-        None => match if incognito {
-            sessions.create_incognito(None).await
-        } else if let Some(grant) = grant {
-            sessions.create_with_grant(None, grant).await
-        } else {
-            sessions.create(None).await
-        } {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::warn!(error = %e, "chat stream could not create a conversation");
-                tokio::spawn(async move {
-                    let _ = tx.send(AgentEvent::Error(e.to_string())).await;
-                });
-                return Sse::new(stream_with_session(None, rx))
-                    .keep_alive(keep_alive())
-                    .into_response();
+        None => {
+            // Incognito wins over background when both are set: RAM-only already never lists.
+            // Background + grant is the conformance path (durable, out of sidebar, scoped).
+            let created = if incognito {
+                sessions.create_incognito(None).await
+            } else if background {
+                sessions
+                    .create_background(None, grant.unwrap_or_default())
+                    .await
+            } else if let Some(grant) = grant {
+                sessions.create_with_grant(None, grant).await
+            } else {
+                sessions.create(None).await
+            };
+            match created {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::warn!(error = %e, "chat stream could not create a conversation");
+                    tokio::spawn(async move {
+                        let _ = tx.send(AgentEvent::Error(e.to_string())).await;
+                    });
+                    return Sse::new(stream_with_session(None, rx))
+                        .keep_alive(keep_alive())
+                        .into_response();
+                }
             }
-        },
+        }
     };
 
     // Now that the conversation has an id, a model asked for on the request becomes a pick scoped to

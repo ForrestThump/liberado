@@ -442,8 +442,13 @@ impl ChatSessions {
     /// Persisting the prompt as the root (rather than re-injecting it on load) keeps the store the
     /// single source of truth for the whole history, system prompt included.
     pub async fn create(&self, title: Option<String>) -> SessionResult<Ulid> {
-        self.create_conversation(title, false, SessionGrant::default())
-            .await
+        self.create_conversation(
+            title,
+            false,
+            liberado_session::Visibility::Foreground,
+            SessionGrant::default(),
+        )
+        .await
     }
 
     /// Create a conversation running under an already-resolved session profile.
@@ -456,7 +461,30 @@ impl ChatSessions {
         title: Option<String>,
         grant: SessionGrant,
     ) -> SessionResult<Ulid> {
-        self.create_conversation(title, false, grant).await
+        self.create_conversation(
+            title,
+            false,
+            liberado_session::Visibility::Foreground,
+            grant,
+        )
+        .await
+    }
+
+    /// Create a **background** conversation: durable, but filtered out of the sidebar the way
+    /// cron/hook sessions are. Used by the live conformance suite and any other machinery that must
+    /// not reintroduce sidebar pollution.
+    pub async fn create_background(
+        &self,
+        title: Option<String>,
+        grant: SessionGrant,
+    ) -> SessionResult<Ulid> {
+        self.create_conversation(
+            title,
+            false,
+            liberado_session::Visibility::Background,
+            grant,
+        )
+        .await
     }
 
     /// Create an **incognito** conversation: RAM only, never written to disk, never listed.
@@ -470,14 +498,20 @@ impl ChatSessions {
     /// incognito chat still writes what it writes — a vault note, a memory, an audit entry. What is
     /// ephemeral is the transcript, not the consequences.
     pub async fn create_incognito(&self, title: Option<String>) -> SessionResult<Ulid> {
-        self.create_conversation(title, true, SessionGrant::default())
-            .await
+        self.create_conversation(
+            title,
+            true,
+            liberado_session::Visibility::Foreground,
+            SessionGrant::default(),
+        )
+        .await
     }
 
     async fn create_conversation(
         &self,
         title: Option<String>,
         ephemeral: bool,
+        visibility: liberado_session::Visibility,
         grant: SessionGrant,
     ) -> SessionResult<Ulid> {
         let header = self
@@ -487,6 +521,7 @@ impl ChatSessions {
                 parent_conversation: None,
                 spawned_by: None,
                 ephemeral,
+                visibility,
                 grant,
             })
             .await?;

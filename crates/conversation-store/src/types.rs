@@ -172,6 +172,12 @@ pub struct NewConversation {
     /// disk and it never appears in a listing. A store with no durable tier at all may ignore this —
     /// it is already telling the truth.
     pub ephemeral: bool,
+    /// Whether a human is attending this chat ([`Visibility::Foreground`](liberado_session::Visibility::Foreground))
+    /// or it is machinery / suite residue
+    /// ([`Visibility::Background`](liberado_session::Visibility::Background)). Background chats are
+    /// durable but filtered out of the sidebar (`list` skips them); defaults to foreground so every
+    /// existing `create` call site keeps today's behaviour.
+    pub visibility: liberado_session::Visibility,
     /// The session profile this conversation runs under, already resolved to capabilities by the
     /// caller. `Default` (empty, unnamed) means "no profile" — see [`ConversationHeader::grant`].
     ///

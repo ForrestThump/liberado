@@ -36,6 +36,7 @@ fn new_convo(title: &str) -> NewConversation {
         parent_conversation: None,
         spawned_by: None,
         ephemeral: false,
+        visibility: Default::default(),
         grant: Default::default(),
     }
 }
@@ -457,6 +458,7 @@ async fn create_stores_parent_conversation_lineage() {
             parent_conversation: Some(parent.id),
             spawned_by: None,
             ephemeral: false,
+            visibility: Default::default(),
             grant: Default::default(),
         })
         .await
@@ -486,6 +488,7 @@ async fn create_stores_spawned_by_lineage() {
             parent_conversation: None,
             spawned_by: Some(node.id),
             ephemeral: false,
+            visibility: Default::default(),
             grant: Default::default(),
         })
         .await
@@ -508,6 +511,7 @@ fn new_incognito(title: &str) -> NewConversation {
         parent_conversation: None,
         spawned_by: None,
         ephemeral: true,
+        visibility: Default::default(),
         grant: Default::default(),
     }
 }

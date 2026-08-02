@@ -77,6 +77,7 @@ liberado-markdown = { path = "crates/markdown" }
 liberado-commands = { path = "crates/liberado-commands" }
 liberado-test-support = { path = "crates/test-support" }
 liberado-eval = { path = "crates/eval" }
+liberado-conformance = { path = "crates/conformance" }
 liberado-heuristics-tuner = { path = "crates/heuristics-tuner" }
 liberado-telegram-approvals = { path = "crates/telegram-approvals" }
 liberado-cron = { path = "crates/cron" }

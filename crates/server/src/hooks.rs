@@ -47,6 +47,9 @@ pub struct ResolvedHook {
     /// Which named dispatcher/executor pool (Decision 18 checkpoint #3) handles this hook's
     /// trigger — `None` routes to the daemon's always-present `"default"` pool.
     pub pool: Option<String>,
+    /// Optional session profile name (E7) — carried into the event the same way cron does, so the
+    /// reactor can resolve the grant from `[[session_profiles]]` instead of the pool default.
+    pub profile: Option<String>,
 }
 
 /// Resolve every enabled hook's secret from the environment. Called once at boot.
@@ -62,6 +65,7 @@ pub fn resolve_hooks(topology: &Topology) -> HashMap<String, ResolvedHook> {
                     secret,
                     goal: h.goal.clone(),
                     pool: h.pool.clone(),
+                    profile: h.profile.clone(),
                 },
             )),
             Err(_) => {
@@ -192,6 +196,16 @@ pub async fn trigger_hook(
         None => hook.goal.clone(),
     };
 
+    // Profile rides on `payload.data` exactly as cron does (`liberado-cron::build_event`), so
+    // `reaction_goal` can pick it up without a second channel.
+    let data = match &hook.profile {
+        Some(p) => {
+            let mut map = serde_json::Map::new();
+            map.insert("profile".into(), serde_json::Value::String(p.clone()));
+            serde_json::Value::Object(map)
+        }
+        None => serde_json::Value::Null,
+    };
     let event = Event::trigger(
         "WebhookFired",
         format!("{}:{name}", event_source::WEBHOOK),
@@ -199,6 +213,7 @@ pub async fn trigger_hook(
         EventPayload {
             summary: Some(goal),
             pool: hook.pool.clone(),
+            data,
             ..Default::default()
         },
     );
@@ -252,6 +267,7 @@ mod tests {
                     secret_ref: "HOOKS_RS_TEST_SECRET".into(),
                     goal: "goal a".into(),
                     pool: None,
+                    profile: None,
                 },
                 HookConfig {
                     name: "disabled".into(),
@@ -259,6 +275,7 @@ mod tests {
                     secret_ref: "HOOKS_RS_TEST_SECRET".into(),
                     goal: "goal b".into(),
                     pool: None,
+                    profile: None,
                 },
                 HookConfig {
                     name: "enabled-missing-secret".into(),
@@ -266,6 +283,7 @@ mod tests {
                     secret_ref: "HOOKS_RS_TEST_DEFINITELY_UNSET".into(),
                     goal: "goal c".into(),
                     pool: None,
+                    profile: None,
                 },
             ],
             ..Topology::default()
@@ -316,6 +334,7 @@ mod tests {
                 secret: hook_secret.to_string(),
                 goal: "back up the vault".to_string(),
                 pool: None,
+                profile: None,
             },
         );
 
@@ -386,6 +405,7 @@ mod tests {
                 secret: "shh".to_string(),
                 goal: "back up the vault".to_string(),
                 pool: Some("restricted".to_string()),
+                profile: None,
             },
         );
         let state = Arc::new(AppState {
@@ -427,6 +447,64 @@ mod tests {
             .try_recv()
             .expect("hook should have pushed an event");
         assert_eq!(event.payload.pool.as_deref(), Some("restricted"));
+    }
+
+    #[tokio::test]
+    async fn a_hooks_configured_profile_is_carried_onto_its_event() {
+        let (hook_tx, mut hook_rx) = unbounded_channel::<Event>();
+        let mut hooks = HashMap::new();
+        hooks.insert(
+            "conformance".to_string(),
+            ResolvedHook {
+                secret: "shh".to_string(),
+                goal: "write the probe note".to_string(),
+                pool: None,
+                profile: Some("conformance".to_string()),
+            },
+        );
+        let state = Arc::new(AppState {
+            start_time: Instant::now(),
+            reactions: Arc::new(Mutex::new(Vec::new())),
+            dispatcher_attached: false,
+            orchestrator_attached: false,
+            vault_path: "/tmp/vault".to_string(),
+            goals: Arc::new(liberado_session::GoalSessionHub::new(
+                liberado_session::GoalSessionStore::new(),
+            )),
+            chat: None,
+            chat_tools: 0,
+            chat_tool_names: Vec::new(),
+            catalog: Arc::new(CapabilityCatalog::new()),
+            sessions_root: std::path::PathBuf::from("/tmp/liberado/sessions"),
+            main_agent_capabilities: liberado_common::CapabilitySet::empty(),
+            dispatcher_capabilities: liberado_common::CapabilitySet::empty(),
+            config: Arc::new(Default::default()),
+            sessions: Arc::new(Default::default()),
+            model_name: None,
+            provider: None,
+            hooks,
+            hook_tx,
+            hook_idempotency: IdempotencyCache::default(),
+            live_mcp: liberado_bootstrap::LiveMcpController::empty(),
+        });
+        let app = Router::new()
+            .route("/api/hooks/{name}", axum::routing::post(trigger_hook))
+            .with_state(state);
+
+        let response = app
+            .oneshot(post("/api/hooks/conformance", Some("shh"), ""))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let event = hook_rx
+            .try_recv()
+            .expect("hook should have pushed an event");
+        assert_eq!(
+            event.payload.data.get("profile").and_then(|v| v.as_str()),
+            Some("conformance"),
+            "profile must ride on payload.data like cron events do"
+        );
     }
 
     #[tokio::test]

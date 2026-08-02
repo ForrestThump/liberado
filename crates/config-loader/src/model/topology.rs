@@ -855,6 +855,15 @@ pub struct HookConfig {
     /// [`CronSchedule::pool`]'s doc comment; identical semantics.
     #[serde(default)]
     pub pool: Option<String>,
+    /// Optional `[[session_profiles]]` hat for this hook (same E7 semantics as
+    /// [`CronSchedule::profile`]). When set, the reaction session resolves its grant from the
+    /// profile; when `None`, the pool grant applies (today's behaviour).
+    ///
+    /// Hooks and schedules are the same reactive pipeline with different triggers; leaving profiles
+    /// only on schedules left network triggers as a second class of authority. A conformance probe
+    /// (or any hook whose tool surface is known) needs this to stay inside a narrow grant.
+    #[serde(default)]
+    pub profile: Option<String>,
 }
 
 /// A wired MCP server: how it's reached, plus the routing description and risk classification the
