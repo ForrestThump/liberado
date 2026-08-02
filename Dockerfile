@@ -39,8 +39,25 @@ COPY . .
 # emits the `liberado` binary. Also ship `liberado-conformance` (Tier 3 live path runner) so the
 # hand-run suite lives beside the daemon on the box without a second toolchain install. The WebUI is
 # a separate `dx` build, so it is naturally excluded.
-RUN cargo build --release -p liberado-cli -p liberado-conformance \
-    && strip target/release/liberado target/release/liberado-conformance || true
+#
+# The two cache mounts are what make a redeploy incremental. `COPY . .` above invalidates this
+# layer on any source change, so without them every deploy recompiled 43 crates plus turbovault
+# from scratch - measured at 888s (14.8 min) for a one-line change. The mounts persist the cargo
+# registry and the target dir across builds, so only what actually changed is rebuilt.
+#
+# `sharing=locked` because two concurrent deploys sharing one target dir is a corrupted target
+# dir; the second build waits instead.
+#
+# The binaries are copied to /out **inside this RUN**, and that is not incidental: a cache mount
+# is not part of the image, so /build/target is empty again the moment this step ends. Copying
+# out here is the only way the runtime stage can still find them - a
+# `COPY --from=builder /build/target/...` would start failing the moment the mount was added.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/build/target,sharing=locked \
+    cargo build --release -p liberado-cli -p liberado-conformance \
+    && mkdir -p /out \
+    && cp target/release/liberado target/release/liberado-conformance /out/ \
+    && (strip /out/liberado /out/liberado-conformance || true)
 
 # ---- runtime ----
 FROM debian:trixie-slim AS runtime
@@ -51,8 +68,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates libssl3 git curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/target/release/liberado /usr/local/bin/liberado
-COPY --from=builder /build/target/release/liberado-conformance /usr/local/bin/liberado-conformance
+# From /out, not /build/target - the target dir is a cache mount and does not survive its RUN.
+COPY --from=builder /out/liberado /usr/local/bin/liberado
+COPY --from=builder /out/liberado-conformance /usr/local/bin/liberado-conformance
 
 # Build provenance — the single answer to "what commit is actually running?".
 # `deploy/homelab/deploy.sh` passes the deployed git SHA here; it lands both in a file the daemon
