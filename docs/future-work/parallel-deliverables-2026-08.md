@@ -51,8 +51,14 @@ known, cost unknown", never a default rate.
 **D2 — a cost query.** New `crates/cost` binary (`role = "tooling"`, copy `crates/eval`'s shape),
 reading the journal and reporting:
 
-- cost per **conversation**, rolled up through `correlation` so a turn includes the subagent work it
-  caused;
+- cost per **conversation**, rolled up to include the subagent work the turn caused. **This is not a
+  group-by**, and getting it wrong is the single most likely way this ships understating the
+  expensive path. A face turn's records carry the *chat id*; its subagent's records carry a
+  *different* correlation (`chat-delegate-<ulid>`). The link lives in the dispatch journal:
+  `<data>/dispatches/<correlation_id>.jsonl`, whose first line carries `parent_conversation`.
+  Verified 2026-08-02 — one delegating turn produced 3 face-role records under the chat id and its
+  subagent's records under the dispatch id, with 541 dispatch-correlated records in the journal
+  overall;
 - cost per **role**;
 - prompt-token growth per turn within a conversation;
 - **cache hit rate** (`cached_prompt_tokens / prompt_tokens`).
@@ -68,7 +74,7 @@ reading the journal and reporting:
 - [ ] Runs against the real journal on the box and prints a per-conversation table. Paste it in the PR.
 - [ ] `cargo test --workspace`, `cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings`, `cargo fmt --check` all clean.
 
-**Landmine.** Streaming calls sometimes report no usage at all, and some providers omit
+**Second landmine.** Streaming calls sometimes report no usage at all, and some providers omit
 `cached_prompt_tokens` entirely. Absent must be distinguishable from zero everywhere — a reported
 zero means "caching available, not working"; absent means "the backend said nothing".
 
