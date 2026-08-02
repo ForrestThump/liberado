@@ -68,11 +68,15 @@ impl EffectRunner {
             Effect::StartChatStream { message, session } => {
                 self.start_chat_stream(message, session).await
             }
-            Effect::CancelStream => self.cancel_stream(),
+            Effect::CancelStream { conversation } => self.cancel_stream(conversation).await,
             Effect::RefreshConversations => self.refresh_conversations().await,
             Effect::LoadConversationHistory(id) => self.load_conversation_history(id).await,
             Effect::FetchModels => self.fetch_models().await,
-            Effect::SelectModel(model) => self.select_model(model).await,
+            Effect::SelectModel {
+                model,
+                conversation,
+            } => self.select_model(model, conversation).await,
+            Effect::AttachConversationStream(id) => self.attach_conversation_stream(id).await,
             Effect::ForkConversation {
                 parent_id,
                 after_turn,
@@ -343,17 +347,19 @@ impl EffectRunner {
         }
     }
 
-    async fn select_model(&self, model: String) {
+    async fn select_model(&self, model: String, conversation: Option<String>) {
         let server = self.server_url();
         let client = self.client.clone();
         let tx = self.action_tx.clone();
-        match api::select_model(&client, &server, &model).await {
+        let conversation_scoped = conversation.is_some();
+        match api::select_model(&client, &server, &model, conversation.as_deref()).await {
             Ok(resp) => {
                 let chosen = resp.current.unwrap_or(model);
                 let _ = tx
                     .send(Action::ModelSelected {
                         model: chosen,
                         error: resp.error,
+                        conversation_scoped,
                     })
                     .await;
             }
@@ -362,6 +368,7 @@ impl EffectRunner {
                     .send(Action::ModelSelected {
                         model,
                         error: Some(e.to_string()),
+                        conversation_scoped,
                     })
                     .await;
             }
@@ -394,9 +401,22 @@ impl EffectRunner {
         });
     }
 
-    fn cancel_stream(&self) {
+    /// Abort the local SSE reader and cancel the durable turn on the daemon when we know which
+    /// conversation is open. Local abort alone is "stop showing me"; the POST is "stop doing this".
+    async fn cancel_stream(&self, conversation: Option<String>) {
         if let Some(handle) = self.stream_state.lock().handle.take() {
             handle.abort();
+        }
+        let Some(id) = conversation else {
+            return;
+        };
+        let client = self.client.clone();
+        let server = self.server_url();
+        if let Err(e) = api::cancel_conversation(&client, &server, &id).await {
+            tracing::warn!(error = %e, conversation = %id, "conversation cancel request failed");
+            let _ = self
+                .action_tx
+                .try_send(Action::SystemMessage(format!("cancel request failed: {e}")));
         }
     }
 
@@ -523,8 +543,16 @@ impl EffectRunner {
         let server = self.server_url();
         tokio::spawn(async move {
             match api::fetch_conversation_history(&client, &server, &id).await {
-                Ok(Some(messages)) => {
-                    if tx.try_send(Action::HistoryLoaded { id, messages }).is_err() {
+                Ok(Some(history)) => {
+                    if tx
+                        .try_send(Action::HistoryLoaded {
+                            id,
+                            messages: history.messages,
+                            turn_running: history.turn_running,
+                            turn_unanswered: history.turn_unanswered,
+                        })
+                        .is_err()
+                    {
                         tracing::warn!("action channel full, dropping HistoryLoaded");
                     }
                 }
@@ -546,6 +574,119 @@ impl EffectRunner {
                 }
             }
         });
+    }
+
+    /// Rejoin a running turn via `GET /api/conversations/{id}/attach`. Uses the same SSE decoder
+    /// and `SessionEvent::from_sse_data` path as a normal chat stream — no forked vocabulary.
+    async fn attach_conversation_stream(&self, id: String) {
+        let client = self.client.clone();
+        let tx = self.action_tx.clone();
+        let server = self.server_url();
+        let state = self.stream_state.clone();
+
+        let handle = tokio::spawn(async move {
+            let response = match api::attach_conversation_stream(&client, &server, &id).await {
+                Ok(r) => r,
+                Err(e) => {
+                    if tx
+                        .try_send(Action::SseFailed(format!(
+                            "could not attach to running turn: {e}"
+                        )))
+                        .is_err()
+                    {
+                        tracing::warn!("action channel full, dropping SseFailed");
+                    }
+                    state.lock().handle = None;
+                    return;
+                }
+            };
+
+            // 409 is the expected race, not a fault: `turn_running` was read a moment ago and the
+            // turn finished before the attach landed. The reply exists — it is simply already on
+            // disk rather than on the wire — so end the stream state and reload the transcript.
+            // Reporting it as `[error]` would blame the user's own answer arriving on time.
+            if response.status() == reqwest::StatusCode::CONFLICT {
+                state.lock().handle = None;
+                if tx.try_send(Action::SseDone).is_err() {
+                    tracing::warn!("action channel full, dropping SseDone");
+                }
+                if tx
+                    .try_send(Action::ReloadConversationHistory(id.clone()))
+                    .is_err()
+                {
+                    tracing::warn!("action channel full, dropping history reload after 409");
+                }
+                return;
+            }
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                if tx
+                    .try_send(Action::SseFailed(format!(
+                        "attach refused ({status}): {body}"
+                    )))
+                    .is_err()
+                {
+                    tracing::warn!("action channel full, dropping SseFailed");
+                }
+                state.lock().handle = None;
+                return;
+            }
+
+            let mut decoder = SseDecoder::default();
+            let mut stream = response.bytes_stream();
+            loop {
+                match tokio::time::timeout(crate::tuning::SSE_STREAM_TIMEOUT, stream.next()).await {
+                    Ok(Some(Ok(chunk))) => {
+                        let text = String::from_utf8_lossy(&chunk);
+                        for event in decoder.push(&text) {
+                            // Shared decode: same `ToAction` / `from_sse_data` as chat stream.
+                            let action = event.to_action().unwrap_or_else(Action::SseFailed);
+                            let is_terminal =
+                                matches!(action, Action::SseDone | Action::SseFailed(_));
+                            if tx.try_send(action).is_err() {
+                                tracing::warn!("action channel full, dropping attach SSE action");
+                            }
+                            if is_terminal {
+                                state.lock().handle = None;
+                                return;
+                            }
+                        }
+                    }
+                    Ok(Some(Err(e))) => {
+                        if tx
+                            .try_send(Action::SseFailed(format!("attach stream error: {e}")))
+                            .is_err()
+                        {
+                            tracing::warn!("action channel full, dropping SseFailed");
+                        }
+                        state.lock().handle = None;
+                        return;
+                    }
+                    Ok(None) => break,
+                    Err(_elapsed) => {
+                        if tx
+                            .try_send(Action::SseFailed(
+                                "attach stream timeout — no data for 60s".to_string(),
+                            ))
+                            .is_err()
+                        {
+                            tracing::warn!("action channel full, dropping SseFailed");
+                        }
+                        state.lock().handle = None;
+                        return;
+                    }
+                }
+            }
+
+            if tx.try_send(Action::SseDone).is_err() {
+                tracing::warn!("action channel full, dropping SseDone");
+            }
+            state.lock().handle = None;
+        });
+
+        self.stream_state.lock().handle = Some(handle.abort_handle());
     }
 }
 
@@ -659,11 +800,18 @@ mod tests {
             .expect("channel closed");
 
         match action {
-            Action::HistoryLoaded { id, messages } => {
+            Action::HistoryLoaded {
+                id,
+                messages,
+                turn_running,
+                turn_unanswered,
+            } => {
                 assert_eq!(id, "c1");
                 assert_eq!(messages.len(), 1);
                 assert_eq!(messages[0].role, "user");
                 assert_eq!(messages[0].content, "hi");
+                assert!(!turn_running);
+                assert!(!turn_unanswered);
             }
             other => panic!("expected HistoryLoaded, got {other:?}"),
         }
@@ -700,7 +848,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancel_stream() {
+    async fn cancel_stream_aborts_local_reader_without_conversation() {
         let app = make_app("http://localhost:0");
         let (action_tx, _action_rx) = mpsc::channel(256);
         let stream_state = Arc::new(Mutex::new(StreamState::default()));
@@ -716,12 +864,264 @@ mod tests {
         let handle = tokio::spawn(async {}).abort_handle();
         stream_state.lock().handle = Some(handle);
 
-        runner.run(Effect::CancelStream).await;
+        runner
+            .run(Effect::CancelStream { conversation: None })
+            .await;
 
         assert!(
             stream_state.lock().handle.is_none(),
             "handle should be taken after CancelStream"
         );
+    }
+
+    /// Stop must hit the daemon cancel endpoint — local SSE abort alone is not enough for durable turns.
+    #[tokio::test]
+    async fn cancel_stream_posts_conversation_cancel() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/conversations/conv-abc/cancel"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, _action_rx) = mpsc::channel(256);
+        let stream_state = Arc::new(Mutex::new(StreamState::default()));
+        let runner = EffectRunner {
+            app,
+            should_quit: Arc::new(AtomicBool::new(false)),
+            action_tx,
+            client: reqwest::Client::new(),
+            stream_state: stream_state.clone(),
+        };
+        let handle = tokio::spawn(async { tokio::time::sleep(Duration::from_secs(60)).await })
+            .abort_handle();
+        stream_state.lock().handle = Some(handle);
+
+        runner
+            .run(Effect::CancelStream {
+                conversation: Some("conv-abc".into()),
+            })
+            .await;
+
+        assert!(stream_state.lock().handle.is_none());
+        // wiremock expect(1) asserts the cancel POST was made when the mock drops.
+    }
+
+    #[tokio::test]
+    async fn select_model_daemon_wide_omits_conversation_field() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/models/select"))
+            .and(body_json(serde_json::json!({ "model": "m1" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "models": [],
+                "current": "m1",
+                "error": null
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner
+            .run(Effect::SelectModel {
+                model: "m1".into(),
+                conversation: None,
+            })
+            .await;
+
+        let action = tokio::time::timeout(Duration::from_secs(2), action_rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+        match action {
+            Action::ModelSelected {
+                model,
+                error: None,
+                conversation_scoped: false,
+            } => assert_eq!(model, "m1"),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn select_model_with_open_conversation_includes_conversation_field() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/models/select"))
+            .and(body_json(serde_json::json!({
+                "model": "m2",
+                "conversation": "conv-99"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "models": [],
+                "current": "m2",
+                "error": null
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner
+            .run(Effect::SelectModel {
+                model: "m2".into(),
+                conversation: Some("conv-99".into()),
+            })
+            .await;
+
+        let action = tokio::time::timeout(Duration::from_secs(2), action_rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+        match action {
+            Action::ModelSelected {
+                model,
+                error: None,
+                conversation_scoped: true,
+            } => assert_eq!(model, "m2"),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    /// Reattach must actually reach the daemon and decode what comes back.
+    ///
+    /// The app-level tests assert only that `Effect::AttachConversationStream` is *emitted*.
+    /// Gutting the effect's body left all 278 tests passing — so the feature whose absence was
+    /// the regression had no coverage below the effect boundary at all.
+    #[tokio::test]
+    async fn attach_stream_replays_the_running_turn() {
+        let mock_server = MockServer::start().await;
+        // Replay-then-live, in the shared SSE vocabulary. `token` frames are what a live turn
+        // emits; the attach endpoint replays them before continuing.
+        let body = "event: token\ndata: re\n\n\
+                    event: token\ndata: joined\n\n\
+                    event: session_finished\ndata: {\"status\":\"done\",\"summary\":\"\"}\n\n";
+        Mock::given(method("GET"))
+            .and(path("/api/conversations/live-7/attach"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(body),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner
+            .run(Effect::AttachConversationStream("live-7".into()))
+            .await;
+
+        let mut tokens = String::new();
+        let mut saw_done = false;
+        for _ in 0..8 {
+            match tokio::time::timeout(Duration::from_secs(2), action_rx.recv()).await {
+                Ok(Some(Action::SseToken(t))) => tokens.push_str(&t),
+                Ok(Some(Action::SseDone)) => {
+                    saw_done = true;
+                    break;
+                }
+                Ok(Some(Action::SseFailed(e))) => panic!("attach failed: {e}"),
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => panic!("timed out waiting for attach actions; got {tokens:?}"),
+            }
+        }
+        assert_eq!(tokens, "rejoined", "replayed tokens must reach the app");
+        assert!(saw_done, "the attach stream must terminate the turn");
+    }
+
+    /// A turn that finishes between reading `turn_running` and the attach request is the expected
+    /// race, not a fault. It must reload the transcript — the reply is on disk — rather than
+    /// blaming the user with `[error] attach refused (409)`.
+    #[tokio::test]
+    async fn attach_409_reloads_history_instead_of_reporting_an_error() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/conversations/done-3/attach"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
+                "error": "no turn is running for this conversation"
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner
+            .run(Effect::AttachConversationStream("done-3".into()))
+            .await;
+
+        let mut saw_reload = false;
+        for _ in 0..4 {
+            match tokio::time::timeout(Duration::from_secs(2), action_rx.recv()).await {
+                Ok(Some(Action::SseFailed(e))) => {
+                    panic!("a finished turn must not surface as an error: {e}")
+                }
+                Ok(Some(Action::ReloadConversationHistory(id))) => {
+                    assert_eq!(id, "done-3");
+                    saw_reload = true;
+                    break;
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+        assert!(
+            saw_reload,
+            "409 must re-read the transcript so the reply that just landed is shown"
+        );
+    }
+
+    #[tokio::test]
+    async fn load_history_forwards_turn_lifecycle_flags() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/conversations/c-run"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "messages": [{"role": "user", "content": "still going?"}],
+                "turn_running": true,
+                "turn_unanswered": false
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner
+            .run(Effect::LoadConversationHistory("c-run".into()))
+            .await;
+
+        let action = tokio::time::timeout(Duration::from_secs(2), action_rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+        match action {
+            Action::HistoryLoaded {
+                id,
+                turn_running: true,
+                turn_unanswered: false,
+                ..
+            } => assert_eq!(id, "c-run"),
+            other => panic!("expected running HistoryLoaded, got {other:?}"),
+        }
     }
 
     #[tokio::test]
