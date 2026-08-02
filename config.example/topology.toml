@@ -326,9 +326,15 @@ transport = { kind = "stdio", command = "riggers-mcp", args = ["--config", "rigg
 # # trigger_tokens = 40000      # absolute wins over pct for this model only
 
 # Declared model windows — what percentage-based triggers resolve against.
+# Optional per-million USD rates (D1 token cost accounting) feed `liberado-cost`:
+#   input / output / cached_input — omit all three for "tokens known, cost unknown"
+# (never a silent $0). Prices are applied at read time; the latency journal never stores money.
 # [[models]]
 # name = "deepseek-chat"
 # tool_calling = true
 # structured_output = false
 # context_window = 64000
 # tier = "work_plane"
+# input = 0.14            # USD per 1M input tokens
+# output = 0.28           # USD per 1M output tokens
+# cached_input = 0.014    # USD per 1M cached input tokens
