@@ -131,11 +131,18 @@ for i in $(seq 1 40); do
   live_sha="$(docker exec liberado cat /etc/liberado-build-sha 2>/dev/null | tr -d '[:space:]' || true)"
   if [ -n "$running" ] && [ "$live_sha" = "$SHA" ]; then
     echo ">> OK  running=true  build-sha=$live_sha"
-    # Reclaim this build's docker cache + the now-dangling old image. Each deploy is a full
-    # from-scratch build, so the buildkit cache is pure dead weight that otherwise piles up (~80 GB
-    # over a handful of deploys) until the box hits "No space left on device" mid-build.
-    echo ">> reclaiming build cache + dangling images"
-    docker builder prune -f >/dev/null 2>&1 || true
+    # Bound the docker cache; do not erase it. This used to be an unconditional `builder prune -f`,
+    # correct when every deploy was a full from-scratch build and the cache was pure dead weight
+    # piling up (~80 GB over a handful of deploys) until the box hit "No space left on device".
+    #
+    # The Dockerfile now carries cargo-registry and target cache mounts, so that same cache is what
+    # makes a redeploy incremental rather than a 15-minute rebuild. Wiping it after every deploy
+    # would leave the mounts in place and silently deliver none of their benefit — the worst
+    # outcome, because the build stays slow and nothing says why.
+    #
+    # `--keep-storage` bounds it instead: old entries are evicted, the working set survives.
+    echo ">> bounding build cache (keeping the working set) + reclaiming dangling images"
+    docker builder prune -f --keep-storage 20GB >/dev/null 2>&1 || true
     docker image prune -f >/dev/null 2>&1 || true
     exit 0
   fi
