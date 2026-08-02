@@ -27,87 +27,68 @@ pub struct PricedEvent {
     /// `None` when the model is unpriced, rates are incomplete for the usage present, or token
     /// usage itself is absent (cannot price what was not reported).
     pub cost_usd: Option<f64>,
-    /// True when the model has no price entry (or empty rates). Distinct from "usage absent".
-    pub unpriced_model: bool,
+    /// True when the **rates** cannot price this call: no entry for the model, empty rates, or an
+    /// entry missing a rate the usage actually needs (`output` set but not `input`, say). Such a
+    /// call's tokens belong on the unpriced line rather than in a money total.
+    ///
+    /// False when usage itself was absent — that is the provider reporting nothing, not a pricing
+    /// gap, and it is deliberately a different condition. Both leave `cost_usd` as `None`.
+    pub cost_unknown: bool,
 }
 
 /// Price a single journal event.
 ///
 /// Rules:
-/// - No rates for `event.model` → `cost_usd = None`, `unpriced_model = true`.
-/// - `prompt_tokens` and `completion_tokens` both absent → `cost_usd = None` (unknown usage).
-/// - Cached portion uses `cached_input` when set; when unset, falls back to `input` so a partial
-///   price table still yields money rather than inventing a free cache.
+/// - No rates for `event.model` → `cost_usd = None`, `cost_unknown = true`.
+/// - `prompt_tokens` and `completion_tokens` both absent → `cost_usd = None`, but
+///   `cost_unknown = false`: the provider reported no usage, which is not a pricing gap.
+/// - A rate the usage needs but the entry lacks → `cost_usd = None`, `cost_unknown = true`. The
+///   missing side is never quietly priced at zero.
+/// - Cached portion uses `cached_input` when set; when unset, falls back to `input`, so a table
+///   that omits only the cache rate still yields money rather than inventing a free cache.
 /// - Uncached prompt = `prompt - cached` (cached clamped to prompt).
 /// - Rates are USD per 1_000_000 tokens.
 pub fn price_event(event: &JournalEvent, prices: &PriceTable) -> PricedEvent {
-    let rates = prices.get(&event.model);
-    let unpriced_model = rates.map(|r| !r.is_priced()).unwrap_or(true);
-    if unpriced_model {
-        return PricedEvent {
-            event: event.clone(),
-            cost_usd: None,
-            unpriced_model: true,
-        };
-    }
-    let rates = rates.expect("priced");
+    let unknown = |cost_unknown| PricedEvent {
+        event: event.clone(),
+        cost_usd: None,
+        cost_unknown,
+    };
 
-    let prompt = event.prompt_tokens;
-    let completion = event.completion_tokens;
+    let Some(rates) = prices.get(&event.model).filter(|r| r.is_priced()) else {
+        return unknown(true);
+    };
+
     // Nothing to price when the provider reported no usage at all.
-    if prompt.is_none() && completion.is_none() {
-        return PricedEvent {
-            event: event.clone(),
-            cost_usd: None,
-            unpriced_model: false,
-        };
+    if event.prompt_tokens.is_none() && event.completion_tokens.is_none() {
+        return unknown(false);
     }
 
-    // Need at least the rates we will apply. Missing input with prompt tokens ⇒ cannot price.
-    let prompt_tokens = prompt.unwrap_or(0);
-    let completion_tokens = completion.unwrap_or(0);
+    let prompt_tokens = event.prompt_tokens.unwrap_or(0);
+    let completion_tokens = event.completion_tokens.unwrap_or(0);
     let cached = event.cached_prompt_tokens.unwrap_or(0).min(prompt_tokens);
     let uncached = prompt_tokens.saturating_sub(cached);
+    // Cached tokens are input tokens; a table that prices input but not the cache still prices them.
+    let cached_rate = rates.cached_input.or(rates.input);
 
-    if (uncached > 0 || (prompt_tokens > 0 && event.cached_prompt_tokens.is_none()))
-        && rates.input.is_none()
+    // Every rate we are about to apply to a non-zero count must exist. Otherwise the call is
+    // unpriceable — reporting the priced fraction alone would understate it.
+    if (uncached > 0 && rates.input.is_none())
+        || (cached > 0 && cached_rate.is_none())
+        || (completion_tokens > 0 && rates.output.is_none())
     {
-        // Have prompt tokens but no input rate.
-        if uncached > 0 || cached == 0 {
-            return PricedEvent {
-                event: event.clone(),
-                cost_usd: None,
-                unpriced_model: true,
-            };
-        }
-    }
-    if completion_tokens > 0 && rates.output.is_none() {
-        return PricedEvent {
-            event: event.clone(),
-            cost_usd: None,
-            unpriced_model: true,
-        };
-    }
-    if cached > 0 && rates.cached_input.is_none() && rates.input.is_none() {
-        return PricedEvent {
-            event: event.clone(),
-            cost_usd: None,
-            unpriced_model: true,
-        };
+        return unknown(true);
     }
 
-    let input_rate = rates.input.unwrap_or(0.0);
-    let output_rate = rates.output.unwrap_or(0.0);
-    let cached_rate = rates.cached_input.unwrap_or(input_rate);
-
-    let usd = (f64::from(uncached) * input_rate
-        + f64::from(cached) * cached_rate
-        + f64::from(completion_tokens) * output_rate)
+    // Each `unwrap_or(0.0)` below is reachable only where the token count is zero.
+    let usd = (f64::from(uncached) * rates.input.unwrap_or(0.0)
+        + f64::from(cached) * cached_rate.unwrap_or(0.0)
+        + f64::from(completion_tokens) * rates.output.unwrap_or(0.0))
         / 1_000_000.0;
 
     PricedEvent {
         event: event.clone(),
         cost_usd: Some(usd),
-        unpriced_model: false,
+        cost_unknown: false,
     }
 }

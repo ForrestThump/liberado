@@ -46,7 +46,7 @@ pub fn format_report(report: &Report) -> String {
     for c in &report.conversations {
         out.push_str(&format!(
             "{:<36} {:>6} {:>10} {:>10} {:>10} {:>12} {:>8}\n",
-            truncate(&c.conversation_id, 36),
+            truncate(&conversation_label(&c.conversation_id), 36),
             c.calls,
             fmt_opt_u32(c.prompt_tokens),
             fmt_opt_u32(c.completion_tokens),
@@ -83,7 +83,9 @@ pub fn format_report(report: &Report) -> String {
     }
 
     if !report.unpriced.is_empty() {
-        out.push_str("\n--- unpriced models (tokens known, cost unknown — not 0.0) ---\n");
+        out.push_str(
+            "\n--- models with no usable rate (tokens known, cost unknown — never 0.0) ---\n",
+        );
         out.push_str(&format!(
             "{:<40} {:>6} {:>10} {:>10} {:>10}\n",
             "model", "calls", "prompt", "completion", "cached"
@@ -111,7 +113,7 @@ pub fn format_report(report: &Report) -> String {
         for t in report.turn_growth.iter().take(limit) {
             out.push_str(&format!(
                 "{:<28} {:>5} {:>10} {:>10} {:>10} {:>12} {}\n",
-                truncate(&t.conversation_id, 28),
+                truncate(&conversation_label(&t.conversation_id), 28),
                 t.turn_index,
                 fmt_opt_u32(t.prompt_tokens),
                 match t.prompt_delta {
@@ -132,6 +134,18 @@ pub fn format_report(report: &Report) -> String {
     }
 
     out
+}
+
+/// `latency::current_correlation()` yields `"-"` for any provider call made outside a
+/// `with_correlation` scope, so those events all land in one bucket. Naming it keeps a row that
+/// looks like a conversation id from being read as one — on the deployed journal it was 8% of
+/// calls, which is a finding about instrumentation coverage, not a chat that cost money.
+fn conversation_label(id: &str) -> String {
+    if id == "-" {
+        "(unattributed)".into()
+    } else {
+        id.to_string()
+    }
 }
 
 fn fmt_money(v: Option<f64>) -> String {

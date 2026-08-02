@@ -324,6 +324,130 @@ mod tests {
         assert_eq!(report.conversations[0].prompt_tokens, Some(100));
     }
 
+    /// A model priced on one side only cannot price a call that uses the other. It must land on
+    /// the unpriced line with its tokens, not contribute a partial (and therefore understated)
+    /// figure to the money total.
+    #[test]
+    fn partially_priced_model_is_unpriceable_not_half_priced() {
+        let half = ModelTokenPrices {
+            input: Some(1.0),
+            output: None,
+            cached_input: None,
+        };
+        let prices = price_table_from_pairs([("half-priced", half)]);
+        let e = event(
+            "c",
+            "face",
+            "half-priced",
+            Some(1_000_000),
+            Some(1_000_000),
+            None,
+            1,
+        );
+
+        let priced = price_event(&e, &prices);
+        assert!(
+            priced.cost_usd.is_none(),
+            "must not report $1.00 by pricing input and silently zeroing output"
+        );
+        assert!(
+            priced.cost_unknown,
+            "a rate the usage needs is missing — that is a pricing gap, not reported usage"
+        );
+
+        let report = report_from_parts(&[e], &HashMap::new(), &prices);
+        assert_eq!(report.total_cost_usd, None);
+        assert_eq!(report.unpriced_calls, 1);
+        let line = report
+            .unpriced
+            .iter()
+            .find(|u| u.model == "half-priced")
+            .expect("tokens still reported for a model we cannot price");
+        assert_eq!(line.completion_tokens, Some(1_000_000));
+    }
+
+    /// A call the provider reported no usage for is not a pricing gap. Both leave cost unknown,
+    /// but only one is an operator action ("add a rate"), so they must stay distinguishable.
+    #[test]
+    fn absent_usage_is_not_counted_as_unpriced() {
+        let prices = price_table_from_pairs([("m", rates(1.0, 2.0, 0.1))]);
+        let no_usage = event("c", "face", "m", None, None, None, 1);
+
+        let priced = price_event(&no_usage, &prices);
+        assert!(priced.cost_usd.is_none());
+        assert!(
+            !priced.cost_unknown,
+            "the model is priced; the backend simply said nothing about usage"
+        );
+
+        let report = report_from_parts(&[no_usage], &HashMap::new(), &prices);
+        assert_eq!(report.unpriced_calls, 0);
+        assert!(
+            report.unpriced.is_empty(),
+            "a priced model must not appear on the unpriced line: {:?}",
+            report.unpriced
+        );
+    }
+
+    /// Provider calls made outside a `with_correlation` scope share the id `"-"`. They are real
+    /// spend, but they are not a conversation, and the table must not imply otherwise.
+    #[test]
+    fn uncorrelated_calls_are_labelled_not_shown_as_a_conversation() {
+        let prices = price_table_from_pairs([("m", rates(1.0, 1.0, 1.0))]);
+        let events = vec![event("-", "unknown", "m", Some(1000), Some(10), None, 1)];
+        let report = report_from_parts(&events, &HashMap::new(), &prices);
+
+        assert_eq!(report.conversations[0].conversation_id, "-");
+        let text = format_report(&report);
+        assert!(
+            text.contains("(unattributed)"),
+            "the '-' bucket must be named in the table: {text}"
+        );
+    }
+
+    /// The turn table is printed truncated, so its order decides what a reader ever sees. It must
+    /// lead with the conversations the cost table leads with, not with whichever id sorts first.
+    #[test]
+    fn turn_growth_leads_with_the_expensive_conversation() {
+        let prices = price_table_from_pairs([("m", rates(1.0, 1.0, 1.0))]);
+        // "-" (the uncorrelated bucket) sorts before any ULID but is the cheaper of the two.
+        let events = vec![
+            event("-", "face", "m", Some(1_000), Some(10), None, 1),
+            event("-", "face", "m", Some(1_200), Some(10), None, 2),
+            event(
+                "01KZEXPENSIVE00000000000000",
+                "face",
+                "m",
+                Some(500_000),
+                Some(100),
+                None,
+                3,
+            ),
+            event(
+                "01KZEXPENSIVE00000000000000",
+                "face",
+                "m",
+                Some(700_000),
+                Some(100),
+                None,
+                4,
+            ),
+        ];
+        let report = report_from_parts(&events, &HashMap::new(), &prices);
+
+        assert_eq!(
+            report.conversations[0].conversation_id, "01KZEXPENSIVE00000000000000",
+            "precondition: the ULID conversation is the expensive one"
+        );
+        assert_eq!(
+            report.turn_growth[0].conversation_id, "01KZEXPENSIVE00000000000000",
+            "turn growth must follow the cost table's order, not id order"
+        );
+        // And within a conversation, turns stay in the order they happened.
+        assert_eq!(report.turn_growth[0].prompt_tokens, Some(500_000));
+        assert_eq!(report.turn_growth[1].prompt_delta, Some(200_000));
+    }
+
     /// Cached tokens use the cached_input rate, not the full input rate.
     #[test]
     fn cached_input_priced_cheaper() {
@@ -396,7 +520,17 @@ mod tests {
             !text.contains(&format!("\n{child}")) || report.conversations.len() == 1,
             "child must not be a separate conversation row"
         );
-        assert!(text.to_lowercase().contains("unpriced") || text.contains("unpriced"));
+        // The model name itself, not just the word "unpriced" — which also appears as a column
+        // header and so matched even when the section was empty.
+        assert!(
+            report.unpriced.iter().any(|u| u.model == "unpriced"),
+            "the model with no rate entry must be listed: {:?}",
+            report.unpriced
+        );
+        assert!(
+            text.contains("no usable rate"),
+            "the report must print the unpriceable section: {text}"
+        );
         assert!(report.conversations[0].cost_usd.is_some());
         assert!(report.roles.iter().any(|r| r.role == "face"));
         assert!(report.roles.iter().any(|r| r.role == "orchestrator"));

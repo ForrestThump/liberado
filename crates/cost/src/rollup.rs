@@ -50,7 +50,8 @@ pub struct TurnGrowth {
     pub cost_usd: Option<f64>,
 }
 
-/// Tokens for an unpriced model — never folded into a money total as 0.0.
+/// Tokens for a model the rates cannot price — never folded into a money total as 0.0. Covers both
+/// "no entry at all" and "entry missing a rate this usage needs".
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnpricedLine {
     pub model: String,
@@ -88,7 +89,7 @@ pub fn rollup_conversations(
         }
         let priced = price_event(event, prices);
         let acc = by_root.entry(root).or_default();
-        acc.add(&priced.event, priced.cost_usd, priced.unpriced_model);
+        acc.add(&priced.event, priced.cost_usd, priced.cost_unknown);
     }
 
     let mut rows: Vec<ConversationRollup> = by_root
@@ -116,7 +117,7 @@ fn rollup_roles(events: &[JournalEvent], prices: &PriceTable) -> Vec<RoleRollup>
         by_role.entry(event.role.clone()).or_default().add(
             &priced.event,
             priced.cost_usd,
-            priced.unpriced_model,
+            priced.cost_unknown,
         );
     }
     let mut rows: Vec<RoleRollup> = by_role
@@ -180,11 +181,37 @@ fn turn_growth(
     out
 }
 
+/// Put the turn table in the same order as the conversation table — most expensive first.
+///
+/// Growth was previously grouped by correlation id, which is alphabetical, so on the real journal
+/// every row a reader saw belonged to the `"-"` bucket and 1,276 turns were truncated away. The
+/// question this table exists to answer is "does a conversation's prompt keep growing", and it can
+/// only answer it for the conversations someone would ask about.
+fn order_turns_by_conversation_cost(
+    turns: Vec<TurnGrowth>,
+    conversations: &[ConversationRollup],
+) -> Vec<TurnGrowth> {
+    let rank: HashMap<&str, usize> = conversations
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.conversation_id.as_str(), i))
+        .collect();
+    let mut turns = turns;
+    turns.sort_by(|a, b| {
+        let ra = rank.get(a.conversation_id.as_str()).copied();
+        let rb = rank.get(b.conversation_id.as_str()).copied();
+        ra.cmp(&rb)
+            .then_with(|| a.turn_index.cmp(&b.turn_index))
+            .then_with(|| a.ts_ms.cmp(&b.ts_ms))
+    });
+    turns
+}
+
 fn unpriced_lines(events: &[JournalEvent], prices: &PriceTable) -> Vec<UnpricedLine> {
     let mut by_model: HashMap<String, Acc> = HashMap::new();
     for event in events {
         let priced = price_event(event, prices);
-        if priced.unpriced_model {
+        if priced.cost_unknown {
             by_model
                 .entry(event.model.clone())
                 .or_default()
@@ -232,7 +259,10 @@ pub fn build_report(
 ) -> Report {
     let conversations = rollup_conversations(events, child_to_parent, prices);
     let roles = rollup_roles(events, prices);
-    let turn_growth = turn_growth(events, child_to_parent, prices);
+    let turn_growth = order_turns_by_conversation_cost(
+        turn_growth(events, child_to_parent, prices),
+        &conversations,
+    );
     let unpriced = unpriced_lines(events, prices);
     let cache_hit_rate = cache_hit_rate(events);
 
@@ -241,7 +271,7 @@ pub fn build_report(
     let mut unpriced_calls = 0usize;
     for e in events {
         let p = price_event(e, prices);
-        if p.unpriced_model {
+        if p.cost_unknown {
             unpriced_calls += 1;
         }
         if let Some(c) = p.cost_usd {
@@ -274,9 +304,9 @@ struct Acc {
 }
 
 impl Acc {
-    fn add(&mut self, event: &JournalEvent, cost: Option<f64>, unpriced_model: bool) {
+    fn add(&mut self, event: &JournalEvent, cost: Option<f64>, cost_unknown: bool) {
         self.calls += 1;
-        if unpriced_model {
+        if cost_unknown {
             self.unpriced_calls += 1;
         }
         self.prompt_tokens = sum_opt(self.prompt_tokens, event.prompt_tokens);

@@ -3615,6 +3615,7 @@ version = "0.1.0"
 dependencies = [
  "liberado-common",
  "liberado-config-loader",
+ "liberado-provider",
  "serde",
  "serde_json",
  "tempfile",
