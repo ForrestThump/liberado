@@ -601,6 +601,24 @@ impl EffectRunner {
                 }
             };
 
+            // 409 is the expected race, not a fault: `turn_running` was read a moment ago and the
+            // turn finished before the attach landed. The reply exists — it is simply already on
+            // disk rather than on the wire — so end the stream state and reload the transcript.
+            // Reporting it as `[error]` would blame the user's own answer arriving on time.
+            if response.status() == reqwest::StatusCode::CONFLICT {
+                state.lock().handle = None;
+                if tx.try_send(Action::SseDone).is_err() {
+                    tracing::warn!("action channel full, dropping SseDone");
+                }
+                if tx
+                    .try_send(Action::ReloadConversationHistory(id.clone()))
+                    .is_err()
+                {
+                    tracing::warn!("action channel full, dropping history reload after 409");
+                }
+                return;
+            }
+
             if !response.status().is_success() {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
@@ -972,6 +990,102 @@ mod tests {
             } => assert_eq!(model, "m2"),
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    /// Reattach must actually reach the daemon and decode what comes back.
+    ///
+    /// The app-level tests assert only that `Effect::AttachConversationStream` is *emitted*.
+    /// Gutting the effect's body left all 278 tests passing — so the feature whose absence was
+    /// the regression had no coverage below the effect boundary at all.
+    #[tokio::test]
+    async fn attach_stream_replays_the_running_turn() {
+        let mock_server = MockServer::start().await;
+        // Replay-then-live, in the shared SSE vocabulary. `token` frames are what a live turn
+        // emits; the attach endpoint replays them before continuing.
+        let body = "event: token\ndata: re\n\n\
+                    event: token\ndata: joined\n\n\
+                    event: session_finished\ndata: {\"status\":\"done\",\"summary\":\"\"}\n\n";
+        Mock::given(method("GET"))
+            .and(path("/api/conversations/live-7/attach"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(body),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner
+            .run(Effect::AttachConversationStream("live-7".into()))
+            .await;
+
+        let mut tokens = String::new();
+        let mut saw_done = false;
+        for _ in 0..8 {
+            match tokio::time::timeout(Duration::from_secs(2), action_rx.recv()).await {
+                Ok(Some(Action::SseToken(t))) => tokens.push_str(&t),
+                Ok(Some(Action::SseDone)) => {
+                    saw_done = true;
+                    break;
+                }
+                Ok(Some(Action::SseFailed(e))) => panic!("attach failed: {e}"),
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => panic!("timed out waiting for attach actions; got {tokens:?}"),
+            }
+        }
+        assert_eq!(tokens, "rejoined", "replayed tokens must reach the app");
+        assert!(saw_done, "the attach stream must terminate the turn");
+    }
+
+    /// A turn that finishes between reading `turn_running` and the attach request is the expected
+    /// race, not a fault. It must reload the transcript — the reply is on disk — rather than
+    /// blaming the user with `[error] attach refused (409)`.
+    #[tokio::test]
+    async fn attach_409_reloads_history_instead_of_reporting_an_error() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/conversations/done-3/attach"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
+                "error": "no turn is running for this conversation"
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner
+            .run(Effect::AttachConversationStream("done-3".into()))
+            .await;
+
+        let mut saw_reload = false;
+        for _ in 0..4 {
+            match tokio::time::timeout(Duration::from_secs(2), action_rx.recv()).await {
+                Ok(Some(Action::SseFailed(e))) => {
+                    panic!("a finished turn must not surface as an error: {e}")
+                }
+                Ok(Some(Action::ReloadConversationHistory(id))) => {
+                    assert_eq!(id, "done-3");
+                    saw_reload = true;
+                    break;
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+        assert!(
+            saw_reload,
+            "409 must re-read the transcript so the reply that just landed is shown"
+        );
     }
 
     #[tokio::test]

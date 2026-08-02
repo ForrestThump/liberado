@@ -1103,6 +1103,10 @@ pub enum Action {
         turn_running: bool,
         turn_unanswered: bool,
     },
+    /// Re-read a conversation's transcript because the reply landed while nobody was attached.
+    /// Raised when attach returns `409` — the turn finished between reading `turn_running` and
+    /// the attach request, so the answer is on disk and the displayed history is one turn stale.
+    ReloadConversationHistory(String),
     /// Conversation session id from the first SSE event.
     SseSession(String),
     /// Streaming text delta.
@@ -1386,6 +1390,13 @@ impl App {
                 } else {
                     follow_up
                 }
+            }
+            Action::ReloadConversationHistory(id) => {
+                // Same handshake every other open path uses: `HistoryLoaded` discards a response
+                // whose id is not the pending one, so claim it before asking.
+                self.pending_load = Some(id.clone());
+                self.mark_dirty();
+                vec![Effect::LoadConversationHistory(id)]
             }
             Action::SseSession(id) => {
                 if self.session.is_none() {
