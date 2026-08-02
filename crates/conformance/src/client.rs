@@ -520,10 +520,13 @@ fn parse_sse_block(block: &str, session_id: &mut Option<String>, saw_token: &mut
             *session_id = Some(data.trim().trim_matches('"').to_string());
         }
     }
-    if event_name == "token" || data.contains("token") {
-        *saw_token = true;
-    }
-    // chat-client-contract: token events may be bare text under event: token
+    // Only a real `event: token` frame counts as turn content.
+    //
+    // This used to also accept any block whose *data* contained the substring "token", which
+    // reopens the hole the strict assertion exists to close: `progress`, `tool_started` and
+    // `session_finished` all carry free text, so a subagent previewing a tool arg or a summary
+    // mentioning tokens would satisfy P6 without the answer ever being replayed. The suite would
+    // then pass against an attach that streams nothing.
     if event_name == "token" {
         *saw_token = true;
     }
@@ -649,5 +652,27 @@ mod tests {
         assert!(!tok, "session frame must not count as token");
         parse_sse_block("event: token\ndata: hello", &mut sid, &mut tok);
         assert!(tok);
+    }
+
+    /// Free-text events must not be mistaken for turn content because they say "token".
+    ///
+    /// `progress`, `tool_started` and `session_finished` all carry text the model or a tool
+    /// chose. Accepting them would let P6 pass against an attach that replays nothing — the
+    /// exact vacuous pass the strict content assertion exists to prevent.
+    #[test]
+    fn free_text_mentioning_tokens_is_not_turn_content() {
+        for block in [
+            "event: progress\ndata: {\"message\":\"summarising, 4200 tokens so far\"}",
+            "event: tool_started\ndata: {\"name\":\"search_web\",\"args_preview\":\"q=token bucket\"}",
+            "event: session_finished\ndata: {\"status\":\"done\",\"summary\":\"spent 900 tokens\"}",
+        ] {
+            let mut sid = None;
+            let mut tok = false;
+            parse_sse_block(block, &mut sid, &mut tok);
+            assert!(
+                !tok,
+                "non-token event must not count as replayed turn content: {block}"
+            );
+        }
     }
 }

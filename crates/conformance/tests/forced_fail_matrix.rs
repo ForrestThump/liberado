@@ -534,6 +534,10 @@ enum P6Break {
     EmptyAttach,
     /// Attach 200 with session framing only — no token/replay (real broken attach shape).
     SessionOnlyAttach,
+    /// Attach 200 that streams only *chatter* — progress and tool frames whose free text happens
+    /// to mention tokens. Shaped like a real research turn's opening seconds, and the closest
+    /// thing to a plausible false pass: nothing of the answer is replayed.
+    AttachChatterMentionsTokens,
     /// Cancel HTTP succeeds but turn_running stays true.
     CancelNoOp,
     /// Cancel "succeeds", turn stops, but assistant partial is on the transcript.
@@ -695,6 +699,14 @@ async fn listen_p6(mock: Arc<P6Mock>) -> SocketAddr {
                                 // Real attach shape that is still broken: session framing, zero tokens.
                                 "event: session\ndata: {\"session\":\"01P6FORCED0000000000000000\"}\n\n".into(),
                             ),
+                            P6Break::AttachChatterMentionsTokens => (
+                                axum::http::StatusCode::OK,
+                                [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                                "event: session\ndata: {\"session\":\"01P6FORCED0000000000000000\"}\n\n\
+                                 event: progress\ndata: {\"message\":\"gathering context, 4200 tokens so far\"}\n\n\
+                                 event: tool_started\ndata: {\"name\":\"search_web\",\"args_preview\":\"q=token bucket\"}\n\n"
+                                    .into(),
+                            ),
                             P6Break::DiesOnDisconnect => (
                                 axum::http::StatusCode::CONFLICT,
                                 [(axum::http::header::CONTENT_TYPE, "text/plain")],
@@ -774,6 +786,39 @@ async fn p6_fails_when_attach_replays_nothing() {
             || r.assertion.contains("token"),
         "{:?}",
         r.assertion
+    );
+}
+
+/// An attach that streams only chatter must fail, even when the chatter says "token".
+///
+/// The block parser used to set `saw_token` for any frame whose *data* contained the substring,
+/// so a `progress` line reporting token counts — or a tool preview searching for "token bucket" —
+/// satisfied the content assertion. This is the shape that would have let P6 pass against an
+/// attach replaying none of the answer, and free-text frames are common in the first seconds of a
+/// real research turn.
+#[tokio::test]
+async fn p6_fails_when_attach_streams_only_chatter_mentioning_tokens() {
+    let r = run_p6_against(P6Break::AttachChatterMentionsTokens).await;
+    write_capture("p6_attach_chatter_mentions_tokens", &r);
+    assert_eq!(
+        r.status,
+        PathStatus::Fail,
+        "chatter is not the replayed answer; got {:?}",
+        r.assertion
+    );
+    assert!(
+        r.assertion.contains("turn content") || r.assertion.contains("token"),
+        "must reject on missing turn content; got {:?}",
+        r.assertion
+    );
+    assert_eq!(
+        r.evidence
+            .as_ref()
+            .and_then(|e| e.get("saw_token"))
+            .and_then(|v| v.as_bool()),
+        Some(false),
+        "evidence must show no real token frame arrived: {:?}",
+        r.evidence
     );
 }
 
