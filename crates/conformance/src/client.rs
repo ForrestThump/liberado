@@ -149,8 +149,194 @@ impl DaemonClient {
         self.get_json(&format!("/api/conversations/{id}")).await
     }
 
+    /// Parse conversation history flags used by P6 (turn lifecycle + transcript roles).
+    pub async fn conversation_snapshot(&self, id: &str) -> Result<ConversationSnapshot, String> {
+        let v = self.conversation(id).await?;
+        Ok(ConversationSnapshot::from_json(&v))
+    }
+
     pub async fn sessions(&self) -> Result<Value, String> {
         self.get_json("/api/sessions").await
+    }
+
+    /// Start a **background** chat turn, read until the session id is announced, then **drop** the
+    /// SSE body so the connection ends while the turn (if durable) keeps running.
+    ///
+    /// P6 landmine: pre-durable turns died on disconnect. The suite must leave nobody attached
+    /// and still observe `turn_running`.
+    pub async fn start_background_turn_drop_stream(&self, message: &str) -> Result<String, String> {
+        let url = format!("{}/api/chat/stream", self.base);
+        let body = serde_json::json!({
+            "message": message,
+            "background": true,
+        });
+        let resp = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("POST chat/stream: {e}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("chat/stream {status}: {text}"));
+        }
+
+        let mut session_id: Option<String> = None;
+        let mut saw_token = false;
+        let mut buffer = String::new();
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| format!("sse chunk: {e}"))?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            while let Some(idx) = buffer.find("\n\n") {
+                let block = buffer[..idx].to_string();
+                buffer = buffer[idx + 2..].to_string();
+                parse_sse_block(&block, &mut session_id, &mut saw_token);
+            }
+            if session_id.is_some() {
+                // Drop the stream here — connection closes; durable turn must keep running.
+                break;
+            }
+        }
+        let _ = saw_token;
+        session_id.ok_or_else(|| "chat stream never announced a session id before drop".into())
+    }
+
+    /// Poll until `turn_running` is true, or timeout.
+    pub async fn wait_turn_running(&self, id: &str, timeout: Duration) -> Result<(), String> {
+        let start = std::time::Instant::now();
+        loop {
+            let snap = self.conversation_snapshot(id).await?;
+            if snap.turn_running {
+                return Ok(());
+            }
+            // Already finished with a reply: cannot prove outlive for this attempt.
+            if snap.has_assistant && !snap.turn_running {
+                return Err(
+                    "turn finished before we observed turn_running (assistant already present)"
+                        .into(),
+                );
+            }
+            if start.elapsed() > timeout {
+                return Err(format!(
+                    "turn_running never became true for {id} within {timeout:?} \
+                     (turn_unanswered={}, has_assistant={})",
+                    snap.turn_unanswered, snap.has_assistant
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// Poll until `turn_running` is false, or timeout.
+    pub async fn wait_turn_not_running(&self, id: &str, timeout: Duration) -> Result<(), String> {
+        let start = std::time::Instant::now();
+        loop {
+            let snap = self.conversation_snapshot(id).await?;
+            if !snap.turn_running {
+                return Ok(());
+            }
+            if start.elapsed() > timeout {
+                return Err(format!("turn still running for {id} after {timeout:?}"));
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    /// `GET /api/conversations/{id}/attach` — collect SSE until a **token** (turn content) arrives
+    /// or the stream ends/timeouts.
+    ///
+    /// Real attach always frames with a `session` event first; that alone is **not** proof of
+    /// replay/live turn content. P6 requires at least one token (or other non-session agent event
+    /// counted as turn content via [`parse_sse_block`]'s `saw_token`). Empty attach, session-only
+    /// framing, or 409 are fails.
+    pub async fn attach_and_collect(
+        &self,
+        id: &str,
+        timeout: Duration,
+    ) -> Result<AttachCollect, String> {
+        let url = format!("{}/api/conversations/{id}/attach", self.base);
+        let resp = self
+            .http
+            .get(&url)
+            .timeout(timeout)
+            .send()
+            .await
+            .map_err(|e| format!("GET attach: {e}"))?;
+        let status = resp.status();
+        if status.as_u16() == 409 {
+            return Err("attach 409: nothing running".into());
+        }
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("attach {status}: {text}"));
+        }
+
+        let mut session_id: Option<String> = None;
+        let mut saw_token = false;
+        let mut session_frames = 0usize;
+        let mut event_blocks = 0usize;
+        let mut buffer = String::new();
+        let mut stream = resp.bytes_stream();
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(
+                deadline.saturating_duration_since(std::time::Instant::now()),
+                stream.next(),
+            )
+            .await
+            {
+                Ok(Some(Ok(chunk))) => {
+                    buffer.push_str(&String::from_utf8_lossy(&chunk));
+                    while let Some(idx) = buffer.find("\n\n") {
+                        let block = buffer[..idx].to_string();
+                        buffer = buffer[idx + 2..].to_string();
+                        if block.trim().is_empty() {
+                            continue;
+                        }
+                        event_blocks += 1;
+                        let before = session_id.clone();
+                        parse_sse_block(&block, &mut session_id, &mut saw_token);
+                        // Count pure session framing (session id set, no token in this pass).
+                        if !saw_token && session_id.is_some() && before != session_id {
+                            session_frames += 1;
+                        }
+                    }
+                }
+                Ok(Some(Err(e))) => return Err(format!("attach stream: {e}")),
+                Ok(None) => break,
+                Err(_) => break,
+            }
+            // Only turn *content* is enough to stop early — not session framing alone.
+            if saw_token {
+                break;
+            }
+        }
+        Ok(AttachCollect {
+            event_blocks,
+            session_frames,
+            saw_token,
+            session_echo: session_id,
+        })
+    }
+
+    /// `POST /api/conversations/{id}/cancel`.
+    pub async fn cancel_conversation(&self, id: &str) -> Result<(), String> {
+        let url = format!("{}/api/conversations/{id}/cancel", self.base);
+        let resp = self
+            .http
+            .post(&url)
+            .send()
+            .await
+            .map_err(|e| format!("POST cancel: {e}"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("cancel {status}: {text}"));
+        }
+        Ok(())
     }
 
     /// Poll reactions until a Dispatched outcome appears for `correlation_id`, or timeout.
@@ -230,6 +416,81 @@ pub struct ChatTurnOutcome {
     pub saw_token: bool,
 }
 
+/// Snapshot of GET /api/conversations/{id} fields P6 asserts on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationSnapshot {
+    pub turn_running: bool,
+    pub turn_unanswered: bool,
+    pub has_user: bool,
+    pub has_assistant: bool,
+    pub user_contents: Vec<String>,
+    pub assistant_contents: Vec<String>,
+}
+
+impl ConversationSnapshot {
+    pub fn from_json(v: &Value) -> Self {
+        let turn_running = v
+            .get("turn_running")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
+        let turn_unanswered = v
+            .get("turn_unanswered")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
+        let mut user_contents = Vec::new();
+        let mut assistant_contents = Vec::new();
+        if let Some(msgs) = v.get("messages").and_then(|m| m.as_array()) {
+            for m in msgs {
+                let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("");
+                let content = m
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                match role {
+                    "user" if !content.is_empty() => user_contents.push(content),
+                    "assistant" if !content.trim().is_empty() => assistant_contents.push(content),
+                    _ => {}
+                }
+            }
+        }
+        Self {
+            turn_running,
+            turn_unanswered,
+            has_user: !user_contents.is_empty(),
+            has_assistant: !assistant_contents.is_empty(),
+            user_contents,
+            assistant_contents,
+        }
+    }
+
+    /// Cancel rollback ground truth: question kept, no assistant text persisted.
+    pub fn cancel_left_question_without_reply(&self) -> bool {
+        self.has_user && !self.has_assistant && !self.turn_running
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachCollect {
+    /// Non-empty SSE blocks (including session framing). Diagnostic only — not a pass signal.
+    pub event_blocks: usize,
+    /// How many blocks set/updated the session id without a token (framing).
+    pub session_frames: usize,
+    /// At least one token (turn text) — the only content that proves attach replay/live.
+    pub saw_token: bool,
+    pub session_echo: Option<String>,
+}
+
+impl AttachCollect {
+    /// True only when attach delivered **turn content** (token), not mere session framing.
+    ///
+    /// A successful attach always emits `event: session` first; counting any block as content
+    /// would make P6 pass against a stream that never replays the answer.
+    pub fn has_turn_content(&self) -> bool {
+        self.saw_token
+    }
+}
+
 fn parse_sse_block(block: &str, session_id: &mut Option<String>, saw_token: &mut bool) {
     let mut event_name = String::new();
     let mut data = String::new();
@@ -259,10 +520,13 @@ fn parse_sse_block(block: &str, session_id: &mut Option<String>, saw_token: &mut
             *session_id = Some(data.trim().trim_matches('"').to_string());
         }
     }
-    if event_name == "token" || data.contains("token") {
-        *saw_token = true;
-    }
-    // chat-client-contract: token events may be bare text under event: token
+    // Only a real `event: token` frame counts as turn content.
+    //
+    // This used to also accept any block whose *data* contained the substring "token", which
+    // reopens the hole the strict assertion exists to close: `progress`, `tool_started` and
+    // `session_finished` all carry free text, so a subagent previewing a tool arg or a summary
+    // mentioning tokens would satisfy P6 without the answer ever being replayed. The suite would
+    // then pass against an attach that streams nothing.
     if event_name == "token" {
         *saw_token = true;
     }
@@ -302,5 +566,113 @@ mod tests {
             Some("sess-1")
         );
         assert!(find_dispatched(&reactions, "other").is_none());
+    }
+
+    #[test]
+    fn conversation_snapshot_parses_lifecycle_and_roles() {
+        let v = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "q"},
+                {"role": "assistant", "content": "a"}
+            ],
+            "turn_running": true,
+            "turn_unanswered": false
+        });
+        let s = ConversationSnapshot::from_json(&v);
+        assert!(s.turn_running);
+        assert!(!s.turn_unanswered);
+        assert!(s.has_user && s.has_assistant);
+        assert!(!s.cancel_left_question_without_reply());
+    }
+
+    #[test]
+    fn cancel_rollback_requires_user_without_assistant() {
+        let ok = ConversationSnapshot::from_json(&serde_json::json!({
+            "messages": [{"role": "user", "content": "only question"}],
+            "turn_running": false,
+            "turn_unanswered": true
+        }));
+        assert!(ok.cancel_left_question_without_reply());
+
+        let partial = ConversationSnapshot::from_json(&serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "q"},
+                {"role": "assistant", "content": "partial…"}
+            ],
+            "turn_running": false
+        }));
+        assert!(
+            !partial.cancel_left_question_without_reply(),
+            "partial assistant must fail rollback assert"
+        );
+    }
+
+    #[test]
+    fn attach_session_framing_alone_is_not_turn_content() {
+        // Real attach always sends session first — that must not pass P6.
+        assert!(
+            !AttachCollect {
+                event_blocks: 2,
+                session_frames: 1,
+                saw_token: false,
+                session_echo: Some("01ABC".into()),
+            }
+            .has_turn_content()
+        );
+        assert!(
+            !AttachCollect {
+                event_blocks: 0,
+                session_frames: 0,
+                saw_token: false,
+                session_echo: None,
+            }
+            .has_turn_content()
+        );
+        assert!(
+            AttachCollect {
+                event_blocks: 2,
+                session_frames: 1,
+                saw_token: true,
+                session_echo: Some("01ABC".into()),
+            }
+            .has_turn_content()
+        );
+    }
+
+    #[test]
+    fn parse_sse_token_sets_saw_token() {
+        let mut sid = None;
+        let mut tok = false;
+        parse_sse_block(
+            "event: session\ndata: {\"session\":\"s1\"}",
+            &mut sid,
+            &mut tok,
+        );
+        assert_eq!(sid.as_deref(), Some("s1"));
+        assert!(!tok, "session frame must not count as token");
+        parse_sse_block("event: token\ndata: hello", &mut sid, &mut tok);
+        assert!(tok);
+    }
+
+    /// Free-text events must not be mistaken for turn content because they say "token".
+    ///
+    /// `progress`, `tool_started` and `session_finished` all carry text the model or a tool
+    /// chose. Accepting them would let P6 pass against an attach that replays nothing — the
+    /// exact vacuous pass the strict content assertion exists to prevent.
+    #[test]
+    fn free_text_mentioning_tokens_is_not_turn_content() {
+        for block in [
+            "event: progress\ndata: {\"message\":\"summarising, 4200 tokens so far\"}",
+            "event: tool_started\ndata: {\"name\":\"search_web\",\"args_preview\":\"q=token bucket\"}",
+            "event: session_finished\ndata: {\"status\":\"done\",\"summary\":\"spent 900 tokens\"}",
+        ] {
+            let mut sid = None;
+            let mut tok = false;
+            parse_sse_block(block, &mut sid, &mut tok);
+            assert!(
+                !tok,
+                "non-token event must not count as replayed turn content: {block}"
+            );
+        }
     }
 }
