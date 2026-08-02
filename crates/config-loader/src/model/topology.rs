@@ -670,6 +670,71 @@ impl SessionProfile {
 }
 
 #[cfg(test)]
+mod model_token_prices {
+    use super::*;
+    use liberado_common::ModelTier;
+
+    /// D1: optional per-million rates load from `[[models]]` flat keys; absence means unpriced.
+    #[test]
+    fn loads_optional_rates_from_models_table() {
+        let doc = r#"
+            vault_path = "/tmp/vault"
+            [[models]]
+            name = "priced"
+            tool_calling = true
+            structured_output = true
+            context_window = 128000
+            tier = "control_plane"
+            input = 0.14
+            output = 0.28
+            cached_input = 0.014
+
+            [[models]]
+            name = "unpriced"
+            tool_calling = true
+            structured_output = false
+            context_window = 64000
+            tier = "work_plane"
+        "#;
+        let topo: Topology = toml::from_str(doc).unwrap();
+        assert_eq!(topo.models.len(), 2);
+
+        let priced = topo.models.iter().find(|m| m.name == "priced").unwrap();
+        assert_eq!(priced.prices.input, Some(0.14));
+        assert_eq!(priced.prices.output, Some(0.28));
+        assert_eq!(priced.prices.cached_input, Some(0.014));
+        assert!(priced.prices.is_priced());
+        assert_eq!(priced.tier, ModelTier::ControlPlane);
+
+        let unpriced = topo.models.iter().find(|m| m.name == "unpriced").unwrap();
+        assert!(unpriced.prices.is_empty());
+        assert!(!unpriced.prices.is_priced());
+        // Relative `cost` hint is unrelated and still absent.
+        assert!(unpriced.cost.is_none());
+    }
+
+    /// Partial rates still parse; callers treat a model with any rate as participating in pricing.
+    #[test]
+    fn partial_rates_are_still_priced_presence() {
+        let doc = r#"
+            vault_path = "/tmp/vault"
+            [[models]]
+            name = "input-only"
+            tool_calling = true
+            structured_output = false
+            context_window = 32000
+            tier = "work_plane"
+            input = 1.0
+        "#;
+        let topo: Topology = toml::from_str(doc).unwrap();
+        let m = &topo.models[0];
+        assert_eq!(m.prices.input, Some(1.0));
+        assert!(m.prices.output.is_none());
+        assert!(m.prices.is_priced());
+    }
+}
+
+#[cfg(test)]
 mod webui_config {
     use super::*;
 
@@ -736,6 +801,7 @@ mod compaction_proptest {
             context_window: window,
             tier: ModelTier::WorkPlane,
             cost: None,
+            prices: Default::default(),
         }
     }
 
@@ -1124,6 +1190,7 @@ mod compaction_trigger_resolve_tests {
             context_window: window,
             tier: ModelTier::WorkPlane,
             cost: None,
+            prices: Default::default(),
         }
     }
 
