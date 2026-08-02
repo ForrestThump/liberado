@@ -72,6 +72,59 @@ Today's durable-turn work touched code this fix will brush against:
 - **`append_note` authors as `Named("goal-session")`, not `Assistant`.** Deliberate. Model derivation (`model_last_used`) filters on `Author` precisely so a delegation cannot capture the conversation's model, and `last_turn_unanswered` treats a `Named` node as ending the turn. Making a handoff look "as if the face agent said it" by authoring it `Assistant` would change both. Check them together.
 - **The tool node carries no model stamp.** An MCP produced it, not a model. Any change to how results are recorded must keep that true.
 
+## Root cause (found 2026-08-02)
+
+The contract asks for exactly what we got. `submit_report`'s schema:
+
+```json
+"summary":   { "description": "High-signal, human-readable, short." },
+"artifacts": { "description": "Vault paths written, e.g. \"reviews/2026-06-21.md\"." }
+```
+
+**"short."** The model complied. And `artifacts` is for *vault paths*, so a research task that writes
+no file has nowhere to put findings even if it wanted to.
+
+**The fix already exists, and does not run on this path.** `orchestrator::delivery_directive` tells a
+subagent its summary *is* the document — "complete, structured with markdown headings, as long as the
+material warrants, carrying the detail, sources and specifics you gathered". Its own doc comment
+diagnoses this exact failure, from a live run that filed 231 bytes reading *"I have all the research
+I need. Let me now write the comprehensive report directly to the vault."*
+
+It is appended only when `delivery_target` yields a path:
+
+```rust
+let path = match requested {
+    Delivery::Summarize => return Err(None),   // chat delegation lands here
+    Delivery::Vault { path } => path,
+};
+```
+
+A chat `delegate` is `Delivery::Summarize`. No path, so no directive, so the default "short" contract
+stands. The scheduled-report path gets the good contract; `delegate` never did.
+
+This is the **second** mechanism found this way. `append_note` (direct delivery) is used by `/spawn`
+and not by `delegate`; `delivery_directive` is used by vault delivery and not by `delegate`. The
+pattern is not a coincidence worth ignoring: **`delegate` is the path improvements keep missing**,
+probably because it is the one with no durable artifact to inspect afterwards.
+
+## The fix, in shape
+
+`Delivery::Summarize` needs its own directive. The destination differs — a conversation rather than a
+file — but the contract is identical: *the summary is the material, not a status*. The coupling to be
+broken is that the directive currently keys on **having a file path** when what actually matters is
+**whether the summary is the deliverable**.
+
+`is_read_only_dispatch` already distinguishes research from action and is used a few lines away to
+pick the budget and loop profile, so the gate exists.
+
+Note this keeps Shiloh's routing decision intact: the face agent still receives the material and still
+decides whether to relay it near-verbatim or trim it to the conversation. It simply receives material
+instead of a status line — which is what makes that choice possible at all.
+
+**Still open**: the context cost. A full research report inline in a tool result occupies the face
+agent's history on every later turn. See the three shapes above; that trade-off is not resolved by
+knowing the root cause.
+
 ## Next step
 
 Read what the dispatch pack actually asks a subagent to return, and whether `report` mode states a contract at all — before touching prompt wording. The answer to "why is the summary a status line" is probably written down in the pack, or conspicuously not written down anywhere.
