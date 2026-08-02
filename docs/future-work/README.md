@@ -18,6 +18,7 @@ Index of forward-looking work.
 | [chat-search-plan.md](chat-search-plan.md) | History search tiers |
 | [context-compaction-plan.md](context-compaction-plan.md) | Chat context compaction (CH3 — Tier 1 landed; known residual documented) |
 | [durable-chat-turns-plan.md](durable-chat-turns-plan.md) | A turn outlives the connection watching it (**built + verified live** 2026-08-02; all steps landed) |
+| [token-cost-accounting-plan.md](token-cost-accounting-plan.md) | Price the existing latency journal so design calls use numbers, not guesses (scoped) |
 | [delegated-work-is-discarded-at-the-seam.md](delegated-work-is-discarded-at-the-seam.md) | **Finding**: `delegate` passes only a summary, so the face agent fabricates the specifics (open) |
 | [build-locally-and-ship-the-artifact.md](build-locally-and-ship-the-artifact.md) | Compile on the dev machine, ship the binary (wanted; blocked on disk + a WSL distro) |
 | [context-compaction-viewport-rearchitecture.md](context-compaction-viewport-rearchitecture.md) | CH3.1 proposed: side-summary + viewport (not shipped) |
