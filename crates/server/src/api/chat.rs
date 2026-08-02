@@ -781,6 +781,9 @@ pub async fn get_conversation(
                 // Asked at read time, not remembered: a client opening this conversation needs to
                 // know whether the reply it cannot see is still coming.
                 turn_running: sessions.turn_running(id),
+                // Asked after `turn_running` and never alongside it: a live turn also ends on the
+                // human's message, and calling that dead would mark every in-flight turn as failed.
+                turn_unanswered: sessions.last_turn_unanswered(id).await,
             })
             .into_response()
         }

@@ -85,6 +85,9 @@ struct LoadedConversation {
     /// A turn is in flight for this conversation right now — so the transcript is missing a reply
     /// that is still coming, and this client should attach rather than assume it was lost.
     turn_running: bool,
+    /// The last turn ended with no reply — usually the daemon restarting mid-inference. Rendered as
+    /// a note rather than left as silence, which reads as "the model said nothing".
+    turn_unanswered: bool,
 }
 
 async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConversation, String> {
@@ -112,6 +115,7 @@ async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConve
             .collect(),
         profile: history.profile,
         turn_running: history.turn_running,
+        turn_unanswered: history.turn_unanswered,
     })
 }
 
@@ -224,7 +228,20 @@ pub fn Chat(
                 wasm_bindgen_futures::spawn_local(async move {
                     if let Ok(loaded) = fetch_conversation(&base, &conv_id).await {
                         let running = loaded.turn_running;
-                        messages.set(loaded.messages);
+                        let unanswered = loaded.turn_unanswered;
+                        let mut loaded_messages = loaded.messages;
+                        // Derived at render time, never stored: this is a *reading* of the
+                        // transcript, and writing it into the log would make a display decision
+                        // permanent and re-answer it wrongly if the turn were later retried.
+                        if unanswered {
+                            loaded_messages.push(ChatMsg {
+                                role: "system",
+                                content: "That turn ended without a reply — the daemon most likely                                           restarted mid-answer. Nothing was saved; send again to retry."
+                                    .to_string(),
+                                thinking_steps: Vec::new(),
+                            });
+                        }
+                        messages.set(loaded_messages);
                         // From the conversation, not remembered client-side: opening a chat in a
                         // second tab or after a restart must show the authority it actually runs
                         // under, not whatever this tab last set.
