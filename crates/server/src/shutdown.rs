@@ -222,6 +222,10 @@ pub async fn wait_for_shutdown_signal() {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::Request;
+    use http_body_util::BodyExt;
     use liberado_executor::{Budget, Executor, ToolRuntime};
     use liberado_main_agent::ChatSessions;
     use liberado_provider::{
@@ -231,6 +235,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
+    use tower::ServiceExt;
 
     struct NoTools;
     #[async_trait]
@@ -293,6 +298,44 @@ mod tests {
         Arc::new(AppState::for_test(store, Some(chat), root))
     }
 
+    /// Mini-router matching production: turn-start routes + `refuse_new_turns_if_draining`.
+    /// Deleting the middleware/`route_layer` in `lib.rs` without this layer would still serve
+    /// chat — this test would then fail on status/body.
+    fn turn_start_router(state: Arc<AppState>) -> Router {
+        Router::new()
+            .route("/api/chat", axum::routing::post(crate::api::chat))
+            .route(
+                "/api/chat/stream",
+                axum::routing::get(crate::api::chat_stream_get).post(crate::api::chat_stream_post),
+            )
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                refuse_new_turns_if_draining,
+            ))
+            .with_state(state)
+    }
+
+    async fn post_chat(app: Router, message: &str) -> (StatusCode, serde_json::Value) {
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"message":"{message}"}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .expect("oneshot");
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.expect("body").to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes)
+            .unwrap_or(serde_json::json!({ "raw": String::from_utf8_lossy(&bytes) }));
+        (status, json)
+    }
+
+    /// Real HTTP path: after drain, POST /api/chat is 503 + error=shutting_down.
+    /// Exercises `refuse_new_turns_if_draining` — not just DrainGate flags / JSON helpers.
     #[tokio::test]
     async fn refuse_new_turns_after_begin_drain() {
         let dir = tempfile::tempdir().unwrap();
@@ -306,9 +349,68 @@ mod tests {
         .await;
         let state = state_with(chat, store, dir.path().to_path_buf());
         assert!(state.drain.is_accepting());
+
+        // Integrated path: drain_for_shutdown must call begin_drain (not only wait).
+        let outcome = drain_for_shutdown(&state, Duration::ZERO).await;
+        assert!(
+            !state.drain.is_accepting(),
+            "drain_for_shutdown must flip the gate"
+        );
+        assert!(
+            outcome.idle_within_grace || outcome.aborted == 0,
+            "no turns were running: {outcome:?}"
+        );
+
+        let app = turn_start_router(state.clone());
+        let (status, body) = post_chat(app, "should be refused").await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "middleware must refuse; body={body}"
+        );
+        assert_eq!(
+            body["error"], SHUTTING_DOWN_ERROR,
+            "distinguishable kind, not a generic failure; body={body}"
+        );
+        assert!(
+            body["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("shutting down")),
+            "client-visible message; body={body}"
+        );
+    }
+
+    /// Same refusal on the streaming route used by TUI/WebUI.
+    #[tokio::test]
+    async fn refuse_new_turns_on_chat_stream_after_drain() {
+        let dir = tempfile::tempdir().unwrap();
+        let (chat, store) = make_chat(
+            dir.path(),
+            Arc::new(SlowProvider {
+                delay: Duration::from_millis(1),
+                reply: "ok".into(),
+            }),
+        )
+        .await;
+        let state = state_with(chat, store, dir.path().to_path_buf());
         state.drain.begin_drain();
         assert!(!state.drain.is_accepting());
-        let body = shutting_down_json();
+
+        let app = turn_start_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat/stream")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"message":"nope"}"#))
+                    .unwrap(),
+            )
+            .await
+            .expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body["error"], SHUTTING_DOWN_ERROR);
     }
 
