@@ -462,6 +462,31 @@ impl Orchestrator {
         }
     }
 
+    /// Which output contract a subagent gets, given where its report is going.
+    ///
+    /// Extracted so the *wiring* is testable, not just the wording. The directives are pure functions
+    /// and easy to assert on, which made it possible to have thorough tests of text that was never
+    /// appended to anything — removing the call site failed nothing.
+    ///
+    /// Three cases, and the empty one is deliberate:
+    /// * **filed to the vault** — the summary is the artifact ([`delivery_directive`]);
+    /// * **research relayed to the main agent** — the summary is the material ([`relay_directive`]);
+    /// * **action with no delivery** — nothing. The work produced an artifact of its own, so a short
+    ///   status genuinely is the right report and asking for more would put a wall of text in a chat
+    ///   that wanted "done".
+    fn output_contract(
+        &self,
+        delivery: &Delivery,
+        allowed_mcps: &[String],
+        research: bool,
+    ) -> String {
+        match self.delivery_target(delivery, allowed_mcps) {
+            Ok(target) => delivery_directive(&target),
+            Err(_) if research => relay_directive(),
+            Err(_) => String::new(),
+        }
+    }
+
     /// Where a requested delivery would land, decided **without** the outcome.
     ///
     /// Split out from [`resolve_delivery`](Self::resolve_delivery) because the answer is needed at
@@ -915,9 +940,11 @@ impl Orchestrator {
                     // verbatim has to be told so up front, or it writes a status line and waits to
                     // author the document with a tool it was never given (see `delivery_directive`).
                     let mut instructions = subagent_instructions(&success_criteria);
-                    if let Ok(target) = self.delivery_target(&delivery, &allowed_mcps) {
-                        instructions.push_str(&delivery_directive(&target));
-                    }
+                    instructions.push_str(&self.output_contract(
+                        &delivery,
+                        &allowed_mcps,
+                        research,
+                    ));
                     let task = Task::new(instructions, subgoal)
                         .salvageable(research)
                         // Exact matching for deep work: varied search queries read as
@@ -1486,6 +1513,39 @@ fn delivery_directive(path: &str) -> String {
     )
 }
 
+/// Told to a research subagent whose report goes back to the **main agent** rather than to a file.
+///
+/// The sibling of [`delivery_directive`], for the case that has no path to file to. Both exist for
+/// the same reason: `Report::summary` is documented to the model as "High-signal, human-readable,
+/// short", so absent an instruction otherwise a subagent writes a status line and the material it
+/// gathered is discarded at the seam.
+///
+/// That is not hypothetical here. On 2026-08-02 a delegated research turn returned 504 characters —
+/// a third of it session ids — and the face agent, holding source *names* and none of their content,
+/// produced 7,872 characters of specific, cited answer from its own priors. The content may well
+/// have been right; the claim that it came from those sources was not.
+///
+/// `delivery_directive` was never reached on this path because it is appended only when
+/// `delivery_target` yields a vault path, and a chat `delegate` is `Delivery::Summarize`. The
+/// coupling was to *having a file*, when what matters is whether the summary is the deliverable.
+///
+/// Deliberately does **not** ask for a finished document the way the vault directive does. The main
+/// agent is a reader with conversational context, and it decides how much to relay — so this asks
+/// for the material, and leaves the shaping to the reader that can see the conversation.
+fn relay_directive() -> String {
+    format!(
+        "
+
+OUTPUT CONTRACT — read this before you start.
+
+         Your `{SUBMIT_REPORT_TOOL}` `summary` is the ONLY thing that leaves this session. The main          agent cannot see your tool calls, your searches, or their results — it sees this summary          and nothing else, and it answers the human from it. Anything you leave out is gone.
+
+         So carry the findings themselves, not a description of having found them. Include the          specifics, figures, comparisons and sources you actually gathered, with enough structure          to be read. \"Comprehensive comparison of X and Y, synthesized from several sources\" is a          status line, not a result: the main agent receiving that has nothing to relay and will          fill the gap from memory, attributing invented detail to sources it never saw.
+
+         Length should follow the material. The main agent will trim or relay as the conversation          needs — that is its job, and it can only do it if you give it something to trim."
+    )
+}
+
 /// Validate and normalise a `Delivery::Vault` destination, or say why it can't be used.
 ///
 /// The path comes from a model, and it addresses a **write** — so it gets the same treatment every
@@ -1713,10 +1773,15 @@ mod tests {
         assert!(directive.contains("There is no afterwards"));
     }
 
-    /// The directive is only correct when delivery will actually happen — a downgraded dispatch
-    /// must NOT be told its summary is a document, or it writes a 20KB "summary" into chat.
+    /// The **document** contract is only correct when delivery will actually happen — a downgraded
+    /// dispatch must not be told its summary is a filed artifact, because no file is written.
+    ///
+    /// It does still get the *relay* contract when it is research (see `relay_directive`): the
+    /// summary is the only thing that reaches the main agent either way, so it must carry the
+    /// material. The two differ in what they ask for — a finished document versus the findings,
+    /// shaped by whoever relays them — not in whether the subagent is told anything at all.
     #[test]
-    fn a_dispatch_that_cannot_deliver_gets_no_output_contract() {
+    fn a_dispatch_that_cannot_deliver_gets_no_document_contract() {
         let orch = delivering_orchestrator();
         assert!(
             orch.delivery_target(&vault_to("Learning/x.md"), &acting_mcps())
@@ -1727,6 +1792,76 @@ mod tests {
             orch.delivery_target(&Delivery::Summarize, &read_only_mcps())
                 .is_err(),
             "the default sink authors no document"
+        );
+    }
+
+    /// The seam that discarded delegated work: a research subagent reporting back to the main
+    /// agent must be told the summary is the only thing that leaves the session.
+    ///
+    /// Without it, `Report::summary`'s own schema ("High-signal, human-readable, short") is the only
+    /// instruction it has, and it files a status line — which is what produced 504 characters of
+    /// "comprehensive comparison, synthesized from authoritative sources" while the face agent
+    /// invented 7,872 characters of specifics and attributed them to sources nothing had read.
+    #[test]
+    fn a_research_subagent_reporting_to_chat_is_told_the_summary_is_the_material() {
+        let directive = relay_directive();
+        assert!(
+            directive.contains(SUBMIT_REPORT_TOOL),
+            "it must name the tool whose argument is the only thing that escapes"
+        );
+        // The fact the model cannot otherwise know.
+        assert!(directive.contains("cannot see your tool calls"));
+        assert!(directive.contains("Anything you leave out is gone"));
+        // Names the exact failure, so a model pattern-matching on it recognises its own draft.
+        assert!(directive.contains("status line, not a result"));
+    }
+
+    /// It asks for material, NOT for a finished document — that distinction is the whole reason it
+    /// is a separate directive. The main agent has the conversation and does the shaping; a
+    /// subagent told to write the final artifact would pre-empt a decision it lacks the context to
+    /// make, and drop a report into a chat that wanted two sentences.
+    #[test]
+    fn the_relay_contract_leaves_shaping_to_the_main_agent() {
+        let relay = relay_directive();
+        let document = delivery_directive("Learning/x.md");
+        assert!(
+            document.contains("FINISHED DOCUMENT"),
+            "the vault contract asks for the artifact itself"
+        );
+        assert!(
+            !relay.contains("FINISHED DOCUMENT"),
+            "the relay contract must not ask for a finished artifact"
+        );
+        assert!(
+            relay.contains("will trim or relay"),
+            "it has to say who does the shaping, or the subagent guesses"
+        );
+    }
+
+    /// The wiring, not the wording. Both directives are pure functions and easy to assert on, which
+    /// is exactly how a thorough set of tests can cover text that is never appended to anything —
+    /// deleting the call site failed nothing until this existed.
+    #[test]
+    fn the_output_contract_matches_where_the_report_is_going() {
+        let orch = delivering_orchestrator();
+
+        let filed = orch.output_contract(&vault_to("Learning/x.md"), &read_only_mcps(), true);
+        assert!(
+            filed.contains("FINISHED DOCUMENT"),
+            "a report that will be filed gets the document contract"
+        );
+
+        let relayed = orch.output_contract(&Delivery::Summarize, &read_only_mcps(), true);
+        assert!(
+            relayed.contains("Anything you leave out is gone"),
+            "research relayed to the main agent gets the relay contract"
+        );
+
+        // Action work produces its own artifact, so a short status is genuinely the right report.
+        let acting = orch.output_contract(&Delivery::Summarize, &acting_mcps(), false);
+        assert!(
+            acting.is_empty(),
+            "an acting dispatch gets no contract, or every chat gets a wall of text: {acting}"
         );
     }
 
