@@ -2071,11 +2071,16 @@ async fn daemon_wide_resync_does_not_retune_conversation_with_own_model() {
     );
 }
 
-/// §1 wiring: effective trigger for a session must come from the per-model table path
-/// (`CompactionTriggerTable::for_model`), not only from the daemon default. If `maybe_compact` /
-/// `compaction_trigger_for_session` were changed to always read `default`, this fails.
+/// `compaction_trigger_for_session` resolves through the per-model table rather than the daemon
+/// default.
+///
+/// Scope note, because this test used to claim more than it does: it exercises the **query**, not
+/// `maybe_compact`. Replacing `for_model(turn_model)` with `.default` inside `maybe_compact` leaves
+/// this test passing — verified. The check that catches that mutation is
+/// [`two_conversations_on_different_models_compact_at_different_thresholds`], which drives real
+/// turns and asserts one conversation grew a summary marker while the other did not.
 #[tokio::test]
-async fn per_conversation_trigger_resolution_is_wired_not_only_default() {
+async fn per_conversation_trigger_query_reads_the_model_table() {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(SessionStore::open(dir.path()).await);
     let provider = Arc::new(MockProvider::with_script(
@@ -2109,6 +2114,59 @@ async fn per_conversation_trigger_resolution_is_wired_not_only_default() {
          deleting per-conversation resolution fails this test"
     );
     assert_ne!(effective, sessions.compaction_trigger_tokens().unwrap());
+}
+
+/// Asking which threshold a conversation is on must not steal the pending model pick from the
+/// turn that follows.
+///
+/// The query and the turn share one precedence chain; taking the pick is the single intentional
+/// difference between them. If the query consumed it, the pick would be silently dropped and the
+/// turn would fall back to the daemon default — the exact class of bug this deliverable exists to
+/// fix, reintroduced through the instrument built to measure it.
+#[tokio::test]
+async fn asking_for_the_trigger_does_not_consume_the_pending_model_pick() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        [CompletionResponse::text("answered")],
+    ));
+    let executor = Executor::new(provider.clone(), Budget::default());
+    let mut model_triggers = std::collections::HashMap::new();
+    model_triggers.insert("picked-model".into(), 31_337u32);
+    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools)).with_compaction(
+        CompactionConfig {
+            enabled: true,
+            trigger_tokens: 1_000_000,
+            model_trigger_tokens: model_triggers,
+            unknown_model_trigger_tokens: 1_000_000,
+            ..CompactionConfig::default()
+        },
+        provider,
+    );
+
+    let id = sessions.create(None).await.unwrap();
+    sessions.select_model(id, "picked-model".into());
+
+    // Ask twice — a consuming peek would already have lost the pick by the second call.
+    assert_eq!(
+        sessions.compaction_trigger_for_session(id).await,
+        Some(31_337)
+    );
+    assert_eq!(
+        sessions.compaction_trigger_for_session(id).await,
+        Some(31_337),
+        "the pick must survive being asked about"
+    );
+
+    // And the turn still runs on it. Afterwards the pending pick is gone, so resolution falls to
+    // the log — still the picked model only if the turn actually received it and stamped it.
+    sessions.turn(id, "hello").await.unwrap();
+    assert_eq!(
+        sessions.compaction_trigger_for_session(id).await,
+        Some(31_337),
+        "the turn must have received the pick the query left alone, and stamped it on the log"
+    );
 }
 
 /// Compaction re-appends the kept tail so the model view is a contiguous log suffix. Those copies

@@ -290,6 +290,14 @@ pub struct ChatSessions {
 /// on daemon-wide face-model hot-swap ([`ChatSessions::set_compaction_trigger_tokens`]); per-model
 /// entries are fixed at wiring time so a global resync cannot retune a conversation that pinned
 /// its own model.
+/// Whether resolving a conversation's model should take the pending pick (a real turn, which makes
+/// the choice durable) or leave it alone (a query about what the next turn would do).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConsumePending {
+    Yes,
+    No,
+}
+
 struct CompactionEngine {
     config: CompactionConfig,
     /// Live table: default + per-model absolutes. See [`CompactionTriggerTable::for_model`].
@@ -945,6 +953,7 @@ impl ChatSessions {
         };
         // A *named* profile is authoritative; the absence of one means the daemon's defaults. See
         // `ConversationHeader::grant` for why the name, not an empty capability set, is the signal.
+        let from_profile = Self::profile_model(&header);
         let mut settings = if header.grant.profile.is_none() {
             self.default_turn_settings()
         } else {
@@ -956,7 +965,7 @@ impl ChatSessions {
                 model: header.grant.model,
             }
         };
-        settings.model = self.resolve_turn_model(session, settings.model).await;
+        settings.model = self.resolve_turn_model(session, from_profile).await;
         settings
     }
 
@@ -983,7 +992,27 @@ impl ChatSessions {
         session: Ulid,
         from_profile: Option<String>,
     ) -> Option<String> {
-        if let Some(pending) = self.pending_model(session) {
+        self.model_precedence(session, from_profile, ConsumePending::Yes)
+            .await
+    }
+
+    /// The precedence chain above, in one place.
+    ///
+    /// Taking the pending pick is the *only* thing that differs between a real turn and a query
+    /// that reports which model a turn would use. Sharing the body is deliberate: this logic
+    /// existed twice, and a compaction threshold asserted against a second copy of the rule would
+    /// keep passing while the turn drifted away from it — §6 of `failure-modes.md`.
+    async fn model_precedence(
+        &self,
+        session: Ulid,
+        from_profile: Option<String>,
+        consume: ConsumePending,
+    ) -> Option<String> {
+        let pending = match consume {
+            ConsumePending::Yes => self.pending_model(session),
+            ConsumePending::No => self.peek_pending_model(session),
+        };
+        if let Some(pending) = pending {
             return Some(pending);
         }
         if from_profile.is_some() {
@@ -992,24 +1021,29 @@ impl ChatSessions {
         self.model_last_used(session).await
     }
 
-    /// Like the model half of [`Self::turn_settings`], but does not consume a pending pick.
+    /// Which model this conversation's *next* turn would run on, without consuming the pending
+    /// pick — so asking the question cannot steal the answer from the turn that follows.
+    ///
+    /// Same precedence as [`Self::turn_settings`], including on a header read failure: that path
+    /// pins no profile model but must still honour a pending pick.
     async fn peek_turn_model(&self, session: Ulid) -> Option<String> {
-        if let Some(pending) = self.peek_pending_model(session) {
-            return Some(pending);
-        }
-        let header = match self.store.header(session).await {
-            Ok(h) => h,
-            Err(_) => return self.model_last_used(session).await,
+        let from_profile = match self.store.header(session).await {
+            Ok(header) => Self::profile_model(&header),
+            Err(_) => None,
         };
-        let from_profile = if header.grant.profile.is_none() {
+        self.model_precedence(session, from_profile, ConsumePending::No)
+            .await
+    }
+
+    /// The model a *named* session profile pins. No named profile means the daemon's defaults,
+    /// which pin nothing — see [`Self::turn_settings`] for why the name is the signal rather than
+    /// an empty capability set.
+    fn profile_model(header: &ConversationHeader) -> Option<String> {
+        if header.grant.profile.is_none() {
             None
         } else {
-            header.grant.model
-        };
-        if from_profile.is_some() {
-            return from_profile;
+            header.grant.model.clone()
         }
-        self.model_last_used(session).await
     }
 
     /// The model that most recently ran in this conversation, from the log itself.
