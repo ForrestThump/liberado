@@ -563,6 +563,18 @@ pub async fn delete_conversation(
             .into_response();
     }
 
+    // Stop any turn still running for this conversation *before* removing it, so the two cannot
+    // interleave. Turns outlive their connection now, which turned this from a narrow race into the
+    // normal case: the incognito teardown fires when the human navigates away, and the turn they
+    // left behind is still going. Deleting underneath it would leave a detached turn writing to a
+    // conversation that no longer exists.
+    //
+    // Cancelling persists nothing, so this loses no more than closing the tab already did — and the
+    // ordering is now stated rather than whatever the scheduler happened to pick.
+    if sessions.cancel_turn(id) {
+        tracing::info!(conversation = %id, "cancelled an in-flight turn before deleting");
+    }
+
     match sessions.delete(id).await {
         Ok(()) => {
             tracing::info!(conversation = %id, "conversation deleted");
@@ -1106,6 +1118,38 @@ mod tests {
 
         let absent: ChatRequest = serde_urlencoded::from_str("message=hi").unwrap();
         assert!(absent.model.is_none());
+    }
+
+    /// Deleting a conversation must stop the turn running in it first.
+    ///
+    /// This became load-bearing when turns started outliving their connection. The incognito
+    /// teardown fires when the human navigates away — precisely when a turn they left behind is
+    /// still going — so "delete while a turn is running" went from a narrow race to the ordinary
+    /// case. Without the cancel, a detached turn keeps writing to a conversation that has been
+    /// removed underneath it.
+    #[tokio::test]
+    async fn deleting_a_conversation_stops_its_running_turn_first() {
+        let h = harness_scripted(vec![]).await;
+        let ghost = h.chat.create_incognito(None).await.unwrap();
+
+        // A turn that will not finish on its own: the scripted provider has no reply queued.
+        let (_replay, _rx) = h.chat.start_or_attach(ghost, "still thinking");
+        assert!(
+            h.chat.turn_running(ghost) || h.chat.history(ghost).await.is_ok(),
+            "precondition: the turn was registered"
+        );
+
+        let status = delete(
+            &h.app,
+            &format!("/api/conversations/{ghost}?ephemeral_only=true"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+
+        assert!(
+            !h.chat.turn_running(ghost),
+            "the turn must be cancelled by the delete, not left writing to a removed conversation"
+        );
     }
 
     /// The guard that turns "a client sent the wrong id" from permanent data loss into a no-op.
