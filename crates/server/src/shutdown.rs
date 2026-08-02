@@ -32,6 +32,12 @@ pub const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(90);
 /// Wire error kind clients can match on when new turns are refused during drain.
 pub const SHUTTING_DOWN_ERROR: &str = "shutting_down";
 
+/// Human-readable refusal for surfaces with no JSON envelope to put [`SHUTTING_DOWN_ERROR`] in —
+/// today the Telegram bridge, which calls `ChatSessions` directly and so never passes through
+/// [`refuse_new_turns_if_draining`]. Kept beside the wire constant so the two stay one decision.
+pub const SHUTTING_DOWN_MESSAGE: &str =
+    "The daemon is restarting and is not accepting new turns. Try again in a moment.";
+
 /// Process-wide gate: when false, turn-starting HTTP routes refuse with [`shutting_down_response`].
 #[derive(Debug)]
 pub struct DrainGate {
@@ -332,6 +338,53 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&bytes)
             .unwrap_or(serde_json::json!({ "raw": String::from_utf8_lossy(&bytes) }));
         (status, json)
+    }
+
+    /// Telegram is a turn-starting surface that never touches the HTTP router.
+    ///
+    /// `TelegramChatBridge::chat_turn` calls `ChatSessions::turn` directly, so
+    /// `refuse_new_turns_if_draining` cannot see it. A message arriving mid-drain would start a
+    /// turn the grace timeout aborts moments later — and it would count toward `in_flight_count`
+    /// first, so the drain would wait on work it is about to discard. "New turns are refused"
+    /// has to mean every surface, not the one the middleware happens to cover.
+    #[tokio::test]
+    async fn telegram_bridge_refuses_new_turns_during_drain() {
+        use liberado_messaging::ChatSurface;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (chat, store) = make_chat(
+            dir.path(),
+            Arc::new(SlowProvider {
+                delay: Duration::from_millis(1),
+                reply: "telegram answer".into(),
+            }),
+        )
+        .await;
+        let state = state_with(chat, store, dir.path().to_path_buf());
+        let bridge = crate::telegram::TelegramChatBridge {
+            state: state.clone(),
+            session_id: crate::sticky::StickySession::ephemeral(),
+        };
+
+        // Precondition: the same call succeeds while accepting, so the refusal below is the gate
+        // and not a bridge that never worked.
+        let before = bridge.reply("hello").await;
+        assert_eq!(
+            before.as_deref(),
+            Ok("telegram answer"),
+            "bridge must answer normally before drain"
+        );
+
+        drain_for_shutdown(&state, Duration::ZERO).await;
+
+        let after = bridge.reply("hello again").await;
+        let err = after.expect_err("a new turn must be refused once draining");
+        assert_eq!(err, SHUTTING_DOWN_MESSAGE);
+        assert_eq!(
+            state.chat.as_ref().unwrap().in_flight_count(),
+            0,
+            "a refused message must not register an in-flight turn for the drain to wait on"
+        );
     }
 
     /// Real HTTP path: after drain, POST /api/chat is 503 + error=shutting_down.
