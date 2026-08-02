@@ -36,9 +36,11 @@ ENV CARGO_BUILD_JOBS=2 \
 COPY . .
 
 # `-p liberado-cli` pulls in the whole needed graph (server -> daemon -> every kernel/pack crate) and
-# emits the single `liberado` binary. The WebUI is a separate `dx` build, so it is naturally excluded.
-RUN cargo build --release -p liberado-cli \
-    && strip target/release/liberado || true
+# emits the `liberado` binary. Also ship `liberado-conformance` (Tier 3 live path runner) so the
+# hand-run suite lives beside the daemon on the box without a second toolchain install. The WebUI is
+# a separate `dx` build, so it is naturally excluded.
+RUN cargo build --release -p liberado-cli -p liberado-conformance \
+    && strip target/release/liberado target/release/liberado-conformance || true
 
 # ---- runtime ----
 FROM debian:trixie-slim AS runtime
@@ -50,6 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/liberado /usr/local/bin/liberado
+COPY --from=builder /build/target/release/liberado-conformance /usr/local/bin/liberado-conformance
 
 # Build provenance — the single answer to "what commit is actually running?".
 # `deploy/homelab/deploy.sh` passes the deployed git SHA here; it lands both in a file the daemon
