@@ -3610,6 +3610,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "liberado-cost"
+version = "0.1.0"
+dependencies = [
+ "liberado-common",
+ "liberado-config-loader",
+ "liberado-provider",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "liberado-cron"
 version = "0.1.0"
 dependencies = [

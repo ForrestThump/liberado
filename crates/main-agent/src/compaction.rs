@@ -12,7 +12,9 @@
 //! Two halves:
 //!
 //! * **The trigger** — [`estimate_tokens`] (chars/4 × 1.3 safety factor, Kilo Code's constant; no
-//!   tokenizer dependency) against [`CompactionConfig::trigger_tokens`].
+//!   tokenizer dependency) against the **conversation's** resolved absolute threshold
+//!   ([`CompactionTriggerTable`]), not a single process-wide number. A chat on a 64k model and one
+//!   on a 200k model must compact at different points.
 //! * **The marker model** — a node authored [`COMPACTION_AUTHOR`] carrying the summary, followed
 //!   by a verbatim re-append of the kept tail. The compacted *view* is then a contiguous suffix of
 //!   the append-only log: system root → latest marker → tail. [`ChatSessions`](crate::ChatSessions)'
@@ -51,11 +53,23 @@ pub struct CompactionConfig {
     /// (`failure-modes.md` §2). Disable only with a reason (e.g. an operator benchmarking raw
     /// recall).
     pub enabled: bool,
-    /// Fire when the estimated tokens of history + the incoming user message exceed this.
-    /// Absolute estimated tokens only — config-tier resolution (per-model `trigger_pct` /
-    /// `trigger_tokens` overrides → face model window) happens in `liberado-server` before
-    /// `ChatSessions::with_compaction`.
+    /// Absolute trigger for conversations with **no** model of their own (daemon face default).
+    /// Config-tier resolution (`trigger_pct` / per-model overrides × `[[models]]` windows) happens
+    /// in `liberado-server` before `ChatSessions::with_compaction`. Live-updated by
+    /// [`ChatSessions::set_compaction_trigger_tokens`] when the daemon-wide face model changes —
+    /// that path must **not** retune conversations that already pinned a model (see
+    /// [`CompactionTriggerTable`]).
     pub trigger_tokens: u32,
+    /// Absolute trigger per model slug for conversations that resolved a model of their own.
+    /// Built at boot from `CompactionSettings::resolve_trigger_tokens` for each `[[models]]` entry
+    /// (and the live face slug). Empty = every conversation uses [`Self::trigger_tokens`] (tests
+    /// and hosts that never wired per-model windows).
+    pub model_trigger_tokens: std::collections::HashMap<String, u32>,
+    /// When a conversation's model is set but missing from [`Self::model_trigger_tokens`]
+    /// (undeclared slug), use this absolute threshold. Typically the same fallback
+    /// `resolve_trigger_tokens` would return for an unknown name (hard 48k unless a global
+    /// absolute override is set). Defaults to [`Self::trigger_tokens`].
+    pub unknown_model_trigger_tokens: u32,
     /// User turns (a user message and everything up to the next one) kept **verbatim** after the
     /// summary. Anchored on user messages so tool-call/result pairs can never be split (OpenClaw's
     /// orphan-pair rule). 2–3 is the range every surveyed project ships; 0 is legal (keep nothing).
@@ -71,9 +85,56 @@ impl Default for CompactionConfig {
         Self {
             enabled: true,
             trigger_tokens: 48_000,
+            model_trigger_tokens: std::collections::HashMap::new(),
+            unknown_model_trigger_tokens: 48_000,
             keep_recent_turns: 3,
             summary_max_tokens: 1_024,
             tool_result_max_chars: 2_000,
+        }
+    }
+}
+
+/// Live absolute compaction thresholds: one daemon-default plus optional per-model values.
+///
+/// The §6 bug this replaces was a single shared `trigger_tokens` for every chat — so a daemon-wide
+/// face-model hot-swap retuned conversations that had already pinned their own model. Resolution
+/// at turn time is: conversation model in the map → that absolute; model set but unknown →
+/// `unknown_model`; model unset → live `default` (the only value `set_compaction_trigger_tokens`
+/// may change).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompactionTriggerTable {
+    /// Conversations with no model of their own (pre–per-conversation-model chats, new chats).
+    pub default: u32,
+    /// Conversation's resolved model slug → absolute estimated-token trigger.
+    pub by_model: std::collections::HashMap<String, u32>,
+    /// Model is Some but not in `by_model`.
+    pub unknown_model: u32,
+}
+
+impl CompactionTriggerTable {
+    /// Build from a [`CompactionConfig`]: default and per-model map from the config. When the
+    /// per-model map is **empty** (tests and hosts that only set a single absolute threshold),
+    /// every conversation — including ones that later stamp a model id on the log — uses
+    /// `trigger_tokens`. Only a non-empty map activates the distinct `unknown_model` fallback
+    /// for undeclared slugs.
+    pub fn from_config(config: &CompactionConfig) -> Self {
+        let unknown_model = if config.model_trigger_tokens.is_empty() {
+            config.trigger_tokens
+        } else {
+            config.unknown_model_trigger_tokens
+        };
+        Self {
+            default: config.trigger_tokens,
+            by_model: config.model_trigger_tokens.clone(),
+            unknown_model,
+        }
+    }
+
+    /// Absolute trigger for a conversation whose turn resolved to `model` (`None` = daemon default).
+    pub fn for_model(&self, model: Option<&str>) -> u32 {
+        match model {
+            None => self.default,
+            Some(m) => self.by_model.get(m).copied().unwrap_or(self.unknown_model),
         }
     }
 }
@@ -355,5 +416,26 @@ mod tests {
         assert!(matches!(m.role, Role::System));
         assert!(m.content.starts_with(SUMMARY_HEADER));
         assert!(m.content.contains("## Goal"));
+    }
+
+    #[test]
+    fn trigger_table_uses_per_model_not_default() {
+        let mut by_model = std::collections::HashMap::new();
+        by_model.insert("small".into(), 1_000);
+        by_model.insert("big".into(), 100_000);
+        let table = CompactionTriggerTable {
+            default: 48_000,
+            by_model,
+            unknown_model: 48_000,
+        };
+        assert_eq!(table.for_model(None), 48_000);
+        assert_eq!(table.for_model(Some("small")), 1_000);
+        assert_eq!(table.for_model(Some("big")), 100_000);
+        assert_eq!(table.for_model(Some("undeclared")), 48_000);
+        // Changing default must not retune pinned models (the shared-number bug).
+        let mut after_resync = table.clone();
+        after_resync.default = 9_999;
+        assert_eq!(after_resync.for_model(Some("small")), 1_000);
+        assert_eq!(after_resync.for_model(None), 9_999);
     }
 }

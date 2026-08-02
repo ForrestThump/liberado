@@ -24,7 +24,9 @@ mod dispatch_journal;
 mod face;
 mod sessions;
 
-pub use compaction::{COMPACTION_AUTHOR, CompactionConfig, SUMMARY_HEADER, estimate_tokens};
+pub use compaction::{
+    COMPACTION_AUTHOR, CompactionConfig, CompactionTriggerTable, SUMMARY_HEADER, estimate_tokens,
+};
 pub use dispatch_journal::{dispatches_dir, journal_path};
 pub use face::{DELEGATE_TOOL_NAME, DispatchBridge, FaceRuntime};
 pub use sessions::{
