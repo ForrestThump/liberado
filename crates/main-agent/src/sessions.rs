@@ -66,6 +66,7 @@ use liberado_mcp::ScopedRuntime;
 use liberado_provider::{Message, Provider, Role};
 use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
 use thiserror::Error;
+use tokio::sync::broadcast;
 use tokio::sync::mpsc::Sender;
 
 use crate::compaction::{self, COMPACTION_AUTHOR, COMPACTION_TAIL_AUTHOR, CompactionConfig};
@@ -165,6 +166,61 @@ pub type SessionResult<T> = Result<T, SessionError>;
 ///
 /// When guard configuration is attached (via [`with_guards`](Self::with_guards)), each turn applies
 /// the tool-advisor to select relevant MCPs and wraps the runtime in safety guards.
+/// One in-flight chat turn, and everything a client needs to watch it — including a client that was
+/// not there when it started.
+///
+/// The turn writes here instead of into the HTTP response, which is what decouples the two. A
+/// refresh, a lost connection, or a client that simply times out now costs the viewer, not the work:
+/// the reply still lands on the log because the turn still finishes.
+pub struct RunningTurn {
+    /// Fan-out to every attached client.
+    bus: broadcast::Sender<AgentEvent>,
+    /// Everything emitted so far, replayed to whoever attaches next.
+    ///
+    /// Kept in memory only. Tokens are far too frequent to put in the durable log — a streamed
+    /// answer emits hundreds — and they need no permanent home: the *completed* message is persisted
+    /// by the turn itself, exactly as before. This buffer only has to survive until the turn ends.
+    replay: Mutex<Vec<AgentEvent>>,
+    /// Stops the turn. Aborting drops the turn future, which is the same thing a client disconnect
+    /// used to do — so the rollback guarantee (a stopped turn persists nothing) is unchanged; it is
+    /// only the *trigger* that moved from "nobody is watching" to "someone asked".
+    abort: Mutex<Option<tokio::task::AbortHandle>>,
+}
+
+impl RunningTurn {
+    fn new() -> Self {
+        Self {
+            // Bounded: a slow client must not let the buffer grow without limit. A lagging receiver
+            // is dropped by `broadcast` rather than stalling the turn, which is the right trade —
+            // the durable record does not depend on anyone keeping up.
+            bus: broadcast::channel(1024).0,
+            replay: Mutex::new(Vec::new()),
+            abort: Mutex::new(None),
+        }
+    }
+
+    /// Record an event and hand it to everyone watching. Order matters: appended to the replay
+    /// *before* it is broadcast, so a client attaching between the two sees it once via replay
+    /// rather than missing it entirely.
+    fn publish(&self, event: AgentEvent) {
+        self.replay
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(event.clone());
+        let _ = self.bus.send(event);
+    }
+
+    /// What has happened so far, plus a live feed of what happens next.
+    ///
+    /// Taken under one lock so nothing can slip between the snapshot and the subscription — that gap
+    /// is exactly how a reattaching client would lose the token emitted while it was attaching.
+    pub fn attach(&self) -> (Vec<AgentEvent>, broadcast::Receiver<AgentEvent>) {
+        let replay = self.replay.lock().unwrap_or_else(|p| p.into_inner());
+        let rx = self.bus.subscribe();
+        (replay.clone(), rx)
+    }
+}
+
 pub struct ChatSessions {
     store: Arc<dyn ConversationStore>,
     executor: Executor,
@@ -176,6 +232,12 @@ pub struct ChatSessions {
     /// the pick's permanent home is the user node it stamps, and this holds it only for the gap
     /// between choosing and sending. See [`select_model`](Self::select_model).
     pending_models: Mutex<HashMap<Ulid, String>>,
+    /// Turns currently in flight, keyed by conversation.
+    ///
+    /// This entry is the whole of "a turn outlives the connection watching it": the task is spawned
+    /// detached and owned here, so dropping an HTTP response no longer touches it. Clients attach by
+    /// subscribing; the last one leaving changes nothing.
+    running: Mutex<HashMap<Ulid, Arc<RunningTurn>>>,
 
     // ── Slice 2: runtime safety guards ──────────────────────────────────────
     /// `(mcp_name, consequence)` pairs for RiskGatedToolRuntime consequence gating.
@@ -248,6 +310,7 @@ impl ChatSessions {
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             locks: Mutex::new(HashMap::new()),
             pending_models: Mutex::new(HashMap::new()),
+            running: Mutex::new(HashMap::new()),
             consequences: Vec::new(),
             zone_catalog: Vec::new(),
             live_catalog: None,
@@ -914,6 +977,137 @@ impl ChatSessions {
             .rev()
             .filter(|n| matches!(n.author, Author::User | Author::Assistant))
             .find_map(|n| n.model.clone())
+    }
+
+    /// Start a turn for `session`, or attach to the one already running.
+    ///
+    /// Returns what has happened so far plus a live feed. **Never starts a second turn for a
+    /// conversation that already has one** — which is what makes a reconnect safe: a client that
+    /// resends after losing its connection joins the work in progress instead of paying for it
+    /// twice, and the per-session lock no longer has to arbitrate a race it should not have seen.
+    ///
+    /// `self` is an `Arc` because the spawned turn outlives this call by construction.
+    pub fn start_or_attach(
+        self: &Arc<Self>,
+        session: Ulid,
+        message: &str,
+    ) -> (Vec<AgentEvent>, broadcast::Receiver<AgentEvent>) {
+        // One lock across the check and the insert. Two requests arriving together must not both
+        // conclude that nothing is running.
+        let (entry, is_new) = {
+            let mut running = self.running.lock().unwrap_or_else(|p| p.into_inner());
+            match running.get(&session) {
+                Some(existing) => (Arc::clone(existing), false),
+                None => {
+                    let entry = Arc::new(RunningTurn::new());
+                    running.insert(session, Arc::clone(&entry));
+                    (entry, true)
+                }
+            }
+        };
+        let attachment = entry.attach();
+        if is_new {
+            self.clone().spawn_turn(session, message.to_string(), entry);
+        }
+        attachment
+    }
+
+    /// Attach to a turn already running for `session`, without starting one.
+    ///
+    /// This is what a surface calls after a reload: it has a conversation open and needs to know
+    /// whether anything is still happening in it. `None` means nothing is.
+    pub fn attach(
+        &self,
+        session: Ulid,
+    ) -> Option<(Vec<AgentEvent>, broadcast::Receiver<AgentEvent>)> {
+        let running = self.running.lock().unwrap_or_else(|p| p.into_inner());
+        running.get(&session).map(|entry| entry.attach())
+    }
+
+    /// Whether a turn is in flight for `session`.
+    pub fn turn_running(&self, session: Ulid) -> bool {
+        self.running
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .contains_key(&session)
+    }
+
+    /// Stop the turn running for `session`. `true` if there was one.
+    ///
+    /// The explicit counterpart to what a disconnect used to do implicitly. It has to exist *before*
+    /// turns are detached, or there would be no way to stop one at all — closing the stream was the
+    /// only cancel this system had.
+    pub fn cancel_turn(&self, session: Ulid) -> bool {
+        let entry = {
+            let mut running = self.running.lock().unwrap_or_else(|p| p.into_inner());
+            running.remove(&session)
+        };
+        let Some(entry) = entry else {
+            return false;
+        };
+        if let Some(handle) = entry.abort.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            handle.abort();
+        }
+        // Tell anyone watching why their stream ended. Without this a cancelled turn looks
+        // indistinguishable from one still thinking.
+        entry.publish(AgentEvent::Error("turn cancelled".into()));
+        true
+    }
+
+    /// Run one turn detached, forwarding its events to `entry` and retiring the entry at the end.
+    fn spawn_turn(self: Arc<Self>, session: Ulid, message: String, entry: Arc<RunningTurn>) {
+        // `turn_stream` still speaks mpsc, unchanged. Bridging here rather than changing its
+        // signature keeps this decoupling out of the turn logic entirely — the turn does not know or
+        // care how many people are watching.
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentEvent>(64);
+        let pump = {
+            let entry = Arc::clone(&entry);
+            tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    entry.publish(event);
+                }
+            })
+        };
+
+        let entry_for_abort = Arc::clone(&entry);
+        let handle = tokio::spawn(async move {
+            let result = liberado_provider::latency::with_correlation(
+                session.to_string(),
+                self.turn_stream(session, &message, &tx),
+            )
+            .await;
+            // Drop the sender so the pump drains and exits before the terminal event is published —
+            // otherwise the terminal could overtake the last token and clients would render the
+            // answer as finishing early.
+            drop(tx);
+            let _ = pump.await;
+
+            let terminal = match result {
+                Ok(()) => AgentEvent::Done,
+                Err(e) => {
+                    tracing::warn!(error = %e, session = %session, "chat turn failed");
+                    AgentEvent::Error(e.to_string())
+                }
+            };
+            entry.publish(terminal);
+            // Retired last: while this key is present, `start_or_attach` will attach rather than
+            // start, and a turn that has already published its terminal has nothing left to attach
+            // to.
+            self.running
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&session);
+        });
+
+        // The abort handle has to land on the entry that `cancel_turn` will find. Set after spawn
+        // because that is when it exists; a cancel arriving in the gap still removes the entry, and
+        // the turn then finds itself unregistered when it finishes.
+        // (Registry lookup is by key, so the worst case is a turn that completes uncancelled — it
+        // persists, which is the safe direction.)
+        *entry_for_abort
+            .abort
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(handle.abort_handle());
     }
 
     /// Record that the next turn of `conversation` should run on `model`.

@@ -364,6 +364,16 @@ pub struct ConversationHistoryResponse {
     /// `#[serde(default)]` so a client built before this field still decodes a newer daemon's reply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Whether a turn is in flight for this conversation right now.
+    ///
+    /// Here rather than on a probe endpoint because opening a conversation is exactly when a client
+    /// needs to know: after a reload the transcript alone cannot say whether the missing reply is
+    /// still coming or never will. A client that sees `true` attaches
+    /// (`GET /api/conversations/{id}/attach`) instead of re-sending, which would start a second turn.
+    ///
+    /// `#[serde(default)]` — false for an older daemon, which is also the safe reading.
+    #[serde(default)]
+    pub turn_running: bool,
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -909,12 +919,23 @@ mod tests {
                 },
             ],
             profile: Some("basic-chat".into()),
+            turn_running: true,
         };
         let json = serde_json::to_value(&resp).unwrap();
         let back: ConversationHistoryResponse = serde_json::from_value(json).unwrap();
         assert_eq!(back.messages.len(), 2);
         assert_eq!(back.messages[0].role, "user");
         assert_eq!(back.messages[1].content, "hi there");
+        assert!(back.turn_running);
+    }
+
+    /// A daemon that predates `turn_running` omits the field, and a client must read that as "no
+    /// turn is running" — the reading that makes it re-send rather than attach to nothing.
+    #[test]
+    fn an_absent_turn_running_defaults_to_false() {
+        let json = serde_json::json!({ "messages": [] });
+        let back: ConversationHistoryResponse = serde_json::from_value(json).unwrap();
+        assert!(!back.turn_running);
     }
 
     // ── VaultInfo / ApiError ──────────────────────────────────

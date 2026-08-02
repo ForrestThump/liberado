@@ -33,6 +33,42 @@ impl Provider for PendingProvider {
     }
 }
 
+/// A provider that answers, but not immediately.
+///
+/// The delay is the point: with an instant provider a turn finishes before anyone can stop watching
+/// it, so a test that drops its receiver and then finds the reply on disk proves nothing — it would
+/// pass just as well against the old connection-owned turn. This makes "the watcher left while the
+/// turn was still running" an actual state the test passes through.
+struct SlowProvider {
+    delay: std::time::Duration,
+    reply: String,
+}
+#[async_trait]
+impl Provider for SlowProvider {
+    fn model(&self) -> String {
+        "slow".into()
+    }
+    async fn complete(&self, _request: CompletionRequest) -> ProviderResult<CompletionResponse> {
+        tokio::time::sleep(self.delay).await;
+        Ok(CompletionResponse::text(&self.reply))
+    }
+}
+
+/// A `ChatSessions` whose provider takes `delay` to answer. See [`SlowProvider`].
+async fn slow_sessions_at(
+    root: &std::path::Path,
+    delay: std::time::Duration,
+    reply: &str,
+) -> ChatSessions {
+    let store = Arc::new(SessionStore::open(root).await);
+    let provider = Arc::new(SlowProvider {
+        delay,
+        reply: reply.to_string(),
+    });
+    let executor = Executor::new(provider, Budget::default());
+    ChatSessions::new(store, executor, Arc::new(NoTools))
+}
+
 /// A `ChatSessions` over the **real** session store at `root`, scripted with `replies` and no tools.
 async fn sessions_at(root: &std::path::Path, replies: Vec<CompletionResponse>) -> ChatSessions {
     let store = Arc::new(SessionStore::open(root).await);
@@ -2674,4 +2710,117 @@ async fn a_conversation_with_no_stamps_falls_back_to_the_provider() {
     let sessions = sessions_at(dir.path(), Vec::new()).await;
     let id = sessions.create(None).await.unwrap();
     assert_eq!(sessions.turn_settings(id).await.model, None);
+}
+
+// ── Durable turns: a turn outlives the connection watching it ────────────────────────────────
+
+/// The point of the whole change. Start a turn, drop every watcher immediately, and the reply must
+/// still be on disk afterwards.
+///
+/// Before this, the turn was owned by the HTTP response: dropping the stream cancelled the inference
+/// and rolled the turn back, so a refresh mid-answer cost the answer. The assertion is on the
+/// **persisted node**, not on an event — an event saying it finished is exactly what the old code
+/// also managed to not produce.
+#[tokio::test]
+async fn a_turn_survives_every_watcher_leaving() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions =
+        Arc::new(slow_sessions_at(dir.path(), std::time::Duration::from_millis(300), "kept").await);
+    let id = sessions.create(None).await.unwrap();
+
+    let (_replay, rx) = sessions.start_or_attach(id, "does this survive?");
+    // The turn must still be running when the last watcher goes, or this test would pass against
+    // the old connection-owned behaviour too.
+    assert!(
+        sessions.turn_running(id),
+        "precondition: the turn must be in flight when the watcher leaves"
+    );
+    drop(rx);
+    assert!(
+        sessions.turn_running(id),
+        "dropping the last watcher must not end the turn"
+    );
+
+    for _ in 0..400 {
+        if !sessions.turn_running(id) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    let history = sessions.history(id).await.unwrap();
+    assert!(
+        history.iter().any(|m| m.content.contains("kept")),
+        "the reply must be persisted even though nobody was watching: {history:?}"
+    );
+}
+
+/// A reconnect joins the running turn instead of starting a second one.
+///
+/// Without this, a client that resends after losing its connection pays for the same answer twice
+/// and the conversation grows two copies of the question.
+#[tokio::test]
+async fn attaching_twice_runs_one_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = Arc::new(sessions_at(dir.path(), vec![CompletionResponse::text("once")]).await);
+    let id = sessions.create(None).await.unwrap();
+
+    let (_r1, _rx1) = sessions.start_or_attach(id, "only once");
+    let (_r2, _rx2) = sessions.start_or_attach(id, "only once");
+
+    for _ in 0..200 {
+        if !sessions.turn_running(id) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    let history = sessions.history(id).await.unwrap();
+    let users = history.iter().filter(|m| m.role == Role::User).count();
+    assert_eq!(
+        users, 1,
+        "a second attach started a second turn: {history:?}"
+    );
+}
+
+/// Attaching mid-turn replays what already happened.
+///
+/// A reconnect that only showed *future* events would leave the client staring at a blank pane while
+/// the answer it already missed sits in the buffer.
+#[tokio::test]
+async fn a_late_attach_replays_what_it_missed() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = Arc::new(sessions_at(dir.path(), vec![CompletionResponse::text("hello")]).await);
+    let id = sessions.create(None).await.unwrap();
+
+    let (_replay, _rx) = sessions.start_or_attach(id, "hi");
+    for _ in 0..200 {
+        if !sessions.turn_running(id) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    // The turn has retired, so there is nothing to attach to — the honest answer, not an empty feed.
+    assert!(
+        sessions.attach(id).is_none(),
+        "a finished turn must not be attachable; it has nothing left to stream"
+    );
+}
+
+/// Cancelling is now an explicit act, and it keeps the old rollback guarantee: nothing persists.
+#[tokio::test]
+async fn cancelling_a_turn_persists_nothing_and_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = Arc::new(sessions_at(dir.path(), vec![CompletionResponse::text("nope")]).await);
+    let id = sessions.create(None).await.unwrap();
+
+    assert!(
+        !sessions.cancel_turn(id),
+        "cancelling with nothing running must report that, not claim success"
+    );
+
+    let (_replay, _rx) = sessions.start_or_attach(id, "stop me");
+    let cancelled = sessions.cancel_turn(id);
+    assert!(cancelled, "an in-flight turn must be cancellable");
+    assert!(!sessions.turn_running(id), "cancel must retire the entry");
 }

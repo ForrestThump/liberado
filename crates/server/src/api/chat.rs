@@ -17,6 +17,7 @@ use futures::{Stream, StreamExt};
 use liberado_conversation_store::Ulid;
 use liberado_executor::AgentEvent;
 use serde::Deserialize;
+use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -240,38 +241,16 @@ async fn chat_stream_core(
         sessions.select_model(session, model);
     }
 
-    // `turn_tx` drives the turn; `tx` is kept to detect the client leaving and to send the terminal
-    // event. Cloning is cheap and keeps the two uses from tangling borrows below.
-    let turn_tx = tx.clone();
-    tokio::spawn(async move {
-        // Race the turn against the client disconnecting (`tx.closed()` resolves when the SSE
-        // receiver is dropped â€” the browser called `EventSource.close()` or the connection dropped).
-        // On disconnect we drop the turn future, which cancels the in-flight model/tool work *and*
-        // (inside `ChatSessions`/`Conversation`) rolls the partial turn back and persists nothing, so
-        // a stopped turn leaves the store clean and the per-session lock is released.
-        tokio::select! {
-            // Tag the face turn's inference with the chat session id so its latency records join the
-            // dispatch work it triggers (the dispatch pack keys the same space via correlation_id).
-            result = liberado_provider::latency::with_correlation(
-                session.to_string(),
-                sessions.turn_stream(session, &message, &turn_tx),
-            ) => {
-                let terminal = match result {
-                    Ok(()) => AgentEvent::Done,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "chat stream turn failed");
-                        AgentEvent::Error(e.to_string())
-                    }
-                };
-                let _ = tx.send(terminal).await;
-            }
-            _ = tx.closed() => {
-                tracing::info!("chat stream cancelled by client; persisted nothing");
-            }
-        }
-    });
+    // Start the turn, or join the one already running. The response is now a *subscriber*: dropping
+    // it ends the viewing, not the work. That is the whole change - a refresh, a suspended tab, or a
+    // client that simply times out used to cost the answer, because the turn was owned by the
+    // connection watching it.
+    //
+    // `tx` is no longer the turn's channel; it only carried pre-turn failure events, so it goes.
+    drop(tx);
+    let (replay, live) = sessions.start_or_attach(session, &message);
 
-    Sse::new(stream_with_session(Some(session), rx))
+    Sse::new(attached_stream(Some(session), replay, live))
         .keep_alive(keep_alive())
         .into_response()
 }
@@ -279,6 +258,133 @@ async fn chat_stream_core(
 /// Prepend a `session` SSE event (the conversation id) ahead of the agent event stream, so the
 /// client records the id and sends it back as `?session=â€¦` on the next turn. `None` means no session
 /// was resolved (chat disabled or creation failed) â€” only the body's `failed` event is emitted.
+/// `GET /api/conversations/{id}/attach` - SSE: join a turn already in flight, without starting one.
+///
+/// What a surface calls after a reload. It has a conversation open and needs to know whether
+/// anything is still happening in it; posting the message again would start a second turn, and
+/// polling the transcript would show nothing until the turn ended.
+///
+/// `409` when nothing is running - not `404`, which would say the conversation does not exist.
+pub async fn attach_conversation(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> axum::response::Response {
+    let Some(sessions) = state.chat.as_ref() else {
+        return chat_disabled();
+    };
+    let Ok(session) = id.parse::<Ulid>() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: format!("not a conversation id: {id}"),
+            }),
+        )
+            .into_response();
+    };
+    match sessions.attach(session) {
+        Some((replay, live)) => Sse::new(attached_stream(Some(session), replay, live))
+            .keep_alive(keep_alive())
+            .into_response(),
+        None => (
+            StatusCode::CONFLICT,
+            Json(ApiError {
+                error: "no turn is running for this conversation".into(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/conversations/{id}/cancel` - stop the turn running for this conversation.
+///
+/// The explicit stop. It has to exist because closing the stream no longer cancels anything: that
+/// used to be the only way to halt a turn, and detaching the turn from the connection would
+/// otherwise have removed the stop button entirely rather than fixing it.
+///
+/// Cancelling still persists nothing - the same rollback a disconnect used to give. What changed is
+/// only the trigger: from "nobody is watching" to "someone asked".
+pub async fn cancel_conversation_turn(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> axum::response::Response {
+    let Some(sessions) = state.chat.as_ref() else {
+        return chat_disabled();
+    };
+    let Ok(session) = id.parse::<Ulid>() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: format!("not a conversation id: {id}"),
+            }),
+        )
+            .into_response();
+    };
+    if sessions.cancel_turn(session) {
+        tracing::info!(session = %session, "chat turn cancelled by request; persisted nothing");
+        StatusCode::ACCEPTED.into_response()
+    } else {
+        (
+            StatusCode::CONFLICT,
+            Json(ApiError {
+                error: "no turn is running for this conversation".into(),
+            }),
+        )
+            .into_response()
+    }
+}
+
+/// The shared "chat is off" response for the endpoints above.
+fn chat_disabled() -> axum::response::Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ApiError {
+            error: "chat is disabled".into(),
+        }),
+    )
+        .into_response()
+}
+
+/// The SSE body for a client attached to a turn: the session id, everything that has already
+/// happened, then the live feed.
+///
+/// Replay-then-live is what makes a reconnect useful rather than merely non-destructive. A client
+/// that reattaches three seconds into an answer gets those three seconds, not a blank pane that
+/// fills in from wherever the turn happens to be.
+///
+/// A `Lagged` receiver is skipped rather than closed: falling behind costs that client some tokens,
+/// and ending its stream instead would turn a slow reader into a lost answer, which is the failure
+/// this whole change exists to remove. The terminal event still arrives.
+fn attached_stream(
+    session: Option<Ulid>,
+    replay: Vec<AgentEvent>,
+    live: broadcast::Receiver<AgentEvent>,
+) -> SseBody {
+    let head = futures::stream::once(async move {
+        match session {
+            Some(id) => Ok(Event::default().event("session").data(id.to_string())),
+            None => Ok(Event::default().comment("no session")),
+        }
+    });
+    let caught_up = futures::stream::iter(replay.into_iter().map(|e| Ok(to_sse(e))));
+    let body = async_stream::stream! {
+        let mut live = live;
+        loop {
+            match live.recv().await {
+                Ok(event) => {
+                    let terminal = matches!(event, AgentEvent::Done | AgentEvent::Error(_));
+                    yield Ok(to_sse(event));
+                    if terminal {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+    Box::pin(head.chain(caught_up).chain(body))
+}
+
 fn stream_with_session(session: Option<Ulid>, rx: mpsc::Receiver<AgentEvent>) -> SseBody {
     let head = futures::stream::once(async move {
         match session {
@@ -669,7 +775,14 @@ pub async fn get_conversation(
                 .session(id)
                 .await
                 .and_then(|h| h.grant.profile);
-            Json(ConversationHistoryResponse { messages, profile }).into_response()
+            Json(ConversationHistoryResponse {
+                messages,
+                profile,
+                // Asked at read time, not remembered: a client opening this conversation needs to
+                // know whether the reply it cannot see is still coming.
+                turn_running: sessions.turn_running(id),
+            })
+            .into_response()
         }
         Err(liberado_main_agent::SessionError::Store(
             liberado_conversation_store::StoreError::NotFound(_),

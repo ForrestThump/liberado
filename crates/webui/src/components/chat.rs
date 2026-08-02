@@ -82,6 +82,9 @@ impl ChatMsg {
 struct LoadedConversation {
     messages: Vec<ChatMsg>,
     profile: Option<String>,
+    /// A turn is in flight for this conversation right now — so the transcript is missing a reply
+    /// that is still coming, and this client should attach rather than assume it was lost.
+    turn_running: bool,
 }
 
 async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConversation, String> {
@@ -108,6 +111,7 @@ async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConve
             .map(ChatMsg::from_wire)
             .collect(),
         profile: history.profile,
+        turn_running: history.turn_running,
     })
 }
 
@@ -219,11 +223,32 @@ pub fn Chat(
                 let conv_id = conv_id.clone();
                 wasm_bindgen_futures::spawn_local(async move {
                     if let Ok(loaded) = fetch_conversation(&base, &conv_id).await {
+                        let running = loaded.turn_running;
                         messages.set(loaded.messages);
                         // From the conversation, not remembered client-side: opening a chat in a
                         // second tab or after a restart must show the authority it actually runs
                         // under, not whatever this tab last set.
                         active_profile.set(loaded.profile);
+                        // A turn is still going: rejoin it. This is the reload case — the answer is
+                        // being written right now and the transcript cannot show it yet. Attaching
+                        // rather than re-sending matters, because re-sending would start a second
+                        // turn and charge for the same answer twice.
+                        if running {
+                            sending.set(true);
+                            attach_stream(
+                                &base,
+                                &conv_id,
+                                StreamTargets {
+                                    messages,
+                                    sending,
+                                    session,
+                                    active_conv_id,
+                                    should_set_title,
+                                    ghost_session,
+                                },
+                                &base,
+                            );
+                        }
                     }
                 });
             } else if ghost_session.read().is_none() {
@@ -315,9 +340,24 @@ pub fn Chat(
         }
     });
 
+    // Stop now means "stop doing this", not "stop showing me this".
+    //
+    // Closing the EventSource used to be the cancel: the daemon saw its receiver go and dropped the
+    // turn. Turns outlive their connection now, so closing alone would leave it running and only
+    // hide it. The request is what stops it; closing the stream is still done so this client also
+    // stops rendering.
+    let stop_base = api_base.clone();
     let mut stop_stream = move || {
         #[cfg(target_arch = "wasm32")]
-        crate::components::chat::close_current_stream();
+        {
+            if let Some(id) = session() {
+                let url = format!("{stop_base}/api/conversations/{id}/cancel");
+                wasm_bindgen_futures::spawn_local(async move {
+                    let _ = reqwest::Client::new().post(&url).send().await;
+                });
+            }
+            crate::components::chat::close_current_stream();
+        }
         sending.set(false);
     };
 
@@ -1082,6 +1122,49 @@ fn open_stream(
     // already exists — see `ChatRequest::model`.
     pending_model: Option<String>,
 ) {
+    let encoded = urlencoding::encode(message);
+    let url = stream_url(
+        api_base,
+        &encoded,
+        targets.session.read().as_deref(),
+        incognito,
+        pending_profile.as_deref(),
+        pending_model.as_deref(),
+    );
+    // **Whether this turn is opening a private session**, which is not the same question as whether
+    // the mode is on. If `session` is already set we are continuing an existing conversation, and no
+    // flag can retroactively make that one private. Conflating the two once destroyed a saved chat.
+    let opened_incognito = incognito && targets.session.read().is_none();
+    connect_stream(
+        &url,
+        api_base,
+        targets,
+        api_base_for_title,
+        opened_incognito,
+    );
+}
+
+/// Rejoin a turn already running for `conv_id`, without sending anything.
+///
+/// The reload path. The daemon replays what has already happened and then continues live, so the
+/// answer being written while the page was gone still lands on screen. Never opens an incognito
+/// session: attaching is by definition to a conversation that already exists.
+#[cfg(target_arch = "wasm32")]
+fn attach_stream(api_base: &str, conv_id: &str, targets: StreamTargets, api_base_for_title: &str) {
+    let url = format!("{api_base}/api/conversations/{conv_id}/attach");
+    connect_stream(&url, api_base, targets, api_base_for_title, false);
+}
+
+/// Open an SSE connection at `url` and wire it into `targets`. Shared by the send path and the
+/// reattach path, so a turn renders identically however this client came to be watching it.
+#[cfg(target_arch = "wasm32")]
+fn connect_stream(
+    url: &str,
+    api_base: &str,
+    targets: StreamTargets,
+    api_base_for_title: &str,
+    opened_incognito: bool,
+) {
     let StreamTargets {
         mut messages,
         mut sending,
@@ -1095,25 +1178,6 @@ fn open_stream(
     use wasm_bindgen::closure::Closure;
     use web_sys::{EventSource, MessageEvent};
 
-    let encoded = urlencoding::encode(message);
-    // **Whether this turn is opening a private session**, which is not the same question as whether
-    // the mode is on. If `session` is already set we are continuing an existing conversation, and no
-    // flag can retroactively make that one private.
-    //
-    // Everything below keys off *this*, never off `incognito`. Conflating the two is what destroyed
-    // a saved conversation: with the mode armed but no private session yet, selecting a saved chat
-    // and sending a message made the SSE handler record that chat's id as the ghost — and the
-    // teardown then deleted it. A session may only be treated as disposable if we watched it get
-    // created as one.
-    let opened_incognito = incognito && session.read().is_none();
-    let url = stream_url(
-        api_base,
-        &encoded,
-        session.read().as_deref(),
-        incognito,
-        pending_profile.as_deref(),
-        pending_model.as_deref(),
-    );
     let ghost_base = api_base.to_string();
     let source = match EventSource::new(&url) {
         Ok(s) => Rc::new(s),
@@ -1261,7 +1325,11 @@ fn open_stream(
             // Skipped for incognito: a title exists to label a row in the sidebar, and an incognito
             // session has no row. Naming it would only mean sending the first thing the user typed
             // back over the wire for a field nobody will ever read.
-            if should_set_title() && !incognito {
+            //
+            // Keyed on `opened_incognito`, not the mode flag — the rule this file already states
+            // elsewhere. With the mode armed but a *saved* chat open, that chat does have a row and
+            // does want a title; reading the raw flag left it permanently untitled.
+            if should_set_title() && !opened_incognito {
                 should_set_title.set(false);
                 let title_opt = messages.read().iter().find(|m| m.role == "user").map(|m| {
                     let t = m.content.trim();
