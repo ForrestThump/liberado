@@ -18,7 +18,8 @@ Index of forward-looking work.
 | [chat-search-plan.md](chat-search-plan.md) | History search tiers |
 | [context-compaction-plan.md](context-compaction-plan.md) | Chat context compaction (CH3 — Tier 1 landed; known residual documented) |
 | [durable-chat-turns-plan.md](durable-chat-turns-plan.md) | A turn outlives the connection watching it (**built + verified live** 2026-08-02; all steps landed) |
-| [parallel-deliverables-2026-08.md](parallel-deliverables-2026-08.md) | **Five independent PR-sized specs** with acceptance criteria, for parallel execution off main |
+| [parallel-deliverables-2026-08-round-2.md](parallel-deliverables-2026-08-round-2.md) | **Round 2 — five independent PR-sized specs**, plus what round 1's five PRs taught us about how the tests go wrong |
+| [parallel-deliverables-2026-08.md](parallel-deliverables-2026-08.md) | Round 1 — five specs, **all landed** (PRs #28–#32); kept for the acceptance-criteria style and the review record |
 | [token-cost-accounting-plan.md](token-cost-accounting-plan.md) | Price the existing latency journal so design calls use numbers, not guesses (scoped) |
 | [delegated-work-is-discarded-at-the-seam.md](delegated-work-is-discarded-at-the-seam.md) | **Finding**: `delegate` passes only a summary, so the face agent fabricates the specifics (open) |
 | [build-locally-and-ship-the-artifact.md](build-locally-and-ship-the-artifact.md) | Compile on the dev machine, ship the binary (wanted; blocked on disk + a WSL distro) |
