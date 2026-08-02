@@ -67,8 +67,12 @@ tests whether the *model* can actually drive the machinery.
 
 ### Tier 3 — against the **deployed daemon**, one run per path, on a schedule
 
-**Status**: open, and the highest-value unbuilt thing here (added 2026-07-28). Implementation
-branch: `harden/live-conformance-suite` (based on `feat/webui-fixes` until that merges).
+**Status**: **built and passing live** (2026-08-02). First green run against the deployed daemon:
+`p1b` `p2` `p3` `p4` pass, `p1a` correctly **skipped** by its restart gate on a freshly recreated
+container, overall exit 0. Verified independently of the runner's own report — P1b's artifact
+(`conformance/artifacts/<run_id>.md`) held exactly `CONFORMANCE_OK <run_id>`, and P4's session
+carried the narrow `conformance` grant rather than the dispatcher fallback, which is what makes
+that assertion mean anything. **v1 remains hand-run**; scheduling is still deliberately not built.
 **Building it?** This section is the argument; the deliverables, safety envelope, per-path
 assertion contract, and **settled packaging decisions** (runs on the homelab box; **v1 hand-run
 only** — no host cron until mature; every-run vault reports under `conformance/`; Telegram notify

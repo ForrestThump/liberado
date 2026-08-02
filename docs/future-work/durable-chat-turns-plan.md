@@ -1,7 +1,12 @@
 # Durable chat turns — a turn should outlive the connection watching it
 
-**Status**: planned, not built. Written 2026-08-01 after a refresh during a delegated turn discarded
-a reply the daemon went on to produce successfully 93 seconds later.
+**Status**: **built and verified live** (2026-08-02, `b2eeec7`). Written 2026-08-01 after a refresh
+during a delegated turn discarded a reply the daemon went on to produce successfully 93 seconds
+later.
+
+Live proof: a client killed 12 seconds into a delegating turn, which then ran **205 seconds**
+unwatched and persisted its whole transcript — including a delegation that failed, was noticed, and
+was retried to success. Every second past the 12s mark is work the old code discarded.
 
 **Wanted**: refreshing the page, switching apps, losing signal, or closing a tab must not kill a
 running turn or discard its answer. On return, the conversation shows what happened. This holds for
