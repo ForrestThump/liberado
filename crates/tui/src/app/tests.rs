@@ -268,11 +268,23 @@ fn slash_works_during_streaming() {
     assert!(app.session.is_none());
     assert!(!app.streaming);
     assert!(app.input.is_empty());
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::CancelStream { .. }))
-    );
+    // Must cancel the *prior* conversation — session is cleared by /new before effects run,
+    // so the effect has to carry the id captured before dispatch, not self.session afterward.
+    match effects
+        .iter()
+        .find(|e| matches!(e, Effect::CancelStream { .. }))
+    {
+        Some(Effect::CancelStream {
+            conversation: Some(id),
+        }) => assert_eq!(
+            id, "sess",
+            "cancel must target the conversation that was streaming"
+        ),
+        Some(Effect::CancelStream { conversation: None }) => {
+            panic!("CancelStream without conversation id — durable turn would keep running")
+        }
+        other => panic!("expected CancelStream with conversation id, got {other:?}"),
+    }
 }
 #[test]
 fn pgup_scrolls_up() {

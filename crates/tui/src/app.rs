@@ -812,6 +812,10 @@ impl App {
         };
 
         let is_help = matches!(cmd, liberado_commands::SlashCommand::Help);
+        // Capture before dispatch: `/new` clears the active session inside liberado-commands
+        // (`set_active_session(None)`), so reading `self.session` afterward would drop the cancel
+        // target and leave a durable turn running.
+        let session_before_dispatch = self.session.clone();
         let results = liberado_commands::dispatch(&cmd, self);
 
         let mut effects = Vec::new();
@@ -822,7 +826,7 @@ impl App {
                     effects.push(Effect::RefreshConversations);
                     if *was_streaming {
                         effects.push(Effect::CancelStream {
-                            conversation: self.session.clone(),
+                            conversation: session_before_dispatch.clone(),
                         });
                     }
                 }
