@@ -81,14 +81,14 @@ function Invoke-Native([string]$Exe, [string[]]$Arguments) {
 }
 
 function Invoke-Ssh([string]$cmd) {
-    $code = Invoke-Native "ssh" @("-o", "BatchMode=yes", "-o", "ConnectTimeout=15", $SshHost, $cmd)
+    $code = Invoke-Native "ssh" @("-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=6", $SshHost, $cmd)
     if ($code -ne 0) {
         throw "ssh failed (exit $code): $cmd"
     }
 }
 
 function Invoke-SshAllowFail([string]$cmd) {
-    return Invoke-Native "ssh" @("-o", "BatchMode=yes", "-o", "ConnectTimeout=15", $SshHost, $cmd)
+    return Invoke-Native "ssh" @("-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=6", $SshHost, $cmd)
 }
 
 # Docker's own word for what the container is doing: `running`, `created`, `exited`, or `missing`
@@ -97,11 +97,39 @@ function Invoke-SshAllowFail([string]$cmd) {
 # helper deliberately sends output to the host. Same local `$ErrorActionPreference` trick.
 function Get-ContainerState {
     $ErrorActionPreference = "Continue"
-    $out = & ssh -o BatchMode=yes -o ConnectTimeout=15 $SshHost `
+    $out = & ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 $SshHost `
         "docker inspect -f '{{.State.Status}}' liberado 2>/dev/null || echo missing"
     $lines = @($out)
     if ($lines.Count -eq 0) { return "unknown" }
     return ([string]$lines[-1]).Trim()
+}
+
+# Run a remote command and return its output (trimmed last line). Same local-`$ErrorActionPreference`
+# trick as `Get-ContainerState`: `Invoke-Native` deliberately sends output to the host, and these
+# calls are the ones whose *output* is the answer.
+function Invoke-SshCapture([string]$cmd) {
+    $ErrorActionPreference = "Continue"
+    $out = & ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 `
+        -o ServerAliveCountMax=6 $SshHost $cmd
+    $lines = @($out)
+    if ($lines.Count -eq 0) { return "" }
+    return ([string]$lines[-1]).Trim()
+}
+
+# Fail loudly on a CR inside a script bound for bash.
+#
+# On 2026-08-02 an edit rewrote this file with CRLF endings. PowerShell keeps the `r inside a
+# here-string, so every line reached the remote shell with a trailing carriage return. The words
+# `fi` and `then` were therefore not the words `fi` and `then`.
+# The `if` block was left unterminated, bash exited 2 with its complaint on a stream the helper
+# discards, and the failure looked like a flaky network for the better part of an hour. Every manual
+# reproduction passed, because those were typed fresh with LF.
+#
+# The here-strings in this file MUST stay LF. This turns that from a silent trap into a named error.
+function Assert-NoCarriageReturn([string]$script, [string]$what) {
+    if ($script.Contains("`r")) {
+        throw "$what contains a carriage return. This file's here-strings must use LF endings - CRLF reaches bash as literal  and breaks it (exit 2, no useful message). Re-save scripts/deploy-homelab.ps1 with LF."
+    }
 }
 
 function ConvertTo-SshSingleQuoted([string]$script) {
@@ -190,6 +218,7 @@ fi
 test -f Cargo.toml && test -d crates && test -d turbovault && test -d turbomcp
 echo extract-ok
 "@
+    Assert-NoCarriageReturn $extract "the extract script"
     Invoke-Ssh "bash -lc $(ConvertTo-SshSingleQuoted $extract)"
 
     # --- 4. Docker build (foreground; long) ---
@@ -206,19 +235,62 @@ echo extract-ok
         Write-Host "  working tree is dirty - tagging image $sha" -ForegroundColor Yellow
     }
     Write-Step "docker build -t $Image (GIT_SHA=$sha; on homelab; may take a while)"
-    $buildCmd = @"
-set -euo pipefail
+
+    # The build runs DETACHED on the box, and this script only watches it.
+    #
+    # It used to run as a child of this ssh session, which made a 15-minute compile hostage to a
+    # connection: on 2026-08-02 the local process was torn down, ssh dropped, the remote build took
+    # SIGHUP, and the log sat frozen for 14 minutes before anyone noticed. The work was on the box;
+    # only its *lifetime* lived here. `setsid` cuts that tie - the build is reparented to init and
+    # survives losing us entirely.
+    #
+    # Same idea as durable chat turns, for the same reason: whoever is watching should not decide
+    # whether the work continues.
+    $launch = @"
+set -uo pipefail
 cd $RemoteBuild
+rm -f ~/liberado-build.done
 : > ~/liberado-build.log
-docker build --build-arg 'GIT_SHA=$sha' -t $Image . 2>&1 | tee ~/liberado-build.log
+rm -f ~/liberado-build.pid
+# The wrapper records its OWN pid (`$`$), not `$`!. `setsid` forks a new session leader and the
+# process `$`! names exits immediately, so a pid captured out here is dead within a second and the
+# adoption check below would conclude "idle" while a build was very much running - and start a
+# second one racing it for the same cache mounts.
+setsid nohup bash -c 'echo `$`$ > ~/liberado-build.pid; docker build --build-arg "GIT_SHA=$sha" -t $Image $RemoteBuild > ~/liberado-build.log 2>&1; echo `$? > ~/liberado-build.done' </dev/null >/dev/null 2>&1 &
+sleep 2
+echo launched
 "@
-    # `docker build` writes its entire progress stream to stderr, so this is the call that most
-    # obviously needs `Invoke-Native` — it was only ever surviving because the build's own `tee`
-    # merged the streams first.
-    $code = Invoke-Native "ssh" @(
-        "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=30",
-        $SshHost, "bash -lc $(ConvertTo-SshSingleQuoted $buildCmd)"
-    )
+
+    # A build already in flight is adopted, not duplicated. Re-running after this script died (or
+    # after the agent driving it restarted) should join the compile already paid for, not start a
+    # second one racing it for the same cache mounts.
+    $inflight = Invoke-SshCapture "if [ -f ~/liberado-build.pid ] && [ ! -f ~/liberado-build.done ] && kill -0 `$(cat ~/liberado-build.pid) 2>/dev/null; then echo running; else echo idle; fi"
+    if ($inflight -eq "running") {
+        Write-Host "  a build is already in flight on the box - adopting it instead of starting a second" -ForegroundColor Yellow
+    } else {
+        Assert-NoCarriageReturn $launch "the build-launch script"
+        Invoke-Ssh "bash -lc $(ConvertTo-SshSingleQuoted $launch)"
+    }
+
+    # Poll for the done-marker. Losing this loop no longer loses the build; the next run adopts it.
+    $deadline = (Get-Date).AddMinutes($WaitMinutes)
+    $code = $null
+    while ((Get-Date) -lt $deadline) {
+        $done = Invoke-SshCapture "cat ~/liberado-build.done 2>/dev/null || echo pending"
+        if ($done -ne "pending" -and $done -ne "") {
+            $code = [int]$done
+            break
+        }
+        $tail = Invoke-SshCapture "tail -n 1 ~/liberado-build.log 2>/dev/null | cut -c1-100"
+        if ($tail) { Write-Host "  $tail" -ForegroundColor DarkGray }
+        Start-Sleep -Seconds 20
+    }
+
+    if ($null -eq $code) {
+        # Deliberately does NOT kill the build - it is still going, and killing it would throw away
+        # the one thing this change exists to protect. Re-running adopts it.
+        throw "build still running after $WaitMinutes min; it is detached and continues. Re-run this script to adopt it, or watch: ssh $SshHost 'tail -f ~/liberado-build.log'"
+    }
     if ($code -ne 0) {
         Write-Host "Build failed. Last log lines:" -ForegroundColor Red
         $null = Invoke-SshAllowFail "tail -n 40 ~/liberado-build.log"
@@ -287,7 +359,7 @@ Write-Step "Health checks"
 # the only thing wrong with it is that it is the previous build. Ask it what it is.
 if ($sha) {
     $ErrorActionPreference = "Continue"
-    $liveSha = (& ssh -o BatchMode=yes -o ConnectTimeout=15 $SshHost `
+    $liveSha = (& ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 $SshHost `
         "docker exec liberado cat /etc/liberado-build-sha 2>/dev/null || echo missing")
     $ErrorActionPreference = "Stop"
     $liveSha = ([string](@($liveSha)[-1])).Trim()
