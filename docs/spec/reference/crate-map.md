@@ -105,10 +105,11 @@ Composition roots: the only crates allowed to see everything.
 
 ## tooling
 
-Meta tooling (evals, heuristics tuner). Not build dependencies of the system.
+Meta tooling (evals, heuristics tuner, cost accounting). Not build dependencies of the system.
 
 | Crate | Internal deps | Description |
 |---|---|---|
+| [`liberado-cost`](../../../crates/cost/) | `liberado-common`, `liberado-config-loader` | Token cost accounting over the existing latency journal (D1+D2 of `token-cost-accounting-plan.md`). Applies `[[models]]` per-million rates **at read time** — the journal never stores money — and rolls a conversation up through the dispatch journal's `parent_conversation`, so delegated subagent spend is attributed to the turn that caused it. Reads JSONL rather than depending on `liberado-provider`; `tests/journal_shape.rs` is the guard that the two shapes still agree. |
 | [`liberado-eval`](../../../crates/eval/) | `liberado-common`, `liberado-config-loader`, `liberado-dispatcher`, `liberado-provider`, `liberado-provider-openai-compat` | The heuristic-tuning instrument (testing-and-eval-spec §4.2): runs the real dispatcher over a labeled set of routing scenarios and reports routing accuracy, safe-default rate, and the safety-regression gate — used to A/B the system prompt and tune the guards. |
 | [`liberado-heuristics-tuner`](../../../crates/heuristics-tuner/) | `liberado-coder-agent`, `liberado-coder-core`, `liberado-common`, `liberado-config`, `liberado-dispatcher`, `liberado-eval`, `liberado-executor`, `liberado-orchestrator`, `liberado-provider`, `liberado-provider-openai-compat` | Automates prompt-tuning for dispatcher, executor/subagent tool loops, and Liberado coder-role system prompts via beam search; proposes diffs + rubrics for human review. Never auto-applies prompt changes. |
 
