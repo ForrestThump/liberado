@@ -6,6 +6,12 @@ use chrono::Utc;
 
 use crate::result::{PathStatus, RunReport};
 
+/// Preferred owner for suite residue under the vault. TurboVault (and the host user) are uid 1000
+/// on the homelab; the conformance binary often runs as root inside the daemon container. Files
+/// left as root cause `write_note` → Permission denied on the next agent write into that tree.
+const VAULT_OWNER_UID: u32 = 1000;
+const VAULT_OWNER_GID: u32 = 1000;
+
 /// Write `conformance/reports/<ts>-<pass|fail>.md` and return the path relative to the vault.
 pub fn write_vault_report(vault_path: &Path, report: &RunReport) -> Result<std::path::PathBuf, String> {
     let tag = match report.overall {
@@ -21,6 +27,9 @@ pub fn write_vault_report(vault_path: &Path, report: &RunReport) -> Result<std::
     if let Some(parent) = abs.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        // Best-effort: keep the suite zone writable by TurboVault / host user.
+        reclaim_owner(parent);
+        reclaim_owner(vault_path.join("conformance"));
     }
 
     let mut md = String::new();
@@ -54,5 +63,15 @@ pub fn write_vault_report(vault_path: &Path, report: &RunReport) -> Result<std::
     }
 
     std::fs::write(&abs, md).map_err(|e| format!("write {}: {e}", abs.display()))?;
+    reclaim_owner(&abs);
     Ok(rel)
 }
+
+#[cfg(unix)]
+fn reclaim_owner(path: impl AsRef<Path>) {
+    let path = path.as_ref();
+    let _ = std::os::unix::fs::chown(path, Some(VAULT_OWNER_UID), Some(VAULT_OWNER_GID));
+}
+
+#[cfg(not(unix))]
+fn reclaim_owner(_path: impl AsRef<Path>) {}

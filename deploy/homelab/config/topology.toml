@@ -220,6 +220,14 @@ transport = { kind = "http", url = "https://mcp.deepwiki.com" }
 # than the domain fallback, and a hook that stamps that profile onto the reaction event.
 # See docs/future-work/live-conformance-tier3-build-spec.md.
 
+# Pool whose ceiling is the `conformance` policy grant (name = component). Without this, the hook
+# runs on the default pool and the orchestrator intersects the session grant with `dispatcher`,
+# which has no Write(conformance) — so the probe's write is stripped and becomes a permission
+# request. Found on first dogfood run 2026-08-01.
+[[pools]]
+name = "conformance"
+enabled = true
+
 [[session_profiles]]
 name = "conformance"
 enabled = true
@@ -234,6 +242,7 @@ enabled = true
 # Env var on the box (Decision 10). Set LIBERADO_HOOK_CONFORMANCE_SECRET before boot.
 secret_ref = "LIBERADO_HOOK_CONFORMANCE_SECRET"
 profile = "conformance"
+pool = "conformance"
 goal = """
 You are a live-conformance probe. Do exactly this and nothing else:
 
