@@ -70,6 +70,22 @@ store is already shared; this is the step that was deferred.
 5. **Persist on completion, regardless of audience.** The reply lands because the turn finished, not
    because someone was watching. This is the actual ask.
 
+## Status of the remaining steps (2026-08-02)
+
+Steps 1-3 landed in #25. The three items below — restart semantics, reattach catch-up, and incognito
+ordering — landed in #27 and were verified against the deployed daemon. What each turned out to be:
+
+- **Restart**: never looked like a hang (`turn_running` reads false once the registry is gone), but
+  the transcript ended on the question with no explanation. `turn_unanswered` now names that, derived
+  rather than recorded — a durable "in flight" flag would be wrong in exactly the case it exists for,
+  because a killed process clears nothing.
+- **Reattach**: the real gap was a race, not polish. History says a turn is running, it finishes
+  before the attach lands, the daemon answers 409, and the client showed silence while the answer sat
+  on disk. An attach now re-reads the store when its stream ends badly.
+- **Incognito**: `delete_conversation` did not cancel the running turn. A narrow race before turns
+  were detached; the ordinary case afterwards, since the teardown fires exactly when someone
+  navigates away from work in flight.
+
 ## The parts that are easy to get wrong
 
 **Tokens are the awkward case.** Persisting every token delta into the JSONL would bloat it badly —
