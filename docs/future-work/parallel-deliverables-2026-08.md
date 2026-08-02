@@ -68,7 +68,11 @@ reading the journal and reporting:
 - [ ] A model with no price entry reports its tokens and a `null` cost. A test asserts an unpriced
       model never contributes 0.0 to a total — it appears on a separate "unpriced" line.
 - [ ] Rolling up a conversation whose turn dispatched a subagent includes the subagent's calls.
-      Test with a fixture journal where the child's `correlation` matches the parent's.
+      Fixture must use a *different* correlation for the child plus a dispatch-journal entry naming
+      `parent_conversation` — a fixture where the ids already match would pass a naive group-by and
+      prove nothing.
+- [ ] A subagent's cost is attributed to its parent conversation and NOT double-counted when the
+      dispatch is also queried directly.
 - [ ] Prices are applied at read time. A test changes a rate and re-queries the *same* fixture,
       showing a different total — the journal must not bake money in.
 - [ ] Runs against the real journal on the box and prints a per-conversation table. Paste it in the PR.
