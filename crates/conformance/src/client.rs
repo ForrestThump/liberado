@@ -245,11 +245,13 @@ impl DaemonClient {
         }
     }
 
-    /// `GET /api/conversations/{id}/attach` — collect SSE until done/timeout.
+    /// `GET /api/conversations/{id}/attach` — collect SSE until a **token** (turn content) arrives
+    /// or the stream ends/timeouts.
     ///
-    /// Uses the same event vocabulary as chat stream. "Replay before live" is observable as
-    /// receiving content/events while the turn was already started (we do not invent a second
-    /// decoder). Empty/409 attach is a fail for P6.
+    /// Real attach always frames with a `session` event first; that alone is **not** proof of
+    /// replay/live turn content. P6 requires at least one token (or other non-session agent event
+    /// counted as turn content via [`parse_sse_block`]'s `saw_token`). Empty attach, session-only
+    /// framing, or 409 are fails.
     pub async fn attach_and_collect(
         &self,
         id: &str,
@@ -274,6 +276,7 @@ impl DaemonClient {
 
         let mut session_id: Option<String> = None;
         let mut saw_token = false;
+        let mut session_frames = 0usize;
         let mut event_blocks = 0usize;
         let mut buffer = String::new();
         let mut stream = resp.bytes_stream();
@@ -290,23 +293,30 @@ impl DaemonClient {
                     while let Some(idx) = buffer.find("\n\n") {
                         let block = buffer[..idx].to_string();
                         buffer = buffer[idx + 2..].to_string();
-                        if !block.trim().is_empty() {
-                            event_blocks += 1;
+                        if block.trim().is_empty() {
+                            continue;
                         }
+                        event_blocks += 1;
+                        let before = session_id.clone();
                         parse_sse_block(&block, &mut session_id, &mut saw_token);
+                        // Count pure session framing (session id set, no token in this pass).
+                        if !saw_token && session_id.is_some() && before != session_id {
+                            session_frames += 1;
+                        }
                     }
                 }
                 Ok(Some(Err(e))) => return Err(format!("attach stream: {e}")),
                 Ok(None) => break,
                 Err(_) => break,
             }
-            // Enough signal: session + content, or several blocks (replay).
-            if saw_token || event_blocks >= 2 {
+            // Only turn *content* is enough to stop early — not session framing alone.
+            if saw_token {
                 break;
             }
         }
         Ok(AttachCollect {
             event_blocks,
+            session_frames,
             saw_token,
             session_echo: session_id,
         })
@@ -462,15 +472,22 @@ impl ConversationSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttachCollect {
+    /// Non-empty SSE blocks (including session framing). Diagnostic only — not a pass signal.
     pub event_blocks: usize,
+    /// How many blocks set/updated the session id without a token (framing).
+    pub session_frames: usize,
+    /// At least one token (turn text) — the only content that proves attach replay/live.
     pub saw_token: bool,
     pub session_echo: Option<String>,
 }
 
 impl AttachCollect {
-    /// Attach produced observable stream content (replay and/or live).
-    pub fn has_content(&self) -> bool {
-        self.saw_token || self.event_blocks > 0
+    /// True only when attach delivered **turn content** (token), not mere session framing.
+    ///
+    /// A successful attach always emits `event: session` first; counting any block as content
+    /// would make P6 pass against a stream that never replays the answer.
+    pub fn has_turn_content(&self) -> bool {
+        self.saw_token
     }
 }
 
@@ -588,22 +605,49 @@ mod tests {
     }
 
     #[test]
-    fn attach_collect_empty_has_no_content() {
+    fn attach_session_framing_alone_is_not_turn_content() {
+        // Real attach always sends session first — that must not pass P6.
+        assert!(
+            !AttachCollect {
+                event_blocks: 2,
+                session_frames: 1,
+                saw_token: false,
+                session_echo: Some("01ABC".into()),
+            }
+            .has_turn_content()
+        );
         assert!(
             !AttachCollect {
                 event_blocks: 0,
+                session_frames: 0,
                 saw_token: false,
                 session_echo: None,
             }
-            .has_content()
+            .has_turn_content()
         );
         assert!(
             AttachCollect {
-                event_blocks: 1,
-                saw_token: false,
-                session_echo: None,
+                event_blocks: 2,
+                session_frames: 1,
+                saw_token: true,
+                session_echo: Some("01ABC".into()),
             }
-            .has_content()
+            .has_turn_content()
         );
+    }
+
+    #[test]
+    fn parse_sse_token_sets_saw_token() {
+        let mut sid = None;
+        let mut tok = false;
+        parse_sse_block(
+            "event: session\ndata: {\"session\":\"s1\"}",
+            &mut sid,
+            &mut tok,
+        );
+        assert_eq!(sid.as_deref(), Some("s1"));
+        assert!(!tok, "session frame must not count as token");
+        parse_sse_block("event: token\ndata: hello", &mut sid, &mut tok);
+        assert!(tok);
     }
 }

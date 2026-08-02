@@ -532,6 +532,8 @@ enum P6Break {
     DiesOnDisconnect,
     /// turn_running true but attach yields no events / empty body.
     EmptyAttach,
+    /// Attach 200 with session framing only — no token/replay (real broken attach shape).
+    SessionOnlyAttach,
     /// Cancel HTTP succeeds but turn_running stays true.
     CancelNoOp,
     /// Cancel "succeeds", turn stops, but assistant partial is on the transcript.
@@ -640,7 +642,7 @@ async fn listen_p6(mock: Arc<P6Mock>) -> SocketAddr {
                                 "turn_running": false,
                                 "turn_unanswered": true
                             })),
-                            P6Break::EmptyAttach => {
+                            P6Break::EmptyAttach | P6Break::SessionOnlyAttach => {
                                 // Stay running forever so attach is attempted; never finish with assistant.
                                 Json(json!({
                                     "messages": [{"role": "user", "content": "durable"}],
@@ -686,6 +688,12 @@ async fn listen_p6(mock: Arc<P6Mock>) -> SocketAddr {
                                 [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
                                 // No events at all — empty attach.
                                 String::new(),
+                            ),
+                            P6Break::SessionOnlyAttach => (
+                                axum::http::StatusCode::OK,
+                                [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                                // Real attach shape that is still broken: session framing, zero tokens.
+                                "event: session\ndata: {\"session\":\"01P6FORCED0000000000000000\"}\n\n".into(),
                             ),
                             P6Break::DiesOnDisconnect => (
                                 axum::http::StatusCode::CONFLICT,
@@ -761,9 +769,40 @@ async fn p6_fails_when_attach_replays_nothing() {
     let r = run_p6_against(P6Break::EmptyAttach).await;
     write_capture("p6_empty_attach", &r);
     assert!(
-        r.assertion.contains("attach") || r.assertion.contains("replay"),
+        r.assertion.contains("attach")
+            || r.assertion.contains("replay")
+            || r.assertion.contains("token"),
         "{:?}",
         r.assertion
+    );
+}
+
+/// Session framing without tokens must fail — that is the live attach shape that made a
+/// vacuous `event_blocks > 0` check pass.
+#[tokio::test]
+async fn p6_fails_when_attach_is_session_framing_only() {
+    let r = run_p6_against(P6Break::SessionOnlyAttach).await;
+    write_capture("p6_session_only_attach", &r);
+    assert_eq!(r.status, PathStatus::Fail);
+    assert!(
+        r.assertion.contains("attach")
+            || r.assertion.contains("token")
+            || r.assertion.contains("framing")
+            || r.assertion.contains("content")
+            || r.assertion.contains("replay"),
+        "must reject session-only attach; got {:?}",
+        r.assertion
+    );
+    assert!(
+        r.evidence
+            .as_ref()
+            .and_then(|e| e.get("saw_token"))
+            .and_then(|v| v.as_bool())
+            == Some(false)
+            || r.assertion.contains("token")
+            || r.assertion.contains("framing"),
+        "evidence/assertion should show missing turn content: {:?}",
+        r.evidence
     );
 }
 

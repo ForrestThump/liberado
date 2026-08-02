@@ -68,14 +68,16 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
             );
         }
     };
-    if !attach.has_content() {
+    // Session framing alone is not enough — attach always emits `event: session` first.
+    if !attach.has_turn_content() {
         return PathResult::fail(
             PathId::P6,
-            "attach stream delivers replay and/or live events (not empty)",
+            "attach stream delivers turn content (token/replay), not only session framing",
             elapsed_ms(start),
             serde_json::json!({
                 "session_id": session,
                 "event_blocks": attach.event_blocks,
+                "session_frames": attach.session_frames,
                 "saw_token": attach.saw_token,
             }),
         );
@@ -208,6 +210,7 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
             "outlive_session": session,
             "cancel_session": cancel_session,
             "attach_event_blocks": attach.event_blocks,
+            "attach_session_frames": attach.session_frames,
             "attach_saw_token": attach.saw_token,
             "assistant_preview": snap.assistant_contents.first().map(|s| {
                 let t: String = s.chars().take(120).collect();
