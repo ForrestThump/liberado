@@ -790,31 +790,25 @@ async fn build_chat(
     .with_dispatcher_capabilities(dispatcher_caps)
     .with_delegation_mode(main_agent_cfg.delegation_mode);
 
-    // CH3 context compaction: config-tier knobs → the kernel's runtime type. Trigger is resolved
-    // for the *face* model (per-model pct / absolute override, else global, else fallback) so a
-    // 128k face model does not share a 48k default with a 64k one. Summaries use the face provider
-    // (see docs/roadmap/context-compaction-plan.md §Summary generation).
-    let compact = &main_agent_cfg.compaction;
+    // CH3 context compaction: config-tier knobs → kernel runtime type (per-model absolute
+    // triggers + daemon default). See `state::compaction_config_for_face`. Summaries use the face
+    // provider (docs/roadmap/context-compaction-plan.md §Summary generation).
     let face_model = provider.model();
-    let trigger_tokens =
-        compact.resolve_trigger_tokens(Some(face_model.as_str()), &config.topology.models);
-    sessions = sessions.with_compaction(
-        liberado_main_agent::CompactionConfig {
-            enabled: compact.enabled,
-            trigger_tokens,
-            keep_recent_turns: compact.keep_recent_turns as usize,
-            summary_max_tokens: compact.summary_max_tokens,
-            tool_result_max_chars: compact.tool_result_max_chars as usize,
-        },
-        provider.clone(),
-    );
-    if compact.enabled {
+    let compact_cfg = crate::state::compaction_config_for_face(config, face_model.as_str());
+    let compact_enabled = compact_cfg.enabled;
+    let default_trigger = compact_cfg.trigger_tokens;
+    let models_with_triggers = compact_cfg.model_trigger_tokens.len();
+    let trigger_pct = main_agent_cfg.compaction.trigger_pct;
+    let keep_recent_turns = compact_cfg.keep_recent_turns;
+    sessions = sessions.with_compaction(compact_cfg, provider.clone());
+    if compact_enabled {
         info!(
             face_model = %face_model,
-            trigger_tokens,
-            trigger_pct = compact.trigger_pct,
-            keep_recent_turns = compact.keep_recent_turns,
-            "chat: automatic context compaction enabled"
+            trigger_tokens = default_trigger,
+            models_with_triggers,
+            trigger_pct,
+            keep_recent_turns,
+            "chat: automatic context compaction enabled (per-conversation model triggers)"
         );
     }
 
