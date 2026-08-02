@@ -10,6 +10,7 @@ mod api;
 mod cron_delivery;
 mod hooks;
 mod latency;
+mod shutdown;
 mod state;
 mod sticky;
 mod telegram;
@@ -289,6 +290,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         hook_tx,
         hook_idempotency: Default::default(),
         live_mcp: live_mcp.clone(),
+        drain: crate::shutdown::DrainGate::default(),
     });
 
     // Optional — Telegram bot: proposal Approve/Reject/Revise buttons + free-form chat when a
@@ -336,7 +338,23 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         daemon.run(reaction_tx).await.ok();
     });
 
+    // Turn-starting routes only: middleware refuses with `shutting_down` once drain begins.
+    // Attach/cancel stay on the main router so clients can rejoin or stop work already in flight
+    // without editing `api/chat.rs`.
+    let turn_start_routes = Router::new()
+        .route("/api/chat", axum::routing::post(api::chat))
+        .route(
+            "/api/chat/stream",
+            axum::routing::get(api::chat_stream_get).post(api::chat_stream_post),
+        )
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            shutdown::refuse_new_turns_if_draining,
+        ))
+        .with_state(state.clone());
+
     let app = Router::new()
+        .merge(turn_start_routes)
         .route("/api/status", axum::routing::get(api::status))
         .route("/api/models", axum::routing::get(api::models))
         .route("/api/models/select", axum::routing::post(api::select_model))
@@ -347,11 +365,6 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/reactions", axum::routing::get(api::reactions))
         .route("/api/vault", axum::routing::get(api::vault))
-        .route("/api/chat", axum::routing::post(api::chat))
-        .route(
-            "/api/chat/stream",
-            axum::routing::get(api::chat_stream_get).post(api::chat_stream_post),
-        )
         .route(
             "/api/conversations",
             axum::routing::get(api::list_conversations),
@@ -373,7 +386,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
             axum::routing::post(api::set_conversation_profile),
         )
         // Rejoin a turn after a reload, and stop one on purpose. Both exist because a turn no
-        // longer belongs to the connection that started it.
+        // longer belongs to the connection that started it. Not gated by drain.
         .route(
             "/api/conversations/{id}/attach",
             axum::routing::get(api::attach_conversation),
@@ -414,7 +427,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/goals/{id}/park", axum::routing::post(api::goals_park))
         .layer(CorsLayer::permissive())
-        .with_state(state)
+        .with_state(state.clone())
         // Compression is scoped to the static fallback, deliberately not applied to the router as a
         // whole. The payload that needs it is the release .wasm (multi-MB, ~4x compressible, and the
         // whole page blocks on it over the tailnet); the payload that must never be buffered is
@@ -427,7 +440,13 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         );
 
     let addr = format!("0.0.0.0:{port}");
+    let grace = shutdown::shutdown_grace_from_env();
     info!("Web UI server listening on http://{}", addr);
+    info!(
+        grace_secs = grace.as_secs(),
+        "shutdown: on SIGTERM/Ctrl+C drain refuses new turns for up to grace_secs then exits \
+         (set LIBERADO_SHUTDOWN_GRACE_SECS; compose stop_grace_period should be ≥ this)"
+    );
     info!("API endpoints:");
     info!("  GET /api/status  — daemon status");
     info!("  GET /api/models  — live provider model catalog");
@@ -439,8 +458,22 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     info!("  /  — static frontend (build with `dx build` from crates/webui/)");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    let drain_state = state.clone();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            shutdown::wait_for_shutdown_signal().await;
+            let outcome = shutdown::drain_for_shutdown(&drain_state, grace).await;
+            info!(
+                idle = outcome.idle_within_grace,
+                aborted = outcome.aborted,
+                waited_ms = outcome.waited.as_millis() as u64,
+                "shutdown drain complete; stopping HTTP accept"
+            );
+        })
+        .await?;
 
+    // Vault-watch / reaction loop: stop after chat drain so cron/vault reactions do not keep the
+    // process alive past the grace budget.
     daemon_handle.abort();
     Ok(())
 }

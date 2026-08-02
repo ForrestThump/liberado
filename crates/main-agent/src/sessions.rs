@@ -1032,6 +1032,24 @@ impl ChatSessions {
             .contains_key(&session)
     }
 
+    /// How many turns are currently registered as running (including incognito).
+    ///
+    /// Used by the server's graceful-shutdown drain: HTTP connection close is no longer enough to
+    /// know work is done, because durable turns outlive their watchers.
+    pub fn in_flight_count(&self) -> usize {
+        self.running.lock().unwrap_or_else(|p| p.into_inner()).len()
+    }
+
+    /// Session ids with a turn currently in the running map (for drain/timeout abort).
+    pub fn in_flight_sessions(&self) -> Vec<Ulid> {
+        self.running
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .keys()
+            .copied()
+            .collect()
+    }
+
     /// Stop the turn running for `session`. `true` if there was one.
     ///
     /// The explicit counterpart to what a disconnect used to do implicitly. It has to exist *before*
