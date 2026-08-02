@@ -473,6 +473,7 @@ mod goal_message_tests {
             hook_tx,
             hook_idempotency: crate::hooks::IdempotencyCache::default(),
             live_mcp: liberado_bootstrap::LiveMcpController::empty(),
+            drain: crate::shutdown::DrainGate::default(),
         });
 
         let app = Router::new()
@@ -537,6 +538,7 @@ mod goal_message_tests {
             hook_tx,
             hook_idempotency: crate::hooks::IdempotencyCache::default(),
             live_mcp: liberado_bootstrap::LiveMcpController::empty(),
+            drain: crate::shutdown::DrainGate::default(),
         });
 
         let app = Router::new()
@@ -920,6 +922,7 @@ mod goal_message_tests {
             hook_tx,
             hook_idempotency: crate::hooks::IdempotencyCache::default(),
             live_mcp: liberado_bootstrap::LiveMcpController::empty(),
+            drain: crate::shutdown::DrainGate::default(),
         });
 
         let app = Router::new()

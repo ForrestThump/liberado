@@ -35,6 +35,13 @@ impl liberado_messaging::ChatSurface for TelegramChatBridge {
 
 impl TelegramChatBridge {
     async fn chat_turn(&self, user_text: &str) -> Result<String, String> {
+        // Telegram reaches `ChatSessions::turn` directly, so the HTTP middleware that refuses new
+        // turns during shutdown never sees it. Without this check a message arriving mid-drain
+        // starts a turn that the grace timeout aborts moments later — and it would also count
+        // toward `in_flight_count`, so the drain waits on work it is about to throw away.
+        if !self.state.drain.is_accepting() {
+            return Err(crate::shutdown::SHUTTING_DOWN_MESSAGE.to_string());
+        }
         let sessions = self.chat_sessions()?;
         let creator = sessions.clone();
         let id = self

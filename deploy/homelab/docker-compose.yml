@@ -45,6 +45,9 @@ services:
       RUST_LOG: "info"
       # OpenRouter → DeepSeek v4 Pro (slug confirmed on openrouter.ai). Overrides built-in default.
       OPENROUTER_MODEL: "deepseek/deepseek-v4-pro"
+      # In-process drain budget on SIGTERM (default 90s). Compose `stop_grace_period` must be ≥ this
+      # or Docker SIGKILL's mid-drain (default stop is only 10s — too short for long turns).
+      LIBERADO_SHUTDOWN_GRACE_SECS: "90"
       # --- Telegram: DO NOT use TELEGRAM_BOT_TOKEN (OpenClaw owns that name). ---
       # After LIBERADO_* rename lands in the image:
       # LIBERADO_TELEGRAM_BOT_TOKEN: ...
@@ -62,6 +65,9 @@ services:
       # scripts/deploy-webui-homelab.ps1. ServeDir reads it per request, so shipping a new UI is a
       # file copy - no restart, no image rebuild.
       - /home/shiloh/homelab/services/liberado/webui:/webui:ro
+    # Outer ceiling for process stop: must cover LIBERADO_SHUTDOWN_GRACE_SECS (+ slack). Docker's
+    # default 10s would kill the process during drain of a long research turn.
+    stop_grace_period: 2m
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4201/api/status || exit 1"]
       interval: 60s

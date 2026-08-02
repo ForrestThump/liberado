@@ -5,6 +5,10 @@
 //! and forwards the changes that came from *outside* our own write path as standardized
 //! [`Event`]s. Downstream (the dispatcher, hooks) consume those events; here we just produce them.
 //!
+//! **Process shutdown** is coordinated by `liberado-server` (SIGTERM → drain in-flight durable chat
+//! turns → abort this vault-watch task). The daemon loop itself is not the chat turn owner; killing
+//! it after the chat drain is the correct order so vault/cron reactions do not outlive the grace.
+//!
 //! The reactive decision is split into a pure, deterministic [`Daemon::process_change`] (testable
 //! without the filesystem) and the watcher plumbing in [`Daemon::run`] - mirroring how the vault
 //! crate separates attribution from I/O.

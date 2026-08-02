@@ -18,6 +18,7 @@ use liberado_session::GoalSessionHub;
 use chat_client_contract::{ReactionEvent, ReactionOutcome};
 
 use crate::hooks::{IdempotencyCache, ResolvedHook};
+use crate::shutdown::DrainGate;
 
 pub struct AppState {
     pub start_time: Instant,
@@ -81,6 +82,9 @@ pub struct AppState {
     /// Shared MCP peer controller (catalog + registry). `POST /api/mcp/reload` re-applies the
     /// hand-edited topology MCP slice without process restart.
     pub live_mcp: LiveMcpController,
+    /// Graceful-shutdown drain gate: when not accepting, turn-starting routes refuse with
+    /// `shutting_down` (see `crate::shutdown`). Attach and other read paths stay open.
+    pub drain: DrainGate,
 }
 
 /// Build the kernel [`liberado_main_agent::CompactionConfig`] from topology: absolute triggers
@@ -242,6 +246,7 @@ impl AppState {
             hook_tx,
             hook_idempotency: IdempotencyCache::default(),
             live_mcp: LiveMcpController::empty(),
+            drain: DrainGate::default(),
         }
     }
 }
