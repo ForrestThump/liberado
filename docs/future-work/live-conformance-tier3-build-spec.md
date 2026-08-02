@@ -187,10 +187,13 @@ idempotency key. Same event→dispatch→execute path a cron takes, minus the ti
 **Assert**, in order of how much they prove:
 - `ReactionOutcome::Dispatched { session_id }` appears for the correlation id
 - `GET /api/goals/{session_id}` reaches a terminal **success**, not merely terminal
-- the transcript contains at least one `ToolFinished { ok: true }` — the 28th's failure mode was a
-  session that started and then failed every action, which a status check alone reads as fine
 - **ground truth on disk**: `$vault/conformance/artifacts/<run_id>.md` exists and body contains
   `CONFORMANCE_OK <run_id>` (see *P1b goal + on-disk success* under Settled decisions)
+
+**Not required (v1):** `ToolFinished { ok: true }` on the goal-session event log. The dispatch
+path records `progress` + `session_finished` today, not `tool_finished` frames (live-verified
+2026-08-01). Claiming ToolFinished without emission was suite theatre. The artifact on disk is the
+ground-truth arm that catches "started then failed every action."
 
 **Not proof**: `202` from the hook. A status code, a `Dispatched` outcome, and a terminal status are
 all things the system says about itself.
@@ -201,18 +204,17 @@ all things the system says about itself.
 
 **Assert**:
 - at least one `Token` delta arrived (the provider was really reached)
-- the conversation appears in `GET /api/conversations` afterwards
-- `GET /api/conversations/{id}` holds a `User` node and an `Assistant` node
-- the assistant node's `model` equals the daemon's active model from `GET /api/status`
+- `GET /api/conversations/{id}` holds a `User` message and an `Assistant` message (by id — Background
+  chats are filtered from the **list** endpoint by design)
+- session `visibility` is `background` on `GET /api/sessions`
+- the assistant message's `model` equals the daemon's active model from `GET /api/status`, and the
+  stamp **must be present** — missing stamp is a fail (not a silent pass)
 
-That last one needs `MessageNode.model` (on this branch base via `feat/webui-fixes`). It is a
-cross-check between two independently derived facts — the shape §6 of `failure-modes.md` says
-nothing ever guards. It also catches "the request never reached a provider" more sharply than token
-presence does.
+That last one needs `MessageNode.model` on the store and on the **wire** (`ChatMessage.model` on
+`GET /api/conversations/{id}`). It is a cross-check between two independently derived facts — the
+shape §6 of `failure-modes.md` says nothing ever guards.
 
-Chat turns the suite starts must be **Background** so they stay out of the sidebar (same envelope
-rule as goal sessions). If the public API cannot create a background chat, **stop and raise it** —
-do not create foreground pollution and call it fine.
+Chat turns the suite starts must be **Background** so they stay out of the sidebar (`ChatRequest.background`).
 
 ### P3 — hook → joinable session
 
@@ -241,7 +243,12 @@ Second arm, if cheap: the session's `RoleStarted { model }` matches the profile'
 
 **Trigger**: a chat turn constructed to require delegation.
 
-**Assert**: a child session exists, is `Background`, and carries the **dispatcher** grant.
+**Assert (v1)**: a child session exists, is `Background`, and is parent-linked to the chat that
+delegated.
+
+**Out of v1:** asserting the child carries the **dispatcher** grant. Grant fingerprints on the
+sessions list interact with pool ceilings and are easy to get wrong without teaching flaky
+ignores of P1–P4. Revisit when a stable, dual-arm grant assert is cheap.
 
 **This is the one non-deterministic path** — whether the model delegates is a model decision. Report
 it separately and **do not let it set the exit code** by default; put it behind a flag. A flaky gate
@@ -431,10 +438,11 @@ You are a live-conformance probe. Do exactly this and nothing else:
 1. Hook accepted with that `correlation_id` / idempotency key.
 2. `Dispatched { session_id }` for that correlation.
 3. Session reaches terminal **Succeeded**.
-4. At least one `ToolFinished { ok: true }` on the transcript.
-5. **Ground truth**: file exists at
+4. **Ground truth**: file exists at
    `$vault/conformance/artifacts/<run_id>.md` and its body contains
    `CONFORMANCE_OK <run_id>` (runner reads the vault filesystem — it is on the box).
+
+ToolFinished on the hub event log is **not** a v1 requirement (dispatch path does not emit it today).
 
 **Why this shape**
 
@@ -459,7 +467,7 @@ Confirm whether `POST /api/chat/stream` (or an adjacent goals/chat create) can s
 
 ## Still open (implementation detail, not design forks)
 
-- Concrete topology/policy entries for `conformance` zone, grant, hook, and profile — write them when
-  implementing against the live files, not as speculative snippets ahead of time.
 - When promoting off hand-run: host cron cadence, and whether to wire `conformance-notify` (and keep
   green Telegram pings vs fail-only later).
+- P5 dispatcher-grant arm (deferred from v1).
+- Optional: emit real `tool_finished` on the dispatch hub path and re-add as a P1b assert later.

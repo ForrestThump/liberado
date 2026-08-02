@@ -1099,11 +1099,26 @@ impl ChatSessions {
     /// log before the marker, so rendering both would repeat the last `keep_recent_turns` turns
     /// after every compaction.
     pub async fn history(&self, session: Ulid) -> SessionResult<Vec<Message>> {
+        Ok(self
+            .history_nodes(session)
+            .await?
+            .into_iter()
+            .map(|n| n.message)
+            .collect())
+    }
+
+    /// Leaf-path transcript nodes (compaction tail copies dropped), including per-node model stamps.
+    ///
+    /// Prefer this over [`history`](Self::history) when a caller needs provenance that lives on the
+    /// node rather than the provider [`Message`] (today: which model ran a turn).
+    pub async fn history_nodes(
+        &self,
+        session: Ulid,
+    ) -> SessionResult<Vec<MessageNode>> {
         let nodes = self.store.leaf_path(session, None).await?;
         Ok(nodes
             .into_iter()
             .filter(|n| !n.author.is_compaction_tail_copy())
-            .map(|n| n.message)
             .collect())
     }
 

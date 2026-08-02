@@ -338,6 +338,14 @@ pub struct ChatMessage {
     pub tool_calls: Option<serde_json::Value>,
     #[serde(default)]
     pub tool_call_id: Option<String>,
+    /// Model stamp from the store's [`MessageNode`](liberado_conversation_store is not linked here —
+    /// see server `get_conversation`): which model a user turn was dispatched to, or which model
+    /// produced an assistant turn. Absent on system/tool nodes and on pre-stamp history.
+    ///
+    /// Optional so older clients ignore it; required for Tier 3 P2's cross-check against
+    /// `GET /api/status` (failure-modes §6 — do not let a missing stamp silently pass).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// Response from `GET /api/conversations/{id}`. Not just `Vec<ChatMessage>` directly at the top
@@ -837,10 +845,12 @@ mod tests {
                 {"function": {"name": "search", "arguments": "{\"q\":\"test\"}"}}
             ])),
             tool_call_id: None,
+            model: Some("test/model".into()),
         };
         let json = serde_json::to_value(&msg).unwrap();
         let back: ChatMessage = serde_json::from_value(json).unwrap();
         assert_eq!(back.role, "assistant");
+        assert_eq!(back.model.as_deref(), Some("test/model"));
         let tc = back.tool_calls.unwrap();
         assert_eq!(tc[0]["function"]["name"], "search");
     }
@@ -851,6 +861,32 @@ mod tests {
         let msg: ChatMessage = serde_json::from_value(json).unwrap();
         assert_eq!(msg.tool_calls, None);
         assert_eq!(msg.tool_call_id, None);
+        assert_eq!(msg.model, None);
+    }
+
+    #[test]
+    fn chat_message_model_roundtrips_and_omits_when_none() {
+        let with = ChatMessage {
+            role: "assistant".into(),
+            content: "hi".into(),
+            tool_calls: None,
+            tool_call_id: None,
+            model: Some("vendor/slug".into()),
+        };
+        let v = serde_json::to_value(&with).unwrap();
+        assert_eq!(v["model"], "vendor/slug");
+        let back: ChatMessage = serde_json::from_value(v).unwrap();
+        assert_eq!(back.model.as_deref(), Some("vendor/slug"));
+
+        let bare = ChatMessage {
+            role: "user".into(),
+            content: "q".into(),
+            tool_calls: None,
+            tool_call_id: None,
+            model: None,
+        };
+        let v = serde_json::to_value(&bare).unwrap();
+        assert!(v.get("model").is_none(), "None must skip_serializing");
     }
 
     #[test]
@@ -862,12 +898,14 @@ mod tests {
                     content: "hello".into(),
                     tool_calls: None,
                     tool_call_id: None,
+                    model: None,
                 },
                 ChatMessage {
                     role: "assistant".into(),
                     content: "hi there".into(),
                     tool_calls: None,
                     tool_call_id: None,
+                    model: Some("deepseek/v4".into()),
                 },
             ],
             profile: Some("basic-chat".into()),

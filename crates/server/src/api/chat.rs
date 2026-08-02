@@ -655,12 +655,11 @@ pub async fn get_conversation(
         )
             .into_response();
     };
-    match sessions.history(id).await {
-        Ok(messages) => {
-            let messages: Vec<ChatMessage> = messages
-                .into_iter()
-                .map(chat_message_from_provider)
-                .collect();
+    match sessions.history_nodes(id).await {
+        Ok(nodes) => {
+            // Nodes carry `model` (which Message alone does not). Dropping the stamp here is what
+            // made Tier 3 P2's model cross-check vacuous — every history reply had no model field.
+            let messages: Vec<ChatMessage> = nodes.into_iter().map(chat_message_from_node).collect();
             // Read from the session's own header rather than tracked client-side: a conversation
             // opened in a second tab, or after a restart, must show the authority it actually runs
             // under.
@@ -684,11 +683,14 @@ pub async fn get_conversation(
     }
 }
 
-/// Converts one stored `liberado_provider::Message` (the internal, richer type
-/// `ChatSessions::history` returns) into the wire `ChatMessage` â€” the single conversion point that
-/// keeps `GET /api/conversations/{id}` honoring `chat-client-contract` instead of leaking an
+/// Converts one stored transcript node into the wire `ChatMessage` — the single conversion point
+/// that keeps `GET /api/conversations/{id}` honoring `chat-client-contract` instead of leaking an
 /// internal type through a hand-rolled `serde_json::json!` literal.
-fn chat_message_from_provider(m: liberado_provider::Message) -> ChatMessage {
+///
+/// Carries [`MessageNode::model`] so clients (and the Tier 3 suite) can cross-check which model
+/// actually ran a turn without a second API.
+fn chat_message_from_node(n: liberado_conversation_store::MessageNode) -> ChatMessage {
+    let m = n.message;
     let role = match m.role {
         liberado_provider::Role::System => "system",
         liberado_provider::Role::User => "user",
@@ -702,6 +704,7 @@ fn chat_message_from_provider(m: liberado_provider::Message) -> ChatMessage {
             .then(|| serde_json::to_value(&m.tool_calls).ok())
             .flatten(),
         tool_call_id: m.tool_call_id,
+        model: n.model,
     }
 }
 
@@ -946,6 +949,30 @@ mod tests {
             Some("mock"),
             "with nothing asked for, the turn takes the provider's own model"
         );
+    }
+
+    #[test]
+    fn chat_message_from_node_carries_the_store_model_stamp() {
+        use liberado_conversation_store::{Author, MessageNode, Ulid};
+        use liberado_provider::{Message, Role};
+
+        let node = MessageNode {
+            id: Ulid::new(),
+            parent_id: None,
+            conversation_id: Ulid::new(),
+            author: Author::Assistant,
+            created_at: chrono::Utc::now(),
+            message: Message {
+                role: Role::Assistant,
+                content: "hi".into(),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+            },
+            model: Some("vendor/slug".into()),
+        };
+        let wire = chat_message_from_node(node);
+        assert_eq!(wire.role, "assistant");
+        assert_eq!(wire.model.as_deref(), Some("vendor/slug"));
     }
 
     /// Both transports, because `EventSource` can only `GET` and so the WebUI's picks arrive as a

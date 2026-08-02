@@ -90,20 +90,23 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, _timeout: Durat
         );
     }
 
-    // Model cross-check when both sides present.
-    if let (Some(active), Some(stamped)) = (active_model.as_ref(), assistant_model.as_ref())
-        && active != stamped
-    {
-        return PathResult::fail(
-            PathId::P2,
-            "assistant MessageNode.model equals daemon active model",
-            elapsed_ms(start),
-            serde_json::json!({
-                "active_model": active,
-                "assistant_model": stamped,
-                "session_id": turn.session_id,
-            }),
-        );
+    // Fail-closed model cross-check (build-spec P2 / failure-modes §6). A missing stamp is a fail,
+    // not a silent skip — that was the theatre that made this assert vacuous.
+    match assert_assistant_model(&active_model, assistant_model.as_deref()) {
+        Ok(()) => {}
+        Err(reason) => {
+            return PathResult::fail(
+                PathId::P2,
+                "assistant MessageNode.model equals daemon active model",
+                elapsed_ms(start),
+                serde_json::json!({
+                    "active_model": active_model,
+                    "assistant_model": assistant_model,
+                    "session_id": turn.session_id,
+                    "reason": reason,
+                }),
+            );
+        }
     }
 
     let _ = cfg; // vault not needed for P2
@@ -118,6 +121,26 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, _timeout: Durat
             "visibility": visibility,
         }),
     )
+}
+
+/// Pure decision for the P2 model arm — unit-tested without a daemon.
+///
+/// Requires both sides present and equal. Missing stamp or missing status model is a failure so
+/// the check cannot pass by omission.
+pub(crate) fn assert_assistant_model(
+    active: &Option<String>,
+    stamped: Option<&str>,
+) -> Result<(), String> {
+    let Some(active) = active.as_deref() else {
+        return Err("daemon status has no model_name".into());
+    };
+    let Some(stamped) = stamped else {
+        return Err("assistant message has no model stamp on GET /api/conversations/{id}".into());
+    };
+    if active != stamped {
+        return Err(format!("mismatch: status={active} stamp={stamped}"));
+    }
+    Ok(())
 }
 
 fn inspect_transcript(conv: &serde_json::Value) -> (bool, bool, Option<String>) {
@@ -169,4 +192,57 @@ async fn session_visibility(client: &DaemonClient, id: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_stamp_is_a_fail() {
+        let err = assert_assistant_model(&Some("m".into()), None).unwrap_err();
+        assert!(err.contains("no model stamp"), "{err}");
+    }
+
+    #[test]
+    fn missing_status_model_is_a_fail() {
+        let err = assert_assistant_model(&None, Some("m")).unwrap_err();
+        assert!(err.contains("no model_name"), "{err}");
+    }
+
+    #[test]
+    fn mismatch_is_a_fail() {
+        let err = assert_assistant_model(&Some("a".into()), Some("b")).unwrap_err();
+        assert!(err.contains("mismatch"), "{err}");
+    }
+
+    #[test]
+    fn equal_stamps_pass() {
+        assert!(assert_assistant_model(&Some("m".into()), Some("m")).is_ok());
+    }
+
+    #[test]
+    fn inspect_transcript_reads_model_from_wire_shape() {
+        let conv = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "hi", "model": "m"},
+                {"role": "assistant", "content": "pong", "model": "m"}
+            ]
+        });
+        let (u, a, model) = inspect_transcript(&conv);
+        assert!(u && a);
+        assert_eq!(model.as_deref(), Some("m"));
+    }
+
+    #[test]
+    fn inspect_transcript_without_model_yields_none() {
+        let conv = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "pong"}
+            ]
+        });
+        let (_, _, model) = inspect_transcript(&conv);
+        assert!(model.is_none());
+    }
 }

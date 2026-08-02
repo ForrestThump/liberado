@@ -303,6 +303,7 @@ fn history_loaded_renders_tool_calls() {
                 serde_json::json!([{"function":{"name":"search","arguments":"{\"q\":\"test\"}"}}]),
             ),
             tool_call_id: None,
+            model: None,
         }],
     });
     assert_eq!(app.messages.len(), 1);
@@ -320,6 +321,7 @@ fn history_loaded_mixed_content_and_tools() {
                 content: "search please".into(),
                 tool_calls: None,
                 tool_call_id: None,
+                model: None,
             },
             ChatMessage {
                 role: "assistant".into(),
@@ -328,6 +330,7 @@ fn history_loaded_mixed_content_and_tools() {
                     serde_json::json!([{"function":{"name":"search","arguments":"{}"}}]),
                 ),
                 tool_call_id: None,
+                model: None,
             },
         ],
     });
@@ -346,6 +349,7 @@ fn history_loaded_enforces_message_cap() {
             content: format!("message {i}"),
             tool_calls: None,
             tool_call_id: None,
+            model: None,
         })
         .collect();
     app.update(Action::HistoryLoaded {
@@ -1023,6 +1027,7 @@ fn history_loaded_stale_response_rejected() {
             content: "stale".into(),
             tool_calls: None,
             tool_call_id: None,
+            model: None,
         }],
     });
     assert!(matches!(app.messages[0], Message::User(ref m) if m == "current"));

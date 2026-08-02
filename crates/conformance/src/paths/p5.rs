@@ -1,4 +1,9 @@
 //! P5 — delegate (advisory; model-decision non-deterministic).
+//!
+//! **v1 assert:** a Background child session under the chat parent (parent linkage + visibility).
+//! **Out of v1:** asserting the child carries the *dispatcher* grant — that requires a stable
+//! grant fingerprint on the sessions list that is easy to false-pass/false-fail under pool
+//! intersection; keep model-decision flakiness from teaching people to ignore P1–P4.
 
 use std::time::{Duration, Instant};
 
@@ -39,18 +44,19 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
         {
             return PathResult::pass(
                 PathId::P5,
-                "child background session exists under chat parent",
+                "child background session under chat parent (v1; dispatcher grant out of v1)",
                 elapsed_ms(start),
                 serde_json::json!({
                     "parent": turn.session_id,
                     "child": child,
+                    "v1_note": "dispatcher grant arm deferred — see live-conformance-tier3-build-spec",
                 }),
             );
         }
         if Instant::now() >= deadline {
             return PathResult::fail(
                 PathId::P5,
-                "child Background session with dispatcher grant (model may not have delegated)",
+                "child Background session under chat parent (model may not have delegated)",
                 elapsed_ms(start),
                 serde_json::json!({
                     "parent": turn.session_id,

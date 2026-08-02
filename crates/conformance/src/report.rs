@@ -9,7 +9,9 @@ use crate::result::{PathStatus, RunReport};
 /// Preferred owner for suite residue under the vault. TurboVault (and the host user) are uid 1000
 /// on the homelab; the conformance binary often runs as root inside the daemon container. Files
 /// left as root cause `write_note` → Permission denied on the next agent write into that tree.
+#[cfg(unix)]
 const VAULT_OWNER_UID: u32 = 1000;
+#[cfg(unix)]
 const VAULT_OWNER_GID: u32 = 1000;
 
 /// Write `conformance/reports/<ts>-<pass|fail>.md` and return the path relative to the vault.

@@ -86,16 +86,9 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
         );
     }
 
-    // ToolFinished { ok: true } in event history if present on the snapshot.
-    let has_tool_ok = snapshot_has_successful_tool(&snap);
-    if !has_tool_ok {
-        // Still require the artifact — ground truth. Soft-note tool events if the snapshot shape
-        // does not expose them the way we expect.
-        eprintln!(
-            "p1b: warning — no ToolFinished ok:true found on snapshot; relying on artifact"
-        );
-    }
-
+    // Ground truth is the vault artifact — not ToolFinished on the hub event log.
+    // The dispatch path records progress + session_finished, not tool_finished frames
+    // (verified live 2026-08-01). Claiming ToolFinished without emitting it was suite theatre.
     let artifact = cfg
         .vault_path
         .join("conformance")
@@ -113,7 +106,6 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
                     "path": artifact.display().to_string(),
                     "session_id": session_id,
                     "run_id": run_id,
-                    "tool_ok_seen": has_tool_ok,
                 }),
             );
         }
@@ -143,35 +135,6 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
             "session_id": session_id,
             "run_id": run_id,
             "artifact": artifact.display().to_string(),
-            "tool_ok_seen": has_tool_ok,
         }),
     )
-}
-
-fn snapshot_has_successful_tool(snap: &serde_json::Value) -> bool {
-    // Snapshot shapes vary; search the JSON tree for tool_finished / ToolFinished with ok true.
-    fn walk(v: &serde_json::Value) -> bool {
-        match v {
-            serde_json::Value::Object(map) => {
-                let kind = map
-                    .get("type")
-                    .or_else(|| map.get("kind"))
-                    .or_else(|| map.get("event"))
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("");
-                let ok = map.get("ok").and_then(|x| x.as_bool()) == Some(true);
-                if ok
-                    && (kind.contains("tool_finished")
-                        || kind.contains("ToolFinished")
-                        || map.contains_key("result_preview"))
-                {
-                    return true;
-                }
-                map.values().any(walk)
-            }
-            serde_json::Value::Array(a) => a.iter().any(walk),
-            _ => false,
-        }
-    }
-    walk(snap)
 }
