@@ -236,6 +236,10 @@ if (-not $SkipConfig) {
         "-o", "BatchMode=yes",
         (Join-Path $cfgLocal "topology.toml"),
         (Join-Path $cfgLocal "policy.toml"),
+        # The Tier 3 runner reads this from the mounted config dir (it runs inside the container,
+        # where this path is /config/conformance.toml). Shipping the binary without its config just
+        # moves the failure to run time.
+        (Join-Path $cfgLocal "conformance.toml"),
         "${SshHost}:${RemoteService}/config/"
     )
     if ($code -ne 0) { throw "config scp failed (exit $code)" }
