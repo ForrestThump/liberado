@@ -340,6 +340,7 @@ mod tests {
             secret_ref: "LIBERADO_TEST_DEFINITELY_UNSET_HOOK_SECRET_XYZZY".into(),
             goal: "do something".into(),
             pool: None,
+            profile: None,
         }];
         let cfg = config(
             topology,

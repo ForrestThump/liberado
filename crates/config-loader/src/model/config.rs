@@ -529,6 +529,18 @@ impl Config {
                 )));
             }
         }
+        // Hooks share the same profile stamp as schedules — same fail-fast rule.
+        for hook in &self.topology.hooks {
+            if let Some(profile) = &hook.profile
+                && !profile_exists(profile)
+            {
+                return Err(Error::Config(format!(
+                    "topology.hooks['{}'].profile '{profile}' does not name an enabled \
+                     topology.session_profiles entry",
+                    hook.name
+                )));
+            }
+        }
 
         Ok(())
     }

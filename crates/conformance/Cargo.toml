@@ -1,0 +1,33 @@
+[package]
+name = "liberado-conformance"
+version = "0.1.0"
+description = "Tier 3 live conformance runner: exercises each execution path against a deployed daemon over HTTP, asserts ground-truth outcomes, writes vault reports. Hand-run on the box for v1."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "liberado-conformance"
+path = "src/main.rs"
+
+[dependencies]
+chat-client-contract = { workspace = true }
+chrono = { workspace = true }
+cron = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+ulid = { workspace = true }
+
+[dev-dependencies]
+axum = { version = "0.8.9", features = ["json", "tokio"] }
+tempfile = { workspace = true }
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
+role = "tooling"

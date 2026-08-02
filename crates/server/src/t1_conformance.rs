@@ -975,6 +975,7 @@ async fn l10_fork_holds_prefix_while_original_continues() {
                     parent_id: parent,
                     author: Author::User,
                     message: Message::user(q),
+                    model: None,
                 },
             )
             .await
@@ -986,6 +987,7 @@ async fn l10_fork_holds_prefix_while_original_continues() {
                     parent_id: Some(u.id),
                     author: Author::Assistant,
                     message: Message::assistant(a),
+                    model: None,
                 },
             )
             .await
@@ -1022,6 +1024,7 @@ async fn l10_fork_holds_prefix_while_original_continues() {
                 parent_id: Some(leaf),
                 author: Author::User,
                 message: Message::user("q4-after-fork"),
+                model: None,
             },
         )
         .await
@@ -1469,6 +1472,7 @@ async fn l10_fork_via_http_works_for_goal_sessions_too() {
                     parent_id: parent,
                     author: Author::User,
                     message: Message::user(format!("goal-turn-{i}")),
+                    model: None,
                 },
             )
             .await
@@ -1480,6 +1484,7 @@ async fn l10_fork_via_http_works_for_goal_sessions_too() {
                     parent_id: Some(u.id),
                     author: Author::Assistant,
                     message: Message::assistant(format!("goal-reply-{i}")),
+                    model: None,
                 },
             )
             .await
@@ -1516,6 +1521,7 @@ async fn l10_fork_via_http_works_for_goal_sessions_too() {
                 parent_id: Some(leaf),
                 author: Author::User,
                 message: Message::user("goal-turn-4-after-fork"),
+                model: None,
             },
         )
         .await

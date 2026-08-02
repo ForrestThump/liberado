@@ -338,6 +338,14 @@ pub struct ChatMessage {
     pub tool_calls: Option<serde_json::Value>,
     #[serde(default)]
     pub tool_call_id: Option<String>,
+    /// Model stamp from the store's [`MessageNode`](liberado_conversation_store is not linked here —
+    /// see server `get_conversation`): which model a user turn was dispatched to, or which model
+    /// produced an assistant turn. Absent on system/tool nodes and on pre-stamp history.
+    ///
+    /// Optional so older clients ignore it; required for Tier 3 P2's cross-check against
+    /// `GET /api/status` (failure-modes §6 — do not let a missing stamp silently pass).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// Response from `GET /api/conversations/{id}`. Not just `Vec<ChatMessage>` directly at the top
@@ -356,6 +364,16 @@ pub struct ConversationHistoryResponse {
     /// `#[serde(default)]` so a client built before this field still decodes a newer daemon's reply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Whether a turn is in flight for this conversation right now.
+    ///
+    /// Here rather than on a probe endpoint because opening a conversation is exactly when a client
+    /// needs to know: after a reload the transcript alone cannot say whether the missing reply is
+    /// still coming or never will. A client that sees `true` attaches
+    /// (`GET /api/conversations/{id}/attach`) instead of re-sending, which would start a second turn.
+    ///
+    /// `#[serde(default)]` — false for an older daemon, which is also the safe reading.
+    #[serde(default)]
+    pub turn_running: bool,
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -837,10 +855,12 @@ mod tests {
                 {"function": {"name": "search", "arguments": "{\"q\":\"test\"}"}}
             ])),
             tool_call_id: None,
+            model: Some("test/model".into()),
         };
         let json = serde_json::to_value(&msg).unwrap();
         let back: ChatMessage = serde_json::from_value(json).unwrap();
         assert_eq!(back.role, "assistant");
+        assert_eq!(back.model.as_deref(), Some("test/model"));
         let tc = back.tool_calls.unwrap();
         assert_eq!(tc[0]["function"]["name"], "search");
     }
@@ -851,6 +871,32 @@ mod tests {
         let msg: ChatMessage = serde_json::from_value(json).unwrap();
         assert_eq!(msg.tool_calls, None);
         assert_eq!(msg.tool_call_id, None);
+        assert_eq!(msg.model, None);
+    }
+
+    #[test]
+    fn chat_message_model_roundtrips_and_omits_when_none() {
+        let with = ChatMessage {
+            role: "assistant".into(),
+            content: "hi".into(),
+            tool_calls: None,
+            tool_call_id: None,
+            model: Some("vendor/slug".into()),
+        };
+        let v = serde_json::to_value(&with).unwrap();
+        assert_eq!(v["model"], "vendor/slug");
+        let back: ChatMessage = serde_json::from_value(v).unwrap();
+        assert_eq!(back.model.as_deref(), Some("vendor/slug"));
+
+        let bare = ChatMessage {
+            role: "user".into(),
+            content: "q".into(),
+            tool_calls: None,
+            tool_call_id: None,
+            model: None,
+        };
+        let v = serde_json::to_value(&bare).unwrap();
+        assert!(v.get("model").is_none(), "None must skip_serializing");
     }
 
     #[test]
@@ -862,21 +908,34 @@ mod tests {
                     content: "hello".into(),
                     tool_calls: None,
                     tool_call_id: None,
+                    model: None,
                 },
                 ChatMessage {
                     role: "assistant".into(),
                     content: "hi there".into(),
                     tool_calls: None,
                     tool_call_id: None,
+                    model: Some("deepseek/v4".into()),
                 },
             ],
             profile: Some("basic-chat".into()),
+            turn_running: true,
         };
         let json = serde_json::to_value(&resp).unwrap();
         let back: ConversationHistoryResponse = serde_json::from_value(json).unwrap();
         assert_eq!(back.messages.len(), 2);
         assert_eq!(back.messages[0].role, "user");
         assert_eq!(back.messages[1].content, "hi there");
+        assert!(back.turn_running);
+    }
+
+    /// A daemon that predates `turn_running` omits the field, and a client must read that as "no
+    /// turn is running" — the reading that makes it re-send rather than attach to nothing.
+    #[test]
+    fn an_absent_turn_running_defaults_to_false() {
+        let json = serde_json::json!({ "messages": [] });
+        let back: ConversationHistoryResponse = serde_json::from_value(json).unwrap();
+        assert!(!back.turn_running);
     }
 
     // ── VaultInfo / ApiError ──────────────────────────────────

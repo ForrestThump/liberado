@@ -193,12 +193,24 @@ echo extract-ok
     Invoke-Ssh "bash -lc $(ConvertTo-SshSingleQuoted $extract)"
 
     # --- 4. Docker build (foreground; long) ---
-    Write-Step "docker build -t $Image (on homelab; may take a while)"
+    #
+    # GIT_SHA is what makes a live test worth anything: it lands in /etc/liberado-build-sha, an image
+    # label, and LIBERADO_BUILD_SHA, so "is the running daemon the code I just wrote" is a question
+    # with an answer. `deploy/homelab/deploy.sh` has always passed it; this path did not, so every
+    # image it built reported "unknown" and any behaviour observed afterwards had no provenance.
+    # The source packed above is the working tree, so the SHA is only honest when the tree is clean;
+    # a dirty tree is marked as such rather than claiming to be the commit it is merely near.
+    $sha = (& git rev-parse HEAD).Trim()
+    if (& git status --porcelain --untracked-files=no) {
+        $sha = "$sha-dirty"
+        Write-Host "  working tree is dirty - tagging image $sha" -ForegroundColor Yellow
+    }
+    Write-Step "docker build -t $Image (GIT_SHA=$sha; on homelab; may take a while)"
     $buildCmd = @"
 set -euo pipefail
 cd $RemoteBuild
 : > ~/liberado-build.log
-docker build -t $Image . 2>&1 | tee ~/liberado-build.log
+docker build --build-arg 'GIT_SHA=$sha' -t $Image . 2>&1 | tee ~/liberado-build.log
 "@
     # `docker build` writes its entire progress stream to stderr, so this is the call that most
     # obviously needs `Invoke-Native` — it was only ever surviving because the build's own `tee`
@@ -224,6 +236,10 @@ if (-not $SkipConfig) {
         "-o", "BatchMode=yes",
         (Join-Path $cfgLocal "topology.toml"),
         (Join-Path $cfgLocal "policy.toml"),
+        # The Tier 3 runner reads this from the mounted config dir (it runs inside the container,
+        # where this path is /config/conformance.toml). Shipping the binary without its config just
+        # moves the failure to run time.
+        (Join-Path $cfgLocal "conformance.toml"),
         "${SshHost}:${RemoteService}/config/"
     )
     if ($code -ne 0) { throw "config scp failed (exit $code)" }
@@ -265,6 +281,22 @@ Write-Host "  container running" -ForegroundColor Green
 
 # --- 7. Health ---
 Write-Step "Health checks"
+
+# Assert the container is running the image this run built. A recreate that quietly reused the old
+# image passes every other check here - it is running, it is healthy, it answers /api/status - and
+# the only thing wrong with it is that it is the previous build. Ask it what it is.
+if ($sha) {
+    $ErrorActionPreference = "Continue"
+    $liveSha = (& ssh -o BatchMode=yes -o ConnectTimeout=15 $SshHost `
+        "docker exec liberado cat /etc/liberado-build-sha 2>/dev/null || echo missing")
+    $ErrorActionPreference = "Stop"
+    $liveSha = ([string](@($liveSha)[-1])).Trim()
+    if ($liveSha -ne $sha) {
+        throw "container reports build-sha '$liveSha' but this run built '$sha' - the old image is still live"
+    }
+    Write-Host "  build-sha $liveSha confirmed live" -ForegroundColor Green
+}
+
 Invoke-Ssh "docker ps --filter name=^liberado`$ --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'; docker logs liberado --tail 30"
 Write-Host ""
 Write-Host "GET $ApiUrl/api/status" -ForegroundColor DarkGray

@@ -36,6 +36,7 @@ fn new_convo(title: &str) -> NewConversation {
         parent_conversation: None,
         spawned_by: None,
         ephemeral: false,
+        visibility: Default::default(),
         grant: Default::default(),
     }
 }
@@ -46,6 +47,7 @@ fn user_node(parent: Option<ulid::Ulid>, content: &str) -> NewNode {
         parent_id: parent,
         author: Author::User,
         message: Message::user(content),
+        model: None,
     }
 }
 
@@ -208,6 +210,7 @@ async fn tool_call_messages_round_trip() {
                 parent_id: None,
                 author: Author::Assistant,
                 message: assistant,
+                model: None,
             },
         )
         .await
@@ -221,6 +224,7 @@ async fn tool_call_messages_round_trip() {
                 parent_id: Some(asst_node.id),
                 author: Author::Tool,
                 message: Message::tool_result("call_1", "{\"hits\":3}"),
+                model: None,
             },
         )
         .await
@@ -454,6 +458,7 @@ async fn create_stores_parent_conversation_lineage() {
             parent_conversation: Some(parent.id),
             spawned_by: None,
             ephemeral: false,
+            visibility: Default::default(),
             grant: Default::default(),
         })
         .await
@@ -483,6 +488,7 @@ async fn create_stores_spawned_by_lineage() {
             parent_conversation: None,
             spawned_by: Some(node.id),
             ephemeral: false,
+            visibility: Default::default(),
             grant: Default::default(),
         })
         .await
@@ -505,6 +511,7 @@ fn new_incognito(title: &str) -> NewConversation {
         parent_conversation: None,
         spawned_by: None,
         ephemeral: true,
+        visibility: Default::default(),
         grant: Default::default(),
     }
 }

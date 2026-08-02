@@ -95,10 +95,16 @@ pub async fn models(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     }
 }
 
-/// `POST /api/models/select` — hot-swap the active model for subsequent completions without
-/// restarting the daemon. Body: `{"model":"…"}`. Same base URL / credentials; only the model
-/// field of the next chat-completions request changes. Also re-resolves the chat compaction
-/// trigger for the new face model.
+/// `POST /api/models/select` — choose the model for subsequent completions, without restarting.
+///
+/// Body: `{"model":"…"}` swaps the **daemon-wide** default, which is what every surface has always
+/// done. `{"model":"…","conversation":"<ulid>"}` instead binds the choice to that one chat: its next
+/// turn runs on that model and stamps it onto the log, after which the conversation stays there on
+/// its own. Nothing global changes, so other chats are untouched.
+///
+/// The per-conversation form is deliberately *not* durable at this point. There is nothing to record
+/// until a turn happens, and once one does the log carries it — a second stored copy would be a
+/// second thing to keep in sync with what actually ran.
 pub async fn select_model(
     State(state): State<Arc<AppState>>,
     Json(body): Json<SelectModelRequest>,
@@ -113,6 +119,40 @@ pub async fn select_model(
                 models: Vec::new(),
                 current: active_model(&state),
                 error: Some("model must be a non-empty string".into()),
+            }),
+        );
+    }
+
+    // Scoped to one conversation: record the pick and return without touching the shared provider.
+    if let Some(conversation) = body.conversation.as_deref() {
+        let Ok(id) = conversation.parse::<liberado_conversation_store::Ulid>() else {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(ModelsResponse {
+                    models: Vec::new(),
+                    current: active_model(&state),
+                    error: Some(format!("not a conversation id: {conversation}")),
+                }),
+            );
+        };
+        let Some(chat) = state.chat.as_ref() else {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(ModelsResponse {
+                    models: Vec::new(),
+                    current: None,
+                    error: Some("chat is disabled".into()),
+                }),
+            );
+        };
+        chat.select_model(id, model.clone());
+        tracing::info!(conversation = %id, model = %model, "model selected for one conversation");
+        return (
+            axum::http::StatusCode::OK,
+            Json(ModelsResponse {
+                models: Vec::new(),
+                current: Some(model),
+                error: None,
             }),
         );
     }
@@ -146,6 +186,10 @@ pub async fn select_model(
 #[derive(Deserialize)]
 pub struct SelectModelRequest {
     model: String,
+    /// Scope the choice to one conversation. Absent = the daemon-wide default, which is the
+    /// historical behaviour and stays the behaviour for callers that do not ask for otherwise.
+    #[serde(default)]
+    conversation: Option<String>,
 }
 
 /// `POST /api/mcp/reload` — re-read topology from the config dir and apply the MCP peer set

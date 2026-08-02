@@ -28,6 +28,7 @@ fn user_node(parent: Option<ulid::Ulid>, text: &str) -> NewNode {
         parent_id: parent,
         author: Author::User,
         message: Message::user(text),
+        model: None,
     }
 }
 
@@ -488,6 +489,7 @@ async fn chat_with_turns(store: &SessionStore, turns: &[(&str, &str)]) -> ulid::
                     parent_id: Some(u.id),
                     author: Author::Assistant,
                     message: Message::assistant(*a),
+                    model: None,
                 },
             )
             .await

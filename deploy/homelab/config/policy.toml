@@ -49,6 +49,12 @@ write_class = "agent_writable"
 zone = "sandbox"
 write_class = "agent_writable"
 
+# Live Tier 3 conformance suite residue (artifacts + runner reports). Only the `conformance`
+# grant may write here — that is the safety envelope for the suite, not polite goal text.
+[[zones]]
+zone = "conformance"
+write_class = "agent_writable"
+
 # The approval channel. Agents must not write here: `status` is the one proposal field outside the
 # integrity signature (so a human can flip it), which made it forgeable by anything holding a write
 # grant. Authority now lives in the ledger under `<LIBERADO_DATA_DIR>/`, and this closes the door
@@ -189,4 +195,14 @@ capabilities = [
     { ExecuteMcp = "liberado-python-interpreter-mcp" },
     { ExecuteMcp = "liberado-search-orchestrator-mcp" },
     "AskHuman",
+]
+
+# Tier 3 conformance profile: *strictly narrower* than `dispatcher` / domain fallback so P4 can
+# tell which grant was applied. Only the conformance zone + turbovault write/read for the probe note.
+[[grants]]
+component = "conformance"
+capabilities = [
+    { Read = { Vault = "conformance" } },
+    { Write = { Vault = "conformance" } },
+    { ExecuteMcp = "turbovault" },
 ]

@@ -36,7 +36,7 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`spec/
 
 | Gap | Why it matters |
 |-----|----------------|
-| **Surface UX** | You pick a **profile** that names a model, not a model directly. Explicit mid-chat “use model X for this thread” in WebUI (CH1), with consistent TUI/Telegram semantics, does not exist. |
+| ~~**Surface UX**~~ | **Closed 2026-08-01.** WebUI `/model` now binds a model to the open conversation. There is no stored "selected model": `MessageNode.model` records what each turn ran on and the next turn reads the last one back off the log, so a conversation stays where it was put without a second field to drift. A pick made before the first message rides `ChatRequest.model` on the request that creates the conversation — the earlier fallback swapped the daemon-wide default and so retuned every *other* chat. **TUI and Telegram `/model` remain daemon-wide**, which is now a real difference in meaning between surfaces rather than a shared limitation. |
 | **Dependent re-resolve** | CH3's compaction trigger is still **one shared number**: `resync_compaction_trigger_for_face_model` ([`state.rs:88`](../crates/server/src/state.rs#L88)) writes a single `trigger_tokens` on the shared engine ([`sessions.rs:279`](../crates/main-agent/src/sessions.rs#L279)). A conversation on a 200k model and one on a 64k model therefore compact at the same threshold. Fixing it means the trigger becoming per-conversation, which is CH3.1 territory. |
 
 *Resolved by the above, no longer gaps:* per-conversation model, sticky preference, and role clarity (the binding is the **chat face**, by construction).

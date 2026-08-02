@@ -95,6 +95,38 @@ pub struct MessageNode {
     /// The message body itself (role / content / tool_calls / tool_call_id), reused from
     /// [`liberado_provider`] so message content has a single definition.
     pub message: Message,
+    /// The model this node was dispatched to (on an [`Author::User`] node) or produced by (on an
+    /// [`Author::Assistant`] one). `None` on system, tool, and named nodes, and on every node
+    /// written before this field existed.
+    ///
+    /// # Why it lives here and not on the header
+    ///
+    /// This is the record of *which model a conversation is on*, and it is deliberately derived
+    /// rather than declared: a `header.model` field would be a second statement of the same fact,
+    /// free to drift from what actually ran (`failure-modes.md` §6). The log already says what
+    /// happened; reading the model off it means there is nothing to keep in sync, and the answer is
+    /// always what did happen rather than what someone intended.
+    ///
+    /// **It is not part of [`Message`], and must not become so.** The provider request is built
+    /// from `Message` alone, so a stamp here never reaches the model — which is right: a model
+    /// being told which model wrote each earlier turn is noise at best, and an invitation to
+    /// reason about its own identity at worst.
+    ///
+    /// # Reading it back
+    ///
+    /// Filter on [`Author`], never on `message.role`. Several things carry an assistant-role body
+    /// without being the chat model — subagent handoffs are authored `goal-session`, compaction
+    /// markers and tail copies are [`Author::Named`] — so a `role == Assistant` scan would migrate
+    /// a conversation onto whichever model a delegation happened to use.
+    ///
+    /// # Not recorded
+    ///
+    /// The *provider* behind the model. `Provider` exposes no identity beyond its base URL, and
+    /// threading the configured name through construction is a wider change than the routing this
+    /// enables. Model ids here are already provider-namespaced (`z-ai/glm-4.5-air`); add the
+    /// provider when two backends serve overlapping ids, which is when it starts to matter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// A conversation's header record — the first line of its log. Carries lineage so subagent trees
@@ -140,6 +172,12 @@ pub struct NewConversation {
     /// disk and it never appears in a listing. A store with no durable tier at all may ignore this —
     /// it is already telling the truth.
     pub ephemeral: bool,
+    /// Whether a human is attending this chat ([`Visibility::Foreground`](liberado_session::Visibility::Foreground))
+    /// or it is machinery / suite residue
+    /// ([`Visibility::Background`](liberado_session::Visibility::Background)). Background chats are
+    /// durable but filtered out of the sidebar (`list` skips them); defaults to foreground so every
+    /// existing `create` call site keeps today's behaviour.
+    pub visibility: liberado_session::Visibility,
     /// The session profile this conversation runs under, already resolved to capabilities by the
     /// caller. `Default` (empty, unnamed) means "no profile" — see [`ConversationHeader::grant`].
     ///
@@ -158,4 +196,7 @@ pub struct NewNode {
     pub parent_id: Option<Ulid>,
     pub author: Author,
     pub message: Message,
+    /// Which model this node was dispatched to (on a `User` node) or produced by (on an
+    /// `Assistant` one). See [`MessageNode::model`].
+    pub model: Option<String>,
 }

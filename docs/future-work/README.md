@@ -17,7 +17,7 @@ Index of forward-looking work.
 | [loops-plan.md](loops-plan.md) | Scheduled recurrence over goals |
 | [chat-search-plan.md](chat-search-plan.md) | History search tiers |
 | [context-compaction-plan.md](context-compaction-plan.md) | Chat context compaction (CH3 — Tier 1 landed; known residual documented) |
-| [roadmap.md](../roadmap.md) **CH4** | Mid-session / per-conversation model switching (open; process-wide hot-swap already exists) |
+| [durable-chat-turns-plan.md](durable-chat-turns-plan.md) | A turn outlives the connection watching it (**built + verified live** 2026-08-02; steps 4+ open) |
 | [context-compaction-viewport-rearchitecture.md](context-compaction-viewport-rearchitecture.md) | CH3.1 proposed: side-summary + viewport (not shipped) |
 | [coding-tui-plan.md](coding-tui-plan.md) | Agentic coding TUI: goal surface + kernel completion gate (S1–S7) |
 | [rust-native-agentic-coder-plan.md](rust-native-agentic-coder-plan.md) | Coding pack roadmap |

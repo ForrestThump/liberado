@@ -1,0 +1,30 @@
+# liberado-conformance — runner config (hand-run on the box for v1).
+# Lives next to topology.toml / policy.toml. See docs/future-work/live-conformance-tier3-build-spec.md.
+#
+#   liberado-conformance --config /path/to/this/file
+#
+# Secrets: LIBERADO_HOOK_CONFORMANCE_SECRET must be set in the environment (same pattern as other hooks).
+
+# Required — no production default. On the box, the daemon is local.
+base_url = "http://127.0.0.1:4201"
+
+# Whole-run wall-clock budget (seconds). Default if omitted: 1800 (30 minutes).
+budget_secs = 1800
+
+# Vault root as the daemon sees it (artifact check + report write).
+vault_path = "/vault"
+
+# Topology file for P1a schedule list (period estimation). Same dir as this file on the box.
+topology_path = "/config/topology.toml"
+
+hook_name = "conformance"
+hook_secret_ref = "LIBERADO_HOOK_CONFORMANCE_SECRET"
+profile_name = "conformance"
+
+# Empty = P1a–P4. Add "p5" to include the advisory delegate path.
+# paths = ["p1a", "p1b", "p2", "p3", "p4"]
+
+# When true, P5 failures set a non-zero exit code. Default false.
+# advisory_counts = false
+
+path_timeout_secs = 600

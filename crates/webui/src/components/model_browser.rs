@@ -3,9 +3,13 @@
 //! Data and action only: the filter box, keyboard handling and dismissal all live in
 //! [`crate::components::picker::Picker`], shared with the theme browser.
 //!
-//! Reads `GET /api/models` and switches with `POST /api/models/select`, which hot-swaps the daemon's
-//! active model without a restart. The catalog is a provider-wide list (hundreds of ids from
-//! OpenRouter), so filtering is not a nicety — it is the only way to reach anything.
+//! Reads `GET /api/models`. A pick applies to **this conversation only** — via
+//! `POST /api/models/select` with its id, or, when the chat has not started yet, by riding the
+//! request that creates it (`model` on `/api/chat/stream`). This picker never changes the daemon-wide
+//! default; that is deliberately not something a chat surface should be able to do by accident.
+//!
+//! The catalog is a provider-wide list (hundreds of ids from OpenRouter), so filtering is not a
+//! nicety — it is the only way to reach anything.
 
 use dioxus::prelude::*;
 
@@ -23,11 +27,27 @@ async fn fetch_models(api_base: String) -> Result<ModelsResponse, String> {
         .map_err(|e| format!("Bad response: {e}"))
 }
 
-async fn select_model(api_base: String, model: String) -> Result<ModelsResponse, String> {
+/// Bind the model to `conversation`.
+///
+/// Always scoped — this function is never called without an id. A chat that has not sent its first
+/// message has none, and that case is handled by the caller carrying the pick onto the request that
+/// creates the conversation, exactly as `/profile` does.
+///
+/// It used to fall back to the daemon-wide swap instead, on the reasoning that a conversation with
+/// no history takes the daemon default anyway. That reasoning only looked at the chat being picked
+/// *for* and ignored every other conversation on the daemon: the fallback silently retuned all of
+/// them. Worse, it was not an edge case — new chat, pick a model, type is the ordinary way anyone
+/// chooses one, so the common path was the broken one.
+async fn select_model(
+    api_base: String,
+    model: String,
+    conversation: String,
+) -> Result<ModelsResponse, String> {
     let url = format!("{api_base}/api/models/select");
+    let body = serde_json::json!({ "model": model, "conversation": conversation });
     let resp = reqwest::Client::new()
         .post(&url)
-        .json(&serde_json::json!({ "model": model }))
+        .json(&body)
         .send()
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
@@ -46,8 +66,12 @@ async fn select_model(api_base: String, model: String) -> Result<ModelsResponse,
 pub fn ModelBrowser(
     api_base: String,
     open: Signal<bool>,
-    /// Reports back so the chat can record the switch as a system message — the same place every
-    /// other slash-command outcome is narrated.
+    /// The conversation to scope the choice to. `None` before a chat has sent anything, in which
+    /// case the pick is handed straight back for the owner to carry — see [`select_model`].
+    conversation: Option<String>,
+    /// Reports the chosen model back. The owner narrates it *and*, when there was no conversation to
+    /// scope to, is responsible for putting it on the next message — without that the pick is
+    /// silently dropped.
     on_switched: EventHandler<String>,
 ) -> Element {
     // `mut` for the close-on-success below, which is wasm-only; on native that writer is cfg'd out.
@@ -72,16 +96,25 @@ pub fn ModelBrowser(
     // answers, so a refusal is shown rather than swallowed by a panel that already closed.
     let switch_to = {
         let base = api_base.clone();
+        let scope = conversation.clone();
         use_callback(move |model: String| {
             if busy() {
                 return;
             }
+            // No conversation yet: accept the pick and let the owner carry it onto the request that
+            // creates one. Same shape as `/profile`, and for the same reason — this is the turn the
+            // choice most obviously means to apply to.
+            let Some(scope) = scope.clone() else {
+                on_switched.call(model);
+                open.set(false);
+                return;
+            };
             busy.set(true);
             error.set(None);
             let base = base.clone();
             #[cfg(target_arch = "wasm32")]
             wasm_bindgen_futures::spawn_local(async move {
-                match select_model(base, model.clone()).await {
+                match select_model(base, model.clone(), scope).await {
                     Ok(_) => {
                         busy.set(false);
                         on_switched.call(model);
@@ -95,7 +128,7 @@ pub fn ModelBrowser(
             });
             #[cfg(not(target_arch = "wasm32"))]
             {
-                let _ = (base, model);
+                let _ = (base, model, scope);
                 busy.set(false);
             }
         })

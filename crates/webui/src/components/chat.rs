@@ -82,6 +82,9 @@ impl ChatMsg {
 struct LoadedConversation {
     messages: Vec<ChatMsg>,
     profile: Option<String>,
+    /// A turn is in flight for this conversation right now — so the transcript is missing a reply
+    /// that is still coming, and this client should attach rather than assume it was lost.
+    turn_running: bool,
 }
 
 async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConversation, String> {
@@ -108,6 +111,7 @@ async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConve
             .map(ChatMsg::from_wire)
             .collect(),
         profile: history.profile,
+        turn_running: history.turn_running,
     })
 }
 
@@ -150,6 +154,11 @@ pub fn Chat(
     let mut palette_dismissed = palette_dismissed;
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut model_browser_open = model_browser_open;
+    // A model chosen before this conversation existed. Local to the chat rather than owned by `App`:
+    // it is consumed by the very next message and means nothing outside that window. Cleared on send
+    // — see `submit` — so a pick cannot leak onto a *later* chat the user opens instead.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut pending_model = use_signal(|| None::<String>);
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut theme_browser_open = theme_browser_open;
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
@@ -214,11 +223,32 @@ pub fn Chat(
                 let conv_id = conv_id.clone();
                 wasm_bindgen_futures::spawn_local(async move {
                     if let Ok(loaded) = fetch_conversation(&base, &conv_id).await {
+                        let running = loaded.turn_running;
                         messages.set(loaded.messages);
                         // From the conversation, not remembered client-side: opening a chat in a
                         // second tab or after a restart must show the authority it actually runs
                         // under, not whatever this tab last set.
                         active_profile.set(loaded.profile);
+                        // A turn is still going: rejoin it. This is the reload case — the answer is
+                        // being written right now and the transcript cannot show it yet. Attaching
+                        // rather than re-sending matters, because re-sending would start a second
+                        // turn and charge for the same answer twice.
+                        if running {
+                            sending.set(true);
+                            attach_stream(
+                                &base,
+                                &conv_id,
+                                StreamTargets {
+                                    messages,
+                                    sending,
+                                    session,
+                                    active_conv_id,
+                                    should_set_title,
+                                    ghost_session,
+                                },
+                                &base,
+                            );
+                        }
                     }
                 });
             } else if ghost_session.read().is_none() {
@@ -310,9 +340,24 @@ pub fn Chat(
         }
     });
 
+    // Stop now means "stop doing this", not "stop showing me this".
+    //
+    // Closing the EventSource used to be the cancel: the daemon saw its receiver go and dropped the
+    // turn. Turns outlive their connection now, so closing alone would leave it running and only
+    // hide it. The request is what stops it; closing the stream is still done so this client also
+    // stops rendering.
+    let stop_base = api_base.clone();
     let mut stop_stream = move || {
         #[cfg(target_arch = "wasm32")]
-        crate::components::chat::close_current_stream();
+        {
+            if let Some(id) = session() {
+                let url = format!("{stop_base}/api/conversations/{id}/cancel");
+                wasm_bindgen_futures::spawn_local(async move {
+                    let _ = reqwest::Client::new().post(&url).send().await;
+                });
+            }
+            crate::components::chat::close_current_stream();
+        }
         sending.set(false);
     };
 
@@ -439,6 +484,9 @@ pub fn Chat(
             // Only meaningful when creating: an existing session's profile is already stored, and
             // the daemon ignores the field when a session id is present.
             active_profile(),
+            // Unlike the profile, this is honoured with or without a session id — a model is a
+            // property of a turn. Taken (not read) so it applies once and then lives on the log.
+            pending_model.take(),
         );
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -595,14 +643,24 @@ pub fn Chat(
                 ModelBrowser {
                     api_base: base_for_models.clone(),
                     open: model_browser_open,
+                    // Scope the pick to this chat once it has an id. Before that the browser hands
+                    // the choice back and `pending_model` below carries it onto the request that
+                    // creates the conversation.
+                    conversation: session(),
                     on_switched: move |model: String| {
-                        messages
-                            .write()
-                            .push(ChatMsg {
-                                role: "system",
-                                content: format!("Model switched to {model} (hot-swap, no restart)."),
-                                thinking_steps: Vec::new(),
-                            });
+                        // Held for the next message when there is no conversation yet. Dropping it
+                        // here is what sent the pick to the daemon-wide default instead, which
+                        // retuned every other chat.
+                        if session().is_none() {
+                            pending_model.set(Some(model.clone()));
+                        }
+                        messages.write().push(ChatMsg {
+                            role: "system",
+                            content: format!(
+                                "Model set to {model} for this conversation, from your next message. Other chats are unaffected."
+                            ),
+                            thinking_steps: Vec::new(),
+                        });
                     },
                 }
             }
@@ -1008,6 +1066,49 @@ struct StreamTargets {
     ghost_session: Signal<Option<String>>,
 }
 
+/// The `/api/chat/stream` URL for one turn.
+///
+/// Deliberately **not** `cfg(wasm32)` and deliberately pure: this is where a request parameter goes
+/// missing, and on the wasm-only path that can only be found by deploying and watching what the
+/// daemon does. `message` arrives already percent-encoded, since the caller needs it anyway.
+///
+/// The shape that matters: `session` / `incognito` / `profile` are mutually exclusive — the first
+/// says *which* conversation, the other two say how to open one — while `model` is orthogonal to all
+/// three and appends to whichever applied.
+fn stream_url(
+    api_base: &str,
+    encoded_message: &str,
+    session: Option<&str>,
+    incognito: bool,
+    pending_profile: Option<&str>,
+    pending_model: Option<&str>,
+) -> String {
+    let mut url = match session {
+        Some(id) => format!("{api_base}/api/chat/stream?message={encoded_message}&session={id}"),
+        // `true`, not `1`: axum's `Query` deserializes a bool through `FromStr`, which accepts only
+        // "true"/"false". `incognito=1` fails the whole extraction, so the request would 400 and the
+        // chat would simply not answer — a loud failure, but for a silly reason.
+        None if incognito => {
+            format!("{api_base}/api/chat/stream?message={encoded_message}&incognito=true")
+        }
+        // A profile picked before the first message has nowhere to be applied yet — the session it
+        // scopes does not exist. Carrying it on the request that *creates* the session is what makes
+        // the first turn run under it, which for a "basic chat" profile is the turn that matters.
+        None if pending_profile.is_some() => format!(
+            "{api_base}/api/chat/stream?message={encoded_message}&profile={}",
+            urlencoding::encode(pending_profile.unwrap_or_default())
+        ),
+        None => format!("{api_base}/api/chat/stream?message={encoded_message}"),
+    };
+    // Appended rather than folded into the match above, which is the whole point: as a fifth arm it
+    // would be dropped silently whenever a session id or a profile was also present — and a model
+    // that goes missing does not fail, it just answers on the wrong one.
+    if let Some(model) = pending_model.filter(|m| !m.is_empty()) {
+        url.push_str(&format!("&model={}", urlencoding::encode(model)));
+    }
+    url
+}
+
 #[cfg(target_arch = "wasm32")]
 fn open_stream(
     api_base: &str,
@@ -1017,6 +1118,52 @@ fn open_stream(
     incognito: bool,
     // A profile chosen before this conversation existed. Applied by the request that creates it.
     pending_profile: Option<String>,
+    // A model chosen for this turn. Unlike the profile, applies whether or not the conversation
+    // already exists — see `ChatRequest::model`.
+    pending_model: Option<String>,
+) {
+    let encoded = urlencoding::encode(message);
+    let url = stream_url(
+        api_base,
+        &encoded,
+        targets.session.read().as_deref(),
+        incognito,
+        pending_profile.as_deref(),
+        pending_model.as_deref(),
+    );
+    // **Whether this turn is opening a private session**, which is not the same question as whether
+    // the mode is on. If `session` is already set we are continuing an existing conversation, and no
+    // flag can retroactively make that one private. Conflating the two once destroyed a saved chat.
+    let opened_incognito = incognito && targets.session.read().is_none();
+    connect_stream(
+        &url,
+        api_base,
+        targets,
+        api_base_for_title,
+        opened_incognito,
+    );
+}
+
+/// Rejoin a turn already running for `conv_id`, without sending anything.
+///
+/// The reload path. The daemon replays what has already happened and then continues live, so the
+/// answer being written while the page was gone still lands on screen. Never opens an incognito
+/// session: attaching is by definition to a conversation that already exists.
+#[cfg(target_arch = "wasm32")]
+fn attach_stream(api_base: &str, conv_id: &str, targets: StreamTargets, api_base_for_title: &str) {
+    let url = format!("{api_base}/api/conversations/{conv_id}/attach");
+    connect_stream(&url, api_base, targets, api_base_for_title, false);
+}
+
+/// Open an SSE connection at `url` and wire it into `targets`. Shared by the send path and the
+/// reattach path, so a turn renders identically however this client came to be watching it.
+#[cfg(target_arch = "wasm32")]
+fn connect_stream(
+    url: &str,
+    api_base: &str,
+    targets: StreamTargets,
+    api_base_for_title: &str,
+    opened_incognito: bool,
 ) {
     let StreamTargets {
         mut messages,
@@ -1031,34 +1178,6 @@ fn open_stream(
     use wasm_bindgen::closure::Closure;
     use web_sys::{EventSource, MessageEvent};
 
-    let encoded = urlencoding::encode(message);
-    // **Whether this turn is opening a private session**, which is not the same question as whether
-    // the mode is on. If `session` is already set we are continuing an existing conversation, and no
-    // flag can retroactively make that one private.
-    //
-    // Everything below keys off *this*, never off `incognito`. Conflating the two is what destroyed
-    // a saved conversation: with the mode armed but no private session yet, selecting a saved chat
-    // and sending a message made the SSE handler record that chat's id as the ghost — and the
-    // teardown then deleted it. A session may only be treated as disposable if we watched it get
-    // created as one.
-    let opened_incognito = incognito && session.read().is_none();
-    let url = match session.read().as_ref() {
-        Some(id) => format!("{api_base}/api/chat/stream?message={encoded}&session={id}"),
-        // `true`, not `1`: axum's `Query` deserializes a bool through `FromStr`, which accepts only
-        // "true"/"false". `incognito=1` fails the whole extraction, so the request would 400 and the
-        // chat would simply not answer — a loud failure, but for a silly reason.
-        None if incognito => {
-            format!("{api_base}/api/chat/stream?message={encoded}&incognito=true")
-        }
-        // A profile picked before the first message has nowhere to be applied yet — the session it
-        // scopes does not exist. Carrying it on the request that *creates* the session is what makes
-        // the first turn run under it, which for a "basic chat" profile is the turn that matters.
-        None if pending_profile.is_some() => format!(
-            "{api_base}/api/chat/stream?message={encoded}&profile={}",
-            urlencoding::encode(pending_profile.as_deref().unwrap_or_default())
-        ),
-        None => format!("{api_base}/api/chat/stream?message={encoded}"),
-    };
     let ghost_base = api_base.to_string();
     let source = match EventSource::new(&url) {
         Ok(s) => Rc::new(s),
@@ -1206,7 +1325,11 @@ fn open_stream(
             // Skipped for incognito: a title exists to label a row in the sidebar, and an incognito
             // session has no row. Naming it would only mean sending the first thing the user typed
             // back over the wire for a field nobody will ever read.
-            if should_set_title() && !incognito {
+            //
+            // Keyed on `opened_incognito`, not the mode flag — the rule this file already states
+            // elsewhere. With the mode armed but a *saved* chat open, that chat does have a row and
+            // does want a title; reading the raw flag left it permanently untitled.
+            if should_set_title() && !opened_incognito {
                 should_set_title.set(false);
                 let title_opt = messages.read().iter().find(|m| m.role == "user").map(|m| {
                     let t = m.content.trim();
@@ -1299,5 +1422,66 @@ fn open_stream(
         });
         source.set_onerror(Some(on_err.as_ref().unchecked_ref()));
         on_err.forget();
+    }
+}
+
+#[cfg(test)]
+mod stream_url_tests {
+    use super::stream_url;
+
+    const BASE: &str = "http://d";
+
+    fn url(session: Option<&str>, model: Option<&str>) -> String {
+        stream_url(BASE, "hi", session, false, None, model)
+    }
+
+    /// The regression this function was extracted for. A model picked for an existing conversation
+    /// has to survive alongside `session`; when the two were arms of one match it could not, and the
+    /// symptom was a turn quietly answering on the wrong model rather than any kind of error.
+    #[test]
+    fn a_model_survives_a_session_id() {
+        let u = url(Some("01ABC"), Some("openai/gpt-5"));
+        assert!(u.contains("&session=01ABC"), "{u}");
+        assert!(u.contains("&model=openai%2Fgpt-5"), "{u}");
+    }
+
+    /// The case that caused the live failure: no conversation yet, so the pick rides the request
+    /// that creates one instead of going anywhere near the daemon-wide default.
+    #[test]
+    fn a_model_rides_the_request_that_creates_the_conversation() {
+        let u = url(None, Some("z-ai/glm-4.5-air"));
+        assert!(!u.contains("session="), "{u}");
+        assert!(u.contains("&model=z-ai%2Fglm-4.5-air"), "{u}");
+    }
+
+    #[test]
+    fn a_model_survives_incognito_and_a_profile() {
+        let inc = stream_url(BASE, "hi", None, true, None, Some("m/1"));
+        assert!(
+            inc.contains("incognito=true") && inc.contains("&model=m%2F1"),
+            "{inc}"
+        );
+        let prof = stream_url(BASE, "hi", None, false, Some("basic"), Some("m/1"));
+        assert!(
+            prof.contains("profile=basic") && prof.contains("&model=m%2F1"),
+            "{prof}"
+        );
+    }
+
+    /// Absent and empty both mean "say nothing", so the daemon falls through to its own precedence
+    /// rather than being handed a blank slug to resolve.
+    #[test]
+    fn no_model_means_no_parameter() {
+        assert!(!url(Some("01ABC"), None).contains("model="));
+        assert!(!url(Some("01ABC"), Some("")).contains("model="));
+    }
+
+    /// `session` names an existing conversation; `incognito` and `profile` describe how to open a new
+    /// one. Asserted so the exclusivity survives someone appending a parameter the way `model` is.
+    #[test]
+    fn a_session_id_suppresses_the_creation_only_parameters() {
+        let u = stream_url(BASE, "hi", Some("01ABC"), true, Some("basic"), None);
+        assert!(u.contains("&session=01ABC"), "{u}");
+        assert!(!u.contains("incognito") && !u.contains("profile"), "{u}");
     }
 }

@@ -372,6 +372,16 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
             "/api/conversations/{id}/profile",
             axum::routing::post(api::set_conversation_profile),
         )
+        // Rejoin a turn after a reload, and stop one on purpose. Both exist because a turn no
+        // longer belongs to the connection that started it.
+        .route(
+            "/api/conversations/{id}/attach",
+            axum::routing::get(api::attach_conversation),
+        )
+        .route(
+            "/api/conversations/{id}/cancel",
+            axum::routing::post(api::cancel_conversation_turn),
+        )
         .route("/api/profiles", axum::routing::get(api::list_profiles))
         .route(
             "/api/hooks/{name}",

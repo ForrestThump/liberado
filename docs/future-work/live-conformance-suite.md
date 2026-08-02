@@ -67,9 +67,18 @@ tests whether the *model* can actually drive the machinery.
 
 ### Tier 3 — against the **deployed daemon**, one run per path, on a schedule
 
-**Status**: open, and the highest-value unbuilt thing here (added 2026-07-28).
-**Building it?** This section is the argument; the deliverables, safety envelope and per-path
-assertion contract are in [`live-conformance-tier3-build-spec.md`](live-conformance-tier3-build-spec.md).
+**Status**: **built and passing live** (2026-08-02). First green run against the deployed daemon:
+`p1b` `p2` `p3` `p4` pass, `p1a` correctly **skipped** by its restart gate on a freshly recreated
+container, overall exit 0. Verified independently of the runner's own report — P1b's artifact
+(`conformance/artifacts/<run_id>.md`) held exactly `CONFORMANCE_OK <run_id>`, and P4's session
+carried the narrow `conformance` grant rather than the dispatcher fallback, which is what makes
+that assertion mean anything. **v1 remains hand-run**; scheduling is still deliberately not built.
+**Building it?** This section is the argument; the deliverables, safety envelope, per-path
+assertion contract, and **settled packaging decisions** (runs on the homelab box; **v1 hand-run
+only** — no host cron until mature; every-run vault reports under `conformance/`; Telegram notify
+deferred to a later Liberado schedule on `deliver_cron`; 30‑minute default budget; optional
+`HookConfig.profile`; P1b artifact `conformance/artifacts/<run_id>.md`) are in
+[`live-conformance-tier3-build-spec.md`](live-conformance-tier3-build-spec.md).
 
 Tier 1 is in-process with a `MockProvider`. That is the right design and it is why it runs in CI —
 but it means Tier 1 cannot see anything that only exists on a real deployment: the actual config on
@@ -108,12 +117,12 @@ nothing on the 28th — the session started and then failed every action. The as
 
 #### Cheap companion: seam tests
 
-Independent of Tier 3 and worth doing first because it is nearly free — for every "we send X to the
-provider" abstraction, one unit test inspecting the **built request body**. Two now exist
-(`a_schema_that_constrains_shape_is_sent_as_json_schema`,
-`a_shapeless_schema_falls_back_to_json_object`). That class needs a sweep: tools, temperature,
-max_tokens, and whatever the next boundary carries. This is what would have caught the schema bug in
-CI years earlier than a live run would.
+Independent of Tier 3 and mostly **already landed** on main — for every "we send X to the provider"
+abstraction, unit tests inspecting the **built request body** (and, one crate up, the HTTP body for
+`reasoning` / stream flags). The schema dual-arm tests plus `wire_body_seam_tests` in
+`crates/provider/src/openai_compat.rs`, and the capture tests in `provider-openai-compat`, are the
+thing that would have caught the schema bug in CI years earlier than a live run would. Tier 3 does
+not re-do that work; it covers the paths only a live box can see.
 
 #### Why this and not more unit tests
 
@@ -155,6 +164,7 @@ Tier 1 first, and probably L5/L6/L8 first within it — they are the cheapest an
 security-relevant behaviour. Tier 2 only after Tier 1 is green, because a flaky model-in-the-loop test
 sitting on top of unverified plumbing tells you nothing you can act on.
 
-Tier 3 is now the open one, and the **seam tests** under it come first: they are unit-cheap, run in
-CI, and would have caught the defect that cost a day of crons. Then the cron path, because it is the
-one that has already failed silently. The remaining paths in whatever order they next surprise you.
+Tier 3 is now the open one (seam tests are no longer the blocker — they largely shipped). Build the
+runner and the box config next; within the suite, prefer the cron path first, because it is the one
+that has already failed silently. The remaining paths in whatever order they next surprise you.
+Details: [`live-conformance-tier3-build-spec.md`](live-conformance-tier3-build-spec.md).

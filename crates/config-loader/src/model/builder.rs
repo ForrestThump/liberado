@@ -562,6 +562,7 @@ max_turns = 44
             secret_ref: format!("{}_SECRET", name.to_uppercase()),
             goal: "do something".into(),
             pool: None,
+            profile: None,
         }
     }
 
@@ -622,6 +623,28 @@ max_turns = 44
         schedule.profile = Some("research".into());
         cfg.topology.schedules = vec![schedule];
         assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn a_hook_naming_enabled_session_profile_passes_validation() {
+        let mut cfg = config_with_profiles();
+        let mut hook = hook_config("probe");
+        hook.profile = Some("research".into());
+        cfg.topology.hooks = vec![hook];
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn a_hook_naming_unknown_session_profile_fails_validation() {
+        let mut cfg = config_with_profiles();
+        let mut hook = hook_config("probe");
+        hook.profile = Some("typo-not-a-profile".into());
+        cfg.topology.hooks = vec![hook];
+        let err = cfg.validate().expect_err("unknown profile must fail");
+        assert!(
+            err.to_string().contains("profile") && err.to_string().contains("typo-not-a-profile"),
+            "error should name the bad profile: {err}"
+        );
     }
 
     #[test]
@@ -970,6 +993,7 @@ clarify_threshold_read = 0.8
                 secret_ref: "HOOK1_SECRET".into(),
                 goal: "do something".into(),
                 pool: None,
+                profile: None,
             })
             .build()
             .expect("valid config");

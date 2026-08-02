@@ -17,6 +17,7 @@ use futures::{Stream, StreamExt};
 use liberado_conversation_store::Ulid;
 use liberado_executor::AgentEvent;
 use serde::Deserialize;
+use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -38,6 +39,14 @@ pub struct ChatRequest {
     /// ignored rather than quietly half-honored.
     #[serde(default)]
     pub incognito: bool,
+    /// Open this chat as [`Visibility::Background`](liberado_session::Visibility::Background):
+    /// durable, but filtered out of the sidebar. Same rule as `incognito` / `profile` — only
+    /// consulted when `session` is absent (it describes how to *create* one).
+    ///
+    /// Live conformance (and any other machinery that must not pollute the human's chat list) sets
+    /// this rather than inventing a parallel session path.
+    #[serde(default)]
+    pub background: bool,
     /// Session profile for a chat being **created** by this request.
     ///
     /// Same rule as `incognito`: consulted only when `session` is absent, because it describes how to
@@ -49,6 +58,21 @@ pub struct ChatRequest {
     /// the turn you wanted scoped.
     #[serde(default)]
     pub profile: Option<String>,
+    /// Run **this turn** on this model.
+    ///
+    /// Unlike `incognito` and `profile`, this is honoured whether or not `session` is set: a model is
+    /// a property of a turn, not of how a conversation was opened. The turn stamps it onto the log,
+    /// after which the conversation stays there on its own and this field is only needed to *change*
+    /// the answer.
+    ///
+    /// It exists because a chat has no id until its first message creates one, so a client cannot
+    /// scope a model to a conversation that does not exist yet — the same gap `profile` above was
+    /// added to close, and for the same reason. Without it the only thing a client could do with a
+    /// pick made before the first message was swap the daemon-wide default, which silently retuned
+    /// every *other* conversation. Carrying the choice on the message that opens the chat means the
+    /// common path — new chat, pick a model, type — never touches global state at all.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// Streaming chat â€” the shared client contract (see `docs/reference/api.md`). Returns
@@ -60,8 +84,17 @@ pub struct ChatRequest {
 pub async fn chat_stream_post(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ChatRequest>,
-) -> Sse<SseBody> {
-    chat_stream_core(state, req.message, req.session, req.incognito, req.profile).await
+) -> axum::response::Response {
+    chat_stream_core(
+        state,
+        req.message,
+        req.session,
+        req.incognito,
+        req.background,
+        req.profile,
+        req.model,
+    )
+    .await
 }
 
 /// `GET /api/chat/stream?message=â€¦` â€” the `EventSource`-friendly variant (browsers can't `POST` an
@@ -69,8 +102,17 @@ pub async fn chat_stream_post(
 pub async fn chat_stream_get(
     State(state): State<Arc<AppState>>,
     Query(req): Query<ChatRequest>,
-) -> Sse<SseBody> {
-    chat_stream_core(state, req.message, req.session, req.incognito, req.profile).await
+) -> axum::response::Response {
+    chat_stream_core(
+        state,
+        req.message,
+        req.session,
+        req.incognito,
+        req.background,
+        req.profile,
+        req.model,
+    )
+    .await
 }
 
 /// The SSE item stream `chat_stream_core` returns. Boxed because the function has several early
@@ -78,13 +120,38 @@ pub async fn chat_stream_get(
 /// differ â€” one named type lets them share a return.
 type SseBody = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
 
+/// The heartbeat every SSE response here carries.
+///
+/// A turn that delegates sends **nothing** between the `delegate` tool starting and the subagent
+/// finishing — observed at 3m28s on 2026-08-01, and there is no upper bound on it. Without a
+/// heartbeat that is an idle connection, and every idle timeout between the browser and the daemon
+/// (proxy, mobile radio, load balancer) is free to close it. When one does, the turn is cancelled
+/// and its answer discarded, so the cost of a missing keep-alive is the whole reply.
+///
+/// The payload is an SSE comment: `EventSource` ignores it per spec, and the native parser skips
+/// comment-only blocks (`chat_client_contract::native` — `comments_only_block_returns_nothing`), so
+/// no client sees a frame for it.
+pub(super) fn keep_alive() -> axum::response::sse::KeepAlive {
+    axum::response::sse::KeepAlive::new().interval(KEEP_ALIVE_INTERVAL)
+}
+
+/// How often an otherwise-silent stream emits a heartbeat.
+///
+/// Named so it is a decision rather than a literal: it has to stay comfortably under the shortest
+/// idle timeout anywhere between a browser and the daemon — proxies commonly use 60s — with room to
+/// miss a tick. Raising it past that silently reintroduces the disconnect it exists to prevent, and
+/// nothing else in the system would notice.
+pub(super) const KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+
 async fn chat_stream_core(
     state: Arc<AppState>,
     message: String,
     session: Option<Ulid>,
     incognito: bool,
+    background: bool,
     profile: Option<String>,
-) -> Sse<SseBody> {
+    model: Option<String>,
+) -> axum::response::Response {
     let (tx, rx) = mpsc::channel::<AgentEvent>(64);
 
     let Some(sessions) = state.chat.clone() else {
@@ -96,7 +163,9 @@ async fn chat_stream_core(
                 ))
                 .await;
         });
-        return Sse::new(stream_with_session(None, rx));
+        return Sse::new(stream_with_session(None, rx))
+            .keep_alive(keep_alive())
+            .into_response();
     };
 
     // Resolve the session up front (creating one on the first message), so we can announce it to the
@@ -124,68 +193,198 @@ async fn chat_stream_core(
                 tokio::spawn(async move {
                     let _ = tx.send(AgentEvent::Error(msg)).await;
                 });
-                return Sse::new(stream_with_session(None, rx));
+                return Sse::new(stream_with_session(None, rx))
+                    .keep_alive(keep_alive())
+                    .into_response();
             }
         },
     };
 
     let session = match session {
         Some(id) => id,
-        None => match if incognito {
-            sessions.create_incognito(None).await
-        } else if let Some(grant) = grant {
-            sessions.create_with_grant(None, grant).await
-        } else {
-            sessions.create(None).await
-        } {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::warn!(error = %e, "chat stream could not create a conversation");
-                tokio::spawn(async move {
-                    let _ = tx.send(AgentEvent::Error(e.to_string())).await;
-                });
-                return Sse::new(stream_with_session(None, rx));
-            }
-        },
-    };
-
-    // `turn_tx` drives the turn; `tx` is kept to detect the client leaving and to send the terminal
-    // event. Cloning is cheap and keeps the two uses from tangling borrows below.
-    let turn_tx = tx.clone();
-    tokio::spawn(async move {
-        // Race the turn against the client disconnecting (`tx.closed()` resolves when the SSE
-        // receiver is dropped â€” the browser called `EventSource.close()` or the connection dropped).
-        // On disconnect we drop the turn future, which cancels the in-flight model/tool work *and*
-        // (inside `ChatSessions`/`Conversation`) rolls the partial turn back and persists nothing, so
-        // a stopped turn leaves the store clean and the per-session lock is released.
-        tokio::select! {
-            // Tag the face turn's inference with the chat session id so its latency records join the
-            // dispatch work it triggers (the dispatch pack keys the same space via correlation_id).
-            result = liberado_provider::latency::with_correlation(
-                session.to_string(),
-                sessions.turn_stream(session, &message, &turn_tx),
-            ) => {
-                let terminal = match result {
-                    Ok(()) => AgentEvent::Done,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "chat stream turn failed");
-                        AgentEvent::Error(e.to_string())
-                    }
-                };
-                let _ = tx.send(terminal).await;
-            }
-            _ = tx.closed() => {
-                tracing::info!("chat stream cancelled by client; persisted nothing");
+        None => {
+            // Incognito wins over background when both are set: RAM-only already never lists.
+            // Background + grant is the conformance path (durable, out of sidebar, scoped).
+            let created = if incognito {
+                sessions.create_incognito(None).await
+            } else if background {
+                sessions
+                    .create_background(None, grant.unwrap_or_default())
+                    .await
+            } else if let Some(grant) = grant {
+                sessions.create_with_grant(None, grant).await
+            } else {
+                sessions.create(None).await
+            };
+            match created {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::warn!(error = %e, "chat stream could not create a conversation");
+                    tokio::spawn(async move {
+                        let _ = tx.send(AgentEvent::Error(e.to_string())).await;
+                    });
+                    return Sse::new(stream_with_session(None, rx))
+                        .keep_alive(keep_alive())
+                        .into_response();
+                }
             }
         }
-    });
+    };
 
-    Sse::new(stream_with_session(Some(session), rx))
+    // Now that the conversation has an id, a model asked for on the request becomes a pick scoped to
+    // it. Recorded through the same seam `POST /api/models/select` uses, rather than a second way of
+    // saying the same thing: the turn below consumes it and stamps it onto the log.
+    //
+    // This is deliberately after creation, which is the whole point — before it there is no id to
+    // scope to, and that is what made a client reach for the daemon-wide default instead.
+    if let Some(model) = model {
+        sessions.select_model(session, model);
+    }
+
+    // Start the turn, or join the one already running. The response is now a *subscriber*: dropping
+    // it ends the viewing, not the work. That is the whole change - a refresh, a suspended tab, or a
+    // client that simply times out used to cost the answer, because the turn was owned by the
+    // connection watching it.
+    //
+    // `tx` is no longer the turn's channel; it only carried pre-turn failure events, so it goes.
+    drop(tx);
+    let (replay, live) = sessions.start_or_attach(session, &message);
+
+    Sse::new(attached_stream(Some(session), replay, live))
+        .keep_alive(keep_alive())
+        .into_response()
 }
 
 /// Prepend a `session` SSE event (the conversation id) ahead of the agent event stream, so the
 /// client records the id and sends it back as `?session=â€¦` on the next turn. `None` means no session
 /// was resolved (chat disabled or creation failed) â€” only the body's `failed` event is emitted.
+/// `GET /api/conversations/{id}/attach` - SSE: join a turn already in flight, without starting one.
+///
+/// What a surface calls after a reload. It has a conversation open and needs to know whether
+/// anything is still happening in it; posting the message again would start a second turn, and
+/// polling the transcript would show nothing until the turn ended.
+///
+/// `409` when nothing is running - not `404`, which would say the conversation does not exist.
+pub async fn attach_conversation(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> axum::response::Response {
+    let Some(sessions) = state.chat.as_ref() else {
+        return chat_disabled();
+    };
+    let Ok(session) = id.parse::<Ulid>() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: format!("not a conversation id: {id}"),
+            }),
+        )
+            .into_response();
+    };
+    match sessions.attach(session) {
+        Some((replay, live)) => Sse::new(attached_stream(Some(session), replay, live))
+            .keep_alive(keep_alive())
+            .into_response(),
+        None => (
+            StatusCode::CONFLICT,
+            Json(ApiError {
+                error: "no turn is running for this conversation".into(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/conversations/{id}/cancel` - stop the turn running for this conversation.
+///
+/// The explicit stop. It has to exist because closing the stream no longer cancels anything: that
+/// used to be the only way to halt a turn, and detaching the turn from the connection would
+/// otherwise have removed the stop button entirely rather than fixing it.
+///
+/// Cancelling still persists nothing - the same rollback a disconnect used to give. What changed is
+/// only the trigger: from "nobody is watching" to "someone asked".
+pub async fn cancel_conversation_turn(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> axum::response::Response {
+    let Some(sessions) = state.chat.as_ref() else {
+        return chat_disabled();
+    };
+    let Ok(session) = id.parse::<Ulid>() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: format!("not a conversation id: {id}"),
+            }),
+        )
+            .into_response();
+    };
+    if sessions.cancel_turn(session) {
+        tracing::info!(session = %session, "chat turn cancelled by request; persisted nothing");
+        StatusCode::ACCEPTED.into_response()
+    } else {
+        (
+            StatusCode::CONFLICT,
+            Json(ApiError {
+                error: "no turn is running for this conversation".into(),
+            }),
+        )
+            .into_response()
+    }
+}
+
+/// The shared "chat is off" response for the endpoints above.
+fn chat_disabled() -> axum::response::Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ApiError {
+            error: "chat is disabled".into(),
+        }),
+    )
+        .into_response()
+}
+
+/// The SSE body for a client attached to a turn: the session id, everything that has already
+/// happened, then the live feed.
+///
+/// Replay-then-live is what makes a reconnect useful rather than merely non-destructive. A client
+/// that reattaches three seconds into an answer gets those three seconds, not a blank pane that
+/// fills in from wherever the turn happens to be.
+///
+/// A `Lagged` receiver is skipped rather than closed: falling behind costs that client some tokens,
+/// and ending its stream instead would turn a slow reader into a lost answer, which is the failure
+/// this whole change exists to remove. The terminal event still arrives.
+fn attached_stream(
+    session: Option<Ulid>,
+    replay: Vec<AgentEvent>,
+    live: broadcast::Receiver<AgentEvent>,
+) -> SseBody {
+    let head = futures::stream::once(async move {
+        match session {
+            Some(id) => Ok(Event::default().event("session").data(id.to_string())),
+            None => Ok(Event::default().comment("no session")),
+        }
+    });
+    let caught_up = futures::stream::iter(replay.into_iter().map(|e| Ok(to_sse(e))));
+    let body = async_stream::stream! {
+        let mut live = live;
+        loop {
+            match live.recv().await {
+                Ok(event) => {
+                    let terminal = matches!(event, AgentEvent::Done | AgentEvent::Error(_));
+                    yield Ok(to_sse(event));
+                    if terminal {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+    Box::pin(head.chain(caught_up).chain(body))
+}
+
 fn stream_with_session(session: Option<Ulid>, rx: mpsc::Receiver<AgentEvent>) -> SseBody {
     let head = futures::stream::once(async move {
         match session {
@@ -252,6 +451,13 @@ pub async fn chat(
             Err(e) => return chat_error(e),
         },
     };
+
+    // Same rule as the streaming path: the model rides the message, scoped to the conversation the
+    // message belongs to. Both handlers honour it or neither should — a field that works on one of
+    // two endpoints is a trap for whoever uses the other.
+    if let Some(model) = req.model {
+        sessions.select_model(session, model);
+    }
 
     match sessions.turn(session, &req.message).await {
         Ok(reply) => Json(chat_client_contract::ChatResponse {
@@ -555,12 +761,12 @@ pub async fn get_conversation(
         )
             .into_response();
     };
-    match sessions.history(id).await {
-        Ok(messages) => {
-            let messages: Vec<ChatMessage> = messages
-                .into_iter()
-                .map(chat_message_from_provider)
-                .collect();
+    match sessions.history_nodes(id).await {
+        Ok(nodes) => {
+            // Nodes carry `model` (which Message alone does not). Dropping the stamp here is what
+            // made Tier 3 P2's model cross-check vacuous — every history reply had no model field.
+            let messages: Vec<ChatMessage> =
+                nodes.into_iter().map(chat_message_from_node).collect();
             // Read from the session's own header rather than tracked client-side: a conversation
             // opened in a second tab, or after a restart, must show the authority it actually runs
             // under.
@@ -569,7 +775,14 @@ pub async fn get_conversation(
                 .session(id)
                 .await
                 .and_then(|h| h.grant.profile);
-            Json(ConversationHistoryResponse { messages, profile }).into_response()
+            Json(ConversationHistoryResponse {
+                messages,
+                profile,
+                // Asked at read time, not remembered: a client opening this conversation needs to
+                // know whether the reply it cannot see is still coming.
+                turn_running: sessions.turn_running(id),
+            })
+            .into_response()
         }
         Err(liberado_main_agent::SessionError::Store(
             liberado_conversation_store::StoreError::NotFound(_),
@@ -584,11 +797,14 @@ pub async fn get_conversation(
     }
 }
 
-/// Converts one stored `liberado_provider::Message` (the internal, richer type
-/// `ChatSessions::history` returns) into the wire `ChatMessage` â€” the single conversion point that
-/// keeps `GET /api/conversations/{id}` honoring `chat-client-contract` instead of leaking an
+/// Converts one stored transcript node into the wire `ChatMessage` — the single conversion point
+/// that keeps `GET /api/conversations/{id}` honoring `chat-client-contract` instead of leaking an
 /// internal type through a hand-rolled `serde_json::json!` literal.
-fn chat_message_from_provider(m: liberado_provider::Message) -> ChatMessage {
+///
+/// Carries [`MessageNode::model`] so clients (and the Tier 3 suite) can cross-check which model
+/// actually ran a turn without a second API.
+fn chat_message_from_node(n: liberado_conversation_store::MessageNode) -> ChatMessage {
+    let m = n.message;
     let role = match m.role {
         liberado_provider::Role::System => "system",
         liberado_provider::Role::User => "user",
@@ -602,6 +818,7 @@ fn chat_message_from_provider(m: liberado_provider::Message) -> ChatMessage {
             .then(|| serde_json::to_value(&m.tool_calls).ok())
             .flatten(),
         tool_call_id: m.tool_call_id,
+        model: n.model,
     }
 }
 
@@ -647,6 +864,7 @@ mod tests {
     use axum::Router;
     use axum::body::Body;
     use axum::http::Request;
+    use liberado_conversation_store::ConversationStore;
     use liberado_executor::{Budget, Executor};
     use liberado_main_agent::ChatSessions;
     use liberado_provider::MockProvider;
@@ -665,10 +883,15 @@ mod tests {
     }
 
     async fn harness() -> Harness {
+        harness_scripted(vec![]).await
+    }
+
+    /// A harness whose provider will actually answer, for the tests that need a turn to complete.
+    async fn harness_scripted(script: Vec<liberado_provider::CompletionResponse>) -> Harness {
         let dir = tempfile::tempdir().unwrap();
         let sessions = Arc::new(SessionStore::open(dir.path()).await);
         let executor = Executor::new(
-            Arc::new(MockProvider::with_script("mock", vec![])),
+            Arc::new(MockProvider::with_script("mock", script)),
             Budget::default(),
         );
         let chat = Arc::new(ChatSessions::new(
@@ -686,6 +909,7 @@ mod tests {
                 "/api/conversations/{id}",
                 axum::routing::delete(super::delete_conversation),
             )
+            .route("/api/chat", axum::routing::post(super::chat))
             .with_state(state.clone());
         Harness {
             app,
@@ -708,6 +932,177 @@ mod tests {
             .await
             .unwrap()
             .status()
+    }
+
+    /// The heartbeat, on the real response the handler returns.
+    ///
+    /// Asserted because its absence is invisible: a stream with no keep-alive looks identical to one
+    /// with a keep-alive that has simply not ticked yet, and the symptom shows up minutes later as a
+    /// dropped connection on someone else's machine. On 2026-08-01 a delegated turn sent nothing for
+    /// 3m28s and the connection died before the answer arrived.
+    ///
+    /// `start_paused` runs tokio's clock on demand: the stream below never yields, so time advances
+    /// straight to the heartbeat's timer and the test finishes instantly rather than waiting the real
+    /// 15 seconds.
+    #[tokio::test(start_paused = true)]
+    async fn an_idle_stream_still_sends_a_heartbeat() {
+        use http_body_util::BodyExt;
+
+        let idle = Box::pin(futures::stream::pending::<Result<Event, Infallible>>()) as SseBody;
+        let response = Sse::new(idle)
+            .keep_alive(super::keep_alive())
+            .into_response();
+
+        // Bounded, so losing the keep-alive fails this test instead of hanging it. Without a
+        // heartbeat the body never yields, and an unbounded await would block CI rather than report.
+        // The bound is virtual time too, and later than the heartbeat, so the heartbeat still wins.
+        let frame =
+            tokio::time::timeout(super::KEEP_ALIVE_INTERVAL * 4, response.into_body().frame())
+                .await
+                .expect("no heartbeat arrived: an idle stream produced nothing before the deadline")
+                .expect("an idle stream must still produce a frame")
+                .expect("the heartbeat frame must not be an error");
+        let bytes = frame.into_data().expect("a data frame");
+
+        // An SSE comment: the wire form every client already ignores.
+        assert_eq!(
+            &bytes[..],
+            b":
+
+",
+            "expected a keep-alive comment, got {:?}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+
+    /// The interval is a decision, not a literal. Too long and it stops clearing the idle timeouts it
+    /// exists for — proxies commonly close at 60s — and nothing else in the system would notice.
+    #[test]
+    fn the_heartbeat_stays_inside_common_idle_timeouts() {
+        assert!(
+            super::KEEP_ALIVE_INTERVAL >= std::time::Duration::from_secs(1)
+                && super::KEEP_ALIVE_INTERVAL <= std::time::Duration::from_secs(30),
+            "keep-alive interval {:?} is outside the range that clears a 60s proxy timeout",
+            super::KEEP_ALIVE_INTERVAL
+        );
+    }
+
+    // ── `model` on the request ───────────────────────────────────────────────────────────────
+
+    /// A model asked for on the message must reach the turn — asserted on the **stamp the turn
+    /// left**, not on the request parsing, because parsing correctly and then being ignored is
+    /// exactly how this failed live: the field existed nowhere, the picker fell back to the
+    /// daemon-wide swap, and every other conversation moved with it.
+    #[tokio::test]
+    async fn a_model_on_the_request_is_the_model_the_turn_runs_on() {
+        let h = harness_scripted(vec![liberado_provider::CompletionResponse::text("ok")]).await;
+        let id = h.chat.create(None).await.unwrap();
+
+        let resp = h
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"message":"hi","session":"{id}","model":"picked/one"}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let nodes = h.sessions.leaf_path(id, None).await.unwrap();
+        let user = nodes
+            .iter()
+            .find(|n| matches!(n.author, liberado_conversation_store::Author::User))
+            .expect("the user message is persisted before inference");
+        assert_eq!(
+            user.model.as_deref(),
+            Some("picked/one"),
+            "the turn ran on the daemon default instead of the model the request asked for"
+        );
+    }
+
+    /// The positive control for the test above. Without it, a handler that stamped every turn with
+    /// some fixed string would pass — and so would one that ignored `model` while the default
+    /// happened to match it, which is precisely the confound that made the first live test of this
+    /// feature unreadable.
+    #[tokio::test]
+    async fn no_model_on_the_request_leaves_the_default_alone() {
+        let h = harness_scripted(vec![liberado_provider::CompletionResponse::text("ok")]).await;
+        let id = h.chat.create(None).await.unwrap();
+
+        let resp = h
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"message":"hi","session":"{id}"}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let nodes = h.sessions.leaf_path(id, None).await.unwrap();
+        let user = nodes
+            .iter()
+            .find(|n| matches!(n.author, liberado_conversation_store::Author::User))
+            .unwrap();
+        assert_eq!(
+            user.model.as_deref(),
+            Some("mock"),
+            "with nothing asked for, the turn takes the provider's own model"
+        );
+    }
+
+    #[test]
+    fn chat_message_from_node_carries_the_store_model_stamp() {
+        use liberado_conversation_store::{Author, MessageNode, Ulid};
+        use liberado_provider::{Message, Role};
+
+        let node = MessageNode {
+            id: Ulid::new(),
+            parent_id: None,
+            conversation_id: Ulid::new(),
+            author: Author::Assistant,
+            created_at: chrono::Utc::now(),
+            message: Message {
+                role: Role::Assistant,
+                content: "hi".into(),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+            },
+            model: Some("vendor/slug".into()),
+        };
+        let wire = chat_message_from_node(node);
+        assert_eq!(wire.role, "assistant");
+        assert_eq!(wire.model.as_deref(), Some("vendor/slug"));
+    }
+
+    /// Both transports, because `EventSource` can only `GET` and so the WebUI's picks arrive as a
+    /// query parameter while every other client sends JSON. A field that works on one of the two is
+    /// worse than one that works on neither, because it looks fine wherever you happen to test it.
+    #[test]
+    fn model_parses_from_both_the_query_string_and_json() {
+        let q: ChatRequest = serde_urlencoded::from_str("message=hi&model=vendor%2Fslug").unwrap();
+        assert_eq!(q.model.as_deref(), Some("vendor/slug"));
+
+        let j: ChatRequest =
+            serde_json::from_str(r#"{"message":"hi","model":"vendor/slug"}"#).unwrap();
+        assert_eq!(j.model.as_deref(), Some("vendor/slug"));
+
+        let absent: ChatRequest = serde_urlencoded::from_str("message=hi").unwrap();
+        assert!(absent.model.is_none());
     }
 
     /// The guard that turns "a client sent the wrong id" from permanent data loss into a no-op.

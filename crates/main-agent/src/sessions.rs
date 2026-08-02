@@ -66,6 +66,7 @@ use liberado_mcp::ScopedRuntime;
 use liberado_provider::{Message, Provider, Role};
 use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
 use thiserror::Error;
+use tokio::sync::broadcast;
 use tokio::sync::mpsc::Sender;
 
 use crate::compaction::{self, COMPACTION_AUTHOR, COMPACTION_TAIL_AUTHOR, CompactionConfig};
@@ -165,6 +166,61 @@ pub type SessionResult<T> = Result<T, SessionError>;
 ///
 /// When guard configuration is attached (via [`with_guards`](Self::with_guards)), each turn applies
 /// the tool-advisor to select relevant MCPs and wraps the runtime in safety guards.
+/// One in-flight chat turn, and everything a client needs to watch it — including a client that was
+/// not there when it started.
+///
+/// The turn writes here instead of into the HTTP response, which is what decouples the two. A
+/// refresh, a lost connection, or a client that simply times out now costs the viewer, not the work:
+/// the reply still lands on the log because the turn still finishes.
+pub struct RunningTurn {
+    /// Fan-out to every attached client.
+    bus: broadcast::Sender<AgentEvent>,
+    /// Everything emitted so far, replayed to whoever attaches next.
+    ///
+    /// Kept in memory only. Tokens are far too frequent to put in the durable log — a streamed
+    /// answer emits hundreds — and they need no permanent home: the *completed* message is persisted
+    /// by the turn itself, exactly as before. This buffer only has to survive until the turn ends.
+    replay: Mutex<Vec<AgentEvent>>,
+    /// Stops the turn. Aborting drops the turn future, which is the same thing a client disconnect
+    /// used to do — so the rollback guarantee (a stopped turn persists nothing) is unchanged; it is
+    /// only the *trigger* that moved from "nobody is watching" to "someone asked".
+    abort: Mutex<Option<tokio::task::AbortHandle>>,
+}
+
+impl RunningTurn {
+    fn new() -> Self {
+        Self {
+            // Bounded: a slow client must not let the buffer grow without limit. A lagging receiver
+            // is dropped by `broadcast` rather than stalling the turn, which is the right trade —
+            // the durable record does not depend on anyone keeping up.
+            bus: broadcast::channel(1024).0,
+            replay: Mutex::new(Vec::new()),
+            abort: Mutex::new(None),
+        }
+    }
+
+    /// Record an event and hand it to everyone watching. Order matters: appended to the replay
+    /// *before* it is broadcast, so a client attaching between the two sees it once via replay
+    /// rather than missing it entirely.
+    fn publish(&self, event: AgentEvent) {
+        self.replay
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(event.clone());
+        let _ = self.bus.send(event);
+    }
+
+    /// What has happened so far, plus a live feed of what happens next.
+    ///
+    /// Taken under one lock so nothing can slip between the snapshot and the subscription — that gap
+    /// is exactly how a reattaching client would lose the token emitted while it was attaching.
+    pub fn attach(&self) -> (Vec<AgentEvent>, broadcast::Receiver<AgentEvent>) {
+        let replay = self.replay.lock().unwrap_or_else(|p| p.into_inner());
+        let rx = self.bus.subscribe();
+        (replay.clone(), rx)
+    }
+}
+
 pub struct ChatSessions {
     store: Arc<dyn ConversationStore>,
     executor: Executor,
@@ -172,6 +228,16 @@ pub struct ChatSessions {
     system_prompt: String,
     /// Per-session turn serialization — one turn at a time per conversation.
     locks: Mutex<HashMap<Ulid, Arc<tokio::sync::Mutex<()>>>>,
+    /// Model picks made for a conversation that has not run a turn since. Deliberately not durable:
+    /// the pick's permanent home is the user node it stamps, and this holds it only for the gap
+    /// between choosing and sending. See [`select_model`](Self::select_model).
+    pending_models: Mutex<HashMap<Ulid, String>>,
+    /// Turns currently in flight, keyed by conversation.
+    ///
+    /// This entry is the whole of "a turn outlives the connection watching it": the task is spawned
+    /// detached and owned here, so dropping an HTTP response no longer touches it. Clients attach by
+    /// subscribing; the last one leaving changes nothing.
+    running: Mutex<HashMap<Ulid, Arc<RunningTurn>>>,
 
     // ── Slice 2: runtime safety guards ──────────────────────────────────────
     /// `(mcp_name, consequence)` pairs for RiskGatedToolRuntime consequence gating.
@@ -243,6 +309,8 @@ impl ChatSessions {
             runtime,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             locks: Mutex::new(HashMap::new()),
+            pending_models: Mutex::new(HashMap::new()),
+            running: Mutex::new(HashMap::new()),
             consequences: Vec::new(),
             zone_catalog: Vec::new(),
             live_catalog: None,
@@ -437,8 +505,13 @@ impl ChatSessions {
     /// Persisting the prompt as the root (rather than re-injecting it on load) keeps the store the
     /// single source of truth for the whole history, system prompt included.
     pub async fn create(&self, title: Option<String>) -> SessionResult<Ulid> {
-        self.create_conversation(title, false, SessionGrant::default())
-            .await
+        self.create_conversation(
+            title,
+            false,
+            liberado_session::Visibility::Foreground,
+            SessionGrant::default(),
+        )
+        .await
     }
 
     /// Create a conversation running under an already-resolved session profile.
@@ -451,7 +524,30 @@ impl ChatSessions {
         title: Option<String>,
         grant: SessionGrant,
     ) -> SessionResult<Ulid> {
-        self.create_conversation(title, false, grant).await
+        self.create_conversation(
+            title,
+            false,
+            liberado_session::Visibility::Foreground,
+            grant,
+        )
+        .await
+    }
+
+    /// Create a **background** conversation: durable, but filtered out of the sidebar the way
+    /// cron/hook sessions are. Used by the live conformance suite and any other machinery that must
+    /// not reintroduce sidebar pollution.
+    pub async fn create_background(
+        &self,
+        title: Option<String>,
+        grant: SessionGrant,
+    ) -> SessionResult<Ulid> {
+        self.create_conversation(
+            title,
+            false,
+            liberado_session::Visibility::Background,
+            grant,
+        )
+        .await
     }
 
     /// Create an **incognito** conversation: RAM only, never written to disk, never listed.
@@ -465,14 +561,20 @@ impl ChatSessions {
     /// incognito chat still writes what it writes — a vault note, a memory, an audit entry. What is
     /// ephemeral is the transcript, not the consequences.
     pub async fn create_incognito(&self, title: Option<String>) -> SessionResult<Ulid> {
-        self.create_conversation(title, true, SessionGrant::default())
-            .await
+        self.create_conversation(
+            title,
+            true,
+            liberado_session::Visibility::Foreground,
+            SessionGrant::default(),
+        )
+        .await
     }
 
     async fn create_conversation(
         &self,
         title: Option<String>,
         ephemeral: bool,
+        visibility: liberado_session::Visibility,
         grant: SessionGrant,
     ) -> SessionResult<Ulid> {
         let header = self
@@ -482,6 +584,7 @@ impl ChatSessions {
                 parent_conversation: None,
                 spawned_by: None,
                 ephemeral,
+                visibility,
                 grant,
             })
             .await?;
@@ -492,6 +595,7 @@ impl ChatSessions {
                     parent_id: None,
                     author: Author::System,
                     message: Message::system(&self.system_prompt),
+                    model: None,
                 },
             )
             .await?;
@@ -538,6 +642,7 @@ impl ChatSessions {
                     parent_id: parent_leaf,
                     author: Author::Named(PROFILE_AUTHOR.into()),
                     message: Message::system(note),
+                    model: None,
                 },
             )
             .await?;
@@ -568,6 +673,7 @@ impl ChatSessions {
                     parent_id: parent_leaf,
                     author: Author::Named("goal-session".into()),
                     message: Message::assistant(content),
+                    model: None,
                 },
             )
             .await?;
@@ -588,18 +694,25 @@ impl ChatSessions {
         let (nodes, parent_leaf) = self.load(session).await?;
         let (mut convo, parent_leaf) = self.maybe_compact(session, nodes, parent_leaf, user).await;
         let before = convo.len();
-        // Before a single token is spent: whatever happens to this turn, what the human typed
-        // survives it. The replies still chain off this node, so ordering is unchanged.
-        let parent_leaf = self
-            .persist_user_message(session, user, parent_leaf)
-            .await?;
 
         // Read per turn, not cached: a profile switch mid-conversation takes effect on the next
-        // turn, which is the whole of "switchable" — no restart, no reconnect.
+        // turn, which is the whole of "switchable" — no restart, no reconnect. Resolved *before*
+        // the user node is written, because that node is stamped with the model this turn will run
+        // on and the answer has to be known first.
         let settings = self.turn_settings(session).await;
         // A profile's model applies to this turn only. Specialised per turn rather than set on the
         // shared provider, so one chat choosing a model cannot change it for every other session.
         let executor = self.executor.with_model(settings.model.clone());
+        // The concrete id, never `None`: a stamp of "the provider's default" would mean something
+        // different on the next read if the default has since changed, which is the drift this
+        // whole record exists to remove.
+        let turn_model = executor.active_model();
+
+        // Before a single token is spent: whatever happens to this turn, what the human typed
+        // survives it. The replies still chain off this node, so ordering is unchanged.
+        let parent_leaf = self
+            .persist_user_message(session, user, parent_leaf, Some(turn_model.clone()))
+            .await?;
         // Resolved once: the prompt the model reads and the tools it is handed must agree, and
         // deciding that twice is how they came apart in the first place.
         let face_agent = self.uses_face_agent(settings.delegation);
@@ -646,6 +759,7 @@ impl ChatSessions {
             session,
             tail_after_user(convo.turn_tail(before)),
             parent_leaf,
+            Some(turn_model),
         )
         .await?;
         Ok(reply)
@@ -677,14 +791,19 @@ impl ChatSessions {
         let (nodes, parent_leaf) = self.load(session).await?;
         let (mut convo, parent_leaf) = self.maybe_compact(session, nodes, parent_leaf, user).await;
         let before = convo.len();
-        // Durable before the first token is streamed — a turn the client abandons still leaves the
-        // question behind it.
-        let parent_leaf = self
-            .persist_user_message(session, user, parent_leaf)
-            .await?;
 
+        // Resolved before the user node is written: that node carries the model this turn runs on,
+        // which is what makes the choice durable without a second place to store it.
         let settings = self.turn_settings(session).await;
         let executor = self.executor.with_model(settings.model.clone());
+        let turn_model = executor.active_model();
+
+        // Durable before the first token is streamed — a turn the client abandons still leaves the
+        // question behind it, and now the model it was asked of.
+        let parent_leaf = self
+            .persist_user_message(session, user, parent_leaf, Some(turn_model.clone()))
+            .await?;
+
         let face_agent = self.uses_face_agent(settings.delegation);
         if !face_agent {
             convo.apply_direct_agent_prompt();
@@ -735,6 +854,7 @@ impl ChatSessions {
             session,
             tail_after_user(convo.turn_tail(before)),
             parent_leaf,
+            Some(turn_model),
         )
         .await?;
         Ok(())
@@ -795,16 +915,220 @@ impl ChatSessions {
         };
         // A *named* profile is authoritative; the absence of one means the daemon's defaults. See
         // `ConversationHeader::grant` for why the name, not an empty capability set, is the signal.
-        if header.grant.profile.is_none() {
-            return self.default_turn_settings();
+        let mut settings = if header.grant.profile.is_none() {
+            self.default_turn_settings()
+        } else {
+            TurnSettings {
+                capabilities: header.grant.capabilities,
+                delegation: header.grant.delegation.unwrap_or(self.delegation_mode),
+                prompt_append: header.grant.prompt_append,
+                profile: header.grant.profile,
+                model: header.grant.model,
+            }
+        };
+        settings.model = self.resolve_turn_model(session, settings.model).await;
+        settings
+    }
+
+    /// Which model this turn runs on, in precedence order.
+    ///
+    /// 1. **A pending pick** — a human chose a model for *this* conversation. Either they asked
+    ///    ahead of time (`POST /api/models/select` with a `conversation`) or the choice arrived on
+    ///    the message itself (`model` on the chat request, which is how a pick made *before* the
+    ///    conversation existed gets here). Held in memory only, because until a turn runs there is
+    ///    nothing to record; the pick becomes durable the moment the user node is stamped with it.
+    /// 2. **The profile's model**, when a session profile names one. Operator-declared.
+    /// 3. **What this conversation last ran on**, read back off its own log. This is the sticky
+    ///    behaviour: a conversation stays on the model that has been answering it, rather than
+    ///    following the daemon-wide default when someone else changes it.
+    /// 4. `None` — the provider's current model. New conversations, and every conversation that
+    ///    predates this field.
+    ///
+    /// Note what (3) does to the process-wide picker: it no longer retunes conversations that
+    /// already have history. That is the intended change — a global default is the right thing for
+    /// a *new* chat and the wrong thing for one already in progress — but it is a change to what an
+    /// existing control does, not only an addition.
+    async fn resolve_turn_model(
+        &self,
+        session: Ulid,
+        from_profile: Option<String>,
+    ) -> Option<String> {
+        if let Some(pending) = self.pending_model(session) {
+            return Some(pending);
         }
-        TurnSettings {
-            capabilities: header.grant.capabilities,
-            delegation: header.grant.delegation.unwrap_or(self.delegation_mode),
-            prompt_append: header.grant.prompt_append,
-            profile: header.grant.profile,
-            model: header.grant.model,
+        if from_profile.is_some() {
+            return from_profile;
         }
+        self.model_last_used(session).await
+    }
+
+    /// The model that most recently ran in this conversation, from the log itself.
+    ///
+    /// Filters on [`Author`], never on `message.role`: subagent handoffs are authored
+    /// `goal-session` and compaction writes `Named` nodes, all with assistant-role bodies. A
+    /// role-based scan would silently move the conversation onto whichever model a delegation used.
+    ///
+    /// Returns `None` on a read failure rather than propagating: an unreadable log should fall back
+    /// to the provider default, not fail the turn.
+    async fn model_last_used(&self, session: Ulid) -> Option<String> {
+        let nodes = self.store.leaf_path(session, None).await.ok()?;
+        nodes
+            .iter()
+            .rev()
+            .filter(|n| matches!(n.author, Author::User | Author::Assistant))
+            .find_map(|n| n.model.clone())
+    }
+
+    /// Start a turn for `session`, or attach to the one already running.
+    ///
+    /// Returns what has happened so far plus a live feed. **Never starts a second turn for a
+    /// conversation that already has one** — which is what makes a reconnect safe: a client that
+    /// resends after losing its connection joins the work in progress instead of paying for it
+    /// twice, and the per-session lock no longer has to arbitrate a race it should not have seen.
+    ///
+    /// `self` is an `Arc` because the spawned turn outlives this call by construction.
+    pub fn start_or_attach(
+        self: &Arc<Self>,
+        session: Ulid,
+        message: &str,
+    ) -> (Vec<AgentEvent>, broadcast::Receiver<AgentEvent>) {
+        // One lock across the check and the insert. Two requests arriving together must not both
+        // conclude that nothing is running.
+        let (entry, is_new) = {
+            let mut running = self.running.lock().unwrap_or_else(|p| p.into_inner());
+            match running.get(&session) {
+                Some(existing) => (Arc::clone(existing), false),
+                None => {
+                    let entry = Arc::new(RunningTurn::new());
+                    running.insert(session, Arc::clone(&entry));
+                    (entry, true)
+                }
+            }
+        };
+        let attachment = entry.attach();
+        if is_new {
+            self.clone().spawn_turn(session, message.to_string(), entry);
+        }
+        attachment
+    }
+
+    /// Attach to a turn already running for `session`, without starting one.
+    ///
+    /// This is what a surface calls after a reload: it has a conversation open and needs to know
+    /// whether anything is still happening in it. `None` means nothing is.
+    pub fn attach(
+        &self,
+        session: Ulid,
+    ) -> Option<(Vec<AgentEvent>, broadcast::Receiver<AgentEvent>)> {
+        let running = self.running.lock().unwrap_or_else(|p| p.into_inner());
+        running.get(&session).map(|entry| entry.attach())
+    }
+
+    /// Whether a turn is in flight for `session`.
+    pub fn turn_running(&self, session: Ulid) -> bool {
+        self.running
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .contains_key(&session)
+    }
+
+    /// Stop the turn running for `session`. `true` if there was one.
+    ///
+    /// The explicit counterpart to what a disconnect used to do implicitly. It has to exist *before*
+    /// turns are detached, or there would be no way to stop one at all — closing the stream was the
+    /// only cancel this system had.
+    pub fn cancel_turn(&self, session: Ulid) -> bool {
+        let entry = {
+            let mut running = self.running.lock().unwrap_or_else(|p| p.into_inner());
+            running.remove(&session)
+        };
+        let Some(entry) = entry else {
+            return false;
+        };
+        if let Some(handle) = entry.abort.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            handle.abort();
+        }
+        // Tell anyone watching why their stream ended. Without this a cancelled turn looks
+        // indistinguishable from one still thinking.
+        entry.publish(AgentEvent::Error("turn cancelled".into()));
+        true
+    }
+
+    /// Run one turn detached, forwarding its events to `entry` and retiring the entry at the end.
+    fn spawn_turn(self: Arc<Self>, session: Ulid, message: String, entry: Arc<RunningTurn>) {
+        // `turn_stream` still speaks mpsc, unchanged. Bridging here rather than changing its
+        // signature keeps this decoupling out of the turn logic entirely — the turn does not know or
+        // care how many people are watching.
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentEvent>(64);
+        let pump = {
+            let entry = Arc::clone(&entry);
+            tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    entry.publish(event);
+                }
+            })
+        };
+
+        let entry_for_abort = Arc::clone(&entry);
+        let handle = tokio::spawn(async move {
+            let result = liberado_provider::latency::with_correlation(
+                session.to_string(),
+                self.turn_stream(session, &message, &tx),
+            )
+            .await;
+            // Drop the sender so the pump drains and exits before the terminal event is published —
+            // otherwise the terminal could overtake the last token and clients would render the
+            // answer as finishing early.
+            drop(tx);
+            let _ = pump.await;
+
+            let terminal = match result {
+                Ok(()) => AgentEvent::Done,
+                Err(e) => {
+                    tracing::warn!(error = %e, session = %session, "chat turn failed");
+                    AgentEvent::Error(e.to_string())
+                }
+            };
+            entry.publish(terminal);
+            // Retired last: while this key is present, `start_or_attach` will attach rather than
+            // start, and a turn that has already published its terminal has nothing left to attach
+            // to.
+            self.running
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&session);
+        });
+
+        // The abort handle has to land on the entry that `cancel_turn` will find. Set after spawn
+        // because that is when it exists; a cancel arriving in the gap still removes the entry, and
+        // the turn then finds itself unregistered when it finishes.
+        // (Registry lookup is by key, so the worst case is a turn that completes uncancelled — it
+        // persists, which is the safe direction.)
+        *entry_for_abort
+            .abort
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(handle.abort_handle());
+    }
+
+    /// Record that the next turn of `conversation` should run on `model`.
+    ///
+    /// In memory on purpose. The pick has no durable home until a turn uses it, at which point the
+    /// user node carries it and this entry is redundant — so the only thing a restart can lose is a
+    /// choice nobody acted on yet, which is the same as never having made it.
+    pub fn select_model(&self, conversation: Ulid, model: String) {
+        self.pending_models
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(conversation, model);
+    }
+
+    /// Take the pending pick for `conversation`, if any. Removing on read is what makes the
+    /// hand-off to the log clean: it is consumed exactly when it becomes durable.
+    fn pending_model(&self, conversation: Ulid) -> Option<String> {
+        self.pending_models
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&conversation)
     }
 
     /// Log the tool surface this turn actually holds, then state it to the model.
@@ -969,11 +1293,23 @@ impl ChatSessions {
     /// log before the marker, so rendering both would repeat the last `keep_recent_turns` turns
     /// after every compaction.
     pub async fn history(&self, session: Ulid) -> SessionResult<Vec<Message>> {
+        Ok(self
+            .history_nodes(session)
+            .await?
+            .into_iter()
+            .map(|n| n.message)
+            .collect())
+    }
+
+    /// Leaf-path transcript nodes (compaction tail copies dropped), including per-node model stamps.
+    ///
+    /// Prefer this over [`history`](Self::history) when a caller needs provenance that lives on the
+    /// node rather than the provider [`Message`] (today: which model ran a turn).
+    pub async fn history_nodes(&self, session: Ulid) -> SessionResult<Vec<MessageNode>> {
         let nodes = self.store.leaf_path(session, None).await?;
         Ok(nodes
             .into_iter()
             .filter(|n| !n.author.is_compaction_tail_copy())
-            .map(|n| n.message)
             .collect())
     }
 
@@ -1315,6 +1651,7 @@ impl ChatSessions {
                     parent_id: parent_leaf,
                     author: Author::Named(COMPACTION_AUTHOR.into()),
                     message: marker.clone(),
+                    model: None,
                 },
             )
             .await
@@ -1355,6 +1692,7 @@ impl ChatSessions {
                         parent_id: parent,
                         author: Author::Named(COMPACTION_TAIL_AUTHOR.into()),
                         message: tail_node.message.clone(),
+                        model: None,
                     },
                 )
                 .await
@@ -1404,11 +1742,15 @@ impl ChatSessions {
     /// assistant `tool_calls` with no matching results. A lone user message does not threaten that:
     /// it is an unanswered question, which is a legal transcript and a true account of what
     /// happened. The assistant/tool tail still lands only on success.
+    /// `model` is the one this turn was dispatched to — the *intent*, stamped before the answer
+    /// exists. It is what makes a model choice durable the instant a turn starts: an abandoned turn
+    /// writes no assistant node, so a pick recorded only on the reply would evaporate with it.
     async fn persist_user_message(
         &self,
         session: Ulid,
         user: &str,
         parent: Option<Ulid>,
+        model: Option<String>,
     ) -> SessionResult<Option<Ulid>> {
         let message = Message::user(user);
         let node = self
@@ -1419,27 +1761,37 @@ impl ChatSessions {
                     parent_id: parent,
                     author: Author::from_role(message.role),
                     message,
+                    model,
                 },
             )
             .await?;
         Ok(Some(node.id))
     }
 
+    /// `model` is what actually answered. Stamped on **assistant** nodes only — a tool result is
+    /// produced by an MCP, not by a model, and marking it would make the derivation read back a
+    /// model for a turn no model spoke in.
     async fn persist_tail(
         &self,
         session: Ulid,
         new: &[Message],
         mut parent: Option<Ulid>,
+        model: Option<String>,
     ) -> SessionResult<()> {
         for msg in new {
+            let author = Author::from_role(msg.role);
+            let stamp = matches!(author, Author::Assistant)
+                .then(|| model.clone())
+                .flatten();
             let node = self
                 .store
                 .append(
                     session,
                     NewNode {
                         parent_id: parent,
-                        author: Author::from_role(msg.role),
+                        author,
                         message: msg.clone(),
+                        model: stamp,
                     },
                 )
                 .await?;
