@@ -659,7 +659,8 @@ pub async fn get_conversation(
         Ok(nodes) => {
             // Nodes carry `model` (which Message alone does not). Dropping the stamp here is what
             // made Tier 3 P2's model cross-check vacuous — every history reply had no model field.
-            let messages: Vec<ChatMessage> = nodes.into_iter().map(chat_message_from_node).collect();
+            let messages: Vec<ChatMessage> =
+                nodes.into_iter().map(chat_message_from_node).collect();
             // Read from the session's own header rather than tracked client-side: a conversation
             // opened in a second tab, or after a restart, must show the authority it actually runs
             // under.

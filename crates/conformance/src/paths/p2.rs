@@ -169,10 +169,7 @@ fn inspect_transcript(conv: &serde_json::Value) -> (bool, bool, Option<String>) 
         if role == "assistant" || author == "assistant" {
             has_assistant = true;
             if assistant_model.is_none() {
-                assistant_model = n
-                    .get("model")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string);
+                assistant_model = n.get("model").and_then(|v| v.as_str()).map(str::to_string);
             }
         }
     }

@@ -63,9 +63,10 @@ fn default_path_timeout() -> u64 {
 
 impl ConformanceConfig {
     pub fn load(path: &Path) -> Result<Self, String> {
-        let raw = std::fs::read_to_string(path)
-            .map_err(|e| format!("read {}: {e}", path.display()))?;
-        let cfg: Self = toml::from_str(&raw).map_err(|e| format!("parse {}: {e}", path.display()))?;
+        let raw =
+            std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        let cfg: Self =
+            toml::from_str(&raw).map_err(|e| format!("parse {}: {e}", path.display()))?;
         if cfg.base_url.trim().is_empty() {
             return Err("base_url must be set (no production default)".into());
         }

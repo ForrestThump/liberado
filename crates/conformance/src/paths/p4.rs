@@ -62,10 +62,7 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, _timeout: Durat
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
-    let profile_on_grant = grant
-        .get("profile")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let profile_on_grant = grant.get("profile").and_then(|v| v.as_str()).unwrap_or("");
 
     if profile_on_grant != cfg.profile_name {
         return PathResult::fail(

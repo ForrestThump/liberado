@@ -139,7 +139,8 @@ impl DaemonClient {
         }
 
         Ok(ChatTurnOutcome {
-            session_id: session_id.ok_or_else(|| "chat stream never announced a session id".to_string())?,
+            session_id: session_id
+                .ok_or_else(|| "chat stream never announced a session id".to_string())?,
             saw_token,
         })
     }

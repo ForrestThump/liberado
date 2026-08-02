@@ -86,10 +86,7 @@ async fn listen(state: Arc<Mutex<MockState>>) -> SocketAddr {
                     let s = s.clone();
                     async move {
                         let g = s.lock().await;
-                        (
-                            axum::http::StatusCode::ACCEPTED,
-                            Json(g.goals.clone()),
-                        )
+                        (axum::http::StatusCode::ACCEPTED, Json(g.goals.clone()))
                     }
                 }
             }),
@@ -121,10 +118,7 @@ async fn listen(state: Arc<Mutex<MockState>>) -> SocketAddr {
             post(|| async {
                 // Minimal SSE: session then no tokens
                 (
-                    [(
-                        axum::http::header::CONTENT_TYPE,
-                        "text/event-stream",
-                    )],
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
                     "event: session\ndata: {\"session\":\"01FORCEDCHAT00000000000000\"}\n\n",
                 )
             }),
@@ -246,7 +240,13 @@ goal = "noop"
     let base = format!("http://{addr}");
     let client = DaemonClient::new(&base).unwrap();
     let cfg = cfg(&base, dir.path().to_path_buf(), Some(topo));
-    let r = run_path(PathId::P1a, &client, &cfg, Instant::now() + Duration::from_secs(30)).await;
+    let r = run_path(
+        PathId::P1a,
+        &client,
+        &cfg,
+        Instant::now() + Duration::from_secs(30),
+    )
+    .await;
     write_capture("p1a", &r);
     assert!(
         r.assertion.contains("missing") || r.evidence.is_some(),
@@ -296,7 +296,13 @@ async fn p1b_fails_when_session_is_failed_terminal() {
     let base = format!("http://{addr}");
     let client = DaemonClient::new(&base).unwrap();
     let cfg = cfg(&base, dir.path().to_path_buf(), None);
-    let r = run_path(PathId::P1b, &client, &cfg, Instant::now() + Duration::from_secs(30)).await;
+    let r = run_path(
+        PathId::P1b,
+        &client,
+        &cfg,
+        Instant::now() + Duration::from_secs(30),
+    )
+    .await;
     write_capture("p1b", &r);
     assert!(
         r.assertion.contains("succeeded") || r.assertion.contains("artifact"),
@@ -394,7 +400,13 @@ async fn p2_fails_when_assistant_model_stamp_missing() {
     let base = format!("http://{addr}");
     let client = DaemonClient::new(&base).unwrap();
     let cfg = cfg(&base, dir.path().to_path_buf(), None);
-    let r = run_path(PathId::P2, &client, &cfg, Instant::now() + Duration::from_secs(30)).await;
+    let r = run_path(
+        PathId::P2,
+        &client,
+        &cfg,
+        Instant::now() + Duration::from_secs(30),
+    )
+    .await;
     write_capture("p2", &r);
     assert!(
         r.evidence
@@ -444,7 +456,13 @@ async fn p3_fails_when_goal_stream_refuses() {
     let base = format!("http://{addr}");
     let client = DaemonClient::new(&base).unwrap();
     let cfg = cfg(&base, dir.path().to_path_buf(), None);
-    let r = run_path(PathId::P3, &client, &cfg, Instant::now() + Duration::from_secs(30)).await;
+    let r = run_path(
+        PathId::P3,
+        &client,
+        &cfg,
+        Instant::now() + Duration::from_secs(30),
+    )
+    .await;
     write_capture("p3", &r);
     assert!(
         r.assertion.contains("stream") || r.assertion.contains("joinable"),
@@ -487,7 +505,13 @@ async fn p4_fails_when_grant_profile_is_not_conformance() {
     let base = format!("http://{addr}");
     let client = DaemonClient::new(&base).unwrap();
     let cfg = cfg(&base, dir.path().to_path_buf(), None);
-    let r = run_path(PathId::P4, &client, &cfg, Instant::now() + Duration::from_secs(30)).await;
+    let r = run_path(
+        PathId::P4,
+        &client,
+        &cfg,
+        Instant::now() + Duration::from_secs(30),
+    )
+    .await;
     write_capture("p4", &r);
     assert!(
         r.assertion.contains("profile") || r.assertion.contains("grant"),

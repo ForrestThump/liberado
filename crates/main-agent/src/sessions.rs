@@ -1111,10 +1111,7 @@ impl ChatSessions {
     ///
     /// Prefer this over [`history`](Self::history) when a caller needs provenance that lives on the
     /// node rather than the provider [`Message`] (today: which model ran a turn).
-    pub async fn history_nodes(
-        &self,
-        session: Ulid,
-    ) -> SessionResult<Vec<MessageNode>> {
+    pub async fn history_nodes(&self, session: Ulid) -> SessionResult<Vec<MessageNode>> {
         let nodes = self.store.leaf_path(session, None).await?;
         Ok(nodes
             .into_iter()

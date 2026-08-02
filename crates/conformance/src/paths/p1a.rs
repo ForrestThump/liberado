@@ -49,10 +49,7 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, _timeout: Durat
     };
 
     if schedules.is_empty() {
-        return PathResult::skipped(
-            PathId::P1a,
-            "no enabled non-suite schedules in topology",
-        );
+        return PathResult::skipped(PathId::P1a, "no enabled non-suite schedules in topology");
     }
 
     let reactions = match client.reactions().await {
@@ -217,11 +214,7 @@ fn estimate_period_secs(cron_expr: &str) -> Option<u64> {
     let a = upcoming.next()?;
     let b = upcoming.next()?;
     let secs = (b - a).num_seconds();
-    if secs <= 0 {
-        None
-    } else {
-        Some(secs as u64)
-    }
+    if secs <= 0 { None } else { Some(secs as u64) }
 }
 
 #[cfg(test)]

@@ -15,7 +15,10 @@ const VAULT_OWNER_UID: u32 = 1000;
 const VAULT_OWNER_GID: u32 = 1000;
 
 /// Write `conformance/reports/<ts>-<pass|fail>.md` and return the path relative to the vault.
-pub fn write_vault_report(vault_path: &Path, report: &RunReport) -> Result<std::path::PathBuf, String> {
+pub fn write_vault_report(
+    vault_path: &Path,
+    report: &RunReport,
+) -> Result<std::path::PathBuf, String> {
     let tag = match report.overall {
         PathStatus::Pass => "pass",
         PathStatus::Fail => "fail",
@@ -27,8 +30,7 @@ pub fn write_vault_report(vault_path: &Path, report: &RunReport) -> Result<std::
         .join(format!("{ts}-{tag}.md"));
     let abs = vault_path.join(&rel);
     if let Some(parent) = abs.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
         // Best-effort: keep the suite zone writable by TurboVault / host user.
         reclaim_owner(parent);
         reclaim_owner(vault_path.join("conformance"));
@@ -42,10 +44,7 @@ pub fn write_vault_report(vault_path: &Path, report: &RunReport) -> Result<std::
     md.push_str(&format!("- **base_url**: `{}`\n\n", report.base_url));
     md.push_str("## Paths\n\n");
     for r in &report.results {
-        md.push_str(&format!(
-            "### `{}` — {:?}\n\n",
-            r.path, r.status
-        ));
+        md.push_str(&format!("### `{}` — {:?}\n\n", r.path, r.status));
         if !r.assertion.is_empty() {
             md.push_str(&format!("- assertion: {}\n", r.assertion));
         }

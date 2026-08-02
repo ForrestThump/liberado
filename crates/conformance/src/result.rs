@@ -71,7 +71,12 @@ pub struct PathResult {
 }
 
 impl PathResult {
-    pub fn pass(id: PathId, assertion: impl Into<String>, duration_ms: u64, evidence: serde_json::Value) -> Self {
+    pub fn pass(
+        id: PathId,
+        assertion: impl Into<String>,
+        duration_ms: u64,
+        evidence: serde_json::Value,
+    ) -> Self {
         Self {
             path: id.as_str().into(),
             status: PathStatus::Pass,
@@ -83,7 +88,12 @@ impl PathResult {
         }
     }
 
-    pub fn fail(id: PathId, assertion: impl Into<String>, duration_ms: u64, evidence: serde_json::Value) -> Self {
+    pub fn fail(
+        id: PathId,
+        assertion: impl Into<String>,
+        duration_ms: u64,
+        evidence: serde_json::Value,
+    ) -> Self {
         Self {
             path: id.as_str().into(),
             status: PathStatus::Fail,
@@ -123,10 +133,7 @@ pub struct RunReport {
 
 impl RunReport {
     pub fn compute_overall(results: &[PathResult], advisory_counts: bool) -> PathStatus {
-        if results
-            .iter()
-            .any(|r| r.is_blocking_fail(advisory_counts))
-        {
+        if results.iter().any(|r| r.is_blocking_fail(advisory_counts)) {
             PathStatus::Fail
         } else if results.iter().all(|r| r.status == PathStatus::Skipped) {
             PathStatus::Skipped

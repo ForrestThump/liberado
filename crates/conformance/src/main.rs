@@ -74,10 +74,7 @@ async fn main() -> ExitCode {
         if cfg.paths.is_empty() {
             PathId::all_default()
         } else {
-            cfg.paths
-                .iter()
-                .filter_map(|s| PathId::parse(s))
-                .collect()
+            cfg.paths.iter().filter_map(|s| PathId::parse(s)).collect()
         }
     });
 
@@ -102,10 +99,7 @@ async fn main() -> ExitCode {
     for id in paths {
         eprintln!("… running {}", id.as_str());
         let r = run_path(id, &client, &cfg, deadline).await;
-        eprintln!(
-            "  {} → {:?} ({} ms)",
-            r.path, r.status, r.duration_ms
-        );
+        eprintln!("  {} → {:?} ({} ms)", r.path, r.status, r.duration_ms);
         // stdout: one JSON object per path
         match serde_json::to_string(&r) {
             Ok(line) => println!("{line}"),

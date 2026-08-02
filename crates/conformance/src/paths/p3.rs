@@ -17,10 +17,7 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
     };
 
     let run_id = Ulid::new().to_string();
-    let accept = match client
-        .trigger_hook(&cfg.hook_name, &secret, &run_id)
-        .await
-    {
+    let accept = match client.trigger_hook(&cfg.hook_name, &secret, &run_id).await {
         Ok(v) => v,
         Err(e) => {
             return PathResult::fail(

@@ -53,3 +53,7 @@ tmp-liberado-*.log.prev
 mutants.out/
 
 *.secret
+
+# Working notes that are deliberately not history: they snapshot in-progress state (including which
+# fixes the deployed box is still missing), so committing one publishes a to-do list of live gaps.
+docs/future-work/session-profiles-next-actions.md
