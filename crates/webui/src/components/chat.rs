@@ -85,6 +85,9 @@ struct LoadedConversation {
     /// A turn is in flight for this conversation right now — so the transcript is missing a reply
     /// that is still coming, and this client should attach rather than assume it was lost.
     turn_running: bool,
+    /// The last turn ended with no reply — usually the daemon restarting mid-inference. Rendered as
+    /// a note rather than left as silence, which reads as "the model said nothing".
+    turn_unanswered: bool,
 }
 
 async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConversation, String> {
@@ -112,6 +115,7 @@ async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConve
             .collect(),
         profile: history.profile,
         turn_running: history.turn_running,
+        turn_unanswered: history.turn_unanswered,
     })
 }
 
@@ -224,7 +228,20 @@ pub fn Chat(
                 wasm_bindgen_futures::spawn_local(async move {
                     if let Ok(loaded) = fetch_conversation(&base, &conv_id).await {
                         let running = loaded.turn_running;
-                        messages.set(loaded.messages);
+                        let unanswered = loaded.turn_unanswered;
+                        let mut loaded_messages = loaded.messages;
+                        // Derived at render time, never stored: this is a *reading* of the
+                        // transcript, and writing it into the log would make a display decision
+                        // permanent and re-answer it wrongly if the turn were later retried.
+                        if unanswered {
+                            loaded_messages.push(ChatMsg {
+                                role: "system",
+                                content: "That turn ended without a reply — the daemon most likely                                           restarted mid-answer. Nothing was saved; send again to retry."
+                                    .to_string(),
+                                thinking_steps: Vec::new(),
+                            });
+                        }
+                        messages.set(loaded_messages);
                         // From the conversation, not remembered client-side: opening a chat in a
                         // second tab or after a restart must show the authority it actually runs
                         // under, not whatever this tab last set.
@@ -1135,12 +1152,14 @@ fn open_stream(
     // the mode is on. If `session` is already set we are continuing an existing conversation, and no
     // flag can retroactively make that one private. Conflating the two once destroyed a saved chat.
     let opened_incognito = incognito && targets.session.read().is_none();
+    // A send owns its turn from the start, so a dropped stream means what it says.
     connect_stream(
         &url,
         api_base,
         targets,
         api_base_for_title,
         opened_incognito,
+        None,
     );
 }
 
@@ -1152,7 +1171,14 @@ fn open_stream(
 #[cfg(target_arch = "wasm32")]
 fn attach_stream(api_base: &str, conv_id: &str, targets: StreamTargets, api_base_for_title: &str) {
     let url = format!("{api_base}/api/conversations/{conv_id}/attach");
-    connect_stream(&url, api_base, targets, api_base_for_title, false);
+    connect_stream(
+        &url,
+        api_base,
+        targets,
+        api_base_for_title,
+        false,
+        Some(conv_id.to_string()),
+    );
 }
 
 /// Open an SSE connection at `url` and wire it into `targets`. Shared by the send path and the
@@ -1164,6 +1190,9 @@ fn connect_stream(
     targets: StreamTargets,
     api_base_for_title: &str,
     opened_incognito: bool,
+    // Conversation to re-read from the store if this stream ends badly. Set for an *attach*, where
+    // the answer may already be on disk and the stream failing says nothing about the turn.
+    reconcile: Option<String>,
 ) {
     let StreamTargets {
         mut messages,
@@ -1412,13 +1441,30 @@ fn connect_stream(
         on_fail.forget();
     }
 
-    // Native EventSource error (connection dropped).
+    // Native EventSource error (connection dropped, or the attach was refused).
+    //
+    // For an attach this is not evidence about the turn. The commonest cause is a race the client
+    // cannot avoid: the history said a turn was running, it finished before the attach arrived, and
+    // the daemon answered 409 because there is nothing left to join. The answer is already on disk.
+    // Ending quietly here would show the question with no reply — the exact silence this change set
+    // exists to remove — so ask the store rather than guess.
     {
         let source_err = source.clone();
+        let reconcile_err = reconcile.clone();
+        let reconcile_base = api_base.to_string();
         let on_err = Closure::<dyn FnMut(MessageEvent)>::new(move |_e: MessageEvent| {
             source_err.close();
             sending.set(false);
             CURRENT_SOURCE.with(|cell| *cell.borrow_mut() = None);
+            if let Some(conv_id) = reconcile_err.clone() {
+                let base = reconcile_base.clone();
+                let mut messages = messages;
+                wasm_bindgen_futures::spawn_local(async move {
+                    if let Ok(loaded) = fetch_conversation(&base, &conv_id).await {
+                        messages.set(loaded.messages);
+                    }
+                });
+            }
         });
         source.set_onerror(Some(on_err.as_ref().unchecked_ref()));
         on_err.forget();

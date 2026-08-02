@@ -1313,6 +1313,39 @@ impl ChatSessions {
             .collect())
     }
 
+    /// Whether this conversation's last turn never produced a reply.
+    ///
+    /// True when the transcript ends on the human's message and nothing is running for it. The
+    /// honest reading of that state is "a turn was started and did not finish" — the daemon was
+    /// restarted mid-inference, the turn was cancelled, or it failed before persisting anything.
+    ///
+    /// Derived rather than recorded, because the alternative is a durable "turn in flight" flag that
+    /// has to be cleared on every exit path including the ones that do not run (a killed process
+    /// clears nothing), and a flag that lies after a crash is worse than no flag. The transcript
+    /// already knows: a question with no answer under it is exactly the condition.
+    ///
+    /// Filters on [`Author`], never `message.role` — the same rule the model derivation follows. A
+    /// tool result and a subagent handoff both carry non-user roles but neither ends a turn.
+    ///
+    /// Callers must pair this with [`turn_running`](Self::turn_running): while a turn is in flight
+    /// the transcript *also* ends on the human's message, and reporting that as incomplete would
+    /// call every live turn dead.
+    pub async fn last_turn_unanswered(&self, session: Ulid) -> bool {
+        if self.turn_running(session) {
+            return false;
+        }
+        match self.history_nodes(session).await {
+            Ok(nodes) => nodes
+                .iter()
+                .rev()
+                .find(|n| !matches!(n.author, Author::System))
+                .is_some_and(|n| matches!(n.author, Author::User)),
+            // An unreadable log is not evidence of an unanswered turn. Say nothing rather than
+            // decorate a conversation we could not read.
+            Err(_) => false,
+        }
+    }
+
     /// Set the title of a conversation. Idempotent — subsequent calls overwrite the same field.
     ///
     /// Intended writers: first-line default seed, future flash-title agent, HTTP `PATCH`,

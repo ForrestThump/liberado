@@ -2824,3 +2824,83 @@ async fn cancelling_a_turn_persists_nothing_and_says_so() {
     assert!(cancelled, "an in-flight turn must be cancellable");
     assert!(!sessions.turn_running(id), "cancel must retire the entry");
 }
+
+/// A daemon restart mid-turn must leave a *visible* dead turn, not silence.
+///
+/// The restart is simulated the way the store's other durability tests do it: run a turn against a
+/// provider that never answers, then drop the whole `ChatSessions` — the process dying takes the
+/// in-memory registry with it — and reopen the store at the same root.
+///
+/// What a reader must then see: the human's message is there (persisted before inference, on
+/// purpose), no reply, nothing running, and `last_turn_unanswered` saying so. A conversation that
+/// ends on a question with no explanation is indistinguishable from a model that returned nothing.
+#[tokio::test]
+async fn a_restart_mid_turn_leaves_a_visible_unanswered_turn() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let id = {
+        let store = Arc::new(SessionStore::open(dir.path()).await);
+        let executor = Executor::new(Arc::new(PendingProvider), Budget::default());
+        let sessions = Arc::new(ChatSessions::new(store, executor, Arc::new(NoTools)));
+        let id = sessions.create(None).await.unwrap();
+
+        let (_replay, _rx) = sessions.start_or_attach(id, "will the daemon outlive this?");
+        // Let the user node land before the "process" dies.
+        for _ in 0..200 {
+            if sessions.history(id).await.map(|h| h.len()).unwrap_or(0) >= 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            sessions.turn_running(id),
+            "the turn should still be in flight"
+        );
+        assert!(
+            !sessions.last_turn_unanswered(id).await,
+            "a turn that is still running must never be reported as unanswered"
+        );
+        id
+    }; // ChatSessions dropped — the registry is gone, exactly as a restart loses it.
+
+    // Reopen at the same root: a fresh daemon reading the durable log.
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let executor = Executor::new(Arc::new(PendingProvider), Budget::default());
+    let reopened = Arc::new(ChatSessions::new(store, executor, Arc::new(NoTools)));
+
+    let history = reopened.history(id).await.unwrap();
+    assert!(
+        history.iter().any(|m| m.role == Role::User),
+        "the question must survive the restart: {history:?}"
+    );
+    assert!(
+        !history.iter().any(|m| m.role == Role::Assistant),
+        "no reply was produced, so none may be persisted: {history:?}"
+    );
+    assert!(
+        !reopened.turn_running(id),
+        "nothing is running after a restart — reporting otherwise is the hang this guards"
+    );
+    assert!(
+        reopened.last_turn_unanswered(id).await,
+        "the dead turn must be visible, not silent"
+    );
+}
+
+/// The positive control. A conversation whose turn completed is not an unanswered one — without
+/// this, a function that always returned `true` would pass the test above.
+#[tokio::test]
+async fn a_completed_turn_is_not_reported_unanswered() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions =
+        Arc::new(sessions_at(dir.path(), vec![CompletionResponse::text("answered")]).await);
+    let id = sessions.create(None).await.unwrap();
+
+    sessions.turn(id, "did you answer?").await.unwrap();
+
+    assert!(!sessions.turn_running(id));
+    assert!(
+        !sessions.last_turn_unanswered(id).await,
+        "a turn with a reply under it is answered"
+    );
+}

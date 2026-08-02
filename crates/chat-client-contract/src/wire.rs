@@ -374,6 +374,17 @@ pub struct ConversationHistoryResponse {
     /// `#[serde(default)]` — false for an older daemon, which is also the safe reading.
     #[serde(default)]
     pub turn_running: bool,
+    /// The last turn ended without a reply: the transcript stops on the human's message and nothing
+    /// is running for it.
+    ///
+    /// A surface should say so rather than render a question followed by silence, which is
+    /// indistinguishable from a model that answered with nothing. The usual cause is the daemon
+    /// restarting mid-inference — a chat turn cannot resume, because inference is not replayable
+    /// from where it stopped, so the honest outcome is a visible dead turn the human can retry.
+    ///
+    /// Mutually exclusive with [`turn_running`](Self::turn_running) by construction.
+    #[serde(default)]
+    pub turn_unanswered: bool,
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -920,6 +931,7 @@ mod tests {
             ],
             profile: Some("basic-chat".into()),
             turn_running: true,
+            turn_unanswered: false,
         };
         let json = serde_json::to_value(&resp).unwrap();
         let back: ConversationHistoryResponse = serde_json::from_value(json).unwrap();
@@ -936,6 +948,7 @@ mod tests {
         let json = serde_json::json!({ "messages": [] });
         let back: ConversationHistoryResponse = serde_json::from_value(json).unwrap();
         assert!(!back.turn_running);
+        assert!(!back.turn_unanswered);
     }
 
     // ── VaultInfo / ApiError ──────────────────────────────────
