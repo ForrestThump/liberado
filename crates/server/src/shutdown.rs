@@ -1,15 +1,33 @@
-//! Graceful shutdown drain for durable chat turns (parallel deliverable §4).
+//! Graceful shutdown drain for durable **chat turns and goal sessions**.
 //!
-//! Durable turns outlive their HTTP connection. Docker/SIGTERM killing the process mid-turn loses
+//! Durable work outlives its HTTP connection. Docker/SIGTERM killing the process mid-run loses
 //! work that could still finish and persist. This module:
 //!
-//! 1. Marks the daemon as **not accepting new turns** ([`DrainGate`]) — clients get a
+//! 1. Marks the daemon as **not accepting new work** ([`DrainGate`]) — clients get a
 //!    distinguishable `shutting_down` refusal, not a generic failure.
-//! 2. Waits up to a **bounded grace period** for in-flight turns to finish and persist.
-//! 3. Aborts anything still running so nothing claims `turn_running` after exit; unfinished
-//!    transcripts already read as [`ChatSessions::last_turn_unanswered`] after restart.
+//! 2. Waits up to a **bounded grace period** for in-flight chat turns **and** goal sessions.
+//! 3. On grace timeout: **aborts** remaining chat turns; **parks** remaining goal sessions (so
+//!    post-drain status is not permanently `Running` — parked is human-actionable; aborted chat
+//!    turns read as unanswered). Prefer park over goal-cancel: a parked session can be resumed
+//!    when the pack allows; a cancelled one cannot.
 //!
-//! Resume-across-restart is out of scope (inference is not replayable).
+//! Resume of mid-inference model calls across restart is out of scope (inference is not
+//! replayable). Parking is session-level only.
+//!
+//! # Work-start inventory (what is gated during drain)
+//!
+//! | Surface | Starts work how | Gated? |
+//! |---|---|---|
+//! | Chat HTTP `POST /api/chat`, `/api/chat/stream` | route layer [`refuse_new_turns_if_draining`] | **yes** |
+//! | Chat Telegram free-form | `TelegramChatBridge` checks `drain.is_accepting()` | **yes** (capability, not this middleware) |
+//! | Goals HTTP `POST /api/goals` | same refuse middleware as chat starts | **yes** |
+//! | Goals HTTP cancel/park/message/stream/list | do not start new goal work | no (manage in-flight) |
+//! | Hooks `POST /api/hooks/{name}` | enqueue daemon events; may later start sessions | **not** HTTP-gated here — event loop stops after drain completes (`lib.rs`); new hooks during drain are rare and not turn-shaped |
+//! | Cron | scheduled fires into the daemon event loop | **not** HTTP — loop stops after drain; no new cron processing once process exits |
+//! | Vault reactions | watcher → reactions while daemon runs | **not** HTTP — stopped with the process after drain |
+//!
+//! The gate covers **capabilities that start work**, not every route someone remembered. Chat
+//! attach/cancel stay open so clients can rejoin or stop work already in flight.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -67,12 +85,14 @@ impl DrainGate {
 /// Outcome of [`drain_for_shutdown`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrainOutcome {
-    /// True if every in-flight turn finished before grace elapsed (no abort needed).
+    /// True if every in-flight chat turn **and** goal session finished before grace elapsed.
     pub idle_within_grace: bool,
     /// How long we waited (≤ grace).
     pub waited: Duration,
-    /// Turns still running when grace ended (aborted).
+    /// Chat turns still running when grace ended (aborted via `cancel_turn`).
     pub aborted: usize,
+    /// Goal sessions still hosted when grace ended (park signals sent).
+    pub parked_goals: usize,
     /// Grace budget that was applied.
     pub grace: Duration,
 }
@@ -103,8 +123,9 @@ pub fn shutting_down_response() -> Response<Body> {
         .into_response()
 }
 
-/// Axum middleware for turn-**starting** routes only (`/api/chat`, `/api/chat/stream`).
-/// Attach stays available so clients can rejoin work already in flight.
+/// Axum middleware for **work-starting** routes only (`/api/chat`, `/api/chat/stream`,
+/// `POST /api/goals`). Attach/cancel/park/list stay available so clients can rejoin or stop work
+/// already in flight.
 pub async fn refuse_new_turns_if_draining(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     request: Request<Body>,
@@ -116,37 +137,42 @@ pub async fn refuse_new_turns_if_draining(
     next.run(request).await
 }
 
-/// Mark drain, wait up to `grace` for in-flight chat turns, then abort stragglers.
+/// Mark drain, wait up to `grace` for in-flight chat turns **and** goal sessions, then abort chat
+/// stragglers and **park** remaining goals.
 ///
-/// Pure coordination over [`AppState::chat`] — no SIGTERM plumbing; `run` calls this from the
-/// signal handler. Tests call it directly with a short grace.
+/// Pure coordination over [`AppState`] — no SIGTERM plumbing; `run` calls this from the signal
+/// handler. Tests call it directly with a short grace.
 pub async fn drain_for_shutdown(state: &AppState, grace: Duration) -> DrainOutcome {
     state.drain.begin_drain();
     info!(
         grace_secs = grace.as_secs(),
-        "shutdown drain: refusing new turns; waiting for in-flight work"
+        "shutdown drain: refusing new work; waiting for in-flight chat + goal sessions"
     );
 
     let start = Instant::now();
-    let idle = wait_until_chat_idle(state, grace).await;
+    let idle = wait_until_idle(state, grace).await;
     let waited = start.elapsed();
 
-    let aborted = if idle {
-        0
+    let (aborted, parked_goals) = if idle {
+        (0, 0)
     } else {
-        let n = abort_remaining_turns(state);
+        let aborted = abort_remaining_turns(state);
+        let parked_goals = park_remaining_goals(state).await;
+        // Cooperative park/cancel needs a moment to leave the running map and flip status.
+        let _ = wait_until_idle(state, Duration::from_millis(500)).await;
         warn!(
-            aborted = n,
+            aborted,
+            parked_goals,
             waited_ms = waited.as_millis() as u64,
-            "shutdown drain: grace elapsed; aborted remaining in-flight turns"
+            "shutdown drain: grace elapsed; aborted chat stragglers and parked remaining goals"
         );
-        n
+        (aborted, parked_goals)
     };
 
     if idle {
         info!(
             waited_ms = waited.as_millis() as u64,
-            "shutdown drain: all in-flight turns finished within grace"
+            "shutdown drain: all in-flight work finished within grace"
         );
     }
 
@@ -154,21 +180,22 @@ pub async fn drain_for_shutdown(state: &AppState, grace: Duration) -> DrainOutco
         idle_within_grace: idle,
         waited,
         aborted,
+        parked_goals,
         grace,
     }
 }
 
-/// Poll until [`ChatSessions::in_flight_count`] is 0 or `grace` elapses.
+/// Poll until chat + goal in-flight counts are both 0, or `grace` elapses.
 ///
 /// Returns true if idle within grace. A **zero grace** returns immediately (does not wait) —
-/// that is intentional so §1 can prove non-zero grace is what makes finish-within-grace work.
-pub async fn wait_until_chat_idle(state: &AppState, grace: Duration) -> bool {
+/// that is intentional so tests can prove non-zero grace is what makes finish-within-grace work.
+pub async fn wait_until_idle(state: &AppState, grace: Duration) -> bool {
     if grace.is_zero() {
-        return in_flight_count(state) == 0;
+        return total_in_flight(state).await == 0;
     }
     let deadline = Instant::now() + grace;
     loop {
-        if in_flight_count(state) == 0 {
+        if total_in_flight(state).await == 0 {
             return true;
         }
         if Instant::now() >= deadline {
@@ -178,7 +205,11 @@ pub async fn wait_until_chat_idle(state: &AppState, grace: Duration) -> bool {
     }
 }
 
-fn in_flight_count(state: &AppState) -> usize {
+async fn total_in_flight(state: &AppState) -> usize {
+    chat_in_flight_count(state) + state.goals.in_flight_count().await
+}
+
+fn chat_in_flight_count(state: &AppState) -> usize {
     state
         .chat
         .as_ref()
@@ -186,7 +217,7 @@ fn in_flight_count(state: &AppState) -> usize {
         .unwrap_or(0)
 }
 
-/// Cancel every still-running turn so post-drain state is not `turn_running`.
+/// Cancel every still-running chat turn so post-drain state is not `turn_running`.
 /// Cancel persists nothing → transcripts that ended on a user message read as unanswered.
 fn abort_remaining_turns(state: &AppState) -> usize {
     let Some(chat) = state.chat.as_ref() else {
@@ -200,6 +231,11 @@ fn abort_remaining_turns(state: &AppState) -> usize {
         }
     }
     n
+}
+
+/// Park every still-hosted goal session so post-drain status is not permanently `Running`.
+async fn park_remaining_goals(state: &AppState) -> usize {
+    state.goals.park_all_in_flight().await
 }
 
 /// Await OS shutdown signals (Ctrl+C; SIGTERM on Unix). Used by `axum::serve` graceful path.
@@ -603,5 +639,195 @@ mod tests {
     fn default_grace_is_above_docker_ten_seconds() {
         assert!(DEFAULT_SHUTDOWN_GRACE > Duration::from_secs(10));
         assert_eq!(DEFAULT_SHUTDOWN_GRACE, Duration::from_secs(90));
+    }
+
+    // ── Goal sessions in the drain (round-2 §4) ─────────────────────────────
+
+    /// Pack that only finishes when the cancel/park signal fires — so a no-op park leaves
+    /// `Running` forever and fails the post-drain status assertion.
+    struct NeverEndingGoalPack;
+    #[async_trait]
+    impl liberado_session::DomainPackRunner for NeverEndingGoalPack {
+        fn domain_id(&self) -> &str {
+            "life"
+        }
+        async fn run(
+            &self,
+            _id: &str,
+            _goal: &liberado_session::GoalSpec,
+            _ctx: &liberado_session::PackContext<'_>,
+            _events: tokio::sync::mpsc::Sender<liberado_session::SessionEvent>,
+            _inputs: liberado_session::InputChannel,
+            mut cancel: tokio::sync::watch::Receiver<bool>,
+        ) -> Result<liberado_session::GoalResult, liberado_session::PackError> {
+            loop {
+                if *cancel.borrow() {
+                    return Err(liberado_session::PackError::Cancelled);
+                }
+                if cancel.changed().await.is_err() {
+                    return Err(liberado_session::PackError::Cancelled);
+                }
+            }
+        }
+    }
+
+    async fn state_with_hanging_goal(
+        root: &std::path::Path,
+    ) -> (Arc<AppState>, Arc<liberado_session::GoalSessionHub>, String) {
+        use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant};
+
+        let store = Arc::new(SessionStore::open(root).await);
+        let mut hub = GoalSessionHub::new(SessionStore::clone(&store));
+        hub.register_pack(Arc::new(NeverEndingGoalPack));
+        let goals = Arc::new(hub);
+
+        let (chat, _) = make_chat(root, Arc::new(PendingProvider)).await;
+
+        let mut state = AppState::for_test(store, Some(chat), root.to_path_buf());
+        // Replace the empty hub from for_test with one that has a pack.
+        state.goals = Arc::clone(&goals);
+        let state = Arc::new(state);
+
+        let id = goals
+            .start_with_grant(
+                GoalSpec {
+                    id: None,
+                    description: "hang until park".into(),
+                    success_criteria: vec![],
+                    domain: DomainHint::Life,
+                    max_turns: 0,
+                    max_idle_secs: None,
+                    origin: None,
+                    profile: None,
+                    payload: serde_json::Value::Null,
+                },
+                SessionGrant::default(),
+            )
+            .await
+            .expect("start hanging goal");
+
+        // Wait until hosted (Running + cancel handle).
+        for _ in 0..100 {
+            if goals.in_flight_count().await >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            goals.in_flight_count().await >= 1,
+            "goal must be in-flight before drain"
+        );
+
+        (state, goals, id)
+    }
+
+    /// R3 / acceptance: after drain, a goal that did not finish is **not** left `Running` —
+    /// park is the disposition (not process-kill mid-run with status still Running).
+    ///
+    /// R1: if `park_remaining_goals` / goal half of `total_in_flight` is deleted, this fails
+    /// (session stays Running, or drain never waits on goals).
+    #[tokio::test]
+    async fn goal_session_is_parked_not_left_running_after_drain() {
+        use liberado_session::SessionStatus;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (state, goals, id) = state_with_hanging_goal(dir.path()).await;
+
+        // Zero grace: do not wait for the pack to finish itself — force the park path.
+        let outcome = drain_for_shutdown(&state, Duration::ZERO).await;
+        assert!(
+            outcome.parked_goals >= 1,
+            "drain must park straggler goals: {outcome:?}"
+        );
+
+        // Settle until the cooperative park lands (or timeout).
+        let mut final_status = None;
+        for _ in 0..100 {
+            if let Some(snap) = goals.snapshot(&id).await {
+                final_status = Some(snap.session.status);
+                if snap.session.status != SessionStatus::Running {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let status = final_status.expect("session still in store");
+        assert_eq!(
+            status,
+            SessionStatus::Parked,
+            "post-drain goal must be Parked (human-actionable), not permanently Running"
+        );
+        assert_eq!(
+            goals.in_flight_count().await,
+            0,
+            "parked session must leave the host map"
+        );
+    }
+
+    /// Router with refuse middleware: `POST /api/goals` after drain is 503 + shutting_down.
+    /// Asserting only `DrainGate` would not catch a goals route never added to the layer (R3).
+    #[tokio::test]
+    async fn post_goals_refuses_with_shutting_down_after_drain() {
+        let dir = tempfile::tempdir().unwrap();
+        let (chat, store) = make_chat(
+            dir.path(),
+            Arc::new(SlowProvider {
+                delay: Duration::from_millis(1),
+                reply: "n/a".into(),
+            }),
+        )
+        .await;
+        let state = state_with(chat, store, dir.path().to_path_buf());
+        drain_for_shutdown(&state, Duration::ZERO).await;
+        assert!(!state.drain.is_accepting());
+
+        // Same production shape: POST /api/goals on the work-start layer only.
+        let app = Router::new()
+            .route("/api/goals", axum::routing::post(crate::api::goals_start))
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                refuse_new_turns_if_draining,
+            ))
+            .with_state(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/goals")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"description":"should refuse","domain":"life"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = resp.into_body().collect().await.expect("body").to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(
+            body["error"], SHUTTING_DOWN_ERROR,
+            "structured shutting_down kind, not a generic 503: {body}"
+        );
+    }
+
+    /// Inventory comment in this module lists every work-start surface (acceptance deliverable).
+    #[test]
+    fn work_start_inventory_is_documented_in_module_docs() {
+        let docs = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shutdown.rs"));
+        for needle in [
+            "Chat HTTP",
+            "Telegram",
+            "POST /api/goals",
+            "Hooks",
+            "Cron",
+            "Vault",
+        ] {
+            assert!(
+                docs.contains(needle),
+                "shutdown module docs must inventory work-start surface: {needle}"
+            );
+        }
     }
 }

@@ -480,6 +480,36 @@ impl GoalSessionHub {
         self.store.list().await
     }
 
+    /// How many goal sessions currently have a live host (cancel handle present).
+    ///
+    /// Used by the server's graceful-shutdown drain so in-flight goals count toward the wait,
+    /// not only chat turns. A session that has finished (or never started) is not counted.
+    pub async fn in_flight_count(&self) -> usize {
+        self.cancels.lock().await.len()
+    }
+
+    /// Ids of sessions currently hosted (same set as [`in_flight_count`](Self::in_flight_count)).
+    pub async fn in_flight_ids(&self) -> Vec<String> {
+        self.cancels.lock().await.keys().cloned().collect()
+    }
+
+    /// Ask every in-flight session to **park** (shutdown drain). Prefer this over cancel: parked
+    /// sessions remain human-actionable after restart; cancelled ones do not.
+    ///
+    /// Returns how many park signals were accepted. Cooperative packs land in
+    /// [`SessionStatus::Parked`]; the count is signals sent, not final status (status is observed
+    /// after a short settle wait in the drain).
+    pub async fn park_all_in_flight(&self) -> usize {
+        let ids = self.in_flight_ids().await;
+        let mut n = 0;
+        for id in ids {
+            if self.park(&id).await.is_ok() {
+                n += 1;
+            }
+        }
+        n
+    }
+
     async fn run_session(
         &self,
         session_id: String,
