@@ -50,6 +50,13 @@ pub const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(90);
 /// Wire error kind clients can match on when new turns are refused during drain.
 pub const SHUTTING_DOWN_ERROR: &str = "shutting_down";
 
+/// How long the drain lets a cooperative park land before recording the status itself.
+///
+/// Deliberately short: this is a courtesy window for a pack that is between turns, not a second
+/// grace period. A pack that needs longer is one blocked in a model call, and no achievable wait
+/// helps it — `force_park_still_hosted` is what makes that case correct.
+const PARK_SETTLE_MS: u64 = 500;
+
 /// Human-readable refusal for surfaces with no JSON envelope to put [`SHUTTING_DOWN_ERROR`] in —
 /// today the Telegram bridge, which calls `ChatSessions` directly and so never passes through
 /// [`refuse_new_turns_if_draining`]. Kept beside the wire constant so the two stay one decision.
@@ -159,10 +166,15 @@ pub async fn drain_for_shutdown(state: &AppState, grace: Duration) -> DrainOutco
         let aborted = abort_remaining_turns(state);
         let parked_goals = park_remaining_goals(state).await;
         // Cooperative park/cancel needs a moment to leave the running map and flip status.
-        let _ = wait_until_idle(state, Duration::from_millis(500)).await;
+        let _ = wait_until_idle(state, Duration::from_millis(PARK_SETTLE_MS)).await;
+        // A pack blocked in a model call cannot observe the signal before we exit, and `Parked` is
+        // only filed when a pack returns. Record it ourselves so nothing is left `Running` with no
+        // host — see `GoalSessionHub::force_park_still_hosted`.
+        let forced_park_goals = state.goals.force_park_still_hosted().await;
         warn!(
             aborted,
             parked_goals,
+            forced_park_goals,
             waited_ms = waited.as_millis() as u64,
             "shutdown drain: grace elapsed; aborted chat stragglers and parked remaining goals"
         );
@@ -643,6 +655,29 @@ mod tests {
 
     // ── Goal sessions in the drain (round-2 §4) ─────────────────────────────
 
+    /// Pack that does **not** observe the park signal promptly — the realistic case, because a
+    /// session still hosted at grace timeout is usually blocked in a model call and cannot check
+    /// its cancel channel until that call returns.
+    struct UncooperativeGoalPack;
+    #[async_trait]
+    impl liberado_session::DomainPackRunner for UncooperativeGoalPack {
+        fn domain_id(&self) -> &str {
+            "life"
+        }
+        async fn run(
+            &self,
+            _id: &str,
+            _goal: &liberado_session::GoalSpec,
+            _ctx: &liberado_session::PackContext<'_>,
+            _events: tokio::sync::mpsc::Sender<liberado_session::SessionEvent>,
+            _inputs: liberado_session::InputChannel,
+            _cancel: tokio::sync::watch::Receiver<bool>,
+        ) -> Result<liberado_session::GoalResult, liberado_session::PackError> {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            Err(liberado_session::PackError::Cancelled)
+        }
+    }
+
     /// Pack that only finishes when the cancel/park signal fires — so a no-op park leaves
     /// `Running` forever and fails the post-drain status assertion.
     struct NeverEndingGoalPack;
@@ -674,11 +709,18 @@ mod tests {
     async fn state_with_hanging_goal(
         root: &std::path::Path,
     ) -> (Arc<AppState>, Arc<liberado_session::GoalSessionHub>, String) {
+        state_with_goal_pack(root, Arc::new(NeverEndingGoalPack)).await
+    }
+
+    async fn state_with_goal_pack(
+        root: &std::path::Path,
+        pack: Arc<dyn liberado_session::DomainPackRunner>,
+    ) -> (Arc<AppState>, Arc<liberado_session::GoalSessionHub>, String) {
         use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant};
 
         let store = Arc::new(SessionStore::open(root).await);
         let mut hub = GoalSessionHub::new(SessionStore::clone(&store));
-        hub.register_pack(Arc::new(NeverEndingGoalPack));
+        hub.register_pack(pack);
         let goals = Arc::new(hub);
 
         let (chat, _) = make_chat(root, Arc::new(PendingProvider)).await;
@@ -812,22 +854,78 @@ mod tests {
         );
     }
 
-    /// Inventory comment in this module lists every work-start surface (acceptance deliverable).
+    /// The module docs must inventory every work-start surface (an acceptance deliverable in its
+    /// own right — the list is as much the point as the code).
+    ///
+    /// Scoped to `//!` lines only. Searching the whole file made this unfalsifiable: `include_str!`
+    /// pulls in this test too, and the needle array below contains every string being searched for,
+    /// so the entire inventory could be deleted with the test still green — `failure-modes.md` §1,
+    /// a check that cannot fail.
     #[test]
     fn work_start_inventory_is_documented_in_module_docs() {
-        let docs = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shutdown.rs"));
+        let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shutdown.rs"));
+        let docs: String = src
+            .lines()
+            .filter(|l| l.trim_start().starts_with("//!"))
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
         for needle in [
             "Chat HTTP",
             "Telegram",
             "POST /api/goals",
             "Hooks",
             "Cron",
-            "Vault",
+            "Vault reactions",
         ] {
             assert!(
                 docs.contains(needle),
                 "shutdown module docs must inventory work-start surface: {needle}"
             );
         }
+        // The inventory is a table of decisions, not a word list: every row states gated or not.
+        assert!(
+            docs.contains("Gated?"),
+            "inventory must record a gated/not-gated verdict per surface"
+        );
+    }
+
+    /// The state that must be on **disk** when the process exits, for a pack that never got to
+    /// cooperate.
+    ///
+    /// `park()` only signals: `SessionStatus::Parked` is filed by `run_session` *after the pack
+    /// returns*, and the `park_requests` set recording the intent is in-memory. A session still
+    /// hosted at grace timeout is typically blocked in a model call, so it cannot observe the
+    /// signal before the process exits — and then the store still says `Running`, with no host and
+    /// no pending question. That is the permanently-running state the acceptance criterion
+    /// forbids, and the goal-session twin of the zombie `turn_running` P7 guards against.
+    ///
+    /// R3: asserts the **persisted record**, not `DrainOutcome.parked_goals`. The signal count is
+    /// what the drain attempted; this is what a human finds after restart, and only the second one
+    /// is the guarantee.
+    #[tokio::test]
+    async fn uncooperative_goal_is_left_parked_on_disk_not_running() {
+        use liberado_session::SessionStatus;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (state, goals, id) =
+            state_with_goal_pack(dir.path(), Arc::new(UncooperativeGoalPack)).await;
+
+        let outcome = drain_for_shutdown(&state, Duration::ZERO).await;
+        assert!(
+            outcome.parked_goals >= 1,
+            "drain must signal park: {outcome:?}"
+        );
+
+        // No polling: the process is about to exit, so whatever is on disk *now* is what survives.
+        let status = goals.snapshot(&id).await.expect("record").session.status;
+        assert_eq!(
+            status,
+            SessionStatus::Parked,
+            "a pack that could not observe the signal must still be recorded Parked before exit — \
+             found {status:?}, which is a session no human can act on"
+        );
     }
 }
