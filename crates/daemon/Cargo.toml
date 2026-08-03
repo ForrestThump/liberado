@@ -17,6 +17,9 @@ liberado-vault = { workspace = true }
 liberado-dispatcher = { workspace = true }
 liberado-orchestrator = { workspace = true }
 liberado-session = { workspace = true }
+# For `latency::with_correlation` only: the approval path executes inference and must attribute it
+# to the proposal's originating correlation, or the cost journal records `"-"`.
+liberado-provider = { workspace = true }
 chrono = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
@@ -26,7 +29,6 @@ thiserror = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 liberado-cron = { workspace = true }
-liberado-provider = { workspace = true }
 liberado-executor = { workspace = true }
 liberado-test-support = { workspace = true }
 liberado-config-loader = { workspace = true }
