@@ -78,8 +78,8 @@ measurement is in [`token-economics-findings-2026-08.md`](token-economics-findin
 
 | # | What | Pointer |
 |---|---|---|
-| **A1** | **Instrument the tool catalog.** Promote the `allowed_mcps` count from `debug` to `info`, and log the *offered* vs *surviving* MCP count and the resulting schema token size. The box runs at `info`, so today this is unobservable. **Instrument only — do not change narrowing behaviour.** | `crates/orchestrator/src/lib.rs` ~865 |
-| **A2** | **Order the dispatcher prompt for cache reuse.** The varying goal is formatted *before* the stable MCP catalog, poisoning the prefix — dispatcher cache hit is 22.3% against ~76% elsewhere. Put stable content first. Then check the orchestrator's own prompt for the same shape; that one is 92.8% of spend. | `crates/dispatcher/src/lib.rs:240` |
+| **A1** | ~~Instrument the tool catalog.~~ **Done — PR #42.** | `crates/orchestrator/src/lib.rs` ~865 |
+| **A2** | ~~Order the dispatcher prompt for cache reuse.~~ **Done — PR #43.** | `crates/dispatcher/src/lib.rs:240` |
 | **A3** | **Report `repeat_calls` in `liberado-cost`.** Once PR #41 lands, the counter rides every filed report but nothing aggregates it. | `crates/cost/` |
 
 ## Band B — correctness and honesty gaps (each found and left open deliberately)
