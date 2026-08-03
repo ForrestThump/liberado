@@ -2735,6 +2735,94 @@ mod tests {
         );
     }
 
+    /// The **plain `DispatchSubagent` arm** — a chat `delegate`, and the path that produces most of
+    /// the journal's subagent records.
+    ///
+    /// The test above takes its subagent side from `dispatch_parallel`, so this single-dispatch arm
+    /// was unguarded: routing it back through the orchestrator's own provider left the whole
+    /// workspace green (108/108). That is the R7 shape — a fixture that cannot fail the wrong
+    /// implementation, on the busiest of the three subagent paths.
+    ///
+    /// Also stronger than existence: the recorder sees exactly one call here, so the role is
+    /// unambiguously attributable to *this* dispatch rather than to whichever call happened to
+    /// contribute it in a mixed list.
+    #[tokio::test]
+    async fn a_plain_dispatch_subagent_journals_as_subagent() {
+        use liberado_provider::{AgentRole, LatencyEvent, LatencyRecorder, MeteredProvider};
+
+        #[derive(Default)]
+        struct CapturingRecorder {
+            events: std::sync::Mutex<Vec<LatencyEvent>>,
+        }
+        impl LatencyRecorder for CapturingRecorder {
+            fn record(&self, event: LatencyEvent) {
+                self.events.lock().unwrap().push(event);
+            }
+        }
+
+        let rec = Arc::new(CapturingRecorder::default());
+        // The orchestrator's own provider is tagged `Orchestrator`; if the dispatch runs on it, the
+        // recorded role is wrong and this fails.
+        let direct = MeteredProvider::wrap(
+            Arc::new(MockProvider::with_script(
+                "mock",
+                [submit_report_response("wrong provider", "succeeded")],
+            )),
+            AgentRole::Orchestrator,
+            rec.clone(),
+        );
+        let subagent = MeteredProvider::wrap(
+            Arc::new(MockProvider::with_script(
+                "mock",
+                [submit_report_response("delegated done", "succeeded")],
+            )),
+            AgentRole::Subagent,
+            rec.clone(),
+        );
+        let orch = Orchestrator::new(
+            direct,
+            CallRecordingFactory::default(),
+            CapabilitySet::empty(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            std::env::temp_dir(),
+            ProposalSigner::random(),
+            "default",
+        )
+        .with_subagent_provider(subagent);
+
+        let decision = DispatchDecision {
+            action: DispatchAction::DispatchSubagent {
+                goal: "compare belt drive vs chain drive".into(),
+                capabilities: CapabilitySet::empty(),
+                allowed_mcps: Vec::new(),
+                success_criteria: Vec::new(),
+                artifact_target: None,
+                model: None,
+                correlation_id: "chat-delegate-plain".into(),
+                delivery: Delivery::Summarize,
+                depth: Depth::Normal,
+            },
+            confidence: 0.9,
+            rationale: "multi-step".into(),
+        };
+        orch.run(decision, "outer", "trigger-plain", &CapabilitySet::empty())
+            .await
+            .expect("run");
+
+        let events = rec.events.lock().unwrap();
+        assert_eq!(
+            events.len(),
+            1,
+            "precondition: exactly one call, so the role below is attributable to this dispatch"
+        );
+        assert_eq!(
+            events[0].role, "subagent",
+            "a plain DispatchSubagent must journal as subagent, not merge into orchestrator"
+        );
+    }
+
     #[test]
     fn terminal_summary_failed_outcome_maps_to_failed_terminal_kind() {
         let report = Report {
