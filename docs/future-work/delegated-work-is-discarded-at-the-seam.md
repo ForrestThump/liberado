@@ -1,9 +1,51 @@
 # A delegated subagent's work is discarded at the seam
 
-**Status**: fixed in tree (`e0fde79` / `relay_directive` + `output_contract` on research
-`Delivery::Summarize`). Round-3 §1 acceptance tests land the R6/R7 guarantees on the live
-`DispatchSubagent` path. Written 2026-08-02; status updated 2026-08-02.
-**Severity** (historical): the user got a confident, cited answer whose specifics the system never researched.
+**Status**: **payload fixed 2026-08-02 in `e0fde79`** for the `DispatchSubagent` path, with the
+boundary tests landed 2026-08-03. Written 2026-08-02.
+**Severity** (historical): the user got a confident, cited answer whose specifics the system never
+researched.
+
+> **Read this before acting on the rest of the page.** The fix described under "The fix, in shape"
+> **has landed**. `Orchestrator::output_contract` now picks the contract from where the report is
+> going, and a research dispatch whose delivery is `Summarize` — a chat `delegate` — is given
+> `relay_directive()`: its summary *is* the material. The call site is on the `DispatchSubagent`
+> path ([`orchestrator/src/lib.rs:943`](../../crates/orchestrator/src/lib.rs#L943)).
+>
+> This header said "not yet fixed" for a day after it was fixed, and that cost a round of planning:
+> round 3 §1 was specced against it. **Diagnosis pages need their status checked against the code,
+> not trusted.**
+>
+> **Boundary coverage landed 2026-08-03.** `e0fde79`'s four tests all called `output_contract`
+> directly; `crates/orchestrator/tests/orchestrate.rs` now drives `Orchestrator::run` and asserts the
+> relay contract reaches the **subagent's actual system prompt**, with the vault and acting paths
+> pinned alongside. The must-not-regress pair is covered in `main-agent/src/sessions/tests.rs`.
+
+## `ExecuteDirect` has the same gap, deliberately left open (2026-08-03)
+
+A chat `delegate` goes through the dispatch pack to `dispatcher.dispatch()`, which may classify it
+as **`ExecuteDirect`** rather than `DispatchSubagent`. That branch builds its task from
+[`DIRECT_INSTRUCTIONS`](../../crates/orchestrator/src/lib.rs#L107) alone and appends **no output
+contract** — and those instructions ask for a *"concise, high-signal result"*, which is the same
+"short" contract that caused the original bug.
+
+So the gap is structurally real. It is left open on purpose, for two reasons:
+
+1. **`ExecuteDirect` carries no `Delivery`.** `DispatchSubagent` has one, which is how
+   `output_contract` knows a report is being relayed to a conversation rather than filed. Direct
+   execution has no such field — its report always goes back as a summary, to a chat *or* to a cron
+   brief *or* to a vault reaction, and nothing distinguishes them.
+2. **A blanket fix would be a token regression on the largest bucket.** Appending `relay_directive`
+   to every read-only `ExecuteDirect` tells cron and vault-triggered runs to write full documents
+   too. Those are `orchestrator`-role work, which is 92.8% of all token spend
+   ([`token-economics-findings-2026-08.md`](token-economics-findings-2026-08.md)) — paying document
+   output on every reactive lookup to fix a chat-only provenance problem.
+
+**Practical severity is low**, which is why this is a note and not a deliverable. The classifier picks
+`ExecuteDirect` when a few steps suffice, so its summary usually *is* the whole answer — the
+fabrication risk was specific to research, where a lot is gathered and then discarded. The real fix
+is to give direct execution a destination it can reason about, not to append a directive
+unconditionally. `execute_direct_gets_no_output_contract_today` pins the current behaviour so this
+stays a decision rather than an accident.
 
 ## What happens
 

@@ -6,6 +6,14 @@ Written 2026-08-02, after all five round-2 PRs (#33–#37) landed.
 after **one** still lands the most valuable thing, and stopping after **two** still lands the
 measurement work the token-economics push depends on. Do not start §3 before §1 and §2 are open.
 
+> **Revised order, 2026-08-03: §2 → §3 → §1.** §1's payload fix turned out to be already on main
+> (`e0fde79`) — specced against a doc header that said otherwise. What remains of §1 is a boundary
+> test and one unproven question about `ExecuteDirect`, which is a fraction of the work described.
+> **§2 is now the first thing to do**, and it is also the one the token-economics push is blocked on.
+>
+> The lesson generalises past this page: **a diagnosis doc's status line is a claim, not evidence.**
+> Before starting any deliverable here, `git log` the area and read the code it describes.
+
 These are deliberately larger than round 2's. Small, well-understood changes are cheaper to
 implement directly than to spec, review and repair — the scoping-plus-review overhead is only worth
 paying on work with real design content in it.
@@ -62,9 +70,35 @@ must be updated in the same PR.
 
 ---
 
-## 1. Delegated findings must reach the face agent
+## 1. Delegated findings must reach the face agent — ⚠️ **MOSTLY ALREADY DONE**
 
-**Why this is first.** It is the most serious open correctness bug in the tree: the system returns
+> **Correction, 2026-08-03.** This deliverable was specced against a stale doc header. The payload
+> fix **landed on main on 2026-08-02 in `e0fde79`**, before this page was written.
+> `Orchestrator::output_contract` picks the contract from where the report is going, and a research
+> dispatch delivering `Summarize` — a chat `delegate` — gets `relay_directive()`. The call site is
+> real, on the `DispatchSubagent` path ([`lib.rs:943`](../../crates/orchestrator/src/lib.rs#L943)).
+>
+> The mistake was mine: `delegated-work-is-discarded-at-the-seam.md` still read *"Status: finding,
+> not yet fixed"*, and I took that at face value instead of reading the code. The commit was in the
+> git log the whole time.
+>
+> **What is genuinely left**, and worth a smaller PR than this section describes:
+> - **Test at the boundary, not the function.** All four of `e0fde79`'s tests call `output_contract`
+>   directly. Nothing asserts what the face agent *receives* from a real delegation — which is the
+>   property the finding was about, and exactly the "testing the nearest seam" weakness round 2 was
+>   full of. The acceptance items below on the **must-not-regress list** and the **before/after
+>   measurement** are also still unmet.
+> - **`ExecuteDirect` gets no output contract at all** ([`lib.rs:869`](../../crates/orchestrator/src/lib.rs#L869)
+>   builds its task from `DIRECT_INSTRUCTIONS` alone). Unproven rather than known-broken — the
+>   original reproduction was deep research, which routes to `DispatchSubagent` — but a shallow
+>   `delegate` routed direct would still return an unshaped summary. **Establish whether this is real
+>   before building anything**: one delegation shallow enough to route `ExecuteDirect`, and look at
+>   what comes back.
+>
+> **Priority now: below §2.** Read the rest of this section for the reasoning and the
+> must-not-regress list, which still apply.
+
+**Why this was first.** It is the most serious correctness bug the tree has had: the system returns
 confident, well-structured answers whose *provenance is false*. It is fully diagnosed —
 [`delegated-work-is-discarded-at-the-seam.md`](delegated-work-is-discarded-at-the-seam.md) has the
 root cause, the reproduction (twice, on different models), and the fix shape. Nothing about it is

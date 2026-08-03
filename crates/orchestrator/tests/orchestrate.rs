@@ -1466,14 +1466,19 @@ fn long_findings_report() -> CompletionResponse {
 }
 
 /// R6: a research `DispatchSubagent` with `Delivery::Summarize` (the chat `delegate` shape) must
-/// put the **relay contract** into the subagent instructions, and the report that becomes the
-/// face tool result must be able to carry the findings (not only a status line).
+/// put the **relay contract** into the system prompt the subagent actually receives — asserted on
+/// the provider's recorded request, not on `output_contract`'s return value, which is what
+/// `e0fde79`'s own tests already cover.
+///
+/// Scope, stated honestly (R5): this proves the contract is **delivered**. It cannot prove the
+/// subagent then writes more, because a scripted mock ignores its prompt. "Findings reach the face"
+/// is only observable against a real model — see the live check in the PR body.
 ///
 /// R7 wrong implementation excluded: *no contract on Summarize* (only vault path gets a directive)
 /// — the first completion's system prompt would lack "Anything you leave out is gone", and the
 /// seam would keep discarding research.
 #[tokio::test]
-async fn research_summarize_subagent_gets_relay_contract_and_findings_reach_the_report() {
+async fn research_summarize_subagent_gets_the_relay_contract_in_its_live_prompt() {
     let provider = Arc::new(MockProvider::with_script("mock", [long_findings_report()]));
     let factory = CallRecordingFactory::default();
     let ceiling = research_ceiling();
@@ -1538,17 +1543,25 @@ async fn research_summarize_subagent_gets_relay_contract_and_findings_reach_the_
     let Disposition::Reported(report) = disposition else {
         panic!("expected Reported, got {disposition:?}");
     };
-    // Observable the face agent receives (face.rs wraps this summary as the tool result body).
-    let face_tool_result = format!("RESULT (Succeeded):\n{}", report.summary.trim());
+    // A long summary survives to the report unmangled — the orchestrator does not truncate or
+    // re-summarise what the subagent filed.
+    //
+    // This is deliberately **not** claimed as "the findings reach the face". `MockProvider` returns
+    // its script regardless of the prompt it is given, so the findings here are guaranteed by the
+    // fixture, not by the contract: with `relay_directive()` replaced by `String::new()` these
+    // assertions still pass. No in-process test can show that a prompt *causes* a model to write
+    // more — the provable property is the one above, that the contract reaches the subagent.
     assert!(
-        face_tool_result.contains("eccentric BB")
-            && face_tool_result.contains("135000")
-            && face_tool_result.contains("BikeRadar"),
-        "face must receive findings, not a status line; got:\n{face_tool_result}"
+        report.summary.contains("eccentric BB")
+            && report.summary.contains("135000")
+            && report.summary.contains("BikeRadar"),
+        "a long filed summary must survive to the report intact; got:\n{}",
+        report.summary
     );
     assert!(
-        !face_tool_result.contains(STATUS_LINE) || face_tool_result.len() > STATUS_LINE.len() * 2,
-        "must not be the thin status-only shape alone"
+        report.summary.len() > STATUS_LINE.len() * 2,
+        "fixture check: this summary must be substantially longer than the status-line shape, or \
+         the assertion above proves nothing about truncation"
     );
 }
 
@@ -1681,5 +1694,74 @@ async fn acting_subagent_gets_no_output_contract() {
         !system_blob.contains("Anything you leave out is gone")
             && !system_blob.contains("FINISHED DOCUMENT"),
         "acting dispatch must not get research/vault output contracts; got:\n{system_blob}"
+    );
+}
+
+/// Pins the **known gap**: `ExecuteDirect` gets no output contract, and its baseline instructions
+/// ask for a *"concise, high-signal result"* — the same "short" contract that caused the seam bug.
+/// A chat `delegate` the classifier judges simple lands here, so this path can still return an
+/// unshaped summary.
+///
+/// It is left this way deliberately, and this test exists so that stays a decision rather than an
+/// accident. `ExecuteDirect` carries no `Delivery`, so the orchestrator cannot tell a chat relay
+/// from a cron brief or a vault reaction; appending `relay_directive` unconditionally would tell
+/// every read-only direct execution to write a document, and that is the `orchestrator` role —
+/// 92.8% of token spend. The fix needs a destination, not a directive.
+///
+/// **If you make `ExecuteDirect` destination-aware, this test should start failing.** Change it
+/// then, and see `delegated-work-is-discarded-at-the-seam.md`.
+#[tokio::test]
+async fn execute_direct_gets_no_output_contract_today() {
+    let provider = Arc::new(MockProvider::with_script("mock", [long_findings_report()]));
+    let ceiling = research_ceiling();
+    let orch = Orchestrator::new(
+        provider.clone(),
+        CallRecordingFactory::default(),
+        ceiling.clone(),
+        research_catalog(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    );
+
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            // Read-only MCPs: research-shaped, so this is the case that *would* qualify for the
+            // relay contract if direct execution knew where its report was going.
+            relevant_mcps: vec!["search".into()],
+        },
+        confidence: 0.9,
+        rationale: "few steps suffice".into(),
+    };
+
+    let _ = orch
+        .run(
+            decision,
+            "compare belt vs chain",
+            "chat-delegate-direct",
+            &ceiling,
+        )
+        .await
+        .expect("run");
+
+    let req = provider.last_request().expect("executor called");
+    let system_blob: String = req
+        .messages
+        .iter()
+        .filter(|m| m.role == liberado_provider::Role::System)
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !system_blob.contains("Anything you leave out is gone"),
+        "documented gap: ExecuteDirect has no relay contract. If you fixed that, update this test \
+         and the seam doc; got:\n{system_blob}"
+    );
+    assert!(
+        system_blob.contains("concise, high-signal"),
+        "and its baseline instructions still ask for concision — the shape of the original bug"
     );
 }
