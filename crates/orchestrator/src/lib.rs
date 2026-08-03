@@ -1240,6 +1240,7 @@ impl Orchestrator {
             goal,
             proposal.correlation_id.as_str(),
         );
+        Self::instrument_catalog(allowed_mcps, &*runtime);
         // Same derivation as the live dispatch arm: an approved proposal that can only read is
         // still research, and gets the same budget and the same right to file partial findings.
         let research = self.is_read_only_dispatch(allowed_mcps);
@@ -1321,6 +1322,7 @@ impl Orchestrator {
                 sub.goal.as_str(),
                 sub.correlation_id.as_str(),
             );
+            Self::instrument_catalog(&sub.allowed_mcps, &*runtime);
             deferrals.push(deferral);
             let task = Task::new(subagent_instructions(&sub.success_criteria), sub.goal);
             let budget = self.subagent_budget.clone();
@@ -1407,23 +1409,25 @@ impl Orchestrator {
 
     fn instrument_catalog(offered: &[String], runtime: &dyn ToolRuntime) {
         let catalog = runtime.catalog();
-        let surviving = catalog
+        let from_catalog = catalog
             .iter()
             .map(|tool| mcp_of(&tool.name))
             .collect::<HashSet<&str>>()
             .len();
         match serde_json::to_string(&catalog) {
             Ok(schema) => {
+                // chars/4 token proxy with a 1.3x safety factor (same
+                // convention as `crates/main-agent/src/compaction.rs`).
                 let schema_est_tokens = ((schema.len() as f64) / 4.0 * 1.3).ceil() as u64;
                 #[cfg(test)]
                 {
                     LAST_CATALOG_OFFERED.store(offered.len(), Ordering::Relaxed);
-                    LAST_CATALOG_SURVIVING.store(surviving, Ordering::Relaxed);
+                    LAST_CATALOG_SURVIVING.store(from_catalog, Ordering::Relaxed);
                     LAST_CATALOG_SCHEMA_EST_TOKENS.store(schema_est_tokens, Ordering::Relaxed);
                 }
                 tracing::info!(
                     mcp_offered = offered.len(),
-                    mcp_surviving = surviving,
+                    mcp_from_catalog = from_catalog,
                     schema_bytes = schema.len(),
                     schema_est_tokens,
                     "tool catalog prepared"
@@ -3077,29 +3081,34 @@ mod tests {
             confidence: 0.8,
             rationale: "multi-step".into(),
         };
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("test runtime");
-        let _ = rt.block_on(orch.run(
-            decision,
-            "outer goal",
-            "trigger-xyz",
-            &CapabilitySet::empty(),
-        ));
+        // Run on a dedicated thread so the run-then-read sequence is atomic
+        // w.r.t. other tests that reach instrument_catalog and touch these
+        // process-wide statics.
+        let (offered, from_catalog, est_tokens) = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime");
+            let _ = rt.block_on(orch.run(
+                decision,
+                "outer goal",
+                "trigger-xyz",
+                &CapabilitySet::empty(),
+            ));
+            (
+                LAST_CATALOG_OFFERED.load(Ordering::Relaxed),
+                LAST_CATALOG_SURVIVING.load(Ordering::Relaxed),
+                LAST_CATALOG_SCHEMA_EST_TOKENS.load(Ordering::Relaxed),
+            )
+        })
+        .join()
+        .expect("catalog instrumentation test thread");
+
+        assert_eq!(offered, 2, "offered = allowed_mcps.len()");
         assert_eq!(
-            LAST_CATALOG_OFFERED.load(Ordering::Relaxed),
-            2,
-            "offered = allowed_mcps.len()"
-        );
-        assert_eq!(
-            LAST_CATALOG_SURVIVING.load(Ordering::Relaxed),
-            1,
+            from_catalog, 1,
             "two MCPs offered but only tasks-mcp survives in the catalog"
         );
-        assert!(
-            LAST_CATALOG_SCHEMA_EST_TOKENS.load(Ordering::Relaxed) > 0,
-            "schema must have positive token count"
-        );
+        assert!(est_tokens > 0, "schema must have positive token count");
     }
 }
