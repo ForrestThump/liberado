@@ -30,6 +30,10 @@ pub enum AgentRole {
     Face,
     Dispatcher,
     Orchestrator,
+    /// Delegated subagent work — journaled separately from the orchestrator's own direct execution
+    /// so delegation vs. doing-it-directly is measurable (see `docs/future-work/
+    /// parallel-deliverables-2026-08-round-3.md` §2).
+    Subagent,
     Unknown,
 }
 
@@ -39,6 +43,7 @@ impl AgentRole {
             AgentRole::Face => "face",
             AgentRole::Dispatcher => "dispatcher",
             AgentRole::Orchestrator => "orchestrator",
+            AgentRole::Subagent => "subagent",
             AgentRole::Unknown => "unknown",
         }
     }
@@ -123,8 +128,10 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// A [`Provider`] decorator that records one [`LatencyEvent`] per call. Wrap the shared provider
-/// **once** (at construction); role/correlation come from the task-local [`scope`] at each seam.
+/// A [`Provider`] decorator that records one [`LatencyEvent`] per call. The **role** is bound at
+/// construction — build one wrapped instance per [`AgentRole`] (the daemon's per-role providers do
+/// exactly that) — while only the **correlation id** rides the task-local [`with_correlation`]
+/// scope at each seam. No role scope exists, so two roles can never share one instance.
 pub struct MeteredProvider {
     inner: Arc<dyn Provider>,
     role: AgentRole,

@@ -242,6 +242,11 @@ pub enum OrchestratorError {
 /// daemon can own an `Orchestrator` without becoming generic.
 pub struct Orchestrator {
     provider: Arc<dyn Provider>,
+    /// Provider for **delegated subagent** work — a second instance over the same model backend,
+    /// tagged `AgentRole::Subagent` so subagent calls journal separately from the orchestrator's own
+    /// direct execution (`ExecuteDirect`, which uses [`provider`](Self::provider)). Defaults to
+    /// `provider` (see [`Self::new`]); override via [`Self::with_subagent_provider`].
+    subagent_provider: Arc<dyn Provider>,
     factory: Box<dyn RuntimeFactory>,
     /// The ceiling `ExecuteDirect` scopes its runtime to (see `run`'s `ExecuteDirect` arm). The
     /// same `CapabilitySet` the caller's dispatch request was checked against — passing a wider
@@ -289,8 +294,17 @@ pub struct Orchestrator {
 /// every pool's call site (`docs/roadmap/hygiene-audit-2026-07-05.md`) — building one
 /// `OrchestratorInfra` and calling [`for_pool`](Self::for_pool) per pool collapses that back down to
 /// naming only what actually differs.
+///
+/// Also shared here: the subagent-tagged provider (defaults to the infra's own `provider`, set via
+/// [`with_subagent_provider`](Self::with_subagent_provider)) — the second instance every pool uses
+/// for delegated subagent work so it journals under `AgentRole::Subagent` rather than
+/// `AgentRole::Orchestrator`.
 pub struct OrchestratorInfra {
     provider: Arc<dyn Provider>,
+    /// Tagged `AgentRole::Subagent` — the second provider handed to every pool built from this
+    /// infra so delegated subagent work journals separately from direct execution. Defaults to
+    /// `provider` (see [`Self::new`]); override via [`Self::with_subagent_provider`].
+    subagent_provider: Arc<dyn Provider>,
     /// Shared live catalog — gate consequence/zone data is refreshed from here after MCP apply.
     live_catalog: Arc<liberado_common::CapabilityCatalog>,
     zone_write_classes: Vec<(String, WriteClass)>,
@@ -311,6 +325,7 @@ impl OrchestratorInfra {
         signer: ProposalSigner,
     ) -> Self {
         Self {
+            subagent_provider: provider.clone(),
             provider,
             live_catalog,
             zone_write_classes,
@@ -319,6 +334,14 @@ impl OrchestratorInfra {
             research_max_turns: RESEARCH_MAX_TURNS,
             report_sink: None,
         }
+    }
+
+    /// Set the subagent-tagged provider every pool built from this infra uses for delegated
+    /// subagent work (see [`Orchestrator::subagent_provider`]). Defaults to the infra's own
+    /// `provider` — set it whenever subagent calls must journal under a distinct role.
+    pub fn with_subagent_provider(mut self, provider: Arc<dyn Provider>) -> Self {
+        self.subagent_provider = provider;
+        self
     }
 
     /// Set the vault report sink for every pool built from this infra (see [`ReportSink`]).
@@ -346,6 +369,7 @@ impl OrchestratorInfra {
     ) -> Orchestrator {
         Orchestrator {
             provider: self.provider.clone(),
+            subagent_provider: self.subagent_provider.clone(),
             factory: Box::new(factory),
             capabilities,
             // Snapshots kept for API compatibility; live_catalog wins on every invoke.
@@ -380,6 +404,7 @@ impl Orchestrator {
         pool_name: impl Into<String>,
     ) -> Self {
         Self {
+            subagent_provider: provider.clone(),
             provider,
             factory: Box::new(factory),
             capabilities,
@@ -402,6 +427,14 @@ impl Orchestrator {
     /// Override the turn budget for read-only subagent work (default [`RESEARCH_MAX_TURNS`]).
     pub fn with_research_budget(mut self, budget: Budget) -> Self {
         self.research_budget = budget;
+        self
+    }
+
+    /// Override the provider used for delegated subagent work. Tag it `AgentRole::Subagent` so the
+    /// journal distinguishes subagent calls from the orchestrator's own direct execution
+    /// (which stays on [`provider`](Self::provider)). Defaults to the orchestrator's own provider.
+    pub fn with_subagent_provider(mut self, provider: Arc<dyn Provider>) -> Self {
+        self.subagent_provider = provider;
         self
     }
 
@@ -965,7 +998,9 @@ impl Orchestrator {
                         delivery = delivery.label(),
                         "dispatching subagent"
                     );
-                    let mut report = self.execute(budget, &*runtime, task).await?;
+                    let mut report =
+                        Self::execute_with(self.subagent_provider.clone(), budget, &*runtime, task)
+                            .await?;
                     // Out-of-band deferral mid-run → mark it so a chat surface drops the redundant
                     // reply (Gap 2). This is the primary path for a delegated subagent's permission
                     // request bubbling up through `delegate`.
@@ -1202,7 +1237,8 @@ impl Orchestrator {
             max_turns = budget.max_turns,
             "executing approved subagent proposal"
         );
-        let mut report = self.execute(budget, &*runtime, task).await?;
+        let mut report =
+            Self::execute_with(self.subagent_provider.clone(), budget, &*runtime, task).await?;
         report.deferred_to_human = deferred_flag_of(&deferral);
         // No `deliver` call here, and `ProposedAction::Subagent` carries no `delivery` — on purpose.
         // A subagent only becomes a proposal by tripping the consequence or zone-write guard, and
@@ -1265,7 +1301,7 @@ impl Orchestrator {
             deferrals.push(deferral);
             let task = Task::new(subagent_instructions(&sub.success_criteria), sub.goal);
             let budget = self.subagent_budget.clone();
-            let provider = self.provider.clone();
+            let provider = self.subagent_provider.clone();
             let label = sub.label.clone();
 
             let correlation = correlation.clone();
@@ -2595,6 +2631,108 @@ mod tests {
 
         assert_eq!(report.outcome, Outcome::Succeeded);
         assert!(report.summary.contains("only task"));
+    }
+
+    // ------------------------------------------------------------------
+    // role journaling: subagent vs. direct execution (deliverable §2)
+    // ------------------------------------------------------------------
+
+    /// One fixture, both roles: a delegated subagent call must journal `role: "subagent"` while an
+    /// `ExecuteDirect` call still journals `role: "orchestrator"`. A fixture of only subagent calls
+    /// would pass an implementation that labels everything `subagent`.
+    ///
+    /// Exercises both orchestrator arms a cron/vault trigger reaches: the `ExecuteDirect` arm
+    /// (871/879) and `dispatch_parallel`'s `tokio::spawn`ed worker (1275) — the spawn case
+    /// especially, because the role has to survive the task boundary the constructor-bound provider
+    /// exists for.
+    #[tokio::test]
+    async fn subagent_and_direct_execution_journal_distinct_roles() {
+        use liberado_provider::{AgentRole, LatencyEvent, LatencyRecorder, MeteredProvider};
+
+        #[derive(Default)]
+        struct CapturingRecorder {
+            events: std::sync::Mutex<Vec<LatencyEvent>>,
+        }
+        impl LatencyRecorder for CapturingRecorder {
+            fn record(&self, event: LatencyEvent) {
+                self.events.lock().unwrap().push(event);
+            }
+        }
+
+        let rec = Arc::new(CapturingRecorder::default());
+        let direct = MeteredProvider::wrap(
+            Arc::new(MockProvider::with_script(
+                "mock",
+                [submit_report_response("direct done", "succeeded")],
+            )),
+            AgentRole::Orchestrator,
+            rec.clone(),
+        );
+        let subagent = MeteredProvider::wrap(
+            Arc::new(MockProvider::with_script(
+                "mock",
+                [submit_report_response("delegated done", "succeeded")],
+            )),
+            AgentRole::Subagent,
+            rec.clone(),
+        );
+        let orch = Orchestrator::new(
+            direct,
+            CallRecordingFactory::default(),
+            CapabilitySet::empty(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            std::env::temp_dir(),
+            ProposalSigner::random(),
+            "default",
+        )
+        .with_subagent_provider(subagent);
+
+        // Direct execution (the `ExecuteDirect` arm) must keep journaling as `orchestrator`.
+        let decision = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: Vec::new(),
+                relevant_mcps: Vec::new(),
+            },
+            confidence: 0.9,
+            rationale: "simple".into(),
+        };
+        let disposition = orch
+            .run(
+                decision,
+                "do it directly",
+                "trigger-direct",
+                &CapabilitySet::empty(),
+            )
+            .await
+            .expect("direct run");
+        assert!(matches!(disposition, Disposition::Reported(_)));
+
+        // Delegated subagent work (the `dispatch_parallel` spawn) must journal as `subagent`.
+        orch.dispatch_parallel(
+            vec![SubDispatch {
+                goal: "delegate".into(),
+                allowed_mcps: vec![],
+                success_criteria: vec![],
+                correlation_id: "delegated-1".into(),
+                label: "D".into(),
+            }],
+            1,
+        )
+        .await
+        .expect("dispatch_parallel");
+
+        let events = rec.events.lock().unwrap();
+        let roles: Vec<&str> = events.iter().map(|e| e.role).collect();
+        assert!(
+            roles.contains(&"orchestrator"),
+            "ExecuteDirect must journal as orchestrator: {roles:?}"
+        );
+        assert!(
+            roles.contains(&"subagent"),
+            "delegated subagent work must journal as subagent: {roles:?}"
+        );
     }
 
     #[test]

@@ -130,7 +130,14 @@ pub struct RoleProviders {
     pub primary: Option<Arc<dyn Provider>>,
     pub face: Option<Arc<dyn Provider>>,
     pub dispatcher: Option<Arc<dyn Provider>>,
+    /// The `ModelRole::Subagent` backend the orchestrator uses as *its own* provider — journaled
+    /// under `AgentRole::Orchestrator` (direct execution and the orchestrator's own tool loop).
     pub subagent: Option<Arc<dyn Provider>>,
+    /// A second instance over the **same** `ModelRole::Subagent` backend, tagged
+    /// `AgentRole::Subagent` — handed to the orchestrator so delegated subagent work journals under
+    /// a separate role. Same model, same config; only the role label differs (see `docs/future-work/
+    /// parallel-deliverables-2026-08-round-3.md` §2).
+    pub subagent_worker: Option<Arc<dyn Provider>>,
 }
 
 impl RoleProviders {
@@ -146,6 +153,7 @@ impl RoleProviders {
             face: None,
             dispatcher: None,
             subagent: None,
+            subagent_worker: None,
         }
     }
 }
@@ -201,6 +209,9 @@ pub fn role_providers_from_config(
         face: Some(role_provider(ModelRole::MainAgent, AgentRole::Face)),
         dispatcher: Some(role_provider(ModelRole::Dispatcher, AgentRole::Dispatcher)),
         subagent: Some(role_provider(ModelRole::Subagent, AgentRole::Orchestrator)),
+        // Same backend, second tag: delegated subagent work must journal under its own role rather
+        // than the orchestrator's (see the field's doc comment).
+        subagent_worker: Some(role_provider(ModelRole::Subagent, AgentRole::Subagent)),
         primary: Some(base),
     }
 }
@@ -434,6 +445,12 @@ pub fn configure_daemon(
         guard.zone_write_classes.clone(),
         guard.proposals_dir.clone(),
         guard.signer.clone(),
+    )
+    .with_subagent_provider(
+        providers
+            .subagent_worker
+            .clone()
+            .expect("subagent_worker built alongside subagent"),
     );
     if let Some(max_turns) = config.topology.research_max_turns {
         orchestrator_infra = orchestrator_infra.with_research_max_turns(max_turns);
@@ -561,6 +578,12 @@ pub fn build_dispatch_pack(
         guard.zone_write_classes.clone(),
         guard.proposals_dir.clone(),
         guard.signer.clone(),
+    )
+    .with_subagent_provider(
+        providers
+            .subagent_worker
+            .clone()
+            .expect("subagent_worker built alongside subagent"),
     );
     if let Some(max_turns) = config.topology.research_max_turns {
         orchestrator_infra = orchestrator_infra.with_research_max_turns(max_turns);
