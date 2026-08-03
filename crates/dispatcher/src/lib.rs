@@ -237,7 +237,11 @@ impl Dispatcher {
             .map(|m| format!("- {}: {}", m.name, m.description))
             .collect::<Vec<_>>()
             .join("\n");
-        let mut user_message = format!("Goal:\n{}\n\nAvailable MCPs:\n{}", req.goal, catalog);
+        // Ordered stable-first so prefix caching has something to match: catalog and vault zones
+        // are identical on every call for a given deployment, while the goal and the guidance
+        // retrieved *for* that goal change every time. Anything varying that appears earlier
+        // poisons the prefix for everything after it.
+        let mut user_message = format!("Available MCPs:\n{catalog}");
         // The zones a `delivery = Vault` path may start with. Without this the classifier is being
         // asked to name a destination it has never been shown, so it invents a plausible one
         // (`research/`), the orchestrator's zone guard refuses the undeclared zone, and delivery
@@ -256,6 +260,16 @@ impl Dispatcher {
                 writable.join(", ")
             ));
         }
+        // Varying from here down: the goal, then the guidance retrieved for it.
+
+        // Varying from here down: the goal, then the guidance retrieved for it.
+        user_message.push_str(&format!(
+            "
+
+Goal:
+{}",
+            req.goal
+        ));
         if !hits.is_empty() {
             let guidance = hits
                 .iter()
@@ -1109,6 +1123,38 @@ mod tests {
             }
             other => panic!("expected Clarify(LowConfidence), got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn user_message_places_catalog_before_goal_for_cache_reuse() {
+        let mut req = request(caps("tasks-mcp"), 0);
+        // A writable zone so the (stable) zone block is present and its position is assertable.
+        req.zone_write_classes = vec![("tasks".into(), WriteClass::AgentWritable)];
+        let mock = scripted(&execute_direct("tasks-mcp:add", 0.95));
+        let dispatcher = Dispatcher::new(mock.clone(), DispatchTuning::default(), 4);
+        dispatcher.dispatch(&req).await.unwrap();
+        let sent = mock.last_request().unwrap();
+        let user_message = &sent.messages[1].content;
+        let cat_pos = user_message
+            .find("Available MCPs:")
+            .expect("catalog header missing");
+        let goal_pos = user_message.find("Goal:").expect("goal header missing");
+        assert!(
+            cat_pos < goal_pos,
+            "catalog must appear before the goal so the stable MCP listing is in the shared \
+             prefix; cache hit is otherwise ~22% vs ~76% elsewhere. \
+             got catalog at {cat_pos}, goal at {goal_pos}"
+        );
+        // The vault zone list is stable too — it must sit inside the same prefix, not after the
+        // goal. Fixing only the catalog leaves the identical mistake one block further down.
+        let zone_pos = user_message
+            .find("Vault zones")
+            .expect("this fixture declares a writable zone, so the block must be present");
+        assert!(
+            zone_pos < goal_pos,
+            "the zone list is identical on every call and belongs before the varying goal; \
+             got zones at {zone_pos}, goal at {goal_pos}"
+        );
     }
 
     #[tokio::test]
