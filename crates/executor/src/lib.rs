@@ -482,7 +482,11 @@ impl Executor {
                 Ok(Terminal::Filed(report)) => {
                     tracing::Span::current()
                         .record("outcome", format_args!("{:?}", report.outcome));
-                    tracing::info!(summary = %report.summary, "execution filed report");
+                    tracing::info!(
+                        summary = %report.summary,
+                        repeat_calls = report.repeat_calls,
+                        "execution filed report"
+                    );
                     Ok(report)
                 }
                 Ok(Terminal::Spoke(_)) => {
@@ -724,6 +728,10 @@ impl Executor {
         // failure report can show what actually happened instead of a bare "ran out of turns" —
         // see `budget_failed_report_with_progress`.
         let mut call_history: Vec<(String, serde_json::Value, String)> = Vec::new();
+        // How many tool calls were byte-exact repeats of an earlier one in this run (same tool name,
+        // same serialised arguments). Tallying at the tool boundary rather than at call time so the
+        // count survives every exit path (including the guard escalations) without extra plumbing.
+        let mut repeat_calls: usize = 0;
         // One escalation ladder per mechanism (see `LoopGuard`'s doc comment for why these must NOT
         // share a counter): 1st detection -> nudge, 2nd -> remove the offending tool(s) and explain
         // why, 3rd+ -> give up honestly. Removal (not just another nudge) is the second step because
@@ -827,7 +835,9 @@ impl Executor {
                             turn,
                             "executor finished without submit_report; wrapping prose as Report"
                         );
-                        return Ok(Terminal::Filed(prose_report(text)));
+                        return Ok(Terminal::Filed(
+                            prose_report(text).with_repeat_calls(repeat_calls),
+                        ));
                     }
                 }
             }
@@ -865,6 +875,10 @@ impl Executor {
                         "report accepted".to_string(),
                     ));
                     match serde_json::from_value::<Report>(call.arguments.clone()) {
+                        // `repeat_calls` is stamped at the return site below, not here. This arm
+                        // runs *before* the counting block for the rest of the batch, so a model
+                        // that emits `submit_report` ahead of another repeated call in the same
+                        // response would otherwise file a count short by those calls.
                         Ok(report) => submitted_report = Some(report),
                         Err(e) => return Err(ExecError::Decode(e.to_string())),
                     }
@@ -904,6 +918,16 @@ impl Executor {
                     .instrument(tool_span)
                     .await;
                 call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
+                // Byte-exact matching: tool name + arguments identical to any earlier call in
+                // this run. `serde_json::Value::PartialEq` is structural (key-order-agnostic for
+                // objects), which is correct here — the model sees the same schema each turn and
+                // the point is identical *arguments*, not identical serialization bytes.
+                if call_history[..call_history.len() - 1]
+                    .iter()
+                    .any(|(n, a, _)| n == &call.name && a == &call.arguments)
+                {
+                    repeat_calls += 1;
+                }
                 messages.push(Message::tool_result(&call.id, result));
 
                 if doom_hit.is_none() && is_doom_loop(&call_history, policy.loop_profile) {
@@ -917,7 +941,9 @@ impl Executor {
             }
 
             if let Some(report) = submitted_report {
-                return Ok(Terminal::Filed(report));
+                // Stamped here so the count covers the whole batch, including calls processed
+                // after `submit_report` was parsed (see the decode arm above).
+                return Ok(Terminal::Filed(report.with_repeat_calls(repeat_calls)));
             }
 
             // Escalations only after every tool_call_id has a result message.
@@ -953,7 +979,9 @@ impl Executor {
                             tool = %tool_name,
                             "doom loop persisted after tool removal; aborting"
                         );
-                        return Ok(Terminal::Filed(doom_loop_failed_report(&tool_name)));
+                        return Ok(Terminal::Filed(
+                            doom_loop_failed_report(&tool_name).with_repeat_calls(repeat_calls),
+                        ));
                     }
                 }
             }
@@ -988,7 +1016,9 @@ impl Executor {
                             ?cycling,
                             "tool cycle persisted after tool removal; aborting"
                         );
-                        return Ok(Terminal::Filed(cycle_failed_report()));
+                        return Ok(Terminal::Filed(
+                            cycle_failed_report().with_repeat_calls(repeat_calls),
+                        ));
                     }
                 }
             }
@@ -1004,11 +1034,10 @@ impl Executor {
             // know what actually happened, not just that time ran out. See
             // `budget_failed_report_with_progress`'s doc comment for why this stays a compact,
             // mechanical summary rather than injecting the raw call history upward.
-            Mode::Report => Ok(Terminal::Filed(budget_failed_report_with_progress(
-                exhausted_name,
-                max_turns,
-                &call_history,
-            ))),
+            Mode::Report => Ok(Terminal::Filed(
+                budget_failed_report_with_progress(exhausted_name, max_turns, &call_history)
+                    .with_repeat_calls(repeat_calls),
+            )),
             // `exhausted_name` is in scope and was being discarded here, so a wall-clock or token
             // exhaustion surfaced as "exceeded the N-turn budget" — the wrong diagnosis, handed
             // to whoever reads the report.
@@ -1122,6 +1151,7 @@ fn prose_report(summary: String) -> Report {
         new_high_signal_facts: Vec::new(),
         deferred_to_human: false,
         follow_up: None,
+        repeat_calls: 0,
     }
 }
 
@@ -1137,6 +1167,7 @@ fn budget_failed_report(turns: u32) -> Report {
         new_high_signal_facts: Vec::new(),
         deferred_to_human: false,
         follow_up: Some("Consider dispatching a subagent with a larger budget.".into()),
+        repeat_calls: 0,
     }
 }
 
@@ -1157,6 +1188,7 @@ fn budget_failed_report_named(resource: &str, turns: u32) -> Report {
         follow_up: Some(format!(
             "Consider raising the {resource} budget, or narrowing the goal so less {resource} is needed."
         )),
+        repeat_calls: 0,
     }
 }
 
@@ -1213,6 +1245,7 @@ fn budget_failed_report_with_progress(
              from here rather than starting over."
                 .into(),
         ),
+        repeat_calls: 0,
     }
 }
 
@@ -1390,6 +1423,7 @@ fn doom_loop_failed_report(tool_name: &str) -> Report {
             "The `{tool_name}` result may not carry enough information to act on, or the goal may \
              need to be rephrased/split into smaller steps."
         )),
+        repeat_calls: 0,
     }
 }
 
@@ -1407,6 +1441,7 @@ fn cycle_failed_report() -> Report {
         follow_up: Some(
             "The goal may need to be rephrased/split into smaller, more concrete steps.".into(),
         ),
+        repeat_calls: 0,
     }
 }
 
@@ -1455,6 +1490,10 @@ mod tests {
 
     fn call_tool(name: &str) -> CompletionResponse {
         CompletionResponse::tool_calls(vec![ToolInvocation::new("c", name, serde_json::json!({}))])
+    }
+
+    fn call_tool_with(name: &str, args: serde_json::Value) -> CompletionResponse {
+        CompletionResponse::tool_calls(vec![ToolInvocation::new("c", name, args)])
     }
 
     fn submit(args: serde_json::Value) -> CompletionResponse {
@@ -3020,6 +3059,125 @@ mod tests {
         // Each vector has 2 entries.
         assert_eq!(vectors[0].len(), 2);
         assert_eq!(vectors[1].len(), 2);
+    }
+
+    // ------------------------------------------------------------------
+    // repeat-call counting (deliverable 3a)
+    // ------------------------------------------------------------------
+
+    /// A run with no repeated tool calls must report `repeat_calls: 0`.
+    #[tokio::test]
+    async fn zero_repeats_reported_when_no_tool_call_was_repeated() {
+        let (_provider, exec) = executor(
+            vec![call_tool("search"), submit(valid_report_args())],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let report = exec
+            .execute(&runtime, Task::new("you are a worker", "find the thing"))
+            .await
+            .unwrap();
+        assert_eq!(report.repeat_calls, 0);
+    }
+
+    /// Two byte-identical calls to the same tool must increment `repeat_calls`.
+    #[tokio::test]
+    async fn an_exact_repeat_increments_the_repeat_calls_counter() {
+        let (_provider, exec) = executor(
+            vec![
+                call_tool("search"),
+                call_tool("search"),
+                submit(valid_report_args()),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let report = exec
+            .execute(&runtime, Task::new("you are a worker", "find the thing"))
+            .await
+            .unwrap();
+        assert_eq!(
+            report.repeat_calls, 1,
+            "the second `search` call (empty args) is a byte-exact repeat of the first"
+        );
+    }
+
+    /// Near-but-not-equal argument sets are **not** counted as repeats. Exact matching is the
+    /// whole point — fuzzy duplicate detection is the doom-loop guard's job.
+    #[tokio::test]
+    async fn nearly_equal_args_are_not_counted_as_repeats() {
+        let (_provider, exec) = executor(
+            vec![
+                call_tool_with("search", serde_json::json!({"q": "hello"})),
+                call_tool_with("search", serde_json::json!({"q": "world"})),
+                submit(valid_report_args()),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let report = exec
+            .execute(&runtime, Task::new("you are a worker", "find the thing"))
+            .await
+            .unwrap();
+        assert_eq!(
+            report.repeat_calls, 0,
+            "different args are never an exact repeat — near-duplicate is the doom-loop guard's concern"
+        );
+    }
+
+    /// Counting must not change execution behaviour: even a repeated call must still be *made*.
+    #[tokio::test]
+    async fn a_repeated_call_is_still_executed_not_deduplicated() {
+        let (_provider, exec) = executor(
+            vec![
+                call_tool("search"),
+                call_tool("search"),
+                submit(valid_report_args()),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let report = exec
+            .execute(&runtime, Task::new("you are a worker", "find the thing"))
+            .await
+            .unwrap();
+        assert!(report.repeat_calls > 0, "the repeat must be counted");
+        let invocations = runtime.invoked();
+        assert_eq!(invocations.len(), 2, "both calls must have been made");
+        assert_eq!(invocations[0].name, "search");
+        assert_eq!(invocations[1].name, "search");
+    }
+
+    /// A repeat that arrives in the **same batch as `submit_report`, after it**, must still be
+    /// counted.
+    ///
+    /// `submit_report` is decoded early in the per-call loop — before the counting block runs for
+    /// the rest of the batch — so stamping `repeat_calls` onto the report at decode time files a
+    /// count short by every repeat that follows it in the same response. The count is stamped at
+    /// the return site instead, once the whole batch has been walked.
+    ///
+    /// R7: the wrong implementation being excluded is `report.repeat_calls = repeat_calls` in the
+    /// decode arm, which passes every other repeat test in this module because they all put
+    /// `submit_report` in its own later response.
+    #[tokio::test]
+    async fn a_repeat_after_submit_report_in_the_same_batch_is_still_counted() {
+        let batched = CompletionResponse::tool_calls(vec![
+            ToolInvocation::new("c-submit", SUBMIT_REPORT_TOOL, valid_report_args()),
+            ToolInvocation::new("c-dup", "search", serde_json::json!({})),
+        ]);
+        // First response makes the `search` call; the second repeats it *after* submit_report.
+        let (_provider, exec) = executor(vec![call_tool("search"), batched], Budget::default());
+        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("you are a worker", "find the thing"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            report.repeat_calls, 1,
+            "the repeat trailing submit_report in the same batch must be counted"
+        );
     }
 }
 

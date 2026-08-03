@@ -249,6 +249,7 @@ fn report_round_trips_each_outcome() {
             new_high_signal_facts: vec![],
             follow_up: None,
             deferred_to_human: false,
+            repeat_calls: 0,
         });
     }
 }

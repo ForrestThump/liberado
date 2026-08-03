@@ -309,6 +309,22 @@ pub struct Report {
     /// ordinary report; serialized only when true so existing persisted reports round-trip unchanged.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deferred_to_human: bool,
+    /// How many tool calls during this run were byte-exact repeats of an earlier one (same tool name,
+    /// same serialised arguments). Set by the executor, not the model, and serialised only when > 0
+    /// so existing persisted reports round-trip unchanged.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub repeat_calls: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+impl Report {
+    pub fn with_repeat_calls(mut self, count: usize) -> Self {
+        self.repeat_calls = count;
+        self
+    }
 }
 
 /// Terminal status of one **execution** — what an executor's `Report` says it achieved.

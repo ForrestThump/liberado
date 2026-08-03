@@ -533,6 +533,7 @@ mod tests {
             new_high_signal_facts: vec![],
             follow_up: None,
             deferred_to_human: false,
+            repeat_calls: 0,
         });
         let (t, s) = d.terminal_summary();
         assert_eq!(t, TerminalKind::Succeeded);
