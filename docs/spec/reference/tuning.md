@@ -254,6 +254,49 @@ ssh <box> 'docker exec -e LIBERADO_CONFIG_DIR=/config liberado \
 
 It prints every guard's verdict and the config edit that would fix each failure.
 
+### Zones on a **non-vault** CRUD surface — `topology.toml`
+
+Zones are not vault-specific, and the policy layer never was: `Policy::write_class` keys on the zone
+*name*, with no idea what a vault is. What differs per MCP is only **how a call's zone is worked
+out**, and there are two declaration styles:
+
+```toml
+# Path-addressed — the zone is the leading path segment of an argument. Use when one tool can
+# land in different zones depending on the call. This is TurboVault.
+[[mcps]]
+name = "turbovault"
+zone_from_arg = "path"           # write_note(path="tasks/x.md") -> zone `tasks`
+write_tools = ["write_note", "delete_note"]
+
+# Fixed-zone — the zone follows from the tool name alone. No paths involved. Use this for any
+# other CRUD surface: a billing API, a database, a device.
+[[mcps]]
+name = "stripe"
+default_zone = "finance"         # every tool here writes to `finance` unless overridden
+
+[[mcps.tools]]
+name = "get_balance"             # `zone` omitted = explicitly NOT a zone write (the one read
+                                 # tool in an otherwise all-write MCP)
+```
+
+A non-`read_only` MCP must declare **one of three** things — `default_zone`, `zone_from_arg` +
+`write_tools`, or `writes_vault = false` — and the daemon refuses to boot otherwise. That is F1: zone
+declaration used to be opt-in, nobody opted in, and both the capability guard and the write-class
+guard sat permanently inert. A guard that is off by default is not a guard.
+
+Both styles feed the same guards — capability check, write class, proposal downgrade — so a new
+surface inherits the whole model by declaring one of them. Zones you never list in `policy.toml`
+default to `proposal_only`, so a surface added before its policy is written asks before it acts.
+
+**A write whose zone cannot be determined is refused, not ignored.** A path-addressed tool called
+with no path is `Undeterminable` and fails closed; that is deliberate, and it is the property that
+keeps a new surface from quietly escaping the model.
+
+**Name your zones distinctly.** `Zone` carries a `Vault`/`Named` variant, but a zone's identity is
+its **name** — `Zone::vault("finance")` and `Zone::named("finance")` are the same zone, because
+`policy.toml` has only ever keyed on the name. If a vault folder `finance/` and an external billing
+system must be different authorities, give them different names.
+
 ### Behaviour thresholds — `tuning.toml`
 
 All optional, all defaulted. The ones worth knowing:

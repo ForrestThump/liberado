@@ -17,7 +17,7 @@ use crate::error::{Error, Result};
 /// names the area it applies to. A `Vault` zone corresponds to a top-level vault folder
 /// (e.g. `tasks`, `decisions`); a `Named` zone is any non-vault area — an external system or
 /// a cross-cutting grouping (well-known examples: `finance`, `sensitive`, `family-shared`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Zone {
     /// A vault folder zone, identified by its top-level path prefix.
     Vault(String),
@@ -34,6 +34,44 @@ impl Zone {
     /// A named (non-vault) zone, e.g. `Zone::named("finance")`.
     pub fn named(name: impl Into<String>) -> Self {
         Self::Named(name.into())
+    }
+
+    /// The zone's name — its identity. See the equality note below.
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Vault(n) | Self::Named(n) => n,
+        }
+    }
+}
+
+// A zone is identified by its **name**, not by which variant spelled it.
+//
+// `Policy::write_class(&self, zone: &str)` has always keyed on the name alone, so policy already
+// considered `finance` to be one zone however it was constructed. `CapabilitySet` disagreed: it is
+// a `Vec<Capability>` whose `contains` used derived structural equality, so a grant recorded as
+// `Named("finance")` could never satisfy a check built as `Vault("finance")` — and the write gate
+// builds every check that way (`risk_gated.rs`, `Capability::Write(Zone::vault(zone))`). Two layers
+// answering "which zone is this?" differently, with nothing checking that they agree —
+// `failure-modes.md` §6. It failed closed, so it refused rather than leaked, but the refusal was
+// unexplainable: a grant that is present and correct-looking, and never matches.
+//
+// The variant is retained because it is **descriptive** (and load-bearing on the wire: `Capability`
+// is serialized into `policy.toml` and into the proposal HMAC, so its representation cannot move).
+// If a vault folder and an external system must be distinct authorities, give them distinct names —
+// which the string-keyed policy layer already requires of you.
+//
+// `Hash` is implemented to match: `a == b` must imply `hash(a) == hash(b)`.
+impl PartialEq for Zone {
+    fn eq(&self, other: &Self) -> bool {
+        self.name() == other.name()
+    }
+}
+
+impl Eq for Zone {}
+
+impl std::hash::Hash for Zone {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name().hash(state);
     }
 }
 
@@ -559,6 +597,86 @@ impl FromIterator<Capability> for CapabilitySet {
             set.grant(c);
         }
         set
+    }
+}
+
+#[cfg(test)]
+mod zone_identity_tests {
+    use super::*;
+
+    /// A zone is its name. Two layers used to disagree: `Policy::write_class` keys on `&str`,
+    /// while `CapabilitySet::contains` used derived structural equality.
+    #[test]
+    fn a_zone_is_identified_by_name_not_by_variant() {
+        assert_eq!(Zone::vault("finance"), Zone::named("finance"));
+        assert_ne!(Zone::vault("finance"), Zone::vault("tasks"));
+        assert_ne!(Zone::named("finance"), Zone::named("tasks"));
+    }
+
+    /// `a == b` implies `hash(a) == hash(b)`, or a `HashSet<Capability>` would hold both.
+    #[test]
+    fn hash_agrees_with_equality_across_variants() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let h = |z: &Zone| {
+            let mut s = DefaultHasher::new();
+            z.hash(&mut s);
+            s.finish()
+        };
+        assert_eq!(h(&Zone::vault("finance")), h(&Zone::named("finance")));
+
+        let mut set = std::collections::HashSet::new();
+        set.insert(Zone::vault("finance"));
+        assert!(
+            set.contains(&Zone::named("finance")),
+            "a set keyed on zones must not hold the same zone twice"
+        );
+    }
+
+    /// **The bug this fixes.** The write gate builds every check as
+    /// `Capability::Write(Zone::vault(zone))` (`risk_gated.rs`), so a grant recorded with the
+    /// `Named` variant could never be found — the human sees "not authorized" holding a grant that
+    /// is present and correct.
+    ///
+    /// R7: the wrong implementation being excluded is derived `PartialEq`. Under it this assertion
+    /// is false while the second one below still passes, so both are needed.
+    #[test]
+    fn a_named_zone_grant_satisfies_a_vault_shaped_check() {
+        let granted = CapabilitySet::from_iter([Capability::Write(Zone::named("finance"))]);
+        assert!(
+            granted.contains(&Capability::Write(Zone::vault("finance"))),
+            "the gate's Zone::vault(..) check must find a grant written as Named"
+        );
+        assert!(
+            !granted.contains(&Capability::Write(Zone::vault("tasks"))),
+            "and must still refuse a zone that was never granted"
+        );
+    }
+
+    /// Equality changed; **the wire did not**. `Capability` is serialized into `policy.toml` and
+    /// folded into the proposal HMAC (`proposal.rs`), so a representation change would invalidate
+    /// every signed proposal on disk. The two variants must still serialize distinctly and
+    /// round-trip to themselves.
+    #[test]
+    fn serialized_representation_is_unchanged_by_the_equality_fix() {
+        let vault = serde_json::to_string(&Zone::vault("finance")).unwrap();
+        let named = serde_json::to_string(&Zone::named("finance")).unwrap();
+        assert_eq!(vault, r#"{"Vault":"finance"}"#);
+        assert_eq!(named, r#"{"Named":"finance"}"#);
+        assert_ne!(vault, named, "the variant is still carried on the wire");
+
+        // Round-trip preserves the variant even though equality ignores it.
+        let back: Zone = serde_json::from_str(&named).unwrap();
+        assert!(
+            matches!(back, Zone::Named(_)),
+            "variant survives a round trip"
+        );
+        assert_eq!(
+            serde_json::to_string(&back).unwrap(),
+            named,
+            "re-serializing must be byte-identical or the HMAC breaks"
+        );
     }
 }
 
