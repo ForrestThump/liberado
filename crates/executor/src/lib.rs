@@ -804,7 +804,11 @@ impl Executor {
                 let request = CompletionRequest::new(messages.clone())
                     .with_tools(tools.clone())
                     .with_model(self.model.clone());
-                self.provider.complete(request).await
+                liberado_provider::latency::with_repeat_calls(
+                    repeat_calls,
+                    self.provider.complete(request),
+                )
+                .await
             }
             .instrument(tracing::debug_span!("provider_complete", turn))
             .await?;

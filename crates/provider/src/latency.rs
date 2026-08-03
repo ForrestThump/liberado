@@ -51,6 +51,7 @@ impl AgentRole {
 
 tokio::task_local! {
     static CORRELATION: String;
+    static REPEAT_CALLS: std::cell::Cell<usize>;
 }
 
 /// Run `fut` with `correlation` on the task-local context. All provider calls made *within the same
@@ -61,6 +62,16 @@ where
     F: std::future::Future<Output = T>,
 {
     CORRELATION.scope(correlation.into(), fut).await
+}
+
+/// Run `fut` with `repeat_calls` on the task-local context so the MeteredProvider stamps it onto
+/// the next [`LatencyEvent`]. Mirrors [`with_correlation`] in shape.
+pub async fn with_repeat_calls<F, T>(count: usize, fut: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    use std::cell::Cell;
+    REPEAT_CALLS.scope(Cell::new(count), fut).await
 }
 
 /// The correlation id on the current task-local context, or `"-"` outside any [`with_correlation`].
@@ -107,6 +118,10 @@ pub struct LatencyEvent {
     pub tool_calls: usize,
     /// Whether this went through the streaming path (`complete_stream`).
     pub streamed: bool,
+    /// Byte-exact repeated tool calls the executor tallied up to this point in the run.
+    /// Absent for providers that don't carry the counter (e.g. dispatcher calls, or pre-PR #44).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat_calls: Option<usize>,
 }
 
 /// Sink for [`LatencyEvent`]s. The daemon supplies a JSONL-appending implementation; tests and
@@ -208,6 +223,10 @@ impl Provider for MeteredProvider {
                 finish,
                 tool_calls,
                 streamed: false,
+                repeat_calls: REPEAT_CALLS
+                    .try_with(|c| c.get())
+                    .ok()
+                    .and_then(|v| if v > 0 { Some(v) } else { None }),
             },
         );
         result
@@ -253,6 +272,10 @@ impl Provider for MeteredProvider {
                             finish: format!("{:?}", resp.finish_reason),
                             tool_calls: resp.tool_calls.len(),
                             streamed: true,
+                            repeat_calls: REPEAT_CALLS
+                                .try_with(|c| c.get())
+                                .ok()
+                                .and_then(|v| if v > 0 { Some(v) } else { None }),
                         },
                     );
                 }
