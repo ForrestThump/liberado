@@ -373,6 +373,7 @@ impl CoderRunResult {
             new_high_signal_facts: Vec::new(),
             follow_up: None,
             deferred_to_human: false,
+            repeat_calls: 0,
         }
     }
 }

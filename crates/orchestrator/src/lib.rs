@@ -1017,6 +1017,7 @@ impl Orchestrator {
                     new_high_signal_facts: Vec::new(),
                     deferred_to_human: false,
                     follow_up: None,
+                    repeat_calls: 0,
                 });
             }
 
@@ -1034,6 +1035,7 @@ impl Orchestrator {
                     new_high_signal_facts: Vec::new(),
                     deferred_to_human: false,
                     follow_up: None,
+                    repeat_calls: 0,
                 });
             }
 
@@ -1058,6 +1060,7 @@ impl Orchestrator {
                     new_high_signal_facts: Vec::new(),
                     deferred_to_human: false,
                     follow_up: None,
+                    repeat_calls: 0,
                 });
             }
 
@@ -1095,6 +1098,7 @@ impl Orchestrator {
                         new_high_signal_facts: Vec::new(),
                         deferred_to_human: false,
                         follow_up: None,
+                        repeat_calls: 0,
                     })
                 }
             }
@@ -1156,6 +1160,7 @@ impl Orchestrator {
             new_high_signal_facts: Vec::new(),
             deferred_to_human: false,
             follow_up: None,
+            repeat_calls: 0,
         })
     }
 
@@ -1316,6 +1321,7 @@ impl Orchestrator {
             new_high_signal_facts: all_facts,
             follow_up: None,
             deferred_to_human: deferrals.iter().any(deferred_flag_of),
+            repeat_calls: 0,
         })
     }
 
@@ -1694,6 +1700,7 @@ mod tests {
             new_high_signal_facts: vec![],
             follow_up: None,
             deferred_to_human: deferred,
+            repeat_calls: 0,
         };
         assert!(Disposition::Reported(report(true)).deferred_to_human());
         assert!(!Disposition::Reported(report(false)).deferred_to_human());
@@ -2240,6 +2247,7 @@ mod tests {
             new_high_signal_facts: vec!["cost scales superlinearly".into()],
             follow_up: Some("benchmark it".into()),
             deferred_to_human: false,
+            repeat_calls: 0,
         };
         let body = vault_note_body(&report, "corr-42", "liberado-executor");
         assert!(body.starts_with("---\n"), "front matter comes first");
@@ -2606,6 +2614,7 @@ mod tests {
             new_high_signal_facts: vec![],
             follow_up: None,
             deferred_to_human: false,
+            repeat_calls: 0,
         };
         let (kind, summary) = Disposition::Reported(report).terminal_summary();
         assert_eq!(kind, TerminalKind::Failed);
@@ -2621,6 +2630,7 @@ mod tests {
             new_high_signal_facts: vec![],
             follow_up: None,
             deferred_to_human: false,
+            repeat_calls: 0,
         };
         let (kind, summary) = Disposition::Reported(report).terminal_summary();
         assert_eq!(kind, TerminalKind::Succeeded);
