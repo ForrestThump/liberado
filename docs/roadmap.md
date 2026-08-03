@@ -4,6 +4,10 @@
 
 Before starting anything, read [`spec/architecture/failure-modes.md`](spec/architecture/failure-modes.md) — six bug classes this codebase produces over and over. Operator knobs (and which are compiled in) are in [`spec/reference/tuning.md`](spec/reference/tuning.md). Every one of them shipped with a green test suite.
 
+> **Picking up self-scoped work?** Start at [`future-work/backlog.md`](future-work/backlog.md) —
+> one item per PR, verify it is still open before starting, and paste per-changed-behaviour mutation
+> evidence in the PR body. This page is the *why*; the backlog is the *what next*.
+
 ## Open now — in priority order
 
 The order is deliberate: **automation daemon → chat → coding.** Why: [`spec/architecture/positioning.md`](spec/architecture/positioning.md).
