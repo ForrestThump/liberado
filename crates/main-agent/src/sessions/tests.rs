@@ -126,6 +126,23 @@ async fn append_note_folds_a_goal_session_summary_into_the_conversation() {
             )
             .await
             .unwrap();
+        // Must-not-regress (round 3 §1): handoff is Named("goal-session"), never Assistant —
+        // model derivation and last_turn_unanswered both key on Author.
+        let nodes = sessions.history_nodes(id).await.unwrap();
+        assert!(
+            nodes.iter().any(|n| {
+                matches!(&n.author, Author::Named(name) if name == "goal-session")
+                    && n.message.content.contains("[coding session succeeded]")
+            }),
+            "append_note must author as Named(\"goal-session\"), not Assistant: {nodes:?}"
+        );
+        assert!(
+            nodes
+                .iter()
+                .filter(|n| n.message.content.contains("[coding session succeeded]"))
+                .all(|n| n.model.is_none()),
+            "handoff note must not carry a model stamp"
+        );
         id
     };
 

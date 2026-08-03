@@ -1417,3 +1417,269 @@ async fn factory_setup_error_is_surfaced_by_orchestrator() {
         "expected Runtime error, got {err:?}"
     );
 }
+
+// ------------------------------------------------------------------
+// Round 3 §1 — delegated findings reach the face (relay contract on Summarize)
+// ------------------------------------------------------------------
+
+/// Long findings a research subagent should put in `summary` when it has the relay contract.
+const RESEARCH_FINDINGS: &str = "\
+## Belt vs chain: findings
+
+- Carbon belts need an eccentric BB or similar tensioning (CyclingAbout, 135000 km testing).
+- Chain drives remain lighter and cheaper for most riders (BikeRadar comparison 2024).
+- Gates Carbon Drive is the dominant belt system; tension windows are tighter than chains.
+
+Sources: CyclingAbout long-term test, BikeRadar belt-drive review, Hackaday tensioning notes.";
+
+/// Status-line shape the model produces under the default "short" schema alone — what the face
+/// used to receive, and what invented 7872 chars of specifics from priors.
+const STATUS_LINE: &str = "Comprehensive comparison of belt vs chain drive bicycles, \
+synthesized from authoritative sources including CyclingAbout and BikeRadar.";
+
+fn research_ceiling() -> CapabilitySet {
+    CapabilitySet::from_iter([
+        Capability::ExecuteMcp("search".into()),
+        Capability::ExecuteMcp("spider".into()),
+    ])
+}
+
+fn research_catalog() -> Vec<(String, Consequence)> {
+    vec![
+        ("search".into(), Consequence::ReadOnly),
+        ("spider".into(), Consequence::ReadOnly),
+        ("email".into(), Consequence::External),
+    ]
+}
+
+fn long_findings_report() -> CompletionResponse {
+    CompletionResponse::tool_calls(vec![ToolInvocation::new(
+        "c",
+        SUBMIT_REPORT_TOOL,
+        serde_json::json!({
+            "outcome": "succeeded",
+            "summary": RESEARCH_FINDINGS,
+            "artifacts": [],
+            "new_high_signal_facts": ["belt needs eccentric BB"],
+        }),
+    )])
+}
+
+/// R6: a research `DispatchSubagent` with `Delivery::Summarize` (the chat `delegate` shape) must
+/// put the **relay contract** into the subagent instructions, and the report that becomes the
+/// face tool result must be able to carry the findings (not only a status line).
+///
+/// R7 wrong implementation excluded: *no contract on Summarize* (only vault path gets a directive)
+/// — the first completion's system prompt would lack "Anything you leave out is gone", and the
+/// seam would keep discarding research.
+#[tokio::test]
+async fn research_summarize_subagent_gets_relay_contract_and_findings_reach_the_report() {
+    let provider = Arc::new(MockProvider::with_script("mock", [long_findings_report()]));
+    let factory = CallRecordingFactory::default();
+    let ceiling = research_ceiling();
+    let orch = Orchestrator::new(
+        provider.clone(),
+        factory,
+        ceiling.clone(),
+        research_catalog(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    );
+
+    let decision = DispatchDecision {
+        action: DispatchAction::DispatchSubagent {
+            goal: "compare belt drive vs chain drive for touring".into(),
+            capabilities: CapabilitySet::empty(),
+            allowed_mcps: vec!["search".into(), "spider".into()],
+            success_criteria: vec!["findings with sources".into()],
+            artifact_target: None,
+            model: None,
+            correlation_id: "chat-delegate-test-1".into(),
+            delivery: Delivery::Summarize, // chat delegate path — no vault path
+            depth: Depth::Deep,
+        },
+        confidence: 0.9,
+        rationale: "research".into(),
+    };
+
+    let disposition = orch
+        .run(
+            decision,
+            "compare belt vs chain",
+            "parent-chat-corr",
+            &ceiling,
+        )
+        .await
+        .expect("run");
+
+    // Contract was actually appended to the subagent (not only defined as a pure function).
+    let req = provider
+        .last_request()
+        .expect("subagent must have been called");
+    let system_blob: String = req
+        .messages
+        .iter()
+        .filter(|m| m.role == liberado_provider::Role::System)
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        system_blob.contains("Anything you leave out is gone"),
+        "research Summarize must append relay_directive to the live task; system was:\n{system_blob}"
+    );
+    assert!(
+        !system_blob.contains("FINISHED DOCUMENT"),
+        "chat relay must not use the vault finished-document contract"
+    );
+
+    let Disposition::Reported(report) = disposition else {
+        panic!("expected Reported, got {disposition:?}");
+    };
+    // Observable the face agent receives (face.rs wraps this summary as the tool result body).
+    let face_tool_result = format!("RESULT (Succeeded):\n{}", report.summary.trim());
+    assert!(
+        face_tool_result.contains("eccentric BB")
+            && face_tool_result.contains("135000")
+            && face_tool_result.contains("BikeRadar"),
+        "face must receive findings, not a status line; got:\n{face_tool_result}"
+    );
+    assert!(
+        !face_tool_result.contains(STATUS_LINE) || face_tool_result.len() > STATUS_LINE.len() * 2,
+        "must not be the thin status-only shape alone"
+    );
+}
+
+/// Vault delivery still gets the document contract (unchanged), not the relay wording.
+#[tokio::test]
+async fn vault_delivery_subagent_still_gets_document_contract_not_relay() {
+    let provider = Arc::new(MockProvider::with_script("mock", [long_findings_report()]));
+    let factory = CallRecordingFactory::default();
+    let ceiling = CapabilitySet::from_iter([
+        Capability::ExecuteMcp("search".into()),
+        Capability::ExecuteMcp("turbovault".into()),
+        Capability::Write(liberado_common::Zone::vault("Learning")),
+    ]);
+    let orch = Orchestrator::new(
+        provider.clone(),
+        factory,
+        ceiling.clone(),
+        vec![
+            ("search".into(), Consequence::ReadOnly),
+            ("turbovault".into(), Consequence::Reversible),
+        ],
+        Vec::new(), // zone_catalog unused when live_catalog absent
+        vec![(
+            "Learning".into(),
+            liberado_common::WriteClass::AgentWritable,
+        )],
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    )
+    .with_report_sink(liberado_orchestrator::ReportSink::new(
+        "turbovault",
+        "write_note",
+        "path",
+        "content",
+    ));
+
+    let decision = DispatchDecision {
+        action: DispatchAction::DispatchSubagent {
+            goal: "research and file to Learning/x.md".into(),
+            capabilities: CapabilitySet::empty(),
+            allowed_mcps: vec!["search".into()],
+            success_criteria: vec![],
+            artifact_target: None,
+            model: None,
+            correlation_id: "vault-sub-1".into(),
+            delivery: Delivery::Vault {
+                path: "Learning/x.md".into(),
+            },
+            depth: Depth::Deep,
+        },
+        confidence: 0.9,
+        rationale: "file it".into(),
+    };
+
+    let _ = orch
+        .run(decision, "outer", "t1", &ceiling)
+        .await
+        .expect("run");
+
+    let req = provider.last_request().expect("subagent called");
+    let system_blob: String = req
+        .messages
+        .iter()
+        .filter(|m| m.role == liberado_provider::Role::System)
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        system_blob.contains("FINISHED DOCUMENT") && system_blob.contains("Learning/x.md"),
+        "vault path must still get delivery_directive; got:\n{system_blob}"
+    );
+    assert!(
+        !system_blob.contains("will trim or relay"),
+        "vault path must not get the chat relay contract"
+    );
+}
+
+/// R7: action subagents must not be told to write an essay — they produce their own artifact.
+#[tokio::test]
+async fn acting_subagent_gets_no_output_contract() {
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        [submit_report_response()],
+    ));
+    let factory = CallRecordingFactory::default();
+    let ceiling = CapabilitySet::from_iter([Capability::ExecuteMcp("email".into())]);
+    let orch = Orchestrator::new(
+        provider.clone(),
+        factory,
+        ceiling.clone(),
+        vec![("email".into(), Consequence::External)],
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    );
+
+    let decision = DispatchDecision {
+        action: DispatchAction::DispatchSubagent {
+            goal: "send the follow-up email".into(),
+            capabilities: CapabilitySet::empty(),
+            allowed_mcps: vec!["email".into()],
+            success_criteria: vec![],
+            artifact_target: None,
+            model: None,
+            correlation_id: "act-1".into(),
+            delivery: Delivery::Summarize,
+            depth: Depth::Normal,
+        },
+        confidence: 0.9,
+        rationale: "act".into(),
+    };
+
+    let _ = orch
+        .run(decision, "outer", "t1", &ceiling)
+        .await
+        .expect("run");
+
+    let req = provider.last_request().expect("subagent called");
+    let system_blob: String = req
+        .messages
+        .iter()
+        .filter(|m| m.role == liberado_provider::Role::System)
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !system_blob.contains("Anything you leave out is gone")
+            && !system_blob.contains("FINISHED DOCUMENT"),
+        "acting dispatch must not get research/vault output contracts; got:\n{system_blob}"
+    );
+}

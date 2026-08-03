@@ -1,7 +1,9 @@
 # A delegated subagent's work is discarded at the seam
 
-**Status**: finding, not yet fixed. Written 2026-08-02.
-**Severity**: the user gets a confident, cited answer whose specifics the system never researched.
+**Status**: fixed in tree (`e0fde79` / `relay_directive` + `output_contract` on research
+`Delivery::Summarize`). Round-3 §1 acceptance tests land the R6/R7 guarantees on the live
+`DispatchSubagent` path. Written 2026-08-02; status updated 2026-08-02.
+**Severity** (historical): the user got a confident, cited answer whose specifics the system never researched.
 
 ## What happens
 
