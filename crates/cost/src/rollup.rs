@@ -38,23 +38,34 @@ pub struct RoleRollup {
 /// # Turn boundary heuristic
 ///
 /// The latency journal has no separate turn id. A face tool-calling loop records one
-/// [`JournalEvent`](crate::JournalEvent) per model hop. We group consecutive hops under the same
-/// root conversation (after child→parent join) into one turn:
+/// [`JournalEvent`](crate::JournalEvent) per model hop. Only the conversation's **own** hops —
+/// those whose `correlation` is the root conversation itself — define turn boundaries:
 ///
 /// - `tool_calls > 0` → the model asked for tools; the turn **continues**.
 /// - `tool_calls == 0` → the model stopped; the turn **closes**.
 /// - `finish == "error"` → the turn **closes** even if tool calls were requested (a turn can end by
 ///   failing).
 ///
-/// Child-dispatch calls are part of the turn's spend when their timestamps fall inside the open
-/// hop window. This is a **heuristic**: it matches the executor's multi-hop loop on honest journals
-/// and is the only boundary recoverable without a journal shape change.
+/// **Child-dispatch calls are spend, not structure.** A delegated subagent runs its own multi-hop
+/// loop, and its final hop reports `tool_calls == 0` like any other. Letting that close the *parent's*
+/// turn splits one delegating turn in two and — worse — makes the row's `prompt_tokens` the
+/// subagent's context while its `role` still says `face`. So a child hop is folded into whichever
+/// turn is open for cost, and is never allowed to close one or to supply `prompt_tokens`/`role`.
+/// A conversation made **only** of child correlations (no parent hop ever recorded) falls back to
+/// treating every event as boundary-defining, so its spend is still grouped rather than collapsed
+/// into a single unbounded turn.
+///
+/// This is a **heuristic**: it matches the executor's multi-hop loop on honest journals and is the
+/// only boundary recoverable without a journal shape change.
 ///
 /// # Fields
 ///
-/// - `prompt_tokens` is the **last hop's** prompt size (end-of-turn context), so
-///   `prompt_delta` is turn-over-turn growth, not hop-over-hop inside a multi-call turn.
-/// - `cost_usd` sums priced hops only; unpriced hops inside a turn never force `Some(0.0)`.
+/// - `prompt_tokens` is the **last parent hop's** prompt size (end-of-turn context), so
+///   `prompt_delta` is turn-over-turn growth, not hop-over-hop inside a multi-call turn and not
+///   contaminated by a subagent's context.
+/// - `role` and `correlation` come from the turn's first parent hop.
+/// - `cost_usd` sums every priced hop in the turn, child hops included; unpriced hops inside a turn
+///   never force `Some(0.0)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TurnGrowth {
     pub conversation_id: String,
@@ -175,11 +186,30 @@ fn turn_growth(
     let mut i = 0;
     while i < indexed.len() {
         let conv = indexed[i].0.clone();
+        let conv_start = i;
+        let conv_end = {
+            let mut j = i;
+            while j < indexed.len() && indexed[j].0 == conv {
+                j += 1;
+            }
+            j
+        };
+        // Only the conversation's own hops define boundaries. A conversation consisting purely of
+        // child correlations has none, so fall back to every event defining one — otherwise its
+        // whole history would collapse into a single never-closing turn.
+        let has_own_hops = indexed[conv_start..conv_end]
+            .iter()
+            .any(|(_, e)| e.correlation == conv);
+        let defines_boundary = |e: &JournalEvent| !has_own_hops || e.correlation == conv;
+
         let mut turn_index = 0usize;
         let mut prev_prompt: Option<u32> = None;
-        while i < indexed.len() && indexed[i].0 == conv {
-            // Collect one multi-hop turn: open on the first hop, close on tool_calls==0 or error.
+        while i < conv_end {
+            // Collect one multi-hop turn: open on the first hop, close on the first *parent* hop
+            // with tool_calls==0 or finish=="error". Child hops are spend only.
             let first = indexed[i].1;
+            let mut first_own: Option<&JournalEvent> = None;
+            let mut last_own: Option<&JournalEvent> = None;
             let mut cost_usd: Option<f64> = None;
             loop {
                 let e = indexed[i].1;
@@ -187,14 +217,23 @@ fn turn_growth(
                 if let Some(c) = priced.cost_usd {
                     cost_usd = Some(cost_usd.unwrap_or(0.0) + c);
                 }
+                let boundary = defines_boundary(e);
+                if boundary {
+                    first_own.get_or_insert(e);
+                    last_own = Some(e);
+                }
                 i += 1;
-                if closes_turn(e) || i >= indexed.len() || indexed[i].0 != conv {
+                if (boundary && closes_turn(e)) || i >= conv_end {
                     break;
                 }
             }
             // `i` advanced past the last hop of this turn.
-            let last = indexed[i - 1].1;
-            let prompt = last.prompt_tokens;
+            let last_any = indexed[i - 1].1;
+            // Context size is the parent's, never a subagent's; fall back only if this turn had no
+            // parent hop at all (trailing child work after the turn already closed).
+            let anchor = last_own.unwrap_or(last_any);
+            let label = first_own.unwrap_or(first);
+            let prompt = anchor.prompt_tokens;
             let prompt_delta = match (prev_prompt, prompt) {
                 (Some(prev), Some(cur)) => Some(i64::from(cur) - i64::from(prev)),
                 _ => None,
@@ -205,9 +244,9 @@ fn turn_growth(
             out.push(TurnGrowth {
                 conversation_id: conv.clone(),
                 turn_index,
-                ts_ms: last.ts_ms,
-                correlation: first.correlation.clone(),
-                role: first.role.clone(),
+                ts_ms: last_any.ts_ms,
+                correlation: label.correlation.clone(),
+                role: label.role.clone(),
                 prompt_tokens: prompt,
                 prompt_delta,
                 cost_usd,
@@ -269,11 +308,38 @@ fn unpriced_lines(events: &[JournalEvent], prices: &PriceTable) -> Vec<UnpricedL
     rows
 }
 
-/// Sum of usage the journal already records — the figure behind `/api/status.token_usage_total`.
+/// Context occupancy of the most recent chat turn — the figure behind
+/// `/api/status.token_usage_total`.
+///
+/// **Not** lifetime spend. Both consumers render this field *against* `context_window`: the TUI
+/// status bar as `[N% ctx]` and `/status` as `Tokens: used / window (N% context)`. A running total
+/// over the whole journal is a different quantity by orders of magnitude — on a journal with a few
+/// thousand calls it pegs the gauge at the display cap permanently and says nothing about how full
+/// the window actually is.
+///
+/// So: take the newest `face` event and report `prompt + completion` for that one call — the tokens
+/// the model last had in front of it, which is what the next turn's context builds on. Non-face
+/// roles are skipped because a subagent's context is not the chat's. No face event in the scanned
+/// window → `None`, so the field stays absent rather than reporting a fabricated number.
+///
+/// [`total_tokens_from_events`] is the cumulative figure, and stays available for the cost report
+/// where that *is* the question being asked.
+pub fn context_tokens_from_events(events: &[JournalEvent]) -> Option<u64> {
+    let last_face = events.iter().rev().find(|e| e.role == "face")?;
+    match (last_face.prompt_tokens, last_face.completion_tokens) {
+        (None, None) => None,
+        (p, c) => Some(u64::from(p.unwrap_or(0)) + u64::from(c.unwrap_or(0))),
+    }
+}
+
+/// Sum of usage the journal already records — every call, all history.
 ///
 /// Prefer each event's `total_tokens` when present; otherwise `prompt + completion` when either is
 /// present. Events with no usage reported contribute nothing (not zero). Empty / no-usage journal
-/// → `None` so the wire field stays absent rather than a fabricated `0`.
+/// → `None`.
+///
+/// This is *cumulative spend*, not context occupancy — see [`context_tokens_from_events`] for the
+/// distinction and why `/api/status` needs the latter.
 pub fn total_tokens_from_events(events: &[JournalEvent]) -> Option<u64> {
     let mut sum = 0u64;
     let mut any = false;

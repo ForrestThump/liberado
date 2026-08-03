@@ -23,7 +23,7 @@ pub use price::{PriceTable, PricedEvent, price_event, price_table_from_models};
 pub use report::{Report, format_report};
 pub use rollup::{
     ConversationRollup, RoleRollup, TurnGrowth, UnpricedLine, build_report, closes_turn,
-    rollup_conversations, total_tokens_from_events,
+    context_tokens_from_events, rollup_conversations, root_conversation, total_tokens_from_events,
 };
 
 use std::collections::HashMap;
@@ -68,9 +68,25 @@ pub fn report_from_data_dir(data_dir: &Path, prices: &PriceTable) -> Result<Repo
     Ok(build_report(&events, &parents, prices))
 }
 
-/// Sum of journaled token usage under `data_dir` — feeds `/api/status.token_usage_total`.
+/// Context occupancy of the newest chat turn under `data_dir` — feeds
+/// `/api/status.token_usage_total`, which its consumers render against `context_window`.
 ///
-/// Missing or empty journal → `None`. Load errors → `None` (status must not 500 over a bad file).
+/// Reads only the journal's tail ([`journal::TAIL_SCAN_BYTES`]), because status is polled every few
+/// seconds by every connected client and the journal grows without bound. Missing journal, no face
+/// call in the window, or any read/parse failure → `None`: status must not fail, and must not
+/// invent a number, over a journal it does not own.
+pub fn context_tokens_for_data_dir(data_dir: &Path) -> Option<u64> {
+    let events = journal::load_latency_events_tail(
+        &latency_journal_path(data_dir),
+        journal::TAIL_SCAN_BYTES,
+    )?;
+    context_tokens_from_events(&events)
+}
+
+/// Cumulative journaled token usage under `data_dir` — every call, all history.
+///
+/// Reads the whole journal, so it belongs to the CLI report rather than a polled endpoint. See
+/// [`context_tokens_for_data_dir`] for the number `/api/status` needs.
 pub fn token_usage_total_for_data_dir(data_dir: &Path) -> Option<u64> {
     match load_latency_events(&latency_journal_path(data_dir)) {
         Ok(events) => total_tokens_from_events(&events),
@@ -593,6 +609,135 @@ mod tests {
         assert_eq!(turns[1].prompt_delta, Some(100));
     }
 
+    /// A delegating face turn is **one** turn, and its numbers are the face's.
+    ///
+    /// R3: this crosses the child→parent join, which the other turn tests never touch — they are
+    /// all single-correlation. A subagent's last hop reports `tool_calls == 0` exactly like a face
+    /// hop, so without the parent-hop boundary rule it closes the *parent's* turn: the row's
+    /// `prompt_tokens` becomes the subagent's context while `role` still reads `face`, and the next
+    /// face hop is reported as a separate turn with a large negative delta.
+    ///
+    /// R1: two independent guards, verified separately. Dropping the `boundary &&` on the close
+    /// check alone fails this at 2 turns (prompts 1000 / 1400). Also taking `anchor = last_any`
+    /// instead of `last_own` reproduces the pre-fix shape exactly: 2 turns, prompt 9000,
+    /// delta -7600 — a face row carrying the subagent's context.
+    #[test]
+    fn delegated_child_hops_do_not_split_or_contaminate_the_parent_turn() {
+        let prices = price_table_from_pairs([("m", rates(1.0, 2.0, 0.1))]);
+        let conv = "01KZDELEGATE0000000000000000";
+        let child = "chat-delegate-01child000000000";
+        let mut parents = HashMap::new();
+        parents.insert(child.to_string(), conv.to_string());
+        // One face turn: face asks for `delegate`, the subagent loops, the face replies.
+        let events = vec![
+            event_full(
+                conv,
+                "face",
+                "m",
+                Some(1_000),
+                Some(10),
+                None,
+                1,
+                1,
+                "tool_calls",
+            ),
+            event_full(
+                child,
+                "orchestrator",
+                "m",
+                Some(5_000),
+                Some(10),
+                None,
+                2,
+                1,
+                "tool_calls",
+            ),
+            event_full(
+                child,
+                "orchestrator",
+                "m",
+                Some(9_000),
+                Some(10),
+                None,
+                3,
+                0,
+                "stop",
+            ),
+            event_full(conv, "face", "m", Some(1_400), Some(10), None, 4, 0, "stop"),
+        ];
+        let report = report_from_parts(&events, &parents, &prices);
+        let turns: Vec<_> = report
+            .turn_growth
+            .iter()
+            .filter(|t| t.conversation_id == conv)
+            .collect();
+        assert_eq!(
+            turns.len(),
+            1,
+            "a subagent's closing hop must not split the face turn: {turns:?}"
+        );
+        assert_eq!(
+            turns[0].prompt_tokens,
+            Some(1_400),
+            "context size must be the face's last hop, not the subagent's 9000"
+        );
+        assert_eq!(turns[0].role, "face");
+        // The subagent's spend still belongs to the turn even though it shapes nothing.
+        let expected: f64 = events
+            .iter()
+            .map(|e| price_event(e, &prices).cost_usd.unwrap())
+            .sum();
+        assert!(
+            (turns[0].cost_usd.unwrap() - expected).abs() < 1e-9,
+            "turn cost must include child hops: got {:?} expected {expected}",
+            turns[0].cost_usd
+        );
+    }
+
+    /// A conversation that is *only* child correlations still gets grouped turns rather than one
+    /// unbounded turn — the fallback when no parent hop was ever recorded (the shape the round-1
+    /// `-` bucket had before correlation coverage landed).
+    #[test]
+    fn child_only_conversation_falls_back_to_per_hop_boundaries() {
+        let prices = price_table_from_pairs([("m", rates(1.0, 2.0, 0.1))]);
+        let conv = "01KZORPHAN000000000000000000";
+        let child = "chat-delegate-01orphan00000000";
+        let mut parents = HashMap::new();
+        parents.insert(child.to_string(), conv.to_string());
+        let events = vec![
+            event_full(
+                child,
+                "orchestrator",
+                "m",
+                Some(100),
+                Some(10),
+                None,
+                1,
+                0,
+                "stop",
+            ),
+            event_full(
+                child,
+                "orchestrator",
+                "m",
+                Some(300),
+                Some(10),
+                None,
+                2,
+                0,
+                "stop",
+            ),
+        ];
+        let report = report_from_parts(&events, &parents, &prices);
+        let turns: Vec<_> = report
+            .turn_growth
+            .iter()
+            .filter(|t| t.conversation_id == conv)
+            .collect();
+        assert_eq!(turns.len(), 2, "no parent hop → every hop is a boundary");
+        assert_eq!(turns[1].prompt_delta, Some(200));
+    }
+
     /// An unpriced hop inside a multi-hop turn does not force the turn's cost to `Some(0.0)`.
     #[test]
     fn unpriced_hop_inside_turn_does_not_zero_turn_cost() {
@@ -645,6 +790,71 @@ mod tests {
             Some(0.0),
             "unpriced mid-turn must never collapse cost to 0.0"
         );
+    }
+
+    /// Context occupancy is the newest **face** call's prompt+completion — not a running total,
+    /// and not a subagent's context even when the subagent called more recently.
+    #[test]
+    fn context_tokens_is_newest_face_call_not_a_running_total() {
+        let events = vec![
+            event("c", "face", "m", Some(200), Some(30), None, 1),
+            event("c", "face", "m", Some(40), Some(10), None, 2),
+            // Newer, much larger, and not the chat's context.
+            event("kid", "orchestrator", "m", Some(90_000), Some(5), None, 3),
+        ];
+        assert_eq!(context_tokens_from_events(&events), Some(50));
+        // The cumulative reading of the same fixture is a different number entirely.
+        assert_eq!(total_tokens_from_events(&events), Some(90_285));
+        // No face call at all → absent, never a fabricated 0.
+        assert_eq!(
+            context_tokens_from_events(&[event(
+                "kid",
+                "orchestrator",
+                "m",
+                Some(7),
+                Some(1),
+                None,
+                1
+            )]),
+            None
+        );
+        assert_eq!(context_tokens_from_events(&[]), None);
+        // Face call that reported no usage → absent.
+        assert_eq!(
+            context_tokens_from_events(&[event("c", "face", "m", None, None, None, 1)]),
+            None
+        );
+    }
+
+    /// The tail reader returns only complete records from the end of the file, and drops the
+    /// partial first line when the window starts mid-record. This is what keeps `/api/status`
+    /// bounded on a journal that grows forever.
+    #[test]
+    fn journal_tail_drops_partial_head_and_keeps_complete_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let line = |ts: u64, prompt: u32| {
+            format!(
+                r#"{{"ts_ms":{ts},"correlation":"c","role":"face","model":"m","kind":"llm_call","wall_ms":1,"prompt_tokens":{prompt},"completion_tokens":1,"finish":"stop","tool_calls":0,"streamed":false}}"#
+            )
+        };
+        let body = format!("{}\n{}\n{}\n", line(1, 10), line(2, 20), line(3, 30));
+        std::fs::write(&path, &body).unwrap();
+
+        // Whole file fits: every record survives.
+        let all = journal::load_latency_events_tail(&path, 1024 * 1024).unwrap();
+        assert_eq!(all.len(), 3);
+
+        // Window smaller than the file: starts mid-record, so the partial head is dropped and only
+        // whole records come back — crucially, never a parse error.
+        let one_line_len = body.lines().next().unwrap().len() as u64 + 1;
+        let tail = journal::load_latency_events_tail(&path, one_line_len + 5).unwrap();
+        assert_eq!(tail.len(), 1, "got {tail:?}");
+        assert_eq!(tail[0].ts_ms, 3, "the tail must be the newest record");
+        assert_eq!(context_tokens_from_events(&tail), Some(31));
+
+        // Missing file → None, not a panic.
+        assert!(journal::load_latency_events_tail(&dir.path().join("nope.jsonl"), 1024).is_none());
     }
 
     #[test]
