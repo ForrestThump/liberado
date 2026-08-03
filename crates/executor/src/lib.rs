@@ -875,10 +875,11 @@ impl Executor {
                         "report accepted".to_string(),
                     ));
                     match serde_json::from_value::<Report>(call.arguments.clone()) {
-                        Ok(mut report) => {
-                            report.repeat_calls = repeat_calls;
-                            submitted_report = Some(report);
-                        }
+                        // `repeat_calls` is stamped at the return site below, not here. This arm
+                        // runs *before* the counting block for the rest of the batch, so a model
+                        // that emits `submit_report` ahead of another repeated call in the same
+                        // response would otherwise file a count short by those calls.
+                        Ok(report) => submitted_report = Some(report),
                         Err(e) => return Err(ExecError::Decode(e.to_string())),
                     }
                     continue;
@@ -940,7 +941,9 @@ impl Executor {
             }
 
             if let Some(report) = submitted_report {
-                return Ok(Terminal::Filed(report));
+                // Stamped here so the count covers the whole batch, including calls processed
+                // after `submit_report` was parsed (see the decode arm above).
+                return Ok(Terminal::Filed(report.with_repeat_calls(repeat_calls)));
             }
 
             // Escalations only after every tool_call_id has a result message.
@@ -3143,6 +3146,38 @@ mod tests {
         assert_eq!(invocations.len(), 2, "both calls must have been made");
         assert_eq!(invocations[0].name, "search");
         assert_eq!(invocations[1].name, "search");
+    }
+
+    /// A repeat that arrives in the **same batch as `submit_report`, after it**, must still be
+    /// counted.
+    ///
+    /// `submit_report` is decoded early in the per-call loop — before the counting block runs for
+    /// the rest of the batch — so stamping `repeat_calls` onto the report at decode time files a
+    /// count short by every repeat that follows it in the same response. The count is stamped at
+    /// the return site instead, once the whole batch has been walked.
+    ///
+    /// R7: the wrong implementation being excluded is `report.repeat_calls = repeat_calls` in the
+    /// decode arm, which passes every other repeat test in this module because they all put
+    /// `submit_report` in its own later response.
+    #[tokio::test]
+    async fn a_repeat_after_submit_report_in_the_same_batch_is_still_counted() {
+        let batched = CompletionResponse::tool_calls(vec![
+            ToolInvocation::new("c-submit", SUBMIT_REPORT_TOOL, valid_report_args()),
+            ToolInvocation::new("c-dup", "search", serde_json::json!({})),
+        ]);
+        // First response makes the `search` call; the second repeats it *after* submit_report.
+        let (_provider, exec) = executor(vec![call_tool("search"), batched], Budget::default());
+        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("you are a worker", "find the thing"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            report.repeat_calls, 1,
+            "the repeat trailing submit_report in the same batch must be counted"
+        );
     }
 }
 
