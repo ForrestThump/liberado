@@ -365,6 +365,22 @@ top-level topology key defaults, so a file containing nothing but `[[models]]` e
 The *entries themselves* are not lenient — a model missing `tier` (or any of the five required
 fields) is a hard parse error, in a rates-only file exactly as in the real topology.
 
+Two read-only analysis tools sit beside it, both reading records the daemon already writes — no
+inference, no extra instrumentation:
+
+```bash
+# What does delegating cost the turns that follow it?
+cargo run -p liberado-cost --example delegation_cost   -- <data-dir>
+# Which delegated answers did the model mostly write itself? (provenance, not quality)
+cargo run -p liberado-cost --example provenance_ratio  -- <data-dir> [ratio-threshold]
+```
+
+`provenance_ratio` compares what the face agent *received* from a delegation against what it then
+*wrote*. It flags rather than judges — a short lookup expanded into a readable sentence is fine — but
+it independently ranked the known [seam bug](../../future-work/delegated-work-is-discarded-at-the-seam.md)
+first at 29x against a median of 0.9x. Why this rather than an eval harness:
+[`evals_implementation.md`](../../future-work/research/evals_implementation.md).
+
 Money is never written to the journal — only tokens are. Rates come from `[[models]]` at query time,
 so repricing history is a config edit, not a migration. A model with no usable rate is listed under
 *"models with no usable rate (tokens known, cost unknown — never 0.0)"* and counted in each row's

@@ -18,7 +18,7 @@ Index of forward-looking work.
 | [chat-search-plan.md](chat-search-plan.md) | History search tiers |
 | [context-compaction-plan.md](context-compaction-plan.md) | Chat context compaction (CH3 — Tier 1 landed; known residual documented) |
 | [durable-chat-turns-plan.md](durable-chat-turns-plan.md) | A turn outlives the connection watching it (**built + verified live** 2026-08-02; all steps landed) |
-| [parallel-deliverables-2026-08-round-3.md](parallel-deliverables-2026-08-round-3.md) | **Round 3 — three larger specs in priority order**, plus R6–R8 from what round 2's tests missed |
+| [parallel-deliverables-2026-08-round-3.md](parallel-deliverables-2026-08-round-3.md) | **Round 3 — status + open work.** §1 done; §2 (subagent vs direct in the journal) is next and has one mandated approach with verified line numbers; §3 split into a delegable measurement and a reserved fix. Carries the R1–R8 pre-PR checklist |
 | [parallel-deliverables-2026-08-round-2.md](parallel-deliverables-2026-08-round-2.md) | Round 2 — five specs, **all landed** (PRs #33–#37); kept for the R1–R5 rules and the review record |
 | [parallel-deliverables-2026-08.md](parallel-deliverables-2026-08.md) | Round 1 — five specs, **all landed** (PRs #28–#32); kept for the acceptance-criteria style and the review record |
 | [token-economics-findings-2026-08.md](token-economics-findings-2026-08.md) | **Finding + TE1–TE3**: 56% of all spend is the orchestrator's ~11k base re-sent per hop; face context is 4.5%. Roadmap P1.5 |
