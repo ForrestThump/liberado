@@ -42,8 +42,6 @@ use tokio::sync::Semaphore;
 use tracing::Instrument;
 
 #[cfg(test)]
-static EXECUTE_DIRECT_BUILDING_LINE_AT_INFO: AtomicBool = AtomicBool::new(false);
-#[cfg(test)]
 static LAST_CATALOG_OFFERED: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static LAST_CATALOG_SURVIVING: AtomicUsize = AtomicUsize::new(0);
@@ -906,10 +904,6 @@ impl Orchestrator {
                             .filter(|name| relevant_mcps.contains(name))
                             .collect()
                     };
-                    #[cfg(test)]
-                    {
-                        EXECUTE_DIRECT_BUILDING_LINE_AT_INFO.store(true, Ordering::Relaxed);
-                    }
                     tracing::info!(
                         seed_count = seed_calls.len(),
                         allowed_mcps = allowed_mcps.len(),
@@ -2988,25 +2982,65 @@ mod tests {
     }
 
     #[test]
-    fn execute_direct_promotes_building_line_to_info() {
-        EXECUTE_DIRECT_BUILDING_LINE_AT_INFO.store(false, Ordering::Relaxed);
-        let orch = orchestrator_with_catalog(Vec::new());
-        let decision = DispatchDecision {
-            action: DispatchAction::ExecuteDirect {
-                seed_calls: Vec::new(),
-                relevant_mcps: Vec::new(),
-            },
-            confidence: 0.9,
-            rationale: "test".into(),
-        };
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("test runtime");
-        let _ = rt.block_on(orch.run(decision, "test goal", "trigger-1", &CapabilitySet::empty()));
-        assert!(
-            EXECUTE_DIRECT_BUILDING_LINE_AT_INFO.load(Ordering::Relaxed),
-            "the building execute-direct task line must fire at info, not debug"
+    fn execute_direct_building_line_is_emitted_at_info_level() {
+        use std::sync::Mutex;
+        use tracing::subscriber;
+        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+
+        #[derive(Default)]
+        struct Captured(Arc<Mutex<Vec<(tracing::Level, String)>>>);
+        impl<S: tracing::Subscriber> Layer<S> for Captured {
+            fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+                struct Msg(String);
+                impl tracing::field::Visit for Msg {
+                    fn record_debug(&mut self, f: &tracing::field::Field, v: &dyn std::fmt::Debug) {
+                        if f.name() == "message" {
+                            self.0 = format!("{v:?}");
+                        }
+                    }
+                }
+                let mut m = Msg(String::new());
+                event.record(&mut m);
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((*event.metadata().level(), m.0));
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sub = tracing_subscriber::registry().with(Captured(seen.clone()));
+
+        subscriber::with_default(sub, || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let orch = orchestrator_with_catalog(Vec::new());
+                    let decision = DispatchDecision {
+                        action: DispatchAction::ExecuteDirect {
+                            seed_calls: Vec::new(),
+                            relevant_mcps: Vec::new(),
+                        },
+                        confidence: 0.9,
+                        rationale: "test".into(),
+                    };
+                    let _ = orch
+                        .run(decision, "goal", "trigger", &CapabilitySet::empty())
+                        .await;
+                });
+        });
+
+        let events = seen.lock().unwrap();
+        let line = events
+            .iter()
+            .find(|(_, m)| m.contains("building execute-direct task"))
+            .expect("the execute-direct build line must be emitted");
+        assert_eq!(
+            line.0,
+            tracing::Level::INFO,
+            "A1 exists because the box runs at info; a debug-level line is unobservable there"
         );
     }
 
