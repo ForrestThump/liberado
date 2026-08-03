@@ -207,7 +207,16 @@ impl Daemon {
             );
             return Ok(ReactionOutcome::Observed);
         };
-        let report = orch.execute_approved(&proposal).await?;
+        // The approval path is the other way inference escapes attribution. The proposal already
+        // carries the originating `correlation_id` — it is used for write provenance a few frames
+        // down — but nothing put it on the latency task-local, so every model call an approved
+        // subagent makes recorded `"-"`. On the deployed journal that was 14 of 104 unattributed
+        // calls, the expensive kind: agent loops reaching 29k prompt tokens.
+        let report = liberado_provider::latency::with_correlation(
+            proposal.correlation_id.clone(),
+            orch.execute_approved(&proposal),
+        )
+        .await?;
 
         // 6.5. Orchestrator pre-execution refuse (wall-clock expiry race): tools never ran —
         //     complete the expiry lifecycle without applying permission grants or marking Done.
