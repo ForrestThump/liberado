@@ -720,85 +720,101 @@ impl ChatSessions {
     ///
     /// When guard configuration is attached, the tool-advisor runs before the turn to select
     /// relevant MCPs, and the runtime is wrapped in [`RiskGatedToolRuntime`] for safety checks.
+    /// Latency correlation is set for the whole turn (session id) so every inference call made on
+    /// this path — face completion, dispatcher, and compaction summarisation — lands under the
+    /// conversation in the cost journal. Without this wrap, `MeteredProvider` records `"-"` and
+    /// non-streaming HTTP + Telegram turns vanish from per-conversation rollups. Streaming already
+    /// had the same wrap in [`spawn_turn`](Self::spawn_turn); both entry points must set it, because
+    /// callers (HTTP non-stream, Telegram) invoke this method directly.
     pub async fn turn(&self, session: Ulid, user: &str) -> SessionResult<String> {
-        let lock = self.session_lock(session);
-        let _guard = lock.lock().await;
-        self.maybe_seed_default_title(session, user).await?;
-        let (nodes, parent_leaf) = self.load(session).await?;
+        // Task-local: every Provider::complete inside this future inherits the session id.
+        // Do not move this into MeteredProvider — the provider must not invent a conversation id.
+        liberado_provider::latency::with_correlation(session.to_string(), async {
+            let lock = self.session_lock(session);
+            let _guard = lock.lock().await;
+            self.maybe_seed_default_title(session, user).await?;
+            let (nodes, parent_leaf) = self.load(session).await?;
 
-        // Read per turn, not cached: a profile switch mid-conversation takes effect on the next
-        // turn, which is the whole of "switchable" — no restart, no reconnect. Resolved *before*
-        // compaction and the user node: the compact threshold tracks this conversation's model,
-        // and the user node is stamped with the same id.
-        let settings = self.turn_settings(session).await;
-        let (mut convo, parent_leaf) = self
-            .maybe_compact(session, nodes, parent_leaf, user, settings.model.as_deref())
-            .await;
-        let before = convo.len();
+            // Read per turn, not cached: a profile switch mid-conversation takes effect on the next
+            // turn, which is the whole of "switchable" — no restart, no reconnect. Resolved *before*
+            // compaction and the user node: the compact threshold tracks this conversation's model,
+            // and the user node is stamped with the same id.
+            let settings = self.turn_settings(session).await;
+            let (mut convo, parent_leaf) = self
+                .maybe_compact(session, nodes, parent_leaf, user, settings.model.as_deref())
+                .await;
+            let before = convo.len();
 
-        // A profile's model applies to this turn only. Specialised per turn rather than set on the
-        // shared provider, so one chat choosing a model cannot change it for every other session.
-        let executor = self.executor.with_model(settings.model.clone());
-        // The concrete id, never `None`: a stamp of "the provider's default" would mean something
-        // different on the next read if the default has since changed, which is the drift this
-        // whole record exists to remove.
-        let turn_model = executor.active_model();
+            // A profile's model applies to this turn only. Specialised per turn rather than set on the
+            // shared provider, so one chat choosing a model cannot change it for every other session.
+            let executor = self.executor.with_model(settings.model.clone());
+            // The concrete id, never `None`: a stamp of "the provider's default" would mean something
+            // different on the next read if the default has since changed, which is the drift this
+            // whole record exists to remove.
+            let turn_model = executor.active_model();
 
-        // Before a single token is spent: whatever happens to this turn, what the human typed
-        // survives it. The replies still chain off this node, so ordering is unchanged.
-        let parent_leaf = self
-            .persist_user_message(session, user, parent_leaf, Some(turn_model.clone()))
-            .await?;
-        // Resolved once: the prompt the model reads and the tools it is handed must agree, and
-        // deciding that twice is how they came apart in the first place.
-        let face_agent = self.uses_face_agent(settings.delegation);
-        if !face_agent {
-            convo.apply_direct_agent_prompt();
-        }
-        convo.apply_prompt_append(settings.prompt_append.as_deref());
-
-        let reply = if face_agent {
-            let turn_deferral = Arc::new(AtomicBool::new(false));
-            let turn_runtime = self.build_face_runtime(
-                user,
-                session,
-                settings.capabilities.clone(),
-                turn_deferral.clone(),
-            );
-            // Derived from the runtime the executor is about to be handed, never from a list built
-            // beside it — see `Conversation::apply_available_tools`.
-            self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
-            let reply = convo.turn(&executor, turn_runtime.as_ref(), user).await?;
-            // Gap 2: if a `delegate` this turn deferred to the human out-of-band (an interactive
-            // proposal/permission notification already landed on this surface), collapse the face
-            // agent's now-redundant reply to a tiny pointer at that notification.
-            collapse_if_deferred(reply, &turn_deferral)
-        } else {
-            match self.dispatch_turn(user).await {
-                DispatchOutcome::Answered(reply) => {
-                    convo.answer(user, &reply);
-                    reply
-                }
-                DispatchOutcome::Proceed(relevant_mcps) => {
-                    let turn_runtime = self.build_turn_runtime(
-                        user,
-                        session,
-                        &relevant_mcps,
-                        &settings.capabilities,
-                    );
-                    self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
-                    convo.turn(&executor, turn_runtime.as_ref(), user).await?
-                }
+            // Before a single token is spent: whatever happens to this turn, what the human typed
+            // survives it. The replies still chain off this node, so ordering is unchanged.
+            let parent_leaf = self
+                .persist_user_message(session, user, parent_leaf, Some(turn_model.clone()))
+                .await?;
+            // Resolved once: the prompt the model reads and the tools it is handed must agree, and
+            // deciding that twice is how they came apart in the first place.
+            let face_agent = self.uses_face_agent(settings.delegation);
+            if !face_agent {
+                convo.apply_direct_agent_prompt();
             }
-        };
-        self.persist_tail(
-            session,
-            tail_after_user(convo.turn_tail(before)),
-            parent_leaf,
-            Some(turn_model),
-        )
-        .await?;
-        Ok(reply)
+            convo.apply_prompt_append(settings.prompt_append.as_deref());
+
+            let reply = if face_agent {
+                let turn_deferral = Arc::new(AtomicBool::new(false));
+                let turn_runtime = self.build_face_runtime(
+                    user,
+                    session,
+                    settings.capabilities.clone(),
+                    turn_deferral.clone(),
+                );
+                // Derived from the runtime the executor is about to be handed, never from a list built
+                // beside it — see `Conversation::apply_available_tools`.
+                self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
+                let reply = convo.turn(&executor, turn_runtime.as_ref(), user).await?;
+                // Gap 2: if a `delegate` this turn deferred to the human out-of-band (an interactive
+                // proposal/permission notification already landed on this surface), collapse the face
+                // agent's now-redundant reply to a tiny pointer at that notification.
+                collapse_if_deferred(reply, &turn_deferral)
+            } else {
+                match self.dispatch_turn(user).await {
+                    DispatchOutcome::Answered(reply) => {
+                        convo.answer(user, &reply);
+                        reply
+                    }
+                    DispatchOutcome::Proceed(relevant_mcps) => {
+                        let turn_runtime = self.build_turn_runtime(
+                            user,
+                            session,
+                            &relevant_mcps,
+                            &settings.capabilities,
+                        );
+                        self.state_tool_surface(
+                            &mut convo,
+                            session,
+                            &settings,
+                            turn_runtime.as_ref(),
+                        );
+                        convo.turn(&executor, turn_runtime.as_ref(), user).await?
+                    }
+                }
+            };
+            self.persist_tail(
+                session,
+                tail_after_user(convo.turn_tail(before)),
+                parent_leaf,
+                Some(turn_model),
+            )
+            .await?;
+            Ok(reply)
+        })
+        .await
     }
 
     /// Streaming variant of [`turn`](Self::turn): same rehydrate → run → persist-on-success path,
@@ -815,87 +831,98 @@ impl ChatSessions {
     ///
     /// When guard configuration is attached, the tool-advisor runs before the turn to select
     /// relevant MCPs, and the runtime is wrapped in [`RiskGatedToolRuntime`] for safety checks.
+    /// Same latency correlation as [`turn`](Self::turn): session id for every inference on this
+    /// path (including compaction). [`spawn_turn`](Self::spawn_turn) also wraps; nesting the same
+    /// id is harmless and keeps direct `turn_stream` callers attributed if they skip `spawn_turn`.
     pub async fn turn_stream(
         &self,
         session: Ulid,
         user: &str,
         events: &Sender<AgentEvent>,
     ) -> SessionResult<()> {
-        let lock = self.session_lock(session);
-        let _guard = lock.lock().await;
-        self.maybe_seed_default_title(session, user).await?;
-        let (nodes, parent_leaf) = self.load(session).await?;
-        // Resolved once per turn (pending model is consumed here): compaction and the user-node
-        // stamp must agree on the same model.
-        let settings = self.turn_settings(session).await;
-        let (mut convo, parent_leaf) = self
-            .maybe_compact(session, nodes, parent_leaf, user, settings.model.as_deref())
-            .await;
-        let before = convo.len();
+        liberado_provider::latency::with_correlation(session.to_string(), async {
+            let lock = self.session_lock(session);
+            let _guard = lock.lock().await;
+            self.maybe_seed_default_title(session, user).await?;
+            let (nodes, parent_leaf) = self.load(session).await?;
+            // Resolved once per turn (pending model is consumed here): compaction and the user-node
+            // stamp must agree on the same model.
+            let settings = self.turn_settings(session).await;
+            let (mut convo, parent_leaf) = self
+                .maybe_compact(session, nodes, parent_leaf, user, settings.model.as_deref())
+                .await;
+            let before = convo.len();
 
-        let executor = self.executor.with_model(settings.model.clone());
-        let turn_model = executor.active_model();
+            let executor = self.executor.with_model(settings.model.clone());
+            let turn_model = executor.active_model();
 
-        // Durable before the first token is streamed — a turn the client abandons still leaves the
-        // question behind it, and now the model it was asked of.
-        let parent_leaf = self
-            .persist_user_message(session, user, parent_leaf, Some(turn_model.clone()))
-            .await?;
-
-        let face_agent = self.uses_face_agent(settings.delegation);
-        if !face_agent {
-            convo.apply_direct_agent_prompt();
-        }
-        convo.apply_prompt_append(settings.prompt_append.as_deref());
-
-        if face_agent {
-            // Streaming path (web-UI SSE): tokens are emitted live, so a post-turn deferral flag
-            // can't retract an already-streamed reply — Gap 2 suppression is a buffered-`turn`
-            // affordance (the Telegram surface). Pass a throwaway flag to satisfy the signature.
-            let turn_deferral = Arc::new(AtomicBool::new(false));
-            // `settings.capabilities`, not a second lookup: `TurnSettings` exists so a profile
-            // switch cannot land between two reads of the same turn's authority, and this path was
-            // quietly doing exactly that.
-            let turn_runtime = self.build_face_runtime(
-                user,
-                session,
-                settings.capabilities.clone(),
-                turn_deferral,
-            );
-            self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
-            convo
-                .turn_stream(&executor, turn_runtime.as_ref(), user, events)
+            // Durable before the first token is streamed — a turn the client abandons still leaves the
+            // question behind it, and now the model it was asked of.
+            let parent_leaf = self
+                .persist_user_message(session, user, parent_leaf, Some(turn_model.clone()))
                 .await?;
-        } else {
-            match self.dispatch_turn(user).await {
-                DispatchOutcome::Answered(reply) => {
-                    convo.answer(user, &reply);
-                    // Deliver the already-resolved reply as a single token so it renders through the
-                    // existing SSE contract unchanged — no new event type needed.
-                    let _ = events.send(AgentEvent::Token(reply)).await;
-                }
-                DispatchOutcome::Proceed(relevant_mcps) => {
-                    let turn_runtime = self.build_turn_runtime(
-                        user,
-                        session,
-                        &relevant_mcps,
-                        &settings.capabilities,
-                    );
-                    self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
-                    convo
-                        .turn_stream(&executor, turn_runtime.as_ref(), user, events)
-                        .await?;
+
+            let face_agent = self.uses_face_agent(settings.delegation);
+            if !face_agent {
+                convo.apply_direct_agent_prompt();
+            }
+            convo.apply_prompt_append(settings.prompt_append.as_deref());
+
+            if face_agent {
+                // Streaming path (web-UI SSE): tokens are emitted live, so a post-turn deferral flag
+                // can't retract an already-streamed reply — Gap 2 suppression is a buffered-`turn`
+                // affordance (the Telegram surface). Pass a throwaway flag to satisfy the signature.
+                let turn_deferral = Arc::new(AtomicBool::new(false));
+                // `settings.capabilities`, not a second lookup: `TurnSettings` exists so a profile
+                // switch cannot land between two reads of the same turn's authority, and this path was
+                // quietly doing exactly that.
+                let turn_runtime = self.build_face_runtime(
+                    user,
+                    session,
+                    settings.capabilities.clone(),
+                    turn_deferral,
+                );
+                self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
+                convo
+                    .turn_stream(&executor, turn_runtime.as_ref(), user, events)
+                    .await?;
+            } else {
+                match self.dispatch_turn(user).await {
+                    DispatchOutcome::Answered(reply) => {
+                        convo.answer(user, &reply);
+                        // Deliver the already-resolved reply as a single token so it renders through the
+                        // existing SSE contract unchanged — no new event type needed.
+                        let _ = events.send(AgentEvent::Token(reply)).await;
+                    }
+                    DispatchOutcome::Proceed(relevant_mcps) => {
+                        let turn_runtime = self.build_turn_runtime(
+                            user,
+                            session,
+                            &relevant_mcps,
+                            &settings.capabilities,
+                        );
+                        self.state_tool_surface(
+                            &mut convo,
+                            session,
+                            &settings,
+                            turn_runtime.as_ref(),
+                        );
+                        convo
+                            .turn_stream(&executor, turn_runtime.as_ref(), user, events)
+                            .await?;
+                    }
                 }
             }
-        }
-        self.persist_tail(
-            session,
-            tail_after_user(convo.turn_tail(before)),
-            parent_leaf,
-            Some(turn_model),
-        )
-        .await?;
-        Ok(())
+            self.persist_tail(
+                session,
+                tail_after_user(convo.turn_tail(before)),
+                parent_leaf,
+                Some(turn_model),
+            )
+            .await?;
+            Ok(())
+        })
+        .await
     }
 
     /// Whether this turn runs as the face agent (delegating) rather than driving the dispatcher
