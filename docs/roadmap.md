@@ -19,6 +19,25 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`spec/
 | **W1** | **Goal-session view in mobile WebUI** | Later phone surface beyond Telegram. See [`spec/architecture/session-surface-contract.md`](spec/architecture/session-surface-contract.md). |
 | **E5-b** | ~~Telegram session deep-link~~ | **Deprioritized** (prefer WebUI later). |
 
+### Priority 1.5 — token economics (foundational, measured 2026-08-02)
+
+The first real read of `liberado-cost` against the deployed journal (1,338 calls, 15.5M tokens) says
+the spend is not where the architecture assumed. Full measurements, method and caveats:
+[`token-economics-findings-2026-08.md`](future-work/token-economics-findings-2026-08.md).
+
+**The finding in one line: 56% of every token ever spent is the orchestrator's ~11k base context,
+re-sent on every hop of every run.** Face context — the thing delegation exists to protect — is
+4.5%. The dispatcher is 2.8%.
+
+| # | What | Why it matters |
+|---|---|---|
+| **TE1** | **Find out why the tool catalog isn't narrowed** | **56% of all spend.** Narrowing already exists (`relevant_mcps`, `allowed_mcps`, `narrow_direct_tools` defaults on) yet the base is a flat ~11k ≈ the full 12-MCP catalog. **Start by instrumenting, not fixing** — the `allowed_mcps` count is `debug`-level and the box runs `info`, so the cause is currently unobservable. |
+| **TE2** | **Split subagent vs direct-execution spend** | `AgentRole` has no `Subagent`: delegated runs and `ExecuteDirect` both journal as `orchestrator`, so "is delegating cheaper than doing it directly?" — the dispatcher's whole reason for existing — is unanswerable today. Touches `provider/src/latency.rs`, which is a journal-shape contract: its own PR, and update `crates/cost/tests/journal_shape.rs` with it. |
+| **TE3** | **Order the dispatcher prompt for cache reuse** | Dispatcher cache hit is 22.3% vs ~76% elsewhere, because the varying goal is formatted *before* the stable MCP catalog and poisons the prefix. One-line reorder. Only ~1% of tokens — listed because it is nearly free and the same mistake in the orchestrator's prompt would not be. |
+
+Do them in that order. TE3 is the tempting one to start with because it is a format string; it is
+also the one that matters least.
+
 ### Priority 2 — lean chat surface
 
 | # | What | Why |
@@ -101,6 +120,10 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
                    ├── M1b done (pool + degraded routing + topology MCP hot-reload)
                    └── T1 Tier-1 done (Tier 3 open; Tier 2 optional)
 
+  P1.5 token economics ──► TE1 instrument the tool catalog   (56% of spend)
+                       ├── TE2 split subagent vs direct       (makes TE1 legible)
+                       └── TE3 dispatcher prompt order        (cheap, ~1%)
+
   Later ──► W1 mobile WebUI session view
   TurboVault (parallel) ──► vault_events · upstream land
 ```
@@ -109,7 +132,7 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
 
 | When | What |
 |------|------|
-| **2026-08-02** | **Five parallel deliverables** (PRs #28–#32), specced in [`parallel-deliverables-2026-08.md`](future-work/parallel-deliverables-2026-08.md) and executed on separate branches: **token cost accounting** (`liberado-cost` — `[[models]]` per-million rates applied at *read* time over the existing latency journal, rolled up per conversation through the dispatch journal's `parent_conversation` so delegated spend lands on the turn that caused it; first measurement says the orchestrator role is ~80% of spend); **per-conversation compaction trigger** (closes CH4's re-resolve gap above); **TUI stop / scoped `/model` / reattach** (durable turns had made Ctrl+S mean "stop showing me"); **graceful shutdown** (SIGTERM drains in-flight durable turns for a bounded grace before exit; `stop_grace_period: 2m` on the compose service); and **Tier 3 P6**, verified against the live daemon. Review notes and the recurring test-aim weakness are written up in [`parallel-deliverables-2026-08-round-2.md`](future-work/parallel-deliverables-2026-08-round-2.md). |
+| **2026-08-02** | **Five parallel deliverables** (PRs #28–#32), specced in [`parallel-deliverables-2026-08.md`](future-work/parallel-deliverables-2026-08.md) and executed on separate branches: **token cost accounting** (`liberado-cost` — `[[models]]` per-million rates applied at *read* time over the existing latency journal, rolled up per conversation through the dispatch journal's `parent_conversation` so delegated spend lands on the turn that caused it; the full read landed 2026-08-02 at **92.8%** orchestrator — see [P1.5](#priority-15--token-economics-foundational-measured-2026-08-02)); **per-conversation compaction trigger** (closes CH4's re-resolve gap above); **TUI stop / scoped `/model` / reattach** (durable turns had made Ctrl+S mean "stop showing me"); **graceful shutdown** (SIGTERM drains in-flight durable turns for a bounded grace before exit; `stop_grace_period: 2m` on the compose service); and **Tier 3 P6**, verified against the live daemon. Review notes and the recurring test-aim weakness are written up in [`parallel-deliverables-2026-08-round-2.md`](future-work/parallel-deliverables-2026-08-round-2.md). |
 | **2026-08-01** | **Session profiles** (PR #21): per-conversation authority — a profile narrows tools, delegation, model, and prompt nudge for one conversation, and a turn may hold fewer capabilities than the profile's ceiling after per-goal narrowing. Includes **CH4's mechanism** (above), the **approval ledger** — a human's approve/reject now lives in an append-only log under `<LIBERADO_DATA_DIR>/` that no MCP mounts and no tool addresses, so editing a proposal note's `status:` authorises nothing — and the policy change that took `Write` on `proposals/` away from every agent grant. Plus the tool manifest (the model is told its exact tool surface each turn, beating stale transcript evidence), a provider-seam test sweep asserting on the serialized request body, and test-clock hardening (frozen state can no longer leak between tests, and the controls compile out of production builds). |
 | **2026-07-23** | **CH3 context compaction:** long chats roll older history into a persisted summary marker (`Author::Named("compaction")` in the session DAG) — the model resumes from the summary + a verbatim tail of the last K user turns; the full transcript stays on disk, rendered and searchable. `[main_agent.compaction]` knobs, default on. Plan + 4-project research (OpenCode/Kilo/LibreChat/OpenClaw): [`context-compaction-plan.md`](future-work/context-compaction-plan.md). **Known residual** (marker durable + partial tail re-append → next load can miss unpersisted tail): documented there; preferred fix is CH3.1 viewport/side-summary — [`context-compaction-viewport-rearchitecture.md`](future-work/context-compaction-viewport-rearchitecture.md). |
 | **2026-07-05** | **CH2 chat history search Tier 1** *(landed then, recorded now — the entry sat open here by mistake)*: lexical AND/regex over the session JSONL logs behind `GET /api/conversations/search`, the webui sidebar search box, and the `chat-search` MCP for the dispatcher. [`chat-search-plan.md`](future-work/chat-search-plan.md). |
@@ -122,4 +145,4 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
 
 See [`spec/architecture/sessions.md`](spec/architecture/sessions.md) for the session model history pointers.
 
-**Last updated:** 2026-08-01.
+**Last updated:** 2026-08-02.

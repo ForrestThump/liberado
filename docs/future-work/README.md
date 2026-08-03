@@ -20,8 +20,9 @@ Index of forward-looking work.
 | [durable-chat-turns-plan.md](durable-chat-turns-plan.md) | A turn outlives the connection watching it (**built + verified live** 2026-08-02; all steps landed) |
 | [parallel-deliverables-2026-08-round-2.md](parallel-deliverables-2026-08-round-2.md) | **Round 2 — five independent PR-sized specs**, plus what round 1's five PRs taught us about how the tests go wrong |
 | [parallel-deliverables-2026-08.md](parallel-deliverables-2026-08.md) | Round 1 — five specs, **all landed** (PRs #28–#32); kept for the acceptance-criteria style and the review record |
+| [token-economics-findings-2026-08.md](token-economics-findings-2026-08.md) | **Finding + TE1–TE3**: 56% of all spend is the orchestrator's ~11k base re-sent per hop; face context is 4.5%. Roadmap P1.5 |
 | [token-cost-accounting-plan.md](token-cost-accounting-plan.md) | Price the existing latency journal so design calls use numbers, not guesses (scoped) |
-| [delegated-work-is-discarded-at-the-seam.md](delegated-work-is-discarded-at-the-seam.md) | **Finding**: `delegate` passes only a summary, so the face agent fabricates the specifics (open) |
+| [delegated-work-is-discarded-at-the-seam.md](delegated-work-is-discarded-at-the-seam.md) | **Finding**: `delegate` passes only a summary, so the face agent fabricates the specifics. Root cause found; **context-cost objection now measured away** (2026-08-02) |
 | [build-locally-and-ship-the-artifact.md](build-locally-and-ship-the-artifact.md) | Compile on the dev machine, ship the binary (wanted; blocked on disk + a WSL distro) |
 | [context-compaction-viewport-rearchitecture.md](context-compaction-viewport-rearchitecture.md) | CH3.1 proposed: side-summary + viewport (not shipped) |
 | [coding-tui-plan.md](coding-tui-plan.md) | Agentic coding TUI: goal surface + kernel completion gate (S1–S7) |
