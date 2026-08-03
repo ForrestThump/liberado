@@ -181,6 +181,7 @@ mod tests {
             finish: finish.into(),
             tool_calls,
             streamed: false,
+            repeat_calls: None,
         }
     }
 
@@ -276,6 +277,33 @@ mod tests {
                 .iter()
                 .any(|c| c.conversation_id == child),
             "child correlation must not be a separate conversation row (would double-count)"
+        );
+    }
+
+    #[test]
+    fn repeat_calls_rolls_up_and_appears_in_report() {
+        let prices = price_table_from_pairs([("m", rates(1.0, 2.0, 0.1))]);
+        let events = vec![
+            JournalEvent {
+                repeat_calls: Some(3),
+                ..event("conv", "face", "m", Some(100), Some(10), None, 1)
+            },
+            JournalEvent {
+                repeat_calls: Some(1),
+                ..event("conv", "orchestrator", "m", Some(200), Some(20), None, 2)
+            },
+            JournalEvent {
+                repeat_calls: None,
+                ..event("conv", "orchestrator", "m", Some(300), Some(30), None, 3)
+            },
+        ];
+        let report = report_from_parts(&events, &HashMap::new(), &prices);
+
+        assert_eq!(report.total_repeat_calls, Some(4));
+        assert_eq!(report.conversations[0].total_repeat_calls, Some(4));
+        assert!(
+            format_report(&report).contains("repeat_calls: 4"),
+            "report header must show repeat_calls"
         );
     }
 

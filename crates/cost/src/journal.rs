@@ -37,6 +37,8 @@ pub struct JournalEvent {
     pub tool_calls: usize,
     #[serde(default)]
     pub streamed: bool,
+    #[serde(default)]
+    pub repeat_calls: Option<usize>,
 }
 
 fn default_kind() -> String {
