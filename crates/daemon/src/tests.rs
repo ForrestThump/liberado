@@ -1889,6 +1889,114 @@ async fn handle_proposal_change_does_not_execute_approved_past_deadline() {
     );
 }
 
+/// An approved **subagent** proposal runs inference, and that inference must be attributed.
+///
+/// Boundary under test (R3): the wrap lives in `Daemon::handle_proposal_change`, and the only way
+/// to see whether it worked is what `MeteredProvider` handed the recorder — so the assertion is on
+/// captured `LatencyEvent.correlation`, not on a function having been called.
+///
+/// R1: removing the `with_correlation` wrap around `execute_approved` in `proposals.rs` fails this
+/// with `left: "-"`. That was the live behaviour: 14 of the deployed journal's 104 unattributed
+/// calls came through this path, and they are the expensive kind — agent loops reaching 29k prompt
+/// tokens with nothing to charge them to.
+#[tokio::test]
+async fn approved_subagent_execution_is_attributed_to_the_proposal_correlation() {
+    use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction};
+    use liberado_orchestrator::Orchestrator;
+    use liberado_provider::{
+        AgentRole, CompletionResponse, LatencyEvent, LatencyRecorder, MeteredProvider,
+        MockProvider, Provider,
+    };
+    use liberado_test_support::{InvocationRecordingFactory, InvocationRecordingRuntime};
+
+    #[derive(Default)]
+    struct CapturingRecorder {
+        events: std::sync::Mutex<Vec<LatencyEvent>>,
+    }
+    impl LatencyRecorder for CapturingRecorder {
+        fn record(&self, event: LatencyEvent) {
+            self.events.lock().unwrap().push(event);
+        }
+    }
+
+    const CORRELATION: &str = "vault-change:Learning/Attribution.md:deadbeef";
+
+    let rec = Arc::new(CapturingRecorder::default());
+    // A subagent loop nudges for a `submit_report`; script enough plain replies that the executor's
+    // own budget ends the run rather than the mock running dry. Whether the subagent *succeeds* is
+    // not what this test is about — only that whatever it spent is attributable.
+    let inner: Arc<dyn Provider> = Arc::new(MockProvider::with_script(
+        "mock",
+        (0..24).map(|i| CompletionResponse::text(format!("step {i}"))),
+    ));
+    let metered = MeteredProvider::wrap(
+        inner,
+        AgentRole::Orchestrator,
+        rec.clone() as Arc<dyn LatencyRecorder>,
+    );
+
+    let signer = ProposalSigner::random();
+    let orch = Orchestrator::new(
+        metered,
+        InvocationRecordingFactory {
+            runtime: InvocationRecordingRuntime::default(),
+        },
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        signer.clone(),
+        "default",
+    );
+
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon
+        .with_orchestrator(orch)
+        .with_proposal_signer(signer.clone());
+    std::fs::create_dir_all(dir.path().join("proposals")).unwrap();
+    // The ledger entry a human's Telegram tap would create. Without it the note's `status:
+    // approved` is only a claim and execution is refused — which would make this test pass
+    // vacuously if the precondition below were not asserted.
+    approve_in(&dir, CORRELATION).await;
+
+    let proposal = Proposal::pending(
+        CORRELATION,
+        CORRELATION,
+        "test",
+        ProposedAction::Subagent {
+            goal: "summarise the note".into(),
+            capabilities: CapabilitySet::empty(),
+            allowed_mcps: Vec::new(),
+            success_criteria: Vec::new(),
+        },
+        "an approved subagent",
+    );
+    let mut proposal = signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+    let rel = Path::new("proposals/attributed.md");
+    let prov = WriteProvenance::agent("test", CORRELATION);
+    daemon
+        .vault
+        .write(rel, &proposal.to_note(), None, &prov)
+        .await
+        .unwrap();
+
+    daemon.handle_proposal_change(rel).await.unwrap();
+
+    let events = rec.events.lock().unwrap();
+    assert!(
+        !events.is_empty(),
+        "an approved subagent must reach the provider — otherwise this test proves nothing"
+    );
+    for (i, ev) in events.iter().enumerate() {
+        assert_eq!(
+            ev.correlation, CORRELATION,
+            "event[{i}] must carry the proposal's correlation, not \"-\""
+        );
+    }
+}
+
 #[tokio::test]
 async fn daemon_does_not_execute_a_pending_proposal() {
     use liberado_common::{Proposal, ProposalStatus, ProposedAction, ToolCall};

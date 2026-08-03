@@ -28,3 +28,28 @@ profile_name = "conformance"
 # advisory_counts = false
 
 path_timeout_secs = 600
+
+# --- P7 restart survival (opt-in) ----------------------------------------------------------------
+# P7 asserts a chat turn is honestly reported across a daemon restart: new turns are refused during
+# the drain (503 `shutting_down`), and afterwards the conversation never claims `turn_running` — a
+# claim about a process that no longer exists.
+#
+# It is the only path with a side effect on the host, so it is opt-in twice over: it is never in the
+# default set (a plain run stays P1a–P4), and it does nothing unless `restart_command` is set here.
+# Unset → P7 **skips with a reason**. A skip is not a pass.
+#
+# Run the runner from somewhere that OUTLIVES the restart. Every other path is run with
+# `docker exec liberado liberado-conformance …`, and that does not work here for two reasons:
+# the binary ships only inside the image (there is no copy on the host), and the container has no
+# docker CLI — so an in-container run could neither perform the restart nor survive it.
+#
+# Two workable setups, both verified:
+#   1. Host: install the binary on the box, then
+#        restart_command = "cd ~/homelab/services/liberado && docker compose up -d --force-recreate"
+#   2. Dev machine over the LAN (what the first live P7 pass used):
+#        base_url       = "http://<box-ip>:4201"
+#        restart_command = "ssh <user>@<box> ./p7-restart.sh"
+#      Put the compose command in a small script on the box rather than inlining it — nested quotes
+#      through `cmd /C` on Windows mangle and the hook exits 2 without restarting anything.
+#
+#   liberado-conformance --config <this file> --path p7

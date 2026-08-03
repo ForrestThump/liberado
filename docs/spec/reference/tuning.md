@@ -57,6 +57,93 @@ reasoning = "off"                # off | low | medium | high
 Unset fields inherit the global `provider` and its default model. This is the single biggest cost
 lever — a cheap router with a strong worker.
 
+**`[roles.*]` takes a free-form slug and is not checked against anything.** Whatever string you
+write is sent to the provider as-is. That is deliberate — it lets you point at a model the day it
+ships — but it means a typo surfaces as a provider error at first use, not at boot.
+
+### The model catalog — `[[models]]`
+
+Separate from `[roles.*]`, and easy to conflate. `[roles.*]` says *which slug to call*; `[[models]]`
+says *what we know about a slug*. Declaring a model is what makes the daemon able to price it and to
+size its context window.
+
+```toml
+[[models]]
+name = "deepseek/deepseek-v4-pro"   # must match the provider slug EXACTLY to be found
+tool_calling = true
+structured_output = true
+context_window = 128000
+tier = "control_plane"              # control_plane | work_plane
+# Optional — USD per 1,000,000 tokens. Read at query time; never written to the journal.
+input = 0.14
+output = 0.28
+cached_input = 0.014
+```
+
+The first five fields are required; a `[[models]]` entry missing any of them fails config load.
+`cost` is an optional coarse ranking hint and is **not** money — the three rate fields are.
+
+Declaring a model buys you exactly two things:
+
+| Declared | Unlocks |
+|---|---|
+| `context_window` | percentage-based compaction triggers (below). Without it, every conversation uses the hard 48k fallback |
+| `input` / `output` / `cached_input` | `liberado-cost` can price that model. Without them it reports tokens with **unknown** cost — never a silent `$0.00` |
+
+Rates are optional individually. A model with only `input` and `output` prices its uncached and
+completion tokens and falls back to the `input` rate for cached tokens; anything genuinely
+unrateable is reported as unknown rather than guessed.
+
+**`[model_roles]` is the checked path.** Where `[roles.*]` is free-form, `[model_roles]` assigns a
+*declared* model to a role and is validated at load against that role's capability floor (Decision
+13): the dispatcher requires `structured_output = true`, main agent and subagent require
+`tool_calling = true`. Referencing an undeclared model, or one that misses its floor, refuses to
+boot rather than breaking the dispatch protocol at runtime.
+
+```toml
+[model_roles]
+dispatcher = "deepseek/deepseek-v4-flash"   # must be a [[models]] name, and must be structured
+```
+
+**An empty `[[models]]` list is legal and is the default.** Nothing breaks — you get unpriced cost
+reports and 48k compaction everywhere. That is the state a fresh deployment is in.
+
+### Context compaction — `topology.toml`
+
+```toml
+[main_agent.compaction]
+enabled = true                   # default ON; a reliability guard that is opt-in is off in practice
+trigger_pct = 0.75               # fraction of the model's context_window
+# trigger_tokens = 48000         # absolute; when set, overrides trigger_pct globally
+keep_recent_turns = 3            # user turns kept verbatim after the summary
+summary_max_tokens = 1024        # cap on the summary, so the cure can't become the disease
+tool_result_max_chars = 2000     # per-tool-result truncation in the summarizer's transcript
+
+[main_agent.compaction.models."deepseek/deepseek-v4-pro"]
+trigger_tokens = 96000           # this model only; absolute wins over any percentage
+```
+
+Triggers are **absolute estimated-token counts**, resolved per model at boot. Estimation is
+`chars / 4 × 1.3` — deliberately a little conservative, because provider tokenizers undercount code
+and JSON.
+
+Resolution, first match wins:
+
+| # | Source | Condition |
+|---|---|---|
+| 1 | `[main_agent.compaction.models."<slug>"].trigger_tokens` | per-model absolute |
+| 2 | that model's `trigger_pct` × its `[[models]].context_window` | per-model pct, model declared |
+| 3 | `[main_agent.compaction].trigger_tokens` | global absolute, when set |
+| 4 | global `trigger_pct` × the model's `context_window` | model declared |
+| 5 | **48,000** | fallback — no declared window, no absolute |
+
+Each conversation resolves against **its own** model, not a single process-wide number: a chat
+pinned to a 128k model and one on a 64k model get different thresholds, and swapping the daemon-wide
+face model retunes only conversations that never pinned one.
+
+`keep_recent_turns` is anchored on user messages, which is what guarantees an assistant's
+`tool_calls` and its `tool` results can never be split across the summary seam.
+
 ### Cron schedules — `topology.toml`
 
 ```toml
@@ -211,6 +298,38 @@ docker logs liberado 2>&1 | grep -a "did not decode"
 Latency and token usage (including cache hit rate) are journaled to
 `<data-dir>/latency/*.jsonl`; `deploy/homelab/latency-report.sh` summarises per-role p50/p95.
 
+**Which compaction thresholds actually loaded**, at boot:
+
+```bash
+docker logs liberado 2>&1 | grep -a "automatic context compaction"
+# chat: automatic context compaction enabled (per-conversation model triggers)
+#   face_model=… trigger_tokens=48000 models_with_triggers=1 trigger_pct=0.75 keep_recent_turns=3
+```
+
+`models_with_triggers` counts declared `[[models]]` plus the live face slug. **A value of `1` means
+you have no `[[models]]` entries at all** — the face slug alone was registered, and every
+conversation is on the 48k fallback. Also worth grepping: `has no matching [[models]] entry`, warned
+when models *are* declared but the face slug does not match one exactly.
+
+**Token cost**, priced at read time from the journal:
+
+```bash
+liberado-cost --data-dir <data-dir> --topology <path/to/topology.toml>
+```
+
+`--prices` is an alias for `--topology` and lets you keep rates in a standalone file: every
+top-level topology key defaults, so a file containing nothing but `[[models]]` entries is accepted.
+The *entries themselves* are not lenient — a model missing `tier` (or any of the five required
+fields) is a hard parse error, in a rates-only file exactly as in the real topology.
+
+Money is never written to the journal — only tokens are. Rates come from `[[models]]` at query time,
+so repricing history is a config edit, not a migration. A model with no usable rate is listed under
+*"models with no usable rate (tokens known, cost unknown — never 0.0)"* and counted in each row's
+`unpriced` column, rather than folded into the total as free. Calls made outside any correlation
+scope land in the
+`(unattributed)` bucket; the journal is append-only, so fixing an attribution gap stops the bucket
+growing but does not retroactively empty it.
+
 ---
 
 ## 4. What is compiled in, and why
@@ -254,3 +373,18 @@ and declared, not inferred from which MCPs are in scope.
 
 **"I changed config and nothing happened."** → `deploy.sh` ships code, not config. Recreate the
 container, then confirm with `config check` **in the container**.
+
+**"Why does the cost report say everything is unpriced?"** → No `[[models]]` entry carries
+`input`/`output` rates for those slugs. The report is telling the truth: it will not invent a rate,
+and an unpriced model is never counted as free. Declare the slugs with their real rates — config
+only, no rebuild.
+
+**"Why is compaction always firing at 48k no matter what I set `trigger_pct` to?"** → `trigger_pct`
+is a fraction of `context_window`, and `context_window` only exists on a `[[models]]` entry. With no
+declared model there is nothing to take a percentage *of*, so resolution falls to the hard 48k
+(row 5 above). Either declare the model with its window, or set an absolute `trigger_tokens`.
+
+**"I set `[roles.main_agent].model` — why isn't it priced / windowed?"** → `[roles.*]` and
+`[[models]]` are different tables. The role override picks the slug to call; the catalog entry is
+what the daemon knows about it. Pointing a role at a slug does not declare it. The two must name the
+slug **identically** — matching is exact, not fuzzy.

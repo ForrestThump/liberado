@@ -245,6 +245,48 @@ impl DaemonClient {
         }
     }
 
+    /// `POST /api/chat` (non-stream) — used by P7 to probe drain refusal (`503` + `shutting_down`).
+    ///
+    /// Returns status code and parsed JSON body (or a wrapper with raw text when body is not JSON).
+    pub async fn post_chat(&self, message: &str) -> Result<(u16, Value), String> {
+        let url = format!("{}/api/chat", self.base);
+        let body = serde_json::json!({ "message": message });
+        let resp = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("POST /api/chat: {e}"))?;
+        let status = resp.status().as_u16();
+        let text = resp.text().await.unwrap_or_default();
+        let json =
+            serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({ "raw": text }));
+        Ok((status, json))
+    }
+
+    /// Whether a response is the structured drain refusal (`error: shutting_down`).
+    pub fn is_shutting_down_response(status: u16, body: &Value) -> bool {
+        status == 503 && body.get("error").and_then(|e| e.as_str()) == Some("shutting_down")
+    }
+
+    /// Poll until `GET /api/status` succeeds (daemon back after restart), or timeout.
+    pub async fn wait_until_up(&self, timeout: Duration) -> Result<(), String> {
+        let start = std::time::Instant::now();
+        loop {
+            let err = match self.status().await {
+                Ok(_) => return Ok(()),
+                Err(e) => e,
+            };
+            if start.elapsed() > timeout {
+                return Err(format!(
+                    "daemon did not come back within {timeout:?}: last error: {err}"
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
     /// `GET /api/conversations/{id}/attach` — collect SSE until a **token** (turn content) arrives
     /// or the stream ends/timeouts.
     ///
@@ -467,6 +509,12 @@ impl ConversationSnapshot {
     /// Cancel rollback ground truth: question kept, no assistant text persisted.
     pub fn cancel_left_question_without_reply(&self) -> bool {
         self.has_user && !self.has_assistant && !self.turn_running
+    }
+
+    /// P7 post-restart honesty: never claim `turn_running` after the process is gone; either the
+    /// reply landed or the turn is openly unanswered. Conversation existence alone is insufficient.
+    pub fn restart_lifecycle_honest(&self) -> bool {
+        !self.turn_running && (self.has_assistant || self.turn_unanswered)
     }
 }
 

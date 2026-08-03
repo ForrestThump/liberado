@@ -281,6 +281,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         // message nodes, and packs currently record their transcripts as events. A pack that wrote
         // its turns as nodes would become searchable for free — no change here.
         sessions_root: sessions_root.clone(),
+        data_dir: liberado_config::data_dir(),
         main_agent_capabilities,
         dispatcher_capabilities,
         config: Arc::new(config.clone()),
