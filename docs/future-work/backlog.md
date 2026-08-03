@@ -86,7 +86,7 @@ measurement is in [`token-economics-findings-2026-08.md`](token-economics-findin
 
 | # | What | Pointer |
 |---|---|---|
-| **B1** | **Hooks are not drain-gated.** `POST /api/hooks/{name}` can enqueue work *during* the 90s shutdown drain, which then dies with the process. The inventory records this as a stated hole. Gate it, or record why the daemon event loop makes it safe. | `crates/server/src/shutdown.rs` module docs |
+| **B1** | ~~Hooks are not drain-gated.~~ **Done — PR #45.** | `crates/server/src/shutdown.rs` module docs |
 | **B2** | **`ExecuteDirect` gets no output contract**, and `DIRECT_INSTRUCTIONS` asks for a *"concise, high-signal result"* — the shape of the seam bug. **Do not blanket-fix**: it carries no `Delivery`, so appending the relay directive would tell every cron and vault run to write documents. Needs a destination first. Read the doc before touching. | [`delegated-work-is-discarded-at-the-seam.md`](delegated-work-is-discarded-at-the-seam.md) |
 | **B3** | **A goal session parked at shutdown records `Parked`, but nothing tells the human why.** A marker node on the transcript would turn "unanswered" into "the daemon restarted". | `crates/server/src/shutdown.rs` |
 | **B4** | **`grace_secs` is 90s; delegating turns routinely exceed it.** Median delegating turn is 26k tokens over ~4 hops. Either raise the default or document the tradeoff where an operator will see it. | `crates/server/src/shutdown.rs`, `tuning.md` |
