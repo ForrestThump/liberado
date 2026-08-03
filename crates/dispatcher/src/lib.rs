@@ -237,7 +237,7 @@ impl Dispatcher {
             .map(|m| format!("- {}: {}", m.name, m.description))
             .collect::<Vec<_>>()
             .join("\n");
-        let mut user_message = format!("Goal:\n{}\n\nAvailable MCPs:\n{}", req.goal, catalog);
+        let mut user_message = format!("Available MCPs:\n{}\n\nGoal:\n{}", catalog, req.goal);
         // The zones a `delivery = Vault` path may start with. Without this the classifier is being
         // asked to name a destination it has never been shown, so it invents a plausible one
         // (`research/`), the orchestrator's zone guard refuses the undeclared zone, and delivery
@@ -1109,6 +1109,26 @@ mod tests {
             }
             other => panic!("expected Clarify(LowConfidence), got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn user_message_places_catalog_before_goal_for_cache_reuse() {
+        let req = request(caps("tasks-mcp"), 0);
+        let mock = scripted(&execute_direct("tasks-mcp:add", 0.95));
+        let dispatcher = Dispatcher::new(mock.clone(), DispatchTuning::default(), 4);
+        dispatcher.dispatch(&req).await.unwrap();
+        let sent = mock.last_request().unwrap();
+        let user_message = &sent.messages[1].content;
+        let cat_pos = user_message
+            .find("Available MCPs:")
+            .expect("catalog header missing");
+        let goal_pos = user_message.find("Goal:").expect("goal header missing");
+        assert!(
+            cat_pos < goal_pos,
+            "catalog must appear before the goal so the stable MCP listing is in the shared \
+             prefix; cache hit is otherwise ~22% vs ~76% elsewhere. \
+             got catalog at {cat_pos}, goal at {goal_pos}"
+        );
     }
 
     #[tokio::test]
