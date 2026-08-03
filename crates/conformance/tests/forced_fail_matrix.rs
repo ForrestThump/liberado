@@ -172,7 +172,16 @@ fn cfg(base: &str, vault: PathBuf, topology: Option<PathBuf>) -> ConformanceConf
         paths: vec![],
         advisory_counts: false,
         path_timeout_secs: 5,
+        restart_command: None,
     }
+}
+
+fn cfg_with_restart(base: &str, vault: PathBuf, restart: Option<&str>) -> ConformanceConfig {
+    let mut c = cfg(base, vault, None);
+    c.restart_command = restart.map(|s| s.to_string());
+    // P7 needs room to poll drain + up; path timeout applies as remaining budget min.
+    c.path_timeout_secs = 30;
+    c
 }
 
 fn out_dir() -> PathBuf {
@@ -896,4 +905,260 @@ async fn p6_fails_when_cancel_leaves_partial_assistant_on_transcript() {
             "evidence should record the partial that broke rollback: {ev}"
         );
     }
+}
+
+// ── P7 forced-fail landmines ─────────────────────────────────────────────────
+
+const P7_SESSION: &str = "01P7FORCED0000000000000000";
+
+/// Modes for the P7 mock surface.
+#[derive(Clone, Copy)]
+enum P7Break {
+    /// Never returns shutting_down — new turns always accepted (drain gate missing).
+    AcceptsDuringDrain,
+    /// After "restart", conversation still reports turn_running (zombie flag).
+    StillTurnRunning,
+    /// Turn lost: user present, no assistant, turn_unanswered false.
+    LostWithoutUnanswered,
+}
+
+struct P7Mock {
+    break_mode: P7Break,
+    /// After restart_command runs, the suite probes chat then history. We flip after first chat POST
+    /// so "during drain" probes can still return 503 for healthy modes.
+    chat_posts: Mutex<u32>,
+}
+
+fn p7_status() -> Value {
+    p6_status()
+}
+
+async fn listen_p7(mock: Arc<P7Mock>) -> SocketAddr {
+    let m = mock.clone();
+    let app = Router::new()
+        .route("/api/status", get(|| async { Json(p7_status()) }))
+        .route(
+            "/api/chat/stream",
+            post(|_body: Json<Value>| async move {
+                let sse = format!(
+                    "event: session\ndata: {{\"session\":\"{P7_SESSION}\"}}\n\n"
+                );
+                (
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    sse,
+                )
+            }),
+        )
+        .route(
+            "/api/chat",
+            post({
+                let m = m.clone();
+                move |_body: Json<Value>| {
+                    let m = m.clone();
+                    async move {
+                        let n = {
+                            let mut g = m.chat_posts.lock().await;
+                            *g += 1;
+                            *g
+                        };
+                        match m.break_mode {
+                            P7Break::AcceptsDuringDrain => {
+                                // Always accept — the landmine: no shutting_down ever.
+                                (
+                                    axum::http::StatusCode::OK,
+                                    Json(json!({"reply": "ok", "session": P7_SESSION})),
+                                )
+                            }
+                            // First probe after restart should see drain; later 200 is fine.
+                            P7Break::StillTurnRunning | P7Break::LostWithoutUnanswered => {
+                                if n <= 2 {
+                                    (
+                                        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                                        Json(json!({
+                                            "error": "shutting_down",
+                                            "message": "daemon is shutting down; new turns are not accepted"
+                                        })),
+                                    )
+                                } else {
+                                    (
+                                        axum::http::StatusCode::OK,
+                                        Json(json!({"reply": "ok", "session": P7_SESSION})),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }),
+        )
+        .route(
+            "/api/conversations/{id}",
+            get({
+                let m = m.clone();
+                move |Path(id): Path<String>| {
+                    let m = m.clone();
+                    async move {
+                        let _ = id;
+                        let posts = *m.chat_posts.lock().await;
+                        // Before restart probes (posts == 0), report turn_running so wait_turn_running
+                        // can succeed quickly. After probes begin, apply the broken post-restart shape.
+                        let (running, unanswered, messages) = if posts == 0 {
+                            (
+                                true,
+                                false,
+                                json!([{"role": "user", "content": "restart prompt"}]),
+                            )
+                        } else {
+                            match m.break_mode {
+                                // Zombie flag *isolated*: the reply landed and persisted, but
+                                // `turn_running` is still true after a restart. Only the
+                                // `!turn_running` half of the honesty check can catch this — if
+                                // this case also had no assistant, it would fail via the
+                                // lost-turn clause and the zombie guard could be deleted
+                                // undetected (it could, until this changed).
+                                P7Break::StillTurnRunning => (
+                                    true,
+                                    false,
+                                    json!([
+                                        {"role": "user", "content": "restart prompt"},
+                                        {"role": "assistant", "content": "finished within grace"}
+                                    ]),
+                                ),
+                                P7Break::LostWithoutUnanswered => (
+                                    false,
+                                    false,
+                                    json!([{"role": "user", "content": "restart prompt"}]),
+                                ),
+                                // Healthy lifecycle so the path fails on shutting_down only.
+                                P7Break::AcceptsDuringDrain => (
+                                    false,
+                                    true,
+                                    json!([{"role": "user", "content": "restart prompt"}]),
+                                ),
+                            }
+                        };
+                        Json(json!({
+                            "id": P7_SESSION,
+                            "turn_running": running,
+                            "turn_unanswered": unanswered,
+                            "messages": messages,
+                        }))
+                    }
+                }
+            }),
+        );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    addr
+}
+
+async fn run_p7_against(break_mode: P7Break) -> PathResult {
+    let dir = tempfile::tempdir().unwrap();
+    let mock = Arc::new(P7Mock {
+        break_mode,
+        chat_posts: Mutex::new(0),
+    });
+    let addr = listen_p7(mock).await;
+    let base = format!("http://{addr}");
+    let client = DaemonClient::new(&base).unwrap();
+    // Host-agnostic no-op restart so the live path runs (does not skip).
+    #[cfg(windows)]
+    let restart = Some("exit 0");
+    #[cfg(not(windows))]
+    let restart = Some("true");
+    let cfg = cfg_with_restart(&base, dir.path().to_path_buf(), restart);
+    run_path(
+        PathId::P7,
+        &client,
+        &cfg,
+        Instant::now() + Duration::from_secs(45),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn p7_fails_when_new_turns_accepted_during_drain() {
+    let r = run_p7_against(P7Break::AcceptsDuringDrain).await;
+    write_capture("p7_accepts_during_drain", &r);
+    assert_eq!(r.status, PathStatus::Fail);
+    assert!(
+        r.assertion.contains("shutting_down") || r.assertion.contains("503"),
+        "must fail on missing drain refusal; got {:?}",
+        r.assertion
+    );
+}
+
+#[tokio::test]
+async fn p7_fails_when_turn_running_after_restart() {
+    let r = run_p7_against(P7Break::StillTurnRunning).await;
+    write_capture("p7_still_turn_running", &r);
+    assert_eq!(r.status, PathStatus::Fail);
+    assert!(
+        r.assertion.contains("turn_running")
+            || r.assertion.contains("lifecycle")
+            || r.assertion.contains("zombie"),
+        "must fail on zombie turn_running; got {:?}",
+        r.assertion
+    );
+}
+
+#[tokio::test]
+async fn p7_fails_when_turn_lost_without_unanswered() {
+    let r = run_p7_against(P7Break::LostWithoutUnanswered).await;
+    write_capture("p7_lost_without_unanswered", &r);
+    assert_eq!(r.status, PathStatus::Fail);
+    assert!(
+        r.assertion.contains("unanswered")
+            || r.assertion.contains("assistant")
+            || r.assertion.contains("lost")
+            || r.assertion.contains("lifecycle"),
+        "must fail on silent loss; got {:?}",
+        r.assertion
+    );
+}
+
+/// Unconfigured restart → Skipped with reason; skip is not Pass (suite overall rules).
+#[tokio::test]
+async fn p7_skips_when_restart_command_unset() {
+    let dir = tempfile::tempdir().unwrap();
+    // Minimal status-only server so client construction is enough.
+    let mock = Arc::new(P7Mock {
+        break_mode: P7Break::AcceptsDuringDrain,
+        chat_posts: Mutex::new(0),
+    });
+    let addr = listen_p7(mock).await;
+    let base = format!("http://{addr}");
+    let client = DaemonClient::new(&base).unwrap();
+    let cfg = cfg_with_restart(&base, dir.path().to_path_buf(), None);
+    let r = run_path(
+        PathId::P7,
+        &client,
+        &cfg,
+        Instant::now() + Duration::from_secs(10),
+    )
+    .await;
+    assert_eq!(r.status, PathStatus::Skipped, "{r:?}");
+    assert!(
+        r.reason.as_ref().is_some_and(|s| !s.is_empty()),
+        "skip must state a reason"
+    );
+    assert!(
+        r.reason
+            .as_ref()
+            .is_some_and(|s| s.contains("restart_command") || s.contains("opt-in")),
+        "reason should mention restart_command: {:?}",
+        r.reason
+    );
+    assert_ne!(r.status, PathStatus::Pass);
+    // Suite-level: only skips → overall Skipped, not Pass.
+    use liberado_conformance::result::RunReport;
+    assert_eq!(
+        RunReport::compute_overall(std::slice::from_ref(&r), false),
+        PathStatus::Skipped
+    );
 }

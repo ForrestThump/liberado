@@ -13,6 +13,8 @@ pub enum PathId {
     P5,
     /// Durable turn outlives connection + attach + cancel rollback (parallel deliverable §5).
     P6,
+    /// Chat turn honest across daemon restart (round-2 §5 / Tier 3 P7). Opt-in: needs restart hook.
+    P7,
 }
 
 impl PathId {
@@ -25,6 +27,7 @@ impl PathId {
             Self::P4 => "p4",
             Self::P5 => "p5",
             Self::P6 => "p6",
+            Self::P7 => "p7",
         }
     }
 
@@ -42,12 +45,21 @@ impl PathId {
             "p4" | "4" => Some(Self::P4),
             "p5" | "5" => Some(Self::P5),
             "p6" | "6" => Some(Self::P6),
+            "p7" | "7" => Some(Self::P7),
             _ => None,
         }
     }
 
+    /// Paths run when `paths` is empty in config / no CLI filter.
+    ///
+    /// **Default-set decision (explicit):**
+    /// - **P1a–P4**: always on — schedule/hook/spawn/join ground truth; no restart side effects.
+    /// - **P5** (delegate): **opt-in** — advisory / model-flaky; use `paths` or `advisory_counts`.
+    /// - **P6** (durable turn): **opt-in** — two real-inference background turns; gating when
+    ///   selected (`p6` / listed) but not in the plain suite so a default run stays cheap.
+    /// - **P7** (restart survival): **opt-in** — restarts the daemon via config hook; never in
+    ///   default so a conformance run cannot reboot the box by surprise. Unconfigured hook skips.
     pub fn all_default() -> Vec<Self> {
-        // P5 stays opt-in (advisory / model flaky). P6 is gating when listed or selected.
         vec![Self::P1a, Self::P1b, Self::P2, Self::P3, Self::P4]
     }
 }
@@ -173,5 +185,48 @@ mod tests {
         assert!(!PathId::P6.is_advisory());
         let r = PathResult::fail(PathId::P6, "durable", 1, serde_json::json!({}));
         assert!(r.is_blocking_fail(false));
+    }
+
+    #[test]
+    fn p7_is_registered_not_advisory_and_not_in_default_set() {
+        assert_eq!(PathId::parse("p7"), Some(PathId::P7));
+        assert_eq!(PathId::parse("7"), Some(PathId::P7));
+        assert_eq!(PathId::P7.as_str(), "p7");
+        assert!(!PathId::P7.is_advisory());
+        assert!(
+            !PathId::all_default().contains(&PathId::P7),
+            "P7 must stay opt-in (restart side effect)"
+        );
+        assert!(
+            !PathId::all_default().contains(&PathId::P6),
+            "P6 stays opt-in (real inference cost)"
+        );
+        let r = PathResult::fail(PathId::P7, "restart", 1, serde_json::json!({}));
+        assert!(r.is_blocking_fail(false));
+    }
+
+    /// A suite of only skips is overall Skipped — never Pass (skip ≠ pass).
+    #[test]
+    fn all_skipped_is_overall_skipped_not_pass() {
+        let results = vec![
+            PathResult::skipped(PathId::P7, "restart_command unset"),
+            PathResult::skipped(PathId::P3, "no secret"),
+        ];
+        assert_eq!(
+            RunReport::compute_overall(&results, false),
+            PathStatus::Skipped
+        );
+        assert_ne!(
+            RunReport::compute_overall(&results, false),
+            PathStatus::Pass
+        );
+    }
+
+    #[test]
+    fn skip_is_not_counted_as_pass_status() {
+        let r = PathResult::skipped(PathId::P7, "no restart hook configured");
+        assert_eq!(r.status, PathStatus::Skipped);
+        assert!(r.reason.as_ref().is_some_and(|s| !s.is_empty()));
+        assert!(!r.is_blocking_fail(false));
     }
 }
