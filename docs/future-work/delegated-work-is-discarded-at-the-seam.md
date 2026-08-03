@@ -121,9 +121,33 @@ Note this keeps Shiloh's routing decision intact: the face agent still receives 
 decides whether to relay it near-verbatim or trim it to the conversation. It simply receives material
 instead of a status line — which is what makes that choice possible at all.
 
-**Still open**: the context cost. A full research report inline in a tool result occupies the face
-agent's history on every later turn. See the three shapes above; that trade-off is not resolved by
-knowing the root cause.
+### The context cost — measured 2026-08-02, and it is smaller than feared
+
+This was the open trade-off: a full research report inline in a tool result occupies the face agent's
+history on every later turn. It is now measured over the deployed journal
+([`token-economics-findings-2026-08.md`](token-economics-findings-2026-08.md)), and the numbers argue
+for relaying the material.
+
+Paired within-conversation and controlled for turn position (delegating and non-delegating turns sit
+at mean index 3.16 vs 3.11), the face's context grows by a median **+38 tokens** after a delegating
+turn versus **+2,949** after a non-delegating one. So the seam is currently costing the face
+essentially nothing — which is exactly the symptom of the work being thrown away.
+
+What relaying would cost:
+
+- The face is **4.5%** of total spend. The orchestrator is 92.8%. Enlarging face history moves tokens
+  into the cheapest bucket in the system.
+- Carried face context is **76.4% cached**, so re-sending it on later turns costs roughly a quarter
+  of nominal.
+- **136 of 185 conversations are a single turn** (median 1, mean 1.9). "Occupies history on every
+  later turn" mostly means *no* later turns.
+
+The recurring cost of relaying is therefore on the order of a few hundred effective tokens per
+subsequent turn, against currently paying full price for a subagent run whose output is discarded.
+**Compaction is the backstop** for the conversations that do run long (CH3, default on).
+
+This does not settle *which* of the three shapes to build — that is still a design call — but it
+removes "too expensive in context" as an objection to relaying the material at all.
 
 ## Next step
 
