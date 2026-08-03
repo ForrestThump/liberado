@@ -732,6 +732,9 @@ impl Executor {
         // same serialised arguments). Tallying at the tool boundary rather than at call time so the
         // count survives every exit path (including the guard escalations) without extra plumbing.
         let mut repeat_calls: usize = 0;
+        // How much of `repeat_calls` has already been journaled, so each event carries only its own
+        // share (see the delta comment at the completion call below).
+        let mut reported_repeats: usize = 0;
         // One escalation ladder per mechanism (see `LoopGuard`'s doc comment for why these must NOT
         // share a counter): 1st detection -> nudge, 2nd -> remove the offending tool(s) and explain
         // why, 3rd+ -> give up honestly. Removal (not just another nudge) is the second step because
@@ -804,7 +807,18 @@ impl Executor {
                 let request = CompletionRequest::new(messages.clone())
                     .with_tools(tools.clone())
                     .with_model(self.model.clone());
-                self.provider.complete(request).await
+                // The **delta** since the previous completion, not the running total. Every
+                // numeric field on a `LatencyEvent` is additive — the cost rollup sums them — so
+                // journaling a monotonically rising counter makes a run with N repeats roll up as
+                // 1+2+…+N. Deltas sum to N, compose across the multiple runs that share one
+                // correlation, and match how `prompt_tokens` and friends already behave.
+                let delta = repeat_calls - reported_repeats;
+                reported_repeats = repeat_calls;
+                liberado_provider::latency::with_repeat_calls(
+                    delta,
+                    self.provider.complete(request),
+                )
+                .await
             }
             .instrument(tracing::debug_span!("provider_complete", turn))
             .await?;
@@ -3146,6 +3160,69 @@ mod tests {
         assert_eq!(invocations.len(), 2, "both calls must have been made");
         assert_eq!(invocations[0].name, "search");
         assert_eq!(invocations[1].name, "search");
+    }
+
+    /// **The journal must sum to the same number the report files.**
+    ///
+    /// `repeat_calls` on a `LatencyEvent` is journaled per completion and the cost rollup *sums*
+    /// it, so the value has to be each call's own share. Journaling the running total made a run
+    /// with 2 real repeats land as `[None, None, Some(1), Some(2)]` and roll up as **3**.
+    ///
+    /// R7: the wrong implementation being excluded is exactly that running total. The existing
+    /// rollup test cannot see it — it constructs `LatencyEvent`s by hand and asserts they add up,
+    /// so the fixture encodes the summing assumption without ever running the executor. This drives
+    /// the real loop through a `MeteredProvider` and compares the journal against the report.
+    #[tokio::test]
+    async fn journaled_repeat_calls_sum_to_the_reported_total() {
+        use liberado_provider::{AgentRole, LatencyEvent, LatencyRecorder, MeteredProvider};
+
+        #[derive(Default)]
+        struct Rec {
+            events: std::sync::Mutex<Vec<LatencyEvent>>,
+        }
+        impl LatencyRecorder for Rec {
+            fn record(&self, e: LatencyEvent) {
+                self.events.lock().unwrap().push(e);
+            }
+        }
+
+        let rec = Arc::new(Rec::default());
+        // Three identical `search` calls: the 2nd and 3rd are repeats, so the truth is 2.
+        let inner = Arc::new(MockProvider::with_script(
+            "m",
+            vec![
+                call_tool("search"),
+                call_tool("search"),
+                call_tool("search"),
+                submit(valid_report_args()),
+            ],
+        ));
+        let exec = Executor::new(
+            MeteredProvider::wrap(inner, AgentRole::Orchestrator, rec.clone()),
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("hits".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("sys", "goal"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            report.repeat_calls, 2,
+            "precondition: the run really had 2 repeats"
+        );
+        let journaled: usize = rec
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|e| e.repeat_calls.unwrap_or(0))
+            .sum();
+        assert_eq!(
+            journaled, report.repeat_calls,
+            "the journal must sum to what the report filed, or liberado-cost over-counts"
+        );
     }
 
     /// A repeat that arrives in the **same batch as `submit_report`, after it**, must still be

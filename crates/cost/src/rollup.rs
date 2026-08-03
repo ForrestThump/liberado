@@ -17,6 +17,7 @@ pub struct ConversationRollup {
     /// Sum of priced calls only; `None` if every call was unpriced/unknown.
     pub cost_usd: Option<f64>,
     pub unpriced_calls: usize,
+    pub total_repeat_calls: Option<usize>,
     /// Child correlations rolled into this conversation (for transparency).
     pub child_correlations: Vec<String>,
 }
@@ -394,6 +395,7 @@ pub fn build_report(
     let mut total: Option<f64> = None;
     let mut priced_calls = 0usize;
     let mut unpriced_calls = 0usize;
+    let mut total_repeat_calls: Option<usize> = None;
     for e in events {
         let p = price_event(e, prices);
         if p.cost_unknown {
@@ -402,6 +404,9 @@ pub fn build_report(
         if let Some(c) = p.cost_usd {
             priced_calls += 1;
             total = Some(total.unwrap_or(0.0) + c);
+        }
+        if let Some(r) = e.repeat_calls {
+            total_repeat_calls = Some(total_repeat_calls.unwrap_or(0).saturating_add(r));
         }
     }
 
@@ -415,6 +420,7 @@ pub fn build_report(
         event_count: events.len(),
         priced_calls,
         unpriced_calls,
+        total_repeat_calls,
     }
 }
 
@@ -426,6 +432,7 @@ struct Acc {
     cached_prompt_tokens: Option<u32>,
     cost_usd: Option<f64>,
     unpriced_calls: usize,
+    repeat_calls: Option<usize>,
 }
 
 impl Acc {
@@ -440,6 +447,9 @@ impl Acc {
         if let Some(c) = cost {
             self.cost_usd = Some(self.cost_usd.unwrap_or(0.0) + c);
         }
+        if let Some(r) = event.repeat_calls {
+            self.repeat_calls = Some(self.repeat_calls.unwrap_or(0).saturating_add(r));
+        }
     }
 
     fn into_conversation(self, id: String, children: Vec<String>) -> ConversationRollup {
@@ -451,6 +461,7 @@ impl Acc {
             cached_prompt_tokens: self.cached_prompt_tokens,
             cost_usd: self.cost_usd,
             unpriced_calls: self.unpriced_calls,
+            total_repeat_calls: self.repeat_calls,
             child_correlations: children,
         }
     }

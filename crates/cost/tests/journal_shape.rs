@@ -32,6 +32,7 @@ fn writer_event() -> LatencyEvent {
         finish: "stop".into(),
         tool_calls: 3,
         streamed: true,
+        repeat_calls: Some(2),
     }
 }
 
@@ -74,6 +75,11 @@ fn reader_parses_every_field_the_writer_emits() {
     assert_eq!(read.finish, "stop");
     assert_eq!(read.tool_calls, 3);
     assert!(read.streamed);
+    assert_eq!(
+        read.repeat_calls,
+        Some(2),
+        "repeat_calls — executor-stamped tally of byte-exact repeated tool calls"
+    );
 }
 
 /// The writer omits absent usage entirely (`skip_serializing_if`). Absent must stay absent —
@@ -86,6 +92,7 @@ fn omitted_usage_reads_back_as_absent_not_zero() {
     event.completion_tokens = None;
     event.total_tokens = None;
     event.cached_prompt_tokens = None;
+    event.repeat_calls = None;
 
     let written = serde_json::to_string(&event).expect("writer serializes");
     assert!(
@@ -100,6 +107,10 @@ fn omitted_usage_reads_back_as_absent_not_zero() {
     assert_eq!(
         read.cached_prompt_tokens, None,
         "absent means the backend volunteered nothing; Some(0) would mean caching is on and failing"
+    );
+    assert_eq!(
+        read.repeat_calls, None,
+        "absent repeat_calls must not become Some(0)"
     );
     // The fields that are always written still arrive.
     assert_eq!(read.correlation, event.correlation);

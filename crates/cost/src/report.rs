@@ -16,6 +16,7 @@ pub struct Report {
     pub event_count: usize,
     pub priced_calls: usize,
     pub unpriced_calls: usize,
+    pub total_repeat_calls: Option<usize>,
 }
 
 /// Format the report as plain-text tables for the CLI / PR paste.
@@ -24,10 +25,14 @@ pub fn format_report(report: &Report) -> String {
 
     out.push_str("=== Liberado token cost report (read-time pricing) ===\n\n");
     out.push_str(&format!(
-        "events: {}  priced_calls: {}  unpriced_calls: {}  total_usd: {}\n",
+        "events: {}  priced_calls: {}  unpriced_calls: {}  repeat_calls: {}  total_usd: {}\n",
         report.event_count,
         report.priced_calls,
         report.unpriced_calls,
+        match report.total_repeat_calls {
+            Some(r) => r.to_string(),
+            None => "n/a".into(),
+        },
         fmt_money(report.total_cost_usd)
     ));
     out.push_str(&format!(
