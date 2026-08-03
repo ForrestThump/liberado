@@ -1895,6 +1895,11 @@ async fn handle_proposal_change_does_not_execute_approved_past_deadline() {
 /// to see whether it worked is what `MeteredProvider` handed the recorder — so the assertion is on
 /// captured `LatencyEvent.correlation`, not on a function having been called.
 ///
+/// Also the approval path's role boundary (deliverable §2): the approved-subagent arm (1205) runs
+/// on the subagent-tagged provider, so every event it records must carry `role: "subagent"` — an
+/// implementation that still routes approval-path work through the orchestrator's own provider
+/// (labelling it `orchestrator`, indistinguishable from `ExecuteDirect`) fails here.
+///
 /// R1: removing the `with_correlation` wrap around `execute_approved` in `proposals.rs` fails this
 /// with `left: "-"`. That was the live behaviour: 14 of the deployed journal's 104 unattributed
 /// calls came through this path, and they are the expensive kind — agent loops reaching 29k prompt
@@ -1929,15 +1934,22 @@ async fn approved_subagent_execution_is_attributed_to_the_proposal_correlation()
         "mock",
         (0..24).map(|i| CompletionResponse::text(format!("step {i}"))),
     ));
-    let metered = MeteredProvider::wrap(
-        inner,
+    // Two metered instances over the same backend: the orchestrator's own provider (tagged
+    // `Orchestrator`, for direct execution) and the subagent-tagged one the approval path runs on.
+    let metered_orchestrator = MeteredProvider::wrap(
+        inner.clone(),
         AgentRole::Orchestrator,
+        rec.clone() as Arc<dyn LatencyRecorder>,
+    );
+    let metered_subagent = MeteredProvider::wrap(
+        inner,
+        AgentRole::Subagent,
         rec.clone() as Arc<dyn LatencyRecorder>,
     );
 
     let signer = ProposalSigner::random();
     let orch = Orchestrator::new(
-        metered,
+        metered_orchestrator,
         InvocationRecordingFactory {
             runtime: InvocationRecordingRuntime::default(),
         },
@@ -1948,7 +1960,8 @@ async fn approved_subagent_execution_is_attributed_to_the_proposal_correlation()
         std::env::temp_dir(),
         signer.clone(),
         "default",
-    );
+    )
+    .with_subagent_provider(metered_subagent);
 
     let (daemon, dir) = temp_daemon().await;
     let daemon = daemon
@@ -1993,6 +2006,10 @@ async fn approved_subagent_execution_is_attributed_to_the_proposal_correlation()
         assert_eq!(
             ev.correlation, CORRELATION,
             "event[{i}] must carry the proposal's correlation, not \"-\""
+        );
+        assert_eq!(
+            ev.role, "subagent",
+            "event[{i}] is delegated subagent work and must not merge into the orchestrator role"
         );
     }
 }

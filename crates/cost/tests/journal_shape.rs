@@ -105,3 +105,39 @@ fn omitted_usage_reads_back_as_absent_not_zero() {
     assert_eq!(read.correlation, event.correlation);
     assert_eq!(read.model, event.model);
 }
+
+/// The role deliverable §2 adds: a `subagent` record must survive the same write → read round trip
+/// as any other, and keep its own label — the whole point is that it rolls up *separately* from
+/// `orchestrator` (per-role rollup keys on the `role` string, so a role that fails to parse is a
+/// silent empty row, not a loud error).
+#[test]
+fn the_subagent_role_round_trips() {
+    let mut event = writer_event();
+    event.role = "subagent";
+
+    let written = serde_json::to_string(&event).expect("writer serializes");
+    let read = parse_one(&written);
+
+    assert_eq!(read.role, "subagent", "role — per-role rollup");
+}
+
+/// A record written **before** this change must still parse and keep its label. The journal is
+/// append-only and history is never rewritten: the `orchestrator` records already on disk contain
+/// both direct execution and delegation, cannot be split retroactively, and must keep parsing as
+/// `orchestrator`. This is the fixture line proving the reader accepts them unchanged.
+///
+/// The line also carries a field the current reader does not know (`future_field`): serde ignores
+/// unknown fields, so a future writer addition can never break the reader — the shape the whole
+/// `#[serde(default)]` mirror exists to protect.
+#[test]
+fn a_pre_change_orchestrator_record_still_parses() {
+    let legacy = r#"{"ts_ms":1754000000123,"correlation":"cron:evening-debrief","role":"orchestrator","model":"deepseek/deepseek-v4-pro","kind":"llm_call","wall_ms":20531,"prompt_tokens":24455,"completion_tokens":1007,"total_tokens":25462,"cached_prompt_tokens":20736,"finish":"stop","tool_calls":3,"streamed":true,"future_field":1}"#;
+
+    let read = parse_one(legacy);
+    assert_eq!(read.ts_ms, 1_754_000_000_123);
+    assert_eq!(
+        read.role, "orchestrator",
+        "legacy label is preserved, not rewritten"
+    );
+    assert_eq!(read.correlation, "cron:evening-debrief");
+}
