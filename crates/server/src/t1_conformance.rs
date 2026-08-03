@@ -128,6 +128,7 @@ impl T1Harness {
             chat_tools: 0,
             chat_tool_names: Vec::new(),
             catalog: Arc::new(liberado_common::CapabilityCatalog::new()),
+            data_dir: root.clone(),
             sessions_root: root.clone(),
             main_agent_capabilities: CapabilitySet::empty(),
             dispatcher_capabilities: CapabilitySet::empty(),
