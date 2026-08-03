@@ -33,10 +33,28 @@ pub struct RoleRollup {
     pub unpriced_calls: usize,
 }
 
-/// Prompt-token growth for successive turns within one conversation.
+/// Prompt-token growth for successive **agent turns** within one conversation.
 ///
-/// A "turn" here is one latency event ordered by `ts_ms` under the root conversation (including
-/// child-dispatch calls, which are part of the turn's spend even when they are not face tokens).
+/// # Turn boundary heuristic
+///
+/// The latency journal has no separate turn id. A face tool-calling loop records one
+/// [`JournalEvent`](crate::JournalEvent) per model hop. We group consecutive hops under the same
+/// root conversation (after child→parent join) into one turn:
+///
+/// - `tool_calls > 0` → the model asked for tools; the turn **continues**.
+/// - `tool_calls == 0` → the model stopped; the turn **closes**.
+/// - `finish == "error"` → the turn **closes** even if tool calls were requested (a turn can end by
+///   failing).
+///
+/// Child-dispatch calls are part of the turn's spend when their timestamps fall inside the open
+/// hop window. This is a **heuristic**: it matches the executor's multi-hop loop on honest journals
+/// and is the only boundary recoverable without a journal shape change.
+///
+/// # Fields
+///
+/// - `prompt_tokens` is the **last hop's** prompt size (end-of-turn context), so
+///   `prompt_delta` is turn-over-turn growth, not hop-over-hop inside a multi-call turn.
+/// - `cost_usd` sums priced hops only; unpriced hops inside a turn never force `Some(0.0)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TurnGrowth {
     pub conversation_id: String,
@@ -45,9 +63,14 @@ pub struct TurnGrowth {
     pub correlation: String,
     pub role: String,
     pub prompt_tokens: Option<u32>,
-    /// `prompt_tokens` delta vs previous turn in this conversation; `None` if either side absent.
+    /// `prompt_tokens` delta vs previous **turn** in this conversation; `None` if either side absent.
     pub prompt_delta: Option<i64>,
     pub cost_usd: Option<f64>,
+}
+
+/// Whether this event ends a multi-hop agent turn (see [`TurnGrowth`]).
+pub fn closes_turn(event: &JournalEvent) -> bool {
+    event.tool_calls == 0 || event.finish == "error"
 }
 
 /// Tokens for a model the rates cannot price — never folded into a money total as 0.0. Covers both
@@ -155,27 +178,41 @@ fn turn_growth(
         let mut turn_index = 0usize;
         let mut prev_prompt: Option<u32> = None;
         while i < indexed.len() && indexed[i].0 == conv {
-            let e = indexed[i].1;
-            let priced = price_event(e, prices);
-            let prompt_delta = match (prev_prompt, e.prompt_tokens) {
+            // Collect one multi-hop turn: open on the first hop, close on tool_calls==0 or error.
+            let first = indexed[i].1;
+            let mut cost_usd: Option<f64> = None;
+            loop {
+                let e = indexed[i].1;
+                let priced = price_event(e, prices);
+                if let Some(c) = priced.cost_usd {
+                    cost_usd = Some(cost_usd.unwrap_or(0.0) + c);
+                }
+                i += 1;
+                if closes_turn(e) || i >= indexed.len() || indexed[i].0 != conv {
+                    break;
+                }
+            }
+            // `i` advanced past the last hop of this turn.
+            let last = indexed[i - 1].1;
+            let prompt = last.prompt_tokens;
+            let prompt_delta = match (prev_prompt, prompt) {
                 (Some(prev), Some(cur)) => Some(i64::from(cur) - i64::from(prev)),
                 _ => None,
             };
-            if e.prompt_tokens.is_some() {
-                prev_prompt = e.prompt_tokens;
+            if prompt.is_some() {
+                prev_prompt = prompt;
             }
             out.push(TurnGrowth {
                 conversation_id: conv.clone(),
                 turn_index,
-                ts_ms: e.ts_ms,
-                correlation: e.correlation.clone(),
-                role: e.role.clone(),
-                prompt_tokens: e.prompt_tokens,
+                ts_ms: last.ts_ms,
+                correlation: first.correlation.clone(),
+                role: first.role.clone(),
+                prompt_tokens: prompt,
                 prompt_delta,
-                cost_usd: priced.cost_usd,
+                cost_usd,
             });
             turn_index += 1;
-            i += 1;
         }
     }
     out
@@ -230,6 +267,28 @@ fn unpriced_lines(events: &[JournalEvent], prices: &PriceTable) -> Vec<UnpricedL
         .collect();
     rows.sort_by(|a, b| a.model.cmp(&b.model));
     rows
+}
+
+/// Sum of usage the journal already records — the figure behind `/api/status.token_usage_total`.
+///
+/// Prefer each event's `total_tokens` when present; otherwise `prompt + completion` when either is
+/// present. Events with no usage reported contribute nothing (not zero). Empty / no-usage journal
+/// → `None` so the wire field stays absent rather than a fabricated `0`.
+pub fn total_tokens_from_events(events: &[JournalEvent]) -> Option<u64> {
+    let mut sum = 0u64;
+    let mut any = false;
+    for e in events {
+        if let Some(t) = e.total_tokens {
+            any = true;
+            sum = sum.saturating_add(u64::from(t));
+        } else if e.prompt_tokens.is_some() || e.completion_tokens.is_some() {
+            any = true;
+            sum = sum
+                .saturating_add(u64::from(e.prompt_tokens.unwrap_or(0)))
+                .saturating_add(u64::from(e.completion_tokens.unwrap_or(0)));
+        }
+    }
+    if any { Some(sum) } else { None }
 }
 
 /// Cache hit rate = sum(cached_prompt_tokens) / sum(prompt_tokens) over events that reported

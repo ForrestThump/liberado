@@ -22,7 +22,8 @@ pub use journal::{
 pub use price::{PriceTable, PricedEvent, price_event, price_table_from_models};
 pub use report::{Report, format_report};
 pub use rollup::{
-    ConversationRollup, RoleRollup, TurnGrowth, UnpricedLine, build_report, rollup_conversations,
+    ConversationRollup, RoleRollup, TurnGrowth, UnpricedLine, build_report, closes_turn,
+    rollup_conversations, total_tokens_from_events,
 };
 
 use std::collections::HashMap;
@@ -65,6 +66,16 @@ pub fn report_from_data_dir(data_dir: &Path, prices: &PriceTable) -> Result<Repo
     let events = load_latency_events(&latency_journal_path(data_dir))?;
     let parents = load_dispatch_parent_map(&dispatches_dir(data_dir))?;
     Ok(build_report(&events, &parents, prices))
+}
+
+/// Sum of journaled token usage under `data_dir` — feeds `/api/status.token_usage_total`.
+///
+/// Missing or empty journal → `None`. Load errors → `None` (status must not 500 over a bad file).
+pub fn token_usage_total_for_data_dir(data_dir: &Path) -> Option<u64> {
+    match load_latency_events(&latency_journal_path(data_dir)) {
+        Ok(events) => total_tokens_from_events(&events),
+        Err(_) => None,
+    }
 }
 
 /// Convenience for tests and pure callers: events + parent map + rates → report.
@@ -110,6 +121,31 @@ mod tests {
         cached: Option<u32>,
         ts_ms: u64,
     ) -> JournalEvent {
+        event_full(
+            correlation,
+            role,
+            model,
+            prompt,
+            completion,
+            cached,
+            ts_ms,
+            0,
+            "stop",
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn event_full(
+        correlation: &str,
+        role: &str,
+        model: &str,
+        prompt: Option<u32>,
+        completion: Option<u32>,
+        cached: Option<u32>,
+        ts_ms: u64,
+        tool_calls: usize,
+        finish: &str,
+    ) -> JournalEvent {
         JournalEvent {
             ts_ms,
             correlation: correlation.into(),
@@ -126,8 +162,8 @@ mod tests {
                 (None, None) => None,
             },
             cached_prompt_tokens: cached,
-            finish: "stop".into(),
-            tool_calls: 0,
+            finish: finish.into(),
+            tool_calls,
             streamed: false,
         }
     }
@@ -402,6 +438,247 @@ mod tests {
         assert!(
             text.contains("(unattributed)"),
             "the '-' bucket must be named in the table: {text}"
+        );
+    }
+
+    /// A face turn with three tool-calling hops is **one** turn row, not three.
+    ///
+    /// R1: if grouping is deleted (one row per event again), this fails — the fixture is multi-hop
+    /// on purpose; a fixture where every call already has `tool_calls == 0` would pass either
+    /// implementation and prove nothing.
+    #[test]
+    fn multi_hop_face_turn_is_one_turn_row() {
+        let prices = price_table_from_pairs([("m", rates(1.0, 2.0, 0.1))]);
+        let conv = "01KZMULTI000000000000000000";
+        // Three hops: two with tool_calls > 0, last closes with tool_calls == 0.
+        let events = vec![
+            event_full(
+                conv,
+                "face",
+                "m",
+                Some(1_000),
+                Some(50),
+                None,
+                1,
+                2,
+                "tool_calls",
+            ),
+            event_full(
+                conv,
+                "face",
+                "m",
+                Some(1_200),
+                Some(40),
+                None,
+                2,
+                1,
+                "tool_calls",
+            ),
+            event_full(conv, "face", "m", Some(1_500), Some(80), None, 3, 0, "stop"),
+        ];
+        let report = report_from_parts(&events, &HashMap::new(), &prices);
+        let turns: Vec<_> = report
+            .turn_growth
+            .iter()
+            .filter(|t| t.conversation_id == conv)
+            .collect();
+        assert_eq!(
+            turns.len(),
+            1,
+            "three hops must collapse to one turn; got {turns:?}"
+        );
+        assert_eq!(turns[0].turn_index, 0);
+        assert_eq!(
+            turns[0].prompt_tokens,
+            Some(1_500),
+            "row uses last hop's prompt (end-of-turn context)"
+        );
+        // Cost is the sum of all three hops, not the last alone.
+        let expected: f64 = events
+            .iter()
+            .map(|e| price_event(e, &prices).cost_usd.unwrap())
+            .sum();
+        assert!(
+            (turns[0].cost_usd.unwrap() - expected).abs() < 1e-9,
+            "turn cost must sum hops: got {:?} expected {expected}",
+            turns[0].cost_usd
+        );
+    }
+
+    /// Per-turn prompt_delta is turn-over-turn: hops inside turn 1 do not create deltas, and
+    /// turn 2's delta is against turn 1's final prompt — not against the middle hop.
+    #[test]
+    fn prompt_delta_is_turn_over_turn_not_hop_over_hop() {
+        let prices = price_table_from_pairs([("m", rates(1.0, 1.0, 1.0))]);
+        let conv = "01KZDELTA000000000000000000";
+        let events = vec![
+            // Turn 1: multi-hop — intra-hop prompts 1000 → 1100 → 1200
+            event_full(
+                conv,
+                "face",
+                "m",
+                Some(1_000),
+                Some(10),
+                None,
+                1,
+                1,
+                "tool_calls",
+            ),
+            event_full(
+                conv,
+                "face",
+                "m",
+                Some(1_100),
+                Some(10),
+                None,
+                2,
+                1,
+                "tool_calls",
+            ),
+            event_full(conv, "face", "m", Some(1_200), Some(10), None, 3, 0, "stop"),
+            // Turn 2: single hop at 1500 → delta should be +300 vs 1200, not vs 1100 or 1000
+            event_full(conv, "face", "m", Some(1_500), Some(10), None, 4, 0, "stop"),
+        ];
+        let report = report_from_parts(&events, &HashMap::new(), &prices);
+        let turns: Vec<_> = report
+            .turn_growth
+            .iter()
+            .filter(|t| t.conversation_id == conv)
+            .collect();
+        assert_eq!(turns.len(), 2, "expected two turns, got {turns:?}");
+        assert_eq!(turns[0].prompt_tokens, Some(1_200));
+        assert_eq!(turns[0].prompt_delta, None, "first turn has no prior");
+        assert_eq!(turns[1].prompt_tokens, Some(1_500));
+        assert_eq!(
+            turns[1].prompt_delta,
+            Some(300),
+            "delta must ignore intra-turn hops (1500-1200)"
+        );
+    }
+
+    /// A hop that finishes with `finish == "error"` closes the turn even when more hops follow.
+    #[test]
+    fn error_finish_closes_a_turn() {
+        let prices = price_table_from_pairs([("m", rates(1.0, 1.0, 1.0))]);
+        let conv = "01KZERROR000000000000000000";
+        let events = vec![
+            event_full(
+                conv,
+                "face",
+                "m",
+                Some(500),
+                Some(10),
+                None,
+                1,
+                2,
+                "tool_calls",
+            ),
+            // Closes despite tool_calls > 0 because finish is error.
+            event_full(conv, "face", "m", Some(600), Some(0), None, 2, 1, "error"),
+            event_full(conv, "face", "m", Some(700), Some(20), None, 3, 0, "stop"),
+        ];
+        let report = report_from_parts(&events, &HashMap::new(), &prices);
+        let turns: Vec<_> = report
+            .turn_growth
+            .iter()
+            .filter(|t| t.conversation_id == conv)
+            .collect();
+        assert_eq!(
+            turns.len(),
+            2,
+            "error must close turn 0; next hop is turn 1: {turns:?}"
+        );
+        assert_eq!(turns[0].prompt_tokens, Some(600));
+        assert_eq!(turns[1].prompt_tokens, Some(700));
+        assert_eq!(turns[1].prompt_delta, Some(100));
+    }
+
+    /// An unpriced hop inside a multi-hop turn does not force the turn's cost to `Some(0.0)`.
+    #[test]
+    fn unpriced_hop_inside_turn_does_not_zero_turn_cost() {
+        let prices = price_table_from_pairs([("priced", rates(1.0, 2.0, 0.1))]);
+        let conv = "01KZUNPRICEDTURN00000000000";
+        let events = vec![
+            event_full(
+                conv,
+                "face",
+                "priced",
+                Some(1_000_000),
+                Some(0),
+                None,
+                1,
+                1,
+                "tool_calls",
+            ),
+            // Unpriced model mid-turn
+            event_full(
+                conv,
+                "face",
+                "mystery",
+                Some(50_000),
+                Some(10),
+                None,
+                2,
+                0,
+                "stop",
+            ),
+        ];
+        let report = report_from_parts(&events, &HashMap::new(), &prices);
+        let turns: Vec<_> = report
+            .turn_growth
+            .iter()
+            .filter(|t| t.conversation_id == conv)
+            .collect();
+        assert_eq!(turns.len(), 1);
+        // First hop alone: 1M prompt @ $1/M = $1.00
+        assert!(
+            turns[0].cost_usd.is_some(),
+            "priced hop must contribute money"
+        );
+        assert!(
+            (turns[0].cost_usd.unwrap() - 1.0).abs() < 1e-9,
+            "cost must be the priced hop only, not 0.0: {:?}",
+            turns[0].cost_usd
+        );
+        assert_ne!(
+            turns[0].cost_usd,
+            Some(0.0),
+            "unpriced mid-turn must never collapse cost to 0.0"
+        );
+    }
+
+    #[test]
+    fn total_tokens_from_events_sums_reported_usage() {
+        let events = vec![
+            event("a", "face", "m", Some(100), Some(20), None, 1),
+            event("b", "face", "m", Some(50), None, None, 2),
+            // no usage — skipped
+            event("c", "face", "m", None, None, None, 3),
+        ];
+        assert_eq!(total_tokens_from_events(&events), Some(170));
+        assert_eq!(total_tokens_from_events(&[]), None);
+        assert_eq!(
+            total_tokens_from_events(&[event("c", "face", "m", None, None, None, 1)]),
+            None
+        );
+    }
+
+    #[test]
+    fn token_usage_total_for_data_dir_reads_journal() {
+        let dir = tempfile::tempdir().unwrap();
+        let latency = dir.path().join("latency");
+        std::fs::create_dir_all(&latency).unwrap();
+        std::fs::write(
+            latency.join("events.jsonl"),
+            r#"{"ts_ms":1,"correlation":"c","role":"face","model":"m","kind":"llm_call","wall_ms":1,"prompt_tokens":100,"completion_tokens":25,"total_tokens":125,"finish":"stop","tool_calls":0,"streamed":false}
+{"ts_ms":2,"correlation":"c","role":"face","model":"m","kind":"llm_call","wall_ms":1,"prompt_tokens":50,"completion_tokens":10,"total_tokens":60,"finish":"stop","tool_calls":0,"streamed":false}
+"#,
+        )
+        .unwrap();
+        assert_eq!(token_usage_total_for_data_dir(dir.path()), Some(185));
+        assert_eq!(
+            token_usage_total_for_data_dir(dir.path().join("missing").as_path()),
+            None
         );
     }
 

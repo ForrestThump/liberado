@@ -38,7 +38,9 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         orchestrator_attached: state.orchestrator_attached,
         reactions_seen: reactions_len as u64,
         model_name: active_model(&state),
-        token_usage_total: None,
+        // Sum of usage already on the latency journal — same figure `liberado-cost` would report.
+        // No second counter; pricing stays read-time and out of this field.
+        token_usage_total: token_usage_total_from_journal(),
         context_window: None,
         chat_tools: state.chat_tools,
         chat_tool_names: state.chat_tool_names.clone(),
@@ -47,6 +49,12 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         // with what the browser does.
         enter_sends: state.config.topology.webui.enter_sends(),
     })
+}
+
+/// Read-time total from the latency journal the daemon writes. Uses the cost crate so status and
+/// `liberado-cost` cannot drift on "what counts as a token".
+fn token_usage_total_from_journal() -> Option<u64> {
+    liberado_cost::token_usage_total_for_data_dir(&liberado_config::data_dir())
 }
 
 /// `GET /api/models` â€” live model catalog from the provider (`GET /models` upstream) plus the
@@ -290,4 +298,81 @@ pub async fn vault(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         note_count: 0,
         watcher_active: true,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    /// R2/R3: `token_usage_total` is the parsed field on `DaemonStatus`, equal to the journal sum
+    /// from the cost crate — not a substring of the JSON body, and not a hand-rolled counter.
+    #[tokio::test]
+    async fn status_token_usage_total_matches_journal_via_cost_crate() {
+        let dir = tempfile::tempdir().unwrap();
+        let latency = dir.path().join("latency");
+        std::fs::create_dir_all(&latency).unwrap();
+        std::fs::write(
+            latency.join("events.jsonl"),
+            r#"{"ts_ms":1,"correlation":"c","role":"face","model":"m","kind":"llm_call","wall_ms":1,"prompt_tokens":200,"completion_tokens":30,"total_tokens":230,"finish":"stop","tool_calls":0,"streamed":false}
+{"ts_ms":2,"correlation":"c","role":"face","model":"m","kind":"llm_call","wall_ms":1,"prompt_tokens":40,"completion_tokens":10,"total_tokens":50,"finish":"stop","tool_calls":0,"streamed":false}
+"#,
+        )
+        .unwrap();
+
+        // Same helper the status handler uses — assert the structured total, then that the
+        // handler path wires that helper (source of truth is the cost crate, not a second sum).
+        let expected = liberado_cost::token_usage_total_for_data_dir(dir.path());
+        assert_eq!(expected, Some(280));
+
+        // Process-wide data dir for the real handler path. Scoped + restored so parallel tests
+        // that also touch LIBERADO_DATA_DIR are less likely to race; this suite already uses
+        // tempfile roots for other handlers the same way when they need a live dir.
+        let prev = std::env::var("LIBERADO_DATA_DIR").ok();
+        // SAFETY: test-only env mutation; restored before return.
+        unsafe {
+            std::env::set_var("LIBERADO_DATA_DIR", dir.path());
+        }
+
+        let root = dir.path().join("sessions-root");
+        std::fs::create_dir_all(&root).unwrap();
+        let sessions = Arc::new(liberado_session_store::SessionStore::open(&root).await);
+        let state = Arc::new(crate::state::AppState::for_test(
+            sessions,
+            None,
+            root.clone(),
+        ));
+
+        let app = axum::Router::new()
+            .route("/api/status", axum::routing::get(status))
+            .with_state(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(resp.status().is_success());
+        let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let body: DaemonStatus = serde_json::from_slice(&bytes).expect("DaemonStatus");
+        assert_eq!(
+            body.token_usage_total, expected,
+            "status field must match cost crate total from the same journal"
+        );
+
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("LIBERADO_DATA_DIR", v),
+                None => std::env::remove_var("LIBERADO_DATA_DIR"),
+            }
+        }
+    }
 }
