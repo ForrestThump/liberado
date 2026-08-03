@@ -339,15 +339,17 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         daemon.run(reaction_tx).await.ok();
     });
 
-    // Turn-starting routes only: middleware refuses with `shutting_down` once drain begins.
-    // Attach/cancel stay on the main router so clients can rejoin or stop work already in flight
-    // without editing `api/chat.rs`.
-    let turn_start_routes = Router::new()
+    // Work-starting routes only: middleware refuses with `shutting_down` once drain begins.
+    // Attach/cancel/park/list stay on the main router so clients can rejoin or stop work already
+    // in flight. `POST /api/goals` is gated here for the same reason as chat — the gate is the
+    // capability, not the surface that happened to be wired first.
+    let work_start_routes = Router::new()
         .route("/api/chat", axum::routing::post(api::chat))
         .route(
             "/api/chat/stream",
             axum::routing::get(api::chat_stream_get).post(api::chat_stream_post),
         )
+        .route("/api/goals", axum::routing::post(api::goals_start))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             shutdown::refuse_new_turns_if_draining,
@@ -355,7 +357,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         .with_state(state.clone());
 
     let app = Router::new()
-        .merge(turn_start_routes)
+        .merge(work_start_routes)
         .route("/api/status", axum::routing::get(api::status))
         .route("/api/models", axum::routing::get(api::models))
         .route("/api/models/select", axum::routing::post(api::select_model))
@@ -409,10 +411,8 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
             axum::routing::post(api::session_fork),
         )
         .route("/api/goals/domains", axum::routing::get(api::goals_domains))
-        .route(
-            "/api/goals",
-            axum::routing::get(api::goals_list).post(api::goals_start),
-        )
+        // List only — start is on `work_start_routes` (drain-gated).
+        .route("/api/goals", axum::routing::get(api::goals_list))
         .route("/api/goals/{id}", axum::routing::get(api::goals_get))
         .route(
             "/api/goals/{id}/stream",
@@ -454,7 +454,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     info!("  POST /api/models/select  — hot-swap active model");
     info!("  GET /api/reactions?limit=20  — recent reactions");
     info!("  GET /api/vault  — vault info");
-    info!("  GET|POST /api/goals  — list / start goal sessions (coding + life packs)");
+    info!("  GET /api/goals  — list goal sessions; POST /api/goals starts one (drain-gated)");
     info!("  GET /api/goals/{{id}}/stream  — SSE goal session events");
     info!("  /  — static frontend (build with `dx build` from crates/webui/)");
 
@@ -467,6 +467,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
             info!(
                 idle = outcome.idle_within_grace,
                 aborted = outcome.aborted,
+                parked_goals = outcome.parked_goals,
                 waited_ms = outcome.waited.as_millis() as u64,
                 "shutdown drain complete; stopping HTTP accept"
             );

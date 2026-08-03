@@ -480,6 +480,68 @@ impl GoalSessionHub {
         self.store.list().await
     }
 
+    /// How many goal sessions currently have a live host (cancel handle present).
+    ///
+    /// Used by the server's graceful-shutdown drain so in-flight goals count toward the wait,
+    /// not only chat turns. A session that has finished (or never started) is not counted.
+    pub async fn in_flight_count(&self) -> usize {
+        self.cancels.lock().await.len()
+    }
+
+    /// Ids of sessions currently hosted (same set as [`in_flight_count`](Self::in_flight_count)).
+    pub async fn in_flight_ids(&self) -> Vec<String> {
+        self.cancels.lock().await.keys().cloned().collect()
+    }
+
+    /// Ask every in-flight session to **park** (shutdown drain). Prefer this over cancel: parked
+    /// sessions remain human-actionable after restart; cancelled ones do not.
+    ///
+    /// Returns how many park signals were accepted. Cooperative packs land in
+    /// [`SessionStatus::Parked`]; the count is signals sent, not final status (status is observed
+    /// after a short settle wait in the drain).
+    pub async fn park_all_in_flight(&self) -> usize {
+        let ids = self.in_flight_ids().await;
+        let mut n = 0;
+        for id in ids {
+            if self.park(&id).await.is_ok() {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// Durably record `Parked` for every session still hosted. The shutdown last word.
+    ///
+    /// [`park`](Self::park) only *signals*: `Parked` is filed by the session host after the pack
+    /// returns, and the intent that distinguishes park from cancel lives in an in-memory set. At
+    /// shutdown the process usually exits first — a session still running when the grace elapsed is
+    /// typically blocked in a model call and cannot check its cancel channel until that returns —
+    /// and then the store keeps `Running` for a session with **no host and no pending question**,
+    /// which is precisely the state a human cannot act on.
+    ///
+    /// Writing the status here makes the on-disk record true whether or not the pack ever got to
+    /// cooperate. Only sessions still recorded `Running` are touched, so one that finished during
+    /// the settle window keeps its real terminal status; and if a forced-park session's pack does
+    /// return before exit, `park_requests` still holds its id, so it files `Parked` again.
+    ///
+    /// Returns how many records were rewritten.
+    pub async fn force_park_still_hosted(&self) -> usize {
+        let ids = self.in_flight_ids().await;
+        let mut n = 0;
+        for id in ids {
+            if self
+                .store
+                .get(&id)
+                .await
+                .is_some_and(|r| r.status == SessionStatus::Running)
+            {
+                self.store.set_status(&id, SessionStatus::Parked).await;
+                n += 1;
+            }
+        }
+        n
+    }
+
     async fn run_session(
         &self,
         session_id: String,
