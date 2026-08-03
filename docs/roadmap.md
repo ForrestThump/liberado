@@ -15,7 +15,7 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`spec/
 | # | What | Why it matters |
 |---|---|---|
 | **Dogfood** | **Lean on Telegram harder** | Collect friction → fix real pain. Free-form sticky chat is the phone surface. |
-| **T1** | **Live conformance suite** — [`live-conformance-suite.md`](future-work/live-conformance-suite.md) | **L1–L11 landed. Tier 3 P1a–P6 landed** (P6 = durable turn outlives its connection, PR #31, verified live). **Open:** P7 restart survival — see [round 2 §5](future-work/parallel-deliverables-2026-08-round-2.md). Tier 2 remains optional. |
+| **T1** | **Live conformance suite** — [`live-conformance-suite.md`](future-work/live-conformance-suite.md) | **L1–L11 landed. Tier 3 P1a–P6 landed** (P6 = durable turn outlives its connection, PR #31, verified live). **P7 restart survival landed** (PR #36, passing live). Tier 2 remains optional. Note P5–P7 are all opt-in; a plain suite run is P1a–P4. |
 | **W1** | **Goal-session view in mobile WebUI** | Later phone surface beyond Telegram. See [`spec/architecture/session-surface-contract.md`](spec/architecture/session-surface-contract.md). |
 | **E5-b** | ~~Telegram session deep-link~~ | **Deprioritized** (prefer WebUI later). |
 
@@ -31,8 +31,8 @@ re-sent on every hop of every run.** Face context — the thing delegation exist
 
 | # | What | Why it matters |
 |---|---|---|
-| **TE1** | **Find out why the tool catalog isn't narrowed** | **56% of all spend.** Narrowing already exists (`relevant_mcps`, `allowed_mcps`, `narrow_direct_tools` defaults on) yet the base is a flat ~11k ≈ the full 12-MCP catalog. **Start by instrumenting, not fixing** — the `allowed_mcps` count is `debug`-level and the box runs `info`, so the cause is currently unobservable. |
-| **TE2** | **Split subagent vs direct-execution spend** | `AgentRole` has no `Subagent`: delegated runs and `ExecuteDirect` both journal as `orchestrator`, so "is delegating cheaper than doing it directly?" — the dispatcher's whole reason for existing — is unanswerable today. Touches `provider/src/latency.rs`, which is a journal-shape contract: its own PR, and update `crates/cost/tests/journal_shape.rs` with it. |
+| **TE1** | **Find out why the tool catalog isn't narrowed** | **56% of all spend.** Narrowing already exists (`relevant_mcps`, `allowed_mcps`, `narrow_direct_tools` defaults on) yet the base is a flat ~11k ≈ the full 12-MCP catalog. **Start by instrumenting, not fixing** — the `allowed_mcps` count is `debug`-level and the box runs `info`, so the cause is currently unobservable. **Not delegated:** it is a diagnosis whose scope is unknown until the measurement returns, which is the one shape you cannot write acceptance criteria for. Instrument in-house, collect a day, *then* spec the fix. |
+| **TE2** | **Split subagent vs direct-execution spend** | `AgentRole` has no `Subagent`, and the role is bound at provider construction ([`bootstrap`](../crates/bootstrap/src/lib.rs#L203)) — one instance serves both dispatch paths — so this is a design task, not an enum addition. Specced as [round 3 §2](future-work/parallel-deliverables-2026-08-round-3.md). |
 | **TE3** | **Order the dispatcher prompt for cache reuse** | Dispatcher cache hit is 22.3% vs ~76% elsewhere, because the varying goal is formatted *before* the stable MCP catalog and poisons the prefix. One-line reorder. Only ~1% of tokens — listed because it is nearly free and the same mistake in the orchestrator's prompt would not be. |
 
 Do them in that order. TE3 is the tempting one to start with because it is a format string; it is
@@ -43,9 +43,9 @@ also the one that matters least.
 | # | What | Why |
 |---|---|---|
 | **CH1** | WebUI chat maturity | Daily usable chat beyond session view (history, UX) |
-| **CH4** | ~~Mid-session / per-conversation model switching~~ | **Mechanism landed** (2026-07-31, `bd4f67a`); WebUI, TUI and the compaction trigger all closed. **One gap left: Telegram** — see below |
+| **CH4** | ~~Mid-session / per-conversation model switching~~ | **Mechanism landed** (2026-07-31, `bd4f67a`); WebUI, TUI, Telegram and the compaction trigger all closed (last gap closed 2026-08-02, PR #35). Kept below for the reasoning. |
 
-**CH4 — mid-session model switching (mechanism landed, surface + re-resolve open)**
+**CH4 — mid-session model switching (complete; retained for the reasoning)**
 
 *What we already have (process-wide, not per chat):* `GET /api/models` + `POST /api/models/select` (and TUI `/model`, Telegram model select) call `Provider::set_model` on the shared face provider. That hot-swaps the **daemon-wide** active model for *subsequent* completions — no restart.
 
@@ -57,7 +57,7 @@ also the one that matters least.
 |-----|----------------|
 | ~~**Surface UX**~~ | **Closed 2026-08-01 (WebUI), 2026-08-02 (TUI, PR #30).** `/model` binds a model to the open conversation. There is no stored "selected model": `MessageNode.model` records what each turn ran on and the next turn reads the last one back off the log, so a conversation stays where it was put without a second field to drift. A pick made before the first message rides `ChatRequest.model` on the request that creates the conversation. |
 | ~~**Dependent re-resolve**~~ | **Closed 2026-08-02 (PR #29).** The compaction trigger is a function of the conversation's resolved model, evaluated per turn against a per-model table built from `[[models]]` windows. A daemon-wide face swap now moves only the default, so it cannot retune a conversation that pinned its own model. No CH3.1 rearchitecture was needed. |
-| **Telegram `/model`** | **Still daemon-wide, and now actively misleading.** [`telegram.rs:153`](../crates/server/src/telegram.rs#L153) calls `provider.set_model` and replies "Model switched" — but a sticky conversation with history resolves via `model_last_used`, so the next turn runs on the *old* model while every other unpinned chat silently moves. Specced as [round 2 §3](future-work/parallel-deliverables-2026-08-round-2.md). |
+| ~~**Telegram `/model`**~~ | **Closed 2026-08-02 (PR #35).** It had been calling `provider.set_model` and replying "Model switched" while the sticky conversation, having history, kept resolving via `model_last_used` — so the next turn ran on the *old* model and every other unpinned chat silently moved. It now scopes to the sticky conversation through `ChatSessions::select_model`, the same call WebUI and TUI make. Telegram also gained `/stop` and turn-lifecycle replies in the same PR. |
 
 *Resolved by the above, no longer gaps:* per-conversation model, sticky preference, and role clarity (the binding is the **chat face**, by construction).
 
@@ -120,9 +120,13 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
                    ├── M1b done (pool + degraded routing + topology MCP hot-reload)
                    └── T1 Tier-1 done (Tier 3 open; Tier 2 optional)
 
-  P1.5 token economics ──► TE1 instrument the tool catalog   (56% of spend)
-                       ├── TE2 split subagent vs direct       (makes TE1 legible)
+  P1.5 token economics ──► TE1 instrument the tool catalog   (56%; in-house, diagnosis)
+                       ├── TE2 split subagent vs direct       (round 3 §2, delegated)
                        └── TE3 dispatcher prompt order        (cheap, ~1%)
+
+  Round 3 (delegated) ──► 1. delegated findings reach the face  (correctness)
+                      ├── 2. subagent vs direct in the journal  (= TE2)
+                      └── 3. executor accumulation term         (37.4%)
 
   Later ──► W1 mobile WebUI session view
   TurboVault (parallel) ──► vault_events · upstream land
@@ -132,6 +136,7 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
 
 | When | What |
 |------|------|
+| **2026-08-02** | **Round 2's five deliverables** (PRs #33–#37): **correlation coverage** (the cost instrument's own 8% blind spot, incl. the approval path); **turn-aware cost** + `token_usage_total` corrected from a lifetime sum to context occupancy; **Telegram parity** — `/model` scopes to the sticky chat, `/stop`, turn-lifecycle replies; **goal sessions in the shutdown drain**, parked durably on disk rather than left `Running`; and **Tier 3 P7 restart survival**, passing live. Every branch shipped a test claiming more than it checked — the four mechanisms and rules R6–R8 are in [round 3](future-work/parallel-deliverables-2026-08-round-3.md). |
 | **2026-08-02** | **Five parallel deliverables** (PRs #28–#32), specced in [`parallel-deliverables-2026-08.md`](future-work/parallel-deliverables-2026-08.md) and executed on separate branches: **token cost accounting** (`liberado-cost` — `[[models]]` per-million rates applied at *read* time over the existing latency journal, rolled up per conversation through the dispatch journal's `parent_conversation` so delegated spend lands on the turn that caused it; the full read landed 2026-08-02 at **92.8%** orchestrator — see [P1.5](#priority-15--token-economics-foundational-measured-2026-08-02)); **per-conversation compaction trigger** (closes CH4's re-resolve gap above); **TUI stop / scoped `/model` / reattach** (durable turns had made Ctrl+S mean "stop showing me"); **graceful shutdown** (SIGTERM drains in-flight durable turns for a bounded grace before exit; `stop_grace_period: 2m` on the compose service); and **Tier 3 P6**, verified against the live daemon. Review notes and the recurring test-aim weakness are written up in [`parallel-deliverables-2026-08-round-2.md`](future-work/parallel-deliverables-2026-08-round-2.md). |
 | **2026-08-01** | **Session profiles** (PR #21): per-conversation authority — a profile narrows tools, delegation, model, and prompt nudge for one conversation, and a turn may hold fewer capabilities than the profile's ceiling after per-goal narrowing. Includes **CH4's mechanism** (above), the **approval ledger** — a human's approve/reject now lives in an append-only log under `<LIBERADO_DATA_DIR>/` that no MCP mounts and no tool addresses, so editing a proposal note's `status:` authorises nothing — and the policy change that took `Write` on `proposals/` away from every agent grant. Plus the tool manifest (the model is told its exact tool surface each turn, beating stale transcript evidence), a provider-seam test sweep asserting on the serialized request body, and test-clock hardening (frozen state can no longer leak between tests, and the controls compile out of production builds). |
 | **2026-07-23** | **CH3 context compaction:** long chats roll older history into a persisted summary marker (`Author::Named("compaction")` in the session DAG) — the model resumes from the summary + a verbatim tail of the last K user turns; the full transcript stays on disk, rendered and searchable. `[main_agent.compaction]` knobs, default on. Plan + 4-project research (OpenCode/Kilo/LibreChat/OpenClaw): [`context-compaction-plan.md`](future-work/context-compaction-plan.md). **Known residual** (marker durable + partial tail re-append → next load can miss unpersisted tail): documented there; preferred fix is CH3.1 viewport/side-summary — [`context-compaction-viewport-rearchitecture.md`](future-work/context-compaction-viewport-rearchitecture.md). |
