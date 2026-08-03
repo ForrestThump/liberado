@@ -5,11 +5,18 @@ can do well, scope it, open a PR. One item per PR.
 
 Items are ordered within each band. Bands matter more than positions inside them.
 
-> ## Enforced — a PR missing either of these is closed without review
+> ## Enforced — a PR missing any of these is closed without review
 >
 > 1. **A "Still open" line** saying how you confirmed the item is not already done.
 > 2. **A "Mutation evidence" section** with one entry *per behaviour you changed*, each pasting the
 >    test that failed when you broke that one thing.
+>
+> **3. If you can drive the real code path, do not hand-build the intermediate.** Mutation evidence
+>    proves your fixture is sensitive to a line; it does *not* prove the fixture models reality.
+>    Three of the last four defects survived per-site mutation because the fixture agreed with the
+>    implementation — hand-built events, a flag beside the macro, a prompt missing the block being
+>    ordered. Before writing the assertion, answer: **would this fixture pass if the feature were
+>    implemented the wrong way?** See [`delegation-failure-modes.md`](delegation-failure-modes.md).
 >
 > This is not a style preference. Both are cheap for you to produce and cheap for a reviewer to
 > check, which is exactly why they are the gate: a PR that lacks them costs a reviewer a full read
