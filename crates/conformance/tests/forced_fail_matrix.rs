@@ -1010,10 +1010,19 @@ async fn listen_p7(mock: Arc<P7Mock>) -> SocketAddr {
                             )
                         } else {
                             match m.break_mode {
+                                // Zombie flag *isolated*: the reply landed and persisted, but
+                                // `turn_running` is still true after a restart. Only the
+                                // `!turn_running` half of the honesty check can catch this — if
+                                // this case also had no assistant, it would fail via the
+                                // lost-turn clause and the zombie guard could be deleted
+                                // undetected (it could, until this changed).
                                 P7Break::StillTurnRunning => (
                                     true,
                                     false,
-                                    json!([{"role": "user", "content": "restart prompt"}]),
+                                    json!([
+                                        {"role": "user", "content": "restart prompt"},
+                                        {"role": "assistant", "content": "finished within grace"}
+                                    ]),
                                 ),
                                 P7Break::LostWithoutUnanswered => (
                                     false,

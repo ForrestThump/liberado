@@ -318,6 +318,29 @@ mod tests {
         assert!(!post_restart_lifecycle_ok(&snap));
     }
 
+    /// The zombie case, **isolated**: the reply landed *and* the flag is still set. Only the
+    /// `!turn_running` half of the check can reject this — `dishonest_when_still_running` above
+    /// has no assistant reply, so it is also a lost turn and fails either way. Without this test
+    /// the zombie guard can be deleted with the whole suite staying green.
+    ///
+    /// This is the case that strands a human: the answer is on the transcript, and the surface
+    /// shows a turn still in flight in a process that no longer exists.
+    #[test]
+    fn dishonest_when_running_flag_survives_a_completed_turn() {
+        let snap = ConversationSnapshot {
+            turn_running: true,
+            turn_unanswered: false,
+            has_user: true,
+            has_assistant: true,
+            user_contents: vec!["q".into()],
+            assistant_contents: vec!["a".into()],
+        };
+        assert!(
+            !post_restart_lifecycle_ok(&snap),
+            "turn_running after a restart is a claim about a dead process, reply or not"
+        );
+    }
+
     #[test]
     fn dishonest_when_lost_silently() {
         let snap = ConversationSnapshot {
