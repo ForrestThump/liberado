@@ -582,13 +582,10 @@ async fn collect_turn_reply(
         match rx.recv().await {
             Ok(AgentEvent::Token(t)) => reply.push_str(&t),
             Ok(AgentEvent::Done) => return Ok(reply),
-            Ok(AgentEvent::Error(e)) => {
-                // Cancel and hard failures: no partial promise. Empty reply → surface the error.
-                if reply.is_empty() {
-                    return Err(e);
-                }
-                return Err(e);
-            }
+            // Cancels and hard failures alike: surface the error and discard whatever text had
+            // streamed. Returning the partial would be the "we kept some of it" promise that /stop's
+            // wording explicitly refuses to make.
+            Ok(AgentEvent::Error(e)) => return Err(e),
             Ok(_) => {}
             Err(RecvError::Lagged(_)) => continue,
             Err(RecvError::Closed) => {
@@ -743,6 +740,41 @@ mod tests {
             self.entered.store(true, Ordering::SeqCst);
             std::future::pending().await
         }
+    }
+
+    /// Hangs on the first completion, answers every one after. Lets a test cancel a turn and then
+    /// take a *successful* next turn — the sequence the unanswered-turn note exists for.
+    struct HangOnceProvider {
+        model: std::sync::Mutex<String>,
+        hung: AtomicBool,
+    }
+    #[async_trait]
+    impl Provider for HangOnceProvider {
+        fn model(&self) -> String {
+            self.model.lock().unwrap().clone()
+        }
+        fn set_model(&self, model: String) {
+            *self.model.lock().unwrap() = model;
+        }
+        async fn complete(&self, _: CompletionRequest) -> ProviderResult<CompletionResponse> {
+            if !self.hung.swap(true, Ordering::SeqCst) {
+                std::future::pending::<()>().await;
+            }
+            Ok(CompletionResponse::text("recovered"))
+        }
+    }
+
+    /// Spin until the sticky conversation has a turn registered, or give up.
+    async fn wait_for_running(bridge: &TelegramChatBridge, chat: &Arc<ChatSessions>) -> Ulid {
+        for _ in 0..200 {
+            if let Some(s) = bridge.session_id.get().await
+                && chat.turn_running(s)
+            {
+                return s;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("no turn registered as running");
     }
 
     async fn bridge_with_provider(
@@ -959,6 +991,71 @@ mod tests {
                     .as_ref()
                     .is_ok_and(|s| s.to_lowercase().contains("cancel")),
             "hung turn after /stop: {hang_result:?}"
+        );
+    }
+
+    /// After a cancelled turn, the **next** message says the previous turn ended without a reply.
+    ///
+    /// This is the second half of the lifecycle acceptance item ("if the last turn ended
+    /// unanswered, say that instead of silence"), and it was the one path with no test: deleting
+    /// the whole `unanswered_prefix` block left every other test in this module green.
+    ///
+    /// R3: crosses from the running-turn map into the persisted log — `last_turn_unanswered` reads
+    /// message nodes, so this only passes if the cancelled turn genuinely left a user node with no
+    /// reply after it, not merely if a flag was set in memory.
+    #[tokio::test]
+    async fn message_after_a_cancelled_turn_reports_the_unanswered_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = Arc::new(HangOnceProvider {
+            model: std::sync::Mutex::new("m".into()),
+            hung: AtomicBool::new(false),
+        });
+        let (bridge, chat, _) = bridge_with_provider(dir.path(), provider).await;
+
+        let b = TelegramChatBridge {
+            state: Arc::clone(&bridge.state),
+            session_id: bridge.session_id.clone(),
+        };
+        let hang = tokio::spawn(async move { b.reply("first").await });
+        let sticky = wait_for_running(&bridge, &chat).await;
+
+        assert!(bridge.reply("/stop").await.is_ok());
+        let _ = hang.await;
+        assert!(!chat.turn_running(sticky));
+        assert!(
+            chat.last_turn_unanswered(sticky).await,
+            "precondition: the cancelled turn must leave an unanswered user node"
+        );
+
+        let next = bridge.reply("second").await.unwrap();
+        assert!(
+            next.contains("previous turn ended without a reply"),
+            "must state the unanswered turn rather than answering in silence: {next}"
+        );
+        assert!(
+            next.contains("recovered"),
+            "the note prefixes the reply, it does not replace it: {next}"
+        );
+    }
+
+    /// The note is *conditional* — an ordinary turn following an answered one carries no prefix.
+    /// Without this, always emitting the note would pass the test above.
+    #[tokio::test]
+    async fn ordinary_turn_carries_no_unanswered_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::with_script(
+            "m",
+            [
+                CompletionResponse::text("one"),
+                CompletionResponse::text("two"),
+            ],
+        ));
+        let (bridge, _chat, _) = bridge_with_provider(dir.path(), mock).await;
+        assert_eq!(bridge.reply("hello").await.unwrap(), "one");
+        let second = bridge.reply("again").await.unwrap();
+        assert_eq!(
+            second, "two",
+            "an answered turn must not be decorated: {second}"
         );
     }
 }
