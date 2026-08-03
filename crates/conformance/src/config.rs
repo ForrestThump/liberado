@@ -43,6 +43,11 @@ pub struct ConformanceConfig {
     /// Per-path timeout in seconds (model-backed paths). Default 600 (10 min).
     #[serde(default = "default_path_timeout")]
     pub path_timeout_secs: u64,
+    /// Shell command that restarts the daemon for **P7** (e.g. docker compose force-recreate).
+    /// Empty / omitted → P7 **skips** with a reason (never passes). Never hard-code a host command
+    /// in source — the box and a laptop restart differently.
+    #[serde(default)]
+    pub restart_command: Option<String>,
 }
 
 fn default_budget() -> u64 {
@@ -94,6 +99,14 @@ impl ConformanceConfig {
     pub fn is_suite_owned(name: &str) -> bool {
         SUITE_OWNED_NAMES.contains(&name)
     }
+
+    /// Configured restart hook for P7, if non-empty after trim.
+    pub fn restart_command(&self) -> Option<&str> {
+        self.restart_command
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
 }
 
 #[cfg(test)]
@@ -110,5 +123,27 @@ mod tests {
     #[test]
     fn default_budget_is_thirty_minutes() {
         assert_eq!(DEFAULT_BUDGET_SECS, 1800);
+    }
+
+    #[test]
+    fn restart_command_empty_is_none() {
+        let mut c = ConformanceConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            budget_secs: 60,
+            vault_path: PathBuf::from("/tmp"),
+            topology_path: None,
+            hook_name: "conformance".into(),
+            hook_secret_ref: "X".into(),
+            profile_name: "conformance".into(),
+            paths: vec![],
+            advisory_counts: false,
+            path_timeout_secs: 60,
+            restart_command: Some("  ".into()),
+        };
+        assert!(c.restart_command().is_none());
+        c.restart_command = Some("docker compose up -d --force-recreate".into());
+        assert!(c.restart_command().is_some());
+        c.restart_command = None;
+        assert!(c.restart_command().is_none());
     }
 }
