@@ -17,9 +17,12 @@
 //! [`RuntimeFactory`], so this crate stays testable with a mock and the real turbomcp-backed
 //! factory is a separate concern.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 
 use async_trait::async_trait;
 use liberado_common::{
@@ -37,6 +40,15 @@ use liberado_session::TerminalKind;
 use thiserror::Error;
 use tokio::sync::Semaphore;
 use tracing::Instrument;
+
+#[cfg(test)]
+static EXECUTE_DIRECT_BUILDING_LINE_AT_INFO: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static LAST_CATALOG_OFFERED: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static LAST_CATALOG_SURVIVING: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static LAST_CATALOG_SCHEMA_EST_TOKENS: AtomicU64 = AtomicU64::new(0);
 
 /// Default `source` recorded in write provenance for orchestrated executions.
 pub const DEFAULT_SOURCE: &str = "liberado-executor";
@@ -894,7 +906,11 @@ impl Orchestrator {
                             .filter(|name| relevant_mcps.contains(name))
                             .collect()
                     };
-                    tracing::debug!(
+                    #[cfg(test)]
+                    {
+                        EXECUTE_DIRECT_BUILDING_LINE_AT_INFO.store(true, Ordering::Relaxed);
+                    }
+                    tracing::info!(
                         seed_count = seed_calls.len(),
                         allowed_mcps = allowed_mcps.len(),
                         "building execute-direct task"
@@ -909,6 +925,7 @@ impl Orchestrator {
                         let runtime = self.factory.runtime_for(&allowed_mcps, provenance).await?;
                         let (runtime, deferral) =
                             self.gate(runtime, effective.clone(), goal, trigger_correlation);
+                        Self::instrument_catalog(&allowed_mcps, &*runtime);
                         let mut report = self.execute(&self.direct_budget, &*runtime, task).await?;
                         // If the gate deferred a call to the human out-of-band mid-run, mark it so a
                         // chat surface can drop the redundant reply (Gap 2).
@@ -943,6 +960,7 @@ impl Orchestrator {
                         subgoal.as_str(),
                         correlation_id.as_str(),
                     );
+                    Self::instrument_catalog(&allowed_mcps, &*runtime);
                     // Research = a subagent that can only read. Derived rather than declared:
                     // the classifier has no task-type field, but "every MCP it may touch is
                     // read_only" is exactly the property that matters here — such a run cannot
@@ -1385,6 +1403,34 @@ impl Orchestrator {
         Executor::new(provider, budget.clone())
             .execute(runtime, task)
             .await
+    }
+
+    fn instrument_catalog(offered: &[String], runtime: &dyn ToolRuntime) {
+        let catalog = runtime.catalog();
+        let surviving = catalog
+            .iter()
+            .map(|tool| mcp_of(&tool.name))
+            .collect::<HashSet<&str>>()
+            .len();
+        match serde_json::to_string(&catalog) {
+            Ok(schema) => {
+                let schema_est_tokens = ((schema.len() as f64) / 4.0 * 1.3).ceil() as u64;
+                #[cfg(test)]
+                {
+                    LAST_CATALOG_OFFERED.store(offered.len(), Ordering::Relaxed);
+                    LAST_CATALOG_SURVIVING.store(surviving, Ordering::Relaxed);
+                    LAST_CATALOG_SCHEMA_EST_TOKENS.store(schema_est_tokens, Ordering::Relaxed);
+                }
+                tracing::info!(
+                    mcp_offered = offered.len(),
+                    mcp_surviving = surviving,
+                    schema_bytes = schema.len(),
+                    schema_est_tokens,
+                    "tool catalog prepared"
+                );
+            }
+            Err(error) => tracing::warn!(%error, "tool catalog serialization failed"),
+        }
     }
 
     /// Wrap a connected runtime in the same runtime-level safety net chat's own tool loop already
@@ -2935,5 +2981,125 @@ mod tests {
             "x".repeat(MIN_DELIVERED_DOCUMENT_BYTES)
         );
         assert!(looks_like_a_document(&body).is_ok());
+    }
+
+    #[test]
+    fn execute_direct_promotes_building_line_to_info() {
+        EXECUTE_DIRECT_BUILDING_LINE_AT_INFO.store(false, Ordering::Relaxed);
+        let orch = orchestrator_with_catalog(Vec::new());
+        let decision = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: Vec::new(),
+                relevant_mcps: Vec::new(),
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let _ = rt.block_on(orch.run(decision, "test goal", "trigger-1", &CapabilitySet::empty()));
+        assert!(
+            EXECUTE_DIRECT_BUILDING_LINE_AT_INFO.load(Ordering::Relaxed),
+            "the building execute-direct task line must fire at info, not debug"
+        );
+    }
+
+    #[test]
+    fn subagent_catalog_instrumentation_sets_offered_vs_surviving_and_schema() {
+        struct SubagentCatalogRuntime;
+        #[async_trait]
+        impl ToolRuntime for SubagentCatalogRuntime {
+            fn catalog(&self) -> Vec<ToolDef> {
+                vec![
+                    ToolDef::new(
+                        "tasks-mcp:list",
+                        "list tasks",
+                        serde_json::json!({ "type": "object", "properties": {} }),
+                    ),
+                    ToolDef::new(
+                        "tasks-mcp:create",
+                        "create a task",
+                        serde_json::json!({ "type": "object", "properties": { "name": { "type": "string" } } }),
+                    ),
+                ]
+            }
+            async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+                Ok("ok".into())
+            }
+        }
+        struct SubagentCatalogFactory;
+        #[async_trait]
+        impl RuntimeFactory for SubagentCatalogFactory {
+            async fn runtime_for(
+                &self,
+                _allowed_mcps: &[String],
+                _provenance: WriteProvenance,
+            ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+                Ok(Box::new(SubagentCatalogRuntime))
+            }
+        }
+
+        LAST_CATALOG_OFFERED.store(0, Ordering::Relaxed);
+        LAST_CATALOG_SURVIVING.store(0, Ordering::Relaxed);
+        LAST_CATALOG_SCHEMA_EST_TOKENS.store(0, Ordering::Relaxed);
+        let orch = Orchestrator::new(
+            Arc::new(MockProvider::with_script(
+                "mock",
+                vec![CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "c",
+                    SUBMIT_REPORT_TOOL,
+                    serde_json::json!({ "outcome": "succeeded", "summary": "done" }),
+                )])],
+            )),
+            SubagentCatalogFactory,
+            CapabilitySet::empty(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            std::env::temp_dir(),
+            ProposalSigner::random(),
+            "default",
+        );
+        let decision = DispatchDecision {
+            action: DispatchAction::DispatchSubagent {
+                goal: "summarize recent decisions".into(),
+                capabilities: CapabilitySet::empty(),
+                allowed_mcps: vec!["tasks-mcp".into(), "email-mcp".into()],
+                success_criteria: vec!["a summary note exists".into()],
+                artifact_target: None,
+                model: None,
+                correlation_id: "subagent-42".into(),
+                delivery: Delivery::Summarize,
+                depth: Depth::Normal,
+            },
+            confidence: 0.8,
+            rationale: "multi-step".into(),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let _ = rt.block_on(orch.run(
+            decision,
+            "outer goal",
+            "trigger-xyz",
+            &CapabilitySet::empty(),
+        ));
+        assert_eq!(
+            LAST_CATALOG_OFFERED.load(Ordering::Relaxed),
+            2,
+            "offered = allowed_mcps.len()"
+        );
+        assert_eq!(
+            LAST_CATALOG_SURVIVING.load(Ordering::Relaxed),
+            1,
+            "two MCPs offered but only tasks-mcp survives in the catalog"
+        );
+        assert!(
+            LAST_CATALOG_SCHEMA_EST_TOKENS.load(Ordering::Relaxed) > 0,
+            "schema must have positive token count"
+        );
     }
 }
