@@ -1,7 +1,27 @@
 # A delegated subagent's work is discarded at the seam
 
-**Status**: finding, not yet fixed. Written 2026-08-02.
+**Status**: **payload fixed 2026-08-02 in `e0fde79`** for the subagent path. Written 2026-08-02.
 **Severity**: the user gets a confident, cited answer whose specifics the system never researched.
+
+> **Read this before acting on the rest of the page.** The fix described under "The fix, in shape"
+> **has landed**. `Orchestrator::output_contract` now picks the contract from where the report is
+> going, and a research dispatch whose delivery is `Summarize` — a chat `delegate` — is given
+> `relay_directive()`: its summary *is* the material. The call site is on the `DispatchSubagent`
+> path ([`orchestrator/src/lib.rs:943`](../../crates/orchestrator/src/lib.rs#L943)).
+>
+> This header said "not yet fixed" for a day after it was fixed, and that cost a round of planning:
+> round 3 §1 was specced against it. **Diagnosis pages need their status checked against the code,
+> not trusted.**
+>
+> **Two things are still open**, and they are why this page is not archived:
+> 1. **`ExecuteDirect` gets no output contract at all** — that branch builds its task from
+>    `DIRECT_INSTRUCTIONS` alone ([`lib.rs:869`](../../crates/orchestrator/src/lib.rs#L869)). The
+>    original reproduction was a deep research dispatch, which routes to `DispatchSubagent`, so this
+>    is unproven rather than known-broken. A shallow `delegate` routed to `ExecuteDirect` would still
+>    return whatever summary the model felt like writing.
+> 2. **Coverage is at the function, not the boundary.** `e0fde79`'s four tests all call
+>    `output_contract` directly. Nothing asserts what the *face agent actually receives* from a
+>    delegation, which is the property the finding was about.
 
 ## What happens
 
