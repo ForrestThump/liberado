@@ -102,6 +102,48 @@ fn load_latency_events_reader<R: BufRead>(
     Ok(out)
 }
 
+/// How much of the journal's tail [`load_latency_events_tail`] reads. Sized to hold well over a
+/// hundred records at observed line lengths (~300 B), which is far more than the "most recent turn"
+/// question needs.
+pub const TAIL_SCAN_BYTES: u64 = 256 * 1024;
+
+/// Load only the **last** `TAIL_SCAN_BYTES` worth of complete records.
+///
+/// The journal is append-only and unbounded, and `/api/status` is polled every few seconds by every
+/// connected client. Reading and parsing the whole file per poll is O(history) forever, so callers
+/// that only need recent state read the tail instead.
+///
+/// The first line in the window is dropped unless the window starts exactly at a record boundary —
+/// it is almost certainly a partial record. A malformed line anywhere in the window yields `None`
+/// rather than an error: this feeds a status field, which must never fail a request over a journal
+/// it does not own.
+pub fn load_latency_events_tail(path: &Path, max_bytes: u64) -> Option<Vec<JournalEvent>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(max_bytes);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = Vec::with_capacity(max_bytes.min(len) as usize);
+    file.read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+
+    let mut lines: Vec<&str> = text.lines().collect();
+    // Truncated head: only when we did not start at byte 0 is the first line suspect.
+    if start > 0 && !lines.is_empty() {
+        lines.remove(0);
+    }
+    let mut out = Vec::new();
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        out.push(serde_json::from_str::<JournalEvent>(line).ok()?);
+    }
+    Some(out)
+}
+
 /// First-line dispatch start record fields we care about.
 #[derive(Debug, Deserialize)]
 struct DispatchStart {

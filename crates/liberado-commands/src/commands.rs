@@ -10,8 +10,12 @@ pub enum SlashCommand {
     Model,
     /// Open the session-profile picker: which tools (and dispatch mode) *this chat* runs under.
     ///
-    /// Per-conversation and switchable, unlike `/model`'s process-wide hot-swap. A human-only act
-    /// by construction — the agent has no tool that reaches it.
+    /// Per-conversation and switchable. A human-only act by construction — the agent has no tool
+    /// that reaches it.
+    ///
+    /// This used to read "unlike `/model`'s process-wide hot-swap". That contrast is gone: WebUI,
+    /// TUI and Telegram all scope `/model` to the open conversation now, and only a `/model` with
+    /// no conversation to bind to still moves the daemon-wide default.
     Profile,
     Session(SessionCmd),
     /// Open the unified session switcher (primary chat + goal sessions in one list).

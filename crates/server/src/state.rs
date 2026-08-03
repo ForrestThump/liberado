@@ -46,6 +46,11 @@ pub struct AppState {
     /// It was `conversations_root`, pointing at `<data_dir>/conversations`. The name outlived the
     /// thing: there is one directory now, holding every session.
     pub sessions_root: PathBuf,
+    /// The data dir the daemon was started with (`liberado_config::data_dir()`), held rather than
+    /// re-resolved so handlers that read journals under it are testable without mutating process
+    /// environment — `data_dir()` reads `LIBERADO_DATA_DIR` on every call, and `set_var` across
+    /// parallel tests is both racy and `unsafe`. `GET /api/status` reads the latency journal here.
+    pub data_dir: PathBuf,
     /// The `"main-agent"` component's capability grant (`policy.toml`) — which MCPs chat's own
     /// tool surface may call directly. `GET /api/catalog` uses this (via `.grants_mcp`) to label
     /// each MCP's `visible_to_main_agent` flag, independently of `dispatcher_capabilities` below.
@@ -235,6 +240,7 @@ impl AppState {
             chat_tools: 0,
             chat_tool_names: Vec::new(),
             catalog: Arc::new(CapabilityCatalog::new()),
+            data_dir: root.clone(),
             sessions_root: root,
             main_agent_capabilities: CapabilitySet::empty(),
             dispatcher_capabilities: CapabilitySet::empty(),
