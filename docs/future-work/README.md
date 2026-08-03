@@ -18,6 +18,7 @@ Index of forward-looking work.
 | [chat-search-plan.md](chat-search-plan.md) | History search tiers |
 | [context-compaction-plan.md](context-compaction-plan.md) | Chat context compaction (CH3 — Tier 1 landed; known residual documented) |
 | [durable-chat-turns-plan.md](durable-chat-turns-plan.md) | A turn outlives the connection watching it (**built + verified live** 2026-08-02; all steps landed) |
+| [delegation-failure-modes.md](delegation-failure-modes.md) | **How delegated PRs go wrong**, over 15 PRs: Grok over-claims, DeepSeek omits, and why per-site mutation evidence misses the dominant failure |
 | [backlog.md](backlog.md) | **Pick-from-here backlog** (2026-08-03): four bands — token economics, correctness gaps, agentic coding, low-risk breadth. Self-scoped work starts here; carries the verify-first and per-behaviour-mutation rules |
 | [parallel-deliverables-2026-08-round-3.md](parallel-deliverables-2026-08-round-3.md) | **Round 3 — status + open work.** §1 done; §2 (subagent vs direct in the journal) is next and has one mandated approach with verified line numbers; §3 split into a delegable measurement and a reserved fix. Carries the R1–R8 pre-PR checklist |
 | [parallel-deliverables-2026-08-round-2.md](parallel-deliverables-2026-08-round-2.md) | Round 2 — five specs, **all landed** (PRs #33–#37); kept for the R1–R5 rules and the review record |
