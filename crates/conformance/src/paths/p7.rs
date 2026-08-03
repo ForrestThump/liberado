@@ -3,10 +3,10 @@
 //! Against a live daemon (when `restart_command` is configured):
 //!
 //! 1. start a **background** chat turn and drop the SSE after the session id;
-//! 2. run the configured restart command (host-specific — never hard-coded);
-//! 3. while the daemon is down/draining, probe `POST /api/chat` until we observe
-//!    `503` + `error: shutting_down` (or fail if we never do before it is fully up again);
-//! 4. wait until the daemon is up again;
+//! 2. **spawn** the configured restart command (host-specific — never hard-coded);
+//! 3. **while that command runs** (and briefly after), probe `POST /api/chat` until we observe
+//!    `503` + `error: shutting_down` — the drain window is *during* recreate, not after it returns;
+//! 4. wait for the restart process to exit, then until the daemon is up again;
 //! 5. assert lifecycle flags: **`turn_running` is false**, and either an assistant reply is on
 //!    the transcript **or** `turn_unanswered` is true — never a silent lost turn.
 //!
@@ -63,32 +63,64 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
         .wait_turn_running(&session, Duration::from_secs(15).min(timeout))
         .await;
 
-    // ── 2. Restart ───────────────────────────────────────────────────────────
-    if let Err(e) = run_shell_command(restart_cmd).await {
-        return PathResult::fail(
-            PathId::P7,
-            "execute configured restart_command",
-            elapsed_ms(start),
-            serde_json::json!({"error": e, "restart_command": restart_cmd, "session_id": session}),
-        );
-    }
+    // ── 2–3. Spawn restart + probe drain concurrently ────────────────────────
+    // Typical hooks (`docker compose up -d --force-recreate`) drain *during* the command. Awaiting
+    // the process first then probing only sees the new process accepting 200s.
+    let mut child = match spawn_restart_command(restart_cmd) {
+        Ok(c) => c,
+        Err(e) => {
+            return PathResult::fail(
+                PathId::P7,
+                "spawn configured restart_command",
+                elapsed_ms(start),
+                serde_json::json!({
+                    "error": e,
+                    "restart_command": restart_cmd,
+                    "session_id": session
+                }),
+            );
+        }
+    };
 
-    // ── 3. Drain window: must refuse new turns with shutting_down ────────────
     let drain_deadline = Instant::now() + timeout.min(Duration::from_secs(120));
     let mut saw_shutting_down = false;
     let mut last_probe = serde_json::json!({});
+    let mut restart_exit: Option<std::process::ExitStatus> = None;
+    // After the restart process exits without a drain observation, probe only briefly — the
+    // gate is almost always closed *during* recreate, not after a successful up.
+    let mut post_exit_deadline: Option<Instant> = None;
+
     while Instant::now() < drain_deadline {
+        // Non-blocking reap of the restart process (null stdio — no pipe deadlock).
+        if restart_exit.is_none() {
+            match child.try_wait() {
+                Ok(Some(st)) => {
+                    restart_exit = Some(st);
+                    if !saw_shutting_down {
+                        post_exit_deadline = Some(Instant::now() + Duration::from_secs(2));
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return PathResult::fail(
+                        PathId::P7,
+                        "wait restart_command (try_wait)",
+                        elapsed_ms(start),
+                        serde_json::json!({
+                            "error": e.to_string(),
+                            "restart_command": restart_cmd,
+                            "session_id": session
+                        }),
+                    );
+                }
+            }
+        }
+
         match client.post_chat("p7 probe during restart").await {
             Ok((status, body)) => {
                 last_probe = serde_json::json!({ "status": status, "body": body });
                 if DaemonClient::is_shutting_down_response(status, &body) {
                     saw_shutting_down = true;
-                    break;
-                }
-                // If the daemon is already fully back and accepting, stop probing — we either
-                // missed the window or the gate never closed.
-                if status == 200 {
-                    break;
                 }
             }
             Err(e) => {
@@ -96,13 +128,62 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
                 // Connection errors are expected while the process is down; keep probing.
             }
         }
+
+        // Seen drain and restart process finished → enough for step 3.
+        if saw_shutting_down && restart_exit.is_some() {
+            break;
+        }
+        // Restart finished, short post-exit window elapsed, still no drain signal → fail next.
+        if let Some(d) = post_exit_deadline
+            && Instant::now() >= d
+            && !saw_shutting_down
+        {
+            break;
+        }
+
         tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    // Reap if still running past the probe window.
+    let restart_status = match restart_exit {
+        Some(st) => st,
+        None => match child.wait().await {
+            Ok(st) => st,
+            Err(e) => {
+                return PathResult::fail(
+                    PathId::P7,
+                    "wait restart_command",
+                    elapsed_ms(start),
+                    serde_json::json!({
+                        "error": e.to_string(),
+                        "restart_command": restart_cmd,
+                        "session_id": session,
+                        "saw_shutting_down": saw_shutting_down,
+                    }),
+                );
+            }
+        },
+    };
+
+    if !restart_status.success() {
+        return PathResult::fail(
+            PathId::P7,
+            "execute configured restart_command",
+            elapsed_ms(start),
+            serde_json::json!({
+                "error": format!("exit {restart_status}"),
+                "restart_command": restart_cmd,
+                "session_id": session,
+                "saw_shutting_down": saw_shutting_down,
+            }),
+        );
     }
 
     if !saw_shutting_down {
         return PathResult::fail(
             PathId::P7,
-            "during restart/drain, POST /api/chat returns 503 with error=shutting_down",
+            "during restart/drain, POST /api/chat returns 503 with error=shutting_down \
+             (probed concurrently while restart_command ran)",
             elapsed_ms(start),
             serde_json::json!({
                 "session_id": session,
@@ -156,7 +237,7 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
 
     PathResult::pass(
         PathId::P7,
-        "restart observed shutting_down; post-restart lifecycle honest",
+        "restart observed shutting_down (concurrent with restart_command); post-restart lifecycle honest",
         elapsed_ms(start),
         serde_json::json!({
             "session_id": session,
@@ -169,31 +250,28 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
     )
 }
 
-async fn run_shell_command(cmd: &str) -> Result<(), String> {
+/// Spawn the host restart hook. **Stdout/stderr are discarded** (`Stdio::null`) so a verbose
+/// compose log cannot fill a pipe buffer and deadlock the child while we only `wait`.
+fn spawn_restart_command(cmd: &str) -> Result<tokio::process::Child, String> {
     #[cfg(windows)]
-    let mut child = tokio::process::Command::new("cmd")
+    let child = tokio::process::Command::new("cmd")
         .args(["/C", cmd])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("spawn restart_command: {e}"))?;
 
     #[cfg(not(windows))]
-    let mut child = tokio::process::Command::new("sh")
+    let child = tokio::process::Command::new("sh")
         .args(["-c", cmd])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("spawn restart_command: {e}"))?;
 
-    let status = child
-        .wait()
-        .await
-        .map_err(|e| format!("wait restart_command: {e}"))?;
-    if !status.success() {
-        return Err(format!("restart_command exited with {status}: {cmd}"));
-    }
-    Ok(())
+    Ok(child)
 }
 
 #[cfg(test)]
