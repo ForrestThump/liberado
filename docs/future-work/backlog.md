@@ -5,11 +5,18 @@ can do well, scope it, open a PR. One item per PR.
 
 Items are ordered within each band. Bands matter more than positions inside them.
 
-> ## Enforced — a PR missing either of these is closed without review
+> ## Enforced — a PR missing any of these is closed without review
 >
 > 1. **A "Still open" line** saying how you confirmed the item is not already done.
 > 2. **A "Mutation evidence" section** with one entry *per behaviour you changed*, each pasting the
 >    test that failed when you broke that one thing.
+>
+> **3. If you can drive the real code path, do not hand-build the intermediate.** Mutation evidence
+>    proves your fixture is sensitive to a line; it does *not* prove the fixture models reality.
+>    Three of the last four defects survived per-site mutation because the fixture agreed with the
+>    implementation — hand-built events, a flag beside the macro, a prompt missing the block being
+>    ordered. Before writing the assertion, answer: **would this fixture pass if the feature were
+>    implemented the wrong way?** See [`delegation-failure-modes.md`](delegation-failure-modes.md).
 >
 > This is not a style preference. Both are cheap for you to produce and cheap for a reviewer to
 > check, which is exactly why they are the gate: a PR that lacks them costs a reviewer a full read
@@ -78,15 +85,15 @@ measurement is in [`token-economics-findings-2026-08.md`](token-economics-findin
 
 | # | What | Pointer |
 |---|---|---|
-| **A1** | ~~Instrument the tool catalog.~~ **Done — PR #42.** | `crates/orchestrator/src/lib.rs` ~865 |
-| **A2** | ~~Order the dispatcher prompt for cache reuse.~~ **Done — PR #43.** | `crates/dispatcher/src/lib.rs:240` |
+| **A1** | **Instrument the tool catalog.** Promote the `allowed_mcps` count from `debug` to `info`, and log the *offered* vs *surviving* MCP count and the resulting schema token size. The box runs at `info`, so today this is unobservable. **Instrument only — do not change narrowing behaviour.** | `crates/orchestrator/src/lib.rs` ~865 |
+| **A2** | **Order the dispatcher prompt for cache reuse.** The varying goal is formatted *before* the stable MCP catalog, poisoning the prefix — dispatcher cache hit is 22.3% against ~76% elsewhere. Put stable content first. Then check the orchestrator's own prompt for the same shape; that one is 92.8% of spend. | `crates/dispatcher/src/lib.rs:240` |
 | **A3** | **Report `repeat_calls` in `liberado-cost`.** Once PR #41 lands, the counter rides every filed report but nothing aggregates it. | `crates/cost/` |
 
 ## Band B — correctness and honesty gaps (each found and left open deliberately)
 
 | # | What | Pointer |
 |---|---|---|
-| **B1** | ~~Hooks are not drain-gated.~~ **Done — PR #45.** | `crates/server/src/shutdown.rs` module docs |
+| **B1** | **Hooks are not drain-gated.** `POST /api/hooks/{name}` can enqueue work *during* the 90s shutdown drain, which then dies with the process. The inventory records this as a stated hole. Gate it, or record why the daemon event loop makes it safe. | `crates/server/src/shutdown.rs` module docs |
 | **B2** | **`ExecuteDirect` gets no output contract**, and `DIRECT_INSTRUCTIONS` asks for a *"concise, high-signal result"* — the shape of the seam bug. **Do not blanket-fix**: it carries no `Delivery`, so appending the relay directive would tell every cron and vault run to write documents. Needs a destination first. Read the doc before touching. | [`delegated-work-is-discarded-at-the-seam.md`](delegated-work-is-discarded-at-the-seam.md) |
 | **B3** | **A goal session parked at shutdown records `Parked`, but nothing tells the human why.** A marker node on the transcript would turn "unanswered" into "the daemon restarted". | `crates/server/src/shutdown.rs` |
 | **B4** | **`grace_secs` is 90s; delegating turns routinely exceed it.** Median delegating turn is 26k tokens over ~4 hops. Either raise the default or document the tradeoff where an operator will see it. | `crates/server/src/shutdown.rs`, `tuning.md` |
