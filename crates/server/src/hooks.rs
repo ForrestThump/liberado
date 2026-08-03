@@ -148,7 +148,7 @@ pub async fn trigger_hook(
     if !state.drain.is_accepting() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": crate::shutdown::SHUTTING_DOWN_ERROR })),
+            Json(crate::shutdown::shutting_down_json()),
         )
             .into_response();
     }
@@ -244,6 +244,7 @@ pub async fn trigger_hook(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http_body_util::BodyExt;
 
     #[test]
     fn constant_time_eq_matches_equal_strings() {
@@ -613,7 +614,7 @@ mod tests {
 
     #[tokio::test]
     async fn hook_is_refused_with_shutting_down_during_drain() {
-        let (hook_tx, _) = unbounded_channel::<Event>();
+        let (hook_tx, mut hook_rx) = unbounded_channel::<Event>();
         let mut hooks = HashMap::new();
         hooks.insert(
             "nightly-backup".to_string(),
@@ -662,5 +663,18 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "shutting_down");
+        assert!(
+            body["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("shutting down"))
+        );
+        // Receiver must still be alive — the gate dropped the request before enqueue.
+        assert!(
+            hook_rx.try_recv().is_err(),
+            "drain-gated hook must not push an event"
+        );
     }
 }
