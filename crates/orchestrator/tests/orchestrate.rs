@@ -1465,18 +1465,11 @@ fn long_findings_report() -> CompletionResponse {
     )])
 }
 
-/// R6: a research `DispatchSubagent` with `Delivery::Summarize` (the chat `delegate` shape) must
-/// put the **relay contract** into the system prompt the subagent actually receives — asserted on
-/// the provider's recorded request, not on `output_contract`'s return value, which is what
-/// `e0fde79`'s own tests already cover.
-///
-/// Scope, stated honestly (R5): this proves the contract is **delivered**. It cannot prove the
-/// subagent then writes more, because a scripted mock ignores its prompt. "Findings reach the face"
-/// is only observable against a real model — see the live check in the PR body.
-///
-/// R7 wrong implementation excluded: *no contract on Summarize* (only vault path gets a directive)
-/// — the first completion's system prompt would lack "Anything you leave out is gone", and the
-/// seam would keep discarding research.
+/// A2 (Band A): the subagent system prompt must place stable content (SUBAGENT_PREAMBLE,
+/// output_contract) before varying content (success_criteria), mirroring the cache-prefix
+/// ordering PR #43 applied to the dispatcher.  Drives the real orchestrator path (rule 3:
+/// no hand-built intermediates).  Excludes the wrong implementation where criteria are
+/// inserted before the output contract.
 #[tokio::test]
 async fn subagent_system_prompt_places_stable_before_varying() {
     let provider = Arc::new(MockProvider::with_script(
@@ -1554,6 +1547,14 @@ async fn subagent_system_prompt_places_stable_before_varying() {
     );
 }
 
+/// R6: a research `DispatchSubagent` with `Delivery::Summarize` (the chat `delegate` shape) must
+/// put the **relay contract** into the system prompt the subagent actually receives — asserted on
+/// the provider's recorded request, not on `output_contract`'s return value, which is what
+/// `e0fde79`'s own tests already cover.
+///
+/// R7 wrong implementation excluded: *no contract on Summarize* (only vault path gets a directive)
+/// — the first completion's system prompt would lack "Anything you leave out is gone", and the
+/// seam would keep discarding research.
 #[tokio::test]
 async fn research_summarize_subagent_gets_the_relay_contract_in_its_live_prompt() {
     let provider = Arc::new(MockProvider::with_script("mock", [long_findings_report()]));
