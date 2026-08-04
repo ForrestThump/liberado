@@ -686,7 +686,7 @@ async fn forking_an_incognito_session_stays_incognito() {
 #[tokio::test]
 async fn turns_excludes_tail_copies() {
     use liberado_provider::Message;
-    use liberado_session::{GoalSessionRecord, GoalSpec, SessionRecordStore, TurnAuthor};
+    use liberado_session::{GoalSessionRecord, GoalSpec, SessionRecordStore};
     use std::sync::Arc;
 
     let dir = tempdir().unwrap();
@@ -705,26 +705,6 @@ async fn turns_excludes_tail_copies() {
     };
     store.insert(GoalSessionRecord::new(spec)).await;
 
-    // Write normal turns via append_turn
-    store
-        .append_turn(
-            "01JVAAAAAAAAAAAAAAAAAAAABB",
-            TurnAuthor::User,
-            "original question".into(),
-        )
-        .await;
-    store
-        .append_turn(
-            "01JVAAAAAAAAAAAAAAAAAAAABB",
-            TurnAuthor::Assistant,
-            "original answer".into(),
-        )
-        .await;
-
-    // Also append a tail-copy node directly onto the conversation leaf path
-    // (what compactionPersists). The append_turn calls above create Event records,
-    // not Node records in the leaf walk — but turns() reads from the leaf path
-    // (ConversationStore::leaf_path). So we also write through that channel.
     let conv_id: liberado_conversation_store::Ulid = "01JVAAAAAAAAAAAAAAAAAAAABB".parse().unwrap();
     let root_node = store
         .append(
