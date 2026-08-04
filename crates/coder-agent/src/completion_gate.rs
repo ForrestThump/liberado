@@ -336,11 +336,11 @@ struct SessionGateObserver {
 
 impl GateObserver for SessionGateObserver {
     fn on_vote(&self, vote: &RecordedVote) {
-        let _ = self.tx.try_send(SessionEvent::new(
+        let event = SessionEvent::new(
             &self.session_id,
             SessionEventKind::CriticVerdict {
                 reviewer: vote.reviewer.clone(),
-                kind: format!("{:?}", vote.kind).to_lowercase(),
+                kind: kind_label(vote.kind).to_string(),
                 approved: matches!(vote.vote, ReviewVote::Approve),
                 issues: match &vote.vote {
                     ReviewVote::Refute { issues } => issues.clone(),
@@ -348,7 +348,13 @@ impl GateObserver for SessionGateObserver {
                 },
                 coerced: vote.was_coerced(),
             },
-        ));
+        );
+        if let Err(e) = self.tx.try_send(event) {
+            tracing::warn!(
+                channel_error = ?e,
+                "live gate vote dropped — session event channel full or closed"
+            );
+        }
     }
 }
 
