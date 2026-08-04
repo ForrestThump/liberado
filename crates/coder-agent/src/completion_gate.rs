@@ -23,11 +23,17 @@ use liberado_coder_core::{
 use liberado_provider::{CompletionRequest, Message, Provider};
 use liberado_session::{
     CompletionGate, GateError, GateEvidence, GateObserver, GateOutcome, RecordedVote, ReviewVote,
-    Reviewer, ReviewerKind, VerifierStatus, VerifierVerdict,
+    Reviewer, ReviewerKind, SessionEvent, SessionEventKind, VerifierStatus, VerifierVerdict,
 };
 use serde_json::json;
 use std::sync::Arc;
 use tokio::process::Command;
+use tokio::sync::mpsc;
+
+tokio::task_local! {
+    /// When set before `CoderBackend::run()`, gate votes stream live to the session bus.
+    pub(crate) static LIVE_GATE: (mpsc::Sender<SessionEvent>, String);
+}
 
 use crate::CoderProviderFactory;
 use crate::critic::parse_critic_verdict;
@@ -307,6 +313,45 @@ impl GateObserver for TraceObserver<'_> {
     }
 }
 
+/// Fans out each vote to two observers — the coder trace (for the run log) and the session
+/// event bus (for the live frontend, C2).
+struct FanoutObserver<'a> {
+    a: &'a dyn GateObserver,
+    b: &'a dyn GateObserver,
+}
+
+impl GateObserver for FanoutObserver<'_> {
+    fn on_vote(&self, vote: &RecordedVote) {
+        self.a.on_vote(vote);
+        self.b.on_vote(vote);
+    }
+}
+
+/// Streams gate votes to the session event bus as they are cast, so the frontend sees
+/// the gate deliberating rather than one verdict at the end (C2).
+struct SessionGateObserver {
+    session_id: String,
+    tx: mpsc::Sender<SessionEvent>,
+}
+
+impl GateObserver for SessionGateObserver {
+    fn on_vote(&self, vote: &RecordedVote) {
+        let _ = self.tx.try_send(SessionEvent::new(
+            &self.session_id,
+            SessionEventKind::CriticVerdict {
+                reviewer: vote.reviewer.clone(),
+                kind: format!("{:?}", vote.kind).to_lowercase(),
+                approved: matches!(vote.vote, ReviewVote::Approve),
+                issues: match &vote.vote {
+                    ReviewVote::Refute { issues } => issues.clone(),
+                    _ => Vec::new(),
+                },
+                coerced: vote.was_coerced(),
+            },
+        ));
+    }
+}
+
 /// Build the reviewers and run the gate for one attempt.
 ///
 /// Reviewer role configs fall back to `[critic]`, so enabling the gate costs no extra config. Every
@@ -358,10 +403,24 @@ pub async fn run_gate(
     }
     let fresh_refs: Vec<&dyn Reviewer> = fresh_owned.iter().map(|r| r as &dyn Reviewer).collect();
 
-    let observer = TraceObserver { events };
-    Ok(gate
-        .evaluate(&evidence, &keeper, &fresh_refs, &observer)
-        .await)
+    let trace_obs = TraceObserver { events };
+    if let Ok(chan) = LIVE_GATE.try_with(|(tx, id)| (tx.clone(), id.clone())) {
+        let session_obs = SessionGateObserver {
+            session_id: chan.1,
+            tx: chan.0,
+        };
+        let fanout = FanoutObserver {
+            a: &trace_obs,
+            b: &session_obs,
+        };
+        Ok(gate
+            .evaluate(&evidence, &keeper, &fresh_refs, &fanout)
+            .await)
+    } else {
+        Ok(gate
+            .evaluate(&evidence, &keeper, &fresh_refs, &trace_obs)
+            .await)
+    }
 }
 
 async fn build_reviewer(
