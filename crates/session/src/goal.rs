@@ -379,9 +379,9 @@ pub fn check_session_invariants(record: &GoalSessionRecord) -> Result<(), String
         return Err(format!("terminal {:?} must not be awaiting_input", status));
     }
     if status == SessionStatus::Parked {
-        if !awaiting {
-            return Err("Parked session must have awaiting_input true".into());
-        }
+        // E6: parked while awaiting a human → awaiting_input is true.
+        // B1: parked mid-execution by the shutdown drain → awaiting_input is false.
+        // Both are valid; the only forbidden Parked state is one that claims to be finished.
         if finished {
             return Err("Parked session must have finished_at None".into());
         }
