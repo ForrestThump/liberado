@@ -88,49 +88,49 @@ If it genuinely cannot be measured yet, say why. Two recent PRs did exactly that
 56% of all token spend is the orchestrator's ~11k base context re-sent every hop; the full
 measurement is in [`token-economics-findings-2026-08.md`](token-economics-findings-2026-08.md).
 
-**Landed 2026-08-03 — do not re-pick:** catalog instrumentation (#42), dispatcher prompt cache
-ordering (#43), `repeat_calls` in `liberado-cost` (#44). Three new instruments exist and **none of
-them has been read yet.** That is A1.
+**Landed — do not re-pick:** catalog instrumentation (#42), dispatcher prompt ordering (#43),
+`repeat_calls` in cost (#44), subagent prompt ordering (#46), `--json` output (#49).
 
 | # | What | Pointer |
 |---|---|---|
-| **A1** | **Deploy, wait a day, and report what the three new instruments say.** Offered-vs-surviving MCP counts and schema token size (#42); dispatcher cache-hit rate, which should rise from 22.3% now that the stable catalog leads (#43); and total `repeat_calls` (#44). All three were built to answer questions nobody can currently answer. **This is measurement, not a fix** — the narrowing change gets specced from what comes back. Put the numbers in the PR. | `liberado-cost`, `docker logs` |
-| **A2** | **The subagent system prompt has the same ordering bug #43 just fixed — on the 92.8% bucket.** `subagent_instructions` emits `SUBAGENT_PREAMBLE` (stable), then **per-dispatch success criteria** (varying), and `output_contract` is appended *after* that — so a long, fully stable directive sits downstream of varying text and cannot cache. Put stable content first, varying last, exactly as the dispatcher now does. | [`orchestrator/src/lib.rs:1519`](../../crates/orchestrator/src/lib.rs#L1519) |
-| **A3** | **Narrow the tool catalog.** Blocked on A1 — do not start until the instrumentation says *why* the base is a flat ~11k. Four candidate causes are listed in the findings doc; picking one without data is how you spend a week on the wrong one. | blocked |
+| **A1** | **Deploy, wait a day, and report what the instruments say.** Nothing landed since #42 has been read. Offered-vs-surviving MCP counts and schema token size; dispatcher cache hit, which should rise from 22.3%; subagent-role split (what share of the 92.8% is delegation vs direct); and total `repeat_calls`. `--json` makes it scriptable. **Measurement only** — A2 gets specced from the answers. | `liberado-cost --json`, `docker logs` |
+| **A2** | **Narrow the tool catalog.** Blocked on A1. Four candidate causes are in the findings doc; picking one without data is how you spend a week on the wrong one. | blocked |
+| **A3** | **Check the face agent's prompt for the same ordering shape** #43 and #46 fixed. Two of three prompt builders had varying content ahead of stable; nobody has looked at the third. | `crates/main-agent/` |
 
 ## Band B — correctness and honesty gaps (each found and left open deliberately)
 
-**Landed 2026-08-03 — do not re-pick:** hooks are now drain-gated (#45).
+**Landed — do not re-pick:** hooks drain-gated (#45), parked-at-shutdown marker (#47), drain grace
+default + tradeoff documented (#51).
 
 | # | What | Pointer |
 |---|---|---|
-| **B2** | **`ExecuteDirect` gets no output contract**, and `DIRECT_INSTRUCTIONS` asks for a *"concise, high-signal result"* — the shape of the seam bug. **Do not blanket-fix**: it carries no `Delivery`, so appending the relay directive would tell every cron and vault run to write documents. Needs a destination first. Read the doc before touching. | [`delegated-work-is-discarded-at-the-seam.md`](delegated-work-is-discarded-at-the-seam.md) |
-| **B3** | **A goal session parked at shutdown records `Parked`, but nothing tells the human why.** A marker node on the transcript would turn "unanswered" into "the daemon restarted". | `crates/server/src/shutdown.rs` |
-| **B4** | **`grace_secs` is 90s; delegating turns routinely exceed it.** Median delegating turn is 26k tokens over ~4 hops. Either raise the default or document the tradeoff where an operator will see it. | `crates/server/src/shutdown.rs`, `tuning.md` |
+| **B1** | **A drain-parked goal rehydrates as `Failed`, not `Parked`** — so it is not resumable, which contradicts the reason the drain parks rather than cancels. `Parked` is non-terminal, and rehydrate coerces non-terminal to `Failed` unless the session was awaiting a human, which a drain-park never is. Pinned by `a_drain_parked_session_rehydrates_as_failed_today`. **Read the resumability hazards first** — the coding pack refuses to resume once a build has started. | [`session/src/store.rs`](../../crates/session/src/store.rs) |
+| **B2** | **`ExecuteDirect` gets no output contract**, and `DIRECT_INSTRUCTIONS` asks for a *"concise, high-signal result"* — the shape of the seam bug. **Do not blanket-fix**: it carries no `Delivery`, so this would tell every cron and vault run to write documents. Needs a destination first. | [`delegated-work-is-discarded-at-the-seam.md`](delegated-work-is-discarded-at-the-seam.md) |
+| **B3** | **An intermittent workspace-test failure**, seen once in ~6 full runs and not reproduced since. Suspect a tracing-subscriber or shared-state interaction between crates under parallel execution. Worth catching with a loop before it becomes a mystery. | workspace |
 
 ## Band C — agentic coding (S2 leftovers, then S3+)
 
 Plan: [`coding-tui-plan.md`](coding-tui-plan.md). S1 landed, S2 partial.
 
+**Landed — do not re-pick:** `GET /api/goals/{id}/diff` (#52), live gate-vote streaming (#53).
+
 | # | What | Pointer |
 |---|---|---|
-| **C1** | **`GET /api/goals/{id}/diff`** — does not exist. The goal surface can show file-changed events but not the diff itself. | `crates/server/src/api/goals.rs` |
-| **C2** | **Gate votes reach the wire batched at attempt end, not live.** The kernel's `GateObserver` supports live emission; `CoderBackend::run` has no `SessionEvent` sender to plumb it through. Wiring one is the remaining half of "watch the quorum vote". | `crates/coder-*` |
-| **C3** | **Dedicated goal-view panes** — role timeline, gate panel, verifier panel as separate widgets. Gate votes and file changes currently render inline in the joined pane. | `crates/tui/` |
-| **C4** | **`WorktreeWorkspace` does not exist**, and its absence is the only thing preventing a workspace race: `dispatch_parallel` is built but unreachable, `delegate` is synchronous, the executor runs tools serially. **Isolation must land before any of those change** — [`agentic-loops.md`](../spec/architecture/agentic-loops.md) §Concurrency, rule 11. Large; scope a slice. | new |
+| **C1** | **Dedicated goal-view panes** — role timeline, gate panel, verifier panel as separate widgets. Gate votes now arrive live (#53) but still render inline in the joined pane, so the streaming has nowhere good to land. | `crates/tui/` |
+| **C2** | **`WorktreeWorkspace` does not exist**, and its absence is the only thing preventing a workspace race: `dispatch_parallel` is built but unreachable, `delegate` is synchronous, the executor runs tools serially. **Isolation must land before any of those change** — [`agentic-loops.md`](../spec/architecture/agentic-loops.md) §Concurrency, rule 11. Large; scope a slice. | new |
+| **C3** | **S3: project authorization.** Untouched. | [`coding-tui-plan.md`](coding-tui-plan.md) |
 
 ## Band D — breadth, low risk, easy to close unmerged
 
+**Landed — do not re-pick:** cost `--json` (#49), Telegram `/help` (#50), subagent provider bundling
+(#48).
+
 | # | What | Pointer |
 |---|---|---|
-| **D1** | **External dependency audit.** Unused deps, duplication, version drift across every `Cargo.toml`. Goal is compile wall-clock, so measure before/after and put both numbers in the PR. | workspace |
-| **D2** | **`liberado-cost` has no `--json` output.** Every consumer today is a human reading a table; a machine-readable mode makes the token work scriptable. | `crates/cost/src/report.rs` |
-| **D3** | **`provenance_ratio` and `delegation_cost` are examples, not subcommands.** If they earn their keep, promote them. If they do not, say so. | `crates/cost/examples/` |
-| **D4** | **Compaction tail copies still exist on disk.** Any *new* reader walking a raw leaf path must skip `Author::is_compaction_tail_copy()`. Audit existing readers for ones that do not. | `crates/conversation-store/` |
-| **D4b** | **`RoleProviders.subagent_worker` is unwrapped with `.expect()` at two bootstrap sites.** It is always built alongside `subagent`, so this cannot fire today — but it is a panic on the daemon start path guarded only by construction order. Make the invariant structural or drop the `Option`. | [`bootstrap/src/lib.rs`](../../crates/bootstrap/src/lib.rs) |
-| **D5** | **Telegram has no `/help` for the commands it actually supports.** It gained `/stop` and scoped `/model`; the help text predates both. | `crates/server/src/telegram.rs` |
-
----
+| **D1** | **External dependency audit.** Unused deps, duplication, version drift across every `Cargo.toml`. Goal is compile wall-clock — measure before/after and put both numbers in the PR. | workspace |
+| **D2** | **Promote `provenance_ratio` / `delegation_cost` from examples to subcommands** if they earn it. Both now have a `--json` sibling to be consistent with. | `crates/cost/examples/` |
+| **D3** | **Compaction tail copies still exist on disk.** Any reader walking a raw leaf path must skip `Author::is_compaction_tail_copy()`. Audit existing readers for ones that do not. | `crates/conversation-store/` |
+| **D4** | **`liberado-cost` prices nothing** because the box declares no `[[models]]` rates, so every report reads `unpriced`. Config-only; the schema and the doc are already there. | [`tuning.md`](../spec/reference/tuning.md) |
 
 ## Not available
 
