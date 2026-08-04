@@ -600,6 +600,50 @@ pub async fn run_strategist(
 
 #[cfg(test)]
 mod tests {
+    /// C2's actual wiring: a vote must land on the session bus as a `CriticVerdict`, carrying the
+    /// reviewer, whether it approved, and any refuting issues.
+    ///
+    /// Scope (R5): this covers the observer — the piece the branch adds — not the gate's voting
+    /// logic, which the existing gate tests own. The observer is where a wrong event kind or a
+    /// dropped field would land, and nothing else asserts it.
+    #[tokio::test]
+    async fn a_vote_reaches_the_session_bus_as_a_critic_verdict() {
+        use liberado_session::{ReviewVote, ReviewerKind, SessionEventKind};
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let obs = super::SessionGateObserver {
+            session_id: "s-1".into(),
+            tx,
+        };
+
+        obs.on_vote(&super::RecordedVote {
+            reviewer: "critic-a".into(),
+            kind: ReviewerKind::Fresh,
+            vote: ReviewVote::Refute {
+                issues: vec!["tests do not cover the new branch".into()],
+            },
+            coerced_from: None,
+        });
+
+        let ev = rx.try_recv().expect("the vote must reach the bus");
+        match ev.kind {
+            SessionEventKind::CriticVerdict {
+                reviewer,
+                approved,
+                issues,
+                ..
+            } => {
+                assert_eq!(reviewer, "critic-a");
+                assert!(!approved, "a Refute must not read as approved");
+                assert_eq!(
+                    issues,
+                    vec!["tests do not cover the new branch".to_string()]
+                );
+            }
+            other => panic!("expected CriticVerdict, got {other:?}"),
+        }
+    }
+
     use super::*;
     use liberado_coder_core::{Verdict, VerdictStatus};
 
