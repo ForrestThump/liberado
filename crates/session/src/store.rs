@@ -251,20 +251,18 @@ impl GoalSessionStore {
                     if status.is_terminal() {
                         s.record.finished_at = Some(Utc::now());
                     }
-                    Some(s.record.finished_at)
+                    s.record.finished_at
                 }
                 None => None,
             }
         };
-        if let Some(finished_at) = finished_at {
-            self.append(
-                id,
-                &LogLine::Status {
-                    status,
-                    finished_at,
-                },
-            );
-        }
+        self.append(
+            id,
+            &LogLine::Status {
+                status,
+                finished_at,
+            },
+        );
     }
 
     pub async fn finish(&self, id: &str, status: SessionStatus, result: GoalResult) {

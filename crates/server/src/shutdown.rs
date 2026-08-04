@@ -930,7 +930,7 @@ mod tests {
         );
         let has_marker = snap.events.iter().any(|e| {
             matches!(&e.kind, liberado_session::SessionEventKind::Progress { message }
-                if message.contains("daemon restarted"))
+                if message.contains("shutting down"))
         });
         assert!(
             has_marker,

@@ -513,7 +513,10 @@ fn replay_file(path: &Path) -> Result<Option<Live>, String> {
     // to `Parked` instead (still non-terminal, still answerable once a resume path is wired). A
     // mid-build session without `awaiting_input` still becomes Failed — packs are not resumable yet.
     if header.goal.is_some() && !header.status.is_terminal() {
-        if header.awaiting_input {
+        // A session already Parked by a previous shutdown must not be re-flagged.
+        if header.status == SessionStatus::Parked {
+            // Parked is already correct — no coercion needed.
+        } else if header.awaiting_input {
             header.status = SessionStatus::Parked;
             // Keep awaiting_input true so the UI still shows "needs you".
             events.push(SessionEvent::new(
@@ -973,20 +976,18 @@ impl SessionRecordStore for SessionStore {
                     if status.is_terminal() {
                         live.header.finished_at = Some(Utc::now());
                     }
-                    Some(live.header.finished_at)
+                    live.header.finished_at
                 }
                 None => None,
             }
         };
-        if let Some(finished_at) = finished_at {
-            self.append_line(
-                ulid,
-                &Record::Status {
-                    status,
-                    finished_at,
-                },
-            );
-        }
+        self.append_line(
+            ulid,
+            &Record::Status {
+                status,
+                finished_at,
+            },
+        );
     }
 
     async fn finish(&self, id: &str, status: SessionStatus, result: GoalResult) {

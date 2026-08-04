@@ -540,7 +540,8 @@ impl GoalSessionHub {
                     .push_event(SessionEvent::new(
                         &id,
                         SessionEventKind::Progress {
-                            message: "Session paused — the daemon restarted".into(),
+                            message: "Session paused — daemon shutting down; pack did not respond"
+                                .into(),
                         },
                     ))
                     .await;
