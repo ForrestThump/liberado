@@ -22,7 +22,7 @@
 //! | Chat Telegram free-form | `TelegramChatBridge` checks `drain.is_accepting()` | **yes** (capability, not this middleware) |
 //! | Goals HTTP `POST /api/goals` | same refuse middleware as chat starts | **yes** |
 //! | Goals HTTP cancel/park/message/stream/list | do not start new goal work | no (manage in-flight) |
-//! | Hooks `POST /api/hooks/{name}` | enqueue daemon events; may later start sessions | **not** HTTP-gated here — event loop stops after drain completes (`lib.rs`); new hooks during drain are rare and not turn-shaped |
+//! | Hooks `POST /api/hooks/{name}` | `trigger_hook` checks `drain.is_accepting()` | **yes** |
 //! | Cron | scheduled fires into the daemon event loop | **not** HTTP — loop stops after drain; no new cron processing once process exits |
 //! | Vault reactions | watcher → reactions while daemon runs | **not** HTTP — stopped with the process after drain |
 //!

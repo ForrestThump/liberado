@@ -145,6 +145,14 @@ pub async fn trigger_hook(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
+    if !state.drain.is_accepting() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(crate::shutdown::shutting_down_json()),
+        )
+            .into_response();
+    }
+
     let Some(hook) = state.hooks.get(&name) else {
         return error(StatusCode::NOT_FOUND, "unknown or disabled hook");
     };
@@ -236,6 +244,7 @@ pub async fn trigger_hook(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http_body_util::BodyExt;
 
     #[test]
     fn constant_time_eq_matches_equal_strings() {
@@ -600,6 +609,72 @@ mod tests {
         assert!(
             hook_rx.try_recv().is_err(),
             "a repeated idempotency key must not push a second event"
+        );
+    }
+
+    #[tokio::test]
+    async fn hook_is_refused_with_shutting_down_during_drain() {
+        let (hook_tx, mut hook_rx) = unbounded_channel::<Event>();
+        let mut hooks = HashMap::new();
+        hooks.insert(
+            "nightly-backup".to_string(),
+            ResolvedHook {
+                secret: "shh".to_string(),
+                goal: "back up the vault".to_string(),
+                pool: None,
+                profile: None,
+            },
+        );
+        let state = Arc::new(AppState {
+            start_time: Instant::now(),
+            reactions: Arc::new(Mutex::new(Vec::new())),
+            dispatcher_attached: false,
+            orchestrator_attached: false,
+            vault_path: "/tmp/vault".to_string(),
+            goals: Arc::new(liberado_session::GoalSessionHub::new(
+                liberado_session::GoalSessionStore::new(),
+            )),
+            chat: None,
+            chat_tools: 0,
+            chat_tool_names: Vec::new(),
+            catalog: Arc::new(CapabilityCatalog::new()),
+            data_dir: std::path::PathBuf::from("/tmp/liberado"),
+            sessions_root: std::path::PathBuf::from("/tmp/liberado/sessions"),
+            main_agent_capabilities: liberado_common::CapabilitySet::empty(),
+            dispatcher_capabilities: liberado_common::CapabilitySet::empty(),
+            config: Arc::new(Default::default()),
+            sessions: Arc::new(Default::default()),
+            model_name: None,
+            provider: None,
+            hooks,
+            hook_tx,
+            hook_idempotency: IdempotencyCache::default(),
+            live_mcp: liberado_bootstrap::LiveMcpController::empty(),
+            drain: crate::shutdown::DrainGate::default(),
+        });
+        state.drain.begin_drain();
+        assert!(!state.drain.is_accepting());
+        let app = Router::new()
+            .route("/api/hooks/{name}", axum::routing::post(trigger_hook))
+            .with_state(state);
+
+        let response = app
+            .oneshot(post("/api/hooks/nightly-backup", Some("shh"), ""))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "shutting_down");
+        assert!(
+            body["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("shutting down"))
+        );
+        // Receiver must still be alive — the gate dropped the request before enqueue.
+        assert!(
+            hook_rx.try_recv().is_err(),
+            "drain-gated hook must not push an event"
         );
     }
 }
