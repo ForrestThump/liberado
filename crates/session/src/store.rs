@@ -517,7 +517,7 @@ mod tests {
     /// rehydrate as `Parked`: that status was explicitly recorded, and the point of parking rather
     /// than cancelling at shutdown is exactly that the session should be resumable afterwards.
     #[tokio::test]
-    async fn a_drain_parked_session_rehydrates_as_failed_today() {
+    async fn a_drain_parked_session_rehydrates_as_parked() {
         let dir = std::env::temp_dir().join(format!("liberado-goals-test-{}", ulid::Ulid::new()));
         {
             let store = GoalSessionStore::open(&dir).await;
@@ -882,8 +882,9 @@ mod proptest_tests {
     }
 
     /// Non-terminal statuses only. A terminal `set_status` would set `finished_at` without a
-    /// `result` (the store's terminal path is `finish`), and `Parked` requires `awaiting_input`,
-    /// which no op here can set — neither can ever satisfy `check_session_invariants`.
+    /// `result` (the store's terminal path is `finish`). `Parked` is excluded because the ops
+    /// never set `awaiting_input` — generating a B1 drain-park would be valid, but an E6 parked
+    /// session requires `awaiting_input = true` which no op here can produce.
     fn nonterminal_status() -> impl Strategy<Value = SessionStatus> {
         prop_oneof![Just(SessionStatus::Pending), Just(SessionStatus::Running),]
     }
