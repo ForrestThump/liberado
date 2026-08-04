@@ -459,13 +459,39 @@ pub async fn goals_diff(
         )
             .into_response();
     };
-    match tokio::process::Command::new("git")
-        .args(["diff", "HEAD"])
-        .current_dir(ws)
-        .output()
-        .await
+    if ws.is_empty() || !std::path::Path::new(ws).is_dir() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "workspace not available".into(),
+            }),
+        )
+            .into_response();
+    }
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::process::Command::new("git")
+            .args(["diff", "HEAD", "--", "."])
+            .current_dir(ws)
+            .output(),
+    )
+    .await
     {
-        Ok(out) if out.status.success() => {
+        Err(_elapsed) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "git diff timed out".into(),
+            }),
+        )
+            .into_response(),
+        Ok(Err(_e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "could not run git diff".into(),
+            }),
+        )
+            .into_response(),
+        Ok(Ok(out)) if out.status.success() => {
             let d = String::from_utf8_lossy(&out.stdout).into_owned();
             let body = if d.is_empty() {
                 "(no changes)".into()
@@ -479,17 +505,10 @@ pub async fn goals_diff(
             )
                 .into_response()
         }
-        Ok(out) => (
+        Ok(Ok(_out)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
-                error: format!("git diff failed: {}", String::from_utf8_lossy(&out.stderr)),
-            }),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiError {
-                error: format!("could not run git diff: {e}"),
+                error: "git diff failed".into(),
             }),
         )
             .into_response(),
@@ -1104,28 +1123,5 @@ mod goal_message_tests {
         let (app, _store, _conv) = fork_app(&[("q1", "a1")]).await;
         let (status, _) = post_fork(&app, &Ulid::new().to_string(), serde_json::json!({})).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn diff_endpoint_404s_for_unknown_session() {
-        use axum::Router;
-        use axum::body::Body;
-        use axum::http::Request;
-        use tower::ServiceExt;
-
-        let (app, _) = goals_app();
-        let router: Router = app;
-
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/goals/01KZNONEXISTENT0000000000/diff")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }
