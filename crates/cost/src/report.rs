@@ -1,9 +1,10 @@
 //! Human-readable cost report tables.
 
 use crate::rollup::{ConversationRollup, RoleRollup, TurnGrowth, UnpricedLine};
+use serde::{Deserialize, Serialize};
 
 /// Full cost query result.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Report {
     pub conversations: Vec<ConversationRollup>,
     pub roles: Vec<RoleRollup>,

@@ -922,12 +922,22 @@ mod tests {
         );
 
         // No polling: the process is about to exit, so whatever is on disk *now* is what survives.
-        let status = goals.snapshot(&id).await.expect("record").session.status;
+        let snap = goals.snapshot(&id).await.expect("record");
         assert_eq!(
-            status,
+            snap.session.status,
             SessionStatus::Parked,
             "a pack that could not observe the signal must still be recorded Parked before exit — \
-             found {status:?}, which is a session no human can act on"
+             found {:?}, which is a session no human can act on",
+            snap.session.status
+        );
+        let has_marker = snap.events.iter().any(|e| {
+            matches!(&e.kind, liberado_session::SessionEventKind::Progress { message }
+                if message.contains("shutting down"))
+        });
+        assert!(
+            has_marker,
+            "parked session must have a Progress event explaining why: {:?}",
+            snap.events
         );
     }
 }
