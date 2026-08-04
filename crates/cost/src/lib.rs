@@ -307,6 +307,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn report_serializes_to_json_and_round_trips() {
+        let events = vec![event("conv-a", "face", "m", Some(1000), Some(100), None, 1)];
+        let prices = price_table_from_pairs([("m", rates(1.0, 2.0, 0.1))]);
+        let report = report_from_parts(&events, &HashMap::new(), &prices);
+
+        let json = serde_json::to_string_pretty(&report).expect("serialize");
+        assert!(json.contains("conv-a"));
+        assert!(json.contains("total_cost_usd"));
+
+        let round_tripped: Report = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(round_tripped.event_count, report.event_count);
+        assert_eq!(round_tripped.priced_calls, report.priced_calls);
+    }
+
     /// Summing parent rows does not double-count child money; querying child scope alone is direct-only.
     #[test]
     fn no_double_count_when_child_also_queried() {
