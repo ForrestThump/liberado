@@ -427,6 +427,75 @@ fn session_event_to_sse(ev: &liberado_session::SessionEvent) -> Event {
     Event::default().event(name).data(data)
 }
 
+/// `GET /api/goals/{id}/diff` — workspace `git diff HEAD` for a coding goal session.
+pub async fn goals_diff(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let snap = match state.goals.snapshot(&id).await {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiError {
+                    error: format!("goal session '{id}' not found"),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(ws) = snap
+        .session
+        .goal
+        .payload
+        .get("workspace_root")
+        .and_then(|v| v.as_str())
+    else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "this goal session has no workspace (not a coding session)".into(),
+            }),
+        )
+            .into_response();
+    };
+    match tokio::process::Command::new("git")
+        .args(["diff", "HEAD"])
+        .current_dir(ws)
+        .output()
+        .await
+    {
+        Ok(out) if out.status.success() => {
+            let d = String::from_utf8_lossy(&out.stdout).into_owned();
+            let body = if d.is_empty() {
+                "(no changes)".into()
+            } else {
+                d
+            };
+            (
+                StatusCode::OK,
+                [("content-type", "text/plain; charset=utf-8")],
+                body,
+            )
+                .into_response()
+        }
+        Ok(out) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: format!("git diff failed: {}", String::from_utf8_lossy(&out.stderr)),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: format!("could not run git diff: {e}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 #[cfg(test)]
 mod goal_message_tests {
     //! HTTP-level integration tests for `POST /api/goals/{id}/message`, against a real `axum::Router`
@@ -1035,5 +1104,28 @@ mod goal_message_tests {
         let (app, _store, _conv) = fork_app(&[("q1", "a1")]).await;
         let (status, _) = post_fork(&app, &Ulid::new().to_string(), serde_json::json!({})).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn diff_endpoint_404s_for_unknown_session() {
+        use axum::Router;
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let (app, _) = goals_app();
+        let router: Router = app;
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/goals/01KZNONEXISTENT0000000000/diff")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }
