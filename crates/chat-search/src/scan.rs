@@ -371,6 +371,53 @@ mod tests {
         assert!(sr.matches.is_empty());
         assert_eq!(sr.total_found, 0);
     }
+
+    /// Tail copies (`Author::Named("compaction-tail")`) duplicate text that is
+    /// already earlier in the log as the original. The scanner must skip them or
+    /// one message would report as two search hits.
+    #[tokio::test]
+    async fn scanner_skips_compaction_tail_copies() {
+        let dir = TempDir::new().unwrap();
+        write_fixture(
+            &dir,
+            "01JVAAAAAAAAAAAAAAAAAAAAAA.jsonl",
+            &[
+                &header("01JVAAAAAAAAAAAAAAAAAAAAAA", None, "2026-01-01T00:00:00Z"),
+                // Original — should match
+                &node(
+                    "01JVAAAAAAAAAAAAAAAAAAAAB1",
+                    "01JVAAAAAAAAAAAAAAAAAAAAAA",
+                    "user",
+                    "hello world",
+                    "2026-01-02T00:00:00Z",
+                ),
+                // Tail copy of the same content — must NOT produce a second hit
+                r#"{{"kind":"node","id":"01JVAAAAAAAAAAAAAAAAAAAAB2","parent_id":"01JVAAAAAAAAAAAAAAAAAAAAB1","conversation_id":"01JVAAAAAAAAAAAAAAAAAAAAAA","author":{"named":"compaction-tail"},"created_at":"2026-01-03T00:00:00Z","message":{"role":"assistant","content":"hello world","tool_calls":[],"tool_call_id":null}}"#,
+                // Another original with different content — should match
+                &node(
+                    "01JVAAAAAAAAAAAAAAAAAAAAB3",
+                    "01JVAAAAAAAAAAAAAAAAAAAAAA",
+                    "assistant",
+                    "goodbye moon",
+                    "2026-01-04T00:00:00Z",
+                ),
+                // Tail copy of that too — must NOT produce a third hit
+                r#"{{"kind":"node","id":"01JVAAAAAAAAAAAAAAAAAAAAB4","parent_id":"01JVAAAAAAAAAAAAAAAAAAAAB3","conversation_id":"01JVAAAAAAAAAAAAAAAAAAAAAA","author":{"named":"compaction-tail"},"created_at":"2026-01-05T00:00:00Z","message":{"role":"assistant","content":"goodbye moon","tool_calls":[],"tool_call_id":null}}"#,
+            ],
+        );
+        let q = ParsedQuery::parse_literal("hello").unwrap();
+        let sr = search(dir.path(), &q, 10).await.unwrap();
+        // Only the original "hello world" should match; tail copy is skipped.
+        assert_eq!(sr.matches.len(), 1);
+        assert_eq!(sr.matches[0].matches.len(), 1);
+        assert!(sr.matches[0].matches[0].content_snippet.contains("hello"));
+
+        // "goodbye" search should also return 1 hit (original only, not the tail copy)
+        let q2 = ParsedQuery::parse_literal("goodbye").unwrap();
+        let sr2 = search(dir.path(), &q2, 10).await.unwrap();
+        assert_eq!(sr2.matches.len(), 1);
+        assert_eq!(sr2.matches[0].matches.len(), 1);
+    }
 }
 
 #[cfg(test)]

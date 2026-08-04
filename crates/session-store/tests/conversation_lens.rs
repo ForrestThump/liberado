@@ -677,3 +677,123 @@ async fn forking_an_incognito_session_stays_incognito() {
     assert!(fork.ephemeral);
     assert_eq!(logs_in(dir.path()), Vec::<String>::new());
 }
+
+// ── D3: compaction tail copy filter in turns() ──────────────────────────────
+
+/// `turns()` walks the leaf path and must skip `Author::Named("compaction-tail")`
+/// nodes, or the kept tail from every compaction would appear as duplicate
+/// transcript entries in goal sessions.
+#[tokio::test]
+async fn turns_excludes_tail_copies() {
+    use liberado_provider::Message;
+    use liberado_session::{GoalSessionRecord, GoalSpec, SessionRecordStore, TurnAuthor};
+    use std::sync::Arc;
+
+    let dir = tempdir().unwrap();
+    let store = Arc::new(store_at(dir.path()).await);
+
+    let spec = GoalSpec {
+        id: Some("01JVAAAAAAAAAAAAAAAAAAAABB".into()),
+        description: "test session".into(),
+        success_criteria: vec![],
+        domain: liberado_session::DomainHint::Life,
+        max_turns: 0,
+        max_idle_secs: None,
+        origin: None,
+        profile: None,
+        payload: serde_json::Value::Null,
+    };
+    store.insert(GoalSessionRecord::new(spec)).await;
+
+    // Write normal turns via append_turn
+    store
+        .append_turn(
+            "01JVAAAAAAAAAAAAAAAAAAAABB",
+            TurnAuthor::User,
+            "original question".into(),
+        )
+        .await;
+    store
+        .append_turn(
+            "01JVAAAAAAAAAAAAAAAAAAAABB",
+            TurnAuthor::Assistant,
+            "original answer".into(),
+        )
+        .await;
+
+    // Also append a tail-copy node directly onto the conversation leaf path
+    // (what compactionPersists). The append_turn calls above create Event records,
+    // not Node records in the leaf walk — but turns() reads from the leaf path
+    // (ConversationStore::leaf_path). So we also write through that channel.
+    let conv_id: liberado_conversation_store::Ulid = "01JVAAAAAAAAAAAAAAAAAAAABB".parse().unwrap();
+    let root_node = store
+        .append(
+            conv_id,
+            NewNode {
+                parent_id: None,
+                author: Author::User,
+                message: Message::user("original question"),
+                model: None,
+            },
+        )
+        .await
+        .unwrap();
+    let answer_node = store
+        .append(
+            conv_id,
+            NewNode {
+                parent_id: Some(root_node.id),
+                author: Author::Assistant,
+                message: Message::assistant("original answer"),
+                model: None,
+            },
+        )
+        .await
+        .unwrap();
+    // Append a tail copy that duplicates the answer
+    let tail_copy = store
+        .append(
+            conv_id,
+            NewNode {
+                parent_id: Some(answer_node.id),
+                author: Author::Named("compaction-tail".into()),
+                message: Message::assistant("original answer"),
+                model: None,
+            },
+        )
+        .await
+        .unwrap();
+    // Append another normal turn after the tail copy
+    store
+        .append(
+            conv_id,
+            NewNode {
+                parent_id: Some(tail_copy.id),
+                author: Author::User,
+                message: Message::user("next question"),
+                model: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let turns = store.turns("01JVAAAAAAAAAAAAAAAAAAAABB").await;
+    // "original answer" must appear exactly once — the tail copy is filtered
+    let answer_occurrences: Vec<_> = turns
+        .iter()
+        .filter(|(_, t)| t == "original answer")
+        .collect();
+    assert_eq!(
+        answer_occurrences.len(),
+        1,
+        "tail copy of 'original answer' must be filtered; got {answer_occurrences:?}"
+    );
+    assert!(
+        turns.iter().any(|(_, t)| t == "original question"),
+        "original question must be in turns"
+    );
+    assert!(
+        turns.iter().any(|(_, t)| t == "next question"),
+        "the turn after the tail copy must be in turns"
+    );
+}
