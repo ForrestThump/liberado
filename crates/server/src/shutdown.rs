@@ -43,9 +43,11 @@ use crate::state::AppState;
 
 /// Default in-process grace when `LIBERADO_SHUTDOWN_GRACE_SECS` is unset.
 ///
-/// Long research turns have run past 200s; Docker's default stop timeout is 10s. Production compose
-/// should set `stop_grace_period` ≥ this value so the container is not SIGKILL'd during drain.
-pub const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(90);
+/// Long research turns routinely exceed 200s; median delegating turn is ~26k tokens over ~4 hops
+/// (each hop a model roundtrip).  Docker's default stop timeout is 10s — production compose must
+/// set `stop_grace_period` ≥ this value so the container is not SIGKILL'd during drain.  Operators
+/// who need less (short chat, no delegation) can set `LIBERADO_SHUTDOWN_GRACE_SECS=90` or lower.
+pub const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(300);
 
 /// Wire error kind clients can match on when new turns are refused during drain.
 pub const SHUTTING_DOWN_ERROR: &str = "shutting_down";
@@ -650,7 +652,7 @@ mod tests {
     #[test]
     fn default_grace_is_above_docker_ten_seconds() {
         assert!(DEFAULT_SHUTDOWN_GRACE > Duration::from_secs(10));
-        assert_eq!(DEFAULT_SHUTDOWN_GRACE, Duration::from_secs(90));
+        assert_eq!(DEFAULT_SHUTDOWN_GRACE, Duration::from_secs(300));
     }
 
     // ── Goal sessions in the drain (round-2 §4) ─────────────────────────────
