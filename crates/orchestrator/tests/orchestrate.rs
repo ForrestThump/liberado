@@ -1534,12 +1534,19 @@ async fn subagent_system_prompt_places_stable_before_varying() {
         .collect::<Vec<_>>()
         .join("\n");
 
+    let preamble_pos = system_blob
+        .find("narrowly-scoped Liberado subagent")
+        .expect("must contain preamble");
     let output_pos = system_blob
         .find("OUTPUT CONTRACT")
         .expect("must contain output contract");
     let criteria_pos = system_blob
         .find("You are done when:")
         .expect("must contain success criteria");
+    assert!(
+        preamble_pos < output_pos,
+        "preamble must precede output contract; preamble at {preamble_pos}, output at {output_pos}"
+    );
     assert!(
         output_pos < criteria_pos,
         "stable output contract must precede varying success criteria; \
