@@ -21,8 +21,6 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(test)]
-use std::sync::atomic::{AtomicU64, AtomicUsize};
 
 use async_trait::async_trait;
 use liberado_common::{
@@ -42,11 +40,8 @@ use tokio::sync::Semaphore;
 use tracing::Instrument;
 
 #[cfg(test)]
-static LAST_CATALOG_OFFERED: AtomicUsize = AtomicUsize::new(0);
-#[cfg(test)]
-static LAST_CATALOG_SURVIVING: AtomicUsize = AtomicUsize::new(0);
-#[cfg(test)]
-static LAST_CATALOG_SCHEMA_EST_TOKENS: AtomicU64 = AtomicU64::new(0);
+static CATALOG_SENDER: std::sync::Mutex<Option<std::sync::mpsc::Sender<(usize, usize, u64)>>> =
+    std::sync::Mutex::new(None);
 
 /// Default `source` recorded in write provenance for orchestrated executions.
 pub const DEFAULT_SOURCE: &str = "liberado-executor";
@@ -1421,9 +1416,11 @@ impl Orchestrator {
                 let schema_est_tokens = ((schema.len() as f64) / 4.0 * 1.3).ceil() as u64;
                 #[cfg(test)]
                 {
-                    LAST_CATALOG_OFFERED.store(offered.len(), Ordering::Relaxed);
-                    LAST_CATALOG_SURVIVING.store(from_catalog, Ordering::Relaxed);
-                    LAST_CATALOG_SCHEMA_EST_TOKENS.store(schema_est_tokens, Ordering::Relaxed);
+                    if let Ok(guard) = CATALOG_SENDER.lock()
+                        && let Some(s) = guard.as_ref()
+                    {
+                        let _ = s.send((offered.len(), from_catalog, schema_est_tokens));
+                    }
                 }
                 tracing::info!(
                     mcp_offered = offered.len(),
@@ -1771,6 +1768,11 @@ mod tests {
     use liberado_executor::SUBMIT_REPORT_TOOL;
     use liberado_provider::{CompletionResponse, MockProvider};
     use liberado_test_support::CallRecordingFactory;
+
+    /// Serializes tests that touch process-global tracing subscriber state or
+    /// module-level `LAST_CATALOG_*` atomics. Two tests racing on either of
+    /// these surfaces as intermittent failures (#B3).
+    static TRACING_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn subagent_instructions_with_criteria() {
@@ -2995,6 +2997,7 @@ mod tests {
 
     #[test]
     fn execute_direct_building_line_is_emitted_at_info_level() {
+        let _guard = TRACING_GUARD.lock().unwrap();
         use std::sync::Mutex;
         use tracing::subscriber;
         use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
@@ -3058,97 +3061,63 @@ mod tests {
 
     #[test]
     fn subagent_catalog_instrumentation_sets_offered_vs_surviving_and_schema() {
-        struct SubagentCatalogRuntime;
-        #[async_trait]
-        impl ToolRuntime for SubagentCatalogRuntime {
-            fn catalog(&self) -> Vec<ToolDef> {
-                vec![
-                    ToolDef::new(
-                        "tasks-mcp:list",
-                        "list tasks",
-                        serde_json::json!({ "type": "object", "properties": {} }),
-                    ),
-                    ToolDef::new(
-                        "tasks-mcp:create",
-                        "create a task",
-                        serde_json::json!({ "type": "object", "properties": { "name": { "type": "string" } } }),
-                    ),
-                ]
-            }
-            async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
-                Ok("ok".into())
-            }
-        }
-        struct SubagentCatalogFactory;
-        #[async_trait]
-        impl RuntimeFactory for SubagentCatalogFactory {
-            async fn runtime_for(
-                &self,
-                _allowed_mcps: &[String],
-                _provenance: WriteProvenance,
-            ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
-                Ok(Box::new(SubagentCatalogRuntime))
-            }
-        }
+        let _guard = TRACING_GUARD.lock().unwrap();
 
-        LAST_CATALOG_OFFERED.store(0, Ordering::Relaxed);
-        LAST_CATALOG_SURVIVING.store(0, Ordering::Relaxed);
-        LAST_CATALOG_SCHEMA_EST_TOKENS.store(0, Ordering::Relaxed);
-        let orch = Orchestrator::new(
-            Arc::new(MockProvider::with_script(
-                "mock",
-                vec![CompletionResponse::tool_calls(vec![ToolInvocation::new(
-                    "c",
-                    SUBMIT_REPORT_TOOL,
-                    serde_json::json!({ "outcome": "succeeded", "summary": "done" }),
-                )])],
-            )),
-            SubagentCatalogFactory,
-            CapabilitySet::empty(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            std::env::temp_dir(),
-            ProposalSigner::random(),
-            "default",
-        );
-        let decision = DispatchDecision {
-            action: DispatchAction::DispatchSubagent {
-                goal: "summarize recent decisions".into(),
-                capabilities: CapabilitySet::empty(),
-                allowed_mcps: vec!["tasks-mcp".into(), "email-mcp".into()],
-                success_criteria: vec!["a summary note exists".into()],
-                artifact_target: None,
-                model: None,
-                correlation_id: "subagent-42".into(),
-                delivery: Delivery::Summarize,
-                depth: Depth::Normal,
-            },
-            confidence: 0.8,
-            rationale: "multi-step".into(),
-        };
-        // Run on a dedicated thread so the run-then-read sequence is atomic
-        // w.r.t. other tests that reach instrument_catalog and touch these
-        // process-wide statics.
-        let (offered, from_catalog, est_tokens) = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("test runtime");
-            let _ = rt.block_on(orch.run(
-                decision,
-                "outer goal",
-                "trigger-xyz",
-                &CapabilitySet::empty(),
-            ));
-            (
-                LAST_CATALOG_OFFERED.load(Ordering::Relaxed),
-                LAST_CATALOG_SURVIVING.load(Ordering::Relaxed),
-                LAST_CATALOG_SCHEMA_EST_TOKENS.load(Ordering::Relaxed),
-            )
-        })
-        .join()
-        .expect("catalog instrumentation test thread");
+        let (tx, rx) = std::sync::mpsc::channel();
+        *CATALOG_SENDER.lock().unwrap() = Some(tx);
+
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let orch = Orchestrator::new(
+                    Arc::new(MockProvider::with_script(
+                        "mock",
+                        vec![CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                            "c",
+                            SUBMIT_REPORT_TOOL,
+                            serde_json::json!({ "outcome": "succeeded", "summary": "done" }),
+                        )])],
+                    )),
+                    SubagentCatalogFactory,
+                    CapabilitySet::empty(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    std::env::temp_dir(),
+                    ProposalSigner::random(),
+                    "default",
+                );
+                let decision = DispatchDecision {
+                    action: DispatchAction::DispatchSubagent {
+                        goal: "summarize recent decisions".into(),
+                        capabilities: CapabilitySet::empty(),
+                        allowed_mcps: vec!["tasks-mcp".into(), "email-mcp".into()],
+                        success_criteria: vec!["a summary note exists".into()],
+                        artifact_target: None,
+                        model: None,
+                        correlation_id: "subagent-42".into(),
+                        delivery: Delivery::Summarize,
+                        depth: Depth::Normal,
+                    },
+                    confidence: 0.8,
+                    rationale: "multi-step".into(),
+                };
+                let _ = orch
+                    .run(
+                        decision,
+                        "outer goal",
+                        "trigger-xyz",
+                        &CapabilitySet::empty(),
+                    )
+                    .await;
+            });
+
+        *CATALOG_SENDER.lock().unwrap() = None; // drop sender before assertions
+
+        let (offered, from_catalog, est_tokens) =
+            rx.recv().expect("catalog instrumentation must fire");
 
         assert_eq!(offered, 2, "offered = allowed_mcps.len()");
         assert_eq!(
@@ -3156,5 +3125,38 @@ mod tests {
             "two MCPs offered but only tasks-mcp survives in the catalog"
         );
         assert!(est_tokens > 0, "schema must have positive token count");
+    }
+
+    struct SubagentCatalogFactory;
+    #[async_trait]
+    impl RuntimeFactory for SubagentCatalogFactory {
+        async fn runtime_for(
+            &self,
+            _allowed_mcps: &[String],
+            _provenance: WriteProvenance,
+        ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+            struct SubagentCatalogRuntime;
+            #[async_trait]
+            impl ToolRuntime for SubagentCatalogRuntime {
+                fn catalog(&self) -> Vec<ToolDef> {
+                    vec![
+                        ToolDef::new(
+                            "tasks-mcp:list",
+                            "list tasks",
+                            serde_json::json!({ "type": "object", "properties": {} }),
+                        ),
+                        ToolDef::new(
+                            "tasks-mcp:create",
+                            "create a task",
+                            serde_json::json!({ "type": "object", "properties": { "name": { "type": "string" } } }),
+                        ),
+                    ]
+                }
+                async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+                    Ok("ok".into())
+                }
+            }
+            Ok(Box::new(SubagentCatalogRuntime))
+        }
     }
 }
