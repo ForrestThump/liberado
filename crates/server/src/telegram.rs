@@ -1077,12 +1077,25 @@ mod tests {
         let (bridge, _chat, _provider) = bridge_with_provider(dir.path(), mock).await;
         let reply = bridge.reply("/help").await.unwrap();
         // Commands from the shared telegram_commands() catalog.
-        for cmd in ["/help", "/new", "/status", "/sessions", "/spawn", "/goal", "/join", "/model", "/fork"] {
+        for cmd in [
+            "/help",
+            "/new",
+            "/status",
+            "/sessions",
+            "/spawn",
+            "/goal",
+            "/join",
+            "/model",
+            "/fork",
+        ] {
             assert!(reply.contains(cmd), "/help must list {cmd}: got {reply}");
         }
         // Telegram-specific commands not in the shared catalog.
         assert!(reply.contains("/stop"), "must include /stop");
         // Shared catalog descriptions come through (not the hardcoded old text).
-        assert!(!reply.contains("switch to model"), "descriptions come from COMMAND_CATALOG, not hardcoded");
+        assert!(
+            !reply.contains("switch to model"),
+            "descriptions come from COMMAND_CATALOG, not hardcoded"
+        );
     }
 }
