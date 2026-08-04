@@ -105,6 +105,17 @@ impl TelegramChatBridge {
             return self.stop_turn().await;
         }
 
+        if matches!(head, "/help") {
+            let shared = liberado_commands::telegram_commands();
+            let mut lines: Vec<String> = shared
+                .iter()
+                .map(|(name, desc)| format!("  /{name} — {desc}"))
+                .collect();
+            lines.push("  /stop — cancel the current turn (same as /cancel)".into());
+            lines.sort();
+            return Ok(format!("Available commands:\n{}", lines.join("\n")));
+        }
+
         let cmd = parse(text).ok_or_else(|| {
             format!("Unknown command: {text}\nType /help for available commands.")
         })?;
@@ -1056,6 +1067,35 @@ mod tests {
         assert_eq!(
             second, "two",
             "an answered turn must not be decorated: {second}"
+        );
+    }
+
+    #[tokio::test]
+    async fn help_command_lists_available_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::new("m"));
+        let (bridge, _chat, _provider) = bridge_with_provider(dir.path(), mock).await;
+        let reply = bridge.reply("/help").await.unwrap();
+        // Commands from the shared telegram_commands() catalog.
+        for cmd in [
+            "/help",
+            "/new",
+            "/status",
+            "/sessions",
+            "/spawn",
+            "/goal",
+            "/join",
+            "/model",
+            "/fork",
+        ] {
+            assert!(reply.contains(cmd), "/help must list {cmd}: got {reply}");
+        }
+        // Telegram-specific commands not in the shared catalog.
+        assert!(reply.contains("/stop"), "must include /stop");
+        // Shared catalog descriptions come through (not the hardcoded old text).
+        assert!(
+            !reply.contains("switch to model"),
+            "descriptions come from COMMAND_CATALOG, not hardcoded"
         );
     }
 }

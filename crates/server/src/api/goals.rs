@@ -427,10 +427,171 @@ fn session_event_to_sse(ev: &liberado_session::SessionEvent) -> Event {
     Event::default().event(name).data(data)
 }
 
+/// Cap on the diff body returned by [`goals_diff`].
+///
+/// `git diff HEAD` over a large working tree is unbounded, and this endpoint is polled by a UI —
+/// the whole thing is read into memory and sent. A megabyte is far more than a human reads and
+/// still small enough that a runaway workspace cannot cost the daemon its heap.
+const MAX_DIFF_BYTES: usize = 1024 * 1024;
+
+/// Truncate `diff` to [`MAX_DIFF_BYTES`] on a char boundary, announcing it when it happens.
+///
+/// Separate from the handler so the bounding rule is testable without a git repo holding a
+/// megabyte of uncommitted change: the handler's job is running the command, this is the rule.
+fn bound_diff(diff: String) -> String {
+    if diff.len() <= MAX_DIFF_BYTES {
+        return diff;
+    }
+    let mut cut = MAX_DIFF_BYTES;
+    while cut > 0 && !diff.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!(
+        "{}
+
+[diff truncated at {MAX_DIFF_BYTES} bytes — run `git diff HEAD` in the workspace          for the rest]",
+        &diff[..cut]
+    )
+}
+
+/// `GET /api/goals/{id}/diff` — workspace `git diff HEAD` for a coding goal session.
+pub async fn goals_diff(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let snap = match state.goals.snapshot(&id).await {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiError {
+                    error: format!("goal session '{id}' not found"),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(ws) = snap
+        .session
+        .goal
+        .payload
+        .get("workspace_root")
+        .and_then(|v| v.as_str())
+    else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "this goal session has no workspace (not a coding session)".into(),
+            }),
+        )
+            .into_response();
+    };
+    if ws.is_empty() || !std::path::Path::new(ws).is_dir() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "workspace not available".into(),
+            }),
+        )
+            .into_response();
+    }
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::process::Command::new("git")
+            .args(["diff", "HEAD", "--", "."])
+            .current_dir(ws)
+            .output(),
+    )
+    .await
+    {
+        Err(_elapsed) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "git diff timed out".into(),
+            }),
+        )
+            .into_response(),
+        Ok(Err(_e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "could not run git diff".into(),
+            }),
+        )
+            .into_response(),
+        Ok(Ok(out)) if out.status.success() => {
+            let d = String::from_utf8_lossy(&out.stdout).into_owned();
+            let body = if d.is_empty() {
+                "(no changes)".into()
+            } else {
+                bound_diff(d)
+            };
+            (
+                StatusCode::OK,
+                [("content-type", "text/plain; charset=utf-8")],
+                body,
+            )
+                .into_response()
+        }
+        Ok(Ok(_out)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "git diff failed".into(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 #[cfg(test)]
 mod goal_message_tests {
+
     //! HTTP-level integration tests for `POST /api/goals/{id}/message`, against a real `axum::Router`
     //! wired to a `GoalSessionHub` with the life-ops demo pack (the same pattern as `hooks.rs`).
+    /// The bound must announce itself. A silently truncated diff reads as a complete one, which is
+    /// worse than a large response: the human concludes the change set is smaller than it is.
+    ///
+    /// Scope (R5): this exercises the bounding rule, not the handler — running the real endpoint
+    /// would need a git workspace carrying a megabyte of uncommitted change.
+    #[test]
+    fn an_oversized_diff_is_truncated_and_says_so() {
+        let small = "diff --git a/x b/x
++one line
+"
+        .to_string();
+        assert_eq!(
+            super::bound_diff(small.clone()),
+            small,
+            "a diff under the cap must be returned byte-for-byte"
+        );
+
+        let huge = "x".repeat(super::MAX_DIFF_BYTES + 5_000);
+        let bounded = super::bound_diff(huge);
+        assert!(
+            bounded.len() < super::MAX_DIFF_BYTES + 500,
+            "must actually shrink, got {} bytes",
+            bounded.len()
+        );
+        assert!(
+            bounded.contains("diff truncated"),
+            "truncation must be visible in the body, not silent"
+        );
+    }
+
+    /// Cutting at a fixed byte offset can land mid-codepoint. `String` will not hold an invalid
+    /// slice, so getting this wrong is a panic on any workspace with non-ASCII in its diff.
+    #[test]
+    fn truncation_lands_on_a_char_boundary() {
+        // 3 bytes wide, and the cap is not a multiple of 3 — so a naive cut lands *inside* a
+        // codepoint. A 2-byte char would align with the even cap and prove nothing.
+        assert_ne!(
+            super::MAX_DIFF_BYTES % 3,
+            0,
+            "fixture only bites on a misaligned cap"
+        );
+        let huge = "€".repeat(super::MAX_DIFF_BYTES);
+        let bounded = super::bound_diff(huge);
+        assert!(bounded.contains("diff truncated"));
+    }
 
     use super::*;
     use std::time::{Duration, Instant};

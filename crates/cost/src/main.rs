@@ -22,6 +22,7 @@ fn main() -> ExitCode {
     let mut data_dir: Option<PathBuf> = None;
     let mut topology: Option<PathBuf> = None;
     let mut prices_path: Option<PathBuf> = None;
+    let mut json = false;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -55,6 +56,9 @@ fn main() -> ExitCode {
                 print_help();
                 return ExitCode::SUCCESS;
             }
+            "--json" => {
+                json = true;
+            }
             other => {
                 eprintln!("liberado-cost: unknown argument {other}");
                 print_help();
@@ -74,7 +78,17 @@ fn main() -> ExitCode {
 
     match report_from_data_dir(&data_dir, &prices) {
         Ok(report) => {
-            print!("{}", format_report(&report));
+            if json {
+                match serde_json::to_string_pretty(&report) {
+                    Ok(json) => println!("{json}"),
+                    Err(e) => {
+                        eprintln!("liberado-cost: failed to serialize report as JSON: {e}");
+                        return ExitCode::from(1);
+                    }
+                }
+            } else {
+                print!("{}", format_report(&report));
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -110,6 +124,7 @@ OPTIONS:
     --data-dir PATH   Liberado data dir (default: $LIBERADO_DATA_DIR or .liberado)
     --topology PATH   topology.toml with [[models]] input/output/cached_input rates
     --prices PATH     same as --topology (alias for a prices-only TOML)
+    --json            output the report as JSON instead of plain-text tables
     -h, --help        Show this help
 
 Reads <data-dir>/latency/events.jsonl and <data-dir>/dispatches/*.jsonl.

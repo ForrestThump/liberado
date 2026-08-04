@@ -984,12 +984,18 @@ impl Orchestrator {
                     // Decided before the run, deliberately: a subagent whose report will be filed
                     // verbatim has to be told so up front, or it writes a status line and waits to
                     // author the document with a tool it was never given (see `delivery_directive`).
-                    let mut instructions = subagent_instructions(&success_criteria);
+                    let mut instructions = SUBAGENT_PREAMBLE.to_string();
                     instructions.push_str(&self.output_contract(
                         &delivery,
                         &allowed_mcps,
                         research,
                     ));
+                    if !success_criteria.is_empty() {
+                        instructions.push_str(&format!(
+                            "\n\nYou are done when:\n{}",
+                            format_success_criteria(&success_criteria)
+                        ));
+                    }
                     let task = Task::new(instructions, subgoal)
                         .salvageable(research)
                         // Exact matching for deep work: varied search queries read as
@@ -1564,12 +1570,18 @@ fn subagent_instructions(success_criteria: &[String]) -> String {
     if success_criteria.is_empty() {
         return SUBAGENT_PREAMBLE.to_string();
     }
-    let criteria = success_criteria
+    format!(
+        "{SUBAGENT_PREAMBLE}\n\nYou are done when:\n{}",
+        format_success_criteria(success_criteria)
+    )
+}
+
+fn format_success_criteria(success_criteria: &[String]) -> String {
+    success_criteria
         .iter()
         .map(|c| format!("- {c}"))
         .collect::<Vec<_>>()
-        .join("\n");
-    format!("{SUBAGENT_PREAMBLE}\n\nYou are done when:\n{criteria}")
+        .join("\n")
 }
 
 /// Told to a subagent whose report will be **filed verbatim** rather than summarised.

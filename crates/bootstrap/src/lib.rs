@@ -117,8 +117,21 @@ fn build_provider_from_profile(
     Some(Arc::new(provider))
 }
 
+/// The two subagent-tagged providers, built together — an `Option` pair where both are `Some` or
+/// both `None`, so the `.expect("subagent_worker built alongside subagent")` unwraps that used to
+/// exist at two sites are structurally impossible now.  The invariant was always true (the builder
+/// constructs them from the same `ModelRole::Subagent` role), but it was a comment, not a type.
+pub struct SubagentProviders {
+    /// The `ModelRole::Subagent` backend the orchestrator uses as *its own* provider — journaled
+    /// under `AgentRole::Orchestrator` (direct execution and the orchestrator's own tool loop).
+    pub orchestrator: Arc<dyn Provider>,
+    /// A second instance over the **same** backend, tagged `AgentRole::Subagent` so delegated
+    /// subagent work journals under a separate role.
+    pub worker: Arc<dyn Provider>,
+}
+
 /// The per-role providers the execution path uses, each already wrapped in a role-tagged
-/// [`MeteredProvider`] so every inference call is recorded (latency observability). All four are
+/// [`MeteredProvider`] so every inference call is recorded (latency observability). All five are
 /// `Some` together (a provider is configured) or all `None` (watch-only).
 ///
 /// `primary` is the unwrapped default provider — the one status/model display and the runtime
@@ -130,14 +143,7 @@ pub struct RoleProviders {
     pub primary: Option<Arc<dyn Provider>>,
     pub face: Option<Arc<dyn Provider>>,
     pub dispatcher: Option<Arc<dyn Provider>>,
-    /// The `ModelRole::Subagent` backend the orchestrator uses as *its own* provider — journaled
-    /// under `AgentRole::Orchestrator` (direct execution and the orchestrator's own tool loop).
-    pub subagent: Option<Arc<dyn Provider>>,
-    /// A second instance over the **same** `ModelRole::Subagent` backend, tagged
-    /// `AgentRole::Subagent` — handed to the orchestrator so delegated subagent work journals under
-    /// a separate role. Same model, same config; only the role label differs (see `docs/future-work/
-    /// parallel-deliverables-2026-08-round-3.md` §2).
-    pub subagent_worker: Option<Arc<dyn Provider>>,
+    pub subagent: Option<SubagentProviders>,
 }
 
 impl RoleProviders {
@@ -153,7 +159,6 @@ impl RoleProviders {
             face: None,
             dispatcher: None,
             subagent: None,
-            subagent_worker: None,
         }
     }
 }
@@ -208,10 +213,10 @@ pub fn role_providers_from_config(
     RoleProviders {
         face: Some(role_provider(ModelRole::MainAgent, AgentRole::Face)),
         dispatcher: Some(role_provider(ModelRole::Dispatcher, AgentRole::Dispatcher)),
-        subagent: Some(role_provider(ModelRole::Subagent, AgentRole::Orchestrator)),
-        // Same backend, second tag: delegated subagent work must journal under its own role rather
-        // than the orchestrator's (see the field's doc comment).
-        subagent_worker: Some(role_provider(ModelRole::Subagent, AgentRole::Subagent)),
+        subagent: Some(SubagentProviders {
+            orchestrator: role_provider(ModelRole::Subagent, AgentRole::Orchestrator),
+            worker: role_provider(ModelRole::Subagent, AgentRole::Subagent),
+        }),
         primary: Some(base),
     }
 }
@@ -409,7 +414,7 @@ pub fn configure_daemon(
         .with_proposal_reap_interval(config.tuning.proposals.reap_interval_secs)
         .with_session_profile_caps(session_profile_caps(config));
 
-    let (Some(dispatcher_provider), Some(subagent_provider)) =
+    let (Some(dispatcher_provider), Some(subagent_providers)) =
         (providers.dispatcher.as_ref(), providers.subagent.as_ref())
     else {
         tracing::warn!(
@@ -440,18 +445,13 @@ pub fn configure_daemon(
     // that pool's own factory/capabilities/name.
     // Live catalog Arc — orchestrator gates re-read consequence/zone data after MCP hot-reload.
     let mut orchestrator_infra = OrchestratorInfra::new(
-        subagent_provider.clone(),
+        subagent_providers.orchestrator.clone(),
         catalog.clone(),
         guard.zone_write_classes.clone(),
         guard.proposals_dir.clone(),
         guard.signer.clone(),
     )
-    .with_subagent_provider(
-        providers
-            .subagent_worker
-            .clone()
-            .expect("subagent_worker built alongside subagent"),
-    );
+    .with_subagent_provider(subagent_providers.worker.clone());
     if let Some(max_turns) = config.topology.research_max_turns {
         orchestrator_infra = orchestrator_infra.with_research_max_turns(max_turns);
     }
@@ -570,21 +570,16 @@ pub fn build_dispatch_pack(
 ) -> Option<DispatchPack> {
     // The dispatch pack needs both the router (dispatcher) and the worker (subagent) providers.
     let dispatcher_provider = providers.dispatcher.as_ref()?;
-    let subagent_provider = providers.subagent.as_ref()?;
+    let sp = providers.subagent.as_ref()?;
     let guard = guard_context(&catalog, &config.policy, vault_path);
     let mut orchestrator_infra = OrchestratorInfra::new(
-        subagent_provider.clone(),
+        sp.orchestrator.clone(),
         catalog.clone(),
         guard.zone_write_classes.clone(),
         guard.proposals_dir.clone(),
         guard.signer.clone(),
     )
-    .with_subagent_provider(
-        providers
-            .subagent_worker
-            .clone()
-            .expect("subagent_worker built alongside subagent"),
-    );
+    .with_subagent_provider(sp.worker.clone());
     if let Some(max_turns) = config.topology.research_max_turns {
         orchestrator_infra = orchestrator_infra.with_research_max_turns(max_turns);
     }
