@@ -106,17 +106,14 @@ impl TelegramChatBridge {
         }
 
         if matches!(head, "/help") {
-            return Ok("\
-Available commands:\n\
-  /help  — show this message\n\
-  /stop  — cancel the in-progress turn (same as /cancel)\n\
-  /model <id>  — switch to model <id> (e.g. /model deepseek/deepseek-v4-pro)\n\
-  /status  — show daemon status (attached components, model, uptime)\n\
-  /sessions  — list active chat and goal sessions\n\
-  /session <id>  — show details for one session\n\
-  /fork <id>  — branch a session at its last turn\n\
-  /join <id>  — link this chat to an existing session"
-                .into());
+            let shared = liberado_commands::telegram_commands();
+            let mut lines: Vec<String> = shared
+                .iter()
+                .map(|(name, desc)| format!("  /{name} — {desc}"))
+                .collect();
+            lines.push("  /stop — cancel the current turn (same as /cancel)".into());
+            lines.sort();
+            return Ok(format!("Available commands:\n{}", lines.join("\n")));
         }
 
         let cmd = parse(text).ok_or_else(|| {
@@ -1079,10 +1076,13 @@ mod tests {
         let mock = Arc::new(MockProvider::new("m"));
         let (bridge, _chat, _provider) = bridge_with_provider(dir.path(), mock).await;
         let reply = bridge.reply("/help").await.unwrap();
-        assert!(reply.contains("/help"));
-        assert!(reply.contains("/stop"));
-        assert!(reply.contains("/model"));
-        assert!(reply.contains("/status"));
-        assert!(reply.contains("/sessions"));
+        // Commands from the shared telegram_commands() catalog.
+        for cmd in ["/help", "/new", "/status", "/sessions", "/spawn", "/goal", "/join", "/model", "/fork"] {
+            assert!(reply.contains(cmd), "/help must list {cmd}: got {reply}");
+        }
+        // Telegram-specific commands not in the shared catalog.
+        assert!(reply.contains("/stop"), "must include /stop");
+        // Shared catalog descriptions come through (not the hardcoded old text).
+        assert!(!reply.contains("switch to model"), "descriptions come from COMMAND_CATALOG, not hardcoded");
     }
 }
