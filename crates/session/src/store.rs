@@ -507,6 +507,51 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// Pins a **known gap**: a goal parked by the shutdown drain rehydrates as `Failed`, not
+    /// `Parked` — so it is not resumable, which contradicts the reason the drain parks rather than
+    /// cancels ("a parked session can be resumed; a cancelled one cannot", `shutdown.rs`).
+    ///
+    /// `set_status` now always logs, so the `Parked` line *is* on disk. But `Parked` is not
+    /// terminal, and rehydrate coerces any non-terminal status to `Failed` unless the session was
+    /// awaiting a human — which a drain-park never is. The durability fix is therefore correct and
+    /// currently unobservable here, which is exactly why removing it fails no test.
+    ///
+    /// **If you make an explicitly-recorded park survive rehydrate, this test should start
+    /// failing.** Change it then, and see the backlog item.
+    #[tokio::test]
+    async fn a_drain_parked_session_rehydrates_as_failed_today() {
+        let dir = std::env::temp_dir().join(format!("liberado-goals-test-{}", ulid::Ulid::new()));
+        {
+            let store = GoalSessionStore::open(&dir).await;
+            store.insert(record("s-park", "long run")).await;
+            store.set_status("s-park", SessionStatus::Running).await;
+            // The shutdown-drain shape: parked mid-run, not awaiting a human, never finished.
+            store.set_status("s-park", SessionStatus::Parked).await;
+            assert_eq!(
+                store.get("s-park").await.unwrap().status,
+                SessionStatus::Parked,
+                "precondition: the live record shows Parked"
+            );
+        }
+
+        let rec = GoalSessionStore::open(&dir)
+            .await
+            .get("s-park")
+            .await
+            .unwrap();
+        assert_eq!(
+            rec.status,
+            SessionStatus::Failed,
+            "documented gap: the rehydrate coercion overrides an explicit drain-park"
+        );
+        assert!(
+            !rec.awaiting_input,
+            "a drain-park holds no question — which is why the coercion sends it to Failed"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[tokio::test]
     async fn awaiting_session_is_parked_on_rehydrate_not_failed() {
         // E6: a session parked on a human must survive a restart as Parked — not Failed with the
