@@ -1478,6 +1478,76 @@ fn long_findings_report() -> CompletionResponse {
 /// — the first completion's system prompt would lack "Anything you leave out is gone", and the
 /// seam would keep discarding research.
 #[tokio::test]
+async fn subagent_system_prompt_places_stable_before_varying() {
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        vec![submit_report_response()],
+    ));
+    let factory = CallRecordingFactory::default();
+    let ceiling = research_ceiling();
+    let orch = Orchestrator::new(
+        provider.clone(),
+        factory,
+        ceiling.clone(),
+        research_catalog(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    )
+    .with_report_sink(liberado_orchestrator::ReportSink::new(
+        "vault",
+        "write_note",
+        "path",
+        "content",
+    ));
+
+    let decision = DispatchDecision {
+        action: DispatchAction::DispatchSubagent {
+            goal: "compare belt vs chain".into(),
+            capabilities: CapabilitySet::empty(),
+            allowed_mcps: vec!["search".into(), "spider".into()],
+            success_criteria: vec!["find something".into()],
+            artifact_target: None,
+            model: None,
+            correlation_id: "subagent-stable-test".into(),
+            delivery: Delivery::Vault {
+                path: "Learning/drives.md".into(),
+            },
+            depth: Depth::Normal,
+        },
+        confidence: 0.9,
+        rationale: "cache-test".into(),
+    };
+
+    orch.run(decision, "test goal", "parent-correlation", &ceiling)
+        .await
+        .expect("run");
+
+    let req = provider.last_request().expect("subagent called");
+    let system_blob: String = req
+        .messages
+        .iter()
+        .filter(|m| m.role == liberado_provider::Role::System)
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let output_pos = system_blob
+        .find("OUTPUT CONTRACT")
+        .expect("must contain output contract");
+    let criteria_pos = system_blob
+        .find("You are done when:")
+        .expect("must contain success criteria");
+    assert!(
+        output_pos < criteria_pos,
+        "stable output contract must precede varying success criteria; \
+         got output_contract at {output_pos}, criteria at {criteria_pos}"
+    );
+}
+
+#[tokio::test]
 async fn research_summarize_subagent_gets_the_relay_contract_in_its_live_prompt() {
     let provider = Arc::new(MockProvider::with_script("mock", [long_findings_report()]));
     let factory = CallRecordingFactory::default();
