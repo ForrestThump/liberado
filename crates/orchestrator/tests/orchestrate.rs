@@ -1465,14 +1465,92 @@ fn long_findings_report() -> CompletionResponse {
     )])
 }
 
+/// A2 (Band A): the subagent system prompt must place stable content (SUBAGENT_PREAMBLE,
+/// output_contract) before varying content (success_criteria), mirroring the cache-prefix
+/// ordering PR #43 applied to the dispatcher.  Drives the real orchestrator path (rule 3:
+/// no hand-built intermediates).  Excludes the wrong implementation where criteria are
+/// inserted before the output contract.
+#[tokio::test]
+async fn subagent_system_prompt_places_stable_before_varying() {
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        vec![submit_report_response()],
+    ));
+    let factory = CallRecordingFactory::default();
+    let ceiling = research_ceiling();
+    let orch = Orchestrator::new(
+        provider.clone(),
+        factory,
+        ceiling.clone(),
+        research_catalog(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    )
+    .with_report_sink(liberado_orchestrator::ReportSink::new(
+        "vault",
+        "write_note",
+        "path",
+        "content",
+    ));
+
+    let decision = DispatchDecision {
+        action: DispatchAction::DispatchSubagent {
+            goal: "compare belt vs chain".into(),
+            capabilities: CapabilitySet::empty(),
+            allowed_mcps: vec!["search".into(), "spider".into()],
+            success_criteria: vec!["find something".into()],
+            artifact_target: None,
+            model: None,
+            correlation_id: "subagent-stable-test".into(),
+            delivery: Delivery::Vault {
+                path: "Learning/drives.md".into(),
+            },
+            depth: Depth::Normal,
+        },
+        confidence: 0.9,
+        rationale: "cache-test".into(),
+    };
+
+    orch.run(decision, "test goal", "parent-correlation", &ceiling)
+        .await
+        .expect("run");
+
+    let req = provider.last_request().expect("subagent called");
+    let system_blob: String = req
+        .messages
+        .iter()
+        .filter(|m| m.role == liberado_provider::Role::System)
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let preamble_pos = system_blob
+        .find("narrowly-scoped Liberado subagent")
+        .expect("must contain preamble");
+    let output_pos = system_blob
+        .find("OUTPUT CONTRACT")
+        .expect("must contain output contract");
+    let criteria_pos = system_blob
+        .find("You are done when:")
+        .expect("must contain success criteria");
+    assert!(
+        preamble_pos < output_pos,
+        "preamble must precede output contract; preamble at {preamble_pos}, output at {output_pos}"
+    );
+    assert!(
+        output_pos < criteria_pos,
+        "stable output contract must precede varying success criteria; \
+         got output_contract at {output_pos}, criteria at {criteria_pos}"
+    );
+}
+
 /// R6: a research `DispatchSubagent` with `Delivery::Summarize` (the chat `delegate` shape) must
 /// put the **relay contract** into the system prompt the subagent actually receives — asserted on
 /// the provider's recorded request, not on `output_contract`'s return value, which is what
 /// `e0fde79`'s own tests already cover.
-///
-/// Scope, stated honestly (R5): this proves the contract is **delivered**. It cannot prove the
-/// subagent then writes more, because a scripted mock ignores its prompt. "Findings reach the face"
-/// is only observable against a real model — see the live check in the PR body.
 ///
 /// R7 wrong implementation excluded: *no contract on Summarize* (only vault path gets a directive)
 /// — the first completion's system prompt would lack "Anything you leave out is gone", and the
