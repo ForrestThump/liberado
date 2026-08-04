@@ -245,6 +245,7 @@ impl LiberadoLoopBackend {
             request.config.command_policy.clone(),
             request.config.path_policy.clone(),
         )
+        .await
         .map_err(|e| CoderError::Tool(e.to_string()))?;
         if let Some(command) = &request.config.validation_command {
             coding_runtime =

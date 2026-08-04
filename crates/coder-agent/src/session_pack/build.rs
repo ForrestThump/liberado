@@ -43,6 +43,20 @@ fn is_stuck(e: &liberado_coder_core::CoderError) -> bool {
 ///
 /// Best-effort: a workspace that is already a repo (the dogfood case, where the caller passes a real
 /// checkout) never reaches here, and a git failure just leaves things as they were.
+/// Whether `dir` is a git repository (or worktree). Used to decide whether to enable
+/// worktree-isolated sandboxing.
+fn is_git_repo(dir: &std::path::Path) -> bool {
+    dir.join(".git").is_dir()
+}
+
+/// Initialize `dir` as a git repo if it is not already one — a workspace without version control
+/// cannot report what the worker changed, so the worker would be asked to test something it has
+/// never seen done, and the verifier would grade the parent workspace (which the worker did not
+/// touch) rather than the child it did. The gap where a freshly-initialised repo sat empty so the
+/// session would then report, and be graded on, changes it never made.
+///
+/// Best-effort: a workspace that is already a repo (the dogfood case, where the caller passes a real
+/// checkout) never reaches here, and a git failure just leaves things as they were.
 fn init_git_repo(dir: &std::path::Path) {
     if dir.join(".git").exists() {
         return;
@@ -146,7 +160,11 @@ impl CodingSessionPack {
                 critic: disabled,
                 gate: liberado_coder_core::CoderGateConfig::default(),
                 repair: Some(role),
-                sandbox: SandboxSpec::HostLocal,
+                sandbox: if is_git_repo(&workspace) {
+                    SandboxSpec::Worktree
+                } else {
+                    SandboxSpec::HostLocal
+                },
                 command_policy: CommandPolicy::default(),
                 validation_command: None,
                 verifiers: Vec::new(),

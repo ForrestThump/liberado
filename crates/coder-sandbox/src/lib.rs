@@ -337,6 +337,145 @@ fn capped_utf8(mut buf: Vec<u8>, max_bytes: usize) -> String {
     String::from_utf8_lossy(&buf).into_owned()
 }
 
+// ── WorktreeWorkspace — git-worktree isolation ──────────────────────────────
+//
+// See `docs/spec/architecture/agentic-loops.md` §Concurrency, rule 11: isolation
+// must land before any concurrent workers. A worktree gives each child its own
+// filesystem view so sibling edits do not collide.
+
+/// A git-worktree-isolated workspace. On construction, `git worktree add --no-checkout`
+/// creates a linked worktree under `<data>/worktrees/<session-id>/`, then the working tree
+/// is synchronised from the parent via `git checkout`. The parent repo is unaffected by
+/// any modification inside the worktree.
+#[derive(Debug)]
+pub struct WorktreeWorkspace {
+    inner: HostWorkspace,
+    /// The git worktree path — removed on `Drop`.
+    worktree_path: Option<PathBuf>,
+    /// The `.git/worktrees/<name>` registration to prune on `Drop`.
+    worktree_git_dir: Option<PathBuf>,
+}
+
+impl WorktreeWorkspace {
+    /// Create a linked git worktree for `session_id` rooted at `parent_root`, storing
+    /// worktrees under `worktrees_base` (typically `<data>/worktrees/`).
+    ///
+    /// `parent_root` must be a git repository root. The parent working tree is left
+    /// untouched; the worktree starts as a clean checkout of HEAD.
+    pub async fn new(
+        parent_root: &Path,
+        session_id: &str,
+        worktrees_base: &Path,
+        command_policy: CommandPolicy,
+    ) -> Result<Self, SandboxError> {
+        let parent_root = parent_root
+            .canonicalize()
+            .map_err(|_| SandboxError::MissingRoot(parent_root.display().to_string()))?;
+        let dest = worktrees_base.join(session_id);
+        std::fs::create_dir_all(worktrees_base)
+            .map_err(|e| SandboxError::MissingRoot(format!("worktree base dir: {e}")))?;
+
+        // Remove any leftover worktree from a prior crashed run.
+        if dest.exists() {
+            let _ = std::fs::remove_dir_all(&dest);
+        }
+
+        let output = tokio::process::Command::new("git")
+            .args(["-C", &parent_root.to_string_lossy()])
+            .args(["worktree", "add", "--no-checkout", &dest.to_string_lossy()])
+            .output()
+            .await
+            .map_err(|e| SandboxError::Spawn(format!("git worktree add: {e}")))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(SandboxError::Spawn(format!(
+                "git worktree add failed: {stderr}"
+            )));
+        }
+
+        // Populate the working tree from the parent's HEAD.
+        let output = tokio::process::Command::new("git")
+            .args(["-C", &dest.to_string_lossy()])
+            .args(["checkout", "HEAD", "--"])
+            .output()
+            .await
+            .map_err(|e| SandboxError::Spawn(format!("git checkout in worktree: {e}")))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let _ = std::fs::remove_dir_all(&dest);
+            return Err(SandboxError::Spawn(format!(
+                "git checkout in worktree failed: {stderr}"
+            )));
+        }
+
+        let git_dir_path = dest.join(".git");
+        let inner = HostWorkspace::new(&dest, command_policy)?;
+
+        Ok(Self {
+            inner,
+            worktree_path: Some(dest),
+            worktree_git_dir: Some(git_dir_path),
+        })
+    }
+
+    /// Remove the worktree from disk and prune its `.git/worktrees/<name>` registration.
+    /// Idempotent — safe to call multiple times.
+    pub async fn cleanup(&mut self) {
+        if let Some(path) = self.worktree_path.take() {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+        if let Some(git_dir) = self.worktree_git_dir.take() {
+            let parent = find_git_root(git_dir.parent());
+            if let Some(repo) = parent {
+                let _ = tokio::process::Command::new("git")
+                    .args(["-C", &repo])
+                    .args(["worktree", "prune"])
+                    .output()
+                    .await;
+            }
+        }
+        // Drain any stale worktree registration so git doesn't complain.
+        // git worktree prune cleans up all stale registrations; that's fine here.
+    }
+}
+
+impl Drop for WorktreeWorkspace {
+    fn drop(&mut self) {
+        if let Some(path) = self.worktree_path.take() {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+}
+
+impl Workspace for WorktreeWorkspace {
+    fn root(&self) -> &Path {
+        self.inner.root()
+    }
+
+    fn resolve_path(&self, rel_path: &str) -> Result<PathBuf, SandboxError> {
+        self.inner.resolve_path(rel_path)
+    }
+}
+
+#[async_trait]
+impl CommandRunner for WorktreeWorkspace {
+    async fn run_command(&self, request: CommandRequest) -> Result<CommandOutput, SandboxError> {
+        self.inner.run_command(request).await
+    }
+}
+
+/// Walk upward from `start` until a `.git` directory or file is found, returning the
+/// repository root.
+fn find_git_root(start: Option<&Path>) -> Option<String> {
+    let mut current = start?;
+    loop {
+        if current.join(".git").exists() {
+            return Some(current.to_string_lossy().to_string());
+        }
+        current = current.parent()?;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -548,5 +687,111 @@ mod tests {
         let err = ws.docker_run_args(&request).unwrap_err();
 
         assert!(matches!(err, SandboxError::CommandDenied(_)));
+    }
+
+    // ── WorktreeWorkspace tests ─────────────────────────────────────────
+
+    async fn worktree_setup() -> (tempfile::TempDir, tempfile::TempDir, WorktreeWorkspace) {
+        let parent = tempfile::tempdir().unwrap();
+        let base = tempfile::tempdir().unwrap();
+
+        let status = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(parent.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        // A commit is needed for worktree to have a HEAD to check out.
+        std::fs::write(parent.path().join("README.md"), "# test repo\n").unwrap();
+        let status = std::process::Command::new("git")
+            .args(["-C", &parent.path().to_string_lossy()])
+            .args(["add", "README.md"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let status = std::process::Command::new("git")
+            .args(["-C", &parent.path().to_string_lossy()])
+            .args(["commit", "--quiet", "-m", "init"])
+            .env("GIT_AUTHOR_NAME", "test")
+            .env("GIT_AUTHOR_EMAIL", "test@test")
+            .env("GIT_COMMITTER_NAME", "test")
+            .env("GIT_COMMITTER_EMAIL", "test@test")
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let ws = WorktreeWorkspace::new(
+            parent.path(),
+            "test-session",
+            base.path(),
+            CommandPolicy::default(),
+        )
+        .await
+        .unwrap();
+        (parent, base, ws)
+    }
+
+    #[tokio::test]
+    async fn worktree_root_is_a_subdirectory_of_the_base() {
+        let (_parent, _base, ws) = worktree_setup().await;
+        assert!(ws.root().exists(), "worktree root must exist");
+        assert!(
+            ws.root().join("README.md").exists(),
+            "worktree must have parent's committed files"
+        );
+        // The root is at <base>/test-session. On some platforms canonicalize
+        // resolves tempdir symlinks differently, so check by relative path.
+        assert_eq!(ws.root().file_name().unwrap(), "test-session");
+    }
+
+    #[tokio::test]
+    async fn worktree_writes_are_isolated_from_parent() {
+        let (parent, _base, ws) = worktree_setup().await;
+
+        let parent_readme = std::fs::read_to_string(parent.path().join("README.md")).unwrap();
+        assert_eq!(parent_readme, "# test repo\n");
+
+        std::fs::write(ws.root().join("new-file.txt"), "worktree content").unwrap();
+        assert!(ws.root().join("new-file.txt").exists());
+        assert!(
+            !parent.path().join("new-file.txt").exists(),
+            "worktree write must not appear in parent"
+        );
+
+        let parent_readme2 = std::fs::read_to_string(parent.path().join("README.md")).unwrap();
+        assert_eq!(parent_readme2, "# test repo\n", "parent README untouched");
+    }
+
+    #[tokio::test]
+    async fn worktree_cleanup_removes_the_directory() {
+        let (_parent, _base, mut ws) = worktree_setup().await;
+        let root = ws.root().to_path_buf();
+        assert!(root.exists());
+        ws.cleanup().await;
+        assert!(!root.exists());
+    }
+
+    #[tokio::test]
+    async fn worktree_drop_removes_the_directory() {
+        let (_parent, _base, ws) = worktree_setup().await;
+        let root = ws.root().to_path_buf();
+        assert!(root.exists());
+        drop(ws);
+        assert!(!root.exists());
+    }
+
+    #[tokio::test]
+    async fn worktree_resolve_path_is_contained() {
+        let (_parent, _base, ws) = worktree_setup().await;
+        let path = ws.resolve_path("src/lib.rs").unwrap();
+        assert!(path.starts_with(ws.root()));
+    }
+
+    #[tokio::test]
+    async fn worktree_resolve_path_rejects_escape() {
+        let (_parent, _base, ws) = worktree_setup().await;
+        let err = ws.resolve_path("../secret.txt").unwrap_err();
+        assert!(matches!(err, SandboxError::PathEscape(_)));
     }
 }

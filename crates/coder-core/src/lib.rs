@@ -100,6 +100,10 @@ pub enum SandboxSpec {
     #[default]
     HostLocal,
     Docker(DockerSandboxSpec),
+    /// Git worktree isolation: the worker runs in a git-worktree copy of the
+    /// workspace root so concurrent workers cannot trample each other.
+    /// [`SandboxSpec::HostLocal`] is the sandbox inside the worktree.
+    Worktree,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

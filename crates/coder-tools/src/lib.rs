@@ -9,7 +9,7 @@ use std::{
 use async_trait::async_trait;
 use liberado_coder_core::{CommandPolicy, PathPolicy, SandboxSpec};
 use liberado_coder_sandbox::{
-    CommandRequest, DockerWorkspace, HostWorkspace, SandboxError, Workspace,
+    CommandRequest, DockerWorkspace, HostWorkspace, SandboxError, Workspace, WorktreeWorkspace,
 };
 use liberado_executor::ToolRuntime;
 use liberado_provider::{ToolDef, ToolInvocation};
@@ -46,7 +46,7 @@ impl CodingToolRuntime {
         Ok(Self::from_workspace(workspace, path_policy))
     }
 
-    pub fn from_sandbox(
+    pub async fn from_sandbox(
         root: impl Into<PathBuf>,
         sandbox: SandboxSpec,
         command_policy: CommandPolicy,
@@ -56,6 +56,18 @@ impl CodingToolRuntime {
             SandboxSpec::HostLocal => Self::new(root, command_policy, path_policy),
             SandboxSpec::Docker(spec) => {
                 let workspace = DockerWorkspace::new(root, spec, command_policy)?;
+                Ok(Self::from_workspace(workspace, path_policy))
+            }
+            SandboxSpec::Worktree => {
+                let root = root.into();
+                let session_id = root
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("session");
+                let worktrees_base = root.parent().unwrap_or(&root).join("worktrees");
+                let workspace =
+                    WorktreeWorkspace::new(&root, session_id, &worktrees_base, command_policy)
+                        .await?;
                 Ok(Self::from_workspace(workspace, path_policy))
             }
         }
@@ -773,6 +785,7 @@ mod tests {
             CommandPolicy::default(),
             PathPolicy::default(),
         )
+        .await
         .unwrap();
 
         runtime
