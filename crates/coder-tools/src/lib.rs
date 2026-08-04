@@ -86,6 +86,10 @@ impl CodingToolRuntime {
         self
     }
 
+    pub fn workspace_root(&self) -> &Path {
+        self.workspace.root()
+    }
+
     pub async fn invoke_json_for_backend(
         &self,
         name: &str,

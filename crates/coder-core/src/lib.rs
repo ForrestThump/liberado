@@ -574,6 +574,15 @@ mod tests {
     }
 
     #[test]
+    fn sandbox_worktree_round_trips_json() {
+        let spec = SandboxSpec::Worktree;
+        let json = serde_json::to_string(&spec).unwrap();
+        assert_eq!(json, r#"{"backend":"worktree"}"#);
+        let back: SandboxSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, SandboxSpec::Worktree);
+    }
+
+    #[test]
     fn coder_result_converts_to_report() {
         let result = CoderRunResult {
             backend: LIBERADO_LOOP_BACKEND.to_string(),

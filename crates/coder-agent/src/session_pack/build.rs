@@ -72,7 +72,30 @@ fn init_git_repo(dir: &std::path::Path) {
             dir = %dir.display(),
             "could not `git init` the session workspace — file-change reporting may be unreliable"
         );
+        return;
     }
+    // An empty repo has no HEAD commit, so `git worktree add` would fail.
+    // Seed a placeholder commit so Worktree isolation can proceed.
+    let placeholder = dir.join(".liberado-placeholder");
+    let _ = std::fs::write(&placeholder, "");
+    let _ = std::process::Command::new("git")
+        .args(["-C", &dir.to_string_lossy()])
+        .args(["add", ".liberado-placeholder"])
+        .status();
+    let _ = std::process::Command::new("git")
+        .args(["-C", &dir.to_string_lossy()])
+        .args([
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "liberado workspace root",
+        ])
+        .env("GIT_AUTHOR_NAME", "liberado")
+        .env("GIT_AUTHOR_EMAIL", "liberado@local")
+        .env("GIT_COMMITTER_NAME", "liberado")
+        .env("GIT_COMMITTER_EMAIL", "liberado@local")
+        .status();
 }
 
 impl CodingSessionPack {
