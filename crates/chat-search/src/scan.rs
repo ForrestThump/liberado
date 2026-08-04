@@ -392,7 +392,7 @@ mod tests {
                     "2026-01-02T00:00:00Z",
                 ),
                 // Tail copy of the same content — must NOT produce a second hit
-                r#"{{"kind":"node","id":"01JVAAAAAAAAAAAAAAAAAAAAB2","parent_id":"01JVAAAAAAAAAAAAAAAAAAAAB1","conversation_id":"01JVAAAAAAAAAAAAAAAAAAAAAA","author":{"named":"compaction-tail"},"created_at":"2026-01-03T00:00:00Z","message":{"role":"assistant","content":"hello world","tool_calls":[],"tool_call_id":null}}"#,
+                r#"{"kind":"node","id":"01JVAAAAAAAAAAAAAAAAAAAAB2","parent_id":"01JVAAAAAAAAAAAAAAAAAAAAB1","conversation_id":"01JVAAAAAAAAAAAAAAAAAAAAAA","author":{"named":"compaction-tail"},"created_at":"2026-01-03T00:00:00Z","message":{"role":"assistant","content":"hello world","tool_calls":[],"tool_call_id":null}}"#,
                 // Another original with different content — should match
                 &node(
                     "01JVAAAAAAAAAAAAAAAAAAAAB3",
@@ -402,7 +402,7 @@ mod tests {
                     "2026-01-04T00:00:00Z",
                 ),
                 // Tail copy of that too — must NOT produce a third hit
-                r#"{{"kind":"node","id":"01JVAAAAAAAAAAAAAAAAAAAAB4","parent_id":"01JVAAAAAAAAAAAAAAAAAAAAB3","conversation_id":"01JVAAAAAAAAAAAAAAAAAAAAAA","author":{"named":"compaction-tail"},"created_at":"2026-01-05T00:00:00Z","message":{"role":"assistant","content":"goodbye moon","tool_calls":[],"tool_call_id":null}}"#,
+                r#"{"kind":"node","id":"01JVAAAAAAAAAAAAAAAAAAAAB4","parent_id":"01JVAAAAAAAAAAAAAAAAAAAAB3","conversation_id":"01JVAAAAAAAAAAAAAAAAAAAAAA","author":{"named":"compaction-tail"},"created_at":"2026-01-05T00:00:00Z","message":{"role":"assistant","content":"goodbye moon","tool_calls":[],"tool_call_id":null}}"#,
             ],
         );
         let q = ParsedQuery::parse_literal("hello").unwrap();
