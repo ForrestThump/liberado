@@ -364,6 +364,16 @@ async fn awaiting_input_is_derived_from_the_transcript_and_survives_a_restart() 
     let h = store.session(id).await.unwrap();
     assert_eq!(h.status, SessionStatus::Parked);
     assert!(h.awaiting_input, "the question must survive the restart");
+    // B3: restart must leave a marker explaining why the session is parked.
+    let events = store.events(&id.to_string()).await.unwrap();
+    let has_marker = events.iter().any(|e| {
+        matches!(&e.kind, SessionEventKind::Progress { message }
+            if message.contains("daemon restarted"))
+    });
+    assert!(
+        has_marker,
+        "restart-parked session must carry a Progress marker"
+    );
 }
 
 #[tokio::test]
