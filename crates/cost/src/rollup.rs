@@ -5,9 +5,10 @@ use std::collections::HashMap;
 use crate::journal::JournalEvent;
 use crate::price::{PriceTable, price_event};
 use crate::report::Report;
+use serde::{Deserialize, Serialize};
 
 /// Per-root-conversation aggregates (face chat id, after child→parent join).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationRollup {
     pub conversation_id: String,
     pub calls: usize,
@@ -24,7 +25,7 @@ pub struct ConversationRollup {
 
 /// Per-role aggregates (after the same parent join — cost attributed where the work ran, under
 /// the root conversation's tree, but role labels stay on the call).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RoleRollup {
     pub role: String,
     pub calls: usize,
@@ -67,7 +68,7 @@ pub struct RoleRollup {
 /// - `role` and `correlation` come from the turn's first parent hop.
 /// - `cost_usd` sums every priced hop in the turn, child hops included; unpriced hops inside a turn
 ///   never force `Some(0.0)`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TurnGrowth {
     pub conversation_id: String,
     pub turn_index: usize,
@@ -87,7 +88,7 @@ pub fn closes_turn(event: &JournalEvent) -> bool {
 
 /// Tokens for a model the rates cannot price — never folded into a money total as 0.0. Covers both
 /// "no entry at all" and "entry missing a rate this usage needs".
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UnpricedLine {
     pub model: String,
     pub calls: usize,

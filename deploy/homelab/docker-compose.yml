@@ -45,8 +45,14 @@ services:
       RUST_LOG: "info"
       # OpenRouter → DeepSeek v4 Pro (slug confirmed on openrouter.ai). Overrides built-in default.
       OPENROUTER_MODEL: "deepseek/deepseek-v4-pro"
-      # In-process drain budget on SIGTERM (default 90s). Compose `stop_grace_period` must be ≥ this
-      # or Docker SIGKILL's mid-drain (default stop is only 10s — too short for long turns).
+      # In-process drain budget on SIGTERM. The code default is now 300s, sized for delegating
+      # turns: the median one is ~26k tokens over ~4 hops and routinely outlives 90s, so a restart
+      # mid-delegation throws away the most expensive work the system does.
+      #
+      # This compose deliberately pins **90s**, because the budget is paid on every deploy: a
+      # force-recreate with work in flight waits the full drain before the container stops. 90s
+      # keeps deploys brisk and accepts that a long delegation is lost. Raise it toward 300 if you
+      # would rather wait than lose the run — `stop_grace_period` below already covers it.
       LIBERADO_SHUTDOWN_GRACE_SECS: "90"
       # --- Telegram: DO NOT use TELEGRAM_BOT_TOKEN (OpenClaw owns that name). ---
       # After LIBERADO_* rename lands in the image:
@@ -67,7 +73,7 @@ services:
       - /home/shiloh/homelab/services/liberado/webui:/webui:ro
     # Outer ceiling for process stop: must cover LIBERADO_SHUTDOWN_GRACE_SECS (+ slack). Docker's
     # default 10s would kill the process during drain of a long research turn.
-    stop_grace_period: 2m
+    stop_grace_period: 6m
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4201/api/status || exit 1"]
       interval: 60s
