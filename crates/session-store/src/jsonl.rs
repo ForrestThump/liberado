@@ -516,6 +516,12 @@ fn replay_file(path: &Path) -> Result<Option<Live>, String> {
         if header.awaiting_input {
             header.status = SessionStatus::Parked;
             // Keep awaiting_input true so the UI still shows "needs you".
+            events.push(SessionEvent::new(
+                header.id.to_string(),
+                SessionEventKind::Progress {
+                    message: "Session paused — the daemon restarted".into(),
+                },
+            ));
         } else {
             header.status = SessionStatus::Failed;
             header.awaiting_input = false;

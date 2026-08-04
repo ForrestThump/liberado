@@ -536,6 +536,14 @@ impl GoalSessionHub {
                 .is_some_and(|r| r.status == SessionStatus::Running)
             {
                 self.store.set_status(&id, SessionStatus::Parked).await;
+                self.store
+                    .push_event(SessionEvent::new(
+                        &id,
+                        SessionEventKind::Progress {
+                            message: "Session paused — the daemon restarted".into(),
+                        },
+                    ))
+                    .await;
                 n += 1;
             }
         }
