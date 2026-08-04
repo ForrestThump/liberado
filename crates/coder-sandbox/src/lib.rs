@@ -352,8 +352,8 @@ pub struct WorktreeWorkspace {
     inner: HostWorkspace,
     /// The git worktree path — removed on `Drop`.
     worktree_path: Option<PathBuf>,
-    /// The `.git/worktrees/<name>` registration to prune on `Drop`.
-    worktree_git_dir: Option<PathBuf>,
+    /// The parent git repository root, used for `git worktree prune` on teardown.
+    parent_repo: Option<PathBuf>,
 }
 
 impl WorktreeWorkspace {
@@ -375,7 +375,15 @@ impl WorktreeWorkspace {
         std::fs::create_dir_all(worktrees_base)
             .map_err(|e| SandboxError::MissingRoot(format!("worktree base dir: {e}")))?;
 
-        // Remove any leftover worktree from a prior crashed run.
+        // Prune any stale registration from a prior crashed run before trying to
+        // create a new worktree with the same name — git will refuse otherwise.
+        let _ = tokio::process::Command::new("git")
+            .args(["-C", &parent_root.to_string_lossy()])
+            .args(["worktree", "prune"])
+            .output()
+            .await;
+
+        // Remove any leftover worktree directory from a prior crashed run.
         if dest.exists() {
             let _ = std::fs::remove_dir_all(&dest);
         }
@@ -408,34 +416,32 @@ impl WorktreeWorkspace {
             )));
         }
 
-        let git_dir_path = dest.join(".git");
         let inner = HostWorkspace::new(&dest, command_policy)?;
 
         Ok(Self {
             inner,
             worktree_path: Some(dest),
-            worktree_git_dir: Some(git_dir_path),
+            parent_repo: Some(parent_root),
         })
     }
 
     /// Remove the worktree from disk and prune its `.git/worktrees/<name>` registration.
     /// Idempotent — safe to call multiple times.
     pub async fn cleanup(&mut self) {
-        if let Some(path) = self.worktree_path.take() {
+        let _path = self.worktree_path.take();
+        let _repo = self.parent_repo.take();
+        // Prune the registration before removing the directory — git needs the
+        // worktree metadata to know which registration to clean up.
+        if let Some(repo) = _repo {
+            let _ = tokio::process::Command::new("git")
+                .args(["-C", &repo.to_string_lossy()])
+                .args(["worktree", "prune"])
+                .output()
+                .await;
+        }
+        if let Some(path) = _path {
             let _ = std::fs::remove_dir_all(&path);
         }
-        if let Some(git_dir) = self.worktree_git_dir.take() {
-            let parent = find_git_root(git_dir.parent());
-            if let Some(repo) = parent {
-                let _ = tokio::process::Command::new("git")
-                    .args(["-C", &repo])
-                    .args(["worktree", "prune"])
-                    .output()
-                    .await;
-            }
-        }
-        // Drain any stale worktree registration so git doesn't complain.
-        // git worktree prune cleans up all stale registrations; that's fine here.
     }
 }
 
@@ -444,6 +450,9 @@ impl Drop for WorktreeWorkspace {
         if let Some(path) = self.worktree_path.take() {
             let _ = std::fs::remove_dir_all(&path);
         }
+        // Drop is synchronous so we cannot run `git worktree prune` here.
+        // The stale registration is harmless: it occupies a few bytes in
+        // .git/worktrees/ and will be pruned by the next worktree creation.
     }
 }
 
@@ -461,18 +470,6 @@ impl Workspace for WorktreeWorkspace {
 impl CommandRunner for WorktreeWorkspace {
     async fn run_command(&self, request: CommandRequest) -> Result<CommandOutput, SandboxError> {
         self.inner.run_command(request).await
-    }
-}
-
-/// Walk upward from `start` until a `.git` directory or file is found, returning the
-/// repository root.
-fn find_git_root(start: Option<&Path>) -> Option<String> {
-    let mut current = start?;
-    loop {
-        if current.join(".git").exists() {
-            return Some(current.to_string_lossy().to_string());
-        }
-        current = current.parent()?;
     }
 }
 
@@ -793,5 +790,60 @@ mod tests {
         let (_parent, _base, ws) = worktree_setup().await;
         let err = ws.resolve_path("../secret.txt").unwrap_err();
         assert!(matches!(err, SandboxError::PathEscape(_)));
+    }
+
+    /// After explicit cleanup with prune, a second worktree for the same session id
+    /// can be created without git complaining about an existing registration.
+    #[tokio::test]
+    async fn worktree_recreation_after_cleanup_succeeds() {
+        let parent = tempfile::tempdir().unwrap();
+        let base = tempfile::tempdir().unwrap();
+
+        let status = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(parent.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::fs::write(parent.path().join("f"), "v").unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["-C", &parent.path().to_string_lossy()])
+            .args(["add", "."])
+            .status()
+            .unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["-C", &parent.path().to_string_lossy()])
+            .args(["commit", "--quiet", "-m", "x"])
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .status()
+            .unwrap();
+
+        let session = "recreate-test";
+        let mut ws1 = WorktreeWorkspace::new(
+            parent.path(),
+            session,
+            base.path(),
+            CommandPolicy::default(),
+        )
+        .await
+        .unwrap();
+        assert!(ws1.root().exists());
+        ws1.cleanup().await;
+        assert!(!ws1.root().exists());
+
+        // Second creation must succeed — prune cleared the stale registration.
+        let ws2 = WorktreeWorkspace::new(
+            parent.path(),
+            session,
+            base.path(),
+            CommandPolicy::default(),
+        )
+        .await
+        .unwrap();
+        assert!(ws2.root().exists());
+        drop(ws2);
     }
 }

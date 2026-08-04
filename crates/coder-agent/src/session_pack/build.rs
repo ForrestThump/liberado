@@ -46,7 +46,7 @@ fn is_stuck(e: &liberado_coder_core::CoderError) -> bool {
 /// Whether `dir` is a git repository (or worktree). Used to decide whether to enable
 /// worktree-isolated sandboxing.
 fn is_git_repo(dir: &std::path::Path) -> bool {
-    dir.join(".git").is_dir()
+    dir.join(".git").exists()
 }
 
 /// Initialize `dir` as a git repo if it is not already one — a workspace without version control
