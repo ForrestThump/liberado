@@ -414,6 +414,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         // List only — start is on `work_start_routes` (drain-gated).
         .route("/api/goals", axum::routing::get(api::goals_list))
         .route("/api/goals/{id}", axum::routing::get(api::goals_get))
+        .route("/api/goals/{id}/diff", axum::routing::get(api::goals_diff))
         .route(
             "/api/goals/{id}/stream",
             axum::routing::get(api::goals_stream),
