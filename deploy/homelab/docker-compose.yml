@@ -45,8 +45,8 @@ services:
       RUST_LOG: "info"
       # OpenRouter → DeepSeek v4 Pro (slug confirmed on openrouter.ai). Overrides built-in default.
       OPENROUTER_MODEL: "deepseek/deepseek-v4-pro"
-      # In-process drain budget on SIGTERM (default 90s). Compose `stop_grace_period` must be ≥ this
-      # or Docker SIGKILL's mid-drain (default stop is only 10s — too short for long turns).
+      # In-process drain budget (code default 300s; raised from 90s to accommodate delegating turns).
+      # This compose pins back to 90s to stay under the 2m `stop_grace_period` on the service below.
       LIBERADO_SHUTDOWN_GRACE_SECS: "90"
       # --- Telegram: DO NOT use TELEGRAM_BOT_TOKEN (OpenClaw owns that name). ---
       # After LIBERADO_* rename lands in the image:
