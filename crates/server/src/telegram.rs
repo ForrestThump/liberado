@@ -105,6 +105,20 @@ impl TelegramChatBridge {
             return self.stop_turn().await;
         }
 
+        if matches!(head, "/help") {
+            return Ok("\
+Available commands:\n\
+  /help  — show this message\n\
+  /stop  — cancel the in-progress turn (same as /cancel)\n\
+  /model <id>  — switch to model <id> (e.g. /model deepseek/deepseek-v4-pro)\n\
+  /status  — show daemon status (attached components, model, uptime)\n\
+  /sessions  — list active chat and goal sessions\n\
+  /session <id>  — show details for one session\n\
+  /fork <id>  — branch a session at its last turn\n\
+  /join <id>  — link this chat to an existing session"
+                .into());
+        }
+
         let cmd = parse(text).ok_or_else(|| {
             format!("Unknown command: {text}\nType /help for available commands.")
         })?;
@@ -1057,5 +1071,18 @@ mod tests {
             second, "two",
             "an answered turn must not be decorated: {second}"
         );
+    }
+
+    #[tokio::test]
+    async fn help_command_lists_available_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::new("m"));
+        let (bridge, _chat, _provider) = bridge_with_provider(dir.path(), mock).await;
+        let reply = bridge.reply("/help").await.unwrap();
+        assert!(reply.contains("/help"));
+        assert!(reply.contains("/stop"));
+        assert!(reply.contains("/model"));
+        assert!(reply.contains("/status"));
+        assert!(reply.contains("/sessions"));
     }
 }
