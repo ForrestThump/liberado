@@ -318,8 +318,7 @@ mod tests {
         assert!(json.contains("total_cost_usd"));
 
         let round_tripped: Report = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(round_tripped.event_count, report.event_count);
-        assert_eq!(round_tripped.priced_calls, report.priced_calls);
+        assert_eq!(round_tripped, report, "full report must round-trip through JSON");
     }
 
     /// Summing parent rows does not double-count child money; querying child scope alone is direct-only.
