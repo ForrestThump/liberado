@@ -43,6 +43,20 @@ fn is_stuck(e: &liberado_coder_core::CoderError) -> bool {
 ///
 /// Best-effort: a workspace that is already a repo (the dogfood case, where the caller passes a real
 /// checkout) never reaches here, and a git failure just leaves things as they were.
+/// Whether `dir` is a git repository (or worktree). Used to decide whether to enable
+/// worktree-isolated sandboxing.
+fn is_git_repo(dir: &std::path::Path) -> bool {
+    dir.join(".git").exists()
+}
+
+/// Initialize `dir` as a git repo if it is not already one — a workspace without version control
+/// cannot report what the worker changed, so the worker would be asked to test something it has
+/// never seen done, and the verifier would grade the parent workspace (which the worker did not
+/// touch) rather than the child it did. The gap where a freshly-initialised repo sat empty so the
+/// session would then report, and be graded on, changes it never made.
+///
+/// Best-effort: a workspace that is already a repo (the dogfood case, where the caller passes a real
+/// checkout) never reaches here, and a git failure just leaves things as they were.
 fn init_git_repo(dir: &std::path::Path) {
     if dir.join(".git").exists() {
         return;
@@ -58,7 +72,30 @@ fn init_git_repo(dir: &std::path::Path) {
             dir = %dir.display(),
             "could not `git init` the session workspace — file-change reporting may be unreliable"
         );
+        return;
     }
+    // An empty repo has no HEAD commit, so `git worktree add` would fail.
+    // Seed a placeholder commit so Worktree isolation can proceed.
+    let placeholder = dir.join(".liberado-placeholder");
+    let _ = std::fs::write(&placeholder, "");
+    let _ = std::process::Command::new("git")
+        .args(["-C", &dir.to_string_lossy()])
+        .args(["add", ".liberado-placeholder"])
+        .status();
+    let _ = std::process::Command::new("git")
+        .args(["-C", &dir.to_string_lossy()])
+        .args([
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "liberado workspace root",
+        ])
+        .env("GIT_AUTHOR_NAME", "liberado")
+        .env("GIT_AUTHOR_EMAIL", "liberado@local")
+        .env("GIT_COMMITTER_NAME", "liberado")
+        .env("GIT_COMMITTER_EMAIL", "liberado@local")
+        .status();
 }
 
 impl CodingSessionPack {
@@ -146,7 +183,11 @@ impl CodingSessionPack {
                 critic: disabled,
                 gate: liberado_coder_core::CoderGateConfig::default(),
                 repair: Some(role),
-                sandbox: SandboxSpec::HostLocal,
+                sandbox: if is_git_repo(&workspace) {
+                    SandboxSpec::Worktree
+                } else {
+                    SandboxSpec::HostLocal
+                },
                 command_policy: CommandPolicy::default(),
                 validation_command: None,
                 verifiers: Vec::new(),

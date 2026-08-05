@@ -239,13 +239,23 @@ impl LiberadoLoopBackend {
         })?;
         let event_preview_max_chars = request.config.progress.event_preview_max_chars;
 
+        let workspace_root_in = request.workspace.root.clone();
         let mut coding_runtime = CodingToolRuntime::from_sandbox(
-            &request.workspace.root,
+            &workspace_root_in,
             request.config.sandbox.clone(),
             request.config.command_policy.clone(),
             request.config.path_policy.clone(),
         )
+        .await
         .map_err(|e| CoderError::Tool(e.to_string()))?;
+
+        // The sandbox may have created a separate workspace (e.g. Worktree).
+        // Use the actual workspace root for change detection, verification,
+        // and gating so they operate on the worktree rather than the parent.
+        let effective_root = coding_runtime
+            .workspace_root()
+            .to_string_lossy()
+            .to_string();
         if let Some(command) = &request.config.validation_command {
             coding_runtime =
                 coding_runtime.with_validation_command(gates::command_request(command));
@@ -307,7 +317,7 @@ impl LiberadoLoopBackend {
         }
 
         let file_changes: Vec<liberado_coder_core::FileChangeRecord> =
-            gates::changed_files_detailed(&request.workspace.root)
+            gates::changed_files_detailed(&effective_root)
                 .await?
                 .into_iter()
                 .map(|(path, change)| liberado_coder_core::FileChangeRecord {
@@ -362,7 +372,7 @@ impl LiberadoLoopBackend {
             );
             if !specs.is_empty() {
                 let pipeline = verify_pipeline::run_pipeline(
-                    &request.workspace.root,
+                    &effective_root,
                     &specs,
                     &request.config.verify_policy,
                     Some(&events),

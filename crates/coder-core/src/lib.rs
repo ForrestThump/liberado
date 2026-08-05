@@ -100,6 +100,10 @@ pub enum SandboxSpec {
     #[default]
     HostLocal,
     Docker(DockerSandboxSpec),
+    /// Git worktree isolation: the worker runs in a git-worktree copy of the
+    /// workspace root so concurrent workers cannot trample each other.
+    /// [`SandboxSpec::HostLocal`] is the sandbox inside the worktree.
+    Worktree,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -567,6 +571,15 @@ mod tests {
         let json = serde_json::to_string_pretty(&request).unwrap();
         let back: CoderRunRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(request, back);
+    }
+
+    #[test]
+    fn sandbox_worktree_round_trips_json() {
+        let spec = SandboxSpec::Worktree;
+        let json = serde_json::to_string(&spec).unwrap();
+        assert_eq!(json, r#"{"backend":"worktree"}"#);
+        let back: SandboxSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, SandboxSpec::Worktree);
     }
 
     #[test]
