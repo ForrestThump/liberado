@@ -356,6 +356,11 @@ impl CodingToolRuntime {
                 "branch name must not be empty".to_string(),
             ));
         }
+        if args.name.starts_with('-') {
+            return Err(ToolError::BadRequest(
+                "branch name must not start with '-'".to_string(),
+            ));
+        }
         let branch_name = args.name.clone();
         let mut request = CommandRequest::new("git");
         request.args = vec!["checkout".to_string(), "-b".to_string(), args.name];
@@ -387,7 +392,7 @@ impl CodingToolRuntime {
         if args.files.is_empty() {
             stage.args = vec!["add".to_string(), "-A".to_string()];
         } else {
-            stage.args = vec!["add".to_string()];
+            stage.args = vec!["add".to_string(), "--".to_string()];
             stage.args.extend(args.files.clone());
         }
         let stage_output = self.workspace.run_command(stage).await?;
@@ -439,6 +444,28 @@ impl CodingToolRuntime {
             set_upstream: bool,
         }
         let args: Args = parse_args(args)?;
+        if args.remote.is_empty() {
+            return Err(ToolError::BadRequest(
+                "remote must not be empty".to_string(),
+            ));
+        }
+        if args.remote.starts_with('-') {
+            return Err(ToolError::BadRequest(
+                "remote must not start with '-'".to_string(),
+            ));
+        }
+        if let Some(ref branch) = args.branch {
+            if branch.is_empty() {
+                return Err(ToolError::BadRequest(
+                    "branch must not be empty".to_string(),
+                ));
+            }
+            if branch.starts_with('-') {
+                return Err(ToolError::BadRequest(
+                    "branch must not start with '-'".to_string(),
+                ));
+            }
+        }
         let mut request = CommandRequest::new("git");
         request.args = vec!["push".to_string()];
         if args.set_upstream {
@@ -1367,8 +1394,3 @@ mod tests {
         );
     }
 }
-
-
-
-
-
