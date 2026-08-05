@@ -1236,6 +1236,35 @@ mod tests {
         assert_eq!(branch, "feature-x");
     }
 
+    /// Option injection: these values become argv entries, so a name like `-D` or `--force` would
+    /// change what git does rather than name a branch. The guards existed but nothing held them —
+    /// disabling all three `starts_with('-')` checks left the whole crate green.
+    ///
+    /// The three sites are separate arguments to separate commands, so this covers each rather than
+    /// trusting one to stand for the others.
+    #[tokio::test]
+    async fn git_tools_reject_arguments_that_would_parse_as_options() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        for (tool, args) in [
+            ("git_branch", json!({"name": "-D"})),
+            ("git_push", json!({"remote": "--mirror"})),
+            ("git_push", json!({"remote": "origin", "branch": "--force"})),
+        ] {
+            let Err(err) = runtime.invoke_json(tool, args.clone()).await else {
+                panic!("{tool} accepted {args}, which git would read as an option");
+            };
+            assert!(
+                err.to_string().contains("must not start with"),
+                "{tool} must refuse a leading dash; got: {err}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn git_branch_rejects_empty_name() {
         let dir = tempfile::tempdir().unwrap();
