@@ -122,13 +122,12 @@ impl CodingSessionPack {
             .and_then(|v| v.as_str())
             .map(PathBuf::from)
             .unwrap_or_else(|| {
-                let dir = self
-                    .default_workspace_parent
-                    .join(format!("goal-{session_id}"));
-                let _ = std::fs::create_dir_all(&dir);
-                init_git_repo(&dir);
-                dir
+                self.default_workspace_parent
+                    .join(format!("goal-{session_id}"))
             });
+
+        let _ = std::fs::create_dir_all(&workspace);
+        init_git_repo(&workspace);
 
         let model = goal
             .payload
@@ -442,5 +441,48 @@ impl CodingSessionPack {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_git_repo_returns_false_for_empty_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_git_repo(dir.path()));
+    }
+
+    #[test]
+    fn is_git_repo_returns_true_after_init() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+        assert!(is_git_repo(dir.path()));
+    }
+
+    #[test]
+    fn init_git_repo_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+        assert!(is_git_repo(dir.path()));
+        init_git_repo(dir.path());
+        assert!(is_git_repo(dir.path()));
+    }
+
+    #[test]
+    fn init_git_repo_creates_a_commit_so_worktree_can_proceed() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+
+        let output = std::process::Command::new("git")
+            .args(["-C", &dir.path().to_string_lossy()])
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "init_git_repo must leave at least one commit so WorktreeWorkspace can proceed"
+        );
     }
 }
