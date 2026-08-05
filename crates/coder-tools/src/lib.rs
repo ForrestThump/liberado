@@ -112,6 +112,7 @@ impl CodingToolRuntime {
         match name {
             "list_files" => self.list_files(args).await,
             "search_text" => self.search_text(args).await,
+            "list_symbols" => self.list_symbols(args).await,
             "read_file" => self.read_file(args).await,
             "write_file" => self.write_file(args).await,
             "edit_file" => self.edit_file(args).await,
@@ -183,6 +184,33 @@ impl CodingToolRuntime {
             },
         )?;
         Ok(json!({ "matches": matches }))
+    }
+
+    async fn list_symbols(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            #[serde(default = "default_limit")]
+            limit: usize,
+        }
+        let args: Args = parse_args(args)?;
+        let mut files = Vec::new();
+        walk_files(self.workspace.root(), args.limit, |path| {
+            let rel = relative_string(self.workspace.root(), path);
+            if path_denied(&rel, &self.path_policy) {
+                return;
+            }
+            let Ok(content) = std::fs::read_to_string(path) else {
+                return;
+            };
+            let symbols = extract_symbols(&rel, &content);
+            if !symbols.is_empty() {
+                files.push(json!({
+                    "path": rel,
+                    "symbols": symbols,
+                }));
+            }
+        })?;
+        Ok(json!({ "files": files, "limit": args.limit }))
     }
 
     async fn read_file(&self, args: Value) -> Result<Value, ToolError> {
@@ -402,6 +430,14 @@ impl ToolRuntime for CodingToolRuntime {
                 }),
             ),
             tool(
+                "list_symbols",
+                "Walk workspace files and extract top-level symbols (functions, structs, classes, etc.) across supported languages. Returns a structured map of file→symbols for quick codebase orientation.",
+                json!({
+                    "type": "object",
+                    "properties": { "limit": { "type": "integer", "minimum": 1 } }
+                }),
+            ),
+            tool(
                 "read_file",
                 "Read a file, optionally by line range.",
                 json!({
@@ -595,6 +631,326 @@ fn relative_string(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+fn lang_from_path(path: &str) -> &str {
+    let lower = path.to_lowercase();
+    if lower.ends_with(".rs") {
+        "rust"
+    } else if lower.ends_with(".py") {
+        "python"
+    } else if lower.ends_with(".ts")
+        || lower.ends_with(".tsx")
+        || lower.ends_with(".js")
+        || lower.ends_with(".jsx")
+    {
+        "typescript"
+    } else if lower.ends_with(".go") {
+        "go"
+    } else if lower.ends_with(".java") {
+        "java"
+    } else {
+        ""
+    }
+}
+
+fn extract_symbols(path: &str, content: &str) -> Vec<String> {
+    let lang = lang_from_path(path);
+    if lang.is_empty() {
+        return Vec::new();
+    }
+    let mut symbols = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        let sym = match lang {
+            "rust" => extract_rust_symbol(trimmed),
+            "python" => extract_python_symbol(trimmed),
+            "typescript" => extract_ts_symbol(trimmed),
+            "go" => extract_go_symbol(trimmed),
+            "java" => extract_java_symbol(trimmed),
+            _ => None,
+        };
+        if let Some(s) = sym {
+            if symbols.len() >= 50 {
+                break;
+            }
+            symbols.push(s);
+        }
+    }
+    symbols
+}
+
+fn extract_rust_symbol(line: &str) -> Option<String> {
+    let line = line.trim();
+    if line.starts_with("//")
+        || line.starts_with("///")
+        || line.starts_with("//!")
+        || line.starts_with("/*")
+        || line.starts_with('*')
+    {
+        return None;
+    }
+    if line.starts_with("pub fn ") || line.starts_with("fn ") {
+        let name = line
+            .trim_start_matches("pub ")
+            .trim_start_matches("fn ")
+            .split(['(', '<'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() && !name.starts_with("//") {
+            return Some(format!("fn {name}"));
+        }
+    }
+    if line.starts_with("pub struct ") || line.starts_with("struct ") {
+        let name = line
+            .trim_start_matches("pub ")
+            .trim_start_matches("struct ")
+            .split(['<', '{', '(', ';'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("struct {name}"));
+        }
+    }
+    if line.starts_with("pub enum ") || line.starts_with("enum ") {
+        let name = line
+            .trim_start_matches("pub ")
+            .trim_start_matches("enum ")
+            .split(['<', '{'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("enum {name}"));
+        }
+    }
+    if line.starts_with("pub trait ") || line.starts_with("trait ") {
+        let name = line
+            .trim_start_matches("pub ")
+            .trim_start_matches("trait ")
+            .split(['<', '{'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("trait {name}"));
+        }
+    }
+    if line.starts_with("pub impl ") || line.starts_with("impl ") {
+        let rest = line.trim_start_matches("pub ").trim_start_matches("impl ");
+        let name = rest.split(['<', '{', ' ']).next()?.trim().to_string();
+        if !name.is_empty() && !name.starts_with("for") {
+            return Some(format!("impl {name}"));
+        }
+    }
+    if line.starts_with("pub mod ") || line.starts_with("mod ") {
+        let name = line
+            .trim_start_matches("pub ")
+            .trim_start_matches("mod ")
+            .split(['{', ';'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("mod {name}"));
+        }
+    }
+    None
+}
+
+fn extract_python_symbol(line: &str) -> Option<String> {
+    if line.starts_with(' ') || line.starts_with('\t') {
+        return None;
+    }
+    let trimmed = line.trim();
+    if trimmed.starts_with('#') {
+        return None;
+    }
+    if trimmed.starts_with("def ") {
+        let name = trimmed
+            .trim_start_matches("def ")
+            .split('(')
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() && !name.starts_with('_') {
+            return Some(format!("def {name}"));
+        }
+    }
+    if trimmed.starts_with("class ") {
+        let name = trimmed
+            .trim_start_matches("class ")
+            .split(['(', ':'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("class {name}"));
+        }
+    }
+    None
+}
+
+fn extract_ts_symbol(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+        return None;
+    }
+    if trimmed.starts_with("function ") {
+        let name = trimmed
+            .trim_start_matches("function ")
+            .split('(')
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("function {name}"));
+        }
+    }
+    if trimmed.starts_with("export function ") {
+        let name = trimmed
+            .trim_start_matches("export function ")
+            .split('(')
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("export function {name}"));
+        }
+    }
+    if trimmed.contains(" class ") || trimmed.starts_with("class ") {
+        let rest = if trimmed.starts_with("export ") {
+            trimmed
+                .trim_start_matches("export ")
+                .trim_start_matches("default ")
+                .trim_start_matches("abstract ")
+        } else {
+            trimmed.trim_start_matches("abstract ")
+        };
+        if rest.starts_with("class ") {
+            let name = rest
+                .trim_start_matches("class ")
+                .split(['<', '{', ' ', ':'])
+                .next()?
+                .trim()
+                .to_string();
+            if !name.is_empty() && name != "extends" && name != "implements" {
+                return Some(format!("class {name}"));
+            }
+        }
+    }
+    if trimmed.starts_with("interface ") || trimmed.starts_with("export interface ") {
+        let name = trimmed
+            .trim_start_matches("export ")
+            .trim_start_matches("interface ")
+            .split(['<', '{'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("interface {name}"));
+        }
+    }
+    if trimmed.starts_with("export const ") || trimmed.starts_with("const ") {
+        let rest = trimmed.trim_start_matches("export ");
+        if rest.starts_with("const ") {
+            let name = rest
+                .trim_start_matches("const ")
+                .split([':', '='])
+                .next()?
+                .trim()
+                .to_string();
+            if !name.is_empty() && rest.contains("=>") {
+                return Some(format!("const {name}"));
+            }
+        }
+    }
+    None
+}
+
+fn extract_go_symbol(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+        return None;
+    }
+    if trimmed.starts_with("func ") {
+        let name = trimmed
+            .trim_start_matches("func ")
+            .split('(')
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("func {name}"));
+        }
+    }
+    if trimmed.starts_with("type ") && trimmed.contains(" struct") {
+        let name = trimmed
+            .trim_start_matches("type ")
+            .split_whitespace()
+            .next()?
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("type {name} struct"));
+        }
+    }
+    if trimmed.starts_with("type ") && trimmed.contains(" interface") {
+        let name = trimmed
+            .trim_start_matches("type ")
+            .split_whitespace()
+            .next()?
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("type {name} interface"));
+        }
+    }
+    None
+}
+
+fn extract_java_symbol(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+        return None;
+    }
+    if trimmed.starts_with("public class ") || trimmed.starts_with("class ") {
+        let name = trimmed
+            .trim_start_matches("public ")
+            .trim_start_matches("class ")
+            .split(['<', '{'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("class {name}"));
+        }
+    }
+    if trimmed.starts_with("public interface ") || trimmed.starts_with("interface ") {
+        let name = trimmed
+            .trim_start_matches("public ")
+            .trim_start_matches("interface ")
+            .split(['<', '{'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("interface {name}"));
+        }
+    }
+    if trimmed.starts_with("public enum ") || trimmed.starts_with("enum ") {
+        let name = trimmed
+            .trim_start_matches("public ")
+            .trim_start_matches("enum ")
+            .split(['<', '{'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("enum {name}"));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -934,6 +1290,7 @@ mod tests {
         for tool in &[
             "list_files",
             "search_text",
+            "list_symbols",
             "read_file",
             "write_file",
             "edit_file",
@@ -1005,5 +1362,136 @@ mod tests {
         .unwrap();
 
         assert_eq!(count, 3, "walk_files should visit at most 3 files");
+    }
+
+    #[test]
+    fn extract_rust_functions_and_structs() {
+        let content = "pub fn main() {\n    let x = 1;\n}\n\npub struct Foo {\n    x: i32,\n}\n\nfn private_help() {}";
+        let symbols = extract_symbols("src/main.rs", content);
+        assert!(symbols.contains(&"fn main".to_string()));
+        assert!(symbols.contains(&"struct Foo".to_string()));
+        assert!(symbols.contains(&"fn private_help".to_string()));
+    }
+
+    #[test]
+    fn extract_rust_traits_and_enums() {
+        let content = "pub trait Handler {\n    fn handle(&self);\n}\n\npub enum Status {\n    Ok,\n    Err,\n}";
+        let symbols = extract_symbols("src/types.rs", content);
+        assert!(symbols.contains(&"trait Handler".to_string()));
+        assert!(symbols.contains(&"enum Status".to_string()));
+    }
+
+    #[test]
+    fn extract_rust_mods_and_impls() {
+        let content =
+            "pub mod sub;\nmod private_mod {\n}\n\nimpl MyType {\n    fn new() -> Self {}\n}";
+        let symbols = extract_symbols("src/lib.rs", content);
+        assert!(symbols.contains(&"mod sub".to_string()));
+        assert!(symbols.contains(&"mod private_mod".to_string()));
+        assert!(symbols.contains(&"impl MyType".to_string()));
+    }
+
+    #[test]
+    fn extract_python_symbols() {
+        let content = "def handle_request(req):\n    pass\n\nclass Router:\n    def route(self):\n        pass";
+        let symbols = extract_symbols("app.py", content);
+        assert!(symbols.contains(&"def handle_request".to_string()));
+        assert!(symbols.contains(&"class Router".to_string()));
+    }
+
+    #[test]
+    fn extract_typescript_symbols() {
+        let content = "export function main() {}\n\nclass App {\n    render() {}\n}\n\ninterface Config {\n    port: number;\n}\n\nconst handler = (req: Request) => { return 200; };";
+        let symbols = extract_symbols("app.ts", content);
+        assert!(symbols.contains(&"export function main".to_string()));
+        assert!(symbols.contains(&"class App".to_string()));
+        assert!(symbols.contains(&"interface Config".to_string()));
+        assert!(symbols.contains(&"const handler".to_string()));
+    }
+
+    #[test]
+    fn extract_go_symbols() {
+        let content = "func main() {\n}\n\ntype Server struct {\n    port int\n}\n\ntype Handler interface {\n    Serve()\n}";
+        let symbols = extract_symbols("main.go", content);
+        assert!(symbols.contains(&"func main".to_string()));
+        assert!(symbols.contains(&"type Server struct".to_string()));
+        assert!(symbols.contains(&"type Handler interface".to_string()));
+    }
+
+    #[test]
+    fn extract_java_symbols() {
+        let content = "public class Main {\n    public static void main(String[] args) {}\n}\n\npublic enum State {\n    ON, OFF\n}\n\npublic interface Runnable {\n    void run();\n}";
+        let symbols = extract_symbols("Main.java", content);
+        assert!(symbols.contains(&"class Main".to_string()));
+        assert!(symbols.contains(&"enum State".to_string()));
+        assert!(symbols.contains(&"interface Runnable".to_string()));
+    }
+
+    #[test]
+    fn unknown_extension_returns_empty() {
+        let content = "fn main() {}";
+        let symbols = extract_symbols("README.md", content);
+        assert!(symbols.is_empty());
+    }
+
+    #[test]
+    fn skips_comments() {
+        let content = "// fn not_a_fn() {}\n/* struct Fake {} */\n\nfn real() {}";
+        let symbols = extract_symbols("src/lib.rs", content);
+        assert_eq!(symbols.len(), 1);
+        assert!(symbols.contains(&"fn real".to_string()));
+    }
+
+    #[tokio::test]
+    async fn list_symbols_returns_workspace_symbols() {
+        let (dir, runtime) = runtime();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn answer() -> u8 { 42 }\n\npub struct Config { pub port: u16 }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("README.md"),
+            "# Project\nfn not_extracted() {}\n",
+        )
+        .unwrap();
+
+        let result = runtime
+            .invoke_json("list_symbols", json!({}))
+            .await
+            .unwrap();
+        let files = result["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["path"], "src/lib.rs");
+        let symbols: Vec<String> = files[0]["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str().unwrap().to_string())
+            .collect();
+        assert!(symbols.contains(&"fn answer".to_string()));
+        assert!(symbols.contains(&"struct Config".to_string()));
+    }
+
+    #[tokio::test]
+    async fn list_symbols_respects_limit() {
+        let (dir, runtime) = runtime();
+        for i in 0..5 {
+            std::fs::write(
+                dir.path().join(format!("f{i}.rs")),
+                format!("fn f{i}() {{}}"),
+            )
+            .unwrap();
+        }
+
+        let result = runtime
+            .invoke_json("list_symbols", json!({"limit": 2}))
+            .await
+            .unwrap();
+
+        let files = result["files"].as_array().unwrap();
+        assert!(files.len() <= 2, "limit 2 should cap results");
+        assert_eq!(result["limit"], 2);
     }
 }
