@@ -155,11 +155,16 @@ impl CodingSessionPack {
             "You are Liberado's coding worker. Inspect, edit with tools, then submit_report.",
         );
 
-        let max_turns = if goal.max_turns > 0 {
+        let max_turns = if policies.plan_mode {
+            // Plans are short; keep the bound tight so a looping planner cannot burn a full build
+            // budget. Cap an explicit max_turns from a direct API call too.
+            if goal.max_turns > 0 {
+                8.min(goal.max_turns)
+            } else {
+                8
+            }
+        } else if goal.max_turns > 0 {
             goal.max_turns
-        } else if policies.plan_mode {
-            // Plans are short; keep the bound tight so a looping planner cannot burn a full build budget.
-            8
         } else {
             12
         };

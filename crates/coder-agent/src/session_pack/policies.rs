@@ -70,7 +70,9 @@ fn is_plan_mode(overrides: &serde_json::Value, payload: &serde_json::Value) -> b
             .and_then(|v| v.as_str())
             .is_some_and(|m| m.eq_ignore_ascii_case("plan"))
     };
-    // Payload wins over profile overrides for the boolean, but either source may enable plan mode.
+    // Either source may enable plan mode; neither can disable it once the other has set it.
+    // The flag ORs rather than layers — a profile override that sets plan_mode cannot be
+    // overridden by a payload that omits it, and vice versa.
     bool_flag(payload) || mode_plan(payload) || bool_flag(overrides) || mode_plan(overrides)
 }
 
