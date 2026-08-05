@@ -59,13 +59,15 @@ pub enum CommandResult {
         domain: String,
         goal: String,
     },
-    /// Start a **coding** goal session (`/goal <text>`). Distinct from `SpawnGoalSession`: that one
-    /// takes a domain/profile token from the human, while this one is always the coding pack and
-    /// carries a project instead. `project` is `None` when the surface should use its current
-    /// project context.
+    /// Start a **coding** goal session (`/goal <text>` or `/explore <text>`). Distinct from
+    /// `SpawnGoalSession`: that one takes a domain/profile token from the human, while this one is
+    /// always the coding pack and carries a project instead. `project` is `None` when the surface
+    /// should use its current project context. `explore_mode` selects the read-only tool preset.
     StartCodingGoal {
         project: Option<String>,
         text: String,
+        /// When true, payload includes `explore_mode: true` (read-only PathPolicy + catalog).
+        explore_mode: bool,
     },
     /// Open the goal view for the focused session (bare `/goal`).
     OpenGoalView,

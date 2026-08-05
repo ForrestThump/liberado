@@ -36,6 +36,10 @@ pub fn parse(input: &str) -> Option<SlashCommand> {
         "/goal" => Some(parse_goal(
             trimmed.strip_prefix("/goal").unwrap_or("").trim(),
         )),
+        // Same grammar as `/goal` start; payload sets `explore_mode` for the coding pack.
+        "/explore" => Some(parse_explore(
+            trimmed.strip_prefix("/explore").unwrap_or("").trim(),
+        )),
         "/back" => Some(SlashCommand::Back),
         // `/fork 3` branches after your 3rd turn; a bare `/fork` takes the whole conversation.
         // A non-numeric argument is a typo, not a turn — fall back to the whole conversation rather
@@ -80,6 +84,35 @@ fn parse_goal(rest: &str) -> SlashCommand {
     SlashCommand::Goal(cmd)
 }
 
+/// `/explore …` — same start grammar as `/goal` (including `in <project>`).
+fn parse_explore(rest: &str) -> SlashCommand {
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return SlashCommand::Explore {
+            project: None,
+            text: String::new(),
+        };
+    }
+    let (first, tail) = match rest.split_once(char::is_whitespace) {
+        Some((f, t)) => (f, t.trim()),
+        None => (rest, ""),
+    };
+    if first == "in" {
+        let (project, text) = match tail.split_once(char::is_whitespace) {
+            Some((p, t)) => (p.trim(), t.trim()),
+            None => (tail, ""),
+        };
+        return SlashCommand::Explore {
+            project: Some(project.to_string()),
+            text: text.to_string(),
+        };
+    }
+    SlashCommand::Explore {
+        project: None,
+        text: rest.to_string(),
+    }
+}
+
 fn parse_theme(sub: Option<&str>, extra: Option<&str>) -> SlashCommand {
     match sub.unwrap_or("") {
         "reload" => SlashCommand::Theme(ThemeCmd::Reload),
@@ -117,5 +150,8 @@ pub fn dispatch(cmd: &SlashCommand, ctx: &mut dyn CommandContext) -> Vec<Command
         SlashCommand::Back => handlers::focus::back(ctx),
         SlashCommand::Fork { after_turn } => handlers::fork::handle(ctx, *after_turn),
         SlashCommand::Goal(cmd) => handlers::focus::goal(cmd, ctx),
+        SlashCommand::Explore { project, text } => {
+            handlers::focus::explore(project.as_deref(), text, ctx)
+        }
     }
 }

@@ -40,6 +40,14 @@ pub enum SlashCommand {
     /// Coding-goal surface (S2/G2): `/goal <text>`, `/goal in <project> <text>`, and the
     /// lifecycle subcommands.
     Goal(GoalCmd),
+    /// Read-only coding explore (`/explore <text>`, `/explore in <project> <text>`).
+    ///
+    /// Same coding pack as `/goal`, with `explore_mode` so the pack applies read-only path/command
+    /// policy and a filtered tool catalog. Reuses hub + PathPolicy — not a second agent runtime.
+    Explore {
+        project: Option<String>,
+        text: String,
+    },
 }
 
 /// `/goal` subcommands.
@@ -128,6 +136,14 @@ impl std::fmt::Display for SlashCommand {
                 GoalCmd::Resume(a) => write!(f, "/goal resume {a}"),
                 GoalCmd::Clear => write!(f, "/goal clear"),
             },
+            SlashCommand::Explore {
+                project: Some(p),
+                text,
+            } => write!(f, "/explore in {p} {text}"),
+            SlashCommand::Explore {
+                project: None,
+                text,
+            } => write!(f, "/explore {text}"),
             SlashCommand::Back => write!(f, "/back"),
             SlashCommand::Fork { after_turn: None } => write!(f, "/fork"),
             SlashCommand::Fork {

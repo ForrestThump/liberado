@@ -6,8 +6,8 @@
 //! Conflating those is what made the ask seam unreachable from the case that most needed it.
 
 use liberado_coder_core::{
-    CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask, CommandPolicy, GoalContract,
-    LIBERADO_LOOP_BACKEND, PathPolicy, ProgressPolicy, SandboxSpec, WorkspaceRef,
+    CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask, GoalContract,
+    LIBERADO_LOOP_BACKEND, ProgressPolicy, SandboxSpec, WorkspaceRef,
 };
 use liberado_common::Outcome;
 use liberado_session::{
@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use tokio::sync::mpsc::Sender;
 
 use super::CodingSessionPack;
+use super::policies::WorkspacePolicies;
 
 /// Is this a failure a **human answer** could plausibly unblock?
 ///
@@ -147,17 +148,18 @@ impl CodingSessionPack {
             .unwrap_or("session-coder")
             .to_string();
 
-        let prompt = goal
-            .payload
-            .get("coder_prompt")
-            .and_then(|v| v.as_str())
-            .unwrap_or(
-                "You are Liberado's coding worker. Inspect, edit with tools, then submit_report.",
-            )
-            .to_string();
+        // Path/command policy from profile overrides + payload (explore = read-only preset).
+        let policies = WorkspacePolicies::resolve(ctx.overrides(), &goal.payload);
+        let prompt = policies.coder_prompt(
+            &goal.payload,
+            "You are Liberado's coding worker. Inspect, edit with tools, then submit_report.",
+        );
 
         let max_turns = if goal.max_turns > 0 {
             goal.max_turns
+        } else if policies.explore_mode {
+            // Exploration is bounded research, not a long build.
+            10
         } else {
             12
         };
@@ -182,6 +184,16 @@ impl CodingSessionPack {
         let mut task = CoderTask::new(session_id, &goal.description);
         task.success_criteria = goal.success_criteria.clone();
 
+        // Explore is read-only: HostLocal is enough (no worktree isolation required for readers).
+        // Build mode still uses Worktree when the workspace is a git repo (C7).
+        let sandbox = if policies.explore_mode {
+            SandboxSpec::HostLocal
+        } else if is_git_repo(&workspace) {
+            SandboxSpec::Worktree
+        } else {
+            SandboxSpec::HostLocal
+        };
+
         let mut request = CoderRunRequest {
             task,
             workspace: WorkspaceRef::new(workspace.to_string_lossy(), "HEAD"),
@@ -192,19 +204,20 @@ impl CodingSessionPack {
                 coder: role.clone(),
                 critic: disabled,
                 gate: liberado_coder_core::CoderGateConfig::default(),
-                repair: Some(role),
-                sandbox: if is_git_repo(&workspace) {
-                    SandboxSpec::Worktree
+                // Explore: no repair loop mutating the tree.
+                repair: if policies.explore_mode {
+                    None
                 } else {
-                    SandboxSpec::HostLocal
+                    Some(role)
                 },
-                command_policy: CommandPolicy::default(),
+                sandbox,
+                command_policy: policies.command_policy.clone(),
                 validation_command: None,
                 verifiers: Vec::new(),
                 verify_policy: Default::default(),
-                path_policy: PathPolicy::default(),
+                path_policy: policies.path_policy.clone(),
                 progress: ProgressPolicy {
-                    max_attempts: 2,
+                    max_attempts: if policies.explore_mode { 1 } else { 2 },
                     ..ProgressPolicy::default()
                 },
             },
@@ -212,6 +225,17 @@ impl CodingSessionPack {
             prior_feedback: Vec::new(),
             strategist_directive: None,
         };
+
+        if policies.explore_mode {
+            let _ = events
+                .send(SessionEvent::new(
+                    session_id,
+                    SessionEventKind::Progress {
+                        message: "explore mode: read-only tools; writes and shell disabled".into(),
+                    },
+                ))
+                .await;
+        }
 
         // The frozen contract overwrites description, success criteria, and — the point of the
         // whole exercise — the **verifiers**. Without it these stay empty and the loop grades its

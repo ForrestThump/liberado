@@ -7,7 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use liberado_coder_core::{CommandPolicy, PathPolicy, SandboxSpec};
+use liberado_coder_core::{CommandPolicy, EXPLORE_TOOL_NAMES, PathPolicy, SandboxSpec};
 use liberado_coder_sandbox::{
     CommandRequest, DockerWorkspace, HostWorkspace, SandboxError, Workspace, WorktreeWorkspace,
 };
@@ -522,7 +522,9 @@ impl CodingToolRuntime {
 #[async_trait]
 impl ToolRuntime for CodingToolRuntime {
     fn catalog(&self) -> Vec<ToolDef> {
-        vec![
+        // Full tool surface; explore mode filters to EXPLORE_TOOL_NAMES (read-only) so the model
+        // is not offered write tools. PathPolicy/CommandPolicy still enforce on invoke.
+        let full = vec![
             tool(
                 "list_files",
                 "List workspace files with policy filtering.",
@@ -674,10 +676,24 @@ impl ToolRuntime for CodingToolRuntime {
                 "Run the configured validation command.",
                 json!({ "type": "object" }),
             ),
-        ]
+        ];
+        if self.path_policy.writes_disabled() {
+            full.into_iter()
+                .filter(|t| EXPLORE_TOOL_NAMES.contains(&t.name.as_str()))
+                .collect()
+        } else {
+            full
+        }
     }
 
     async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
+        // Defense in depth: even if a write tool is named, read-only policy refuses it.
+        if self.path_policy.writes_disabled() && !EXPLORE_TOOL_NAMES.contains(&call.name.as_str()) {
+            return Err(format!(
+                "tool '{}' is not available in explore (read-only) mode",
+                call.name
+            ));
+        }
         self.invoke_json(&call.name, call.arguments.clone())
             .await
             .and_then(|value| {
@@ -1176,6 +1192,41 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(ok["written"], true);
+    }
+
+    /// Explore mode reuses PathPolicy::read_only + catalog filter — no parallel tool stack.
+    #[tokio::test]
+    async fn explore_mode_catalog_is_read_only_and_writes_fail() {
+        use liberado_coder_core::EXPLORE_TOOL_NAMES;
+        use liberado_executor::ToolRuntime;
+
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = CodingToolRuntime::new(
+            dir.path(),
+            CommandPolicy::none_allowed(),
+            PathPolicy::read_only(),
+        )
+        .unwrap();
+
+        let names: Vec<_> = runtime.catalog().into_iter().map(|t| t.name).collect();
+        for n in EXPLORE_TOOL_NAMES {
+            assert!(names.contains(&n.to_string()), "missing explore tool {n}");
+        }
+        assert!(!names.iter().any(|n| n == "write_file"));
+        assert!(!names.iter().any(|n| n == "run_command"));
+
+        let err = runtime
+            .invoke(&liberado_provider::ToolInvocation {
+                id: "1".into(),
+                name: "write_file".into(),
+                arguments: json!({"path": "x.rs", "content": "x"}),
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("explore") || err.contains("read-only") || err.contains("denied"),
+            "got {err}"
+        );
     }
 
     #[tokio::test]

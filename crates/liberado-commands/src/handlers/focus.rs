@@ -79,6 +79,7 @@ pub fn goal(cmd: &GoalCmd, ctx: &mut dyn CommandContext) -> Vec<CommandResult> {
             vec![CommandResult::StartCodingGoal {
                 project: project.clone().filter(|p| !p.trim().is_empty()),
                 text: text.to_string(),
+                explore_mode: false,
             }]
         }
         GoalCmd::View => vec![CommandResult::OpenGoalView],
@@ -89,4 +90,34 @@ pub fn goal(cmd: &GoalCmd, ctx: &mut dyn CommandContext) -> Vec<CommandResult> {
         }],
         GoalCmd::Clear => vec![CommandResult::CancelGoalSession],
     }
+}
+
+/// `/explore …` — coding goal in explore mode (read-only tools, no shell).
+pub fn explore(
+    project: Option<&str>,
+    text: &str,
+    ctx: &mut dyn CommandContext,
+) -> Vec<CommandResult> {
+    ctx.clear_input();
+    let text = text.trim();
+    if text.is_empty() {
+        ctx.push_system_message(
+            "Usage: /explore <what to investigate>
+             e.g. /explore how auth middleware is wired
+             e.g. /explore in liberado how sessions park
+
+             Explore mode: read-only tools only (list/search/read/git status|diff); no writes or shell.
+             Findings return as the session summary — use a normal /goal to implement afterward."
+                .into(),
+        );
+        return vec![CommandResult::None];
+    }
+    vec![CommandResult::StartCodingGoal {
+        project: project
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_string),
+        text: text.to_string(),
+        explore_mode: true,
+    }]
 }

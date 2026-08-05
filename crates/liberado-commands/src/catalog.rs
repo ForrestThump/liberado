@@ -95,6 +95,11 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
         description: "coding goal: /goal <text> | in <project> <text> | status|pause|resume|clear",
     },
     CommandSpec {
+        insert: "/explore ",
+        name: "/explore",
+        description: "read-only coding explore: /explore <text> | in <project> <text>",
+    },
+    CommandSpec {
         insert: "/join ",
         name: "/join",
         description: "join a goal session by id (focus its input)",

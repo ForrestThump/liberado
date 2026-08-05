@@ -894,13 +894,18 @@ impl App {
                         after_turn: *after_turn,
                     });
                 }
-                liberado_commands::CommandResult::StartCodingGoal { project, text } => {
+                liberado_commands::CommandResult::StartCodingGoal {
+                    project,
+                    text,
+                    explore_mode,
+                } => {
                     if self.joined.as_ref().map(|j| j.finished).unwrap_or(false) {
                         self.joined = None;
                     }
                     effects.push(Effect::StartCodingGoal {
                         project: project.clone(),
                         text: text.clone(),
+                        explore_mode: *explore_mode,
                         origin_conversation: self.session.clone(),
                     });
                 }
@@ -1207,11 +1212,12 @@ pub enum Effect {
         goal: String,
         origin_conversation: Option<String>,
     },
-    /// Start a **coding** goal (`/goal <text>`): `POST /api/goals` with domain `coding`, then focus
-    /// it. Separate from `SpawnGoalSession` because the coding pack takes a project, not a profile.
+    /// Start a **coding** goal (`/goal` or `/explore`): `POST /api/goals` with domain `coding`.
     StartCodingGoal {
         project: Option<String>,
         text: String,
+        /// Read-only explore preset (no writes / shell).
+        explore_mode: bool,
         origin_conversation: Option<String>,
     },
     /// Park the joined session (`POST /api/goals/{id}/park`) — graceful, resumable.
