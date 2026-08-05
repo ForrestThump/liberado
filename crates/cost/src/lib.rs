@@ -123,6 +123,193 @@ where
     price_table_from_models(&models)
 }
 
+// ── Provenance ratio (promoted from examples/provenance_ratio.rs) ──────
+
+/// A single delegation row for the provenance-ratio report.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProvenanceRow {
+    pub conversation: String,
+    pub received: usize,
+    pub written: usize,
+    pub ratio: f64,
+}
+
+/// Walk session logs and pair delegate tool results with the assistant reply that followed.
+///
+/// How much of a delegated answer came from the delegation?  High ratios flag transcripts
+/// worth reading — they may signal fabricated detail.
+pub fn run_provenance_ratio(data_dir: &Path) -> Vec<ProvenanceRow> {
+    let sessions = data_dir.join("sessions");
+    let Ok(entries) = std::fs::read_dir(&sessions) else {
+        return Vec::new();
+    };
+
+    let mut rows = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let delegations = scan_session_log(&text);
+        rows.extend(delegations);
+    }
+
+    rows.sort_by(|a, b| {
+        b.ratio
+            .partial_cmp(&a.ratio)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    rows
+}
+
+fn substance(content: &str) -> usize {
+    content
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            !t.is_empty()
+                && !t.starts_with("[session:")
+                && !t.starts_with("[dispatch journal:")
+                && !t.starts_with("RESULT (")
+        })
+        .map(|l| l.trim().len())
+        .sum()
+}
+
+fn succeeded(content: &str) -> bool {
+    content.trim_start().starts_with("RESULT (Succeeded)")
+}
+
+fn scan_session_log(text: &str) -> Vec<ProvenanceRow> {
+    let mut out = Vec::new();
+    let mut pending_received = 0usize;
+    let mut conversation = String::new();
+
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v.get("kind").and_then(|k| k.as_str()) != Some("node") {
+            continue;
+        }
+        let author = v.get("author").and_then(|a| a.as_str()).unwrap_or("");
+        let content = v
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+        let cid = v
+            .get("conversation_id")
+            .and_then(|c| c.as_str())
+            .unwrap_or("?");
+
+        match author {
+            "tool" if content.contains("chat-delegate-") && !succeeded(content) => {}
+            "tool" if content.contains("chat-delegate-") => {
+                if conversation != cid {
+                    pending_received = 0;
+                    conversation = cid.to_string();
+                }
+                pending_received += substance(content);
+            }
+            "assistant" if pending_received > 0 && cid == conversation => {
+                out.push(ProvenanceRow {
+                    conversation: cid.to_string(),
+                    received: pending_received,
+                    written: content.trim().len(),
+                    ratio: content.trim().len() as f64 / pending_received as f64,
+                });
+                pending_received = 0;
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+// ── Delegation cost (promoted from examples/delegation_cost.rs) ──────
+
+/// A prompt-token sample for the delegation-cost report.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DelegationCostSample {
+    pub after_delegating: bool,
+    pub prompt_tokens: u32,
+    pub cached_prompt_tokens: Option<u32>,
+}
+
+/// Compare prompt-token sizes of turns that follow a delegating vs non-delegating turn.
+pub fn run_delegation_cost(data_dir: &Path) -> Result<Vec<DelegationCostSample>, LoadError> {
+    let events = load_latency_events(&latency_journal_path(data_dir))?;
+    let parents = load_dispatch_parent_map(&dispatches_dir(data_dir))?;
+
+    let mut indexed: Vec<(String, &JournalEvent)> = events
+        .iter()
+        .map(|e| (root_conversation(&e.correlation, &parents), e))
+        .collect();
+    indexed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.ts_ms.cmp(&b.1.ts_ms)));
+
+    #[derive(Default)]
+    struct Turn {
+        delegated: bool,
+        prompt: Option<u32>,
+        cached: Option<u32>,
+    }
+
+    let mut by_conv: HashMap<String, Vec<Turn>> = HashMap::new();
+    let mut i = 0;
+    while i < indexed.len() {
+        let conv = indexed[i].0.clone();
+        let start = i;
+        while i < indexed.len() && indexed[i].0 == conv {
+            i += 1;
+        }
+        let slice = &indexed[start..i];
+        let has_own = slice.iter().any(|(_, e)| e.correlation == conv);
+        let mut turns = Vec::new();
+        let mut cur: Option<Turn> = None;
+        for (_, e) in slice {
+            let boundary = !has_own || e.correlation == conv;
+            let t = cur.get_or_insert(Turn::default());
+            if e.correlation != conv {
+                t.delegated = true;
+            }
+            if boundary {
+                t.prompt = e.prompt_tokens;
+                t.cached = e.cached_prompt_tokens;
+            }
+            if boundary && (e.tool_calls == 0 || e.finish == "error") {
+                turns.push(cur.take().expect("just inserted"));
+            }
+        }
+        if let Some(t) = cur {
+            turns.push(t);
+        }
+        by_conv.insert(conv, turns);
+    }
+
+    let mut samples = Vec::new();
+    for turns in by_conv.values() {
+        for pair in turns.windows(2) {
+            let Some(prompt) = pair[1].prompt else {
+                continue;
+            };
+            samples.push(DelegationCostSample {
+                after_delegating: pair[0].delegated,
+                prompt_tokens: prompt,
+                cached_prompt_tokens: pair[1].cached,
+            });
+        }
+    }
+    Ok(samples)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
