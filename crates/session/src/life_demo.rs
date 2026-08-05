@@ -977,4 +977,89 @@ mod tests {
         assert_eq!(listed.len(), 1, "the session must be listable");
         assert_eq!(listed[0].id, id);
     }
+
+    /// B1: a session parked by the drain mid-execution (not awaiting a human)
+    /// rehydrates as Parked and is resumable. The E6 path covers awaiting;
+    /// this exercises the drain-park path.
+    #[tokio::test]
+    async fn a_drain_parked_session_resumes_after_rehydrate() {
+        use crate::goal::{GoalSessionRecord, GoalSpec, SessionGrant, SessionStatus};
+        use crate::store::GoalSessionStore;
+
+        /// A pack that can resume and records that it was called.
+        struct ResumablePack;
+        #[async_trait::async_trait]
+        impl DomainPackRunner for ResumablePack {
+            fn domain_id(&self) -> &str {
+                "life"
+            }
+            async fn can_resume(&self, _ctx: &crate::runner::PackContext<'_>) -> bool {
+                true
+            }
+            async fn run(
+                &self,
+                _id: &str,
+                _goal: &GoalSpec,
+                _ctx: &crate::runner::PackContext<'_>,
+                _events: tokio::sync::mpsc::Sender<crate::SessionEvent>,
+                _inputs: crate::runner::InputChannel,
+                _cancel: tokio::sync::watch::Receiver<bool>,
+            ) -> Result<crate::GoalResult, crate::runner::PackError> {
+                Ok(crate::GoalResult {
+                    terminal: crate::TerminalKind::Succeeded,
+                    summary: "drain-park resume succeeded".into(),
+                    artifacts: vec![],
+                    diagnostics: serde_json::Value::Null,
+                })
+            }
+        }
+
+        let dir = std::env::temp_dir().join(format!("liberado-goals-test-{}", ulid::Ulid::new()));
+        {
+            // The drain-park shape: session was running, drain sets Parked.
+            let store = GoalSessionStore::open(&dir).await;
+            let mut rec = GoalSessionRecord::new(GoalSpec {
+                id: Some("b1-resume".into()),
+                description: "long running task".into(),
+                success_criteria: vec![],
+                domain: DomainHint::Life,
+                max_turns: 0,
+                max_idle_secs: None,
+                origin: None,
+                profile: None,
+                payload: serde_json::Value::Null,
+            });
+            rec.grant = SessionGrant {
+                capabilities: CapabilitySet::from_iter([liberado_common::Capability::AskHuman]),
+                ..Default::default()
+            };
+            rec.status = SessionStatus::Running;
+            store.insert(rec).await;
+            store.set_status("b1-resume", SessionStatus::Parked).await;
+        }
+
+        // Reopen: the store rehydrates from disk.
+        let store = GoalSessionStore::open(&dir).await;
+        let rehydrated = store.get("b1-resume").await.unwrap();
+        assert_eq!(
+            rehydrated.status,
+            SessionStatus::Parked,
+            "B1: drain-parked session must rehydrate as Parked"
+        );
+        assert!(
+            !rehydrated.awaiting_input,
+            "drain-park has no awaiting question"
+        );
+
+        let mut hub = GoalSessionHub::new(store);
+        hub.register_pack(Arc::new(ResumablePack));
+        let hub = Arc::new(hub);
+
+        // Resume must work — this is what B1 fixes.
+        hub.resume("b1-resume", "let's continue")
+            .await
+            .expect("drain-parked session must be resumable");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

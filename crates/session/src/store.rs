@@ -350,9 +350,14 @@ fn replay_file(path: &Path) -> Option<SessionInner> {
 
     // A session that was still running when the daemon stopped can't be resumed — mark it Failed so
     // surfaces show it as terminal (its transcript stays fully viewable on rejoin). E6 exception:
-    // an awaiting session is only *parked*, not failed.
+    // an awaiting session is only *parked*, not failed. B1: an explicit drain-park is also preserved
+    // so the session is resumable — that is the point of parking rather than cancelling at shutdown.
     if !record.status.is_terminal() {
-        if record.awaiting_input {
+        if record.status == SessionStatus::Parked {
+            // A session the drain explicitly parked (E6 drain semantics: park, don't cancel).
+            // Keep it Parked so it is resumable. The coding pack's can_resume still refuses
+            // once the build has started, so this is safe.
+        } else if record.awaiting_input {
             record.status = SessionStatus::Parked;
         } else {
             record.status = SessionStatus::Failed;
@@ -507,19 +512,12 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// Pins a **known gap**: a goal parked by the shutdown drain rehydrates as `Failed`, not
-    /// `Parked` — so it is not resumable, which contradicts the reason the drain parks rather than
-    /// cancels ("a parked session can be resumed; a cancelled one cannot", `shutdown.rs`).
-    ///
-    /// `set_status` now always logs, so the `Parked` line *is* on disk. But `Parked` is not
-    /// terminal, and rehydrate coerces any non-terminal status to `Failed` unless the session was
-    /// awaiting a human — which a drain-park never is. The durability fix is therefore correct and
-    /// currently unobservable here, which is exactly why removing it fails no test.
-    ///
-    /// **If you make an explicitly-recorded park survive rehydrate, this test should start
-    /// failing.** Change it then, and see the backlog item.
+    /// A drain-parked goal rehydrates as `Parked` — so it is resumable. The coding pack's own
+    /// `can_resume` gate still refuses once the build has started, but the session must survive
+    /// rehydrate as `Parked`: that status was explicitly recorded, and the point of parking rather
+    /// than cancelling at shutdown is exactly that the session should be resumable afterwards.
     #[tokio::test]
-    async fn a_drain_parked_session_rehydrates_as_failed_today() {
+    async fn a_drain_parked_session_rehydrates_as_parked() {
         let dir = std::env::temp_dir().join(format!("liberado-goals-test-{}", ulid::Ulid::new()));
         {
             let store = GoalSessionStore::open(&dir).await;
@@ -541,12 +539,13 @@ mod tests {
             .unwrap();
         assert_eq!(
             rec.status,
-            SessionStatus::Failed,
-            "documented gap: the rehydrate coercion overrides an explicit drain-park"
+            SessionStatus::Parked,
+            "B1 fix: an explicitly recorded drain-park must survive rehydrate as Parked"
         );
+        assert!(!rec.awaiting_input, "a drain-park holds no question");
         assert!(
-            !rec.awaiting_input,
-            "a drain-park holds no question — which is why the coercion sends it to Failed"
+            rec.result.is_none(),
+            "a parked session has no terminal result"
         );
 
         std::fs::remove_dir_all(&dir).ok();
@@ -883,8 +882,9 @@ mod proptest_tests {
     }
 
     /// Non-terminal statuses only. A terminal `set_status` would set `finished_at` without a
-    /// `result` (the store's terminal path is `finish`), and `Parked` requires `awaiting_input`,
-    /// which no op here can set — neither can ever satisfy `check_session_invariants`.
+    /// `result` (the store's terminal path is `finish`). `Parked` is excluded because the ops
+    /// never set `awaiting_input` — generating a B1 drain-park would be valid, but an E6 parked
+    /// session requires `awaiting_input = true` which no op here can produce.
     fn nonterminal_status() -> impl Strategy<Value = SessionStatus> {
         prop_oneof![Just(SessionStatus::Pending), Just(SessionStatus::Running),]
     }

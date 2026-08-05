@@ -3410,7 +3410,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "ulid",
 ]
 
 [[package]]
@@ -3520,9 +3519,6 @@ dependencies = [
 [[package]]
 name = "liberado-commands"
 version = "0.1.0"
-dependencies = [
- "liberado-theme",
-]
 
 [[package]]
 name = "liberado-common"
