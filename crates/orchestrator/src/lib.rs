@@ -39,10 +39,6 @@ use thiserror::Error;
 use tokio::sync::Semaphore;
 use tracing::Instrument;
 
-#[cfg(test)]
-static CATALOG_SENDER: std::sync::Mutex<Option<std::sync::mpsc::Sender<(usize, usize, u64)>>> =
-    std::sync::Mutex::new(None);
-
 /// Default `source` recorded in write provenance for orchestrated executions.
 pub const DEFAULT_SOURCE: &str = "liberado-executor";
 
@@ -1404,24 +1400,12 @@ impl Orchestrator {
 
     fn instrument_catalog(offered: &[String], runtime: &dyn ToolRuntime) {
         let catalog = runtime.catalog();
-        let from_catalog = catalog
-            .iter()
-            .map(|tool| mcp_of(&tool.name))
-            .collect::<HashSet<&str>>()
-            .len();
+        let (_, from_catalog, _) = catalog_measurements(offered, &catalog);
         match serde_json::to_string(&catalog) {
             Ok(schema) => {
                 // chars/4 token proxy with a 1.3x safety factor (same
                 // convention as `crates/main-agent/src/compaction.rs`).
                 let schema_est_tokens = ((schema.len() as f64) / 4.0 * 1.3).ceil() as u64;
-                #[cfg(test)]
-                {
-                    if let Ok(guard) = CATALOG_SENDER.lock()
-                        && let Some(s) = guard.as_ref()
-                    {
-                        let _ = s.send((offered.len(), from_catalog, schema_est_tokens));
-                    }
-                }
                 tracing::info!(
                     mcp_offered = offered.len(),
                     mcp_from_catalog = from_catalog,
@@ -1579,6 +1563,25 @@ fn format_success_criteria(success_criteria: &[String]) -> String {
         .map(|c| format!("- {c}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The three numbers A1 logs, as a pure function of the offered MCP list and the connected
+/// catalog: how many were offered, how many distinct MCPs actually appear, and a chars/4 × 1.3
+/// token estimate of the serialized schema (same convention as `main-agent`'s compaction).
+///
+/// Separate from the logging so it is testable without a dispatch — the previous test read these
+/// back out of a `#[cfg(test)]` global that production code wrote to, which raced any other test
+/// on the same path.
+fn catalog_measurements(offered: &[String], catalog: &[ToolDef]) -> (usize, usize, u64) {
+    let from_catalog = catalog
+        .iter()
+        .map(|tool| mcp_of(&tool.name))
+        .collect::<HashSet<&str>>()
+        .len();
+    let est = serde_json::to_string(catalog)
+        .map(|s| ((s.len() as f64) / 4.0 * 1.3).ceil() as u64)
+        .unwrap_or(0);
+    (offered.len(), from_catalog, est)
 }
 
 /// Told to a subagent whose report will be **filed verbatim** rather than summarised.
@@ -2997,7 +3000,7 @@ mod tests {
 
     #[test]
     fn execute_direct_building_line_is_emitted_at_info_level() {
-        let _guard = TRACING_GUARD.lock().unwrap();
+        let _guard = TRACING_GUARD.lock().unwrap_or_else(|p| p.into_inner());
         use std::sync::Mutex;
         use tracing::subscriber;
         use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
@@ -3059,104 +3062,44 @@ mod tests {
         );
     }
 
+    /// The catalog measurement A1 logs: offered MCPs, how many actually appear in the connected
+    /// runtime's catalog, and an estimate of the schema's token cost.
+    ///
+    /// Calls the measurement directly. It used to run a real dispatch and read the values back out
+    /// of a `#[cfg(test)]` global that production code wrote to — which raced any other test
+    /// touching the same path and failed roughly one run in six with `left: 0` (nothing arrived).
+    /// A side channel in production code cannot be made reliable by guarding it; removing it can.
     #[test]
-    fn subagent_catalog_instrumentation_sets_offered_vs_surviving_and_schema() {
-        let _guard = TRACING_GUARD.lock().unwrap();
+    fn catalog_measurements_counts_offered_surviving_and_schema_size() {
+        let offered = vec!["tasks-mcp".to_string(), "email-mcp".to_string()];
+        // Two offered, but only one shows up in the connected catalog — the gap A1 exists to see.
+        let catalog = vec![
+            ToolDef {
+                name: "tasks-mcp:add".into(),
+                description: "add a task".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            },
+            ToolDef {
+                name: "tasks-mcp:list".into(),
+                description: "list tasks".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            },
+        ];
 
-        let (tx, rx) = std::sync::mpsc::channel();
-        *CATALOG_SENDER.lock().unwrap() = Some(tx);
-
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async {
-                let orch = Orchestrator::new(
-                    Arc::new(MockProvider::with_script(
-                        "mock",
-                        vec![CompletionResponse::tool_calls(vec![ToolInvocation::new(
-                            "c",
-                            SUBMIT_REPORT_TOOL,
-                            serde_json::json!({ "outcome": "succeeded", "summary": "done" }),
-                        )])],
-                    )),
-                    SubagentCatalogFactory,
-                    CapabilitySet::empty(),
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    std::env::temp_dir(),
-                    ProposalSigner::random(),
-                    "default",
-                );
-                let decision = DispatchDecision {
-                    action: DispatchAction::DispatchSubagent {
-                        goal: "summarize recent decisions".into(),
-                        capabilities: CapabilitySet::empty(),
-                        allowed_mcps: vec!["tasks-mcp".into(), "email-mcp".into()],
-                        success_criteria: vec!["a summary note exists".into()],
-                        artifact_target: None,
-                        model: None,
-                        correlation_id: "subagent-42".into(),
-                        delivery: Delivery::Summarize,
-                        depth: Depth::Normal,
-                    },
-                    confidence: 0.8,
-                    rationale: "multi-step".into(),
-                };
-                let _ = orch
-                    .run(
-                        decision,
-                        "outer goal",
-                        "trigger-xyz",
-                        &CapabilitySet::empty(),
-                    )
-                    .await;
-            });
-
-        *CATALOG_SENDER.lock().unwrap() = None; // drop sender before assertions
-
-        let (offered, from_catalog, est_tokens) =
-            rx.recv().expect("catalog instrumentation must fire");
-
-        assert_eq!(offered, 2, "offered = allowed_mcps.len()");
+        let (offered_n, surviving, est) = super::catalog_measurements(&offered, &catalog);
+        assert_eq!(offered_n, 2, "offered = allowed_mcps.len()");
         assert_eq!(
-            from_catalog, 1,
-            "two MCPs offered but only tasks-mcp survives in the catalog"
+            surviving, 1,
+            "surviving counts distinct MCPs present in the catalog, not tools"
         );
-        assert!(est_tokens > 0, "schema must have positive token count");
-    }
+        assert!(est > 0, "schema must have a positive token estimate");
 
-    struct SubagentCatalogFactory;
-    #[async_trait]
-    impl RuntimeFactory for SubagentCatalogFactory {
-        async fn runtime_for(
-            &self,
-            _allowed_mcps: &[String],
-            _provenance: WriteProvenance,
-        ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
-            struct SubagentCatalogRuntime;
-            #[async_trait]
-            impl ToolRuntime for SubagentCatalogRuntime {
-                fn catalog(&self) -> Vec<ToolDef> {
-                    vec![
-                        ToolDef::new(
-                            "tasks-mcp:list",
-                            "list tasks",
-                            serde_json::json!({ "type": "object", "properties": {} }),
-                        ),
-                        ToolDef::new(
-                            "tasks-mcp:create",
-                            "create a task",
-                            serde_json::json!({ "type": "object", "properties": { "name": { "type": "string" } } }),
-                        ),
-                    ]
-                }
-                async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
-                    Ok("ok".into())
-                }
-            }
-            Ok(Box::new(SubagentCatalogRuntime))
-        }
+        // Empty catalog: nothing survives, and the estimate must not claim tokens for nothing.
+        let (_, none_surviving, empty_est) = super::catalog_measurements(&offered, &[]);
+        assert_eq!(none_surviving, 0);
+        assert!(
+            empty_est < est,
+            "an empty catalog must estimate fewer tokens than a populated one"
+        );
     }
 }
