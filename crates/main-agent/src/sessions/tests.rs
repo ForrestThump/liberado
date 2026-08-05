@@ -2765,6 +2765,50 @@ fn the_tool_manifest_is_the_last_word_before_the_dialogue() {
     );
 }
 
+/// The face-agent prompt is the third builder (#43 fixed the dispatcher, #46 fixed the
+/// subagent). The other two were reordered to put stable content before varying content
+/// for provider prefix-cache reuse. The face-agent prompt is already correct: the base
+/// prompt is purely static and always the first message; the varying tool manifest and
+/// profile nudge are transient messages injected before each turn's dialogue.
+#[test]
+fn face_agent_prompt_places_static_before_varying() {
+    let mut convo = Conversation::from_history(vec![
+        Message::system(HUMAN_INTERFACE_SYSTEM_PROMPT),
+        Message::user("hello"),
+        Message::assistant("hi there"),
+    ]);
+    convo.apply_prompt_append(Some("Be brief."));
+    convo.apply_available_tools(&[ToolDef::new(
+        "delegate",
+        "delegate",
+        serde_json::json!({ "type": "object" }),
+    )]);
+
+    let msgs = convo.messages_for_test();
+    // The static base prompt is first — it never varies between turns.
+    assert_eq!(
+        msgs[0].content, HUMAN_INTERFACE_SYSTEM_PROMPT,
+        "the static face-agent base prompt must be the first message"
+    );
+    // The transient messages are injected in order: prompt append, then tool manifest last.
+    let system_positions: Vec<usize> = msgs
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.role == Role::System)
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(system_positions.len(), 3, "base prompt + append + manifest");
+    assert!(
+        msgs[system_positions[1]].content.contains("Be brief"),
+        "the profile nudge must come after the base prompt: {:?}",
+        msgs[system_positions[1]].content
+    );
+    assert!(
+        msgs[system_positions[2]].content.contains("delegate"),
+        "the varying tool manifest must be the last system message before the dialogue"
+    );
+}
+
 /// The stale-evidence case: a transcript containing a successful call to a since-revoked tool must
 /// be explicitly outranked, not merely contradicted by omission.
 #[test]
