@@ -18,18 +18,8 @@ Thumbs.db
 desktop.ini
 
 # Sub-repos (standalone git repos nested inside this repo)
-/liberado-tool-helper-mcp/
 /turbomcp/
 /turbovault/
-/liberado-pr-dispatch-mcp/
-/liberado-deliberate-mcp/
-/liberado-wakeup-mcp/
-/liberado-standalone-kit/
-/liberado-actual-mcp/
-/liberado-qdrant-mcp/
-/liberado-search-orchestrator-mcp/
-/liberado-spider-mcp/
-/liberado-python-interpreter-mcp/
 
 # Not-for-deploy scratch (subagent-manager: operator directive — do not deploy)
 /subagent-manager-mcp-master/
@@ -38,9 +28,6 @@ desktop.ini
 # Local configuration overrides (committed starters live in config.example/ and crates/*/config.example/)
 config/*.toml
 crates/*/config/*.toml
-
-# Local secrets (Decision 10 — secrets stay in the environment/local files, never committed)
-telegram_bot_info.md
 
 .kilo
 .codex/
