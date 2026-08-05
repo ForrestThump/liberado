@@ -333,6 +333,10 @@ pub async fn list_projects(client: &Client, server: &str) -> Result<Vec<ProjectR
 
 /// `POST /api/goals` for a **coding** goal. Domain is always `coding`; `project` rides in the
 /// payload where the coding pack reads it (and where G4's project authorization will check it).
+///
+/// Only `project` is transmitted — `workspace_root` is not yet wired through the TUI client.
+/// The server's `(None, Some(path))` auth arm (direct-path workspace authorization) is HTTP-only
+/// until a TUI picker lets the user browse to a subdirectory under a declared project root.
 pub async fn start_coding_goal(
     client: &Client,
     server: &str,

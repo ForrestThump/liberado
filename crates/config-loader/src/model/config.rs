@@ -299,6 +299,11 @@ impl Config {
                 let mut matched: Option<&ProjectConfig> = None;
                 for proj in self.enabled_projects() {
                     let Ok(root) = canonicalize_existing_dir(&proj.root) else {
+                        tracing::warn!(
+                            project = %proj.name,
+                            root = %proj.root.display(),
+                            "skipping project with unreadable root during workspace auth"
+                        );
                         continue;
                     };
                     if path_is_within(&root, &cand) {
@@ -880,6 +885,19 @@ mod project_auth_tests {
         let cfg = cfg_with_projects(vec![project]);
         let err = cfg
             .authorize_coding_workspace(Some("docs"), None)
+            .unwrap_err();
+        assert!(matches!(err, CodingAuthError::NotWritable { .. }));
+    }
+
+    #[test]
+    fn proposal_only_project_refuses_path_only_coding() {
+        let (_dir, project) = temp_project("docs", WriteClass::ProposalOnly);
+        let sub = project.root.join("pages");
+        std::fs::create_dir_all(&sub).unwrap();
+        let sub = std::fs::canonicalize(&sub).unwrap();
+        let cfg = cfg_with_projects(vec![project]);
+        let err = cfg
+            .authorize_coding_workspace(None, Some(sub.to_str().unwrap()))
             .unwrap_err();
         assert!(matches!(err, CodingAuthError::NotWritable { .. }));
     }
