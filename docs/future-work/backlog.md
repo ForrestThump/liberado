@@ -88,49 +88,59 @@ If it genuinely cannot be measured yet, say why. Two recent PRs did exactly that
 56% of all token spend is the orchestrator's ~11k base context re-sent every hop; the full
 measurement is in [`token-economics-findings-2026-08.md`](token-economics-findings-2026-08.md).
 
-**Landed — do not re-pick:** catalog instrumentation (#42), dispatcher prompt ordering (#43),
-`repeat_calls` in cost (#44), subagent prompt ordering (#46), `--json` output (#49).
+**Landed:** #42 #43 #44 #46 #49 #54.
 
 | # | What | Pointer |
 |---|---|---|
-| **A1** | **Deploy, wait a day, and report what the instruments say.** Nothing landed since #42 has been read. Offered-vs-surviving MCP counts and schema token size; dispatcher cache hit, which should rise from 22.3%; subagent-role split (what share of the 92.8% is delegation vs direct); and total `repeat_calls`. `--json` makes it scriptable. **Measurement only** — A2 gets specced from the answers. | `liberado-cost --json`, `docker logs` |
-| **A2** | **Narrow the tool catalog.** Blocked on A1. Four candidate causes are in the findings doc; picking one without data is how you spend a week on the wrong one. | blocked |
-| **A3** | **Check the face agent's prompt for the same ordering shape** #43 and #46 fixed. Two of three prompt builders had varying content ahead of stable; nobody has looked at the third. | `crates/main-agent/` |
+| **A1** | **Deploy, wait a day, and report what the instruments say.** Still nothing read. Offered-vs-surviving MCP counts; dispatcher cache hit (should rise from 22.3%); subagent-vs-direct split of the 92.8%; total `repeat_calls`. `--json` makes it scriptable. **Measurement only.** | `liberado-cost --json`, `docker logs` |
+| **A2** | **Narrow the tool catalog.** Blocked on A1. | blocked |
+| **A3** | **Check the face agent's prompt for the ordering shape** #43 and #46 fixed. Two of three builders are done; nobody has looked at the third. | `crates/main-agent/` |
 
-## Band B — correctness and honesty gaps (each found and left open deliberately)
+## Band B — correctness gaps
 
-**Landed — do not re-pick:** hooks drain-gated (#45), parked-at-shutdown marker (#47), drain grace
-default + tradeoff documented (#51).
-
-| # | What | Pointer |
-|---|---|---|
-| **B1** | **A drain-parked goal rehydrates as `Failed`, not `Parked`** — so it is not resumable, which contradicts the reason the drain parks rather than cancels. `Parked` is non-terminal, and rehydrate coerces non-terminal to `Failed` unless the session was awaiting a human, which a drain-park never is. Pinned by `a_drain_parked_session_rehydrates_as_failed_today`. **Read the resumability hazards first** — the coding pack refuses to resume once a build has started. | [`session/src/store.rs`](../../crates/session/src/store.rs) |
-| **B2** | **`ExecuteDirect` gets no output contract**, and `DIRECT_INSTRUCTIONS` asks for a *"concise, high-signal result"* — the shape of the seam bug. **Do not blanket-fix**: it carries no `Delivery`, so this would tell every cron and vault run to write documents. Needs a destination first. | [`delegated-work-is-discarded-at-the-seam.md`](delegated-work-is-discarded-at-the-seam.md) |
-| **B3** | **An intermittent workspace-test failure**, seen once in ~6 full runs and not reproduced since. Suspect a tracing-subscriber or shared-state interaction between crates under parallel execution. Worth catching with a loop before it becomes a mystery. | workspace |
-
-## Band C — agentic coding (S2 leftovers, then S3+)
-
-Plan: [`coding-tui-plan.md`](coding-tui-plan.md). S1 landed, S2 partial.
-
-**Landed — do not re-pick:** `GET /api/goals/{id}/diff` (#52), live gate-vote streaming (#53).
+**Landed:** #45 #47 #51 #56 #57.
 
 | # | What | Pointer |
 |---|---|---|
-| **C1** | **Dedicated goal-view panes** — role timeline, gate panel, verifier panel as separate widgets. Gate votes now arrive live (#53) but still render inline in the joined pane, so the streaming has nowhere good to land. | `crates/tui/` |
-| **C2** | **`WorktreeWorkspace` does not exist**, and its absence is the only thing preventing a workspace race: `dispatch_parallel` is built but unreachable, `delegate` is synchronous, the executor runs tools serially. **Isolation must land before any of those change** — [`agentic-loops.md`](../spec/architecture/agentic-loops.md) §Concurrency, rule 11. Large; scope a slice. | new |
-| **C3** | **S3: project authorization.** Untouched. | [`coding-tui-plan.md`](coding-tui-plan.md) |
+| **B1** | **`ExecuteDirect` gets no output contract**, and `DIRECT_INSTRUCTIONS` asks for a *"concise, high-signal result"* — the shape of the seam bug. **Do not blanket-fix**: it carries no `Delivery`, so this would tell every cron and vault run to write documents. Needs a destination first. | [`delegated-work-is-discarded-at-the-seam.md`](delegated-work-is-discarded-at-the-seam.md) |
 
-## Band D — breadth, low risk, easy to close unmerged
+## Band C — agentic coding: get to self-hosting
 
-**Landed — do not re-pick:** cost `--json` (#49), Telegram `/help` (#50), subagent provider bundling
-(#48).
+**The bar is concrete: run these PRs on our own coder instead of OpenCode.** That is more useful
+than "parity with X" because it is pass/fail, it is dogfooding, and the benchmark is trivial — give
+the same task to the same model in each harness and compare.
+
+**Landed:** #52 #53 #58. Isolation (#58) was the gate on all concurrency; `dispatch_parallel` and a
+concurrent `delegate` are now unblocked.
+
+**What already exists**, so nobody rebuilds it: tools are `list_files`, `search_text`, `read_file`,
+`write_file`, `edit_file`, `apply_patch`, `git_status`, `git_diff`, `run_command`, `validate`. The
+completion gate (S1) with gatekeeper veto and fresh-reviewer quorum is built and default-**off**.
+Goal sessions, park/resume, live gate votes, and `GET /api/goals/{id}/diff` all work.
+
+**On the reference implementations:** OpenCode, Grok Build and Kimicode are all open source and
+worth reading, but **none is checked out here**. A spec that says "copy the best part of X" without
+X on disk produces invention, not a port. Clone them first, cite file and function in the PR, and
+say what you changed and why — a straight port of a design that assumes a different execution model
+is how you get a subtly broken loop.
 
 | # | What | Pointer |
 |---|---|---|
-| **D1** | **External dependency audit.** Unused deps, duplication, version drift across every `Cargo.toml`. Goal is compile wall-clock — measure before/after and put both numbers in the PR. | workspace |
-| **D2** | **Promote `provenance_ratio` / `delegation_cost` from examples to subcommands** if they earn it. Both now have a `--json` sibling to be consistent with. | `crates/cost/examples/` |
-| **D3** | **Compaction tail copies still exist on disk.** Any reader walking a raw leaf path must skip `Author::is_compaction_tail_copy()`. Audit existing readers for ones that do not. | `crates/conversation-store/` |
-| **D4** | **`liberado-cost` prices nothing** because the box declares no `[[models]]` rates, so every report reads `unpriced`. Config-only; the schema and the doc are already there. | [`tuning.md`](../spec/reference/tuning.md) |
+| **C1** | **The coder cannot commit.** No branch/commit/push tool, and `CommandPolicy::default()` has an empty allow-list, so `run_command` cannot shell out to `git` either. This is the hard blocker on self-hosting: everything up to "the change is made and tests pass" works, and then it stops. Decide whether this is a tool or a policy entry, and mind that a commit is a write the capability model should see. | `crates/coder-tools/`, `crates/coder-core/` |
+| **C2** | **Run one real PR end to end and write up where it fell over.** Pick something off this backlog, drive it through the coder, and report the transcript honestly — turns burned, tools missing, where it looped. **This outranks building anything new**: every item below is a guess until one real run says which of them actually bites. | dogfood |
+| **C3** | **Benchmark against the three.** Same task, same model, four harnesses (ours, OpenCode, Grok Build, Kimicode). Report turns, tokens, wall-clock, and whether the result passed. Cheap to run, and it turns "are we close?" into a number. | new |
+| **C4** | **Dedicated goal-view panes** — role timeline, gate panel, verifier panel. Gate votes stream live (#53) but render inline in the joined pane, so the streaming has nowhere good to land. | `crates/tui/` |
+| **C5** | **Turn on the completion gate and measure it.** S1 is default-off pending S7 because it costs `1 + fresh_reviewers` model calls per attempt. With `liberado-cost --json` that price is now measurable — run a handful of tasks with it on and off. | `[coder.gate] enabled` |
+| **C6** | **Use the isolation #58 unblocked.** `dispatch_parallel` is built and unreachable; `delegate` is synchronous. Scope one of them onto `WorktreeWorkspace` rather than both. | `crates/orchestrator/`, `crates/coder-agent/` |
+
+## Band D — breadth, low risk
+
+**Landed:** #48 #50 #55.
+
+| # | What | Pointer |
+|---|---|---|
+| **D1** | **Promote `provenance_ratio` / `delegation_cost` from examples to subcommands** if they earn it. Both now have a `--json` sibling to match. | `crates/cost/examples/` |
+| **D2** | **`liberado-cost` prices nothing** — the box declares no `[[models]]` rates, so every report reads `unpriced`. Config-only; schema and doc already exist. | [`tuning.md`](../spec/reference/tuning.md) |
 
 ## Not available
 
