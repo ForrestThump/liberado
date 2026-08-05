@@ -218,6 +218,21 @@ impl CodingSessionPack {
                 path_policy: policies.path_policy.clone(),
                 progress: ProgressPolicy {
                     max_attempts: if policies.explore_mode { 1 } else { 2 },
+                    // Explore mode is exclusively read-only tools — the progress guard's
+                    // read_only_turn_limit and same_tool_limit would trigger false
+                    // ReadOnlyStall / SameToolChurn fatals because every explore tool is
+                    // classified as non-mutating. Disable the guard so max_turns is the
+                    // only bound.
+                    read_only_turn_limit: if policies.explore_mode {
+                        u32::MAX
+                    } else {
+                        ProgressPolicy::default().read_only_turn_limit
+                    },
+                    same_tool_limit: if policies.explore_mode {
+                        u32::MAX
+                    } else {
+                        ProgressPolicy::default().same_tool_limit
+                    },
                     ..ProgressPolicy::default()
                 },
             },
