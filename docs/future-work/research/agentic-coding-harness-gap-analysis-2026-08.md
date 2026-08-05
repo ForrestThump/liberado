@@ -28,7 +28,7 @@ Liberado is a **general agentic orchestration kernel** (goal sessions, budgets, 
 | Gap class | Liberado today | FOSS reference |
 |---|---|---|
 | **Time-based series (`/loop`)** | Designed (`loops-plan.md`); **zero production code** | Grok: `/loop` + scheduler tools; Kimi: session cron tools; OpenCode: external only |
-| **Agent-reachable parallelism** | `dispatch_parallel` **tests-only**; tools **serial**; `delegate` **sync await** | Grok/Kimi/OpenCode: multi-subagent + (often) parallel tool settle |
+| **Agent-reachable parallelism** | `dispatch_parallel` **built but unwired**; tools **serial**; `delegate` **sync await** | Grok/Kimi/OpenCode: multi-subagent + (often) parallel tool settle |
 | **Coding subagent productization** | Dispatch-pack children; **no** coding worktree children with merge-back | Grok `task` + isolation; OpenCode `task` + child sessions; Kimi Agent/Swarm |
 | **Plan mode as UX/FSM** | Planner role + capability narrowing exist; **no** exclusive plan-file mode + approval UI | Grok/OpenCode/Kimi all ship plan mode |
 | **Workspace rewind / checkpoints** | Park session yes; **mid-build resume false**; no shadow-git `/rewind` | Grok FS checkpoints; OpenCode snapshot/revert |
@@ -76,7 +76,9 @@ Analysis inventory (`gh pr list --state open`, 2026-08-05). **Every open PR belo
 | **#62** | `feat(coder-tools): add list_symbols tool for codebase orientation` | Structural symbol listing for orientation (beyond flat `list_files` / `search_text`) |
 | **#63** | `feat(cost): promote provenance_ratio and delegation_cost to subcommands` | Cost analysis tools as first-class `liberado-cost` subcommands (ops visibility for coding spend) |
 | **#64** | `fix(main-agent): verify face-agent prompt ordering for cache reuse` | Face-agent static-before-varying prompt order locked by test (cache hit rate / token economics) |
-| **#2** *(draft)* | WebUI chat HTML edit | Treated as present WebUI surface work; **draft** — capability thin; do not treat as full goal WebUI |
+| **#2** *(draft, auto-generated)* | WebUI chat HTML edit (subagent draft) | Treated as present WebUI surface work; **draft** — capability thin; do not treat as full goal WebUI |
+
+**Note:** PRs #61–#64 (and draft #2) are **open and un-merged** at analysis time. They are counted as landed per the baseline rule above, which assumes near-term merge of the current Band C/D work. The aggregate parity assessment is therefore forward-looking on these items. The text marks open-PR capability with the PR number so a reader can verify merge status independently.
 
 **Main tip at branch cut:** `a902520` — *Merge PR #60 — C7: worktree isolation for all coding sessions*.
 
@@ -124,7 +126,7 @@ Legend: **Y** = productized / agent-reachable · **P** = partial / opt-in / test
 |---|---|---|---|---|
 | Per-session git worktree | **Y** (#60 / `WorktreeWorkspace`) | **Y** (`xai-fast-worktree`, apply/GC) | **Y** (experimental worktree API) | **N** (detect only) |
 | Subagent worktree isolation | **P** (isolation exists; coding child product open) | **Y** (`isolation: worktree`) | **P** (workspace/worktree control plane) | **N** |
-| Parallel subagent fan-out | **P** (`dispatch_parallel` tests-only) | **Y** (task + wait_tasks + workflows) | **Y** (task / background experimental) | **Y** (Agent + AgentSwarm) |
+| Parallel subagent fan-out | **P** (`dispatch_parallel` built; no agent path calls it) | **Y** (task + wait_tasks + workflows) | **Y** (task / background experimental) | **Y** (Agent + AgentSwarm) |
 | Parallel tool calls (one turn) | **N** (serial `for` loop) | **P** (flagged parallel dispatch) | **Y** (eager settle) | **Y** (resource-aware scheduler) |
 | Merge-back story | **P** (worktree Drop/cleanup; no product apply) | **Y** (apply into main) | **P** | **—** |
 
@@ -282,7 +284,7 @@ Vocabulary (agentic-loops): turn ⊂ goal ⊂ **loop (designed)** ⊂ meta-loop.
 
 | Piece | Status |
 |---|---|
-| `Orchestrator::dispatch_parallel` | Built + tested; **no production `SubDispatch` construction** |
+| `Orchestrator::dispatch_parallel` | Built + tested; **no agent path calls it** (no fan-out `DispatchAction`) |
 | Fan-out `DispatchAction` | Missing — classifier cannot say “these are independent” |
 | Agent `delegate` | `start_background` + **`await_terminal`** (synchronous in chat turn); AskHuman stripped |
 | Parallel tools in executor | Serial `for call in tool_calls` |
@@ -362,8 +364,6 @@ Consequence: Liberado is still **“protected by accident”** from multi-writer
 | Face `delegate` → dispatch pack; capability ∩; sync | Typed agents (explore/plan/coder), depth limits, swarm, resume_from, background tasks |
 | Parallel API unusable | Productized dashboards |
 
-Also known seam: **delegated findings discarded at face** (`delegated-work-is-discarded-at-the-seam.md`) — correctness bug class for multi-agent coding quality.
-
 ### 8.5 Resume, checkpoints, compaction
 
 | Mechanism | Liberado | Need |
@@ -400,13 +400,12 @@ These are not “missing features”; they are **performance and reliability deb
 1. **Gate cost vs quality** — multi-reviewer gate off by default; without it Liberado looks closer to “critic once”; with it, token burn rises.
 2. **Serial tools** — multi-tool model turns wait in line; latency and “feels dumb” next to OpenCode/Kimi parallel settle.
 3. **Sync delegate** — multi-hop coding research cannot overlap; face turn blocked.
-4. **Delegate seam discard** — multi-agent success can be thrown away at chat boundary.
-5. **Token economics** — orchestrator ~11k base context re-sent (TE1); face protection not paying off in measurements.
-6. **Worktree without apply UX** — isolation without merge productization means parallel workers (when added) still lack a user story.
-7. **Can_resume false after build starts** — long coding jobs are not restart-safe mid-diff.
-8. **No series memory on cron** — recurring vault/doc improvement cannot learn from previous passes until loops land.
-9. **Doc/code drift** — roadmap still describing pre-worktree world confuses implementers.
-10. **VTCode/PR-dispatch historical path** — external PR factory findings; keep coding pack path pure.
+4. **Token economics** — orchestrator ~11k base context re-sent (TE1); face protection not paying off in measurements.
+5. **Worktree without apply UX** — isolation without merge productization means parallel workers (when added) still lack a user story.
+6. **Can_resume false after build starts** — long coding jobs are not restart-safe mid-diff.
+7. **No series memory on cron** — recurring vault/doc improvement cannot learn from previous passes until loops land.
+8. **Doc/code drift** — some living docs and older research notes still reference coding tools or isolation state that has since landed; implementers may waste time chasing stale claims. Prefer code + §2 open-PR baseline over older doc claims.
+9. **VTCode/PR-dispatch historical path** — external PR factory findings; keep coding pack path pure.
 
 ---
 
@@ -469,8 +468,7 @@ Priority is for **coding harness performance + parity**, assuming life-OS P1 con
 ### Band E — Economics & correctness
 
 19. **TE1** tool catalog narrowing diagnosis (spend).  
-20. **Delegate seam** — ensure findings reach face (round-3 class).  
-21. **#63/#64** cost + cache ordering (already counted present) operationalized in dogfood.
+20. **#63/#64** cost + cache ordering (already counted present) operationalized in dogfood.
 
 ### Explicit non-goals (for this parity track)
 
@@ -508,7 +506,7 @@ Single-responsibility slices that match existing Liberado plans:
 |---|---|
 | Vocabulary / concurrency rule | `docs/spec/architecture/agentic-loops.md` |
 | Loops design | `docs/future-work/loops-plan.md` |
-| Coding TUI slices | `docs/future-work/coding-tui-plan.md`, `docs/roadmap.md` §P3 |
+| Coding TUI slices | `docs/future-work/coding-tui-plan.md`, `docs/roadmap.md` (Priority 3 — coding pack) |
 | Goal hub / gate | `crates/session/` (`hub`, `completion_gate`, `event`) |
 | Worktree | `crates/coder-sandbox/src/lib.rs` (`WorktreeWorkspace`) |
 | Pack isolation wiring | `crates/coder-agent/src/session_pack/build.rs` |
