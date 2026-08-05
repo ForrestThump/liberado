@@ -118,6 +118,9 @@ impl CodingToolRuntime {
             "apply_patch" => self.apply_patch(args).await,
             "git_status" => self.git_status().await,
             "git_diff" => self.git_diff(args).await,
+            "git_branch" => self.git_branch(args).await,
+            "git_commit" => self.git_commit(args).await,
+            "git_push" => self.git_push(args).await,
             "run_command" => self.run_command(args).await,
             "validate" => self.validate().await,
             other => Err(ToolError::BadRequest(format!("unknown tool: {other}"))),
@@ -342,6 +345,145 @@ impl CodingToolRuntime {
         }))
     }
 
+    async fn git_branch(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            name: String,
+        }
+        let args: Args = parse_args(args)?;
+        if args.name.is_empty() {
+            return Err(ToolError::BadRequest(
+                "branch name must not be empty".to_string(),
+            ));
+        }
+        if args.name.starts_with('-') {
+            return Err(ToolError::BadRequest(
+                "branch name must not start with '-'".to_string(),
+            ));
+        }
+        let branch_name = args.name.clone();
+        let mut request = CommandRequest::new("git");
+        request.args = vec!["checkout".to_string(), "-b".to_string(), args.name];
+        let output = self.workspace.run_command(request).await?;
+        Ok(json!({
+            "branch": branch_name,
+            "exit_code": output.exit_code,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+            "timed_out": output.timed_out,
+        }))
+    }
+
+    async fn git_commit(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            message: String,
+            #[serde(default)]
+            files: Vec<String>,
+        }
+        let args: Args = parse_args(args)?;
+        if args.message.is_empty() {
+            return Err(ToolError::BadRequest(
+                "commit message must not be empty".to_string(),
+            ));
+        }
+
+        let mut stage = CommandRequest::new("git");
+        if args.files.is_empty() {
+            stage.args = vec!["add".to_string(), "-A".to_string()];
+        } else {
+            stage.args = vec!["add".to_string(), "--".to_string()];
+            stage.args.extend(args.files.clone());
+        }
+        let stage_output = self.workspace.run_command(stage).await?;
+        if stage_output.exit_code != Some(0) {
+            return Ok(json!({
+                "committed": false,
+                "stage_exit_code": stage_output.exit_code,
+                "stage_stderr": stage_output.stderr,
+                "exit_code": null,
+                "stdout": "",
+                "stderr": "",
+                "timed_out": stage_output.timed_out,
+            }));
+        }
+
+        let mut request = CommandRequest::new("git");
+        request.args = vec!["commit".to_string(), "-m".to_string(), args.message];
+        request
+            .env
+            .insert("GIT_AUTHOR_NAME".to_string(), "liberado".to_string());
+        request
+            .env
+            .insert("GIT_AUTHOR_EMAIL".to_string(), "liberado@local".to_string());
+        request
+            .env
+            .insert("GIT_COMMITTER_NAME".to_string(), "liberado".to_string());
+        request.env.insert(
+            "GIT_COMMITTER_EMAIL".to_string(),
+            "liberado@local".to_string(),
+        );
+        let output = self.workspace.run_command(request).await?;
+        Ok(json!({
+            "committed": output.exit_code == Some(0),
+            "exit_code": output.exit_code,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+            "timed_out": output.timed_out,
+        }))
+    }
+
+    async fn git_push(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            #[serde(default = "default_remote")]
+            remote: String,
+            #[serde(default)]
+            branch: Option<String>,
+            #[serde(default)]
+            set_upstream: bool,
+        }
+        let args: Args = parse_args(args)?;
+        if args.remote.is_empty() {
+            return Err(ToolError::BadRequest(
+                "remote must not be empty".to_string(),
+            ));
+        }
+        if args.remote.starts_with('-') {
+            return Err(ToolError::BadRequest(
+                "remote must not start with '-'".to_string(),
+            ));
+        }
+        if let Some(ref branch) = args.branch {
+            if branch.is_empty() {
+                return Err(ToolError::BadRequest(
+                    "branch must not be empty".to_string(),
+                ));
+            }
+            if branch.starts_with('-') {
+                return Err(ToolError::BadRequest(
+                    "branch must not start with '-'".to_string(),
+                ));
+            }
+        }
+        let mut request = CommandRequest::new("git");
+        request.args = vec!["push".to_string()];
+        if args.set_upstream {
+            request.args.push("--set-upstream".to_string());
+        }
+        request.args.push(args.remote);
+        if let Some(branch) = args.branch {
+            request.args.push(branch);
+        }
+        let output = self.workspace.run_command(request).await?;
+        Ok(json!({
+            "exit_code": output.exit_code,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+            "timed_out": output.timed_out,
+        }))
+    }
+
     async fn run_command(&self, args: Value) -> Result<Value, ToolError> {
         #[derive(Deserialize)]
         struct Args {
@@ -478,6 +620,44 @@ impl ToolRuntime for CodingToolRuntime {
                 }),
             ),
             tool(
+                "git_branch",
+                "Create and switch to a new git branch.",
+                json!({
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                        "name": { "type": "string" }
+                    }
+                }),
+            ),
+            tool(
+                "git_commit",
+                "Stage files and create a git commit with the given message. Stages all changes when no files are listed.",
+                json!({
+                    "type": "object",
+                    "required": ["message"],
+                    "properties": {
+                        "message": { "type": "string" },
+                        "files": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                        }
+                    }
+                }),
+            ),
+            tool(
+                "git_push",
+                "Push the current branch to a remote.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "remote": { "type": "string" },
+                        "branch": { "type": "string" },
+                        "set_upstream": { "type": "boolean" }
+                    }
+                }),
+            ),
+            tool(
                 "run_command",
                 "Run a policy-checked command in the workspace.",
                 json!({
@@ -521,6 +701,10 @@ fn default_limit() -> usize {
 
 fn default_diff_mode() -> String {
     "patch".to_string()
+}
+
+fn default_remote() -> String {
+    "origin".to_string()
 }
 
 fn fs_err(error: std::io::Error) -> ToolError {
@@ -940,6 +1124,9 @@ mod tests {
             "apply_patch",
             "git_status",
             "git_diff",
+            "git_branch",
+            "git_commit",
+            "git_push",
             "run_command",
             "validate",
         ] {
@@ -1005,5 +1192,234 @@ mod tests {
         .unwrap();
 
         assert_eq!(count, 3, "walk_files should visit at most 3 files");
+    }
+
+    fn init_temp_git_repo(dir: &std::path::Path) {
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_AUTHOR_NAME", "test")
+                .env("GIT_AUTHOR_EMAIL", "test@test")
+                .env("GIT_COMMITTER_NAME", "test")
+                .env("GIT_COMMITTER_EMAIL", "test@test")
+                .output()
+                .unwrap()
+        };
+        run(&["init", "--quiet"]);
+        std::fs::write(dir.join("seed.txt"), "initial\n").unwrap();
+        run(&["add", "seed.txt"]);
+        run(&["commit", "-m", "initial commit"]);
+    }
+
+    #[tokio::test]
+    async fn git_branch_creates_and_switches() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json("git_branch", json!({"name": "feature-x"}))
+            .await
+            .unwrap();
+        assert_eq!(result["branch"], "feature-x");
+        assert_eq!(result["exit_code"], 0);
+
+        let current = std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let branch = String::from_utf8_lossy(&current.stdout).trim().to_string();
+        assert_eq!(branch, "feature-x");
+    }
+
+    /// Option injection: these values become argv entries, so a name like `-D` or `--force` would
+    /// change what git does rather than name a branch. The guards existed but nothing held them —
+    /// disabling all three `starts_with('-')` checks left the whole crate green.
+    ///
+    /// The three sites are separate arguments to separate commands, so this covers each rather than
+    /// trusting one to stand for the others.
+    #[tokio::test]
+    async fn git_tools_reject_arguments_that_would_parse_as_options() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        for (tool, args) in [
+            ("git_branch", json!({"name": "-D"})),
+            ("git_push", json!({"remote": "--mirror"})),
+            ("git_push", json!({"remote": "origin", "branch": "--force"})),
+        ] {
+            let Err(err) = runtime.invoke_json(tool, args.clone()).await else {
+                panic!("{tool} accepted {args}, which git would read as an option");
+            };
+            assert!(
+                err.to_string().contains("must not start with"),
+                "{tool} must refuse a leading dash; got: {err}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn git_branch_rejects_empty_name() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let err = runtime
+            .invoke_json("git_branch", json!({"name": ""}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must not be empty"));
+    }
+
+    #[tokio::test]
+    async fn git_commit_stages_and_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        std::fs::write(dir.path().join("new_file.txt"), "content\n").unwrap();
+
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json(
+                "git_commit",
+                json!({"message": "add new file", "files": ["new_file.txt"]}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["committed"], true);
+        assert_eq!(result["exit_code"], 0);
+
+        let log = std::process::Command::new("git")
+            .args(["log", "--oneline"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let log_text = String::from_utf8_lossy(&log.stdout);
+        assert!(log_text.contains("add new file"));
+    }
+
+    #[tokio::test]
+    async fn git_commit_stages_all_when_no_files_given() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        std::fs::write(dir.path().join("a.txt"), "a\n").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "b\n").unwrap();
+
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json("git_commit", json!({"message": "commit all"}))
+            .await
+            .unwrap();
+        assert_eq!(result["committed"], true);
+        assert_eq!(result["exit_code"], 0);
+
+        let status = std::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&status.stdout).trim().is_empty());
+    }
+
+    #[tokio::test]
+    async fn git_commit_reports_stage_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json("git_commit", json!({"message": "empty commit"}))
+            .await
+            .unwrap();
+        assert_eq!(result["committed"], false);
+    }
+
+    #[tokio::test]
+    async fn git_commit_rejects_empty_message() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let err = runtime
+            .invoke_json("git_commit", json!({"message": ""}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must not be empty"));
+    }
+
+    #[tokio::test]
+    async fn git_push_runs_push_command() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json("git_push", json!({"remote": "origin", "branch": "main"}))
+            .await
+            .unwrap();
+
+        assert!(
+            result["exit_code"].is_number() || result["timed_out"] == false,
+            "git_push should return exit_code and timed_out"
+        );
+    }
+
+    #[tokio::test]
+    async fn git_push_with_set_upstream() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json(
+                "git_push",
+                json!({"remote": "origin", "branch": "main", "set_upstream": true}),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            result["exit_code"].is_number() || result["timed_out"] == false,
+            "git_push with set_upstream should return exit_code and timed_out"
+        );
+    }
+
+    #[tokio::test]
+    async fn git_push_defaults_to_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime.invoke_json("git_push", json!({})).await.unwrap();
+
+        assert!(
+            result["exit_code"].is_number() || result["timed_out"] == false,
+            "git_push with no args should default to origin"
+        );
     }
 }
