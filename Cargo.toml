@@ -64,13 +64,10 @@ liberado-scratchpad = { path = "crates/scratchpad" }
 liberado-notify = { path = "crates/notify" }
 liberado-messaging = { path = "crates/messaging" }
 liberado-mcp = { path = "crates/mcp" }
-liberado-mcp-forge = { path = "crates/mcp-forge" }
 liberado-orchestrator = { path = "crates/orchestrator" }
 liberado-main-agent = { path = "crates/main-agent" }
 liberado-daemon = { path = "crates/daemon" }
-liberado-cli = { path = "crates/cli" }
 liberado-server = { path = "crates/server" }
-liberado-tui = { path = "crates/tui" }
 liberado-theme = { path = "crates/theme" }
 chat-client-contract = { path = "crates/chat-client-contract" }
 liberado-markdown = { path = "crates/markdown" }
@@ -78,8 +75,6 @@ liberado-commands = { path = "crates/liberado-commands" }
 liberado-test-support = { path = "crates/test-support" }
 liberado-eval = { path = "crates/eval" }
 liberado-cost = { path = "crates/cost" }
-liberado-conformance = { path = "crates/conformance" }
-liberado-heuristics-tuner = { path = "crates/heuristics-tuner" }
 liberado-telegram-approvals = { path = "crates/telegram-approvals" }
 liberado-cron = { path = "crates/cron" }
 liberado-chat-search = { path = "crates/chat-search" }
@@ -98,8 +93,6 @@ liberado-dispatch-pack = { path = "crates/dispatch-pack" }
 turbovault-core = { path = "turbovault/crates/turbovault-core" }
 turbovault-vault = { path = "turbovault/crates/turbovault-vault" }
 turbovault-audit = { path = "turbovault/crates/turbovault-audit" }
-turbovault-tools = { path = "turbovault/crates/turbovault-tools" }
-turbovault-batch = { path = "turbovault/crates/turbovault-batch" }
 turbovault = { path = "turbovault/crates/turbovault" } # umbrella (ObsidianMcpServer) — test-only
 # liberado-memory-store's semantic recall. (2026-07-11: the vector-db work is on the fork's
 # `develop` like the other turbovault-* deps — the old "pinned to feature/vector-db" note was
