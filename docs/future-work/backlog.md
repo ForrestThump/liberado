@@ -118,15 +118,34 @@ concurrent `delegate` are now unblocked.
 completion gate (S1) with gatekeeper veto and fresh-reviewer quorum is built and default-**off**.
 Goal sessions, park/resume, live gate votes, and `GET /api/goals/{id}/diff` all work.
 
-**On the reference implementations:** OpenCode, Grok Build and Kimicode are all open source and
-worth reading, but **none is checked out here**. A spec that says "copy the best part of X" without
-X on disk produces invention, not a port. Clone them first, cite file and function in the PR, and
-say what you changed and why — a straight port of a design that assumes a different execution model
-is how you get a subtly broken loop.
+**On the reference implementations.** Grok Build **is** checked out, at
+`%LOCALAPPDATA%\Temp\opencode\grok-build` (commit `ed6d543`, ~94 MB). It is a **Rust** workspace,
+so this is porting rather than translating — read it. OpenCode and Kimicode are not checked out;
+clone them before citing them.
+
+Caveat worth knowing: that path is a tool's temp directory. It can be wiped between sessions and is
+not shared. If it is gone, re-clone rather than working from memory of it.
+
+**Cite file and function in the PR, and say what you changed and why.** A straight port of a design
+that assumes a different execution model is how you get a subtly broken loop, and it is hard to spot
+in review.
+
+Crates in there that map onto items below, so nobody reads the whole 94 MB:
+
+| Their crate | Ours |
+|---|---|
+| `xai-gix-status`, and `gix` (gitoxide) as a workspace dep | **C1** — they do git through a *library*, not a shell. That is a better answer than allow-listing `git` in `CommandPolicy`: a library call is something the capability model can see, an allow-listed shell is a hole in it. |
+| `xai-fast-worktree` | #58's `WorktreeWorkspace` — compare before extending it |
+| `xai-codebase-graph` | Repo-map/context selection, which we have nothing equivalent to |
+| `xai-hunk-tracker` | `edit_file` / `apply_patch` quality |
+| `xai-grok-tools`, `xai-grok-tools-api` | Our ten-tool surface |
+| `xai-grok-subagent-resolution` | **C6** — subagents on the isolation #58 unblocked |
+| `xai-ratatui-inline`, `xai-ratatui-textarea` | **C4** — goal-view panes |
+| `xai-grok-shell`, `xai-grok-shell-session-support` | `run_command`, and whether a persistent shell session is worth it |
 
 | # | What | Pointer |
 |---|---|---|
-| **C1** | **The coder cannot commit.** No branch/commit/push tool, and `CommandPolicy::default()` has an empty allow-list, so `run_command` cannot shell out to `git` either. This is the hard blocker on self-hosting: everything up to "the change is made and tests pass" works, and then it stops. Decide whether this is a tool or a policy entry, and mind that a commit is a write the capability model should see. | `crates/coder-tools/`, `crates/coder-core/` |
+| **C1** | **The coder cannot commit.** No branch/commit/push tool, and `CommandPolicy::default()` has an empty allow-list, so `run_command` cannot shell out to `git` either. This is the hard blocker on self-hosting: everything up to "the change is made and tests pass" works, and then it stops. **Prefer a tool over a policy entry** — a commit is a write, and the capability model should see it as one; Grok Build does git through `gix` for the same reason. | `crates/coder-tools/`, `crates/coder-core/` |
 | **C2** | **Run one real PR end to end and write up where it fell over.** Pick something off this backlog, drive it through the coder, and report the transcript honestly — turns burned, tools missing, where it looped. **This outranks building anything new**: every item below is a guess until one real run says which of them actually bites. | dogfood |
 | **C3** | **Benchmark against the three.** Same task, same model, four harnesses (ours, OpenCode, Grok Build, Kimicode). Report turns, tokens, wall-clock, and whether the result passed. Cheap to run, and it turns "are we close?" into a number. | new |
 | **C4** | **Dedicated goal-view panes** — role timeline, gate panel, verifier panel. Gate votes stream live (#53) but render inline in the joined pane, so the streaming has nowhere good to land. | `crates/tui/` |
