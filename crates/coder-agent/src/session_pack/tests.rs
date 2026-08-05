@@ -5,7 +5,7 @@ use super::*;
 use async_trait::async_trait;
 use liberado_coder_core::{
     CoderBackend, CoderError, CoderRunRequest, CoderRunResult, FreezeAuthority, GoalContract,
-    GoalContractDraft, IntakeOutcome, VerifierSpec,
+    GoalContractDraft, IntakeOutcome, SandboxSpec, VerifierSpec,
 };
 use liberado_common::Outcome;
 use liberado_provider::{CompletionResponse, MockProvider};
@@ -825,5 +825,68 @@ async fn the_coding_pack_will_not_resume_once_the_build_has_started() {
     assert!(
         !pack.can_resume(&ctx).await,
         "once the build has touched the workspace, resume is no longer safe"
+    );
+}
+
+#[tokio::test]
+async fn an_external_workspace_gets_worktree_isolation() {
+    use std::process::Command;
+
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let backend = Arc::new(ScriptedBackend {
+        seen: seen.clone(),
+        fail_attempts: 0,
+    });
+    let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+    let pack = CodingSessionPack::with_backend(backend, provider, std::env::temp_dir());
+
+    let (ev_tx, _ev_rx) = mpsc::channel::<SessionEvent>(64);
+    let (_in_tx, in_rx) = mpsc::channel::<HumanInput>(16);
+    let inputs = InputChannel::new(in_rx, None);
+    let (_c_tx, cancel) = tokio::sync::watch::channel(false);
+
+    let workspace = tempfile::tempdir().unwrap();
+    let workspace_root = workspace.path().to_path_buf();
+
+    let mut g = goal("edit README.md");
+    g.payload = serde_json::json!({
+        "workspace_root": workspace_root.to_string_lossy(),
+        "intake": { "enabled": false },
+    });
+
+    let store = Arc::new(liberado_session::GoalSessionStore::new());
+    let mut spec = g.clone();
+    spec.id = Some("s1".into());
+    liberado_session::SessionRecordStore::insert(
+        store.as_ref(),
+        liberado_session::GoalSessionRecord::new(spec),
+    )
+    .await;
+    let grant = liberado_session::SessionGrant::default();
+    let ctx = PackContext::new(&grant, store.clone(), "s1");
+
+    let _out = pack
+        .run("s1", &g, &ctx, ev_tx, inputs, cancel)
+        .await
+        .unwrap();
+
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].config.sandbox,
+        SandboxSpec::Worktree,
+        "a coding workspace must default to worktree isolation"
+    );
+
+    // And the workspace is now a real git repo with a commit, so WorktreeWorkspace can proceed.
+    let output = Command::new("git")
+        .args(["-C", &workspace_root.to_string_lossy()])
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "init_git_repo must run so WorktreeWorkspace can proceed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
