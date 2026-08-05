@@ -686,31 +686,45 @@ fn extract_rust_symbol(line: &str) -> Option<String> {
         || line.starts_with("///")
         || line.starts_with("//!")
         || line.starts_with("/*")
-        || line.starts_with('*')
+        || line.starts_with("* ")
+        || line == "*"
     {
         return None;
     }
-    // fn, pub fn, pub async fn, async fn
-    if line.starts_with("pub fn ")
-        || line.starts_with("fn ")
-        || line.starts_with("pub async fn ")
-        || line.starts_with("async fn ")
-    {
-        let name = line
-            .trim_start_matches("pub ")
-            .trim_start_matches("async ")
+    // Strip #[derive(...)] and other same-line attributes.
+    let line = if line.starts_with("#[") {
+        line.split(']').nth(1).unwrap_or("").trim()
+    } else {
+        line
+    };
+    if line.is_empty() {
+        return None;
+    }
+    // Strip visibility and qualifier prefixes, leaving just the keyword prefix.
+    // Handles: pub, pub(crate), pub(super), pub(in path), const, unsafe, async, extern "C"
+    let rest = line
+        .trim_start_matches("pub(crate) ")
+        .trim_start_matches("pub(super) ")
+        .trim_start_matches("pub ")
+        .trim_start_matches("const ")
+        .trim_start_matches("unsafe ")
+        .trim_start_matches("async ")
+        .trim_start_matches("extern \"C\" ");
+    // fn
+    if rest.starts_with("fn ") {
+        let name = rest
             .trim_start_matches("fn ")
             .split(['(', '<'])
             .next()?
             .trim()
             .to_string();
-        if !name.is_empty() && !name.starts_with("//") {
+        if !name.is_empty() {
             return Some(format!("fn {name}"));
         }
     }
-    if line.starts_with("pub struct ") || line.starts_with("struct ") {
-        let name = line
-            .trim_start_matches("pub ")
+    // struct
+    if rest.starts_with("struct ") {
+        let name = rest
             .trim_start_matches("struct ")
             .split(['<', '{', '(', ';'])
             .next()?
@@ -720,9 +734,9 @@ fn extract_rust_symbol(line: &str) -> Option<String> {
             return Some(format!("struct {name}"));
         }
     }
-    if line.starts_with("pub enum ") || line.starts_with("enum ") {
-        let name = line
-            .trim_start_matches("pub ")
+    // enum
+    if rest.starts_with("enum ") {
+        let name = rest
             .trim_start_matches("enum ")
             .split(['<', '{'])
             .next()?
@@ -732,9 +746,9 @@ fn extract_rust_symbol(line: &str) -> Option<String> {
             return Some(format!("enum {name}"));
         }
     }
-    if line.starts_with("pub trait ") || line.starts_with("trait ") {
-        let name = line
-            .trim_start_matches("pub ")
+    // trait
+    if rest.starts_with("trait ") {
+        let name = rest
             .trim_start_matches("trait ")
             .split(['<', '{'])
             .next()?
@@ -744,11 +758,9 @@ fn extract_rust_symbol(line: &str) -> Option<String> {
             return Some(format!("trait {name}"));
         }
     }
-    if line.starts_with("pub impl") || line.starts_with("impl ") || line.starts_with("impl<") {
-        let rest = line
-            .trim_start_matches("pub ")
-            .trim_start_matches("impl")
-            .trim_start_matches(' ');
+    // impl
+    if rest.starts_with("impl<") || rest.starts_with("impl ") {
+        let rest = rest.trim_start_matches("impl").trim_start_matches(' ');
         let name = if rest.starts_with('<') {
             rest.split('>')
                 .nth(1)
@@ -761,9 +773,9 @@ fn extract_rust_symbol(line: &str) -> Option<String> {
             return Some(format!("impl {name}"));
         }
     }
-    if line.starts_with("pub mod ") || line.starts_with("mod ") {
-        let name = line
-            .trim_start_matches("pub ")
+    // mod
+    if rest.starts_with("mod ") {
+        let name = rest
             .trim_start_matches("mod ")
             .split(['{', ';'])
             .next()?
@@ -1387,12 +1399,31 @@ mod tests {
     }
 
     #[test]
-    fn extract_rust_async_functions() {
-        let content = "pub async fn handle() {}\nasync fn fetch_data() -> Result<Data> {}\npub fn regular() {}";
+    fn extract_rust_visibility_variants() {
+        let content = "pub(crate) fn internal() {}\npub(super) fn semi_public() {}\npub fn public() {}\nfn private() {}";
         let symbols = extract_symbols("src/lib.rs", content);
-        assert!(symbols.contains(&"fn handle".to_string()));
-        assert!(symbols.contains(&"fn fetch_data".to_string()));
-        assert!(symbols.contains(&"fn regular".to_string()));
+        assert!(symbols.contains(&"fn internal".to_string()));
+        assert!(symbols.contains(&"fn semi_public".to_string()));
+        assert!(symbols.contains(&"fn public".to_string()));
+        assert!(symbols.contains(&"fn private".to_string()));
+    }
+
+    #[test]
+    fn extract_rust_const_and_unsafe_fn() {
+        let content = "const fn compile_time() -> u32 { 42 }\npub const fn pub_compile() {}\nunsafe fn raw_op() {}\npub unsafe fn pub_raw() {}";
+        let symbols = extract_symbols("src/lib.rs", content);
+        assert!(symbols.contains(&"fn compile_time".to_string()));
+        assert!(symbols.contains(&"fn pub_compile".to_string()));
+        assert!(symbols.contains(&"fn raw_op".to_string()));
+        assert!(symbols.contains(&"fn pub_raw".to_string()));
+    }
+
+    #[test]
+    fn extract_rust_attribute_prefixed() {
+        let content = "#[derive(Debug)]\npub struct Foo;\n\n#[inline]\npub fn bar() {}";
+        let symbols = extract_symbols("src/lib.rs", content);
+        assert!(symbols.contains(&"struct Foo".to_string()));
+        assert!(symbols.contains(&"fn bar".to_string()));
     }
 
     #[test]
