@@ -51,6 +51,28 @@ pub struct JoinedSession {
     pub awaiting: Option<AwaitingPrompt>,
     /// True once a terminal event arrived — input reverts to the primary chat.
     pub finished: bool,
+    /// Live gate votes rendered in the goal sidebar — updated as each vote streams in.
+    pub gate_votes: Vec<GateVote>,
+    /// The currently active role, if any. `None` between roles.
+    pub active_role: Option<String>,
+    /// The most recent validation result, if any.
+    pub last_validation: Option<ValidationResult>,
+}
+
+/// One completion-gate vote, rendered in the goal sidebar.
+#[derive(Debug, Clone)]
+pub struct GateVote {
+    pub reviewer: String,
+    pub kind: String,
+    pub approved: bool,
+    pub coerced: bool,
+}
+
+/// The most recent validation result for the goal sidebar.
+#[derive(Debug, Clone)]
+pub struct ValidationResult {
+    pub ok: bool,
+    pub summary: String,
 }
 
 /// The prompt an interactive session is blocked on (`AwaitingInput`).
@@ -201,6 +223,8 @@ pub struct LayoutRects {
     pub input: Rect,
     /// Full-screen area used while the session browser is open.
     pub session_browser: Rect,
+    /// Goal sidebar (right of chat) — rendered when a goal session is joined.
+    pub goal_sidebar: Rect,
     /// The available character-width inside the input box (area width minus borders).
     pub input_content_width: usize,
 }
@@ -494,6 +518,9 @@ impl App {
             stream_buf: String::new(),
             awaiting: None,
             finished: false,
+            gate_votes: Vec::new(),
+            active_role: None,
+            last_validation: None,
         });
         self.focus = Focus::Input;
         self.scroll_offset = 0;
@@ -540,6 +567,8 @@ impl App {
             }
             GoalUiEvent::Role { role, model } => {
                 Self::flush_joined_buf(j);
+                j.active_role = Some(role.clone());
+                j.last_validation = None;
                 let line = match model {
                     Some(m) => format!("▸ {role} · {m}"),
                     None => format!("▸ {role}"),
@@ -552,6 +581,10 @@ impl App {
             }
             GoalUiEvent::Validation { ok, summary } => {
                 Self::flush_joined_buf(j);
+                j.last_validation = Some(ValidationResult {
+                    ok,
+                    summary: summary.clone(),
+                });
                 let mark = if ok { "✓" } else { "✗" };
                 j.messages
                     .push(Message::System(format!("{mark} {summary}")));
@@ -564,8 +597,12 @@ impl App {
                 coerced,
             } => {
                 Self::flush_joined_buf(j);
-                // "?" rather than "✗" when coerced: the reviewer produced no opinion, and showing
-                // that as a rejection would make an outage look like the work being wrong.
+                j.gate_votes.push(GateVote {
+                    reviewer: reviewer.clone(),
+                    kind: kind.clone(),
+                    approved,
+                    coerced,
+                });
                 let mark = if coerced {
                     "?"
                 } else if approved {
@@ -616,6 +653,7 @@ impl App {
             GoalUiEvent::Finished { status, summary } => {
                 Self::flush_joined_buf(j);
                 j.awaiting = None;
+                j.active_role = None;
                 j.finished = true;
                 j.status = status.clone();
                 j.messages.push(Message::System(format!(
@@ -1647,3 +1685,4 @@ use liberado_commands::format_uptime;
 #[cfg(test)]
 #[path = "app/tests.rs"]
 mod tests;
+
