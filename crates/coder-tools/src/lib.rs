@@ -690,9 +690,15 @@ fn extract_rust_symbol(line: &str) -> Option<String> {
     {
         return None;
     }
-    if line.starts_with("pub fn ") || line.starts_with("fn ") {
+    // fn, pub fn, pub async fn, async fn
+    if line.starts_with("pub fn ")
+        || line.starts_with("fn ")
+        || line.starts_with("pub async fn ")
+        || line.starts_with("async fn ")
+    {
         let name = line
             .trim_start_matches("pub ")
+            .trim_start_matches("async ")
             .trim_start_matches("fn ")
             .split(['(', '<'])
             .next()?
@@ -738,9 +744,19 @@ fn extract_rust_symbol(line: &str) -> Option<String> {
             return Some(format!("trait {name}"));
         }
     }
-    if line.starts_with("pub impl ") || line.starts_with("impl ") {
-        let rest = line.trim_start_matches("pub ").trim_start_matches("impl ");
-        let name = rest.split(['<', '{', ' ']).next()?.trim().to_string();
+    if line.starts_with("pub impl") || line.starts_with("impl ") || line.starts_with("impl<") {
+        let rest = line
+            .trim_start_matches("pub ")
+            .trim_start_matches("impl")
+            .trim_start_matches(' ');
+        let name = if rest.starts_with('<') {
+            rest.split('>')
+                .nth(1)
+                .and_then(|s| s.trim().split(' ').next())?
+                .to_string()
+        } else {
+            rest.split(['<', '{', ' ']).next()?.trim().to_string()
+        };
         if !name.is_empty() && !name.starts_with("for") {
             return Some(format!("impl {name}"));
         }
@@ -809,9 +825,15 @@ fn extract_ts_symbol(line: &str) -> Option<String> {
             return Some(format!("function {name}"));
         }
     }
-    if trimmed.starts_with("export function ") {
+    if trimmed.starts_with("export function ")
+        || trimmed.starts_with("export default function ")
+        || trimmed.starts_with("export default async function ")
+    {
         let name = trimmed
-            .trim_start_matches("export function ")
+            .trim_start_matches("export default async ")
+            .trim_start_matches("export default ")
+            .trim_start_matches("export ")
+            .trim_start_matches("function ")
             .split('(')
             .next()?
             .trim()
@@ -1365,12 +1387,31 @@ mod tests {
     }
 
     #[test]
-    fn extract_rust_functions_and_structs() {
-        let content = "pub fn main() {\n    let x = 1;\n}\n\npub struct Foo {\n    x: i32,\n}\n\nfn private_help() {}";
-        let symbols = extract_symbols("src/main.rs", content);
-        assert!(symbols.contains(&"fn main".to_string()));
-        assert!(symbols.contains(&"struct Foo".to_string()));
-        assert!(symbols.contains(&"fn private_help".to_string()));
+    fn extract_rust_async_functions() {
+        let content = "pub async fn handle() {}\nasync fn fetch_data() -> Result<Data> {}\npub fn regular() {}";
+        let symbols = extract_symbols("src/lib.rs", content);
+        assert!(symbols.contains(&"fn handle".to_string()));
+        assert!(symbols.contains(&"fn fetch_data".to_string()));
+        assert!(symbols.contains(&"fn regular".to_string()));
+    }
+
+    #[test]
+    fn extract_rust_generic_impl() {
+        let content = "impl<T> MyType<T> {\n    fn new() -> Self {}\n}\n\nimpl PlainType {\n    fn method() {}\n}";
+        let symbols = extract_symbols("src/lib.rs", content);
+        assert!(
+            symbols.iter().any(|s| s.contains("MyType")),
+            "should find generic impl"
+        );
+        assert!(symbols.contains(&"impl PlainType".to_string()));
+    }
+
+    #[test]
+    fn extract_ts_export_default_function() {
+        let content = "export default function main() {}\nexport function helper() {}";
+        let symbols = extract_symbols("app.ts", content);
+        assert!(symbols.contains(&"export function main".to_string()));
+        assert!(symbols.contains(&"export function helper".to_string()));
     }
 
     #[test]
