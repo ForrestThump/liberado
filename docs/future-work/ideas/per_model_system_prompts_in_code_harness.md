@@ -1,0 +1,2 @@
+
+Some harnesses are tuned to specific models. E.g. Grok Build system prompts are obviously tuned to Grok models. Kimicode's prompts are tuned to Kimi models. DeepSeek will be releasing a DeepSeek harness soon, and it will be tuned to DeepSeek V4. Therefore, the Liberado coding harness should use system prompts tuned to the specific model used in the harness in a given moment. So if the harness is set to use Grok, it should use Grok Build system prompts. etc. Having it do this automatically and dynamically would be a great feature.  
