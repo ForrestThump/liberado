@@ -298,16 +298,21 @@ pub async fn post_goal_message(
 /// yields a session that runs to completion without ever prompting.
 /// `POST /api/goals` for a **coding** goal. Domain is always `coding`; `project` rides in the
 /// payload where the coding pack reads it (and where G4's project authorization will check it).
+/// `plan_mode` restricts the pack to writing `.liberado/plan.md` only (existing PathPolicy).
 pub async fn start_coding_goal(
     client: &Client,
     server: &str,
     project: Option<&str>,
     text: &str,
+    plan_mode: bool,
     origin_conversation: Option<&str>,
 ) -> Result<String, String> {
     let mut payload = serde_json::json!({ "interactive": true });
     if let Some(project) = project {
         payload["project"] = serde_json::json!(project);
+    }
+    if plan_mode {
+        payload["plan_mode"] = serde_json::json!(true);
     }
     let mut body = serde_json::json!({
         "description": text,

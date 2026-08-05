@@ -2733,11 +2733,33 @@ fn slash_goal_in_project_carries_the_project() {
     let started = effects.iter().any(|e| {
         matches!(
             e,
-            Effect::StartCodingGoal { project: Some(p), text, .. }
-                if p == "liberado" && text == "add a --version flag"
+            Effect::StartCodingGoal {
+                project: Some(p),
+                text,
+                plan_mode: false,
+                ..
+            } if p == "liberado" && text == "add a --version flag"
         )
     });
     assert!(started, "expected project-scoped goal, got {effects:?}");
+}
+
+#[test]
+fn slash_plan_starts_coding_goal_in_plan_mode() {
+    let mut app = test_app();
+    let effects = run_slash(&mut app, "/plan in liberado design a --version flag");
+    let started = effects.iter().any(|e| {
+        matches!(
+            e,
+            Effect::StartCodingGoal {
+                project: Some(p),
+                text,
+                plan_mode: true,
+                ..
+            } if p == "liberado" && text == "design a --version flag"
+        )
+    });
+    assert!(started, "expected plan-mode goal, got {effects:?}");
 }
 
 #[test]

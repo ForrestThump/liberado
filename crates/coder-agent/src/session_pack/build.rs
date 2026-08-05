@@ -6,8 +6,8 @@
 //! Conflating those is what made the ask seam unreachable from the case that most needed it.
 
 use liberado_coder_core::{
-    CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask, CommandPolicy, GoalContract,
-    LIBERADO_LOOP_BACKEND, PathPolicy, ProgressPolicy, SandboxSpec, WorkspaceRef,
+    CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask, GoalContract,
+    LIBERADO_LOOP_BACKEND, ProgressPolicy, SandboxSpec, WorkspaceRef,
 };
 use liberado_common::Outcome;
 use liberado_session::{
@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use tokio::sync::mpsc::Sender;
 
 use super::CodingSessionPack;
+use super::policies::WorkspacePolicies;
 
 /// Is this a failure a **human answer** could plausibly unblock?
 ///
@@ -147,17 +148,18 @@ impl CodingSessionPack {
             .unwrap_or("session-coder")
             .to_string();
 
-        let prompt = goal
-            .payload
-            .get("coder_prompt")
-            .and_then(|v| v.as_str())
-            .unwrap_or(
-                "You are Liberado's coding worker. Inspect, edit with tools, then submit_report.",
-            )
-            .to_string();
+        // Path/command policy from profile overrides + payload (plan mode = restricted preset).
+        let policies = WorkspacePolicies::resolve(ctx.overrides(), &goal.payload);
+        let prompt = policies.coder_prompt(
+            &goal.payload,
+            "You are Liberado's coding worker. Inspect, edit with tools, then submit_report.",
+        );
 
         let max_turns = if goal.max_turns > 0 {
             goal.max_turns
+        } else if policies.plan_mode {
+            // Plans are short; keep the bound tight so a looping planner cannot burn a full build budget.
+            8
         } else {
             12
         };
@@ -192,19 +194,20 @@ impl CodingSessionPack {
                 coder: role.clone(),
                 critic: disabled,
                 gate: liberado_coder_core::CoderGateConfig::default(),
-                repair: Some(role),
+                // Plan mode: no repair loop rewriting the workspace — one pass to the plan file.
+                repair: if policies.plan_mode { None } else { Some(role) },
                 sandbox: if is_git_repo(&workspace) {
                     SandboxSpec::Worktree
                 } else {
                     SandboxSpec::HostLocal
                 },
-                command_policy: CommandPolicy::default(),
+                command_policy: policies.command_policy.clone(),
                 validation_command: None,
                 verifiers: Vec::new(),
                 verify_policy: Default::default(),
-                path_policy: PathPolicy::default(),
+                path_policy: policies.path_policy.clone(),
                 progress: ProgressPolicy {
-                    max_attempts: 2,
+                    max_attempts: if policies.plan_mode { 1 } else { 2 },
                     ..ProgressPolicy::default()
                 },
             },
@@ -212,6 +215,20 @@ impl CodingSessionPack {
             prior_feedback: Vec::new(),
             strategist_directive: None,
         };
+
+        if policies.plan_mode {
+            let _ = events
+                .send(SessionEvent::new(
+                    session_id,
+                    SessionEventKind::Progress {
+                        message: format!(
+                            "plan mode: writes limited to {}; shell disabled",
+                            liberado_coder_core::PLAN_ARTIFACT_REL
+                        ),
+                    },
+                ))
+                .await;
+        }
 
         // The frozen contract overwrites description, success criteria, and — the point of the
         // whole exercise — the **verifiers**. Without it these stay empty and the loop grades its
