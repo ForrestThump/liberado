@@ -371,6 +371,18 @@ impl WorktreeWorkspace {
         let parent_root = parent_root
             .canonicalize()
             .map_err(|_| SandboxError::MissingRoot(parent_root.display().to_string()))?;
+        // `Drop` recursively deletes `worktree_path`, so the id must not be able to steer that
+        // outside the base. Session ids are internally minted ULIDs today; this is the guard that
+        // keeps it true if one ever comes from somewhere else.
+        if session_id.is_empty()
+            || session_id.contains("..")
+            || session_id.contains('/')
+            || session_id.contains('\\')
+        {
+            return Err(SandboxError::MissingRoot(format!(
+                "session id '{session_id}' is not a safe worktree directory name"
+            )));
+        }
         let dest = worktrees_base.join(session_id);
         std::fs::create_dir_all(worktrees_base)
             .map_err(|e| SandboxError::MissingRoot(format!("worktree base dir: {e}")))?;
@@ -475,6 +487,28 @@ impl CommandRunner for WorktreeWorkspace {
 
 #[cfg(test)]
 mod tests {
+    /// `Drop` does `remove_dir_all(worktree_path)`, so a traversing session id would delete outside
+    /// the worktree base. Ids are internally minted ULIDs today — this is what keeps that a fact
+    /// rather than an assumption.
+    #[tokio::test]
+    async fn a_traversing_session_id_is_refused_before_any_directory_is_made() {
+        let base = std::env::temp_dir().join(format!("wt-guard-{}", std::process::id()));
+        for bad in ["../escape", "a/b", "..", ""] {
+            let err = WorktreeWorkspace::new(
+                std::path::Path::new("."),
+                bad,
+                &base,
+                CommandPolicy::default(),
+            )
+            .await;
+            assert!(
+                err.is_err(),
+                "session id {bad:?} must be refused, not joined into a path Drop will delete"
+            );
+        }
+        assert!(!base.exists(), "a refused id must not create the base dir");
+    }
+
     use super::*;
 
     fn workspace() -> (tempfile::TempDir, HostWorkspace) {
