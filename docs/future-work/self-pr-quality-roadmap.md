@@ -100,16 +100,19 @@ Every self-host coding goal produces a **PR package**, not only a transcript.
 
 **Ship package (default for project `liberado`, optional elsewhere):**
 
-- Frozen contract with an explicit **verifier list** (minimum viable for self-host: targeted
-  `cargo test -p …` / clippy on touched crates, plus "no drive-by files" where practical).
+- Frozen contract; attempt-level verifiers as needed during the build loop.
 - Branch from integration base (`develop` for this repo's dogfood), durable worktree, commits that
   map to contract items.
-- **Preflight** before `gh pr create`: verifiers green, base branch exists on origin (already a
-  known footgun), diffstat under a size budget.
-- PR body template: intent, mutation evidence, test-plan checkboxes (see PR #68 style).
+- **Preflight** (see [Generic preflight gate](#generic-preflight-gate)) before ready / `gh pr create`:
+  **CI-equivalent ship bar** on the agent host — not a soft summary. For liberado that means the
+  same commands CI runs (full workspace test matrix, clippy, fmt, deny), plus hygiene (base branch
+  exists, path/diffstat budget, no secrets). Ten–thirty minutes is acceptable if it saves a human
+  hour and a thrashy fix cycle.
+- PR body template: intent, mutation evidence, preflight report, test-plan checkboxes (see PR #68
+  style).
 
 **Exit criterion:** A human can merge most dogfood PRs after reading the PR body and skimming the
-diff — without re-deriving intent from the SSE stream.
+diff — without re-deriving intent from the SSE stream or re-running the suite by hand.
 
 ### Layer B — Cold review as a product stage
 
@@ -153,13 +156,177 @@ Do not start here. Improving folklore is worse than no memory.
 
 ---
 
+## Generic preflight gate
+
+Preflight is **not a Rust feature** and should not live only as hard-coded `cargo test` inside the
+coding pack. It is a **product concept** any pack can call:
+
+> Nothing is *done / ready / shippable* until preflight for that project (or task profile) passes.
+
+Other agentic harnesses often skip a named preflight stage (pair-programmer UX, CI-after-PR as the
+real gate). For light-oversight self-PRs that is the wrong trade. Liberado should make preflight
+first-class and **language-agnostic at the gate**, with project-specific steps for the repo.
+
+### Two layers
+
+| Layer | Responsibility |
+|-------|----------------|
+| **Product / kernel** | `PreflightRunner`: resolve a `PreflightSpec`, run ordered steps, fail closed, emit events, return a `PreflightReport`. Packs call this before terminal success that implies ship. |
+| **Project binding** | What “ship” means for *this* root: commands, timeouts, profiles (`ship` / `fast` / `deep`). Declared in topology / project config (or a script those steps invoke). |
+
+Coding pack is a **client** of preflight, not the owner of “how to build Rust.” Life, dispatch, and
+future domains reuse the same hook with different specs.
+
+### Do not implement preflight as “run the GitHub Actions YAML”
+
+Running `.github/workflows/ci.yml` via `act` (or by re-implementing Actions in-process) is
+attractive and incomplete:
+
+| Approach | Verdict |
+|----------|---------|
+| Local Actions runner (`act`, etc.) | Partial fidelity: matrices, `ubuntu-latest`, secrets, services, sibling checkouts drift from real CI |
+| Push + `gh run watch` on the real workflow | True CI; slow; needs remote; chicken-and-egg with “preflight before PR” unless draft-first |
+| **CI and agent both call the same entrypoint** | **Preferred:** shared script or config-defined steps; YAML stays a thin orchestrator |
+
+**Semantically** preflight should mean “what CI requires to merge.”  
+**Mechanically** prefer:
+
+```text
+scripts/preflight.sh   (or preflight.ps1 + sh, or one make/just target)
+        ↑                         ↑
+  GitHub Actions step       liberado PreflightRunner
+```
+
+The agent does not re-encode clippy flags in Rust. Drift becomes impossible once CI only invokes
+the shared entrypoint.
+
+Optional later: `mode = "github_actions_remote"` (push branch, watch workflow) for multi-OS truth
+when local host coverage is not enough. That is a **profile**, not the default engine.
+
+### Sketch: spec and report
+
+Illustrative only — not a frozen API:
+
+```text
+PreflightSpec {
+  id,                    // "ship" | "fast" | "deep"
+  steps: [               // ordered, fail-fast
+    { name, run, cwd?, env?, timeout, required }
+  ]
+}
+
+PreflightReport {
+  ok,
+  steps: [{ name, exit_code, duration, log_excerpt_or_path }],
+  summary
+}
+```
+
+Project config sketch (`topology` / projects — shape TBD at implement time):
+
+```toml
+[[projects]]
+name = "liberado"
+root = "…"
+
+[projects.preflight.ship]
+# Prefer one script CI also calls; expanded steps are fine for small repos.
+steps = [
+  { name = "fmt",    run = "cargo fmt --check" },
+  { name = "clippy", run = "cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings" },
+  { name = "test",   run = "cargo test --workspace" },
+  { name = "deny",   run = "cargo deny check" },
+]
+```
+
+Another project might use `npm test && npm run lint` — **no Rust in the abstract gate.**
+
+### Where it sits vs verifiers and the completion gate
+
+| Mechanism | Job |
+|-----------|-----|
+| **Attempt verifiers** | Small, fast, in-loop (paths exist, one command) |
+| **Completion gate** | Model quorum on “is the claim good?” (expensive, optional) |
+| **Preflight** | **Repo/project ship bar** — CI-equivalent (or declared steps) before ready/PR |
+| **Remote CI** | Multi-OS, secrets, final merge protection |
+
+Flow:
+
+```text
+build loop (cheap verifiers)
+  → optional completion gate
+  → PREFLIGHT (ship bar)
+  → open draft / mark ready / allow gh pr create
+  → remote CI still runs
+```
+
+### When packs run it
+
+Generic hook (name TBD):
+
+```text
+before_terminal_success / before_ship:
+  if project.preflight required for this outcome:
+    report = preflight.run(profile)
+    if !report.ok → Failed or stuck+ask — never Succeeded + open ready PR
+```
+
+| Task | Preflight meaning |
+|------|-------------------|
+| Coding → PR | Project `preflight.ship` (for liberado: full CI-equivalent matrix) |
+| Proposal / vault apply | Dry-run, schema, path policy |
+| Cron outbound | Template render + empty-check |
+| Dispatch child “done” | Child exit + required artifacts |
+
+### Liberado `preflight.ship` content (default bar)
+
+Align with [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) until CI is thinned to a
+shared script:
+
+| Step | Hard gate | Notes |
+|------|-----------|--------|
+| `cargo fmt --check` | Yes | Same as CI |
+| `cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings` | Yes | Same flags as CI |
+| `cargo test --workspace` | Yes | Full matrix; includes layer-rules; time is OK |
+| `cargo deny check` | Yes | Cheap; supply-chain |
+| Base branch exists / hygiene / diffstat budget | Yes | Not in CI yaml; agent ship extras |
+| Full multi-OS matrix on one host | No | Document “preflight = this host”; remote CI owns the other OS |
+| Line coverage threshold | Later | Report first; hard-gate only after stable (prefer diff coverage) |
+| Mutation testing | Later / deep profile | Full workspace mutants are hours; optional touched-crate `deep` profile or scheduled campaign — not every ship preflight v1 |
+
+**Agent must not edit preflight or delete tests to pass** — path policy / refuse mutating
+preflight scripts and `.github` without human, or pin expected step hashes from topology.
+
+### Why full matrix (not “touched crates only”) for liberado ship
+
+Interactive harnesses often run targeted tests for latency. For self-host liberado with a
+merge-cheap bar:
+
+- Soft `Succeeded` without full green is the main human tax.
+- Workspace tests include **layer-rules** (architecture), not only unit tests.
+- One red CI + human context switch usually costs more than 10–30 minutes of local
+  `cargo test --workspace`.
+- “Targeted only” remains a **`fast` profile** for docs-only or explicit opt-in — never default
+  for code PRs on project `liberado`.
+
+### Implementation order (preflight-specific)
+
+1. **`PreflightRunner` + config-driven steps** — pack-callable; coding blocks ready/PR until ok.
+2. **Wire liberado `ship` steps to match CI** — full matrix + clippy + fmt + deny.
+3. **Thin CI yaml to call the same script/steps** — single source of truth.
+4. **Profiles** — `fast` / `deep`; optional remote workflow watch.
+5. **Reuse from other domains** — same runner, different specs.
+
+---
+
 ## How Liberado should own the loop
 
 Liberado is a Life OS with a coding pack, not "another coding agent." The loop should be hosted:
 
 | Piece | Owner |
 |-------|--------|
-| Contract + verifiers + worktree + PR package | Coding domain pack |
+| Contract + attempt verifiers + worktree + PR package | Coding domain pack |
+| **Preflight (ship bar)** | Shared runner + project config; coding (and others) call it |
 | Cold-review child | Hub-spawned explore (or a thin `review` domain) with read-only tools |
 | Fix pass | Same coding session / branch (checkpoints + durable worktree) |
 | Queue / approve | Goals API + face (`/goal`, park/resume, message); surfaces later |
@@ -179,6 +346,10 @@ must not depend on an outer CLI skill forever.
 - **Skipping dogfood on liberado itself** — toy repos hide Windows extended paths, worktree Drop,
   `gh --base`, and real CI cost.
 - **Empty verifiers with a green gate later** — measure with hard checks on, not soft summaries.
+- **Hard-code cargo into the kernel** — preflight is generic; Rust is a project binding.
+- **Treat `act`/YAML re-execution as the only engine** — share entrypoints with CI instead.
+- **Let the agent weaken the suite to green** — failing preflight is a stop, not a prompt to
+  delete tests or skip clippy.
 
 ---
 
@@ -202,17 +373,18 @@ Order is deliberate. Prefer shipping the first items as small PRs with dogfood e
 
 | Rank | Investment | Layer | Notes |
 |------|------------|-------|--------|
-| **1** | **Ship package** on coding goals (PR body, preflight tests, size/scope gate; default-on for `liberado`) | A | Highest ROI; unblocks honest dogfood grading |
-| **2** | **Productize cold-review-pr** as hub stage (explore child + filter + one fix round) | B | Uses explore mode + checkpoints already on `develop` |
-| **3** | **Default verifiers** for self-host (touched-crate test/clippy; non-empty when project is set) | A | Soft `Succeeded` is the main merge tax |
+| **1** | **Generic `PreflightRunner` + liberado `ship` profile** (CI-equivalent full matrix, clippy, fmt, deny; blocks ready/PR; PR body + size/scope) | A | Highest ROI; abstract gate + project binding; see [Generic preflight gate](#generic-preflight-gate) |
+| **2** | **Thin CI to the same entrypoint** as preflight | A | Single source of truth; no Rust in the runner |
+| **3** | **Productize cold-review-pr** as hub stage (explore child + filter + one fix round) | B | After ship bar is honest; uses explore + checkpoints |
 | **4** | **Repo map / cheap intel** | A–B | Fewer turns rediscovering layout; fewer drive-bys |
 | **5** | **Human queue UX** (API list + status first) | C | Steering without reading full streams |
 | **6** | **Post-merge Dream on dogfood outcomes** | D | Only after 1–3 reduce noise |
 | **7** | Completion gate default-on for self-host *after* cost/quality measured | A–B | Still opt-in until S7-style measurement (see coding-tui plan) |
+| **8** | Coverage / mutants as `deep` or scheduled — not default ship v1 | A | Report first; touched-crate mutants later |
 
-A natural first implementation PR is **(1)+(2) as one "PR quality loop"** on coding goals: verify →
-cold review → fix → re-verify → draft/ready PR. Substrate: explore mode, durable worktrees,
-checkpoints/mid-build resume (#73), hub fan-out patterns (#72).
+Natural first implementation: **(1)** alone (runner + coding pack hooks + liberado steps matching
+CI + PR body). Then **(2)** so yaml cannot drift. Then **(3)** cold review on top of a real ship bar.
+Substrate already on `develop`: explore mode, durable worktrees, checkpoints (#73), hub fan-out (#72).
 
 ---
 
@@ -221,7 +393,7 @@ checkpoints/mid-build resume (#73), hub fan-out patterns (#72).
 Treat this as the dogfood grade for the program, not a single ticket:
 
 1. **Five consecutive self-host PRs** on liberado (scoped tasks) reach "ready" with:
-   - green preflight verifiers,
+   - green **preflight.ship** (full CI-equivalent matrix on agent host + hygiene),
    - cold-review stage run,
    - zero high findings open (or explicitly waived with reason in PR body).
 2. Human time per PR is dominated by **taste and scope**, not by rediscovering what the agent did.
@@ -244,9 +416,10 @@ Until then, draft + human submit remains the default.
 | S3 project auth | Landed; required for safe self-host |
 | S4 checkpoints / mid-build resume | Landed (#73); enables B fix pass and park/resume dogfood |
 | S6 fan-out | Landed (#72); width, not quality loop |
-| S7 intake / verifiers as authoritative | Contract + verifiers are the spine of Layer A |
+| S7 intake / verifiers as authoritative | Contract + attempt verifiers during build; preflight is the ship bar above them |
 | E6-c(b) | Satisfied in spirit by S4 mid-build resume with checkpoints |
 | C2 dogfood | Continues as the grading method for this entire roadmap |
+| [`verifiers.md`](../spec/architecture/verifiers.md) | Attempt-level gates; preflight is the project-level ship gate (complementary) |
 
 This document does not replace [`coding-tui-plan.md`](coding-tui-plan.md); it ranks **PR quality and
 self-improvement** as the product outcome those slices were building toward.
@@ -258,3 +431,4 @@ self-improvement** as the product outcome those slices were building toward.
 | Date | Note |
 |------|------|
 | 2026-08-06 | Initial roadmap after #72 (fan-out), #73 (checkpoints/mid-build resume), and discussion of cold-review skill vs in-product loop |
+| 2026-08-06 | **Generic preflight gate:** CI-equivalent full matrix for liberado ship; abstract `PreflightRunner` + project binding; prefer shared scripts over running Actions YAML; coverage/mutants as later/deep; re-ranked investments |
