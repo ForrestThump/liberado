@@ -33,18 +33,6 @@ fn is_stuck(e: &liberado_coder_core::CoderError) -> bool {
     matches!(e, CoderError::NoChanges | CoderError::Validation(_))
 }
 
-/// Make a freshly-created session workspace its **own** git repo.
-///
-/// Without this, a workspace created under the daemon's data dir (`.liberado/…`, which is a
-/// *relative* path and so usually sits inside the user's own checkout) is not a repo, and every git
-/// command run there — `git status` for `files_changed`, the coder's `git_diff` tool, a
-/// `git_nonempty_diff` verifier — silently resolves against the **enclosing** repo instead. The
-/// session would then report, and be graded on, changes it never made.
-///
-/// Best-effort: a workspace that is already a repo (the dogfood case, where the caller passes a real
-/// checkout) never reaches here, and a git failure just leaves things as they were.
-/// Whether `dir` is a git repository (or worktree). Used to decide whether to enable
-/// worktree-isolated sandboxing.
 /// Whether `dir` is inside a git working tree — **not** merely whether it is a repo *root*.
 ///
 /// `dir.join(".git").exists()` only answers for a root. A workspace pointed at a subdirectory of an
@@ -60,10 +48,12 @@ fn is_git_repo(dir: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Initialize `dir` as a git repo if it is not already one — a workspace without version control
-/// cannot report what the worker changed, so the worker would be asked to test something it has
-/// never seen done, and the verifier would grade the parent workspace (which the worker did not
-/// touch) rather than the child it did. The gap where a freshly-initialised repo sat empty so the
+/// Make a freshly-created session workspace its **own** git repo.
+///
+/// Without this, a workspace created under the daemon's data dir (`.liberado/…`, which is a
+/// *relative* path and so usually sits inside the user's own checkout) is not a repo, and every git
+/// command run there — `git status` for `files_changed`, the coder's `git_diff` tool, a
+/// `git_nonempty_diff` verifier — silently resolves against the **enclosing** repo instead. The
 /// session would then report, and be graded on, changes it never made.
 ///
 /// Best-effort: a workspace that is already a repo (the dogfood case, where the caller passes a real

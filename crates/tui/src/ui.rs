@@ -320,6 +320,114 @@ mod tests {
         );
     }
 
+    /// The sidebar column on its own. The chat transcript renders the same reviewer names and
+    /// validation text, so a whole-frame `contains` would pass with the sidebar not drawn at all.
+    fn sidebar_columns(out: &str, width: usize) -> String {
+        let start = width * crate::tuning::CHAT_SIDEBAR_SPLIT_CHAT as usize / 100;
+        out.lines()
+            .map(|l| l.chars().skip(start).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// C4's sidebar. `n` gate votes, all approved, then one validation result.
+    fn joined_app_with_votes(n: usize) -> App {
+        let mut app = smoke_app();
+        app.update(Action::SessionsUpdate(vec![goal_header(
+            "g1",
+            DomainWire::Coding,
+            "build a CLI",
+            "running",
+            false,
+        )]));
+        app.join_session("g1".to_string());
+        for i in 0..n {
+            app.update(Action::GoalStreamEvent(GoalUiEvent::CriticVerdict {
+                reviewer: format!("rev-{i}"),
+                kind: "fresh".into(),
+                approved: true,
+                issues: vec![],
+                coerced: false,
+            }));
+        }
+        app.update(Action::GoalStreamEvent(GoalUiEvent::Validation {
+            ok: true,
+            summary: "cargo test passed".into(),
+        }));
+        app
+    }
+
+    #[test]
+    fn goal_sidebar_shows_votes_the_role_and_the_validation() {
+        let mut app = joined_app_with_votes(2);
+        app.update(Action::GoalStreamEvent(GoalUiEvent::Role {
+            role: "worker".into(),
+            model: None,
+        }));
+        app.update(Action::GoalStreamEvent(GoalUiEvent::Validation {
+            ok: true,
+            summary: "cargo test passed".into(),
+        }));
+        let out = render_to_string(&mut app, 100, 24);
+        let bar = sidebar_columns(&out, 100);
+        for needle in [
+            "Gate Votes",
+            "rev-0",
+            "rev-1",
+            "Active Role",
+            "worker",
+            "Validation",
+            "cargo test passed",
+        ] {
+            assert!(bar.contains(needle), "sidebar missing '{needle}':\n{out}");
+        }
+    }
+
+    #[test]
+    fn a_long_gate_run_does_not_push_the_other_sidebar_sections_off_the_pane() {
+        // A `Paragraph` clips rather than scrolls, so the unbounded section has to be sized against
+        // what the fixed ones leave — not rendered first and allowed to eat the pane. Filled
+        // top-down, 30 votes hid both "Validation" and every vote after the 17th, which is exactly
+        // backwards: the transcript already holds the old ones, and the sidebar exists to show the
+        // live ones.
+        let mut app = joined_app_with_votes(30);
+        let out = render_to_string(&mut app, 100, 24);
+        let bar = sidebar_columns(&out, 100);
+
+        assert!(
+            bar.contains("Validation") && bar.contains("cargo test passed"),
+            "the validation section must survive a long gate run:\n{out}"
+        );
+        assert!(
+            bar.contains("rev-29"),
+            "the newest vote must be on screen:\n{out}"
+        );
+        assert!(
+            !bar.contains("rev-0 "),
+            "the oldest votes must be the ones dropped:\n{out}"
+        );
+        assert!(
+            bar.lines().any(|l| l.contains("earlier")),
+            "a truncated list must say how many it is not showing:\n{out}"
+        );
+    }
+
+    #[test]
+    fn the_goal_sidebar_is_dropped_rather_than_squeezed_on_a_narrow_terminal() {
+        let mut app = joined_app_with_votes(2);
+        let out = render_to_string(&mut app, 50, 20);
+        assert!(
+            !out.contains("Gate Votes"),
+            // whole-frame on purpose: the claim is that no sidebar is drawn anywhere.
+            "a 50-column terminal has no room for a sidebar:\n{out}"
+        );
+        // …and the chat pane still renders the same votes, so nothing is lost by dropping it.
+        assert!(
+            out.contains("rev-0"),
+            "the transcript still has them:\n{out}"
+        );
+    }
+
     #[test]
     fn status_bar_shows_primary_kind_chip_by_default() {
         let mut app = smoke_app();

@@ -2765,6 +2765,82 @@ fn the_tool_manifest_is_the_last_word_before_the_dialogue() {
     );
 }
 
+/// The face-agent prompt is the third builder — #43 fixed the dispatcher, #46 fixed the subagent,
+/// and nobody had looked at this one (A3). The claim is that the face agent is *already* correct:
+/// the base prompt is purely static and always first, and the two varying blocks — the profile
+/// nudge and the tool manifest — follow it in that order.
+///
+/// This drives a real turn and reads the messages the **provider** received, rather than calling
+/// `apply_prompt_append` and `apply_available_tools` by hand and asserting the order they were
+/// called in. The ordering being checked is a property of `sessions.rs`, not of `Conversation`:
+/// hand-built, the fixture would pass with the two calls swapped at the real call site, which is
+/// precisely the mistake it exists to catch.
+#[tokio::test]
+async fn the_face_agent_sends_its_static_prompt_before_anything_that_varies() {
+    use liberado_session::{GoalSessionHub, GoalSessionStore};
+
+    let dir = tempfile::tempdir().unwrap();
+    let provider = Arc::new(MockProvider::with_script(
+        "chat",
+        [CompletionResponse::text("done")],
+    ));
+    let sessions = ChatSessions::new(
+        Arc::new(SessionStore::open(dir.path()).await),
+        Executor::new(provider.clone(), Budget::default()),
+        Arc::new(NoTools),
+    )
+    .with_delegation_mode(true)
+    .with_goal_hub(Arc::new(GoalSessionHub::new(GoalSessionStore::new())));
+
+    let id = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                profile: Some("terse".into()),
+                prompt_append: Some("Answer in one sentence.".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    sessions.turn(id, "add milk").await.unwrap();
+
+    let sent = provider
+        .last_request()
+        .expect("the turn reached the provider");
+    let systems: Vec<&str> = sent
+        .messages
+        .iter()
+        .take_while(|m| m.role == Role::System)
+        .map(|m| m.content.as_str())
+        .collect();
+
+    assert_eq!(
+        systems.len(),
+        3,
+        "base prompt, profile nudge, tool manifest — in one unbroken system block: {systems:?}"
+    );
+    assert_eq!(
+        systems[0], HUMAN_INTERFACE_SYSTEM_PROMPT,
+        "the one block that never varies between turns must be the cacheable prefix"
+    );
+    assert!(
+        systems[1].contains("Answer in one sentence."),
+        "the profile nudge is second: {:?}",
+        systems[1]
+    );
+    assert!(
+        systems[2].contains(crate::DELEGATE_TOOL_NAME),
+        "the tool manifest varies most, so it goes last: {:?}",
+        systems[2]
+    );
+    assert_eq!(
+        sent.messages[3].role,
+        Role::User,
+        "and nothing that varies is buried among the dialogue"
+    );
+}
+
 /// The stale-evidence case: a transcript containing a successful call to a since-revoked tool must
 /// be explicitly outranked, not merely contradicted by omission.
 #[test]

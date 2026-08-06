@@ -71,7 +71,7 @@ the first time *"did that make it dumber?"* has to be answered with a number —
 
 ## What was built instead
 
-[`crates/cost/examples/provenance_ratio.rs`](../../../crates/cost/examples/provenance_ratio.rs) —
+`liberado-cost provenance-ratio` ([`crates/cost/src/lib.rs`](../../../crates/cost/src/lib.rs)) —
 per delegation, the ratio between what the face agent **received** and what it then **wrote**, read
 from session logs the daemon already writes. No inference, no grader, no authored tasks, nothing to
 maintain.
@@ -80,7 +80,7 @@ On the live logs it ranked the known seam conversation **first, at 29.4×**, wit
 it — against a median of 0.9×. Six of seventy-eight delegations flagged: a short list worth reading,
 which is the cheapest useful thing an eval can do before a free oracle exists.
 
-Sibling: [`delegation_cost.rs`](../../../crates/cost/examples/delegation_cost.rs), the same idea for
+Sibling: `liberado-cost delegation-cost`, the same idea for
 token cost.
 
 **The pattern worth generalising:** the system already writes down what it did. Reading that is
