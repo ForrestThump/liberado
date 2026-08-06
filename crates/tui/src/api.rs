@@ -338,12 +338,14 @@ pub async fn list_projects(client: &Client, server: &str) -> Result<Vec<ProjectR
 /// The server's `(None, Some(path))` auth arm (direct-path workspace authorization) is HTTP-only
 /// until a TUI picker lets the user browse to a subdirectory under a declared project root.
 /// `plan_mode` restricts the pack to writing `.liberado/plan.md` only (existing PathPolicy).
+/// `explore_mode` selects the read-only tool/path preset in the coding pack.
 pub async fn start_coding_goal(
     client: &Client,
     server: &str,
     project: Option<&str>,
     text: &str,
     plan_mode: bool,
+    explore_mode: bool,
     origin_conversation: Option<&str>,
 ) -> Result<String, String> {
     let mut payload = serde_json::json!({ "interactive": true });
@@ -352,6 +354,9 @@ pub async fn start_coding_goal(
     }
     if plan_mode {
         payload["plan_mode"] = serde_json::json!(true);
+    }
+    if explore_mode {
+        payload["explore_mode"] = serde_json::json!(true);
     }
     let mut body = serde_json::json!({
         "description": text,

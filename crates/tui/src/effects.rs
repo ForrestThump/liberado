@@ -97,9 +97,10 @@ impl EffectRunner {
                 project,
                 text,
                 plan_mode,
+                explore_mode,
                 origin_conversation,
             } => {
-                self.start_coding_goal(project, text, plan_mode, origin_conversation)
+                self.start_coding_goal(project, text, plan_mode, explore_mode, origin_conversation)
                     .await
             }
             Effect::ParkGoalSession(id) => self.goal_action(id, "park", "parked").await,
@@ -230,6 +231,7 @@ impl EffectRunner {
         project: Option<String>,
         text: String,
         plan_mode: bool,
+        explore_mode: bool,
         origin_conversation: Option<String>,
     ) {
         let client = self.client.clone();
@@ -242,6 +244,7 @@ impl EffectRunner {
                 project.as_deref(),
                 &text,
                 plan_mode,
+                explore_mode,
                 origin_conversation.as_deref(),
             )
             .await

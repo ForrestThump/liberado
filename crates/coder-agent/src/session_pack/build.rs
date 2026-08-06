@@ -138,14 +138,22 @@ impl CodingSessionPack {
             .unwrap_or("session-coder")
             .to_string();
 
-        // Path/command policy from profile overrides + payload (plan mode = restricted preset).
+        // Path/command policy from profile overrides + payload
+        // (plan = restricted write preset; explore = read-only preset).
         let policies = WorkspacePolicies::resolve(ctx.overrides(), &goal.payload);
         let prompt = policies.coder_prompt(
             &goal.payload,
             "You are Liberado's coding worker. Inspect, edit with tools, then submit_report.",
         );
 
-        let max_turns = if policies.plan_mode {
+        let max_turns = if policies.explore_mode {
+            // Exploration is bounded research, not a long build.
+            if goal.max_turns > 0 {
+                10.min(goal.max_turns)
+            } else {
+                10
+            }
+        } else if policies.plan_mode {
             // Plans are short; keep the bound tight so a looping planner cannot burn a full build
             // budget. Cap an explicit max_turns from a direct API call too.
             if goal.max_turns > 0 {
@@ -179,6 +187,16 @@ impl CodingSessionPack {
         let mut task = CoderTask::new(session_id, &goal.description);
         task.success_criteria = goal.success_criteria.clone();
 
+        // Explore is read-only: HostLocal is enough (no worktree isolation required for readers).
+        // Build mode still uses Worktree when the workspace is a git repo (C7).
+        let sandbox = if policies.explore_mode {
+            SandboxSpec::HostLocal
+        } else if is_git_repo(&workspace) {
+            SandboxSpec::Worktree
+        } else {
+            SandboxSpec::HostLocal
+        };
+
         let mut request = CoderRunRequest {
             task,
             workspace: WorkspaceRef::new(workspace.to_string_lossy(), "HEAD"),
@@ -189,20 +207,39 @@ impl CodingSessionPack {
                 coder: role.clone(),
                 critic: disabled,
                 gate: liberado_coder_core::CoderGateConfig::default(),
-                // Plan mode: no repair loop rewriting the workspace — one pass to the plan file.
-                repair: if policies.plan_mode { None } else { Some(role) },
-                sandbox: if is_git_repo(&workspace) {
-                    SandboxSpec::Worktree
+                // Plan/explore: no repair loop rewriting the workspace.
+                repair: if policies.plan_mode || policies.explore_mode {
+                    None
                 } else {
-                    SandboxSpec::HostLocal
+                    Some(role)
                 },
+                sandbox,
                 command_policy: policies.command_policy.clone(),
                 validation_command: None,
                 verifiers: Vec::new(),
                 verify_policy: Default::default(),
                 path_policy: policies.path_policy.clone(),
                 progress: ProgressPolicy {
-                    max_attempts: if policies.plan_mode { 1 } else { 2 },
+                    max_attempts: if policies.plan_mode || policies.explore_mode {
+                        1
+                    } else {
+                        2
+                    },
+                    // Explore mode is exclusively read-only tools — the progress guard's
+                    // read_only_turn_limit and same_tool_limit would trigger false
+                    // ReadOnlyStall / SameToolChurn fatals because every explore tool is
+                    // classified as non-mutating. Disable the guard so max_turns is the
+                    // only bound.
+                    read_only_turn_limit: if policies.explore_mode {
+                        u32::MAX
+                    } else {
+                        ProgressPolicy::default().read_only_turn_limit
+                    },
+                    same_tool_limit: if policies.explore_mode {
+                        u32::MAX
+                    } else {
+                        ProgressPolicy::default().same_tool_limit
+                    },
                     ..ProgressPolicy::default()
                 },
             },
@@ -211,15 +248,19 @@ impl CodingSessionPack {
             strategist_directive: None,
         };
 
-        if policies.plan_mode {
+        if policies.plan_mode || policies.explore_mode {
             let _ = events
                 .send(SessionEvent::new(
                     session_id,
                     SessionEventKind::Progress {
-                        message: format!(
-                            "plan mode: writes limited to {}; shell disabled",
-                            liberado_coder_core::PLAN_ARTIFACT_REL
-                        ),
+                        message: if policies.explore_mode {
+                            "explore mode: read-only tools; writes and shell disabled".into()
+                        } else {
+                            format!(
+                                "plan mode: writes limited to {}; shell disabled",
+                                liberado_coder_core::PLAN_ARTIFACT_REL
+                            )
+                        },
                     },
                 ))
                 .await;

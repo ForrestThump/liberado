@@ -48,6 +48,14 @@ pub enum SlashCommand {
         project: Option<String>,
         text: String,
     },
+    /// Read-only coding explore (`/explore <text>`, `/explore in <project> <text>`).
+    ///
+    /// Same coding pack as `/goal`, with `explore_mode` so the pack applies read-only path/command
+    /// policy and a filtered tool catalog. Reuses hub + PathPolicy — not a second agent runtime.
+    Explore {
+        project: Option<String>,
+        text: String,
+    },
 }
 
 /// `/goal` subcommands.
@@ -144,6 +152,14 @@ impl std::fmt::Display for SlashCommand {
                 project: None,
                 text,
             } => write!(f, "/plan {text}"),
+            SlashCommand::Explore {
+                project: Some(p),
+                text,
+            } => write!(f, "/explore in {p} {text}"),
+            SlashCommand::Explore {
+                project: None,
+                text,
+            } => write!(f, "/explore {text}"),
             SlashCommand::Back => write!(f, "/back"),
             SlashCommand::Fork { after_turn: None } => write!(f, "/fork"),
             SlashCommand::Fork {

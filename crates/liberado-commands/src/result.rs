@@ -59,15 +59,20 @@ pub enum CommandResult {
         domain: String,
         goal: String,
     },
-    /// Start a **coding** goal session (`/goal <text>` or `/plan <text>`). Distinct from
+    /// Start a **coding** goal session (`/goal`, `/plan`, or `/explore`). Distinct from
     /// `SpawnGoalSession`: that one takes a domain/profile token from the human, while this one is
     /// always the coding pack and carries a project instead. `project` is `None` when the surface
-    /// should use its current project context. `plan_mode` restricts writes to `.liberado/plan.md`.
+    /// should use its current project context.
+    ///
+    /// `plan_mode` restricts writes to `.liberado/plan.md`. `explore_mode` selects the read-only
+    /// tool/path preset. If both are true, the pack prefers explore (strictest).
     StartCodingGoal {
         project: Option<String>,
         text: String,
         /// When true, payload includes `plan_mode: true` (path/command policy preset in the pack).
         plan_mode: bool,
+        /// When true, payload includes `explore_mode: true` (read-only PathPolicy + catalog).
+        explore_mode: bool,
     },
     /// Open the goal view for the focused session (bare `/goal`).
     OpenGoalView,

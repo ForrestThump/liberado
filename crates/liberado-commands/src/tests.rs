@@ -774,6 +774,8 @@ mod goal_command_tests {
             "/goal in liberado add a --version flag",
             "/plan design a CLI flag",
             "/plan in liberado design a CLI flag",
+            "/explore how auth works",
+            "/explore in liberado how auth works",
         ] {
             let parsed = parse(input).expect("parses");
             assert_eq!(
@@ -795,6 +797,20 @@ mod goal_command_tests {
                 assert_eq!(text, "design the CLI");
             }
             other => panic!("expected Plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn explore_parses_with_project() {
+        match parse("/explore in liberado how sessions park") {
+            Some(SlashCommand::Explore {
+                project: Some(p),
+                text,
+            }) => {
+                assert_eq!(p, "liberado");
+                assert_eq!(text, "how sessions park");
+            }
+            other => panic!("expected Explore, got {other:?}"),
         }
     }
 
@@ -859,6 +875,74 @@ mod goal_command_tests {
                 project: Some("liberado".into()),
                 text: "design X".into(),
                 plan_mode: true,
+                explore_mode: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn explore_handler_sets_explore_mode_flag() {
+        use crate::context::{CommandContext, StatusInfo};
+        use crate::result::CommandResult;
+
+        struct NullCtx;
+        impl CommandContext for NullCtx {
+            fn active_session_id(&self) -> Option<&str> {
+                None
+            }
+            fn is_streaming(&self) -> bool {
+                false
+            }
+            fn conversation_count(&self) -> usize {
+                0
+            }
+            fn find_conversation_id_by_prefix(&self, _: &str) -> Option<String> {
+                None
+            }
+            fn status_info(&self) -> Option<StatusInfo> {
+                None
+            }
+            fn theme_names(&self) -> Vec<String> {
+                vec![]
+            }
+            fn current_theme_name(&self) -> &str {
+                ""
+            }
+            fn conversation_title_for(&self, _: &str) -> Option<String> {
+                None
+            }
+            fn conversation_parent_for(&self, _: &str) -> Option<String> {
+                None
+            }
+            fn message_count(&self) -> usize {
+                0
+            }
+            fn conversation_list(&self) -> Vec<(String, String)> {
+                vec![]
+            }
+            fn set_active_session(&mut self, _: Option<String>) {}
+            fn clear_chat(&mut self) {}
+            fn reset_for_new_conversation(&mut self) {}
+            fn push_system_message(&mut self, _: String) {}
+            fn clear_input(&mut self) {}
+            fn stop_streaming(&mut self) {}
+            fn set_theme(&mut self, _: &str) -> bool {
+                false
+            }
+            fn reload_themes(&mut self) -> Result<usize, Vec<String>> {
+                Ok(0)
+            }
+        }
+
+        let results =
+            crate::handlers::focus::explore(Some("liberado"), "how auth works", &mut NullCtx);
+        assert_eq!(
+            results,
+            vec![CommandResult::StartCodingGoal {
+                project: Some("liberado".into()),
+                text: "how auth works".into(),
+                plan_mode: false,
+                explore_mode: true,
             }]
         );
     }

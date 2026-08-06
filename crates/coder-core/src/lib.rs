@@ -150,13 +150,13 @@ impl Default for CommandPolicy {
 }
 
 impl CommandPolicy {
-    /// No shell programs may run (coding plan mode).
+    /// No shell programs may run (plan / explore presets).
     ///
     /// Reuses the existing allow-list rule in `coder-sandbox`: a **non-empty** `allow` list that
     /// matches nothing denies every command. Empty `allow` would mean "allow all".
     pub fn none_allowed() -> Self {
         Self {
-            allow: vec!["!plan-mode-no-shell".into()],
+            allow: vec!["!mode-no-shell".into()],
             deny: Vec::new(),
             timeout_secs: 120,
             output_max_bytes: 64 * 1024,
@@ -172,6 +172,25 @@ You are Liberado's coding planner (plan mode). Explore the codebase with read-on
 write a clear implementation plan ONLY to `.liberado/plan.md`. \
 Do NOT edit any other files. Do NOT run shell commands, git commits, or apply patches outside that path. \
 When the plan is written, call submit_report summarizing the plan and key risks.";
+
+/// Tool names exposed in coding **explore** mode (read-only catalog filter).
+///
+/// Write/mutate tools stay registered in the full catalog but are omitted here so the model is not
+/// invited to call them. Enforcement still lives in [`PathPolicy`] / [`CommandPolicy`].
+pub const EXPLORE_TOOL_NAMES: &[&str] = &[
+    "list_files",
+    "search_text",
+    "read_file",
+    "git_status",
+    "git_diff",
+];
+
+/// System instructions for a coding explore session.
+pub const EXPLORE_MODE_CODER_PROMPT: &str = "\
+You are Liberado's read-only coding explorer. Inspect the codebase with list_files, search_text, \
+read_file, git_status, and git_diff only. Do NOT edit files, apply patches, commit, push, or run \
+shell commands. When you have enough context, call submit_report with a concise findings summary \
+(relevant paths, how the code is structured, and anything the parent agent needs to act).";
 
 /// A configured command the backend can expose through `validate` and run as a deterministic gate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,6 +261,22 @@ impl PathPolicy {
             allow_write_globs: vec![PLAN_ARTIFACT_REL.to_string()],
             ..Self::default()
         }
+    }
+
+    /// No writes under the workspace (coding explore / read-only subagent).
+    ///
+    /// Reuses the existing write-glob check in `coder-tools`: an empty `allow_write_globs` list
+    /// matches nothing, so every write is denied. Not a second permission system.
+    pub fn read_only() -> Self {
+        Self {
+            allow_write_globs: Vec::new(),
+            ..Self::default()
+        }
+    }
+
+    /// True when no write glob is allowed (explore mode and any future read-only preset).
+    pub fn writes_disabled(&self) -> bool {
+        self.allow_write_globs.is_empty()
     }
 }
 

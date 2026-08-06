@@ -49,6 +49,16 @@ vault_path = "/home/shiloh/vault"
 # [session_profiles.overrides]
 # plan_mode = true
 
+# Coding explore (read-only subagent): `/explore <text>` or goal payload `explore_mode = true`.
+# Uses PathPolicy::read_only() + CommandPolicy::none_allowed() + a filtered tool catalog — no
+# parallel permission system. Optional profile that always explores:
+#
+# [[session_profiles]]
+# name = "coding-explore"
+# domain = "coding"
+# [session_profiles.overrides]
+# explore_mode = true
+
 # Main chat agent = human interfacer. Specialist work goes through the built-in `delegate` tool
 # to the dispatcher mesh (grant ExecuteMcp specialists to component `dispatcher` in policy.toml).
 #
