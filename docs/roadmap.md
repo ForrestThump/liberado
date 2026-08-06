@@ -78,7 +78,7 @@ also the one that matters least.
 | Slice | State | Notes |
 |---|---|---|
 | **S1** — completion gate | ✅ **landed** | `liberado_session::completion_gate` (gatekeeper veto + strict-majority fresh quorum + fail-closed votes), coding-pack adapter, `critic_verdict` on the wire, strategist on non-convergence. **Default OFF** (`[coder.gate] enabled`) — it costs `1 + fresh_reviewers` model calls per attempt, and stays opt-in until S7 measures it. |
-| **S2** — wire events + goal surface | 🟡 **partial** | Done: `file_changed`, first-class `hub.park()` + `POST /api/goals/{id}/park`, `/goal` commands (`start`/`in`/`status`/`pause`/`resume`/`clear`), TUI wiring for all of them. **Not done:** dedicated goal-view panes (role timeline / gate panel / verifier panel as separate widgets — gate votes and file changes currently render inline in the joined pane), `GET /api/goals/{id}/diff`, and the live dogfood run. |
+| **S2** — wire events + goal surface | 🟡 **partial** | Done: `file_changed`, first-class `hub.park()` + `POST /api/goals/{id}/park`, `/goal` commands (`start`/`in`/`status`/`pause`/`resume`/`clear`), TUI wiring for all of them. **Not done:** dedicated goal-view panes (role timeline / gate panel / verifier panel as separate widgets — gate votes and file changes currently render inline in the joined pane), `GET /api/goals/{id}/diff`. **Dogfood:** a self-host coding dogfood ran on `develop` on 2026-08-05. |
 | **S3–S7** | ⬜ open | project authorization, checkpoints/rewind, `/loop`, coding subagents, strategist evals |
 
 Two carried-forward limitations, both S2 leftovers worth knowing before building on this:
