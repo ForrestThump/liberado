@@ -52,6 +52,20 @@ impl CodingToolRuntime {
         command_policy: CommandPolicy,
         path_policy: PathPolicy,
     ) -> Result<Self, ToolError> {
+        Self::from_sandbox_with_session(root, sandbox, command_policy, path_policy, None).await
+    }
+
+    /// Like [`from_sandbox`], but uses `session_id` as the worktree directory name when
+    /// `SandboxSpec::Worktree` is active. Prefer a unique goal/task id over the project folder
+    /// name so two coding sessions on the same repo do not collide, and so self-host dogfood
+    /// (workspace root = `…/life-os`) does not create `…/worktrees/life-os`.
+    pub async fn from_sandbox_with_session(
+        root: impl Into<PathBuf>,
+        sandbox: SandboxSpec,
+        command_policy: CommandPolicy,
+        path_policy: PathPolicy,
+        session_id: Option<&str>,
+    ) -> Result<Self, ToolError> {
         match sandbox {
             SandboxSpec::HostLocal => Self::new(root, command_policy, path_policy),
             SandboxSpec::Docker(spec) => {
@@ -60,10 +74,14 @@ impl CodingToolRuntime {
             }
             SandboxSpec::Worktree => {
                 let root = root.into();
-                let session_id = root
+                let fallback = root
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("session");
+                // Sanitize: worktree dir name must not contain path separators.
+                let session_id = session_id
+                    .filter(|s| !s.is_empty() && !s.contains("..") && !s.contains('/') && !s.contains('\\'))
+                    .unwrap_or(fallback);
                 let worktrees_base = root.parent().unwrap_or(&root).join("worktrees");
                 let workspace =
                     WorktreeWorkspace::new(&root, session_id, &worktrees_base, command_policy)

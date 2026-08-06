@@ -240,11 +240,15 @@ impl LiberadoLoopBackend {
         let event_preview_max_chars = request.config.progress.event_preview_max_chars;
 
         let workspace_root_in = request.workspace.root.clone();
-        let mut coding_runtime = CodingToolRuntime::from_sandbox(
+        // Pass the task/session id so Worktree isolation gets a unique directory name (not the
+        // project folder name — self-host on `life-os` would otherwise collide and fail on Windows
+        // extended paths under `…/worktrees/life-os`).
+        let mut coding_runtime = CodingToolRuntime::from_sandbox_with_session(
             &workspace_root_in,
             request.config.sandbox.clone(),
             request.config.command_policy.clone(),
             request.config.path_policy.clone(),
+            Some(request.task.id.as_str()),
         )
         .await
         .map_err(|e| CoderError::Tool(e.to_string()))?;

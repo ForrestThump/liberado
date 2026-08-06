@@ -101,6 +101,9 @@ impl HostWorkspace {
         let root = root
             .canonicalize()
             .map_err(|_| SandboxError::MissingRoot(root.display().to_string()))?;
+        // Windows `canonicalize` yields `\\?\C:\...` which breaks `git -C` / `current_dir`
+        // (git rewrites it to `//?/C:/...` and fails with "Invalid argument"). Strip for CLI use.
+        let root = strip_extended_path_prefix(&root);
         Ok(Self {
             root,
             command_policy,
@@ -274,6 +277,34 @@ fn normalize_docker_path(path: &str) -> String {
     path.replace('\\', "/")
 }
 
+/// Strip Windows extended-length prefixes so paths can be passed to git and other CLIs.
+///
+/// `std::fs::canonicalize` on Windows returns `\\?\C:\...` (or `\\?\UNC\...`). Git for Windows
+/// turns that into `//?/C:/...` and fails with "could not create leading directories … Invalid
+/// argument". Host `current_dir` is similarly happier with a plain drive path.
+///
+/// Idempotent on non-Windows / already-stripped paths.
+pub fn strip_extended_path_prefix(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        if let Some(unc) = rest.strip_prefix(r"UNC\") {
+            return PathBuf::from(format!(r"\\{unc}"));
+        }
+        return PathBuf::from(rest);
+    }
+    // Defensive: if a caller already stringified the extended form with forward slashes.
+    if let Some(rest) = s.strip_prefix("//?/") {
+        let rest = rest.replace('/', "\\");
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
+/// Path string safe for `git -C` and similar CLIs (extended prefix stripped).
+pub fn path_for_cli(path: &Path) -> String {
+    strip_extended_path_prefix(path).to_string_lossy().into_owned()
+}
+
 #[async_trait]
 impl CommandRunner for HostWorkspace {
     async fn run_command(&self, request: CommandRequest) -> Result<CommandOutput, SandboxError> {
@@ -371,6 +402,8 @@ impl WorktreeWorkspace {
         let parent_root = parent_root
             .canonicalize()
             .map_err(|_| SandboxError::MissingRoot(parent_root.display().to_string()))?;
+        let parent_root = strip_extended_path_prefix(&parent_root);
+        let worktrees_base = strip_extended_path_prefix(worktrees_base);
         // `Drop` recursively deletes `worktree_path`, so the id must not be able to steer that
         // outside the base. Session ids are internally minted ULIDs today; this is the guard that
         // keeps it true if one ever comes from somewhere else.
@@ -384,13 +417,16 @@ impl WorktreeWorkspace {
             )));
         }
         let dest = worktrees_base.join(session_id);
-        std::fs::create_dir_all(worktrees_base)
+        std::fs::create_dir_all(&worktrees_base)
             .map_err(|e| SandboxError::MissingRoot(format!("worktree base dir: {e}")))?;
+
+        let parent_cli = path_for_cli(&parent_root);
+        let dest_cli = path_for_cli(&dest);
 
         // Prune any stale registration from a prior crashed run before trying to
         // create a new worktree with the same name — git will refuse otherwise.
         let _ = tokio::process::Command::new("git")
-            .args(["-C", &parent_root.to_string_lossy()])
+            .args(["-C", &parent_cli])
             .args(["worktree", "prune"])
             .output()
             .await;
@@ -401,8 +437,8 @@ impl WorktreeWorkspace {
         }
 
         let output = tokio::process::Command::new("git")
-            .args(["-C", &parent_root.to_string_lossy()])
-            .args(["worktree", "add", "--no-checkout", &dest.to_string_lossy()])
+            .args(["-C", &parent_cli])
+            .args(["worktree", "add", "--no-checkout", &dest_cli])
             .output()
             .await
             .map_err(|e| SandboxError::Spawn(format!("git worktree add: {e}")))?;
@@ -415,7 +451,7 @@ impl WorktreeWorkspace {
 
         // Populate the working tree from the parent's HEAD.
         let output = tokio::process::Command::new("git")
-            .args(["-C", &dest.to_string_lossy()])
+            .args(["-C", &dest_cli])
             .args(["checkout", "HEAD", "--"])
             .output()
             .await
@@ -721,6 +757,30 @@ mod tests {
     }
 
     // ── WorktreeWorkspace tests ─────────────────────────────────────────
+
+    #[test]
+    fn strip_extended_path_prefix_removes_verbatim_drive_and_unc() {
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                strip_extended_path_prefix(Path::new(r"\\?\C:\Users\me\repo")),
+                PathBuf::from(r"C:\Users\me\repo")
+            );
+            assert_eq!(
+                strip_extended_path_prefix(Path::new(r"\\?\UNC\server\share\repo")),
+                PathBuf::from(r"\\server\share\repo")
+            );
+            assert_eq!(
+                strip_extended_path_prefix(Path::new(r"//?/C:/Users/me/repo")),
+                PathBuf::from(r"C:\Users\me\repo")
+            );
+        }
+        // Already-plain paths are unchanged on every platform.
+        assert_eq!(
+            strip_extended_path_prefix(Path::new("/home/me/repo")),
+            PathBuf::from("/home/me/repo")
+        );
+    }
 
     async fn worktree_setup() -> (tempfile::TempDir, tempfile::TempDir, WorktreeWorkspace) {
         let parent = tempfile::tempdir().unwrap();
