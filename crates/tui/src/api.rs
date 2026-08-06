@@ -337,16 +337,21 @@ pub async fn list_projects(client: &Client, server: &str) -> Result<Vec<ProjectR
 /// Only `project` is transmitted — `workspace_root` is not yet wired through the TUI client.
 /// The server's `(None, Some(path))` auth arm (direct-path workspace authorization) is HTTP-only
 /// until a TUI picker lets the user browse to a subdirectory under a declared project root.
+/// `plan_mode` restricts the pack to writing `.liberado/plan.md` only (existing PathPolicy).
 pub async fn start_coding_goal(
     client: &Client,
     server: &str,
     project: Option<&str>,
     text: &str,
+    plan_mode: bool,
     origin_conversation: Option<&str>,
 ) -> Result<String, String> {
     let mut payload = serde_json::json!({ "interactive": true });
     if let Some(project) = project {
         payload["project"] = serde_json::json!(project);
+    }
+    if plan_mode {
+        payload["plan_mode"] = serde_json::json!(true);
     }
     let mut body = serde_json::json!({
         "description": text,

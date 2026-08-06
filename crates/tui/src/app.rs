@@ -940,13 +940,18 @@ impl App {
                         after_turn: *after_turn,
                     });
                 }
-                liberado_commands::CommandResult::StartCodingGoal { project, text } => {
+                liberado_commands::CommandResult::StartCodingGoal {
+                    project,
+                    text,
+                    plan_mode,
+                } => {
                     if self.joined.as_ref().map(|j| j.finished).unwrap_or(false) {
                         self.joined = None;
                     }
                     effects.push(Effect::StartCodingGoal {
                         project: project.clone(),
                         text: text.clone(),
+                        plan_mode: *plan_mode,
                         origin_conversation: self.session.clone(),
                     });
                 }
@@ -1258,6 +1263,8 @@ pub enum Effect {
     StartCodingGoal {
         project: Option<String>,
         text: String,
+        /// Restrict writes to `.liberado/plan.md` and disable shell (plan mode).
+        plan_mode: bool,
         origin_conversation: Option<String>,
     },
     /// Park the joined session (`POST /api/goals/{id}/park`) — graceful, resumable.

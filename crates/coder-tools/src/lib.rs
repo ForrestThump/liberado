@@ -1618,6 +1618,49 @@ mod tests {
         assert_eq!(ok["written"], true);
     }
 
+    /// Plan mode is PathPolicy::plan_mode() only — no parallel write gate in the tools crate.
+    #[tokio::test]
+    async fn plan_mode_path_policy_allows_only_plan_artifact() {
+        use liberado_coder_core::PLAN_ARTIFACT_REL;
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = CodingToolRuntime::new(
+            dir.path(),
+            CommandPolicy::none_allowed(),
+            PathPolicy::plan_mode(),
+        )
+        .unwrap();
+
+        let err = runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "src/main.rs", "content": "fn main() {}"}),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ToolError::PathDenied(_)));
+
+        let ok = runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": PLAN_ARTIFACT_REL, "content": "# Plan\n"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ok["written"], true);
+
+        // Shell is denied via CommandPolicy::none_allowed (empty-matching allow list).
+        let shell_err = runtime
+            .invoke_json("run_command", json!({"program": "echo", "args": ["hi"]}))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(shell_err, ToolError::Sandbox(_) | ToolError::BadRequest(_))
+                || format!("{shell_err:?}").to_lowercase().contains("denied")
+                || format!("{shell_err:?}").to_lowercase().contains("command"),
+            "expected command denied, got {shell_err:?}"
+        );
+    }
+
     #[tokio::test]
     async fn walk_files_respects_limit() {
         let dir = tempfile::tempdir().unwrap();
