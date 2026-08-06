@@ -603,6 +603,14 @@ impl App {
                     approved,
                     coerced,
                 });
+                // Votes arrive on a stream that never ends until the goal does, so prune here
+                // rather than at a load boundary the way `messages` does.
+                if j.gate_votes.len() > MAX_GATE_VOTES {
+                    let removed = j.gate_votes.len() - MAX_GATE_VOTES;
+                    j.gate_votes.drain(..removed);
+                }
+                // "?" rather than "✗" when coerced: the reviewer produced no opinion, and showing
+                // that as a rejection would make an outage look like the work being wrong.
                 let mark = if coerced {
                     "?"
                 } else if approved {
@@ -1685,4 +1693,3 @@ use liberado_commands::format_uptime;
 #[cfg(test)]
 #[path = "app/tests.rs"]
 mod tests;
-

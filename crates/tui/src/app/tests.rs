@@ -2955,3 +2955,33 @@ fn new_role_clears_stale_validation() {
         "a new role starts fresh — stale validation from a prior attempt must be cleared"
     );
 }
+
+#[test]
+fn gate_votes_are_capped_so_a_long_goal_does_not_grow_the_vector_forever() {
+    // `messages` prunes on history load; votes have no such boundary — they arrive on a stream
+    // that runs until the goal ends, at `1 + fresh_reviewers` per attempt. The sidebar only ever
+    // renders the tail, so evicting the head costs nothing visible.
+    let mut app = test_app();
+    app.join_session_with(
+        "g1".into(),
+        Some(SessionKind::Coding),
+        Some("long goal".into()),
+    );
+    for i in 0..(MAX_GATE_VOTES + 25) {
+        app.apply_goal_event(GoalUiEvent::CriticVerdict {
+            reviewer: format!("rev-{i}"),
+            kind: "fresh".into(),
+            approved: true,
+            issues: vec![],
+            coerced: false,
+        });
+    }
+    let j = app.joined.as_ref().unwrap();
+    assert_eq!(j.gate_votes.len(), MAX_GATE_VOTES);
+    // The oldest go, not the newest — the newest are the ones the sidebar shows.
+    assert_eq!(
+        j.gate_votes.last().unwrap().reviewer,
+        format!("rev-{}", MAX_GATE_VOTES + 24)
+    );
+    assert_eq!(j.gate_votes[0].reviewer, "rev-25");
+}
