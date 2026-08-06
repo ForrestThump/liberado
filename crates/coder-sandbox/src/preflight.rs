@@ -412,6 +412,17 @@ mod tests {
     }
 
     #[test]
+    fn default_true_returns_true() {
+        assert!(super::default_true());
+    }
+
+    #[test]
+    fn default_constants_have_expected_values() {
+        assert_eq!(super::DEFAULT_STEP_TIMEOUT_SECS, 45 * 60);
+        assert_eq!(super::DEFAULT_LOG_CAP_BYTES, 16 * 1024);
+    }
+
+    #[test]
     fn cap_log_exact_boundary() {
         assert_eq!(cap_log("hello", 5), "hello");
         assert_eq!(cap_log("hello", 50), "hello");
@@ -443,6 +454,24 @@ mod tests {
         assert!(capped.starts_with('…'));
         // 3-byte … + up to 5 bytes content, may be shorter due to char boundary.
         assert!(capped.len() >= 4 && capped.len() <= 8);
+    }
+
+    #[test]
+    fn cap_log_truncation_at_multibyte_boundary_exercises_scan_loop() {
+        // Two 3-byte chars = 6 bytes. Truncating to 5 bytes means start=1,
+        // which falls inside the first multi-byte char. The loop must scan
+        // forward to the next char boundary at byte 3.
+        let s = "字字";
+        let capped = cap_log(s, 5);
+        assert!(capped.starts_with('…'));
+        assert_eq!(capped.len(), 6); // 3-byte … + second 字 (3 bytes)
+    }
+
+    #[test]
+    fn cap_log_one_byte_shorter_than_input_truncates() {
+        // Input is 6 bytes, max is 5 → must truncate (not return as-is).
+        assert_ne!(cap_log("abcdef", 5), "abcdef");
+        assert!(cap_log("abcdef", 5).starts_with('…'));
     }
 
     #[test]
@@ -481,6 +510,25 @@ mod tests {
             assert!(s.required, "{} must be required", s.name);
             assert!(!s.run.is_empty(), "{} must have a run command", s.name);
         }
+    }
+
+    #[tokio::test]
+    async fn required_failure_breaks_before_optional_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let fail = if cfg!(windows) {
+            "exit /B 1"
+        } else {
+            "exit 1"
+        };
+        let mut optional = PreflightStep::new("soft", fail);
+        optional.required = false;
+        let spec = PreflightSpec::new(
+            "ship",
+            vec![PreflightStep::new("hard-fail", fail), optional],
+        );
+        let report = run_preflight(dir.path(), &spec).await.unwrap();
+        assert!(!report.ok, "required step failed first, overall must be false");
+        assert_eq!(report.steps.len(), 1, "break after required failure; optional never runs");
     }
 
     #[tokio::test]

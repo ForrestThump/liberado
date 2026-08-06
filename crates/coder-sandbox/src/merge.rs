@@ -469,6 +469,32 @@ mod tests {
         init_repo(&root);
         let tip = branch_tip(&root, "HEAD").await;
         assert!(tip.is_ok(), "{tip:?}");
+        let sha = tip.unwrap();
+        assert!(!sha.is_empty());
+        assert_eq!(sha.len(), 40); // full SHA hash
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn commit_merge_returns_real_sha() {
+        let root = std::env::temp_dir().join(format!("lib-merge-cm-{}", unique()));
+        let wt_base = root.join("wts");
+        init_repo(&root);
+
+        let wt = add_worktree_on_branch(&root, &wt_base, "child-cm", "fanout/cm")
+            .await
+            .unwrap();
+        std::fs::write(wt.join("x.txt"), "x\n").unwrap();
+        git(&wt, &["add", "x.txt"]);
+        git(&wt, &["commit", "-m", "x", "--quiet"]);
+        remove_worktree(&root, &wt).await.unwrap();
+
+        match merge_branch(&root, "fanout/cm").await.unwrap() {
+            MergeAttempt::Clean { merge_commit: Some(sha) } => {
+                assert_eq!(sha.len(), 40, "merge commit SHA must be 40 hex chars");
+            }
+            other => panic!("expected clean merge with SHA, got {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 }
