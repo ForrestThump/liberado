@@ -78,8 +78,8 @@ also the one that matters least.
 | Slice | State | Notes |
 |---|---|---|
 | **S1** — completion gate | ✅ **landed** | `liberado_session::completion_gate` (gatekeeper veto + strict-majority fresh quorum + fail-closed votes), coding-pack adapter, `critic_verdict` on the wire, strategist on non-convergence. **Default OFF** (`[coder.gate] enabled`) — it costs `1 + fresh_reviewers` model calls per attempt, and stays opt-in until S7 measures it. |
-| **S2** — wire events + goal surface | 🟡 **partial** | Done: `file_changed`, first-class `hub.park()` + `POST /api/goals/{id}/park`, `/goal` commands (`start`/`in`/`status`/`pause`/`resume`/`clear`), TUI wiring for all of them. **Not done:** dedicated goal-view panes (role timeline / gate panel / verifier panel as separate widgets — gate votes and file changes currently render inline in the joined pane), `GET /api/goals/{id}/diff`, and the live dogfood run. |
-| **S3–S7** | ⬜ open | project authorization, checkpoints/rewind, `/loop`, coding subagents, strategist evals |
+| **S2** — wire events + goal surface | 🟡 **partial** | Done: `file_changed`, first-class `hub.park()` + `POST /api/goals/{id}/park`, `/goal` commands (`start`/`in`/`status`/`pause`/`resume`/`clear`), TUI wiring for all of them; **live dogfood run 2026-08-05** (self-host → [PR #69](https://github.com/ForrestThump/liberado/pull/69); write-up [`self-host-coding-dogfood-2026-08.md`](future-work/self-host-coding-dogfood-2026-08.md)). **Not done:** dedicated goal-view panes; tool/`file_changed` events still weak on the live session stream (see dogfood finding #4). |
+| **S3–S7** | 🟡 **partial** | **S3** project authorization landed on `develop` (PR #66, not yet on `main`). Still open: checkpoints/rewind, `/loop`, coding subagents, strategist evals |
 
 Two carried-forward limitations, both S2 leftovers worth knowing before building on this:
 
@@ -97,6 +97,7 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
 |---|---|---|
 | **CT1** | **Agentic coding TUI** — [`coding-tui-plan.md`](future-work/coding-tui-plan.md) | `/goal` + critic-gated completion + `/loop`, on the existing TUI/hub/coding pack; loosely coupled kernel machinery. S1 done, S2 partial (see above) |
 | **E6-c(b)** | Resume mid-build coding session | Design pass (git suspend point) |
+| — | [`self-host-coding-dogfood-2026-08.md`](future-work/self-host-coding-dogfood-2026-08.md) | **C2 dogfood findings** — P0: no-changes after commit; intake schema; tool stream |
 | — | [`pr-dispatch-vtcode-no-write-finding.md`](future-work/pr-dispatch-vtcode-no-write-finding.md) | Open bug |
 | — | [`coder-eval-curriculum.md`](future-work/coder-eval-curriculum.md) | After P1/P2 not bottleneck |
 

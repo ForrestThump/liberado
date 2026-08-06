@@ -40,10 +40,12 @@ Index of forward-looking work.
 | [heuristics-tuning-engine-plan.md](heuristics-tuning-engine-plan.md) | Heuristics tuner tooling |
 | [coder-eval-curriculum.md](coder-eval-curriculum.md) | Coding quality instrument |
 | [pr-dispatch-vtcode-no-write-finding.md](pr-dispatch-vtcode-no-write-finding.md) | Open PR-dispatch bug |
+| [self-host-coding-dogfood-2026-08.md](self-host-coding-dogfood-2026-08.md) | **C2 dogfood:** first self-host `/goal` on liberado → PR #69; six findings (worktree paths fixed; no-changes-after-commit still open) |
 
 ### Coding pack / TUI
 - [`rust-native-agentic-coder-plan.md`](rust-native-agentic-coder-plan.md) — umbrella design
 - [`coding-tui-plan.md`](coding-tui-plan.md) — surface + completion-gate slices S1–S7
 - [`tui-maturity-roadmap.md`](tui-maturity-roadmap.md) — TUI maturity audit
+- [`self-host-coding-dogfood-2026-08.md`](self-host-coding-dogfood-2026-08.md) — live self-host finding write-up (C2)
 
 Start every planning session at [roadmap.md](../roadmap.md).
