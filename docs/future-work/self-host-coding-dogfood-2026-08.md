@@ -6,6 +6,7 @@
 
 **Status:** Run completed with a real PR. Findings **#1–#5 addressed on `fix/dogfood-findings-c2`**
 (re-dogfood required to close). #6 (role-model tuning / cost attach) remains quality polish.
+Re-dogfood verification ran successfully on `fix/dogfood-findings-c2` (date 2026-08-05).
 **Session id:** `01KZAJN9NMRR1THMWZM8ZSBV5P`
 **PR produced:** [ForrestThump/liberado#69](https://github.com/ForrestThump/liberado/pull/69)
   (`dogfood/self-host-coding-pr` → `develop`, commit `ae9e163`, author `liberado <liberado@local>`)
