@@ -24,56 +24,49 @@ struct Cli {
     #[arg(long, global = true)]
     data_dir: Option<PathBuf>,
 
+    /// topology.toml with [[models]] rates
+    #[arg(long, global = true)]
+    topology: Option<PathBuf>,
+
+    /// Same as --topology (alias for prices-only TOML)
+    #[arg(long, global = true)]
+    prices: Option<PathBuf>,
+
+    /// Output as JSON
+    #[arg(long, global = true)]
+    json: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
 
+// Every flag above is `global`, which is not a tidiness choice: the no-subcommand form is the
+// documented one, and `liberado-cost --json` is what the backlog tells people to script against.
+// Hanging these off the `report` subcommand instead makes the bare invocation an argument error,
+// so the first thing any existing caller sees is "unexpected argument '--json'".
+
 #[derive(Subcommand)]
 enum Command {
     /// Run the standard token-cost report (default when no subcommand is given)
-    Report {
-        /// topology.toml with [[models]] rates
-        #[arg(long)]
-        topology: Option<PathBuf>,
-        /// Same as --topology (alias for prices-only TOML)
-        #[arg(long)]
-        prices: Option<PathBuf>,
-        /// Output the report as JSON
-        #[arg(long)]
-        json: bool,
-    },
+    Report,
     /// Ratio of delegation output to input — flag transcripts worth reading
     ProvenanceRatio {
         /// Flag delegations whose ratio meets or exceeds this threshold
         #[arg(long, default_value_t = DEFAULT_RATIO_THRESHOLD)]
         threshold: f64,
-        /// Output results as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Compare prompt sizes after delegating vs non-delegating turns
-    DelegationCost {
-        /// Output results as JSON
-        #[arg(long)]
-        json: bool,
-    },
+    DelegationCost,
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let data_dir = cli.data_dir.unwrap_or_else(default_data_dir);
+    let json = cli.json;
 
-    match cli.command.unwrap_or(Command::Report {
-        topology: None,
-        prices: None,
-        json: false,
-    }) {
-        Command::Report {
-            topology,
-            prices,
-            json,
-        } => {
-            let prices_table = match load_prices(topology.as_ref(), prices.as_ref()) {
+    match cli.command.unwrap_or(Command::Report) {
+        Command::Report => {
+            let prices_table = match load_prices(cli.topology.as_ref(), cli.prices.as_ref()) {
                 Ok(p) => p,
                 Err(e) => {
                     eprintln!("liberado-cost: {e}");
@@ -101,7 +94,7 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Command::ProvenanceRatio { threshold, json } => {
+        Command::ProvenanceRatio { threshold } => {
             let rows = run_provenance_ratio(&data_dir);
             if json {
                 match serde_json::to_string_pretty(&rows) {
@@ -116,7 +109,7 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Command::DelegationCost { json } => match run_delegation_cost(&data_dir) {
+        Command::DelegationCost => match run_delegation_cost(&data_dir) {
             Ok(samples) => {
                 if json {
                     match serde_json::to_string_pretty(&samples) {
@@ -223,4 +216,69 @@ fn summarize(label: &str, rows: &[&liberado_cost::DelegationCostSample]) {
         format!("{:.1}%", cached as f64 / prompt as f64 * 100.0)
     };
     println!("{label}: n={n}  mean_prompt={mean:.0}  median_prompt={median}  cache_hit={hit}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn clap_definition_is_well_formed() {
+        Cli::command().debug_assert();
+    }
+
+    /// The bare form is the documented one and the one the backlog scripts against. Hanging
+    /// `--json`, `--topology` or `--prices` off the `report` subcommand turns every existing
+    /// invocation into `error: unexpected argument`, which is a silent break for anyone whose
+    /// only feedback is an exit code.
+    #[test]
+    fn the_flags_that_worked_before_subcommands_existed_still_work_without_one() {
+        for argv in [
+            vec!["liberado-cost", "--json"],
+            vec!["liberado-cost", "--topology", "t.toml"],
+            vec!["liberado-cost", "--prices", "p.toml"],
+            vec!["liberado-cost", "--data-dir", "d", "--json"],
+        ] {
+            let cli = Cli::try_parse_from(&argv)
+                .unwrap_or_else(|e| panic!("{argv:?} must still parse:\n{e}"));
+            assert!(
+                cli.command.is_none(),
+                "{argv:?} should fall through to the report"
+            );
+        }
+
+        let cli = Cli::try_parse_from(["liberado-cost", "--json"]).unwrap();
+        assert!(cli.json, "--json must reach the report path");
+        let cli = Cli::try_parse_from(["liberado-cost", "--topology", "t.toml"]).unwrap();
+        assert_eq!(cli.topology, Some(PathBuf::from("t.toml")));
+    }
+
+    #[test]
+    fn the_shared_flags_are_also_accepted_after_a_subcommand() {
+        let cli = Cli::try_parse_from(["liberado-cost", "provenance-ratio", "--json"]).unwrap();
+        assert!(cli.json);
+        assert!(matches!(cli.command, Some(Command::ProvenanceRatio { .. })));
+
+        let cli =
+            Cli::try_parse_from(["liberado-cost", "delegation-cost", "--data-dir", "d"]).unwrap();
+        assert_eq!(cli.data_dir, Some(PathBuf::from("d")));
+        assert!(matches!(cli.command, Some(Command::DelegationCost)));
+    }
+
+    #[test]
+    fn provenance_ratio_threshold_has_a_default_and_takes_an_override() {
+        let cli = Cli::try_parse_from(["liberado-cost", "provenance-ratio"]).unwrap();
+        let Some(Command::ProvenanceRatio { threshold }) = cli.command else {
+            panic!("expected provenance-ratio");
+        };
+        assert_eq!(threshold, DEFAULT_RATIO_THRESHOLD);
+
+        let cli = Cli::try_parse_from(["liberado-cost", "provenance-ratio", "--threshold", "7.5"])
+            .unwrap();
+        let Some(Command::ProvenanceRatio { threshold }) = cli.command else {
+            panic!("expected provenance-ratio");
+        };
+        assert_eq!(threshold, 7.5);
+    }
 }
