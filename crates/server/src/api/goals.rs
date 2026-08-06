@@ -178,6 +178,41 @@ pub async fn goals_start(
                 // plain drive path (dogfood finding #1 residual).
                 let root_s = strip_windows_extended_path(&root);
                 payload.insert("workspace_root".into(), serde_json::json!(root_s));
+                // Inject ship preflight from topology when the client did not supply steps.
+                // Pack still applies liberado built-in defaults when project is "liberado".
+                if payload.get("preflight").and_then(|v| v.get("steps")).is_none() {
+                    if let Some(proj) = state.config.project_by_name(&name) {
+                        if let Some(ship) = &proj.preflight.ship {
+                            let mut steps = Vec::new();
+                            if let Some(script) = &ship.script {
+                                if !script.is_empty() {
+                                    steps.push(serde_json::json!({
+                                        "name": "script",
+                                        "run": script,
+                                    }));
+                                }
+                            }
+                            for s in &ship.steps {
+                                steps.push(serde_json::json!({
+                                    "name": s.name,
+                                    "run": s.run,
+                                    "timeout_secs": s.timeout_secs,
+                                    "required": s.required,
+                                }));
+                            }
+                            if !steps.is_empty() {
+                                payload.insert(
+                                    "preflight".into(),
+                                    serde_json::json!({
+                                        "required": true,
+                                        "profile": "ship",
+                                        "steps": steps,
+                                    }),
+                                );
+                            }
+                        }
+                    }
+                }
             }
             Err(e) => {
                 return (
@@ -1599,6 +1634,7 @@ mod project_auth_http_tests {
             root,
             write_class: WriteClass::AgentWritable,
             enabled: true,
+            preflight: Default::default(),
         }));
         let (status, body) = post_goal(
             &app,
@@ -1627,6 +1663,7 @@ mod project_auth_http_tests {
             root,
             write_class: WriteClass::AgentWritable,
             enabled: true,
+            preflight: Default::default(),
         }));
         let (status, body) = post_goal(
             &app,
@@ -1656,6 +1693,7 @@ mod project_auth_http_tests {
             root: root.clone(),
             write_class: WriteClass::AgentWritable,
             enabled: true,
+            preflight: Default::default(),
         }));
         let response = app
             .oneshot(
@@ -1694,6 +1732,7 @@ mod project_auth_http_tests {
             root: root.clone(),
             write_class: WriteClass::AgentWritable,
             enabled: true,
+            preflight: Default::default(),
         }));
 
         let (status, body) = post_goal(
@@ -1726,9 +1765,11 @@ mod project_auth_http_tests {
         let injected = payload["workspace_root"]
             .as_str()
             .unwrap_or_else(|| panic!("no workspace_root reached the pack: {payload}"));
+        // Server strips Windows `\\?\` so git/tools see a plain drive path.
+        let expected = super::strip_windows_extended_path(&root);
         assert_eq!(
             std::path::Path::new(injected),
-            root.as_path(),
+            std::path::Path::new(&expected),
             "the pack must receive the project's resolved absolute root"
         );
     }
@@ -1747,6 +1788,7 @@ mod project_auth_http_tests {
             root: root.clone(),
             write_class: WriteClass::AgentWritable,
             enabled: true,
+            preflight: Default::default(),
         }));
 
         // Built as a *string*, not by `PathBuf::join`: pushing `..` onto a verbatim `\?\` path
@@ -1776,9 +1818,10 @@ mod project_auth_http_tests {
         .await
         .expect("the coding pack should have been started");
 
+        let expected = super::strip_windows_extended_path(&sub);
         assert_eq!(
             std::path::Path::new(payload["workspace_root"].as_str().unwrap()),
-            sub.as_path(),
+            std::path::Path::new(&expected),
             "the pack must get the canonical path, not the caller's spelling: {payload}"
         );
         assert_eq!(payload["project"], "liberado", "{payload}");

@@ -865,6 +865,7 @@ mod project_auth_tests {
             root: root.clone(),
             write_class,
             enabled: true,
+            preflight: Default::default(),
         };
         (dir, project)
     }
@@ -989,6 +990,7 @@ mod project_auth_tests {
             root: PathBuf::from("relative/path"),
             write_class: WriteClass::AgentWritable,
             enabled: true,
+            preflight: Default::default(),
         });
         let err = cfg.validate().unwrap_err().to_string();
         assert!(err.contains("absolute"), "got {err}");
@@ -1007,12 +1009,14 @@ mod project_auth_tests {
                 root: umbrella_root.clone(),
                 write_class: WriteClass::ProposalOnly,
                 enabled: true,
+                preflight: Default::default(),
             },
             ProjectConfig {
                 name: "life-os".into(),
                 root: nested.clone(),
                 write_class: WriteClass::AgentWritable,
                 enabled: true,
+                preflight: Default::default(),
             },
         ]);
         match cfg
@@ -1140,6 +1144,7 @@ mod project_auth_tests {
             root: root.clone(),
             write_class: WriteClass::AgentWritable,
             enabled: true,
+            preflight: Default::default(),
         }]);
 
         let err = cfg
