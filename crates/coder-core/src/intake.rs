@@ -940,6 +940,25 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_draft_drops_content_contains_with_empty_must_include() {
+        let mut draft = GoalContractDraft {
+            description: "test".into(),
+            success_criteria: vec![],
+            verifiers: vec![VerifierSpec::ContentContains {
+                id: "cc".into(),
+                path: "README.md".into(),
+                must_include: vec![],
+            }],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        sanitize_draft(&mut draft);
+        assert!(draft.verifiers.is_empty(), "verifier with non-empty path but empty must_include should be dropped");
+    }
+
+    #[test]
     fn sanitize_draft_keeps_git_diff_verifier() {
         let mut draft = GoalContractDraft {
             description: "test".into(),
