@@ -251,7 +251,9 @@ impl Conversation {
     ///
     /// In memory only: the stored root node is never rewritten, so nothing on disk becomes wrong
     /// about which prompt was in force when it was written. Call before
-    /// [`apply_prompt_append`](Self::apply_prompt_append) so the profile's nudge stays last.
+    /// [`apply_prompt_append`](Self::apply_prompt_append) so the swap happens before any
+    /// transient messages are added; `apply_available_tools` runs last of the three and
+    /// places the tool manifest as the final system message.
     pub fn apply_direct_agent_prompt(&mut self) {
         let Some(first) = self.messages.first_mut() else {
             return;
