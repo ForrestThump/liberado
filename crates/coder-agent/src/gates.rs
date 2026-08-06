@@ -336,6 +336,43 @@ mod changed_files_tests {
 
         let _ = std::fs::remove_dir_all(&ws);
     }
+
+    /// No baseline means nothing to diff against — return empty even if there are uncommitted changes.
+    #[tokio::test]
+    async fn resolve_attempt_changes_with_none_baseline_returns_empty_when_clean() {
+        use super::resolve_attempt_changes;
+
+        let ws = std::env::temp_dir().join(format!("lib-gates-none-base-{}", unique()));
+        std::fs::create_dir_all(&ws).unwrap();
+        git(&ws, &["init", "--quiet"]);
+        std::fs::write(ws.join("readme.md"), "base\n").unwrap();
+        git(&ws, &["add", "readme.md"]);
+        git(&ws, &["commit", "-m", "base", "--quiet"]);
+        // Tree is clean, no baseline — should get empty.
+        let resolved = resolve_attempt_changes(ws.to_str().unwrap(), None)
+            .await
+            .unwrap();
+        assert!(resolved.is_empty());
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// Empty string baseline is treated like None — returns empty.
+    #[tokio::test]
+    async fn resolve_attempt_changes_with_empty_string_baseline_returns_empty() {
+        use super::resolve_attempt_changes;
+
+        let ws = std::env::temp_dir().join(format!("lib-gates-empty-base-{}", unique()));
+        std::fs::create_dir_all(&ws).unwrap();
+        git(&ws, &["init", "--quiet"]);
+        std::fs::write(ws.join("readme.md"), "base\n").unwrap();
+        git(&ws, &["add", "readme.md"]);
+        git(&ws, &["commit", "-m", "base", "--quiet"]);
+        let resolved = resolve_attempt_changes(ws.to_str().unwrap(), Some(""))
+            .await
+            .unwrap();
+        assert!(resolved.is_empty());
+        let _ = std::fs::remove_dir_all(&ws);
+    }
 }
 
 #[cfg(test)]
