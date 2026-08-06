@@ -23,6 +23,20 @@ use crate::state::AppState;
 
 /// The SSE item stream type shared with chat streaming.
 type SseBody = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
+
+/// Strip Windows extended-length prefixes (`\\?\C:\…`, `\\?\UNC\…`) so paths on the wire are
+/// usable by git and readable in session records.
+fn strip_windows_extended_path(path: &std::path::Path) -> String {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        if let Some(unc) = rest.strip_prefix(r"UNC\") {
+            return format!(r"\\{unc}");
+        }
+        return rest.to_string();
+    }
+    s.into_owned()
+}
+
 // â”€â”€ Goal sessions (scratchpad F) â€” surfaces are clients; packs own the loop â”€â”€
 
 /// `GET /api/goals/domains` â€” which domain packs are registered (coding, life, â€¦).
@@ -160,10 +174,10 @@ pub async fn goals_start(
                     .as_object_mut()
                     .expect("payload forced to object above");
                 payload.insert("project".into(), serde_json::json!(name));
-                payload.insert(
-                    "workspace_root".into(),
-                    serde_json::json!(root.to_string_lossy()),
-                );
+                // Strip Windows `\\?\` extended prefixes so session records and git tools see a
+                // plain drive path (dogfood finding #1 residual).
+                let root_s = strip_windows_extended_path(&root);
+                payload.insert("workspace_root".into(), serde_json::json!(root_s));
             }
             Err(e) => {
                 return (

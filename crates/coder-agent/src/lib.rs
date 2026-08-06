@@ -260,6 +260,9 @@ impl LiberadoLoopBackend {
             .workspace_root()
             .to_string_lossy()
             .to_string();
+        // Capture HEAD *before* the worker runs so a clean tree after `git_commit` still counts
+        // as real progress (dogfood finding #3 — porcelain is empty once the agent commits).
+        let baseline_sha = gates::rev_parse(&effective_root, "HEAD").await.ok();
         if let Some(command) = &request.config.validation_command {
             coding_runtime =
                 coding_runtime.with_validation_command(gates::command_request(command));
@@ -321,7 +324,7 @@ impl LiberadoLoopBackend {
         }
 
         let file_changes: Vec<liberado_coder_core::FileChangeRecord> =
-            gates::changed_files_detailed(&effective_root)
+            gates::resolve_attempt_changes(&effective_root, baseline_sha.as_deref())
                 .await?
                 .into_iter()
                 .map(|(path, change)| liberado_coder_core::FileChangeRecord {

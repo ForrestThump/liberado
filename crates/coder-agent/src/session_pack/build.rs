@@ -143,7 +143,15 @@ impl CodingSessionPack {
         let policies = WorkspacePolicies::resolve(ctx.overrides(), &goal.payload);
         let prompt = policies.coder_prompt(
             &goal.payload,
-            "You are Liberado's coding worker. Inspect, edit with tools, then submit_report.",
+            "You are Liberado's coding worker. Inspect, edit with tools, then submit_report.\n\
+             \n\
+             Git / PR rules (self-host):\n\
+             - Prefer git_branch, git_commit, git_push tools over shelling out to git.\n\
+             - Committing your edits is progress; do not leave a dirty tree just to satisfy gates.\n\
+             - When opening a PR with `gh pr create --base <branch>`, first verify origin has that \
+             branch: `git ls-remote --exit-code origin refs/heads/<branch>`. If it fails, stop and \
+             report that the base branch is missing on the remote — do not open a PR against main \
+             as a silent fallback.",
         );
 
         let max_turns = if policies.explore_mode {

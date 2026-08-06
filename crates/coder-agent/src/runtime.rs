@@ -2,6 +2,8 @@
 //!
 //! Domain-agnostic idea: wrap any ToolRuntime with session events + progress policy.
 //! Implementation is still coding-event typed (`CoderEvent`) until a neutral session event exists.
+//! When the coding pack scopes [`crate::completion_gate::LIVE_GATE`], tool start/finish also
+//! mirror onto the goal session stream (dogfood finding #4).
 
 use std::sync::{Arc, Mutex};
 
@@ -11,7 +13,9 @@ use liberado_coder_core::CoderEvent;
 use liberado_coder_tools::CodingToolRuntime;
 use liberado_executor::ToolRuntime;
 use liberado_provider::{ToolDef, ToolInvocation};
+use liberado_session::{SessionEvent, SessionEventKind};
 
+use crate::completion_gate::LIVE_GATE;
 use crate::progress::{ProgressAction, ProgressGuard};
 use crate::trace::{self, EventLog};
 
@@ -38,6 +42,15 @@ impl GuardedTracingRuntime {
     }
 }
 
+/// Best-effort mirror onto the goal session bus when LIVE_GATE is scoped (coding pack build phase).
+fn emit_live(kind: SessionEventKind) {
+    let Ok((tx, session_id)) = LIVE_GATE.try_with(|(tx, id)| (tx.clone(), id.clone())) else {
+        return;
+    };
+    // try_send: never block the tool loop on a slow UI consumer.
+    let _ = tx.try_send(SessionEvent::new(session_id, kind));
+}
+
 #[async_trait]
 impl ToolRuntime for GuardedTracingRuntime {
     fn catalog(&self) -> Vec<ToolDef> {
@@ -52,28 +65,39 @@ impl ToolRuntime for GuardedTracingRuntime {
             }
         }
 
+        let args_preview = trace::preview_value(&call.arguments, self.preview_max_chars);
         trace::push_event(
             &self.events,
             CoderEvent::ToolStarted {
                 name: call.name.clone(),
-                args_preview: trace::preview_value(&call.arguments, self.preview_max_chars),
+                args_preview: args_preview.clone(),
                 at: Utc::now(),
             },
         );
+        emit_live(SessionEventKind::ToolStarted {
+            name: call.name.clone(),
+            args_preview,
+        });
         let result = self.inner.invoke(call).await;
         let result_preview = match &result {
             Ok(value) => trace::preview_str(value, self.preview_max_chars),
             Err(value) => trace::preview_str(value, self.preview_max_chars),
         };
+        let ok = result.is_ok();
         trace::push_event(
             &self.events,
             CoderEvent::ToolFinished {
                 name: call.name.clone(),
-                ok: result.is_ok(),
+                ok,
                 result_preview: result_preview.clone(),
                 at: Utc::now(),
             },
         );
+        emit_live(SessionEventKind::ToolFinished {
+            name: call.name.clone(),
+            ok,
+            result_preview: result_preview.clone(),
+        });
 
         let full_preview = match &result {
             Ok(value) => value.clone(),

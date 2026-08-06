@@ -139,6 +139,100 @@ pub fn parse_status_path(line: &str) -> Option<String> {
     Some(path.trim_matches('"').to_string())
 }
 
+/// Resolve `rev` to a full SHA in `workspace_root` (e.g. `"HEAD"`).
+pub async fn rev_parse(workspace_root: &str, rev: &str) -> Result<String, CoderError> {
+    let output = Command::new("git")
+        .args(["rev-parse", rev])
+        .current_dir(workspace_root)
+        .output()
+        .await
+        .map_err(|e| CoderError::Backend(format!("git rev-parse: {e}")))?;
+    if !output.status.success() {
+        return Err(CoderError::Backend(format!(
+            "git rev-parse {rev} exited {:?}: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Files changed by commits after `baseline_sha` (exclusive) through `HEAD`.
+///
+/// Used when the working tree is clean after `git_commit`: porcelain status is empty, but the
+/// attempt still produced real work. Dogfood finding #3
+/// (`docs/future-work/self-host-coding-dogfood-2026-08.md`).
+pub async fn committed_files_since(
+    workspace_root: &str,
+    baseline_sha: &str,
+) -> Result<Vec<(String, &'static str)>, CoderError> {
+    let head = rev_parse(workspace_root, "HEAD").await?;
+    if head == baseline_sha {
+        return Ok(Vec::new());
+    }
+    // Two-arg form: tree of baseline vs tree of HEAD (works when baseline is an ancestor).
+    let output = Command::new("git")
+        .args(["diff", "--name-status", baseline_sha, &head])
+        .current_dir(workspace_root)
+        .output()
+        .await
+        .map_err(|e| CoderError::Backend(format!("git diff name-status: {e}")))?;
+    if !output.status.success() {
+        return Err(CoderError::Backend(format!(
+            "git diff --name-status exited {:?}: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .filter_map(parse_name_status_line)
+        .collect())
+}
+
+fn parse_name_status_line(line: &str) -> Option<(String, &'static str)> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let mut parts = line.split('\t');
+    let code = parts.next()?.trim();
+    let path = parts.next()?.trim();
+    if path.is_empty() {
+        return None;
+    }
+    // Renames: R100\told\tnew — take the new path.
+    let path = if code.starts_with('R') || code.starts_with('C') {
+        parts.next().unwrap_or(path).trim()
+    } else {
+        path
+    };
+    let change = match code.chars().next().unwrap_or('M') {
+        'A' => "added",
+        'D' => "deleted",
+        'R' | 'C' => "added",
+        _ => "modified",
+    };
+    Some((path.to_string(), change))
+}
+
+/// Uncommitted porcelain changes, or — if the tree is clean — files introduced by commits after
+/// `baseline_sha` (the SHA recorded at attempt start). Either counts as real workspace progress.
+pub async fn resolve_attempt_changes(
+    workspace_root: &str,
+    baseline_sha: Option<&str>,
+) -> Result<Vec<(String, &'static str)>, CoderError> {
+    let uncommitted = changed_files_detailed(workspace_root).await?;
+    if !uncommitted.is_empty() {
+        return Ok(uncommitted);
+    }
+    let Some(baseline) = baseline_sha.filter(|s| !s.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    committed_files_since(workspace_root, baseline).await
+}
+
 #[cfg(test)]
 mod changed_files_tests {
     use super::changed_files;
@@ -200,6 +294,44 @@ mod changed_files_tests {
         assert!(
             changed.iter().any(|f| f.contains("main.rs")),
             "the workspace's own new file should be reported: {changed:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// Dogfood finding #3: after `git commit`, porcelain is empty but commits since baseline count.
+    #[tokio::test]
+    async fn committed_work_since_baseline_counts_as_attempt_changes() {
+        use super::{resolve_attempt_changes, rev_parse};
+
+        let ws = std::env::temp_dir().join(format!("lib-gates-commit-{}", unique()));
+        std::fs::create_dir_all(&ws).unwrap();
+        git(&ws, &["init", "--quiet"]);
+        // Identity for commit on clean CI machines.
+        git(&ws, &["config", "user.email", "test@liberado.local"]);
+        git(&ws, &["config", "user.name", "liberado-test"]);
+        std::fs::write(ws.join("seed.txt"), "seed").unwrap();
+        git(&ws, &["add", "seed.txt"]);
+        git(&ws, &["commit", "-m", "seed", "--quiet"]);
+        let baseline = rev_parse(ws.to_str().unwrap(), "HEAD").await.unwrap();
+
+        std::fs::write(ws.join("feature.txt"), "dogfood").unwrap();
+        git(&ws, &["add", "feature.txt"]);
+        git(&ws, &["commit", "-m", "feature", "--quiet"]);
+
+        // Working tree is clean — porcelain would be empty.
+        let porcelain = changed_files(ws.to_str().unwrap()).await.unwrap();
+        assert!(
+            porcelain.is_empty(),
+            "expected clean tree after commit, got {porcelain:?}"
+        );
+
+        let resolved = resolve_attempt_changes(ws.to_str().unwrap(), Some(&baseline))
+            .await
+            .unwrap();
+        assert!(
+            resolved.iter().any(|(p, _)| p.contains("feature.txt")),
+            "committed feature.txt must count as attempt progress: {resolved:?}"
         );
 
         let _ = std::fs::remove_dir_all(&ws);

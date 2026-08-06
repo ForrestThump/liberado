@@ -36,6 +36,75 @@ pub struct CodingToolRuntime {
     validation_command: Option<CommandRequest>,
 }
 
+/// Base directory for coding worktrees (`LIBERADO_DATA_DIR/coding-worktrees`, else
+/// `.liberado/coding-worktrees` under the process cwd — the same root the daemon uses for
+/// goal-workspaces when `LIBERADO_DATA_DIR` is unset).
+pub fn coding_worktrees_base() -> PathBuf {
+    let data = std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into());
+    PathBuf::from(data).join("coding-worktrees")
+}
+
+/// If this is `gh pr create … --base <name>`, ensure `origin` has that branch. Returns an error
+/// message when the base is missing or cannot be checked.
+fn preflight_gh_pr_create(program: &str, args: &[String]) -> Option<String> {
+    let prog = Path::new(program)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(program);
+    if !prog.eq_ignore_ascii_case("gh") {
+        return None;
+    }
+    // Match `gh pr create … --base <branch>` (also `--base=<branch>`).
+    let mut saw_pr = false;
+    let mut saw_create = false;
+    let mut base: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a == "pr" {
+            saw_pr = true;
+        } else if a == "create" {
+            saw_create = true;
+        } else if a == "--base" {
+            base = args.get(i + 1).cloned();
+            i += 1;
+        } else if let Some(rest) = a.strip_prefix("--base=") {
+            base = Some(rest.to_string());
+        }
+        i += 1;
+    }
+    if !(saw_pr && saw_create) {
+        return None;
+    }
+    let Some(base) = base.filter(|b| !b.is_empty()) else {
+        return None;
+    };
+    if base.starts_with('-') {
+        return Some(format!(
+            "refusing gh pr create: invalid --base '{base}' (looks like a flag)"
+        ));
+    }
+    let refspec = format!("refs/heads/{base}");
+    let output = std::process::Command::new("git")
+        .args(["ls-remote", "--exit-code", "origin", &refspec])
+        .output();
+    match output {
+        Ok(o) if o.status.success() => None,
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            Some(format!(
+                "refusing gh pr create --base {base}: origin has no branch '{base}' \
+                 (git ls-remote exit {:?}). Push the integration branch first, or pick a base \
+                 that exists on origin. stderr: {stderr}",
+                o.status.code()
+            ))
+        }
+        Err(e) => Some(format!(
+            "refusing gh pr create --base {base}: could not run git ls-remote: {e}"
+        )),
+    }
+}
+
 impl CodingToolRuntime {
     pub fn new(
         root: impl Into<PathBuf>,
@@ -80,9 +149,16 @@ impl CodingToolRuntime {
                     .unwrap_or("session");
                 // Sanitize: worktree dir name must not contain path separators.
                 let session_id = session_id
-                    .filter(|s| !s.is_empty() && !s.contains("..") && !s.contains('/') && !s.contains('\\'))
+                    .filter(|s| {
+                        !s.is_empty()
+                            && !s.contains("..")
+                            && !s.contains('/')
+                            && !s.contains('\\')
+                    })
                     .unwrap_or(fallback);
-                let worktrees_base = root.parent().unwrap_or(&root).join("worktrees");
+                // Prefer LIBERADO_DATA_DIR/coding-worktrees (or .liberado/coding-worktrees) so
+                // self-host does not create sibling dirs next to the project checkout (dogfood #1).
+                let worktrees_base = coding_worktrees_base();
                 let workspace =
                     WorktreeWorkspace::new(&root, session_id, &worktrees_base, command_policy)
                         .await?;
@@ -556,6 +632,11 @@ impl CodingToolRuntime {
             args: Vec<String>,
         }
         let args: Args = parse_args(args)?;
+        // Dogfood finding #5: refuse `gh pr create --base X` when origin has no X, so we never
+        // silently land a PR on main with a multi-PR stack.
+        if let Some(err) = preflight_gh_pr_create(&args.program, &args.args) {
+            return Err(ToolError::BadRequest(err));
+        }
         let mut request = CommandRequest::new(args.program);
         request.args = args.args;
         let output = self.workspace.run_command(request).await?;
@@ -2160,6 +2241,38 @@ mod tests {
         assert!(
             result["exit_code"].is_number() || result["timed_out"] == false,
             "git_push with set_upstream should return exit_code and timed_out"
+        );
+    }
+
+    #[test]
+    fn preflight_gh_pr_create_ignores_non_gh() {
+        assert!(preflight_gh_pr_create("cargo", &["test".into()]).is_none());
+    }
+
+    #[test]
+    fn preflight_gh_pr_create_ignores_without_base() {
+        assert!(
+            preflight_gh_pr_create("gh", &["pr".into(), "create".into(), "--title".into(), "t".into()])
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn preflight_gh_pr_create_flags_missing_remote_base() {
+        // A branch name that almost certainly does not exist on origin.
+        let err = preflight_gh_pr_create(
+            "gh",
+            &[
+                "pr".into(),
+                "create".into(),
+                "--base".into(),
+                "this-branch-does-not-exist-on-origin-zzzz".into(),
+            ],
+        );
+        assert!(
+            err.as_ref()
+                .is_some_and(|e| e.contains("refusing gh pr create") && e.contains("origin has no branch")),
+            "expected refusal for missing base, got {err:?}"
         );
     }
 
