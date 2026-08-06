@@ -1302,14 +1302,67 @@ mod project_auth_http_tests {
         config
     }
 
+    /// A stand-in for the coding pack that only records the goal it was handed.
+    ///
+    /// Registering the real one would pull the whole `coder-agent` dependency tree into a server
+    /// test. What has to be observed here is narrow: the payload the daemon starts the session
+    /// with, after authorization has rewritten it.
+    struct RecordingCodingPack {
+        seen: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl liberado_session::DomainPackRunner for RecordingCodingPack {
+        fn domain_id(&self) -> &str {
+            liberado_session::CODING_DOMAIN
+        }
+
+        async fn run(
+            &self,
+            _session_id: &str,
+            goal: &liberado_session::GoalSpec,
+            _ctx: &liberado_session::PackContext<'_>,
+            _events: tokio::sync::mpsc::Sender<liberado_session::SessionEvent>,
+            _inputs: liberado_session::InputChannel,
+            _cancel: tokio::sync::watch::Receiver<bool>,
+        ) -> Result<liberado_session::GoalResult, liberado_session::PackError> {
+            self.seen.lock().unwrap().push(goal.payload.clone());
+            Ok(liberado_session::GoalResult {
+                terminal: liberado_session::TerminalKind::Succeeded,
+                summary: "recorded".into(),
+                artifacts: Vec::new(),
+                diagnostics: serde_json::Value::Null,
+            })
+        }
+    }
+
+    /// `coding_goals_app`, plus a coding pack that records what it was started with.
+    fn coding_goals_app_recording(
+        config: liberado_bootstrap::Config,
+    ) -> (Router, Arc<std::sync::Mutex<Vec<serde_json::Value>>>) {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let app = coding_goals_app_with(
+            config,
+            Some(Arc::new(RecordingCodingPack { seen: seen.clone() })),
+        );
+        (app, seen)
+    }
+
     fn coding_goals_app(config: liberado_bootstrap::Config) -> Router {
+        coding_goals_app_with(config, None)
+    }
+
+    /// The 403 paths never reach a pack, so the life demo alone is enough for them. Anything
+    /// asserting on what a *started* coding session received needs a pack answering to "coding".
+    fn coding_goals_app_with(
+        config: liberado_bootstrap::Config,
+        coding_pack: Option<Arc<RecordingCodingPack>>,
+    ) -> Router {
         let mut hub = GoalSessionHub::new(GoalSessionStore::new());
-        // Life pack is enough for start-path tests: we only care that authorization runs *before*
-        // pack registration is consulted for undeclared paths. For accepted starts we still need a
-        // coding pack — register a coding-named life demo via domain mismatch? Simpler: only assert
-        // 403 paths that never start a session, and 202 only for ephemeral (no project) which still
-        // needs a coding pack registered.
         hub.register_pack(Arc::new(LifeOpsDemoRunner));
+        if let Some(pack) = coding_pack {
+            hub.register_pack(pack);
+        }
         let goals = Arc::new(hub);
         let (hook_tx, _hook_rx) = tokio::sync::mpsc::unbounded_channel();
         let state = Arc::new(AppState {
@@ -1455,37 +1508,106 @@ mod project_auth_http_tests {
     }
 
     #[tokio::test]
-    async fn authorized_project_injects_workspace_root_and_starts() {
-        // LifeOpsDemoRunner only registers as "life". Use domain life for start success path —
-        // wait: auth only runs for coding domain. So we need a coding pack.
-        // Register CodingSessionPack would pull heavy deps; instead assert that *after* auth
-        // failure modes are covered above, and that a known project that fails only at pack
-        // registration still returns 400 "no domain pack" rather than 403 — proving auth passed.
+    async fn an_authorized_project_name_reaches_the_pack_as_a_resolved_absolute_root() {
+        // Naming a project is the entire point: `/goal in liberado` has to arrive at the pack as
+        // that repo's path. Assert what the *pack* was started with, not the HTTP status — the
+        // status is the same whether the root was injected or dropped, and dropping it does not
+        // fail, it silently builds in a temp directory the human never asked for.
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
-        let app = coding_goals_app(config_with_project(ProjectConfig {
+        let (app, seen) = coding_goals_app_recording(config_with_project(ProjectConfig {
             name: "liberado".into(),
             root: root.clone(),
             write_class: WriteClass::AgentWritable,
             enabled: true,
         }));
+
         let (status, body) = post_goal(
             &app,
             serde_json::json!({
                 "description": "do a thing",
                 "domain": "coding",
-                "payload": { "project": "liberado", "interactive": true }
+                "payload": { "project": "liberado" }
             }),
         )
         .await;
-        // Auth passed; hub has no coding pack → BAD_REQUEST (not FORBIDDEN).
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-        assert!(
-            body.contains("no domain pack") || body.contains("coding"),
-            "expected pack-missing after auth, got {body}"
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+
+        // The pack runs on the hub's task; wait for it rather than racing it.
+        let payload = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Some(p) = seen.lock().unwrap().first().cloned() {
+                    return p;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the coding pack should have been started");
+
+        assert_eq!(
+            payload["project"], "liberado",
+            "the resolved project name must reach the pack: {payload}"
         );
-        assert!(!body.contains("unknown coding project"), "{body}");
-        assert!(!body.contains("not under any declared"), "{body}");
+        let injected = payload["workspace_root"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no workspace_root reached the pack: {payload}"));
+        assert_eq!(
+            std::path::Path::new(injected),
+            root.as_path(),
+            "the pack must receive the project's resolved absolute root"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_client_supplied_workspace_root_is_replaced_by_the_resolved_one() {
+        // The payload field is caller-controlled. Authorization has to *overwrite* it, not merely
+        // approve it — otherwise a non-canonical spelling of an allowed path is what the pack acts
+        // on, and the string that was checked is not the string that is used.
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let sub = root.join("crates");
+        std::fs::create_dir_all(&sub).unwrap();
+        let (app, seen) = coding_goals_app_recording(config_with_project(ProjectConfig {
+            name: "liberado".into(),
+            root: root.clone(),
+            write_class: WriteClass::AgentWritable,
+            enabled: true,
+        }));
+
+        // Built as a *string*, not by `PathBuf::join`: pushing `..` onto a verbatim `\?\` path
+        // collapses it at construction on Windows, so a joined path would arrive already canonical
+        // and the test could not tell the two apart.
+        let sep = std::path::MAIN_SEPARATOR;
+        let scenic = format!("{}{sep}crates{sep}..{sep}crates", root.display());
+        let (status, body) = post_goal(
+            &app,
+            serde_json::json!({
+                "description": "do a thing",
+                "domain": "coding",
+                "payload": { "workspace_root": scenic }
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+
+        let payload = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Some(p) = seen.lock().unwrap().first().cloned() {
+                    return p;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the coding pack should have been started");
+
+        assert_eq!(
+            std::path::Path::new(payload["workspace_root"].as_str().unwrap()),
+            sub.as_path(),
+            "the pack must get the canonical path, not the caller's spelling: {payload}"
+        );
+        assert_eq!(payload["project"], "liberado", "{payload}");
     }
 
     #[tokio::test]

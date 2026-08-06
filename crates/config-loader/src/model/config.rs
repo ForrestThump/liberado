@@ -296,7 +296,9 @@ impl Config {
             (None, Some(path)) => {
                 let cand = resolve_workspace_path(Path::new(path))
                     .map_err(|reason| CodingAuthError::InvalidPath { reason })?;
-                let mut matched: Option<&ProjectConfig> = None;
+                // Most-specific project wins — a narrower `agent_writable` entry under a broad
+                // `proposal_only` umbrella must not be shadowed by the umbrella.
+                let mut best: Option<(&ProjectConfig, usize)> = None;
                 for proj in self.enabled_projects() {
                     let Ok(root) = canonicalize_existing_dir(&proj.root) else {
                         tracing::warn!(
@@ -306,12 +308,15 @@ impl Config {
                         );
                         continue;
                     };
-                    if path_is_within(&root, &cand) {
-                        matched = Some(proj);
-                        break;
+                    if !path_is_within(&root, &cand) {
+                        continue;
+                    }
+                    let depth = root.components().count();
+                    if best.is_none_or(|(_, d)| depth > d) {
+                        best = Some((proj, depth));
                     }
                 }
-                let Some(proj) = matched else {
+                let Some((proj, _)) = best else {
                     return Err(CodingAuthError::UndeclaredWorkspace {
                         path: cand.display().to_string(),
                     });
@@ -742,6 +747,10 @@ impl std::fmt::Display for CodingAuthError {
 impl std::error::Error for CodingAuthError {}
 
 /// Canonicalize an existing directory, or error with a stable reason string.
+///
+/// Callers that may receive non-canonical spellings (client `workspace_root`) must go through
+/// [`resolve_workspace_path`] so Phase-1 openability runs first. Project roots from operator
+/// config are already absolute and normally already canonical.
 fn canonicalize_existing_dir(path: &Path) -> std::result::Result<PathBuf, String> {
     if !path.exists() {
         return Err(format!("path does not exist: {}", path.display()));
@@ -752,13 +761,61 @@ fn canonicalize_existing_dir(path: &Path) -> std::result::Result<PathBuf, String
     std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// Resolve a workspace path to an absolute form. Existing paths are canonicalized; missing paths
-/// are rejected (coding sessions need a real checkout, not a future directory).
+/// Collapse `.` / `..` components without consulting the filesystem.
+///
+/// **Not a security boundary.** Lexical cleanup exists so Windows can open paths that still
+/// contain `..` under a verbatim (`\\?\`) prefix — Win32 does not process those components for
+/// verbatim paths, so `exists`/`canonicalize` would fail before Phase 2 can run. Authorization
+/// must use only the result of [`canonicalize_existing_dir`] (symlinks resolved).
+fn lexically_normalize(path: &Path) -> PathBuf {
+    let mut out: Vec<Component<'_>> = Vec::new();
+    for c in path.components() {
+        match c {
+            Component::Prefix(_) | Component::RootDir => out.push(c),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                match out.last() {
+                    Some(Component::Normal(_)) => {
+                        out.pop();
+                    }
+                    // Absolute path at drive/root: extra `..` is a no-op (same as GetFullPathName).
+                    Some(Component::Prefix(_) | Component::RootDir) => {}
+                    // Relative path still above the starting point — keep the `..`.
+                    _ => out.push(c),
+                }
+            }
+            Component::Normal(_) => out.push(c),
+        }
+    }
+    out.iter().collect()
+}
+
+/// Phase 1: absolute path the OS can open. Collapses `.`/`..`; does **not** resolve symlinks.
+///
+/// Security decisions use Phase 2 ([`canonicalize_existing_dir`]) only.
+fn make_openable_absolute(path: &Path) -> std::result::Result<PathBuf, String> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        // std::path::absolute processes `.`/`..` for non-verbatim paths via the OS; verbatim
+        // inputs are returned as-is, so lexical normalize still runs below.
+        std::path::absolute(path).map_err(|e| format!("{}: {e}", path.display()))?
+    };
+    Ok(lexically_normalize(&absolute))
+}
+
+/// Resolve an untrusted workspace path to an existing absolute directory.
+///
+/// 1. **Phase 1** — [`make_openable_absolute`]: make the path openable (esp. Windows `\\?\` + `..`).
+/// 2. **Phase 2** — [`canonicalize_existing_dir`]: filesystem truth for authorization.
+///
+/// Missing paths are rejected (coding sessions need a real checkout, not a future directory).
 fn resolve_workspace_path(path: &Path) -> std::result::Result<PathBuf, String> {
     if path.as_os_str().is_empty() {
         return Err("path is empty".into());
     }
-    canonicalize_existing_dir(path)
+    let openable = make_openable_absolute(path)?;
+    canonicalize_existing_dir(&openable)
 }
 
 /// True when `candidate` is `root` or a strict subdirectory of `root` (after both are absolute).
@@ -938,11 +995,167 @@ mod project_auth_tests {
     }
 
     #[test]
+    fn most_specific_project_wins_over_broad_non_writable() {
+        // broad proposal_only umbrella + narrow agent_writable sub-project
+        let umbrella = tempfile::tempdir().unwrap();
+        let umbrella_root = std::fs::canonicalize(umbrella.path()).unwrap();
+        let nested = umbrella_root.join("life-os");
+        std::fs::create_dir_all(&nested).unwrap();
+        let cfg = cfg_with_projects(vec![
+            ProjectConfig {
+                name: "umbrella".into(),
+                root: umbrella_root.clone(),
+                write_class: WriteClass::ProposalOnly,
+                enabled: true,
+            },
+            ProjectConfig {
+                name: "life-os".into(),
+                root: nested.clone(),
+                write_class: WriteClass::AgentWritable,
+                enabled: true,
+            },
+        ]);
+        match cfg
+            .authorize_coding_workspace(None, Some(nested.to_str().unwrap()))
+            .unwrap()
+        {
+            CodingWorkspaceAuth::Project { name, .. } => {
+                assert_eq!(name, "life-os", "narrower writable project must win");
+            }
+            other => panic!("expected Project, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scenic_workspace_path_with_parent_components_is_resolved() {
+        // Built as a *string*: PathBuf::join would collapse `..` on Windows verbatim roots
+        // before we ever see it, so the bug (exists fails on `\\?\…\crates\..\crates`) never
+        // appears. Authorization must still accept the scenic spelling and return the canonical
+        // child.
+        let (_dir, project) = temp_project("liberado", WriteClass::AgentWritable);
+        let sub = project.root.join("crates");
+        fs::create_dir_all(&sub).unwrap();
+        let sub = fs::canonicalize(&sub).unwrap();
+        let sep = std::path::MAIN_SEPARATOR;
+        let scenic = format!("{}{sep}crates{sep}..{sep}crates", project.root.display());
+        let cfg = cfg_with_projects(vec![project]);
+        match cfg.authorize_coding_workspace(None, Some(&scenic)).unwrap() {
+            CodingWorkspaceAuth::Project { name, root } => {
+                assert_eq!(name, "liberado");
+                assert_eq!(root, sub, "pack-facing root must be canonical, not scenic");
+            }
+            other => panic!("expected Project, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scenic_path_that_escapes_every_project_is_refused() {
+        // `project_root/../<sibling>` resolves outside every declared root.
+        // Built as a string so Windows verbatim roots keep the ParentDir component.
+        let (_dir, project) = temp_project("liberado", WriteClass::AgentWritable);
+        let parent = project.root.parent().expect("canonical temp has a parent");
+        let sibling = tempfile::Builder::new()
+            .prefix("escape-")
+            .tempdir_in(parent)
+            .unwrap();
+        let sibling_name = sibling.path().file_name().unwrap().to_string_lossy();
+        let sep = std::path::MAIN_SEPARATOR;
+        let scenic = format!("{}{sep}..{sep}{sibling_name}", project.root.display());
+        let cfg = cfg_with_projects(vec![project]);
+        let err = cfg
+            .authorize_coding_workspace(None, Some(&scenic))
+            .unwrap_err();
+        assert!(
+            matches!(err, CodingAuthError::UndeclaredWorkspace { .. }),
+            "escape via .. must be refused after resolve, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn missing_workspace_path_is_invalid() {
+        let (_dir, project) = temp_project("liberado", WriteClass::AgentWritable);
+        let missing = project.root.join("does-not-exist");
+        let cfg = cfg_with_projects(vec![project]);
+        let err = cfg
+            .authorize_coding_workspace(None, Some(&missing.to_string_lossy()))
+            .unwrap_err();
+        assert!(
+            matches!(err, CodingAuthError::InvalidPath { .. }),
+            "missing checkout must be InvalidPath, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn empty_workspace_path_is_treated_as_absent() {
+        let cfg = cfg_with_projects(vec![]);
+        assert_eq!(
+            cfg.authorize_coding_workspace(None, Some("   ")).unwrap(),
+            CodingWorkspaceAuth::Ephemeral
+        );
+    }
+
+    #[test]
     fn path_is_within_rejects_sibling() {
         let a = PathBuf::from("/tmp/projects/a");
         let b = PathBuf::from("/tmp/projects/b");
         assert!(!path_is_within(&a, &b));
         assert!(path_is_within(&a, &a));
         assert!(path_is_within(&a, &a.join("src")));
+    }
+
+    #[test]
+    fn a_sibling_whose_name_merely_starts_with_the_root_is_not_inside_it() {
+        // The failure this boundary is most often written with: `starts_with` on the string form
+        // says `/tmp/projects/app-evil` is under `/tmp/projects/app`, because it is — as text.
+        // Comparing components is what makes it not so, and nothing here pinned that.
+        let root = PathBuf::from("/tmp/projects/app");
+        for outside in [
+            "/tmp/projects/app-evil",
+            "/tmp/projects/app2",
+            "/tmp/projects/appendix/src",
+        ] {
+            assert!(
+                !path_is_within(&root, Path::new(outside)),
+                "{outside} shares a textual prefix with the root but is not under it"
+            );
+        }
+        assert!(
+            path_is_within(&root, Path::new("/tmp/projects/app/src")),
+            "a genuine child must still be allowed"
+        );
+    }
+
+    #[test]
+    fn an_authorized_project_refuses_a_prefix_sibling_end_to_end() {
+        // The unit above is about the predicate; this is about the answer the daemon acts on.
+        let parent = tempfile::tempdir().unwrap();
+        let parent = std::fs::canonicalize(parent.path()).unwrap();
+        let root = parent.join("app");
+        let sibling = parent.join("app-evil");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&sibling).unwrap();
+
+        let cfg = cfg_with_projects(vec![ProjectConfig {
+            name: "app".into(),
+            root: root.clone(),
+            write_class: WriteClass::AgentWritable,
+            enabled: true,
+        }]);
+
+        let err = cfg
+            .authorize_coding_workspace(Some("app"), Some(&sibling.to_string_lossy()))
+            .unwrap_err();
+        assert!(
+            matches!(err, CodingAuthError::UndeclaredWorkspace { .. }),
+            "a prefix sibling must be refused, got {err:?}"
+        );
+        // …and the same path with no project named, so neither branch is the lenient one.
+        let err = cfg
+            .authorize_coding_workspace(None, Some(&sibling.to_string_lossy()))
+            .unwrap_err();
+        assert!(
+            matches!(err, CodingAuthError::UndeclaredWorkspace { .. }),
+            "path-only auth must refuse it too, got {err:?}"
+        );
     }
 }
