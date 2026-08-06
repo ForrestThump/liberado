@@ -411,6 +411,8 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
             axum::routing::post(api::session_fork),
         )
         .route("/api/goals/domains", axum::routing::get(api::goals_domains))
+        // Coding project picker (S3/G4) — read-only; start still drain-gated.
+        .route("/api/projects", axum::routing::get(api::list_projects))
         // List only — start is on `work_start_routes` (drain-gated).
         .route("/api/goals", axum::routing::get(api::goals_list))
         .route("/api/goals/{id}", axum::routing::get(api::goals_get))
