@@ -6,8 +6,11 @@
 //!   [ input      ]
 //!
 //! Prior sessions are not always-on chrome — `/session` opens a full-screen browser.
+//! When a goal session is joined, a compact sidebar appears to the right of the chat pane
+//! showing live gate votes, the active role, and the last validation result.
 
 pub mod chat;
+pub mod goal_sidebar;
 pub mod input;
 pub mod models;
 pub mod sessions;
@@ -42,6 +45,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, spinner_tick: u8) {
         app.layout.status_bar = ratatui::layout::Rect::default();
         app.layout.chat = ratatui::layout::Rect::default();
         app.layout.input = ratatui::layout::Rect::default();
+        app.layout.goal_sidebar = ratatui::layout::Rect::default();
         sessions::draw(frame, area, app, &th);
         return;
     }
@@ -52,6 +56,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, spinner_tick: u8) {
         app.layout.status_bar = ratatui::layout::Rect::default();
         app.layout.chat = ratatui::layout::Rect::default();
         app.layout.input = ratatui::layout::Rect::default();
+        app.layout.goal_sidebar = ratatui::layout::Rect::default();
         switcher::draw(frame, area, app, &th);
         return;
     }
@@ -62,6 +67,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, spinner_tick: u8) {
         app.layout.status_bar = ratatui::layout::Rect::default();
         app.layout.chat = ratatui::layout::Rect::default();
         app.layout.input = ratatui::layout::Rect::default();
+        app.layout.goal_sidebar = ratatui::layout::Rect::default();
         models::draw(frame, area, app, &th);
         return;
     }
@@ -71,6 +77,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, spinner_tick: u8) {
 
     status_bar::draw(frame, layout.status_bar, app, spinner_tick, &th);
     chat::draw(frame, layout.chat, app, &th, spinner_tick);
+    goal_sidebar::draw(frame, layout.goal_sidebar, app, &th);
     input::draw(frame, layout.input, app, &th);
     slash_palette::draw(frame, layout.input, app, &th);
 }
@@ -102,9 +109,10 @@ struct Layout {
     status_bar: ratatui::layout::Rect,
     chat: ratatui::layout::Rect,
     input: ratatui::layout::Rect,
+    goal_sidebar: ratatui::layout::Rect,
 }
 
-/// Vertical stack: status (top) → chat → input.
+/// Vertical stack: status (top) → chat (with optional goal-sidebar split) → input.
 fn compute_layout(terminal: ratatui::layout::Rect, app: &App) -> Layout {
     let input_height = compute_input_height(terminal.width, &app.input, app.input_max_height);
 
@@ -117,10 +125,25 @@ fn compute_layout(terminal: ratatui::layout::Rect, app: &App) -> Layout {
         ])
         .split(terminal);
 
+    let chat_area = chunks[1];
+    let (chat, goal_sidebar) = if app.joined.is_some() && chat_area.width >= 60 {
+        let h_chunks = ratatui::layout::Layout::default()
+            .direction(ratatui::layout::Direction::Horizontal)
+            .constraints([
+                ratatui::layout::Constraint::Percentage(CHAT_SIDEBAR_SPLIT_CHAT),
+                ratatui::layout::Constraint::Percentage(CHAT_SIDEBAR_SPLIT_SIDEBAR),
+            ])
+            .split(chat_area);
+        (h_chunks[0], h_chunks[1])
+    } else {
+        (chat_area, ratatui::layout::Rect::default())
+    };
+
     Layout {
         status_bar: chunks[0],
-        chat: chunks[1],
+        chat,
         input: chunks[2],
+        goal_sidebar,
     }
 }
 
@@ -149,6 +172,7 @@ fn store_layout_rects(app: &mut App, layout: &Layout) {
     app.layout.status_bar = layout.status_bar;
     app.layout.chat = layout.chat;
     app.layout.input = layout.input;
+    app.layout.goal_sidebar = layout.goal_sidebar;
     app.layout.session_browser = ratatui::layout::Rect::default();
     app.layout.input_content_width = layout.input.width.saturating_sub(2) as usize;
 }

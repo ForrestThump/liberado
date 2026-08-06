@@ -1256,4 +1256,109 @@ mod tests {
         assert!(!report.turn_growth.is_empty());
         assert!(report.cache_hit_rate.is_some());
     }
+    // ── Provenance ratio ────────────────────────────────────────────────
+
+    fn node(author: &str, cid: &str, content: &str) -> String {
+        serde_json::json!({
+            "kind": "node",
+            "author": author,
+            "conversation_id": cid,
+            "message": { "content": content },
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn a_delegation_pairs_with_the_reply_that_followed_it() {
+        let log = [
+            node(
+                "tool",
+                "c1",
+                "RESULT (Succeeded) chat-delegate-1\nsixteen chars go",
+            ),
+            node("assistant", "c1", "0123456789"),
+        ]
+        .join("\n");
+
+        let rows = scan_session_log(&log);
+
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].conversation, "c1");
+        assert_eq!(rows[0].written, 10);
+        assert_eq!(rows[0].received, 16, "the RESULT header is not material");
+        assert!((rows[0].ratio - 10.0 / 16.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_failed_delegation_hands_over_no_material_and_so_is_not_a_row() {
+        // A failure gives the face nothing, so the ratio would be a division by what it did not
+        // receive — the number would look like fabrication when it is just an outage.
+        let log = [
+            node(
+                "tool",
+                "c1",
+                "RESULT (Failed) chat-delegate-1\nprovider timed out",
+            ),
+            node("assistant", "c1", "I could not reach the delegate."),
+        ]
+        .join("\n");
+
+        assert!(scan_session_log(&log).is_empty());
+    }
+
+    #[test]
+    fn a_reply_in_a_different_conversation_does_not_claim_another_ones_delegation() {
+        // This is the guard the promotion added over the example it came from, and it is the
+        // whole reason the row carries a conversation id: pairing across conversations would
+        // attribute one agent's material to another agent's answer.
+        let log = [
+            node(
+                "tool",
+                "c1",
+                "RESULT (Succeeded) chat-delegate-1\nmaterial here",
+            ),
+            node(
+                "assistant",
+                "c2",
+                "an answer written somewhere else entirely",
+            ),
+        ]
+        .join("\n");
+
+        assert!(
+            scan_session_log(&log).is_empty(),
+            "must not pair across conversations"
+        );
+    }
+
+    #[test]
+    fn scaffolding_lines_are_not_counted_as_delegated_material() {
+        // Session and journal markers ride along with every delegate result. Counting them
+        // inflates `received`, which *understates* the ratio — it hides the case being looked for.
+        let with_scaffold = node(
+            "tool",
+            "c1",
+            "RESULT (Succeeded) chat-delegate-1\n[session: abc]\n[dispatch journal: xyz]\nreal",
+        );
+        let plain = node("tool", "c1", "RESULT (Succeeded) chat-delegate-1\nreal");
+        let reply = node("assistant", "c1", "written");
+
+        let a = scan_session_log(&[with_scaffold, reply.clone()].join("\n"));
+        let b = scan_session_log(&[plain, reply].join("\n"));
+
+        assert_eq!(a[0].received, b[0].received, "scaffolding must not count");
+    }
+
+    #[test]
+    fn a_non_jsonl_data_dir_reports_nothing_rather_than_failing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sessions")).unwrap();
+        std::fs::write(dir.path().join("sessions").join("notes.txt"), "not jsonl").unwrap();
+
+        assert!(run_provenance_ratio(dir.path()).is_empty());
+        assert!(
+            run_provenance_ratio(&dir.path().join("nope")).is_empty(),
+            "a missing sessions dir is empty, not an error"
+        );
+    }
 }

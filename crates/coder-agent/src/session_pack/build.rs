@@ -33,6 +33,21 @@ fn is_stuck(e: &liberado_coder_core::CoderError) -> bool {
     matches!(e, CoderError::NoChanges | CoderError::Validation(_))
 }
 
+/// Whether `dir` is inside a git working tree — **not** merely whether it is a repo *root*.
+///
+/// `dir.join(".git").exists()` only answers for a root. A workspace pointed at a subdirectory of an
+/// existing checkout would look like "not a repo", and [`init_git_repo`] would then create a nested
+/// repository plus a placeholder commit inside someone's project. `rev-parse` answers the question
+/// actually being asked.
+fn is_git_repo(dir: &std::path::Path) -> bool {
+    std::process::Command::new("git")
+        .args(["-C", &dir.to_string_lossy()])
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()
+        .map(|o| o.status.success() && o.stdout.starts_with(b"true"))
+        .unwrap_or(false)
+}
+
 /// Make a freshly-created session workspace its **own** git repo.
 ///
 /// Without this, a workspace created under the daemon's data dir (`.liberado/…`, which is a
@@ -43,22 +58,8 @@ fn is_stuck(e: &liberado_coder_core::CoderError) -> bool {
 ///
 /// Best-effort: a workspace that is already a repo (the dogfood case, where the caller passes a real
 /// checkout) never reaches here, and a git failure just leaves things as they were.
-/// Whether `dir` is a git repository (or worktree). Used to decide whether to enable
-/// worktree-isolated sandboxing.
-fn is_git_repo(dir: &std::path::Path) -> bool {
-    dir.join(".git").exists()
-}
-
-/// Initialize `dir` as a git repo if it is not already one — a workspace without version control
-/// cannot report what the worker changed, so the worker would be asked to test something it has
-/// never seen done, and the verifier would grade the parent workspace (which the worker did not
-/// touch) rather than the child it did. The gap where a freshly-initialised repo sat empty so the
-/// session would then report, and be graded on, changes it never made.
-///
-/// Best-effort: a workspace that is already a repo (the dogfood case, where the caller passes a real
-/// checkout) never reaches here, and a git failure just leaves things as they were.
 fn init_git_repo(dir: &std::path::Path) {
-    if dir.join(".git").exists() {
+    if is_git_repo(dir) {
         return;
     }
     let ok = std::process::Command::new("git")
@@ -122,13 +123,12 @@ impl CodingSessionPack {
             .and_then(|v| v.as_str())
             .map(PathBuf::from)
             .unwrap_or_else(|| {
-                let dir = self
-                    .default_workspace_parent
-                    .join(format!("goal-{session_id}"));
-                let _ = std::fs::create_dir_all(&dir);
-                init_git_repo(&dir);
-                dir
+                self.default_workspace_parent
+                    .join(format!("goal-{session_id}"))
             });
+
+        let _ = std::fs::create_dir_all(&workspace);
+        init_git_repo(&workspace);
 
         let model = goal
             .payload
@@ -442,5 +442,75 @@ impl CodingSessionPack {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A **subdirectory** of a checkout is inside a work tree, so nothing must be initialised
+    /// there. The previous check was `dir.join(".git").exists()`, which only answers for a repo
+    /// root — pointing a session at `repo/crates/foo` would have created a nested repository and a
+    /// placeholder commit inside someone's project.
+    #[test]
+    fn a_subdirectory_of_a_repo_is_already_a_repo_and_is_not_reinitialised() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+        let sub = dir.path().join("crates").join("thing");
+        std::fs::create_dir_all(&sub).unwrap();
+
+        assert!(
+            is_git_repo(&sub),
+            "a subdirectory of a checkout is inside the work tree"
+        );
+
+        init_git_repo(&sub);
+        assert!(
+            !sub.join(".git").exists(),
+            "init must not create a nested repository inside an existing checkout"
+        );
+        assert!(
+            !sub.join(".liberado-placeholder").exists(),
+            "and must not drop a placeholder commit into someone's project"
+        );
+    }
+
+    #[test]
+    fn is_git_repo_returns_false_for_empty_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_git_repo(dir.path()));
+    }
+
+    #[test]
+    fn is_git_repo_returns_true_after_init() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+        assert!(is_git_repo(dir.path()));
+    }
+
+    #[test]
+    fn init_git_repo_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+        assert!(is_git_repo(dir.path()));
+        init_git_repo(dir.path());
+        assert!(is_git_repo(dir.path()));
+    }
+
+    #[test]
+    fn init_git_repo_creates_a_commit_so_worktree_can_proceed() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(dir.path());
+
+        let output = std::process::Command::new("git")
+            .args(["-C", &dir.path().to_string_lossy()])
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "init_git_repo must leave at least one commit so WorktreeWorkspace can proceed"
+        );
     }
 }

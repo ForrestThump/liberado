@@ -119,6 +119,9 @@ impl CodingToolRuntime {
             "apply_patch" => self.apply_patch(args).await,
             "git_status" => self.git_status().await,
             "git_diff" => self.git_diff(args).await,
+            "git_branch" => self.git_branch(args).await,
+            "git_commit" => self.git_commit(args).await,
+            "git_push" => self.git_push(args).await,
             "run_command" => self.run_command(args).await,
             "validate" => self.validate().await,
             other => Err(ToolError::BadRequest(format!("unknown tool: {other}"))),
@@ -133,12 +136,15 @@ impl CodingToolRuntime {
         }
         let args: Args = parse_args(args)?;
         let mut files = Vec::new();
-        walk_files(self.workspace.root(), args.limit, |path| {
-            let rel = relative_string(self.workspace.root(), path);
-            if !path_denied(&rel, &self.path_policy) {
-                files.push(rel);
-            }
-        })?;
+        walk_files(
+            self.workspace.root(),
+            args.limit,
+            &self.path_policy,
+            |_, rel| {
+                files.push(rel.to_string());
+                true
+            },
+        )?;
         Ok(json!({ "files": files, "limit": args.limit }))
     }
 
@@ -158,16 +164,13 @@ impl CodingToolRuntime {
         walk_files(
             self.workspace.root(),
             self.path_policy.search_max_results,
-            |path| {
+            &self.path_policy,
+            |path, rel| {
                 if matches.len() >= args.limit {
-                    return;
-                }
-                let rel = relative_string(self.workspace.root(), path);
-                if path_denied(&rel, &self.path_policy) {
-                    return;
+                    return false;
                 }
                 let Ok(content) = std::fs::read_to_string(path) else {
-                    return;
+                    return true;
                 };
                 for (idx, line) in content.lines().enumerate() {
                     if line.contains(&args.query) {
@@ -181,6 +184,7 @@ impl CodingToolRuntime {
                         }
                     }
                 }
+                true
             },
         )?;
         Ok(json!({ "matches": matches }))
@@ -194,22 +198,39 @@ impl CodingToolRuntime {
         }
         let args: Args = parse_args(args)?;
         let mut files = Vec::new();
-        walk_files(self.workspace.root(), args.limit, |path| {
-            let rel = relative_string(self.workspace.root(), path);
-            if path_denied(&rel, &self.path_policy) {
-                return;
-            }
-            let Ok(content) = std::fs::read_to_string(path) else {
-                return;
-            };
-            let symbols = extract_symbols(&rel, &content);
-            if !symbols.is_empty() {
-                files.push(json!({
-                    "path": rel,
-                    "symbols": symbols,
-                }));
-            }
-        })?;
+        // `limit` bounds files *returned*; `SYMBOL_SCAN_MAX_FILES` bounds files looked at. A tree
+        // is mostly not source, so spending the same budget on both is what made this return one
+        // file — a stray `validate.py` — against this repo: the 200 slots went to markdown and
+        // manifests before the walk reached `crates/`.
+        walk_files(
+            self.workspace.root(),
+            SYMBOL_SCAN_MAX_FILES,
+            &self.path_policy,
+            |path, rel| {
+                if files.len() >= args.limit {
+                    return false;
+                }
+                // Decide from the extension before touching the file. Reading first loads every
+                // asset, lockfile and binary in the tree whole and then discards it — and
+                // `read_to_string` only fails on a binary *after* it has read all of it.
+                if lang_from_path(rel).is_empty() {
+                    return true;
+                }
+                let Ok(bytes) = std::fs::read(path) else {
+                    return true;
+                };
+                let capped = cap_bytes(bytes, self.path_policy.read_max_bytes);
+                let content = String::from_utf8_lossy(&capped);
+                let symbols = extract_symbols(rel, &content);
+                if !symbols.is_empty() {
+                    files.push(json!({
+                        "path": rel,
+                        "symbols": symbols,
+                    }));
+                }
+                true
+            },
+        )?;
         Ok(json!({ "files": files, "limit": args.limit }))
     }
 
@@ -370,6 +391,145 @@ impl CodingToolRuntime {
         }))
     }
 
+    async fn git_branch(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            name: String,
+        }
+        let args: Args = parse_args(args)?;
+        if args.name.is_empty() {
+            return Err(ToolError::BadRequest(
+                "branch name must not be empty".to_string(),
+            ));
+        }
+        if args.name.starts_with('-') {
+            return Err(ToolError::BadRequest(
+                "branch name must not start with '-'".to_string(),
+            ));
+        }
+        let branch_name = args.name.clone();
+        let mut request = CommandRequest::new("git");
+        request.args = vec!["checkout".to_string(), "-b".to_string(), args.name];
+        let output = self.workspace.run_command(request).await?;
+        Ok(json!({
+            "branch": branch_name,
+            "exit_code": output.exit_code,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+            "timed_out": output.timed_out,
+        }))
+    }
+
+    async fn git_commit(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            message: String,
+            #[serde(default)]
+            files: Vec<String>,
+        }
+        let args: Args = parse_args(args)?;
+        if args.message.is_empty() {
+            return Err(ToolError::BadRequest(
+                "commit message must not be empty".to_string(),
+            ));
+        }
+
+        let mut stage = CommandRequest::new("git");
+        if args.files.is_empty() {
+            stage.args = vec!["add".to_string(), "-A".to_string()];
+        } else {
+            stage.args = vec!["add".to_string(), "--".to_string()];
+            stage.args.extend(args.files.clone());
+        }
+        let stage_output = self.workspace.run_command(stage).await?;
+        if stage_output.exit_code != Some(0) {
+            return Ok(json!({
+                "committed": false,
+                "stage_exit_code": stage_output.exit_code,
+                "stage_stderr": stage_output.stderr,
+                "exit_code": null,
+                "stdout": "",
+                "stderr": "",
+                "timed_out": stage_output.timed_out,
+            }));
+        }
+
+        let mut request = CommandRequest::new("git");
+        request.args = vec!["commit".to_string(), "-m".to_string(), args.message];
+        request
+            .env
+            .insert("GIT_AUTHOR_NAME".to_string(), "liberado".to_string());
+        request
+            .env
+            .insert("GIT_AUTHOR_EMAIL".to_string(), "liberado@local".to_string());
+        request
+            .env
+            .insert("GIT_COMMITTER_NAME".to_string(), "liberado".to_string());
+        request.env.insert(
+            "GIT_COMMITTER_EMAIL".to_string(),
+            "liberado@local".to_string(),
+        );
+        let output = self.workspace.run_command(request).await?;
+        Ok(json!({
+            "committed": output.exit_code == Some(0),
+            "exit_code": output.exit_code,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+            "timed_out": output.timed_out,
+        }))
+    }
+
+    async fn git_push(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            #[serde(default = "default_remote")]
+            remote: String,
+            #[serde(default)]
+            branch: Option<String>,
+            #[serde(default)]
+            set_upstream: bool,
+        }
+        let args: Args = parse_args(args)?;
+        if args.remote.is_empty() {
+            return Err(ToolError::BadRequest(
+                "remote must not be empty".to_string(),
+            ));
+        }
+        if args.remote.starts_with('-') {
+            return Err(ToolError::BadRequest(
+                "remote must not start with '-'".to_string(),
+            ));
+        }
+        if let Some(ref branch) = args.branch {
+            if branch.is_empty() {
+                return Err(ToolError::BadRequest(
+                    "branch must not be empty".to_string(),
+                ));
+            }
+            if branch.starts_with('-') {
+                return Err(ToolError::BadRequest(
+                    "branch must not start with '-'".to_string(),
+                ));
+            }
+        }
+        let mut request = CommandRequest::new("git");
+        request.args = vec!["push".to_string()];
+        if args.set_upstream {
+            request.args.push("--set-upstream".to_string());
+        }
+        request.args.push(args.remote);
+        if let Some(branch) = args.branch {
+            request.args.push(branch);
+        }
+        let output = self.workspace.run_command(request).await?;
+        Ok(json!({
+            "exit_code": output.exit_code,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+            "timed_out": output.timed_out,
+        }))
+    }
+
     async fn run_command(&self, args: Value) -> Result<Value, ToolError> {
         #[derive(Deserialize)]
         struct Args {
@@ -514,6 +674,44 @@ impl ToolRuntime for CodingToolRuntime {
                 }),
             ),
             tool(
+                "git_branch",
+                "Create and switch to a new git branch.",
+                json!({
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                        "name": { "type": "string" }
+                    }
+                }),
+            ),
+            tool(
+                "git_commit",
+                "Stage files and create a git commit with the given message. Stages all changes when no files are listed.",
+                json!({
+                    "type": "object",
+                    "required": ["message"],
+                    "properties": {
+                        "message": { "type": "string" },
+                        "files": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                        }
+                    }
+                }),
+            ),
+            tool(
+                "git_push",
+                "Push the current branch to a remote.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "remote": { "type": "string" },
+                        "branch": { "type": "string" },
+                        "set_upstream": { "type": "boolean" }
+                    }
+                }),
+            ),
+            tool(
                 "run_command",
                 "Run a policy-checked command in the workspace.",
                 json!({
@@ -555,8 +753,18 @@ fn default_limit() -> usize {
     200
 }
 
+/// How many files `list_symbols` will look at while trying to fill its result limit.
+///
+/// The walk still has to terminate on a repository far larger than any limit could describe, but
+/// this is a scan bound rather than a result bound — the two are not the same number.
+const SYMBOL_SCAN_MAX_FILES: usize = 20_000;
+
 fn default_diff_mode() -> String {
     "patch".to_string()
+}
+
+fn default_remote() -> String {
+    "origin".to_string()
 }
 
 fn fs_err(error: std::io::Error) -> ToolError {
@@ -605,17 +813,39 @@ fn slice_lines(content: &str, start_line: Option<usize>, line_count: Option<usiz
         .join("\n")
 }
 
-fn walk_files(root: &Path, limit: usize, mut visit: impl FnMut(&Path)) -> Result<(), ToolError> {
+/// Walk `root` breadth-first, visiting up to `limit` files the policy does not deny.
+///
+/// The deny list prunes **directories** as well as files, and a denied entry does not spend a
+/// slot. Filtering at the visitor instead — after the walk has already counted the file — means
+/// the budget goes to paths the caller was never allowed to read. `PathPolicy::default()` denies
+/// `.git/**`, `target/**` and `node_modules/**`, which between them are almost every file in a
+/// working checkout: run against this repo, `list_symbols` at the default limit of 200 came back
+/// with one file, and it was a stray Python script.
+/// `visit` returns whether to keep walking — `false` stops immediately. A caller whose limit is on
+/// what it *collects* rather than what it *reads* needs that: `list_symbols` has to look past the
+/// markdown and lockfiles to find any source at all, so its `limit` cannot also be the walk budget.
+fn walk_files(
+    root: &Path,
+    limit: usize,
+    policy: &PathPolicy,
+    mut visit: impl FnMut(&Path, &str) -> bool,
+) -> Result<(), ToolError> {
     let mut queue = VecDeque::from([root.to_path_buf()]);
     let mut visited = 0usize;
     while let Some(dir) = queue.pop_front() {
         for entry in std::fs::read_dir(&dir).map_err(fs_err)? {
             let entry = entry.map_err(fs_err)?;
             let path = entry.path();
+            let rel = relative_string(root, &path);
+            if path_denied(&rel, policy) {
+                continue;
+            }
             if path.is_dir() {
                 queue.push_back(path);
             } else if path.is_file() {
-                visit(&path);
+                if !visit(&path, &rel) {
+                    return Ok(());
+                }
                 visited += 1;
                 if visited >= limit {
                     return Ok(());
@@ -664,7 +894,10 @@ fn extract_symbols(path: &str, content: &str) -> Vec<String> {
         let trimmed = line.trim();
         let sym = match lang {
             "rust" => extract_rust_symbol(trimmed),
-            "python" => extract_python_symbol(trimmed),
+            // Python alone gets the raw line: indentation *is* its nesting, so a trimmed line
+            // cannot tell a module-level `def` from a method. Passing `trimmed` here made the
+            // column-0 guard in `extract_python_symbol` a check that could not fire.
+            "python" => extract_python_symbol(line),
             "typescript" => extract_ts_symbol(trimmed),
             "go" => extract_go_symbol(trimmed),
             "java" => extract_java_symbol(trimmed),
@@ -1331,6 +1564,9 @@ mod tests {
             "apply_patch",
             "git_status",
             "git_diff",
+            "git_branch",
+            "git_commit",
+            "git_push",
             "run_command",
             "validate",
         ] {
@@ -1390,12 +1626,39 @@ mod tests {
         }
 
         let mut count = 0usize;
-        walk_files(dir.path(), 3, |_| {
+        walk_files(dir.path(), 3, &PathPolicy::default(), |_, _| {
             count += 1;
+            true
         })
         .unwrap();
 
         assert_eq!(count, 3, "walk_files should visit at most 3 files");
+    }
+
+    #[tokio::test]
+    async fn a_denied_directory_neither_counts_against_the_limit_nor_is_descended_into() {
+        // The budget is what makes this matter. `.git` alone is thousands of files in a real
+        // checkout, so a walk that counts them first and filters them second returns nothing the
+        // caller can use — which is what `list_symbols` did against this repo.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        for i in 0..20 {
+            std::fs::write(dir.path().join(".git").join(format!("o{i}")), "x\n").unwrap();
+        }
+        std::fs::write(dir.path().join("real.rs"), "pub fn kept() {}\n").unwrap();
+
+        let mut seen = Vec::new();
+        walk_files(dir.path(), 5, &PathPolicy::default(), |_, rel| {
+            seen.push(rel.to_string());
+            true
+        })
+        .unwrap();
+
+        assert_eq!(
+            seen,
+            vec!["real.rs".to_string()],
+            "a denied directory must not spend the caller's budget"
+        );
     }
 
     #[test]
@@ -1469,6 +1732,13 @@ mod tests {
         let symbols = extract_symbols("app.py", content);
         assert!(symbols.contains(&"def handle_request".to_string()));
         assert!(symbols.contains(&"class Router".to_string()));
+        // Indentation is Python's nesting. `route` is a method on `Router`; listing it beside the
+        // module-level names says the module exports something it does not. The guard for this
+        // was already written — it just never saw an indented line to reject.
+        assert!(
+            !symbols.contains(&"def route".to_string()),
+            "a nested def is not a top-level symbol: {symbols:?}"
+        );
     }
 
     #[test]
@@ -1565,5 +1835,319 @@ mod tests {
         let files = result["files"].as_array().unwrap();
         assert!(files.len() <= 2, "limit 2 should cap results");
         assert_eq!(result["limit"], 2);
+    }
+
+    fn init_temp_git_repo(dir: &std::path::Path) {
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_AUTHOR_NAME", "test")
+                .env("GIT_AUTHOR_EMAIL", "test@test")
+                .env("GIT_COMMITTER_NAME", "test")
+                .env("GIT_COMMITTER_EMAIL", "test@test")
+                .output()
+                .unwrap()
+        };
+        run(&["init", "--quiet"]);
+        std::fs::write(dir.join("seed.txt"), "initial\n").unwrap();
+        run(&["add", "seed.txt"]);
+        run(&["commit", "-m", "initial commit"]);
+    }
+
+    #[tokio::test]
+    async fn git_branch_creates_and_switches() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json("git_branch", json!({"name": "feature-x"}))
+            .await
+            .unwrap();
+        assert_eq!(result["branch"], "feature-x");
+        assert_eq!(result["exit_code"], 0);
+
+        let current = std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let branch = String::from_utf8_lossy(&current.stdout).trim().to_string();
+        assert_eq!(branch, "feature-x");
+    }
+
+    /// Option injection: these values become argv entries, so a name like `-D` or `--force` would
+    /// change what git does rather than name a branch. The guards existed but nothing held them —
+    /// disabling all three `starts_with('-')` checks left the whole crate green.
+    ///
+    /// The three sites are separate arguments to separate commands, so this covers each rather than
+    /// trusting one to stand for the others.
+    #[tokio::test]
+    async fn git_tools_reject_arguments_that_would_parse_as_options() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        for (tool, args) in [
+            ("git_branch", json!({"name": "-D"})),
+            ("git_push", json!({"remote": "--mirror"})),
+            ("git_push", json!({"remote": "origin", "branch": "--force"})),
+        ] {
+            let Err(err) = runtime.invoke_json(tool, args.clone()).await else {
+                panic!("{tool} accepted {args}, which git would read as an option");
+            };
+            assert!(
+                err.to_string().contains("must not start with"),
+                "{tool} must refuse a leading dash; got: {err}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn git_branch_rejects_empty_name() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let err = runtime
+            .invoke_json("git_branch", json!({"name": ""}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must not be empty"));
+    }
+
+    #[tokio::test]
+    async fn git_commit_stages_and_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        std::fs::write(dir.path().join("new_file.txt"), "content\n").unwrap();
+
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json(
+                "git_commit",
+                json!({"message": "add new file", "files": ["new_file.txt"]}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["committed"], true);
+        assert_eq!(result["exit_code"], 0);
+
+        let log = std::process::Command::new("git")
+            .args(["log", "--oneline"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let log_text = String::from_utf8_lossy(&log.stdout);
+        assert!(log_text.contains("add new file"));
+    }
+
+    #[tokio::test]
+    async fn git_commit_stages_all_when_no_files_given() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        std::fs::write(dir.path().join("a.txt"), "a\n").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "b\n").unwrap();
+
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json("git_commit", json!({"message": "commit all"}))
+            .await
+            .unwrap();
+        assert_eq!(result["committed"], true);
+        assert_eq!(result["exit_code"], 0);
+
+        let status = std::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&status.stdout).trim().is_empty());
+    }
+
+    #[tokio::test]
+    async fn git_commit_reports_stage_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json("git_commit", json!({"message": "empty commit"}))
+            .await
+            .unwrap();
+        assert_eq!(result["committed"], false);
+    }
+
+    #[tokio::test]
+    async fn git_commit_rejects_empty_message() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let err = runtime
+            .invoke_json("git_commit", json!({"message": ""}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must not be empty"));
+    }
+
+    #[tokio::test]
+    async fn git_push_runs_push_command() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json("git_push", json!({"remote": "origin", "branch": "main"}))
+            .await
+            .unwrap();
+
+        assert!(
+            result["exit_code"].is_number() || result["timed_out"] == false,
+            "git_push should return exit_code and timed_out"
+        );
+    }
+
+    #[tokio::test]
+    async fn git_push_with_set_upstream() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json(
+                "git_push",
+                json!({"remote": "origin", "branch": "main", "set_upstream": true}),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            result["exit_code"].is_number() || result["timed_out"] == false,
+            "git_push with set_upstream should return exit_code and timed_out"
+        );
+    }
+
+    #[tokio::test]
+    async fn git_push_defaults_to_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime.invoke_json("git_push", json!({})).await.unwrap();
+
+        assert!(
+            result["exit_code"].is_number() || result["timed_out"] == false,
+            "git_push with no args should default to origin"
+        );
+    }
+    #[tokio::test]
+    async fn list_symbols_limit_bounds_what_is_returned_not_what_is_walked() {
+        // A source tree is mostly not source. When `limit` doubled as the walk budget, the
+        // non-source files ahead of the code in breadth-first order consumed it — against this
+        // repo the tool returned exactly one file, a stray `validate.py`, and no Rust at all.
+        let (dir, runtime) = runtime();
+        for i in 0..10 {
+            std::fs::write(
+                dir.path().join(format!("a{i}.md")),
+                "# not source
+",
+            )
+            .unwrap();
+        }
+        for i in 0..3 {
+            std::fs::write(
+                dir.path().join(format!("z{i}.rs")),
+                format!(
+                    "pub fn thing{i}() {{}}
+"
+                ),
+            )
+            .unwrap();
+        }
+
+        let result = runtime
+            .invoke_json("list_symbols", json!({"limit": 2}))
+            .await
+            .unwrap();
+
+        let files = result["files"].as_array().unwrap();
+        assert_eq!(
+            files.len(),
+            2,
+            "limit is a result bound, and there are 3 source files past 10 non-source ones: {files:?}"
+        );
+        for f in files {
+            let path = f["path"].as_str().unwrap();
+            assert!(
+                path.ends_with(".rs"),
+                "only source files carry symbols: {path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn list_symbols_stops_reading_a_file_at_the_policy_cap() {
+        // `read_file` caps at `read_max_bytes`; this walked every file with an uncapped
+        // `read_to_string`, which on a binary reads the whole thing before failing to decode it.
+        let dir = tempfile::tempdir().unwrap();
+        let policy = PathPolicy {
+            read_max_bytes: 64,
+            ..PathPolicy::default()
+        };
+        let runtime = CodingToolRuntime::new(dir.path(), CommandPolicy::default(), policy).unwrap();
+        let mut content = String::from(
+            "pub fn early() {}
+",
+        );
+        content.push_str(
+            &"// padding padding padding
+"
+            .repeat(20),
+        );
+        content.push_str(
+            "pub fn beyond_the_cap() {}
+",
+        );
+        std::fs::write(dir.path().join("big.rs"), &content).unwrap();
+
+        let result = runtime
+            .invoke_json("list_symbols", json!({}))
+            .await
+            .unwrap();
+
+        let symbols = result["files"][0]["symbols"].as_array().unwrap();
+        assert!(
+            symbols.iter().any(|s| s == "fn early"),
+            "the head of the file is still read: {symbols:?}"
+        );
+        assert!(
+            !symbols.iter().any(|s| s == "fn beyond_the_cap"),
+            "nothing past read_max_bytes should be reachable: {symbols:?}"
+        );
     }
 }
