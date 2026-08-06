@@ -20,7 +20,8 @@ mod trace;
 mod verify_pipeline;
 
 pub use fanout::{
-    ChildOutcome, CodingSubtask, FanoutReport, MergeStep, run_coding_fanout, subtasks_from_payload,
+    ChildOutcome, CodingSubtask, DEFAULT_MAX_CONCURRENT_CODING_SUBAGENTS, FanoutReport, MergeStep,
+    child_session_grant, run_coding_fanout, run_coding_fanout_via_hub, subtasks_from_payload,
 };
 pub use intake_session::{
     IntakeAnswer, freeze_if_ready, request_from_contract, run_intake, run_intake_until_ready,

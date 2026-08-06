@@ -140,8 +140,16 @@ impl CodingSessionPack {
             .to_string();
 
         // ── Parallel coding subagents (S6): payload.subtasks → worktrees → LLM merge ──
-        // Parent-only merge; children never self-merge. Concurrency from payload or default 2
-        // (matches tuning.dispatch.max_concurrent_coding_subagents default).
+        // Parent-only merge; children never self-merge. Prefer hub-spawned child goal sessions
+        // when the pack has an attached hub; fall back to in-process backend workers (tests).
+        // Nested fan-out is refused: children set fanout_child and must not carry subtasks.
+        if goal.payload.get("fanout_child").and_then(|v| v.as_bool()) == Some(true)
+            && crate::fanout::subtasks_from_payload(&goal.payload).is_some()
+        {
+            return Err(PackError::Setup(
+                "fanout child sessions cannot nest further subtasks".into(),
+            ));
+        }
         if let Some(subtasks) = crate::fanout::subtasks_from_payload(&goal.payload) {
             let max_concurrent = goal
                 .payload
@@ -152,15 +160,18 @@ impl CodingSessionPack {
                         .get("max_concurrent_coding_subagents")
                         .and_then(|v| v.as_u64())
                 })
-                .unwrap_or(2) as usize;
+                .unwrap_or(self.max_concurrent_coding_subagents as u64)
+                .max(1) as usize;
 
+            let via_hub = self.hub().is_some();
             let _ = events
                 .send(SessionEvent::new(
                     session_id,
                     SessionEventKind::Progress {
                         message: format!(
-                            "coding fan-out: {} subtask(s), max_concurrent={max_concurrent}",
-                            subtasks.len()
+                            "coding fan-out: {} subtask(s), max_concurrent={max_concurrent}, mode={}",
+                            subtasks.len(),
+                            if via_hub { "hub-sessions" } else { "in-process" }
                         ),
                     },
                 ))
@@ -175,15 +186,29 @@ impl CodingSessionPack {
                 ))
                 .await;
 
-            let report = crate::fanout::run_coding_fanout(
-                Arc::clone(&self.backend),
-                Arc::clone(&self.provider),
-                &workspace,
-                subtasks,
-                max_concurrent,
-                &model,
-            )
-            .await
+            let report = if let Some(hub) = self.hub() {
+                crate::fanout::run_coding_fanout_via_hub(
+                    hub,
+                    ctx.grant.clone(),
+                    session_id,
+                    Arc::clone(&self.provider),
+                    &workspace,
+                    subtasks,
+                    max_concurrent,
+                    &model,
+                )
+                .await
+            } else {
+                crate::fanout::run_coding_fanout(
+                    Arc::clone(&self.backend),
+                    Arc::clone(&self.provider),
+                    &workspace,
+                    subtasks,
+                    max_concurrent,
+                    &model,
+                )
+                .await
+            }
             .map_err(|e| PackError::Failed(format!("coding fan-out: {e}")))?;
 
             let _ = events
@@ -291,8 +316,19 @@ impl CodingSessionPack {
         task.success_criteria = goal.success_criteria.clone();
 
         // Explore is read-only: HostLocal is enough (no worktree isolation required for readers).
+        // Fan-out children already sit on a dedicated worktree — force HostLocal to avoid nesting.
         // Build mode still uses Worktree when the workspace is a git repo (C7).
-        let sandbox = if policies.explore_mode {
+        let force_host = goal
+            .payload
+            .get("force_host_local")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+            || goal
+                .payload
+                .get("fanout_child")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+        let sandbox = if policies.explore_mode || force_host {
             SandboxSpec::HostLocal
         } else if is_git_repo(&workspace) {
             SandboxSpec::Worktree

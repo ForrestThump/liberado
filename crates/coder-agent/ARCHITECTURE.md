@@ -47,22 +47,27 @@ Depends on foundation (`executor`, `provider`, `common`) + coding pack (`coder-c
 (attempt loop, progress policy shape, session events) graduate upward per modularity extraction
 triggers — they do not pull life-ops into this crate.
 
-## Coding fan-out (S6 v1)
+## Coding fan-out (S6)
 
 When a coding goal carries `payload.subtasks` (array of `{label, description, success_criteria?}`):
 
 1. Each subtask gets `git worktree add -b fanout/<label>-i` under `coding-worktrees/`.
-2. Children run the coding backend **in parallel** (semaphore; default 2 / `max_concurrent_subagents`).
-3. Worktrees are removed; **branches remain** on the parent repo.
-4. Parent merges each branch (`--no-ff`). Conflicts: merge-role LLM rewrites files → stage → commit.
-5. Children **never** self-merge; parent owns integration quality.
+2. **Production (hub attached):** each child is a **background coding goal session**
+   (`start_background` + `await_terminal`), grant = parent without `AskHuman`,
+   `payload.fanout_child` + `force_host_local` (no nested worktree). Nested `subtasks` refused.
+3. **Fallback (tests / no hub):** in-process `CoderBackend` workers on the same worktrees.
+4. Concurrency semaphore: `payload.max_concurrent_subagents` → overrides → pack field from
+   `tuning.dispatch.max_concurrent_coding_subagents` (**default 3**).
+5. Worktrees removed after each child; **branches remain**. Parent merges (`--no-ff`); conflicts
+   go through merge-role LLM. Children **never** self-merge.
 
-Helpers live in `liberado-coder-sandbox` (`merge` module). Not yet: hub-spawned child goal sessions, face `delegate` → coding, nested fan-out.
+Helpers: `coder-sandbox` `merge` module; orchestration in `fanout.rs`. Pack gets hub via
+`CodingSessionPack::attach_hub` after server `Arc`s the hub.
 
 ## Not done yet
 
-- Hub-native child goal sessions for fan-out (today: in-pack backend fan-out)
-- Face `delegate` → coding domain
+- Face `delegate` → coding domain (still dispatch-only)
+- Nested fan-out / TUI multi-child chrome
 - Live Docker smoke
 - Model-turn events / streaming session API
 - Config-dir-relative prompt resolution

@@ -54,6 +54,12 @@ pub struct CodingSessionPack {
     provider: Arc<dyn Provider>,
     /// Default workspace when payload.workspace_root is absent (temp parent for demos).
     default_workspace_parent: PathBuf,
+    /// Hub for S6 fan-out child sessions. Set after the hub is `Arc`'d (see
+    /// [`attach_hub`](Self::attach_hub)) — registration order is pack-then-Arc.
+    hub: std::sync::Mutex<Option<Arc<liberado_session::GoalSessionHub>>>,
+    /// Default concurrency for `payload.subtasks` fan-out
+    /// (`tuning.dispatch.max_concurrent_coding_subagents`).
+    max_concurrent_coding_subagents: u32,
 }
 
 impl CodingSessionPack {
@@ -62,6 +68,9 @@ impl CodingSessionPack {
             backend: Arc::new(LiberadoLoopBackend::new(provider.clone())),
             provider,
             default_workspace_parent,
+            hub: std::sync::Mutex::new(None),
+            max_concurrent_coding_subagents: crate::fanout::DEFAULT_MAX_CONCURRENT_CODING_SUBAGENTS
+                as u32,
         }
     }
 
@@ -74,7 +83,26 @@ impl CodingSessionPack {
             backend,
             provider,
             default_workspace_parent,
+            hub: std::sync::Mutex::new(None),
+            max_concurrent_coding_subagents: crate::fanout::DEFAULT_MAX_CONCURRENT_CODING_SUBAGENTS
+                as u32,
         }
+    }
+
+    /// Resource cap for parallel coding subagents (from tuning). Clamped to ≥ 1 at use site.
+    pub fn with_max_concurrent_coding_subagents(mut self, n: u32) -> Self {
+        self.max_concurrent_coding_subagents = n.max(1);
+        self
+    }
+
+    /// Attach the goal hub so `payload.subtasks` spawns **child goal sessions** rather than
+    /// in-process backend workers. Call once after `Arc::new(hub)`.
+    pub fn attach_hub(&self, hub: Arc<liberado_session::GoalSessionHub>) {
+        *self.hub.lock().expect("coding pack hub mutex") = Some(hub);
+    }
+
+    fn hub(&self) -> Option<Arc<liberado_session::GoalSessionHub>> {
+        self.hub.lock().expect("coding pack hub mutex").clone()
     }
 
     /// Emit `AwaitingInput` and block for the answer. `None` = the idle budget expired.

@@ -667,6 +667,18 @@ impl GoalSessionHub {
             )
             .await;
 
+        // Durable terminal state **before** `SessionFinished` so `await_terminal` (which returns on
+        // that event) always sees `result` + terminal status. Emitting the event first left a race
+        // where hub-spawned fan-out children observed "finished with no result".
+        if status == SessionStatus::Parked {
+            // A parked session has NOT finished, and `finish()` would say it had: it stamps
+            // `finished_at` and clears `awaiting_input`, erasing the very question the human is coming
+            // back to answer. `set_status` records the status and leaves both alone.
+            self.store.set_status(&session_id, status).await;
+        } else {
+            self.store.finish(&session_id, status, goal_result.clone()).await;
+        }
+
         let fin = SessionEvent::new(
             &session_id,
             SessionEventKind::SessionFinished {
@@ -678,14 +690,6 @@ impl GoalSessionHub {
         drop(tx);
         let _ = pump.await;
 
-        // A parked session has NOT finished, and `finish()` would say it had: it stamps
-        // `finished_at` and clears `awaiting_input`, erasing the very question the human is coming
-        // back to answer. `set_status` records the status and leaves both alone.
-        if status == SessionStatus::Parked {
-            self.store.set_status(&session_id, status).await;
-        } else {
-            self.store.finish(&session_id, status, goal_result).await;
-        }
         self.cancels.lock().await.remove(&session_id);
         // Drop the input sender so any late `send_input` fails cleanly instead of blocking.
         self.inputs.lock().await.remove(&session_id);

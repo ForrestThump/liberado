@@ -12,7 +12,8 @@
 # detach_soft_timeout_secs = 20    # foreground Await -> Detach promotion point
 # guidance_match_floor = 0.8       # procedural-memory score that short-circuits classification
 # subagent_isolation = "in_process" # in_process | out_of_process
-# max_concurrent_coding_subagents = 2  # in-flight code-dispatch jobs (resource cap, not safety gate)
+# max_concurrent_coding_subagents = 3  # parallel coding subagent worktrees (resource cap, not safety gate)
+
 
 [context]
 # max_goals = 5

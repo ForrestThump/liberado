@@ -17,9 +17,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use liberado_coder_core::{
-    CoderBackend, CoderError, CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderRunResult,
-    CoderTask, CommandPolicy, LIBERADO_LOOP_BACKEND, PathPolicy, ProgressPolicy, SandboxSpec,
-    WorkspaceRef,
+    CoderBackend, CoderError, CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask,
+    CommandPolicy, LIBERADO_LOOP_BACKEND, PathPolicy, ProgressPolicy, SandboxSpec, WorkspaceRef,
 };
 use liberado_coder_sandbox::{
     MergeAttempt, add_worktree_on_branch, branch_tip, commit_merge, merge_branch,
@@ -53,6 +52,9 @@ pub struct ChildOutcome {
     pub outcome: Outcome,
     pub summary: String,
     pub files_changed: Vec<String>,
+    /// Hub session id when the child ran as a goal session (`run_coding_fanout_via_hub`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -133,10 +135,14 @@ pub fn sanitize_label(label: &str) -> String {
     }
 }
 
-/// Run N coding children in parallel worktrees, then merge each branch into `parent_root`.
+/// Default concurrency when neither payload nor pack config sets a cap (matches
+/// `DispatchTuning::default().max_concurrent_coding_subagents`).
+pub const DEFAULT_MAX_CONCURRENT_CODING_SUBAGENTS: usize = 3;
+
+/// Run N coding children via in-process [`CoderBackend`] (no hub). Prefer
+/// [`run_coding_fanout_via_hub`] in production when a hub is attached.
 ///
-/// `parent_root` must be a git repository (the project checkout or parent worktree).
-/// Children use [`SandboxSpec::HostLocal`] inside their already-isolated worktree.
+/// `parent_root` must be a git repository. Children use HostLocal inside dedicated worktrees.
 pub async fn run_coding_fanout(
     backend: Arc<dyn CoderBackend>,
     merger: Arc<dyn Provider>,
@@ -154,7 +160,6 @@ pub async fn run_coding_fanout(
     let worktrees_base = coding_worktrees_base();
     let sem = Arc::new(Semaphore::new(max_concurrent));
 
-    // Spawn children.
     let mut handles = Vec::new();
     for (i, task) in tasks.into_iter().enumerate() {
         let backend = Arc::clone(&backend);
@@ -167,7 +172,7 @@ pub async fn run_coding_fanout(
                 .acquire()
                 .await
                 .expect("semaphore closed unexpectedly");
-            run_one_child(backend, &parent, &wt_base, &task, i, &model).await
+            run_one_child_backend(backend, &parent, &wt_base, &task, i, &model).await
         }));
     }
 
@@ -175,19 +180,107 @@ pub async fn run_coding_fanout(
     for h in handles {
         match h.await {
             Ok(child) => children.push(child),
-            Err(e) => children.push(ChildOutcome {
-                label: "join".into(),
-                branch: String::new(),
-                tip_sha: None,
-                outcome: Outcome::Failed,
-                summary: format!("child task join failed: {e}"),
-                files_changed: vec![],
-                error: Some(e.to_string()),
-            }),
+            Err(e) => children.push(join_fail(e.to_string())),
         }
     }
 
-    // Merge in declaration order (stable, reproducible).
+    finish_fanout(merger.as_ref(), parent_root, children).await
+}
+
+/// Run N coding children as **hub-spawned background goal sessions**, each on its own worktree
+/// branch, then merge into `parent_root` (parent-only, LLM on conflicts).
+///
+/// Child goals:
+/// - domain `coding`, grant = parent without `AskHuman` (no nested interactive stall)
+/// - `payload.fanout_child = true` + `force_host_local` (already on a worktree — no nested isolation)
+/// - no `subtasks` (no recursive fan-out)
+/// - `parent_session_id` for audit
+pub async fn run_coding_fanout_via_hub(
+    hub: Arc<liberado_session::GoalSessionHub>,
+    parent_grant: liberado_session::SessionGrant,
+    parent_session_id: &str,
+    merger: Arc<dyn Provider>,
+    parent_root: &Path,
+    tasks: Vec<CodingSubtask>,
+    max_concurrent: usize,
+    model: &str,
+) -> Result<FanoutReport, CoderError> {
+    if tasks.is_empty() {
+        return Err(CoderError::Setup(
+            "coding fan-out requires at least one subtask".into(),
+        ));
+    }
+    let max_concurrent = max_concurrent.max(1);
+    let worktrees_base = coding_worktrees_base();
+    let child_grant = child_session_grant(&parent_grant);
+    let sem = Arc::new(Semaphore::new(max_concurrent));
+
+    let mut handles = Vec::new();
+    for (i, task) in tasks.into_iter().enumerate() {
+        let hub = Arc::clone(&hub);
+        let grant = child_grant.clone();
+        let sem = Arc::clone(&sem);
+        let parent = parent_root.to_path_buf();
+        let wt_base = worktrees_base.clone();
+        let parent_sid = parent_session_id.to_string();
+        let model = model.to_string();
+        handles.push(tokio::spawn(async move {
+            let _permit = sem
+                .acquire()
+                .await
+                .expect("semaphore closed unexpectedly");
+            run_one_child_hub(hub, grant, &parent, &wt_base, &task, i, &parent_sid, &model)
+                .await
+        }));
+    }
+
+    let mut children = Vec::new();
+    for h in handles {
+        match h.await {
+            Ok(child) => children.push(child),
+            Err(e) => children.push(join_fail(e.to_string())),
+        }
+    }
+
+    finish_fanout(merger.as_ref(), parent_root, children).await
+}
+
+fn join_fail(msg: String) -> ChildOutcome {
+    ChildOutcome {
+        label: "join".into(),
+        branch: String::new(),
+        tip_sha: None,
+        outcome: Outcome::Failed,
+        summary: format!("child task join failed: {msg}"),
+        files_changed: vec![],
+        session_id: None,
+        error: Some(msg),
+    }
+}
+
+/// Child grant: same ceiling as parent minus AskHuman (unattended; no nested human stall).
+pub fn child_session_grant(parent: &liberado_session::SessionGrant) -> liberado_session::SessionGrant {
+    let mut capabilities = liberado_common::CapabilitySet::empty();
+    for cap in &parent.capabilities.capabilities {
+        if *cap != liberado_common::Capability::AskHuman {
+            capabilities.grant(cap.clone());
+        }
+    }
+    liberado_session::SessionGrant {
+        capabilities,
+        profile: parent.profile.clone(),
+        overrides: parent.overrides.clone(),
+        delegation: Some(false), // no nested fan-out via face delegate
+        model: parent.model.clone(),
+        prompt_append: parent.prompt_append.clone(),
+    }
+}
+
+async fn finish_fanout(
+    merger: &dyn Provider,
+    parent_root: &Path,
+    children: Vec<ChildOutcome>,
+) -> Result<FanoutReport, CoderError> {
     let mut merges = Vec::new();
     for child in &children {
         if child.branch.is_empty() || child.tip_sha.is_none() {
@@ -205,8 +298,7 @@ pub async fn run_coding_fanout(
             });
             continue;
         }
-        let step = merge_one_branch(merger.as_ref(), parent_root, &child.branch).await;
-        merges.push(step);
+        merges.push(merge_one_branch(merger, parent_root, &child.branch).await);
     }
 
     let any_child_fail = children.iter().any(|c| c.outcome != Outcome::Succeeded);
@@ -223,7 +315,15 @@ pub async fn run_coding_fanout(
         merges.len(),
         children
             .iter()
-            .map(|c| format!("{}={}", c.label, format!("{:?}", c.outcome).to_lowercase()))
+            .map(|c| format!(
+                "{}={}{}",
+                c.label,
+                format!("{:?}", c.outcome).to_lowercase(),
+                c.session_id
+                    .as_ref()
+                    .map(|s| format!("[{s}]"))
+                    .unwrap_or_default()
+            ))
             .collect::<Vec<_>>()
             .join(", ")
     );
@@ -236,7 +336,7 @@ pub async fn run_coding_fanout(
     })
 }
 
-async fn run_one_child(
+async fn run_one_child_backend(
     backend: Arc<dyn CoderBackend>,
     parent_root: &Path,
     worktrees_base: &Path,
@@ -259,6 +359,7 @@ async fn run_one_child(
                 outcome: Outcome::Failed,
                 summary: format!("worktree create failed: {e}"),
                 files_changed: vec![],
+                session_id: None,
                 error: Some(e.to_string()),
             };
         }
@@ -268,13 +369,12 @@ async fn run_one_child(
         label = %task.label,
         branch = %branch,
         worktree = %wt_path.display(),
-        "coding fan-out: child worktree ready"
+        "coding fan-out (backend): child worktree ready"
     );
 
     let request = child_request(&wt_path, task, model);
     let run = backend.run(request).await;
 
-    // Capture tip before removing worktree (branch lives on parent repo).
     let tip = branch_tip(parent_root, &branch).await.ok();
     let _ = remove_worktree(parent_root, &wt_path).await;
 
@@ -286,6 +386,7 @@ async fn run_one_child(
             outcome: result.outcome,
             summary: result.summary,
             files_changed: result.files_changed,
+            session_id: None,
             error: None,
         },
         Err(e) => ChildOutcome {
@@ -295,8 +396,134 @@ async fn run_one_child(
             outcome: Outcome::Failed,
             summary: e.to_string(),
             files_changed: vec![],
+            session_id: None,
             error: Some(e.to_string()),
         },
+    }
+}
+
+async fn run_one_child_hub(
+    hub: Arc<liberado_session::GoalSessionHub>,
+    grant: liberado_session::SessionGrant,
+    parent_root: &Path,
+    worktrees_base: &Path,
+    task: &CodingSubtask,
+    index: usize,
+    parent_session_id: &str,
+    model: &str,
+) -> ChildOutcome {
+    use liberado_session::{DomainHint, GoalSpec, TerminalKind};
+
+    let label = sanitize_label(&task.label);
+    let branch = format!("fanout/{label}-{index}");
+    let wt_name = format!("fanout-{label}-{index}");
+
+    let wt_path = match add_worktree_on_branch(parent_root, worktrees_base, &wt_name, &branch).await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            return ChildOutcome {
+                label: task.label.clone(),
+                branch: branch.clone(),
+                tip_sha: None,
+                outcome: Outcome::Failed,
+                summary: format!("worktree create failed: {e}"),
+                files_changed: vec![],
+                session_id: None,
+                error: Some(e.to_string()),
+            };
+        }
+    };
+
+    let goal = GoalSpec {
+        id: None,
+        description: task.description.clone(),
+        success_criteria: task.success_criteria.clone(),
+        domain: DomainHint::Coding,
+        max_turns: 12,
+        max_idle_secs: None,
+        origin: None,
+        profile: None,
+        payload: json!({
+            "workspace_root": wt_path.to_string_lossy(),
+            "force_host_local": true,
+            "fanout_child": true,
+            "fanout_branch": branch,
+            "parent_session_id": parent_session_id,
+            "model": model,
+            "intake": { "enabled": false },
+        }),
+    };
+
+    info!(
+        label = %task.label,
+        branch = %branch,
+        worktree = %wt_path.display(),
+        "coding fan-out (hub): starting child goal session"
+    );
+
+    let session_id = match hub.start_background(goal, grant).await {
+        Ok(id) => id,
+        Err(e) => {
+            let _ = remove_worktree(parent_root, &wt_path).await;
+            return ChildOutcome {
+                label: task.label.clone(),
+                branch: branch.clone(),
+                tip_sha: None,
+                outcome: Outcome::Failed,
+                summary: format!("hub start_background failed: {e}"),
+                files_changed: vec![],
+                session_id: None,
+                error: Some(e),
+            };
+        }
+    };
+
+    let snap = match hub.await_terminal(&session_id).await {
+        Ok(s) => s,
+        Err(e) => {
+            let tip = branch_tip(parent_root, &branch).await.ok();
+            let _ = remove_worktree(parent_root, &wt_path).await;
+            return ChildOutcome {
+                label: task.label.clone(),
+                branch,
+                tip_sha: tip,
+                outcome: Outcome::Failed,
+                summary: format!("await_terminal failed: {e}"),
+                files_changed: vec![],
+                session_id: Some(session_id),
+                error: Some(e),
+            };
+        }
+    };
+
+    let tip = branch_tip(parent_root, &branch).await.ok();
+    let _ = remove_worktree(parent_root, &wt_path).await;
+
+    let (outcome, summary, files) = match snap.session.result {
+        Some(r) => {
+            let outcome = match r.terminal {
+                TerminalKind::Succeeded => Outcome::Succeeded,
+                _ => Outcome::Failed,
+            };
+            (outcome, r.summary, r.artifacts)
+        }
+        None => (
+            Outcome::Failed,
+            format!("child session {session_id} finished with no result"),
+            vec![],
+        ),
+    };
+
+    ChildOutcome {
+        label: task.label.clone(),
+        branch,
+        tip_sha: tip,
+        outcome,
+        summary,
+        files_changed: files,
+        session_id: Some(session_id),
+        error: None,
     }
 }
 
@@ -661,6 +888,145 @@ mod tests {
         assert!(root.path().join("src/api.rs").exists());
         assert!(root.path().join("src/cli.rs").exists());
         let _ = wt;
+        unsafe {
+            std::env::remove_var("LIBERADO_DATA_DIR");
+        }
+    }
+
+    /// Hub-spawned children: each is a real goal session on a test pack.
+    #[tokio::test]
+    async fn fanout_via_hub_spawns_sessions_and_merges() {
+        use async_trait::async_trait;
+        use liberado_session::{
+            CODING_DOMAIN, DomainPackRunner, GoalResult, GoalSessionHub, GoalSessionStore,
+            GoalSpec, InputChannel, PackContext, PackError, SessionEvent, SessionGrant,
+            TerminalKind,
+        };
+        use tokio::sync::mpsc::Sender;
+
+        struct HubChildPack;
+        #[async_trait]
+        impl DomainPackRunner for HubChildPack {
+            fn domain_id(&self) -> &str {
+                CODING_DOMAIN
+            }
+            async fn run(
+                &self,
+                _session_id: &str,
+                goal: &GoalSpec,
+                _ctx: &PackContext<'_>,
+                _events: Sender<SessionEvent>,
+                _inputs: InputChannel,
+                _cancel: tokio::sync::watch::Receiver<bool>,
+            ) -> Result<GoalResult, PackError> {
+                let root = goal
+                    .payload
+                    .get("workspace_root")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| PackError::Setup("no workspace_root".into()))?;
+                let name = if goal.description.contains("api") {
+                    "src/api.rs"
+                } else {
+                    "src/cli.rs"
+                };
+                let path = PathBuf::from(root).join(name);
+                if let Some(p) = path.parent() {
+                    std::fs::create_dir_all(p).unwrap();
+                }
+                std::fs::write(&path, format!("{name}\n")).unwrap();
+                let _ = std::process::Command::new("git")
+                    .args(["config", "user.email", "test@liberado.local"])
+                    .current_dir(root)
+                    .status();
+                let _ = std::process::Command::new("git")
+                    .args(["config", "user.name", "test"])
+                    .current_dir(root)
+                    .status();
+                assert!(
+                    std::process::Command::new("git")
+                        .args(["add", "-A"])
+                        .current_dir(root)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+                assert!(
+                    std::process::Command::new("git")
+                        .args(["commit", "-m", "child", "--quiet"])
+                        .current_dir(root)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+                Ok(GoalResult {
+                    terminal: TerminalKind::Succeeded,
+                    summary: format!("wrote {name}"),
+                    artifacts: vec![name.into()],
+                    diagnostics: json!({}),
+                })
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        init_repo(root.path());
+        unsafe {
+            std::env::set_var("LIBERADO_DATA_DIR", root.path());
+        }
+
+        let store_dir = root.path().join("sessions");
+        std::fs::create_dir_all(&store_dir).unwrap();
+        let store = GoalSessionStore::open(&store_dir).await;
+        let mut hub = GoalSessionHub::new(store);
+        hub.register_pack(Arc::new(HubChildPack));
+        let hub = Arc::new(hub);
+
+        let grant = SessionGrant {
+            capabilities: liberado_common::CapabilitySet::from_iter([
+                liberado_common::Capability::AskHuman,
+            ]),
+            ..Default::default()
+        };
+        // Child grant must strip AskHuman
+        let child = child_session_grant(&grant);
+        assert!(!child.grants_ask_human());
+
+        let merger: Arc<dyn Provider> = Arc::new(MockProvider::with_script(
+            "merge",
+            [CompletionResponse::text("unused")],
+        ));
+
+        let report = run_coding_fanout_via_hub(
+            hub,
+            grant,
+            "parent-test",
+            merger,
+            root.path(),
+            vec![
+                CodingSubtask {
+                    label: "api".into(),
+                    description: "add api".into(),
+                    success_criteria: vec![],
+                },
+                CodingSubtask {
+                    label: "cli".into(),
+                    description: "add cli".into(),
+                    success_criteria: vec![],
+                },
+            ],
+            3,
+            "mock",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.overall, Outcome::Succeeded, "{:?}", report);
+        assert!(
+            report.children.iter().all(|c| c.session_id.is_some()),
+            "hub children must record session ids: {:?}",
+            report.children
+        );
+        assert!(root.path().join("src/api.rs").exists());
+        assert!(root.path().join("src/cli.rs").exists());
         unsafe {
             std::env::remove_var("LIBERADO_DATA_DIR");
         }
