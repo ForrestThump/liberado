@@ -321,6 +321,35 @@ pub fn path_for_cli(path: &Path) -> String {
     strip_extended_path_prefix(path).to_string_lossy().into_owned()
 }
 
+/// Canonical git binary name (shared constant so crates don't each spell "git").
+pub const GIT: &str = "git";
+
+/// Run git under `current_dir`, return trimmed stdout.
+///
+/// Errors map to [`SandboxError::Spawn`] so callers can keep their own error wrapping.
+pub async fn run_git(current_dir: &Path, args: &[&str]) -> Result<String, SandboxError> {
+    let dir = path_for_cli(current_dir);
+    let output = Command::new(GIT)
+        .args(args)
+        .current_dir(&dir)
+        .output()
+        .await
+        .map_err(|e| SandboxError::Spawn(format!("git {args:?}: {e}")))?;
+    if !output.status.success() {
+        return Err(SandboxError::Spawn(format!(
+            "git {args:?} exited {:?}: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Like [`run_git`] but failures are logged and swallowed (best-effort operations).
+pub async fn run_git_best_effort(current_dir: &Path, args: &[&str]) {
+    let _ = run_git(current_dir, args).await;
+}
+
 #[async_trait]
 impl CommandRunner for HostWorkspace {
     async fn run_command(&self, request: CommandRequest) -> Result<CommandOutput, SandboxError> {

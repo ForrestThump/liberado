@@ -203,18 +203,17 @@ impl Verdict {
 }
 
 fn signature_for(findings: &[Finding], log: Option<&str>) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
     for f in findings {
-        f.check_id.hash(&mut h);
-        format!("{:?}", f.kind).hash(&mut h);
-        f.message.hash(&mut h);
+        h.update(f.check_id.as_bytes());
+        h.update(format!("{:?}", f.kind).as_bytes());
+        h.update(f.message.as_bytes());
     }
     if let Some(log) = log {
-        log.chars().take(200).collect::<String>().hash(&mut h);
+        h.update(log.chars().take(200).collect::<String>().as_bytes());
     }
-    format!("{:x}", h.finish())
+    format!("{:x}", h.finalize())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

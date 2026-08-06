@@ -305,15 +305,14 @@ fn truncate_log(s: &str) -> String {
 }
 
 fn signature_pipeline(results: &[NamedVerdict]) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
     for r in results {
-        r.id.hash(&mut h);
-        r.verdict.signature.hash(&mut h);
-        r.verdict.summary.hash(&mut h);
+        h.update(r.id.as_bytes());
+        h.update(r.verdict.signature.as_deref().unwrap_or("").as_bytes());
+        h.update(r.verdict.summary.as_bytes());
     }
-    format!("{:x}", h.finish())
+    format!("{:x}", h.finalize())
 }
 
 #[cfg(test)]

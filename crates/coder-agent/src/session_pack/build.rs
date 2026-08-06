@@ -30,10 +30,6 @@ use super::policies::WorkspacePolicies;
 /// Everything else (`Setup`, `Sandbox`, `Provider`, `Tool`, `Backend`) is a broken *environment*.
 /// No answer you could type fixes a dead sandbox or an unreachable provider, so those still fail
 /// fast: paging a human for them would be noise, and the whole value of the ask is that it is rare.
-fn is_stuck(e: &liberado_coder_core::CoderError) -> bool {
-    use liberado_coder_core::CoderError;
-    matches!(e, CoderError::NoChanges | CoderError::Validation(_))
-}
 
 /// Whether `dir` is inside a git working tree — **not** merely whether it is a repo *root*.
 ///
@@ -596,7 +592,7 @@ impl CodingSessionPack {
                         .await;
                     (ok, r.summary, r.files_changed, r.diagnostics)
                 }
-                Err(e) if is_stuck(&e) => {
+                Err(e) if crate::is_stuck_error(&e) => {
                     let msg = e.to_string();
                     let _ = events
                         .send(SessionEvent::new(
