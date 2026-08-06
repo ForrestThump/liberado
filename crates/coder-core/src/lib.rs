@@ -681,4 +681,35 @@ mod tests {
         assert_eq!(report.artifacts, result.files_changed);
         assert!(report.summary.contains("copy button"));
     }
+
+    #[test]
+    fn gate_config_default_is_disabled() {
+        let gate = CoderGateConfig::default();
+        assert!(!gate.enabled);
+        assert_eq!(gate.fresh_reviewers, 2);
+        assert_eq!(gate.strategist_after, 3);
+        assert!(gate.gatekeeper.is_none());
+        assert!(gate.fresh.is_none());
+        assert!(gate.strategist.is_none());
+    }
+
+    #[test]
+    fn plan_mode_coder_prompt_is_non_empty() {
+        assert!(!PLAN_MODE_CODER_PROMPT.is_empty());
+        assert!(PLAN_MODE_CODER_PROMPT.contains(".liberado/plan.md"));
+    }
+
+    #[test]
+    fn explore_mode_coder_prompt_is_non_empty() {
+        assert!(!EXPLORE_MODE_CODER_PROMPT.is_empty());
+        assert!(EXPLORE_MODE_CODER_PROMPT.contains("read-only"));
+    }
+
+    #[test]
+    fn explore_tool_names_are_write_free() {
+        assert!(EXPLORE_TOOL_NAMES.contains(&"list_files"));
+        assert!(EXPLORE_TOOL_NAMES.contains(&"read_file"));
+        assert!(!EXPLORE_TOOL_NAMES.contains(&"write_file"));
+        assert!(!EXPLORE_TOOL_NAMES.contains(&"edit_file"));
+    }
 }

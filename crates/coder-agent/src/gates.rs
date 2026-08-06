@@ -426,3 +426,38 @@ mod name_status_line_tests {
         assert!(parse_name_status_line("M\t").is_none());
     }
 }
+
+#[cfg(test)]
+mod command_request_tests {
+    use super::command_request;
+    use liberado_coder_core::CoderCommandConfig;
+
+    #[test]
+    fn builds_from_command_config() {
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("RUST_LOG".into(), "debug".into());
+        let config = CoderCommandConfig {
+            program: "cargo".into(),
+            args: vec!["test".into(), "--lib".into()],
+            env,
+            timeout_secs: Some(300),
+            output_max_bytes: Some(65536),
+        };
+        let req = command_request(&config);
+        assert_eq!(req.program, "cargo");
+        assert_eq!(req.args, vec!["test", "--lib"]);
+        assert_eq!(req.env.get("RUST_LOG").unwrap(), "debug");
+        assert_eq!(req.timeout_secs, Some(300));
+        assert_eq!(req.output_max_bytes, Some(65536));
+    }
+
+    #[test]
+    fn command_request_without_timeout_or_cap() {
+        let config = CoderCommandConfig::new("echo");
+        let req = command_request(&config);
+        assert_eq!(req.program, "echo");
+        assert!(req.args.is_empty());
+        assert!(req.timeout_secs.is_none());
+        assert!(req.output_max_bytes.is_none());
+    }
+}

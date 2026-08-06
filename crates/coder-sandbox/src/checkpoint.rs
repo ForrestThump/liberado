@@ -366,4 +366,62 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn open_or_init_rejects_path_traversal() {
+        assert!(ShadowGit::open_or_init(Path::new("."), "a/b").is_err());
+        assert!(ShadowGit::open_or_init(Path::new("."), "a\\b").is_err());
+        assert!(ShadowGit::open_or_init(Path::new("."), "..").is_err());
+        assert!(ShadowGit::open_or_init(Path::new("."), "").is_err());
+        assert!(ShadowGit::open_or_init(Path::new("."), "a../b").is_err());
+    }
+
+    #[test]
+    fn git_dir_and_work_tree_accessors() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("lib-ckpt-getters-{}", unique()));
+        let root = base.join("ws");
+        let data = base.join("data");
+        std::fs::create_dir_all(&root).unwrap();
+        unsafe {
+            std::env::set_var("LIBERADO_DATA_DIR", &data);
+        }
+        let sg = ShadowGit::open_or_init(&root, "g1").unwrap();
+        assert!(sg.git_dir().to_string_lossy().contains("checkpoints"));
+        assert!(sg.git_dir().to_string_lossy().contains("g1"));
+        assert!(sg.work_tree().ends_with("ws"));
+        unsafe {
+            std::env::remove_var("LIBERADO_DATA_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn list_clamps_limit_to_valid_range() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("lib-ckpt-list-{}", unique()));
+        let root = base.join("ws");
+        let data = base.join("data");
+        std::fs::create_dir_all(&root).unwrap();
+        unsafe {
+            std::env::set_var("LIBERADO_DATA_DIR", &data);
+        }
+        let sg = ShadowGit::open_or_init(&root, "sess-list").unwrap();
+        // Create a few snapshots.
+        for i in 1..=3 {
+            std::fs::write(root.join("f.txt"), format!("v{i}\n")).unwrap();
+            sg.snapshot(&format!("v{i}")).await.unwrap();
+        }
+        // list(0) should clamp to 1.
+        let items = sg.list(0).await.unwrap();
+        assert!(!items.is_empty(), "list(0) should clamp to at least 1");
+        // list(500) should clamp to 100 max but return only available.
+        let items = sg.list(500).await.unwrap();
+        assert!(!items.is_empty());
+        assert!(items.len() <= 100);
+        unsafe {
+            std::env::remove_var("LIBERADO_DATA_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
