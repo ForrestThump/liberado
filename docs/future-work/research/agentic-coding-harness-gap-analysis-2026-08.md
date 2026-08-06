@@ -78,9 +78,21 @@ Analysis inventory (`gh pr list --state open`, 2026-08-05). **Every open PR belo
 | **#64** | `fix(main-agent): verify face-agent prompt ordering for cache reuse` | Face-agent static-before-varying prompt order locked by test (cache hit rate / token economics) |
 | **#2** *(draft, auto-generated)* | WebUI chat HTML edit (subagent draft) | Treated as present WebUI surface work; **draft** — capability thin; do not treat as full goal WebUI |
 
-**Note:** PRs #61–#64 (and draft #2) are **open and un-merged** at analysis time. They are counted as landed per the baseline rule above, which assumes near-term merge of the current Band C/D work. The aggregate parity assessment is therefore forward-looking on these items. The text marks open-PR capability with the PR number so a reader can verify merge status independently.
+**Note:** PRs #61–#64 (and draft #2) were **open and un-merged** at analysis time. They are counted as landed per the baseline rule above, which assumes near-term merge of the current Band C/D work. The aggregate parity assessment is therefore forward-looking on these items. The text marks open-PR capability with the PR number so a reader can verify merge status independently.
 
 **Main tip at branch cut:** `a902520` — *Merge PR #60 — C7: worktree isolation for all coding sessions*.
+
+### Since the analysis was cut (added on merge, 2026-08-05)
+
+The forward-looking bet paid off for the inventory above — **#61, #62, #63 and #64 all merged**, each after review fixes. Three PRs opened *after* the `gh pr list` snapshot, and one of them moves a row this document treats as a gap:
+
+| PR | Effect on this analysis |
+|---|---|
+| **#66** | Project-root authorization for coding goals (S3/G4) — Band A's "project auth" line. |
+| **#67** | **Plan mode via `PathPolicy` / `CommandPolicy` presets.** §1 lists "Plan mode as UX/FSM" as a gap and Band A calls for a "plan mode profile"; treat that row as in-flight rather than absent. Note the shape differs from the FOSS references — a policy preset, not a separate FSM, which is the cheaper answer if it holds. |
+| **#68** | Explore mode as a read-only `PathPolicy`/catalog preset — same mechanism, no equivalent row here. |
+
+Nothing else in the analysis is affected: the parallelism, series-loop, checkpoint and repo-intelligence gaps are all untouched by those three.
 
 ### Doc drift warning
 
