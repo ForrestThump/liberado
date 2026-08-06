@@ -419,4 +419,131 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[tokio::test]
+    async fn read_conflict_sides_returns_ours_and_theirs() {
+        let root = std::env::temp_dir().join(format!("lib-merge-sides-{}", unique()));
+        let wt_base = root.join("wts");
+        init_repo(&root);
+
+        // Branch edits README.
+        let wt = add_worktree_on_branch(&root, &wt_base, "child-sides", "fanout/sides")
+            .await
+            .unwrap();
+        std::fs::write(wt.join("README.md"), "branch-content\n").unwrap();
+        git(&wt, &["add", "README.md"]);
+        git(&wt, &["commit", "-m", "branch", "--quiet"]);
+        remove_worktree(&root, &wt).await.unwrap();
+
+        // Parent also edits README (different content).
+        std::fs::write(root.join("README.md"), "parent-content\n").unwrap();
+        git(&root, &["add", "README.md"]);
+        git(&root, &["commit", "-m", "parent", "--quiet"]);
+
+        match merge_branch(&root, "fanout/sides").await.unwrap() {
+            MergeAttempt::Conflicts { paths } => {
+                assert!(paths.iter().any(|p| p.contains("README")));
+                let sides = read_conflict_sides(&root, "README.md").await.unwrap();
+                assert!(sides.ours.contains("parent-content"), "ours: {}", sides.ours);
+                assert!(sides.theirs.contains("branch-content"), "theirs: {}", sides.theirs);
+            }
+            other => {
+                // Abort and still check (merge might be clean in extremely rare cases).
+                let _ = std::process::Command::new("git")
+                    .args(["merge", "--abort"])
+                    .current_dir(&root)
+                    .status();
+                panic!("expected conflicts, got {other:?}");
+            }
+        }
+        let _ = std::process::Command::new("git")
+            .args(["merge", "--abort"])
+            .current_dir(&root)
+            .status();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn branch_tip_wraps_rev_parse() {
+        let root = std::env::temp_dir().join(format!("lib-merge-tip-{}", unique()));
+        init_repo(&root);
+        let tip = branch_tip(&root, "HEAD").await;
+        assert!(tip.is_ok(), "{tip:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[test]
+    fn safe_name_rejects_empty() {
+        assert!(validate_safe_name("", "name").is_err());
+    }
+
+    #[test]
+    fn safe_name_rejects_dot_dot() {
+        assert!(validate_safe_name("..", "name").is_err());
+        assert!(validate_safe_name("a../b", "name").is_err());
+    }
+
+    #[test]
+    fn safe_name_rejects_slash() {
+        assert!(validate_safe_name("a/b", "name").is_err());
+    }
+
+    #[test]
+    fn safe_name_rejects_backslash() {
+        assert!(validate_safe_name("a\\b", "name").is_err());
+    }
+
+    #[test]
+    fn safe_name_rejects_dash_prefix() {
+        assert!(validate_safe_name("-bad", "name").is_err());
+    }
+
+    #[test]
+    fn safe_name_accepts_valid() {
+        assert!(validate_safe_name("child-1", "name").is_ok());
+        assert!(validate_safe_name("task_api", "name").is_ok());
+    }
+
+    #[test]
+    fn branch_name_rejects_empty() {
+        assert!(validate_branch_name("").is_err());
+    }
+
+    #[test]
+    fn branch_name_rejects_dot_dot() {
+        assert!(validate_branch_name("..").is_err());
+    }
+
+    #[test]
+    fn branch_name_rejects_backslash() {
+        assert!(validate_branch_name("a\\b").is_err());
+    }
+
+    #[test]
+    fn branch_name_rejects_dash_prefix() {
+        assert!(validate_branch_name("-evil").is_err());
+    }
+
+    #[test]
+    fn branch_name_rejects_space() {
+        assert!(validate_branch_name("bad name").is_err());
+    }
+
+    #[test]
+    fn branch_name_rejects_empty_segment() {
+        assert!(validate_branch_name("fanout//child").is_err());
+        assert!(validate_branch_name("/child").is_err());
+        assert!(validate_branch_name("fanout/").is_err());
+    }
+
+    #[test]
+    fn branch_name_accepts_slash_delimited_paths() {
+        assert!(validate_branch_name("fanout/child").is_ok());
+        assert!(validate_branch_name("fanout/child/api").is_ok());
+    }
 }

@@ -411,6 +411,78 @@ mod tests {
         assert!(resolve_ship_spec(None, None).is_none());
     }
 
+    #[test]
+    fn cap_log_exact_boundary() {
+        assert_eq!(cap_log("hello", 5), "hello");
+        assert_eq!(cap_log("hello", 50), "hello");
+    }
+
+    #[test]
+    fn cap_log_truncation_keeps_last_max_bytes() {
+        let s = "abcdefghijklmnop";
+        let capped = cap_log(s, 8);
+        assert!(capped.starts_with('…'));
+        assert_eq!(capped.len(), 11); // 3-byte … + 8 content bytes
+    }
+
+    #[test]
+    fn cap_log_empty_string() {
+        assert_eq!(cap_log("", 8), "");
+    }
+
+    #[test]
+    fn cap_log_zero_max_returns_ellipsis_only() {
+        assert_eq!(cap_log("anything", 0), "…");
+    }
+
+    #[test]
+    fn cap_log_multibyte_utf8_truncation_safe() {
+        // 字 is 3 bytes; truncation near a multi-byte boundary must not panic.
+        let s = "ab字defg";
+        let capped = cap_log(s, 5);
+        assert!(capped.starts_with('…'));
+        // 3-byte … + up to 5 bytes content, may be shorter due to char boundary.
+        assert!(capped.len() >= 4 && capped.len() <= 8);
+    }
+
+    #[test]
+    fn resolve_ship_spec_empty_configured_for_non_liberado_is_none() {
+        assert!(resolve_ship_spec(Some("notes"), Some(vec![])).is_none());
+    }
+
+    #[test]
+    fn resolve_ship_spec_empty_configured_for_liberado_falls_back() {
+        let spec = resolve_ship_spec(Some("liberado"), Some(vec![])).unwrap();
+        assert!(!spec.steps.is_empty());
+        assert_eq!(spec.id, "ship");
+    }
+
+    #[test]
+    fn preflight_step_builder() {
+        let s = PreflightStep::new("lint", "cargo clippy").with_timeout_secs(120);
+        assert_eq!(s.name, "lint");
+        assert_eq!(s.run, "cargo clippy");
+        assert_eq!(s.timeout_secs, Some(120));
+        assert!(s.required);
+    }
+
+    #[test]
+    fn preflight_spec_is_empty() {
+        assert!(PreflightSpec::new("x", vec![]).is_empty());
+        assert!(!PreflightSpec::new("x", vec![PreflightStep::new("y", "z")]).is_empty());
+    }
+
+    #[test]
+    fn liberado_ship_preflight_steps_structure() {
+        let steps = liberado_ship_preflight_steps();
+        let names: Vec<_> = steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["fmt", "clippy", "test", "deny"]);
+        for s in &steps {
+            assert!(s.required, "{} must be required", s.name);
+            assert!(!s.run.is_empty(), "{} must have a run command", s.name);
+        }
+    }
+
     #[tokio::test]
     async fn optional_failure_does_not_fail_profile() {
         let dir = tempfile::tempdir().unwrap();

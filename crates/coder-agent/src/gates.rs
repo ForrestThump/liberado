@@ -362,3 +362,67 @@ mod status_change_tests {
         assert_eq!(parse_status_change(""), "modified");
     }
 }
+
+#[cfg(test)]
+mod name_status_line_tests {
+    use super::parse_name_status_line;
+
+    #[test]
+    fn parses_added_file() {
+        let (path, change) = parse_name_status_line("A\tsrc/new.rs").unwrap();
+        assert_eq!(path, "src/new.rs");
+        assert_eq!(change, "added");
+    }
+
+    #[test]
+    fn parses_deleted_file() {
+        let (path, change) = parse_name_status_line("D\told.rs").unwrap();
+        assert_eq!(path, "old.rs");
+        assert_eq!(change, "deleted");
+    }
+
+    #[test]
+    fn parses_modified_file() {
+        let (path, change) = parse_name_status_line("M\tlib.rs").unwrap();
+        assert_eq!(path, "lib.rs");
+        assert_eq!(change, "modified");
+    }
+
+    #[test]
+    fn parses_rename_takes_new_path() {
+        let (path, change) = parse_name_status_line("R100\told.rs\tnew.rs").unwrap();
+        assert_eq!(path, "new.rs");
+        assert_eq!(change, "added");
+    }
+
+    #[test]
+    fn parses_copy_takes_destination() {
+        let (path, change) = parse_name_status_line("C80\torig.rs\tcopy.rs").unwrap();
+        assert_eq!(path, "copy.rs");
+        assert_eq!(change, "added");
+    }
+
+    #[test]
+    fn empty_line_is_none() {
+        assert!(parse_name_status_line("").is_none());
+        assert!(parse_name_status_line("  ").is_none());
+    }
+
+    #[test]
+    fn unknown_code_defaults_to_modified() {
+        let (path, change) = parse_name_status_line("XY\tweird.rs").unwrap();
+        assert_eq!(path, "weird.rs");
+        assert_eq!(change, "modified");
+    }
+
+    #[test]
+    fn malformed_line_without_tab_is_none() {
+        assert!(parse_name_status_line("M").is_none());
+    }
+
+    #[test]
+    fn trailing_empty_segment_is_none() {
+        // code + tab + empty path
+        assert!(parse_name_status_line("M\t").is_none());
+    }
+}

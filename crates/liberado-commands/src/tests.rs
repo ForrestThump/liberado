@@ -673,6 +673,30 @@ mod tests {
     fn format_uptime_zero() {
         assert_eq!(crate::format::format_uptime(0), "0m 0s");
     }
+
+    #[test]
+    fn parse_profile_command() {
+        use crate::dispatch::parse;
+        assert_eq!(parse("/profile"), Some(SlashCommand::Profile));
+    }
+
+    #[test]
+    fn dispatch_profile_opens_browser() {
+        let mut ctx = MockContext::new();
+        let results = crate::dispatch::dispatch(&SlashCommand::Profile, &mut ctx);
+        assert_eq!(
+            results,
+            vec![CommandResult::ProfileInfoShown, CommandResult::OpenProfileBrowser]
+        );
+        assert!(ctx.messages[0].contains("profile"));
+    }
+
+    #[test]
+    fn display_profile_round_trips() {
+        let parsed = crate::dispatch::parse("/profile");
+        assert_eq!(parsed, Some(SlashCommand::Profile));
+        assert_eq!(parsed.unwrap().to_string(), "/profile");
+    }
 }
 
 // ── /goal parsing (S2/G2) ───────────────────────────────────────────────────
@@ -681,7 +705,7 @@ mod tests {
 mod goal_command_tests {
     use crate::commands::{GoalCmd, SlashCommand};
     use crate::dispatch::parse;
-
+    use crate::result::CommandResult;
     fn goal(input: &str) -> GoalCmd {
         match parse(input) {
             Some(SlashCommand::Goal(g)) => g,

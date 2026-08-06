@@ -253,4 +253,66 @@ mod tests {
         assert!(prompt.contains("read-only") || prompt.contains("explorer"));
         assert!(!prompt.contains("ignore me"));
     }
+
+    #[test]
+    fn coder_prompt_normal_mode_uses_payload_override() {
+        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "coder_prompt": "be concise" }));
+        let prompt = p.coder_prompt(&json!({ "coder_prompt": "be concise" }), "default");
+        assert_eq!(prompt, "be concise");
+    }
+
+    #[test]
+    fn coder_prompt_normal_mode_falls_back_to_default() {
+        let p = WorkspacePolicies::resolve(&json!({}), &json!({}));
+        let prompt = p.coder_prompt(&json!({}), "default prompt");
+        assert_eq!(prompt, "default prompt");
+    }
+
+    #[test]
+    fn parse_path_policy_from_payload() {
+        let overrides = json!({});
+        let payload = json!({
+            "path_policy": {
+                "allow_write_globs": ["src/**"],
+                "deny_globs": ["secret/**"],
+                "read_max_bytes": 4096,
+                "search_max_results": 50
+            }
+        });
+        let p = WorkspacePolicies::resolve(&overrides, &payload);
+        assert_eq!(p.path_policy.allow_write_globs, vec!["src/**"]);
+        assert_eq!(p.path_policy.deny_globs, vec!["secret/**"]);
+        assert_eq!(p.path_policy.read_max_bytes, 4096);
+        assert_eq!(p.path_policy.search_max_results, 50);
+        assert!(!p.plan_mode);
+        assert!(!p.explore_mode);
+    }
+
+    #[test]
+    fn parse_command_policy_from_overrides() {
+        let overrides = json!({
+            "command_policy": {
+                "allow": ["cargo"],
+                "deny": ["rm"],
+                "timeout_secs": 120,
+                "output_max_bytes": 65536
+            }
+        });
+        let payload = json!({});
+        let p = WorkspacePolicies::resolve(&overrides, &payload);
+        assert_eq!(p.command_policy.allow, vec!["cargo"]);
+        assert_eq!(p.command_policy.deny, vec!["rm"]);
+    }
+
+    #[test]
+    fn payload_policy_wins_over_override_policy() {
+        let overrides = json!({
+            "path_policy": { "allow_write_globs": ["overrides/**"], "read_max_bytes": 4096, "search_max_results": 50 }
+        });
+        let payload = json!({
+            "path_policy": { "allow_write_globs": ["payload/**"], "read_max_bytes": 8192, "search_max_results": 100 }
+        });
+        let p = WorkspacePolicies::resolve(&overrides, &payload);
+        assert_eq!(p.path_policy.allow_write_globs, vec!["payload/**"]);
+    }
 }

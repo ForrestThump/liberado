@@ -822,6 +822,42 @@ mod tests {
         assert_eq!(t[1].description, "do cli");
     }
 
+    #[test]
+    fn sanitize_label_preserves_alphanumeric_and_dash() {
+        assert_eq!(sanitize_label("hello-world"), "hello-world");
+        assert_eq!(sanitize_label("api_v2"), "api_v2");
+        assert_eq!(sanitize_label("task-42"), "task-42");
+    }
+
+    #[test]
+    fn sanitize_label_replaces_spaces_and_special_chars() {
+        assert_eq!(sanitize_label("hello world"), "hello-world");
+        assert_eq!(sanitize_label("fix: bug"), "fix--bug");
+        assert_eq!(sanitize_label("a@b#c"), "a-b-c");
+    }
+
+    #[test]
+    fn sanitize_label_trims_leading_trailing_dashes() {
+        assert_eq!(sanitize_label("-hello-"), "hello");
+        assert_eq!(sanitize_label("--start"), "start");
+        assert_eq!(sanitize_label("end--"), "end");
+    }
+
+    #[test]
+    fn sanitize_label_empty_returns_task() {
+        assert_eq!(sanitize_label(""), "task");
+        assert_eq!(sanitize_label("---"), "task");
+        assert_eq!(sanitize_label("!!!%#"), "task");
+    }
+
+    #[test]
+    fn sanitize_label_truncates_to_40_chars() {
+        let long = "a".repeat(100);
+        let out = sanitize_label(&long);
+        assert_eq!(out.len(), 40);
+        assert!(out.chars().all(|c| c == 'a'));
+    }
+
     #[tokio::test]
     async fn fanout_two_children_clean_merge() {
         let root = tempfile::tempdir().unwrap();
