@@ -503,6 +503,43 @@ pub struct ProjectConfig {
     pub write_class: liberado_common::WriteClass,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Ship / fast / deep preflight profiles (language-agnostic ordered commands).
+    /// See `docs/future-work/self-pr-quality-roadmap.md` § Generic preflight gate.
+    #[serde(default)]
+    pub preflight: ProjectPreflightConfig,
+}
+
+/// Project-level preflight profiles (`ship` is the merge bar).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ProjectPreflightConfig {
+    /// CI-equivalent (or stricter) steps before ready / PR.
+    #[serde(default)]
+    pub ship: Option<PreflightProfileConfig>,
+    /// Optional short profile (docs-only / explicit opt-in).
+    #[serde(default)]
+    pub fast: Option<PreflightProfileConfig>,
+}
+
+/// One named profile: either a single script or an ordered step list.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PreflightProfileConfig {
+    /// If set, run as one step (preferred shared entrypoint with CI).
+    #[serde(default)]
+    pub script: Option<String>,
+    #[serde(default)]
+    pub steps: Vec<PreflightStepConfig>,
+}
+
+/// One preflight command from topology.toml.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PreflightStepConfig {
+    pub name: String,
+    /// Shell command line.
+    pub run: String,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+    #[serde(default = "default_true")]
+    pub required: bool,
 }
 
 fn default_project_write_class() -> liberado_common::WriteClass {

@@ -246,15 +246,51 @@ impl CodingSessionPack {
                     .await;
             }
 
+            let mut terminal = if report.overall == liberado_common::Outcome::Succeeded {
+                TerminalKind::Succeeded
+            } else {
+                TerminalKind::Failed
+            };
+            let mut summary = report.summary.clone();
+            let mut diagnostics = serde_json::json!({ "fanout": report });
+            if terminal == TerminalKind::Succeeded
+                && super::preflight_hook::ship_preflight_required(goal)
+            {
+                if let Some(spec) = super::preflight_hook::ship_spec_from_goal(goal) {
+                    match super::preflight_hook::run_ship_preflight(
+                        session_id,
+                        &workspace,
+                        &spec,
+                        &events,
+                    )
+                    .await
+                    {
+                        Ok(pf) => {
+                            diagnostics = serde_json::json!({
+                                "fanout": report,
+                                "preflight": pf,
+                            });
+                            if !pf.ok {
+                                terminal = TerminalKind::Failed;
+                                summary = pf.summary;
+                            }
+                        }
+                        Err(e) => {
+                            return Ok(GoalResult {
+                                terminal: TerminalKind::Failed,
+                                summary: format!("ship preflight error: {e}"),
+                                artifacts: files,
+                                diagnostics: serde_json::json!({ "fanout": report, "preflight_error": e }),
+                            });
+                        }
+                    }
+                }
+            }
             return Ok(GoalResult {
-                terminal: if report.overall == liberado_common::Outcome::Succeeded {
-                    TerminalKind::Succeeded
-                } else {
-                    TerminalKind::Failed
-                },
-                summary: report.summary.clone(),
+                terminal,
+                summary,
                 artifacts: files,
-                diagnostics: serde_json::json!({ "fanout": report }),
+                diagnostics,
             });
         }
 
@@ -599,12 +635,55 @@ impl CodingSessionPack {
 
             // Succeeded, or failed with no ask left to spend: this is the outcome.
             if ok || asks_remaining == 0 {
+                let mut terminal = if ok {
+                    TerminalKind::Succeeded
+                } else {
+                    TerminalKind::Failed
+                };
+                let mut summary = summary;
+                let mut diagnostics = diagnostics;
+                // Ship preflight: CI-equivalent project bar before terminal Succeeded.
+                if terminal == TerminalKind::Succeeded
+                    && super::preflight_hook::ship_preflight_required(goal)
+                {
+                    if let Some(spec) = super::preflight_hook::ship_spec_from_goal(goal) {
+                        // Prefer durable session worktree when present (same root as build).
+                        let preflight_root = request.workspace.root.as_str();
+                        let root_path = PathBuf::from(preflight_root);
+                        match super::preflight_hook::run_ship_preflight(
+                            session_id,
+                            &root_path,
+                            &spec,
+                            &events,
+                        )
+                        .await
+                        {
+                            Ok(report) => {
+                                diagnostics = serde_json::json!({
+                                    "build": diagnostics,
+                                    "preflight": report,
+                                });
+                                if !report.ok {
+                                    terminal = TerminalKind::Failed;
+                                    summary = report.summary;
+                                }
+                            }
+                            Err(e) => {
+                                return Ok(GoalResult {
+                                    terminal: TerminalKind::Failed,
+                                    summary: format!("ship preflight error: {e}"),
+                                    artifacts,
+                                    diagnostics: serde_json::json!({
+                                        "build": diagnostics,
+                                        "preflight_error": e,
+                                    }),
+                                });
+                            }
+                        }
+                    }
+                }
                 return Ok(GoalResult {
-                    terminal: if ok {
-                        TerminalKind::Succeeded
-                    } else {
-                        TerminalKind::Failed
-                    },
+                    terminal,
                     summary,
                     artifacts,
                     diagnostics,

@@ -34,6 +34,17 @@ vault_path = "/home/shiloh/vault"
 # name = "liberado"
 # root = "/home/shiloh/Code/life-os"
 # write_class = "agent_writable"
+# # Ship preflight before coding goal Succeeded / ready PR (language-agnostic steps).
+# # When omitted for name "liberado", the coding pack uses built-in CI-equivalent cargo steps.
+# # Prefer a shared script that CI also calls (see scripts/preflight-ship.sh).
+# [projects.preflight.ship]
+# # script = "./scripts/preflight-ship.sh"
+# steps = [
+#   { name = "fmt", run = "cargo fmt --check" },
+#   { name = "clippy", run = "cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings" },
+#   { name = "test", run = "cargo test --workspace" },
+#   { name = "deny", run = "cargo deny check" },
+# ]
 #
 # [[projects]]
 # name = "notes-site"
