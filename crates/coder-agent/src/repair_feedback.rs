@@ -37,7 +37,9 @@ impl FailureClass {
     pub fn repair_hint(self) -> &'static str {
         match self {
             Self::NoChanges => {
-                "Make a real workspace mutation (write_file/edit_file/apply_patch) that leaves a git diff."
+                "Make a real workspace mutation (write_file/edit_file/apply_patch), or commit \
+                 changes with git_commit if you already edited — uncommitted *or* commits since \
+                 attempt start both count as progress."
             }
             Self::MissingPath => {
                 "Create the missing paths listed in findings before claiming success."

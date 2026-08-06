@@ -4,7 +4,8 @@
 
 # Self-host coding dogfood — 2026-08-05 (C2)
 
-**Status:** Run completed with a real PR. **Blocker #1 fixed on `develop`.** Findings #2–#6 still open.
+**Status:** Run completed with a real PR. Findings **#1–#5 addressed on `fix/dogfood-findings-c2`**
+(re-dogfood required to close). #6 (role-model tuning / cost attach) remains quality polish.
 **Session id:** `01KZAJN9NMRR1THMWZM8ZSBV5P`
 **PR produced:** [ForrestThump/liberado#69](https://github.com/ForrestThump/liberado/pull/69)
   (`dogfood/self-host-coding-pr` → `develop`, commit `ae9e163`, author `liberado <liberado@local>`)
@@ -65,7 +66,10 @@ reached the build phase.
 
 ## Findings
 
-### 1. Windows worktree paths + non-unique worktree id — **fixed** (`ed8b910` on `develop`)
+### 1. Windows worktree paths + non-unique worktree id — **fixed**
+
+- Extended-path strip + unique session id: `ed8b910` on `develop`.
+- Residual (worktrees under data dir + plain `workspace_root` on the wire): **`fix/dogfood-findings-c2`**.
 
 **Symptom**
 
@@ -106,7 +110,7 @@ fatal: could not create leading directories of
 
 ---
 
-### 2. Intake structured output fails on DeepSeek — **open**
+### 2. Intake structured output fails on DeepSeek — **fixed (decoder + context)**
 
 **Symptom**
 
@@ -160,7 +164,7 @@ without `AskHuman` already skip intake (pre-S7 path).
 
 ---
 
-### 3. Committed work is graded as "no real workspace changes" — **open (high)**
+### 3. Committed work is graded as "no real workspace changes" — **fixed**
 
 **Symptom**
 
@@ -216,7 +220,7 @@ retry — which is exactly the opposite of C2.
 
 ---
 
-### 4. Tool activity barely reaches the goal event stream — **open**
+### 4. Tool activity barely reaches the goal event stream — **fixed (live mirror)**
 
 **Symptom**
 
@@ -252,7 +256,7 @@ each git tool result, without reading server logs.
 
 ---
 
-### 5. `gh pr create --base develop` when `develop` is local-only — **ops / open**
+### 5. `gh pr create --base develop` when `develop` is local-only — **fixed (preflight + prompt)**
 
 **Symptom**
 
@@ -311,14 +315,14 @@ dogfood exercised them for real.
 
 ## Follow-ups (actionable)
 
-| Priority | Action | Closes |
-|---|---|---|
-| P0 | Fix no-changes gate for committed work (#3) — required for unattended self-host | #3 |
-| P1 | Mirror tool + file events onto session stream (#4) | #4 |
-| P1 | Intake: schema-tolerant decode + pass authorized project into intake context (#2) | #2 |
-| P2 | Worktree base under data dir; strip `\\?\` on injected `workspace_root` wire form (#1 residual) | #1 |
-| P2 | PR helper / prompt: require remote base branch (#5) | #5 |
-| P3 | Role models for intake vs worker; attach cost JSON to next dogfood (#6) | #6 |
+| Priority | Action | Closes | State |
+|---|---|---|---|
+| P0 | Fix no-changes gate for committed work (#3) | #3 | **done** — `resolve_attempt_changes` + baseline SHA |
+| P1 | Mirror tool + file events onto session stream (#4) | #4 | **done** — `LIVE_GATE` tool start/finish |
+| P1 | Intake: schema-tolerant decode + pass authorized project into intake context (#2) | #2 | **done** — flexible prompt + auth context |
+| P2 | Worktree base under data dir; strip `\\?\` on injected `workspace_root` | #1 residual | **done** — `.liberado/coding-worktrees` + server strip |
+| P2 | PR helper / prompt: require remote base branch (#5) | #5 | **done** — `preflight_gh_pr_create` + coder prompt |
+| P3 | Role models for intake vs worker; attach cost JSON to next dogfood (#6) | #6 | open (polish) |
 
 ## Related docs
 
