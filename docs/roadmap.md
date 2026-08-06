@@ -79,25 +79,22 @@ also the one that matters least.
 |---|---|---|
 | **S1** — completion gate | ✅ **landed** | `liberado_session::completion_gate` (gatekeeper veto + strict-majority fresh quorum + fail-closed votes), coding-pack adapter, `critic_verdict` on the wire, strategist on non-convergence. **Default OFF** (`[coder.gate] enabled`) — it costs `1 + fresh_reviewers` model calls per attempt, and stays opt-in until S7 measures it. |
 | **S2** — wire events + goal surface | 🟡 **partial** | Done: `file_changed`, first-class `hub.park()` + `POST /api/goals/{id}/park`, `/goal` commands (`start`/`in`/`status`/`pause`/`resume`/`clear`), TUI wiring for all of them; **live dogfood run 2026-08-05** (self-host → [PR #69](https://github.com/ForrestThump/liberado/pull/69); write-up [`self-host-coding-dogfood-2026-08.md`](future-work/self-host-coding-dogfood-2026-08.md)). **Not done:** dedicated goal-view panes; tool/`file_changed` events still weak on the live session stream (see dogfood finding #4). |
-| **S3–S7** | 🟡 **partial** | **S3** project authorization landed on `develop` (PR #66, not yet on `main`). Still open: checkpoints/rewind, `/loop`, coding subagents, strategist evals |
+| **S3–S7** | 🟡 **partial** | **S3** project auth landed (PR #66). **S4** checkpoints + mid-build resume + rewind landed (PR #73). **S6** fan-out + merge-back landed (PR #72). Still open: `/loop`, strategist evals, gate default-on, ship package / cold-review productization |
 
-Two carried-forward limitations, both S2 leftovers worth knowing before building on this:
+Two carried-forward limitations worth knowing before building on this:
 
 - **Gate votes reach the wire batched at attempt end, not live per vote.** The kernel's
   `GateObserver` supports live emission; `CoderBackend::run` has no `SessionEvent` sender to plumb
   it through. Wiring one is the remaining half of "watch the quorum vote".
-- **No agent can fan out, and that is currently the only thing preventing a workspace race.**
-  `dispatch_parallel` is built but unreachable; `delegate` is synchronous; the executor runs tool
-  calls serially. `WorktreeWorkspace` does not exist yet, so isolation must land before any of those
-  change — [`agentic-loops.md`](spec/architecture/agentic-loops.md) §Concurrency, design rule 11.
 - **Compaction tail copies still exist on disk** (CH3.1 territory) — any *new* reader that walks a
   raw leaf path must skip `Author::is_compaction_tail_copy()`.
 
 | # | What | Why |
 |---|---|---|
 | **CT1** | **Agentic coding TUI** — [`coding-tui-plan.md`](future-work/coding-tui-plan.md) | `/goal` + critic-gated completion + `/loop`, on the existing TUI/hub/coding pack; loosely coupled kernel machinery. S1 done, S2 partial (see above) |
-| **E6-c(b)** | Resume mid-build coding session | Design pass (git suspend point) |
-| — | [`self-host-coding-dogfood-2026-08.md`](future-work/self-host-coding-dogfood-2026-08.md) | **C2 dogfood findings** — P0: no-changes after commit; intake schema; tool stream |
+| **SP1** | **Self-PR quality loop** — [`self-pr-quality-roadmap.md`](future-work/self-pr-quality-roadmap.md) | Ship package → cold review → fix → human residual review. Path to light-oversight self-PRs on liberado |
+| **E6-c(b)** | ~~Resume mid-build coding session~~ | **Landed** as S4 (PR #73: durable worktree + shadow-git checkpoints + park/resume + rewind) |
+| — | [`self-host-coding-dogfood-2026-08.md`](future-work/self-host-coding-dogfood-2026-08.md) | **C2 dogfood findings** — reliability fixes partially landed; continue as grading method for SP1 |
 | — | [`pr-dispatch-vtcode-no-write-finding.md`](future-work/pr-dispatch-vtcode-no-write-finding.md) | Open bug |
 | — | [`coder-eval-curriculum.md`](future-work/coder-eval-curriculum.md) | After P1/P2 not bottleneck |
 
