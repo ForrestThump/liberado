@@ -136,12 +136,15 @@ impl CodingToolRuntime {
         }
         let args: Args = parse_args(args)?;
         let mut files = Vec::new();
-        walk_files(self.workspace.root(), args.limit, |path| {
-            let rel = relative_string(self.workspace.root(), path);
-            if !path_denied(&rel, &self.path_policy) {
-                files.push(rel);
-            }
-        })?;
+        walk_files(
+            self.workspace.root(),
+            args.limit,
+            &self.path_policy,
+            |_, rel| {
+                files.push(rel.to_string());
+                true
+            },
+        )?;
         Ok(json!({ "files": files, "limit": args.limit }))
     }
 
@@ -161,16 +164,13 @@ impl CodingToolRuntime {
         walk_files(
             self.workspace.root(),
             self.path_policy.search_max_results,
-            |path| {
+            &self.path_policy,
+            |path, rel| {
                 if matches.len() >= args.limit {
-                    return;
-                }
-                let rel = relative_string(self.workspace.root(), path);
-                if path_denied(&rel, &self.path_policy) {
-                    return;
+                    return false;
                 }
                 let Ok(content) = std::fs::read_to_string(path) else {
-                    return;
+                    return true;
                 };
                 for (idx, line) in content.lines().enumerate() {
                     if line.contains(&args.query) {
@@ -184,6 +184,7 @@ impl CodingToolRuntime {
                         }
                     }
                 }
+                true
             },
         )?;
         Ok(json!({ "matches": matches }))
@@ -197,22 +198,39 @@ impl CodingToolRuntime {
         }
         let args: Args = parse_args(args)?;
         let mut files = Vec::new();
-        walk_files(self.workspace.root(), args.limit, |path| {
-            let rel = relative_string(self.workspace.root(), path);
-            if path_denied(&rel, &self.path_policy) {
-                return;
-            }
-            let Ok(content) = std::fs::read_to_string(path) else {
-                return;
-            };
-            let symbols = extract_symbols(&rel, &content);
-            if !symbols.is_empty() {
-                files.push(json!({
-                    "path": rel,
-                    "symbols": symbols,
-                }));
-            }
-        })?;
+        // `limit` bounds files *returned*; `SYMBOL_SCAN_MAX_FILES` bounds files looked at. A tree
+        // is mostly not source, so spending the same budget on both is what made this return one
+        // file — a stray `validate.py` — against this repo: the 200 slots went to markdown and
+        // manifests before the walk reached `crates/`.
+        walk_files(
+            self.workspace.root(),
+            SYMBOL_SCAN_MAX_FILES,
+            &self.path_policy,
+            |path, rel| {
+                if files.len() >= args.limit {
+                    return false;
+                }
+                // Decide from the extension before touching the file. Reading first loads every
+                // asset, lockfile and binary in the tree whole and then discards it — and
+                // `read_to_string` only fails on a binary *after* it has read all of it.
+                if lang_from_path(rel).is_empty() {
+                    return true;
+                }
+                let Ok(bytes) = std::fs::read(path) else {
+                    return true;
+                };
+                let capped = cap_bytes(bytes, self.path_policy.read_max_bytes);
+                let content = String::from_utf8_lossy(&capped);
+                let symbols = extract_symbols(rel, &content);
+                if !symbols.is_empty() {
+                    files.push(json!({
+                        "path": rel,
+                        "symbols": symbols,
+                    }));
+                }
+                true
+            },
+        )?;
         Ok(json!({ "files": files, "limit": args.limit }))
     }
 
@@ -735,6 +753,12 @@ fn default_limit() -> usize {
     200
 }
 
+/// How many files `list_symbols` will look at while trying to fill its result limit.
+///
+/// The walk still has to terminate on a repository far larger than any limit could describe, but
+/// this is a scan bound rather than a result bound — the two are not the same number.
+const SYMBOL_SCAN_MAX_FILES: usize = 20_000;
+
 fn default_diff_mode() -> String {
     "patch".to_string()
 }
@@ -789,17 +813,39 @@ fn slice_lines(content: &str, start_line: Option<usize>, line_count: Option<usiz
         .join("\n")
 }
 
-fn walk_files(root: &Path, limit: usize, mut visit: impl FnMut(&Path)) -> Result<(), ToolError> {
+/// Walk `root` breadth-first, visiting up to `limit` files the policy does not deny.
+///
+/// The deny list prunes **directories** as well as files, and a denied entry does not spend a
+/// slot. Filtering at the visitor instead — after the walk has already counted the file — means
+/// the budget goes to paths the caller was never allowed to read. `PathPolicy::default()` denies
+/// `.git/**`, `target/**` and `node_modules/**`, which between them are almost every file in a
+/// working checkout: run against this repo, `list_symbols` at the default limit of 200 came back
+/// with one file, and it was a stray Python script.
+/// `visit` returns whether to keep walking — `false` stops immediately. A caller whose limit is on
+/// what it *collects* rather than what it *reads* needs that: `list_symbols` has to look past the
+/// markdown and lockfiles to find any source at all, so its `limit` cannot also be the walk budget.
+fn walk_files(
+    root: &Path,
+    limit: usize,
+    policy: &PathPolicy,
+    mut visit: impl FnMut(&Path, &str) -> bool,
+) -> Result<(), ToolError> {
     let mut queue = VecDeque::from([root.to_path_buf()]);
     let mut visited = 0usize;
     while let Some(dir) = queue.pop_front() {
         for entry in std::fs::read_dir(&dir).map_err(fs_err)? {
             let entry = entry.map_err(fs_err)?;
             let path = entry.path();
+            let rel = relative_string(root, &path);
+            if path_denied(&rel, policy) {
+                continue;
+            }
             if path.is_dir() {
                 queue.push_back(path);
             } else if path.is_file() {
-                visit(&path);
+                if !visit(&path, &rel) {
+                    return Ok(());
+                }
                 visited += 1;
                 if visited >= limit {
                     return Ok(());
@@ -848,7 +894,10 @@ fn extract_symbols(path: &str, content: &str) -> Vec<String> {
         let trimmed = line.trim();
         let sym = match lang {
             "rust" => extract_rust_symbol(trimmed),
-            "python" => extract_python_symbol(trimmed),
+            // Python alone gets the raw line: indentation *is* its nesting, so a trimmed line
+            // cannot tell a module-level `def` from a method. Passing `trimmed` here made the
+            // column-0 guard in `extract_python_symbol` a check that could not fire.
+            "python" => extract_python_symbol(line),
             "typescript" => extract_ts_symbol(trimmed),
             "go" => extract_go_symbol(trimmed),
             "java" => extract_java_symbol(trimmed),
@@ -1577,12 +1626,39 @@ mod tests {
         }
 
         let mut count = 0usize;
-        walk_files(dir.path(), 3, |_| {
+        walk_files(dir.path(), 3, &PathPolicy::default(), |_, _| {
             count += 1;
+            true
         })
         .unwrap();
 
         assert_eq!(count, 3, "walk_files should visit at most 3 files");
+    }
+
+    #[tokio::test]
+    async fn a_denied_directory_neither_counts_against_the_limit_nor_is_descended_into() {
+        // The budget is what makes this matter. `.git` alone is thousands of files in a real
+        // checkout, so a walk that counts them first and filters them second returns nothing the
+        // caller can use — which is what `list_symbols` did against this repo.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        for i in 0..20 {
+            std::fs::write(dir.path().join(".git").join(format!("o{i}")), "x\n").unwrap();
+        }
+        std::fs::write(dir.path().join("real.rs"), "pub fn kept() {}\n").unwrap();
+
+        let mut seen = Vec::new();
+        walk_files(dir.path(), 5, &PathPolicy::default(), |_, rel| {
+            seen.push(rel.to_string());
+            true
+        })
+        .unwrap();
+
+        assert_eq!(
+            seen,
+            vec!["real.rs".to_string()],
+            "a denied directory must not spend the caller's budget"
+        );
     }
 
     #[test]
@@ -1656,6 +1732,13 @@ mod tests {
         let symbols = extract_symbols("app.py", content);
         assert!(symbols.contains(&"def handle_request".to_string()));
         assert!(symbols.contains(&"class Router".to_string()));
+        // Indentation is Python's nesting. `route` is a method on `Router`; listing it beside the
+        // module-level names says the module exports something it does not. The guard for this
+        // was already written — it just never saw an indented line to reject.
+        assert!(
+            !symbols.contains(&"def route".to_string()),
+            "a nested def is not a top-level symbol: {symbols:?}"
+        );
     }
 
     #[test]
@@ -1980,6 +2063,91 @@ mod tests {
         assert!(
             result["exit_code"].is_number() || result["timed_out"] == false,
             "git_push with no args should default to origin"
+        );
+    }
+    #[tokio::test]
+    async fn list_symbols_limit_bounds_what_is_returned_not_what_is_walked() {
+        // A source tree is mostly not source. When `limit` doubled as the walk budget, the
+        // non-source files ahead of the code in breadth-first order consumed it — against this
+        // repo the tool returned exactly one file, a stray `validate.py`, and no Rust at all.
+        let (dir, runtime) = runtime();
+        for i in 0..10 {
+            std::fs::write(
+                dir.path().join(format!("a{i}.md")),
+                "# not source
+",
+            )
+            .unwrap();
+        }
+        for i in 0..3 {
+            std::fs::write(
+                dir.path().join(format!("z{i}.rs")),
+                format!(
+                    "pub fn thing{i}() {{}}
+"
+                ),
+            )
+            .unwrap();
+        }
+
+        let result = runtime
+            .invoke_json("list_symbols", json!({"limit": 2}))
+            .await
+            .unwrap();
+
+        let files = result["files"].as_array().unwrap();
+        assert_eq!(
+            files.len(),
+            2,
+            "limit is a result bound, and there are 3 source files past 10 non-source ones: {files:?}"
+        );
+        for f in files {
+            let path = f["path"].as_str().unwrap();
+            assert!(
+                path.ends_with(".rs"),
+                "only source files carry symbols: {path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn list_symbols_stops_reading_a_file_at_the_policy_cap() {
+        // `read_file` caps at `read_max_bytes`; this walked every file with an uncapped
+        // `read_to_string`, which on a binary reads the whole thing before failing to decode it.
+        let dir = tempfile::tempdir().unwrap();
+        let policy = PathPolicy {
+            read_max_bytes: 64,
+            ..PathPolicy::default()
+        };
+        let runtime = CodingToolRuntime::new(dir.path(), CommandPolicy::default(), policy).unwrap();
+        let mut content = String::from(
+            "pub fn early() {}
+",
+        );
+        content.push_str(
+            &"// padding padding padding
+"
+            .repeat(20),
+        );
+        content.push_str(
+            "pub fn beyond_the_cap() {}
+",
+        );
+        std::fs::write(dir.path().join("big.rs"), &content).unwrap();
+
+        let result = runtime
+            .invoke_json("list_symbols", json!({}))
+            .await
+            .unwrap();
+
+        let symbols = result["files"][0]["symbols"].as_array().unwrap();
+        assert!(
+            symbols.iter().any(|s| s == "fn early"),
+            "the head of the file is still read: {symbols:?}"
+        );
+        assert!(
+            !symbols.iter().any(|s| s == "fn beyond_the_cap"),
+            "nothing past read_max_bytes should be reachable: {symbols:?}"
         );
     }
 }
