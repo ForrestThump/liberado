@@ -13,7 +13,7 @@ pub use chat::{
 };
 pub use goals::{
     goals_cancel, goals_diff, goals_domains, goals_get, goals_list, goals_message, goals_park,
-    goals_start, goals_stream, list_projects,
+    goals_rewind, goals_start, goals_stream, list_projects,
 };
 pub use search::search_conversations;
 pub use sessions::{session_fork, sessions_list};

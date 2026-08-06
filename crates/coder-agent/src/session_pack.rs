@@ -152,28 +152,27 @@ impl DomainPackRunner for CodingSessionPack {
         CODING_DOMAIN
     }
 
-    /// Resumable while still negotiating the contract; **not** once the build has started (E6-c).
+    /// Resumable when:
+    /// - still in **intake** (no coder role yet) — rebuild from transcript; or
+    /// - **mid-build** and at least one **checkpoint** event exists (S4 / E6-c(b)).
     ///
-    /// The line is drawn exactly where irreversibility begins. Intake reasons about the goal and
-    /// touches nothing, so re-deriving it from the transcript is safe even though the
-    /// reconstruction is approximate — it ends at a draft the human must accept, and an approximate
-    /// draft in front of a human for approval harms nobody. The build *edits files*. Re-running it
-    /// from an approximate reconstruction, with no checkpoint of what the last attempt already did,
-    /// would redo real work against a workspace that is no longer in the state the reconstruction
-    /// assumes. So the answer there is no, and the session stays parked and says so, rather than
-    /// resuming optimistically and quietly corrupting a workspace.
-    ///
-    /// (The remaining work — a workspace checkpoint that would make the build resumable too — is
-    /// E6-c's deferred half. The coder workspace is already a git repo, so a commit is the obvious
-    /// suspend point; it is a design pass, not a line of code, and it is not this slice.)
+    /// Without a checkpoint, mid-build resume would re-run tools against an unknown FS state;
+    /// with one, we restore files-only then re-enter the build phase.
     async fn can_resume(&self, ctx: &PackContext<'_>) -> bool {
-        let started_building = ctx.prior_events().await.iter().any(|e| {
+        let events = ctx.prior_events().await;
+        let started_building = events.iter().any(|e| {
             matches!(
                 &e.kind,
-                SessionEventKind::RoleStarted { role, .. } if role == "coder"
+                SessionEventKind::RoleStarted { role, .. }
+                    if role == "coder" || role == "coder-fanout"
             )
         });
-        !started_building
+        if !started_building {
+            return true;
+        }
+        events
+            .iter()
+            .any(|e| matches!(&e.kind, SessionEventKind::Checkpoint { .. }))
     }
     /// The pack's whole story, in one place: **negotiate a contract, then build against it.**
     ///
@@ -192,6 +191,59 @@ impl DomainPackRunner for CodingSessionPack {
     ) -> Result<GoalResult, PackError> {
         if *cancel.borrow() {
             return Err(PackError::Cancelled);
+        }
+
+        let prior = ctx.prior_events().await;
+        let mid_build_resume = prior.iter().any(|e| {
+            matches!(
+                &e.kind,
+                SessionEventKind::RoleStarted { role, .. }
+                    if role == "coder" || role == "coder-fanout"
+            )
+        });
+
+        // S4 / E6-c(b): mid-build resume restores files from the latest checkpoint, then rebuilds.
+        // Restore into the **durable** session worktree (coding-worktrees/{id}) when present —
+        // that is where attempt snapshots were taken. Fall back to payload workspace_root for
+        // HostLocal / non-git sessions.
+        if mid_build_resume {
+            if let Some((id, label)) = last_checkpoint(&prior) {
+                let workspace = coding_checkpoint_workspace(
+                    session_id,
+                    goal,
+                    &self.default_workspace_parent,
+                );
+                match liberado_coder_sandbox::ShadowGit::open_or_init(&workspace, session_id) {
+                    Ok(sg) => {
+                        if let Err(e) = sg.restore(&id).await {
+                            return Err(PackError::Failed(format!(
+                                "mid-build resume: restore checkpoint {id} failed: {e}"
+                            )));
+                        }
+                        let _ = events
+                            .send(SessionEvent::new(
+                                session_id,
+                                SessionEventKind::Progress {
+                                    message: format!(
+                                        "mid-build resume: restored checkpoint {label} ({id}) \
+                                         into {}",
+                                        workspace.display()
+                                    ),
+                                },
+                            ))
+                            .await;
+                    }
+                    Err(e) => {
+                        return Err(PackError::Failed(format!(
+                            "mid-build resume: open shadow-git failed: {e}"
+                        )));
+                    }
+                }
+            }
+            // Skip intake — contract negotiation already happened (or was skipped) before park.
+            return self
+                .run_build_phase(session_id, goal, ctx, None, events, inputs, cancel)
+                .await;
         }
 
         // ── Phase 1: intake (S7) ────────────────────────────────────────────────────────────
@@ -278,4 +330,32 @@ impl DomainPackRunner for CodingSessionPack {
         self.run_build_phase(session_id, goal, ctx, contract, events, inputs, cancel)
             .await
     }
+}
+
+fn last_checkpoint(events: &[SessionEvent]) -> Option<(String, String)> {
+    events.iter().rev().find_map(|e| match &e.kind {
+        SessionEventKind::Checkpoint { id, label, .. } => Some((id.clone(), label.clone())),
+        _ => None,
+    })
+}
+
+/// Workspace root where shadow-git snapshots for this coding session live.
+///
+/// Prefer the durable session worktree when it exists (build-on-git path); otherwise the
+/// authorized `workspace_root` / default goal workspace (HostLocal / non-git).
+pub(crate) fn coding_checkpoint_workspace(
+    session_id: &str,
+    goal: &GoalSpec,
+    default_parent: &std::path::Path,
+) -> std::path::PathBuf {
+    if let Some(sess) = liberado_coder_tools::durable_session_workspace(session_id) {
+        if sess.exists() {
+            return sess;
+        }
+    }
+    goal.payload
+        .get("workspace_root")
+        .and_then(|v| v.as_str())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| default_parent.join(format!("goal-{session_id}")))
 }

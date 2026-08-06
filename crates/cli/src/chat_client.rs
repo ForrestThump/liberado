@@ -170,6 +170,7 @@ fn dispatch(event: &SseEvent, session: &mut Option<String>) -> bool {
         | SessionEventKind::ValidationFinished { .. }
         | SessionEventKind::CriticVerdict { .. }
         | SessionEventKind::FileChanged { .. }
+        | SessionEventKind::Checkpoint { .. }
         | SessionEventKind::LoopGuard { .. } => false,
     }
 }

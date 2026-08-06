@@ -385,6 +385,165 @@ pub async fn goals_park(
     }
 }
 
+/// Body for [`goals_rewind`]: optional checkpoint id (default = latest in session events).
+#[derive(Deserialize, Default)]
+pub struct GoalRewindRequest {
+    #[serde(default)]
+    pub checkpoint_id: Option<String>,
+}
+
+/// `POST /api/goals/{id}/rewind` — restore workspace files from a shadow-git checkpoint (S4).
+/// Conversation/transcript is untouched. Coding sessions only (needs `workspace_root` +
+/// checkpoint events). Returns the restored checkpoint id.
+pub async fn goals_rewind(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    body: Option<Json<GoalRewindRequest>>,
+) -> impl IntoResponse {
+    let want = body.and_then(|Json(b)| b.checkpoint_id);
+    let snap = match state.goals.snapshot(&id).await {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiError {
+                    error: format!("no such goal session '{id}'"),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if snap.session.goal.domain.as_str() != liberado_session::CODING_DOMAIN {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "rewind is only supported for coding goal sessions".into(),
+            }),
+        )
+            .into_response();
+    }
+    // Prefer durable session worktree (where attempt checkpoints are taken) when present.
+    let workspace = if let Some(sess) = liberado_coder_agent::durable_session_workspace(&id) {
+        if sess.exists() {
+            sess
+        } else {
+            match snap
+                .session
+                .goal
+                .payload
+                .get("workspace_root")
+                .and_then(|v| v.as_str())
+            {
+                Some(w) => std::path::PathBuf::from(w),
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(ApiError {
+                            error: "coding session has no workspace_root and no durable \
+                                    session worktree — cannot rewind"
+                                .into(),
+                        }),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    } else {
+        match snap
+            .session
+            .goal
+            .payload
+            .get("workspace_root")
+            .and_then(|v| v.as_str())
+        {
+            Some(w) => std::path::PathBuf::from(w),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiError {
+                        error: "coding session has no workspace_root in payload".into(),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    };
+    let (cp_id, label, tree_hash) = if let Some(id) = want {
+        // Prefer matching event for label; fall back to id alone.
+        let from_ev = snap.events.iter().rev().find_map(|e| match &e.kind {
+            liberado_session::SessionEventKind::Checkpoint {
+                id: cid,
+                label,
+                tree_hash,
+            } if cid == &id => Some((cid.clone(), label.clone(), tree_hash.clone())),
+            _ => None,
+        });
+        match from_ev {
+            Some(t) => t,
+            None => (id, "explicit".into(), String::new()),
+        }
+    } else {
+        match snap.events.iter().rev().find_map(|e| match &e.kind {
+            liberado_session::SessionEventKind::Checkpoint {
+                id,
+                label,
+                tree_hash,
+            } => Some((id.clone(), label.clone(), tree_hash.clone())),
+            _ => None,
+        }) {
+            Some(t) => t,
+            None => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(ApiError {
+                        error: "no checkpoint events on this session — cannot rewind".into(),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    let sg = match liberado_coder_agent::ShadowGit::open_or_init(&workspace, &id) {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: format!("open shadow-git: {e}"),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Err(e) = sg.restore(&cp_id).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: format!("restore checkpoint: {e}"),
+            }),
+        )
+            .into_response();
+    }
+    tracing::info!(
+        session = %id,
+        checkpoint = %cp_id,
+        label = %label,
+        "goals_rewind: restored workspace files"
+    );
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "session_id": id,
+            "checkpoint_id": cp_id,
+            "label": label,
+            "tree_hash": tree_hash,
+            "restored": true,
+        })),
+    )
+        .into_response()
+}
+
 pub async fn goals_message(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -499,6 +658,7 @@ fn session_event_to_sse(ev: &liberado_session::SessionEvent) -> Event {
         K::ValidationFinished { .. } => "validation_finished",
         K::CriticVerdict { .. } => "critic_verdict",
         K::FileChanged { .. } => "file_changed",
+        K::Checkpoint { .. } => "checkpoint",
         K::LoopGuard { .. } => "loop_guard",
         K::SessionFinished { .. } => "session_finished",
         K::Failed { .. } => "failed",

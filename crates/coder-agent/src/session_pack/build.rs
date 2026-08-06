@@ -317,7 +317,9 @@ impl CodingSessionPack {
 
         // Explore is read-only: HostLocal is enough (no worktree isolation required for readers).
         // Fan-out children already sit on a dedicated worktree — force HostLocal to avoid nesting.
-        // Build mode still uses Worktree when the workspace is a git repo (C7).
+        // Build mode on a git repo: **durable** session worktree under coding-worktrees/{session_id}
+        // + HostLocal (S4). Ephemeral Worktree Drop would delete the FS root that shadow-git
+        // checkpoints and mid-build park/resume need to survive attempt teardown (C7 + E6-c(b)).
         let force_host = goal
             .payload
             .get("force_host_local")
@@ -328,17 +330,44 @@ impl CodingSessionPack {
                 .get("fanout_child")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-        let sandbox = if policies.explore_mode || force_host {
-            SandboxSpec::HostLocal
+        let (attempt_workspace, sandbox) = if policies.explore_mode || force_host {
+            (workspace.clone(), SandboxSpec::HostLocal)
         } else if is_git_repo(&workspace) {
-            SandboxSpec::Worktree
+            let base = liberado_coder_tools::coding_worktrees_base();
+            match liberado_coder_sandbox::ensure_session_worktree(
+                &workspace,
+                session_id,
+                &base,
+            )
+            .await
+            {
+                Ok(sess) => {
+                    let _ = events
+                        .send(SessionEvent::new(
+                            session_id,
+                            SessionEventKind::Progress {
+                                message: format!(
+                                    "session workspace: {} (durable; survives park)",
+                                    sess.display()
+                                ),
+                            },
+                        ))
+                        .await;
+                    (sess, SandboxSpec::HostLocal)
+                }
+                Err(e) => {
+                    return Err(PackError::Setup(format!(
+                        "durable session worktree: {e}"
+                    )));
+                }
+            }
         } else {
-            SandboxSpec::HostLocal
+            (workspace.clone(), SandboxSpec::HostLocal)
         };
 
         let mut request = CoderRunRequest {
             task,
-            workspace: WorkspaceRef::new(workspace.to_string_lossy(), "HEAD"),
+            workspace: WorkspaceRef::new(attempt_workspace.to_string_lossy(), "HEAD"),
             config: CoderRunConfig {
                 backend: LIBERADO_LOOP_BACKEND.into(),
                 trace_dir: None,

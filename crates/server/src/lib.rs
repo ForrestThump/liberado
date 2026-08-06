@@ -445,6 +445,10 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
             axum::routing::post(api::goals_message),
         )
         .route("/api/goals/{id}/park", axum::routing::post(api::goals_park))
+        .route(
+            "/api/goals/{id}/rewind",
+            axum::routing::post(api::goals_rewind),
+        )
         .layer(CorsLayer::permissive())
         .with_state(state.clone())
         // Compression is scoped to the static fallback, deliberately not applied to the router as a

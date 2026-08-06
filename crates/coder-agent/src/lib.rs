@@ -27,7 +27,12 @@ pub use intake_session::{
     IntakeAnswer, freeze_if_ready, request_from_contract, run_intake, run_intake_until_ready,
 };
 pub use session_pack::CodingSessionPack;
+/// Durable coding session workspace path (`coding-worktrees/<session_id>`).
+pub use liberado_coder_tools::durable_session_workspace;
+/// Shadow-git checkpoint store (S4).
+pub use liberado_coder_sandbox::{Checkpoint, CheckpointError, ShadowGit};
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -265,6 +270,18 @@ impl LiberadoLoopBackend {
             .workspace_root()
             .to_string_lossy()
             .to_string();
+        // S4: shadow-git checkpoints keyed by stable goal/task id (not per-attempt trace id).
+        let checkpoint_key = if request.task.id.is_empty() {
+            session_id.clone()
+        } else {
+            request.task.id.clone()
+        };
+        take_workspace_checkpoint(
+            Path::new(&effective_root),
+            &checkpoint_key,
+            &format!("attempt-{}-start", request.attempt),
+        )
+        .await;
         // Capture HEAD *before* the worker runs so a clean tree after `git_commit` still counts
         // as real progress (dogfood finding #3 — porcelain is empty once the agent commits).
         let baseline_sha = gates::rev_parse(&effective_root, "HEAD").await.ok();
@@ -302,6 +319,13 @@ impl LiberadoLoopBackend {
             .execute(&runtime, task)
             .await
             .map_err(|e| CoderError::Provider(e.to_string()))?;
+        // Post-worker checkpoint captures mid-attempt FS state for park/resume (S4).
+        take_workspace_checkpoint(
+            Path::new(&effective_root),
+            &checkpoint_key,
+            &format!("attempt-{}-post", request.attempt),
+        )
+        .await;
         trace::push_event(
             &events,
             CoderEvent::RoleFinished {
@@ -526,6 +550,43 @@ impl LiberadoLoopBackend {
         )
         .await?;
         Ok(result)
+    }
+}
+
+/// Best-effort shadow-git snapshot of `workspace_root`, keyed by `session_key`.
+/// Emits a live `Checkpoint` event when the coding pack's LIVE_GATE is installed.
+async fn take_workspace_checkpoint(workspace_root: &Path, session_key: &str, label: &str) {
+    let Ok(sg) = liberado_coder_sandbox::ShadowGit::open_or_init(workspace_root, session_key) else {
+        return;
+    };
+    match sg.snapshot(label).await {
+        Ok(cp) => {
+            if let Ok((tx, sid)) =
+                completion_gate::LIVE_GATE.try_with(|(tx, id)| (tx.clone(), id.clone()))
+            {
+                let _ = tx.try_send(liberado_session::SessionEvent::new(
+                    sid,
+                    liberado_session::SessionEventKind::Checkpoint {
+                        id: cp.id.clone(),
+                        label: cp.label.clone(),
+                        tree_hash: cp.tree_hash.clone(),
+                    },
+                ));
+            }
+            tracing::debug!(
+                session = %session_key,
+                checkpoint = %cp.id,
+                label = %cp.label,
+                "coding checkpoint taken"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                session = %session_key,
+                error = %e,
+                "coding checkpoint snapshot failed (non-fatal)"
+            );
+        }
     }
 }
 
