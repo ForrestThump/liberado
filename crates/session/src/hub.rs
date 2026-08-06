@@ -65,9 +65,9 @@ impl std::fmt::Display for SendInputError {
             ),
             Self::Parked => write!(
                 f,
-                "goal session is parked: the daemon restarted while it was waiting on you, so the \
-                 question it holds is still there but no pack is running to receive the answer. \
-                 It has NOT finished — it cannot be resumed yet (E6-c)"
+                "goal session is parked: no pack is hosting it right now. If a coding build had \
+                 already started without a workspace checkpoint, mid-build resume is refused \
+                 (E6-c). With checkpoints (S4), resume restores files then continues."
             ),
             Self::Closed => write!(f, "goal session input channel is closed"),
         }
@@ -307,10 +307,10 @@ impl GoalSessionHub {
     ///
     /// Parking is a claim that the work is worth continuing. Whether it actually *can* continue is
     /// [`resume`](Self::resume)'s call, via [`DomainPackRunner::can_resume`]: the coding pack
-    /// refuses once a build has started, because re-running it would redo real filesystem work with
-    /// no checkpoint. That refusal happens at resume time rather than here because "can this be
-    /// rebuilt from its transcript" depends on where the pack actually stopped, which is not
-    /// knowable at the moment you ask it to.
+    /// allows mid-build resume when a workspace checkpoint exists (S4), and refuses without one
+    /// so it does not redo filesystem work against an unknown state. That refusal happens at
+    /// resume time rather than here because "can this be rebuilt" depends on where the pack
+    /// actually stopped, which is not knowable at the moment you ask it to.
     pub async fn park(&self, id: &str) -> Result<(), String> {
         // Clone the sender and release `cancels` before touching `park_requests`. Holding both at
         // once would establish a lock order that teardown (which takes them in the other order)
@@ -342,9 +342,8 @@ impl GoalSessionHub {
     /// which the pack could ask a question that has already been answered.
     ///
     /// Refuses when the pack says it cannot be resumed from a transcript
-    /// ([`DomainPackRunner::can_resume`]) — the coding pack says no once the build has started,
-    /// because re-running it would redo real filesystem work with no checkpoint. That refusal is
-    /// honest rather than optimistic: the session stays parked and says so.
+    /// ([`DomainPackRunner::can_resume`]) — the coding pack says no for mid-build without a
+    /// checkpoint (S4). That refusal is honest rather than optimistic: the session stays parked.
     pub async fn resume(
         self: &Arc<Self>,
         id: &str,

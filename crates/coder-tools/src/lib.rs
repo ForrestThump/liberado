@@ -11,6 +11,7 @@ use liberado_coder_core::{CommandPolicy, EXPLORE_TOOL_NAMES, PathPolicy, Sandbox
 use liberado_coder_sandbox::{
     CommandRequest, DockerWorkspace, HostWorkspace, SandboxError, Workspace, WorktreeWorkspace,
 };
+pub use liberado_coder_sandbox::{ensure_session_worktree, session_worktree_path};
 use liberado_executor::ToolRuntime;
 use liberado_provider::{ToolDef, ToolInvocation};
 use serde::Deserialize;
@@ -42,6 +43,12 @@ pub struct CodingToolRuntime {
 pub fn coding_worktrees_base() -> PathBuf {
     let data = std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into());
     PathBuf::from(data).join("coding-worktrees")
+}
+
+/// Durable coding-session workspace path (`coding-worktrees/<session_id>`).
+/// Returns `None` when `session_id` is not a safe directory name.
+pub fn durable_session_workspace(session_id: &str) -> Option<PathBuf> {
+    session_worktree_path(&coding_worktrees_base(), session_id).ok()
 }
 
 /// If this is `gh pr create … --base <name>`, ensure `origin` has that branch. Returns an error
