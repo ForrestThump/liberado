@@ -15,6 +15,7 @@ use liberado_session::{
     TerminalKind,
 };
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 
 use super::CodingSessionPack;
@@ -137,6 +138,100 @@ impl CodingSessionPack {
             .and_then(|v| v.as_str())
             .unwrap_or("session-coder")
             .to_string();
+
+        // ── Parallel coding subagents (S6): payload.subtasks → worktrees → LLM merge ──
+        // Parent-only merge; children never self-merge. Concurrency from payload or default 2
+        // (matches tuning.dispatch.max_concurrent_coding_subagents default).
+        if let Some(subtasks) = crate::fanout::subtasks_from_payload(&goal.payload) {
+            let max_concurrent = goal
+                .payload
+                .get("max_concurrent_subagents")
+                .and_then(|v| v.as_u64())
+                .or_else(|| {
+                    ctx.overrides()
+                        .get("max_concurrent_coding_subagents")
+                        .and_then(|v| v.as_u64())
+                })
+                .unwrap_or(2) as usize;
+
+            let _ = events
+                .send(SessionEvent::new(
+                    session_id,
+                    SessionEventKind::Progress {
+                        message: format!(
+                            "coding fan-out: {} subtask(s), max_concurrent={max_concurrent}",
+                            subtasks.len()
+                        ),
+                    },
+                ))
+                .await;
+            let _ = events
+                .send(SessionEvent::new(
+                    session_id,
+                    SessionEventKind::RoleStarted {
+                        role: "coder-fanout".into(),
+                        model: model.clone(),
+                    },
+                ))
+                .await;
+
+            let report = crate::fanout::run_coding_fanout(
+                Arc::clone(&self.backend),
+                Arc::clone(&self.provider),
+                &workspace,
+                subtasks,
+                max_concurrent,
+                &model,
+            )
+            .await
+            .map_err(|e| PackError::Failed(format!("coding fan-out: {e}")))?;
+
+            let _ = events
+                .send(SessionEvent::new(
+                    session_id,
+                    SessionEventKind::RoleFinished {
+                        role: "coder-fanout".into(),
+                    },
+                ))
+                .await;
+            let _ = events
+                .send(SessionEvent::new(
+                    session_id,
+                    SessionEventKind::ValidationFinished {
+                        ok: report.overall == liberado_common::Outcome::Succeeded,
+                        summary: report.summary.clone(),
+                    },
+                ))
+                .await;
+
+            let files = report
+                .children
+                .iter()
+                .flat_map(|c| c.files_changed.iter().cloned())
+                .collect::<Vec<_>>();
+            for path in &files {
+                let _ = events
+                    .send(SessionEvent::new(
+                        session_id,
+                        SessionEventKind::FileChanged {
+                            path: path.clone(),
+                            change: "modified".into(),
+                        },
+                    ))
+                    .await;
+            }
+
+            return Ok(GoalResult {
+                terminal: if report.overall == liberado_common::Outcome::Succeeded {
+                    TerminalKind::Succeeded
+                } else {
+                    TerminalKind::Failed
+                },
+                summary: report.summary.clone(),
+                artifacts: files,
+                diagnostics: serde_json::json!({ "fanout": report }),
+            });
+        }
 
         // Path/command policy from profile overrides + payload
         // (plan = restricted write preset; explore = read-only preset).

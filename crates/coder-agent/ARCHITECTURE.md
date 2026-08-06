@@ -24,6 +24,8 @@ gates, progress guards, optional critic. UIs and the PR factory must not reimple
 | `progress` | In-loop read-only / same-tool / validation-churn guards |
 | `runtime` | `ToolRuntime` wrapper: tracing + progress |
 | `trace` | Event log + optional `CoderTrace` artifacts |
+| `fanout` | **S6:** parallel coding subagents on named worktree branches + parent LLM merge-back |
+| `session_pack` | Goal-session adapter; routes `payload.subtasks` into `fanout` |
 
 ## Behavior
 
@@ -45,9 +47,22 @@ Depends on foundation (`executor`, `provider`, `common`) + coding pack (`coder-c
 (attempt loop, progress policy shape, session events) graduate upward per modularity extraction
 triggers — they do not pull life-ops into this crate.
 
+## Coding fan-out (S6 v1)
+
+When a coding goal carries `payload.subtasks` (array of `{label, description, success_criteria?}`):
+
+1. Each subtask gets `git worktree add -b fanout/<label>-i` under `coding-worktrees/`.
+2. Children run the coding backend **in parallel** (semaphore; default 2 / `max_concurrent_subagents`).
+3. Worktrees are removed; **branches remain** on the parent repo.
+4. Parent merges each branch (`--no-ff`). Conflicts: merge-role LLM rewrites files → stage → commit.
+5. Children **never** self-merge; parent owns integration quality.
+
+Helpers live in `liberado-coder-sandbox` (`merge` module). Not yet: hub-spawned child goal sessions, face `delegate` → coding, nested fan-out.
+
 ## Not done yet
 
-- Subagent / worktree isolation
+- Hub-native child goal sessions for fan-out (today: in-pack backend fan-out)
+- Face `delegate` → coding domain
 - Live Docker smoke
 - Model-turn events / streaming session API
 - Config-dir-relative prompt resolution

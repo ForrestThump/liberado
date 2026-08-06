@@ -4,6 +4,13 @@
 //! enforces command policy, caps command output, and defines the traits future Docker/remote
 //! sandboxes will implement.
 
+mod merge;
+pub use merge::{
+    ConflictSides, MergeAttempt, MergeError, add_worktree_on_branch, branch_tip, commit_merge,
+    list_unmerged_paths, merge_branch, read_conflict_sides, remove_worktree, rev_parse as git_rev_parse,
+    stage_resolution,
+};
+
 use std::{
     collections::BTreeMap,
     path::{Component, Path, PathBuf},
