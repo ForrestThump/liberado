@@ -146,13 +146,20 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // delegate are hosted sessions, not a second engine. Built before chat so `delegate` can use it.
     let mut goals_hub = liberado_session::GoalSessionHub::new(SessionStore::clone(&sessions));
     goals_hub.register_pack(Arc::new(liberado_session::LifeOpsDemoRunner));
-    if let Some(p) = provider.as_ref() {
-        let work_parent = liberado_bootstrap::data_dir().join("goal-workspaces");
-        let _ = std::fs::create_dir_all(&work_parent);
-        goals_hub.register_pack(Arc::new(liberado_coder_agent::CodingSessionPack::new(
-            p.clone(),
-            work_parent,
-        )));
+    // Coding pack: hold Arc so we can attach the hub after `Arc::new` (S6 child goal sessions).
+    let coding_pack: Option<Arc<liberado_coder_agent::CodingSessionPack>> =
+        provider.as_ref().map(|p| {
+            let work_parent = liberado_bootstrap::data_dir().join("goal-workspaces");
+            let _ = std::fs::create_dir_all(&work_parent);
+            Arc::new(
+                liberado_coder_agent::CodingSessionPack::new(p.clone(), work_parent)
+                    .with_max_concurrent_coding_subagents(
+                        config.tuning.dispatch.max_concurrent_coding_subagents,
+                    ),
+            )
+        });
+    if let Some(pack) = coding_pack.as_ref() {
+        goals_hub.register_pack(Arc::clone(pack) as Arc<dyn liberado_session::DomainPackRunner>);
     }
     if let Some(pack) = liberado_bootstrap::build_dispatch_pack(
         &providers,
@@ -175,6 +182,14 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         info!("session alerts: telegram notifier attached");
     }
     let goals = Arc::new(goals_hub);
+    // S6: coding fan-out spawns child goal sessions on this same hub.
+    if let Some(pack) = coding_pack.as_ref() {
+        pack.attach_hub(Arc::clone(&goals));
+        info!(
+            max_concurrent = config.tuning.dispatch.max_concurrent_coding_subagents,
+            "coding pack: hub attached for subagent fan-out"
+        );
+    }
 
     let (chat, chat_tools, chat_tool_names) = build_chat(
         &providers,

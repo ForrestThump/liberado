@@ -7,6 +7,7 @@
 
 mod completion_gate;
 mod critic;
+mod fanout;
 mod gates;
 mod intake_session;
 mod planner;
@@ -18,6 +19,10 @@ mod session_pack;
 mod trace;
 mod verify_pipeline;
 
+pub use fanout::{
+    ChildOutcome, CodingSubtask, DEFAULT_MAX_CONCURRENT_CODING_SUBAGENTS, FanoutReport, MergeStep,
+    child_session_grant, run_coding_fanout, run_coding_fanout_via_hub, subtasks_from_payload,
+};
 pub use intake_session::{
     IntakeAnswer, freeze_if_ready, request_from_contract, run_intake, run_intake_until_ready,
 };
