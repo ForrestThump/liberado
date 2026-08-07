@@ -544,4 +544,56 @@ mod tests {
         let specs = resolve_verifier_specs(&[], None);
         assert!(specs.is_empty());
     }
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn arb_finding_kind() -> impl Strategy<Value = FindingKind> {
+            prop_oneof![
+                Just(FindingKind::MissingPath),
+                Just(FindingKind::ContentMismatch),
+                Just(FindingKind::CommandFailed),
+                Just(FindingKind::CommandTimeout),
+                Just(FindingKind::PolicyDenied),
+                Just(FindingKind::UnexpectedChange),
+                Just(FindingKind::EmptyDiff),
+                Just(FindingKind::Custom),
+            ]
+        }
+
+        proptest! {
+            #[test]
+            fn finding_serde_roundtrip(
+                check_id in "\\PC{1,30}",
+                kind in arb_finding_kind(),
+                message in "\\PC{0,80}",
+            ) {
+                let finding = Finding { check_id, kind, message, detail: None };
+                let json = serde_json::to_string(&finding).unwrap();
+                let roundtripped: Finding = serde_json::from_str(&json).unwrap();
+                assert_eq!(finding.check_id, roundtripped.check_id);
+                assert_eq!(finding.kind, roundtripped.kind);
+                assert_eq!(finding.message, roundtripped.message);
+            }
+
+            #[test]
+            fn verdict_status_serde_roundtrip(
+                status in prop_oneof![
+                    Just(VerdictStatus::Pass),
+                    Just(VerdictStatus::Fail),
+                    Just(VerdictStatus::Error),
+                ],
+            ) {
+                let json = serde_json::to_string(&status).unwrap();
+                let roundtripped: VerdictStatus = serde_json::from_str(&json).unwrap();
+                assert_eq!(status, roundtripped);
+            }
+
+            #[test]
+            fn finding_kind_deser_never_panics(raw in "\\PC{0,40}") {
+                let _: Result<FindingKind, _> = serde_json::from_str(&format!("\"{raw}\""));
+            }
+        }
+    }
 }
