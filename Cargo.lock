@@ -3372,6 +3372,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
+name = "liberado-acp-bridge"
+version = "0.1.0"
+dependencies = [
+ "liberado-common",
+ "liberado-config-loader",
+ "liberado-conversation-store",
+ "liberado-main-agent",
+ "liberado-provider",
+ "liberado-provider-openai-compat",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "liberado-bootstrap"
 version = "0.1.0"
 dependencies = [
