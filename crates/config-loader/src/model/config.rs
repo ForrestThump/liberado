@@ -1099,6 +1099,65 @@ mod project_auth_tests {
     }
 
     #[test]
+    fn builder_returns_default_builder() {
+        let b = Config::builder();
+        let _built = b.build();
+        // The builder with all defaults may fail validation; that's fine — we just
+        // test that the constructor itself doesn't panic.
+    }
+
+    #[test]
+    fn enabled_session_profiles_filters_disabled() {
+        use crate::model::topology::SessionProfile;
+        let mut cfg = cfg_with_projects(vec![]);
+        cfg.topology.session_profiles = vec![
+            SessionProfile {
+                name: "a".into(),
+                enabled: true,
+                ..SessionProfile::empty("a")
+            },
+            SessionProfile {
+                name: "b".into(),
+                enabled: false,
+                ..SessionProfile::empty("b")
+            },
+        ];
+        let enabled = cfg.enabled_session_profiles();
+        assert_eq!(enabled.len(), 1);
+        assert_eq!(enabled[0].name, "a");
+    }
+
+    #[test]
+    fn path_is_within_rejects_different_root() {
+        // root and candidate are different trees
+        assert!(!super::path_is_within(
+            Path::new("/C:/a"),
+            Path::new("/C:/b/sub")
+        ));
+    }
+
+    #[test]
+    fn path_is_within_accepts_genuine_child() {
+        // /C:/a/b/c is within /C:/a
+        assert!(super::path_is_within(
+            Path::new("/C:/a"),
+            Path::new("/C:/a/b/c")
+        ));
+    }
+
+    #[test]
+    fn lexically_normalize_removes_dot_dot() {
+        let result = super::lexically_normalize(Path::new("/a/b/../c"));
+        assert_eq!(result, PathBuf::from("/a/c"));
+    }
+
+    #[test]
+    fn lexically_normalize_preserves_root() {
+        let result = super::lexically_normalize(Path::new("/a/b/c"));
+        assert_eq!(result, PathBuf::from("/a/b/c"));
+    }
+
+    #[test]
     fn path_is_within_rejects_sibling() {
         let a = PathBuf::from("/tmp/projects/a");
         let b = PathBuf::from("/tmp/projects/b");

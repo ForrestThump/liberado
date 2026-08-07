@@ -1608,4 +1608,25 @@ mod session_profile_tests {
         let caps = p.declared_capabilities();
         assert_eq!(caps.capabilities.len(), 0);
     }
+
+    #[test]
+    fn default_path_arg_is_path_string() {
+        assert_eq!(super::default_path_arg(), "path");
+    }
+
+    #[test]
+    fn default_content_arg_is_content_string() {
+        assert_eq!(super::default_content_arg(), "content");
+    }
+
+    #[test]
+    fn default_true_is_true() {
+        assert!(super::default_true());
+    }
+
+    #[test]
+    fn default_project_write_class_is_agent_writable() {
+        let wc = super::default_project_write_class();
+        assert_eq!(wc, liberado_common::WriteClass::AgentWritable);
+    }
 }
