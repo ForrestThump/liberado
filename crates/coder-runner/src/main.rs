@@ -199,6 +199,8 @@ async fn ensure_git_repo(workspace: &Path) -> Result<(), String> {
         tracing::info!("workspace already a git repo: {}", workspace.display());
         return Ok(());
     }
+    std::fs::create_dir_all(workspace)
+        .map_err(|e| format!("create workspace dir {}: {e}", workspace.display()))?;
     tracing::info!("initialising git repo in bare workspace: {}", workspace.display());
 
     let run_git = |args: &[&str]| -> Result<(), String> {
