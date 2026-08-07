@@ -308,7 +308,8 @@ impl LiberadoLoopBackend {
             Some(request.task.id.as_str()),
         )
         .await
-        .map_err(|e| CoderError::Tool(e.to_string()))?;
+        .map_err(|e| CoderError::Tool(e.to_string()))?
+        .with_hashline(request.config.hashline.clone());
 
         // The sandbox may have created a separate workspace (e.g. Worktree).
         // Use the actual workspace root for change detection, verification,
@@ -357,10 +358,14 @@ impl LiberadoLoopBackend {
         let provider = self
             .providers
             .provider_for(worker_role_name, worker_config)?;
-        let task = Task::new(
-            roles::role_instructions(worker_config, worker_role_name).await?,
-            roles::coder_goal(&request),
-        );
+        let mut instructions =
+            roles::role_instructions(worker_config, worker_role_name).await?;
+        if request.config.hashline.enabled {
+            instructions.push_str(&liberado_coder_tools::hashline_prompt_guidance(
+                request.config.hashline.hash_length,
+            ));
+        }
+        let task = Task::new(instructions, roles::coder_goal(&request));
         let executor = Executor::new(provider, Budget::new(max_turns));
         let report = executor
             .execute(&runtime, task)
@@ -690,6 +695,7 @@ mod tests {
                 verify_policy: Default::default(),
                 path_policy: PathPolicy::default(),
                 progress: ProgressPolicy::default(),
+                hashline: liberado_coder_core::HashlineConfig::default(),
             },
             attempt: 0,
             prior_feedback: Vec::new(),
@@ -757,6 +763,111 @@ mod tests {
 
         assert_eq!(result.outcome, Outcome::Succeeded);
         assert_eq!(result.files_changed, vec!["hello.txt"]);
+    }
+
+    /// Mocked end-to-end: hashline enabled → tool catalog offers `hashline_edit`, system
+    /// prompt includes guidance, and a precomputed-tag patch mutates the workspace.
+    #[tokio::test]
+    async fn mocked_loop_hashline_edit_and_prompt_wiring() {
+        use liberado_coder_core::HashlineConfig;
+
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let seed = "alpha\nbeta\ngamma\n";
+        std::fs::write(dir.path().join("notes.txt"), seed).unwrap();
+        run(dir.path(), &["git", "add", "."]);
+        run(dir.path(), &["git", "commit", "-m", "seed notes"]);
+
+        let tag = liberado_coder_tools::hashline_compute_file_hash(seed, 6);
+        let patch = format!("[notes.txt#{tag}]\nPUT 2.=2:\n+BETA\n");
+
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "hl-1",
+                    "hashline_edit",
+                    json!({ "input": patch }),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "report-1",
+                    liberado_executor::SUBMIT_REPORT_TOOL,
+                    json!({
+                        "outcome": "succeeded",
+                        "summary": "Patched notes.txt via hashline",
+                        "artifacts": ["notes.txt"],
+                        "new_high_signal_facts": [],
+                        "follow_up": null
+                    }),
+                )]),
+            ],
+        ));
+        let backend = LiberadoLoopBackend::new(provider.clone());
+        let mut request = request(dir.path(), "HEAD");
+        request.task.description = "Change beta to BETA in notes.txt using hashline.".into();
+        request.config.hashline = HashlineConfig {
+            enabled: true,
+            hash_length: 6,
+        };
+        request.config.coder.prompt = Some(
+            "You are a coding agent. Use tools then submit_report.".into(),
+        );
+
+        let result = backend.run(request).await.unwrap();
+        assert_eq!(result.outcome, Outcome::Succeeded);
+        assert!(
+            result.files_changed.iter().any(|p| p == "notes.txt"),
+            "files_changed={:?}",
+            result.files_changed
+        );
+        let after = std::fs::read_to_string(dir.path().join("notes.txt")).unwrap();
+        assert_eq!(after, "alpha\nBETA\ngamma\n");
+
+        // First completion request must advertise hashline_edit and carry prompt guidance.
+        let first = provider
+            .received_requests()
+            .into_iter()
+            .next()
+            .expect("provider received a completion request");
+        let tool_names: Vec<&str> = first.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            tool_names.contains(&"hashline_edit"),
+            "tools={tool_names:?}"
+        );
+        let system = first
+            .messages
+            .iter()
+            .find(|m| m.role == liberado_provider::Role::System)
+            .map(|m| m.content.as_str())
+            .unwrap_or("");
+        assert!(
+            system.contains("Hashline edit mode") || system.contains("hashline_edit"),
+            "system prompt missing hashline guidance:\n{system}"
+        );
+        assert!(
+            system.contains('6') || system.contains("6-char"),
+            "system prompt should mention configured hash length"
+        );
+    }
+
+    #[tokio::test]
+    async fn mocked_loop_hashline_disabled_omits_tool_from_catalog() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let provider = Arc::new(MockProvider::with_script("mock", write_then_report()));
+        let backend = LiberadoLoopBackend::new(provider.clone());
+        let mut request = request(dir.path(), "HEAD");
+        request.config.hashline = liberado_coder_core::HashlineConfig {
+            enabled: false,
+            hash_length: 4,
+        };
+        backend.run(request).await.unwrap();
+        let first = provider.received_requests().into_iter().next().unwrap();
+        let tool_names: Vec<&str> = first.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            !tool_names.contains(&"hashline_edit"),
+            "hashline_edit must be absent when disabled; tools={tool_names:?}"
+        );
     }
 
     #[tokio::test]
@@ -1402,6 +1513,152 @@ mod tests {
         assert_eq!(
             content.trim_end_matches(['\r', '\n']),
             "hello from liberado"
+        );
+    }
+
+    /// Live smoke for hashline edit mode: an *existing* multi-line file must be patched
+    /// via line anchors (not a greenfield `write_file` of hello.txt). Catches prompt/tool
+    /// wiring bugs that unit tests miss.
+    #[tokio::test]
+    #[ignore = "requires OPENROUTER_API_KEY and network access"]
+    async fn openrouter_deepseek_live_hashline_edit_smoke() {
+        use liberado_coder_core::{HashlineConfig, VerifierSpec};
+        use liberado_provider_openai_compat::OpenAiCompatibleProvider;
+
+        let api_key = std::env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY not set");
+        let model = std::env::var("LIBERADO_CODER_LIVE_MODEL")
+            .unwrap_or_else(|_| "deepseek/deepseek-v4-pro".to_string());
+        let provider = Arc::new(
+            OpenAiCompatibleProvider::new(
+                api_key,
+                &model,
+                OpenAiCompatibleProvider::OPENROUTER_BASE_URL,
+            )
+            .with_extra_client_error_status(vec![402]),
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        // Multi-line file so a middle-line edit is meaningful.
+        let seed = "\
+# greet helper
+def greet(name):
+    msg = \"Hello, \" + name
+    print(msg)
+    return msg
+
+if __name__ == \"__main__\":
+    greet(\"world\")
+";
+        std::fs::write(dir.path().join("greet.py"), seed).unwrap();
+        run(dir.path(), &["git", "add", "."]);
+        run(dir.path(), &["git", "commit", "-m", "seed greet.py"]);
+
+        let mut request = request(dir.path(), "HEAD");
+        request.task.id = "hashline-live-1".into();
+        request.task.description = "\
+In greet.py, change ONLY the message construction so it uses an f-string: \
+msg = f\"Hi, {name}\" instead of string concatenation. Do not rewrite the whole file \
+if you can avoid it. Keep the rest of the file (function structure, print, return, \
+__main__) intact.\n"
+            .to_string();
+        request.task.success_criteria = vec![
+            "greet.py uses f\"Hi, {name}\" (or equivalent f-string Hi greeting)".into(),
+            "greet.py still defines def greet(name)".into(),
+        ];
+        request.config.coder.model = model.clone();
+        request.config.coder.prompt = Some(
+            "You are a careful autonomous coding agent. Hashline edit mode is ENABLED.\n\
+             - read_file returns [path#TAG] and LINE:content anchors.\n\
+             - Prefer hashline_edit for existing files: pass a patch with [path#TAG] and \
+             PUT/CUT ops using + body rows. Re-read after every edit because the tag changes.\n\
+             - write_file is only for brand-new files. edit_file/apply_patch are fallbacks.\n\
+             - When done, submit_report with outcome=succeeded only if the file really changed."
+                .to_string(),
+        );
+        request.config.coder.max_turns = Some(16);
+        request.config.hashline = HashlineConfig {
+            enabled: true,
+            hash_length: 6,
+        };
+        request.config.progress.event_preview_max_chars = 2_000;
+        request.config.progress.max_attempts = 2;
+        request.config.progress.read_only_turn_limit = 6;
+        request.config.trace_dir = Some(
+            dir.path()
+                .join("traces")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        request.config.verifiers = vec![VerifierSpec::ContentContains {
+            id: "hi-fstring".into(),
+            path: "greet.py".into(),
+            must_include: vec!["Hi,".into()],
+        }];
+
+        let backend = LiberadoLoopBackend::new(provider);
+        let result = match backend.run(request).await {
+            Ok(r) => r,
+            Err(e) => panic!("hashline live smoke backend error: {e:#}"),
+        };
+
+        eprintln!(
+            "hashline live smoke: outcome={:?} summary={} files={:?} diagnostics={}",
+            result.outcome,
+            result.summary,
+            result.files_changed,
+            result.diagnostics
+        );
+        if let Some(path) = &result.trace_path {
+            eprintln!("trace: {path}");
+            if let Ok(raw) = std::fs::read_to_string(path) {
+                // Surface whether the model actually used hashline tools.
+                let used_hashline = raw.contains("hashline_edit");
+                let used_read = raw.contains("\"read_file\"") || raw.contains("read_file");
+                eprintln!(
+                    "trace tool hints: hashline_edit={used_hashline} read_file={used_read}"
+                );
+                // Print tool names from events for diagnosis.
+                for line in raw.lines().take(80) {
+                    if line.contains("ToolStarted")
+                        || line.contains("tool_started")
+                        || line.contains("\"name\"")
+                    {
+                        eprintln!("trace-line: {line}");
+                    }
+                }
+            }
+        }
+
+        let content = std::fs::read_to_string(dir.path().join("greet.py")).unwrap();
+        eprintln!("--- greet.py after run ---\n{content}\n--- end ---");
+
+        assert_eq!(
+            result.outcome,
+            Outcome::Succeeded,
+            "expected success; summary={} validation={:?}",
+            result.summary,
+            result.validation_notes
+        );
+        assert!(
+            result
+                .files_changed
+                .iter()
+                .any(|p| p == "greet.py" || p.ends_with("greet.py")),
+            "greet.py should be in files_changed: {:?}",
+            result.files_changed
+        );
+        assert!(
+            content.contains("def greet(name)"),
+            "function signature must remain"
+        );
+        assert!(
+            content.contains("Hi,") && content.contains("name"),
+            "expected Hi greeting with name; got:\n{content}"
+        );
+        assert!(
+            !content.contains("Hello, \" + name") && !content.contains("Hello, \"+ name"),
+            "old concatenation should be gone; got:\n{content}"
         );
     }
 

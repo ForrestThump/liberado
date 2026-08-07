@@ -61,6 +61,8 @@ pub struct CodingSessionPack {
     /// Default concurrency for `payload.subtasks` fan-out
     /// (`tuning.dispatch.max_concurrent_coding_subagents`).
     max_concurrent_coding_subagents: u32,
+    /// Default hashline settings from `[coder.hashline]` in tuning.toml.
+    hashline: liberado_coder_core::HashlineConfig,
 }
 
 impl CodingSessionPack {
@@ -72,6 +74,7 @@ impl CodingSessionPack {
             hub: std::sync::Mutex::new(None),
             max_concurrent_coding_subagents: crate::fanout::DEFAULT_MAX_CONCURRENT_CODING_SUBAGENTS
                 as u32,
+            hashline: liberado_coder_core::HashlineConfig::default(),
         }
     }
 
@@ -87,12 +90,19 @@ impl CodingSessionPack {
             hub: std::sync::Mutex::new(None),
             max_concurrent_coding_subagents: crate::fanout::DEFAULT_MAX_CONCURRENT_CODING_SUBAGENTS
                 as u32,
+            hashline: liberado_coder_core::HashlineConfig::default(),
         }
     }
 
     /// Resource cap for parallel coding subagents (from tuning). Clamped to ≥ 1 at use site.
     pub fn with_max_concurrent_coding_subagents(mut self, n: u32) -> Self {
         self.max_concurrent_coding_subagents = n.max(1);
+        self
+    }
+
+    /// Seed hashline edit mode from `[coder.hashline]` (payload/overrides can still override).
+    pub fn with_hashline(mut self, config: liberado_coder_core::HashlineConfig) -> Self {
+        self.hashline = config;
         self
     }
 

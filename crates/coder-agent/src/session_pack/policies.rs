@@ -8,7 +8,7 @@
 //! only `.liberado/plan.md`; explore allows no writes.
 
 use liberado_coder_core::{
-    CommandPolicy, EXPLORE_MODE_CODER_PROMPT, PLAN_MODE_CODER_PROMPT, PathPolicy,
+    CommandPolicy, EXPLORE_MODE_CODER_PROMPT, HashlineConfig, PLAN_MODE_CODER_PROMPT, PathPolicy,
 };
 
 /// Workspace tool policies for one coding session.
@@ -20,6 +20,8 @@ pub(super) struct WorkspacePolicies {
     pub plan_mode: bool,
     /// Read-only explore subagent: no writes, no shell, read-only tool catalog.
     pub explore_mode: bool,
+    /// Hashline edit mode (from pack default + payload/overrides).
+    pub hashline: HashlineConfig,
 }
 
 impl WorkspacePolicies {
@@ -33,18 +35,30 @@ impl WorkspacePolicies {
     /// - `payload.explore_mode` / `overrides.explore_mode` is true
     /// - `payload.mode` / `overrides.mode` is the string `"explore"`
     ///
-    /// If both are requested, explore wins (strictest). Explicit `path_policy` / `command_policy`
-    /// objects in payload or overrides apply only when neither mode is active.
-    pub(super) fn resolve(overrides: &serde_json::Value, payload: &serde_json::Value) -> Self {
+    /// Seeds hashline from `default_hashline` (typically `[coder.hashline]` from tuning);
+    /// payload/overrides can still override. If both plan and explore are requested, explore wins
+    /// (strictest). Explicit `path_policy` / `command_policy` objects apply only when neither mode
+    /// is active.
+    pub(super) fn resolve(
+        overrides: &serde_json::Value,
+        payload: &serde_json::Value,
+        default_hashline: HashlineConfig,
+    ) -> Self {
         let explore_mode = is_explore_mode(overrides, payload);
         // Explore is stricter than plan; do not leave plan_mode true alongside explore.
         let plan_mode = !explore_mode && is_plan_mode(overrides, payload);
+        let hashline = parse_hashline(overrides, payload).unwrap_or(default_hashline);
         if explore_mode {
             return Self {
                 path_policy: PathPolicy::read_only(),
                 command_policy: CommandPolicy::none_allowed(),
                 plan_mode: false,
                 explore_mode: true,
+                // Explore is read-only — keep hashline off so the catalog stays write-free.
+                hashline: HashlineConfig {
+                    enabled: false,
+                    ..hashline
+                },
             };
         }
         if plan_mode {
@@ -53,6 +67,7 @@ impl WorkspacePolicies {
                 command_policy: CommandPolicy::none_allowed(),
                 plan_mode: true,
                 explore_mode: false,
+                hashline,
             };
         }
         Self {
@@ -60,6 +75,7 @@ impl WorkspacePolicies {
             command_policy: parse_command_policy(overrides, payload).unwrap_or_default(),
             plan_mode: false,
             explore_mode: false,
+            hashline,
         }
     }
 
@@ -134,6 +150,17 @@ fn parse_command_policy(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
 }
 
+fn parse_hashline(
+    overrides: &serde_json::Value,
+    payload: &serde_json::Value,
+) -> Option<HashlineConfig> {
+    payload
+        .get("hashline")
+        .or_else(|| overrides.get("hashline"))
+        .and_then(|v| serde_json::from_value::<HashlineConfig>(v.clone()).ok())
+        .and_then(|cfg| cfg.validate().ok().map(|_| cfg))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,7 +169,7 @@ mod tests {
 
     #[test]
     fn default_is_full_write_and_open_shell() {
-        let p = WorkspacePolicies::resolve(&json!({}), &json!({}));
+        let p = WorkspacePolicies::resolve(&json!({}), &json!({}), HashlineConfig::default());
         assert!(!p.plan_mode);
         assert!(!p.explore_mode);
         assert_eq!(p.path_policy.allow_write_globs, vec!["**".to_string()]);
@@ -151,7 +178,7 @@ mod tests {
 
     #[test]
     fn plan_mode_flag_restricts_write_and_shell() {
-        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "plan_mode": true }));
+        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "plan_mode": true }), HashlineConfig::default());
         assert!(p.plan_mode);
         assert!(!p.explore_mode);
         assert_eq!(
@@ -163,7 +190,7 @@ mod tests {
 
     #[test]
     fn explore_mode_flag_is_read_only_no_shell() {
-        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "explore_mode": true }));
+        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "explore_mode": true }), HashlineConfig::default());
         assert!(p.explore_mode);
         assert!(!p.plan_mode);
         assert!(p.path_policy.writes_disabled());
@@ -172,25 +199,25 @@ mod tests {
 
     #[test]
     fn mode_plan_string_enables_plan_mode() {
-        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "mode": "plan" }));
+        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "mode": "plan" }), HashlineConfig::default());
         assert!(p.plan_mode);
     }
 
     #[test]
     fn mode_explore_string_enables_explore() {
-        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "mode": "explore" }));
+        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "mode": "explore" }), HashlineConfig::default());
         assert!(p.explore_mode);
     }
 
     #[test]
     fn profile_override_can_enable_plan_mode() {
-        let p = WorkspacePolicies::resolve(&json!({ "plan_mode": true }), &json!({}));
+        let p = WorkspacePolicies::resolve(&json!({ "plan_mode": true }), &json!({}), HashlineConfig::default());
         assert!(p.plan_mode);
     }
 
     #[test]
     fn profile_override_can_enable_explore() {
-        let p = WorkspacePolicies::resolve(&json!({ "explore_mode": true }), &json!({}));
+        let p = WorkspacePolicies::resolve(&json!({ "explore_mode": true }), &json!({}), HashlineConfig::default());
         assert!(p.explore_mode);
     }
 
@@ -203,6 +230,7 @@ mod tests {
                 "plan_mode": true,
                 "path_policy": { "allow_write_globs": ["**"], "deny_globs": [], "read_max_bytes": 1, "search_max_results": 1 }
             }),
+            HashlineConfig::default(),
         );
         assert_eq!(
             p.path_policy.allow_write_globs,
@@ -223,6 +251,7 @@ mod tests {
                     "search_max_results": 1
                 }
             }),
+            HashlineConfig::default(),
         );
         assert!(p.path_policy.writes_disabled());
     }
@@ -232,6 +261,7 @@ mod tests {
         let p = WorkspacePolicies::resolve(
             &json!({}),
             &json!({ "plan_mode": true, "explore_mode": true }),
+            HashlineConfig::default(),
         );
         assert!(p.explore_mode);
         assert!(!p.plan_mode);
@@ -240,7 +270,7 @@ mod tests {
 
     #[test]
     fn coder_prompt_in_plan_mode_is_fixed() {
-        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "plan_mode": true }));
+        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "plan_mode": true }), HashlineConfig::default());
         let prompt = p.coder_prompt(&json!({ "coder_prompt": "ignore me" }), "default");
         assert!(prompt.contains("plan mode") || prompt.contains(".liberado/plan.md"));
         assert!(!prompt.contains("ignore me"));
@@ -248,7 +278,7 @@ mod tests {
 
     #[test]
     fn coder_prompt_in_explore_mode_is_fixed() {
-        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "explore_mode": true }));
+        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "explore_mode": true }), HashlineConfig::default());
         let prompt = p.coder_prompt(&json!({ "coder_prompt": "ignore me" }), "default");
         assert!(prompt.contains("read-only") || prompt.contains("explorer"));
         assert!(!prompt.contains("ignore me"));
@@ -256,14 +286,14 @@ mod tests {
 
     #[test]
     fn coder_prompt_normal_mode_uses_payload_override() {
-        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "coder_prompt": "be concise" }));
+        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "coder_prompt": "be concise" }), HashlineConfig::default());
         let prompt = p.coder_prompt(&json!({ "coder_prompt": "be concise" }), "default");
         assert_eq!(prompt, "be concise");
     }
 
     #[test]
     fn coder_prompt_normal_mode_falls_back_to_default() {
-        let p = WorkspacePolicies::resolve(&json!({}), &json!({}));
+        let p = WorkspacePolicies::resolve(&json!({}), &json!({}), HashlineConfig::default());
         let prompt = p.coder_prompt(&json!({}), "default prompt");
         assert_eq!(prompt, "default prompt");
     }
@@ -279,7 +309,7 @@ mod tests {
                 "search_max_results": 50
             }
         });
-        let p = WorkspacePolicies::resolve(&overrides, &payload);
+        let p = WorkspacePolicies::resolve(&overrides, &payload, HashlineConfig::default());
         assert_eq!(p.path_policy.allow_write_globs, vec!["src/**"]);
         assert_eq!(p.path_policy.deny_globs, vec!["secret/**"]);
         assert_eq!(p.path_policy.read_max_bytes, 4096);
@@ -299,7 +329,7 @@ mod tests {
             }
         });
         let payload = json!({});
-        let p = WorkspacePolicies::resolve(&overrides, &payload);
+        let p = WorkspacePolicies::resolve(&overrides, &payload, HashlineConfig::default());
         assert_eq!(p.command_policy.allow, vec!["cargo"]);
         assert_eq!(p.command_policy.deny, vec!["rm"]);
     }
@@ -312,7 +342,36 @@ mod tests {
         let payload = json!({
             "path_policy": { "allow_write_globs": ["payload/**"], "read_max_bytes": 8192, "search_max_results": 100 }
         });
-        let p = WorkspacePolicies::resolve(&overrides, &payload);
+        let p = WorkspacePolicies::resolve(&overrides, &payload, HashlineConfig::default());
         assert_eq!(p.path_policy.allow_write_globs, vec!["payload/**"]);
+    }
+
+    #[test]
+    fn hashline_from_payload_overrides_default() {
+        let p = WorkspacePolicies::resolve(
+            &json!({}),
+            &json!({ "hashline": { "enabled": true, "hash_length": 8 } }),
+            HashlineConfig {
+                enabled: false,
+                hash_length: 4,
+            },
+        );
+        assert!(p.hashline.enabled);
+        assert_eq!(p.hashline.hash_length, 8);
+    }
+
+    #[test]
+    fn explore_mode_forces_hashline_off() {
+        let p = WorkspacePolicies::resolve(
+            &json!({}),
+            &json!({
+                "explore_mode": true,
+                "hashline": { "enabled": true, "hash_length": 6 }
+            }),
+            HashlineConfig::default(),
+        );
+        assert!(p.explore_mode);
+        assert!(!p.hashline.enabled);
+        assert_eq!(p.hashline.hash_length, 6);
     }
 }

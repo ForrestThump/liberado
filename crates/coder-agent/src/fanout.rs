@@ -576,6 +576,7 @@ fn child_request(worktree_root: &Path, task: &CodingSubtask, model: &str) -> Cod
                 max_attempts: 2,
                 ..ProgressPolicy::default()
             },
+            hashline: liberado_coder_core::HashlineConfig::default(),
         },
         attempt: 0,
         prior_feedback: Vec::new(),

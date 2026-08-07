@@ -364,6 +364,53 @@ impl Default for ProgressPolicy {
     }
 }
 
+/// Hashline (line-anchored) edit mode for the coding harness.
+///
+/// Ported from oh-my-pi's hashline dialect: reads emit `[path#TAG]` content-hash headers and
+/// `LINE:content` rows; the `hashline_edit` tool applies `PUT`/`CUT`/`REM` patches that bind to
+/// those tags so stale anchors fail closed instead of corrupting files.
+///
+/// **Default off.** Enable via `[coder.hashline] enabled = true` in `tuning.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HashlineConfig {
+    /// Master switch. When false, `read_file` returns plain content and `hashline_edit` is absent.
+    pub enabled: bool,
+    /// Length of the content-hash tag in characters (inclusive range 4–10).
+    ///
+    /// Tags are uppercase base-36 (`0-9A-Z`) fingerprints of the whole file's normalized text.
+    pub hash_length: u8,
+}
+
+impl Default for HashlineConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            hash_length: 4,
+        }
+    }
+}
+
+impl HashlineConfig {
+    /// Minimum allowed hash length (characters).
+    pub const HASH_LENGTH_MIN: u8 = 4;
+    /// Maximum allowed hash length (characters).
+    pub const HASH_LENGTH_MAX: u8 = 10;
+
+    /// Validate load-time constraints (hash length bounds when enabled or always, for fail-fast).
+    pub fn validate(&self) -> Result<(), String> {
+        if !(Self::HASH_LENGTH_MIN..=Self::HASH_LENGTH_MAX).contains(&self.hash_length) {
+            return Err(format!(
+                "hashline.hash_length must be between {} and {} (got {})",
+                Self::HASH_LENGTH_MIN,
+                Self::HASH_LENGTH_MAX,
+                self.hash_length
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Fully resolved settings for one backend run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CoderRunConfig {
@@ -394,6 +441,9 @@ pub struct CoderRunConfig {
     pub path_policy: PathPolicy,
     #[serde(default)]
     pub progress: ProgressPolicy,
+    /// Hashline edit mode (`[coder.hashline]`). Default off.
+    #[serde(default)]
+    pub hashline: HashlineConfig,
 }
 
 /// Input to a coding backend. PR-factory details such as pushing branches and opening PRs stay
@@ -641,6 +691,7 @@ mod tests {
                 }),
                 path_policy: PathPolicy::default(),
                 progress: ProgressPolicy::default(),
+                hashline: HashlineConfig::default(),
             },
             attempt: 0,
             prior_feedback: Vec::new(),
@@ -691,6 +742,82 @@ mod tests {
         assert!(gate.gatekeeper.is_none());
         assert!(gate.fresh.is_none());
         assert!(gate.strategist.is_none());
+    }
+
+    #[test]
+    fn hashline_config_default_is_disabled_with_length_4() {
+        let h = HashlineConfig::default();
+        assert!(!h.enabled);
+        assert_eq!(h.hash_length, 4);
+        assert!(h.validate().is_ok());
+    }
+
+    #[test]
+    fn hashline_config_rejects_out_of_range_length() {
+        assert!(
+            HashlineConfig {
+                enabled: true,
+                hash_length: 3,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            HashlineConfig {
+                enabled: false,
+                hash_length: 11,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            HashlineConfig {
+                enabled: true,
+                hash_length: 10,
+            }
+            .validate()
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn hashline_config_accepts_every_length_in_range() {
+        for len in HashlineConfig::HASH_LENGTH_MIN..=HashlineConfig::HASH_LENGTH_MAX {
+            assert!(
+                HashlineConfig {
+                    enabled: true,
+                    hash_length: len,
+                }
+                .validate()
+                .is_ok(),
+                "length {len}"
+            );
+        }
+    }
+
+    #[test]
+    fn hashline_config_round_trips_json() {
+        let cfg = HashlineConfig {
+            enabled: true,
+            hash_length: 7,
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: HashlineConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(cfg, back);
+    }
+
+    #[test]
+    fn coder_run_config_deserializes_absent_hashline_as_default() {
+        // Minimal JSON without hashline key — serde default must fill it.
+        let json = r#"{
+            "backend": "liberado-loop",
+            "planner": {"model": "m", "prompt": "p", "max_turns": 1},
+            "coder": {"model": "m", "prompt": "p", "max_turns": 1},
+            "critic": {"model": "m", "prompt": "p", "max_turns": 1}
+        }"#;
+        let cfg: CoderRunConfig = serde_json::from_str(json).unwrap();
+        assert!(!cfg.hashline.enabled);
+        assert_eq!(cfg.hashline.hash_length, 4);
     }
 
     #[test]

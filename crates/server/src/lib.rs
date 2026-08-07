@@ -151,12 +151,18 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         provider.as_ref().map(|p| {
             let work_parent = liberado_bootstrap::data_dir().join("goal-workspaces");
             let _ = std::fs::create_dir_all(&work_parent);
-            Arc::new(
-                liberado_coder_agent::CodingSessionPack::new(p.clone(), work_parent)
+            {
+                let mut pack = liberado_coder_agent::CodingSessionPack::new(p.clone(), work_parent)
                     .with_max_concurrent_coding_subagents(
                         config.tuning.dispatch.max_concurrent_coding_subagents,
-                    ),
-            )
+                    );
+                if let Ok(coder_tuning) =
+                    liberado_coder_core::CoderTuning::from_value(config.tuning.coder.as_ref())
+                {
+                    pack = pack.with_hashline(coder_tuning.hashline);
+                }
+                Arc::new(pack)
+            }
         });
     if let Some(pack) = coding_pack.as_ref() {
         goals_hub.register_pack(Arc::clone(pack) as Arc<dyn liberado_session::DomainPackRunner>);

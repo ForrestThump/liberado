@@ -288,7 +288,8 @@ impl CodingSessionPack {
 
         // Path/command policy from profile overrides + payload
         // (plan = restricted write preset; explore = read-only preset).
-        let policies = WorkspacePolicies::resolve(ctx.overrides(), &goal.payload);
+        let policies =
+            WorkspacePolicies::resolve(ctx.overrides(), &goal.payload, self.hashline.clone());
         let prompt = policies.coder_prompt(
             &goal.payload,
             "You are Liberado's coding worker. Inspect, edit with tools, then submit_report.\n\
@@ -432,6 +433,7 @@ impl CodingSessionPack {
                     },
                     ..ProgressPolicy::default()
                 },
+                hashline: policies.hashline.clone(),
             },
             attempt: 0,
             prior_feedback: Vec::new(),

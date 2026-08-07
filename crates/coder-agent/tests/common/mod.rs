@@ -126,6 +126,7 @@ pub fn base_request(root: &Path) -> CoderRunRequest {
                 max_attempts: 1,
                 ..ProgressPolicy::default()
             },
+            hashline: liberado_coder_core::HashlineConfig::default(),
         },
         attempt: 0,
         prior_feedback: Vec::new(),
