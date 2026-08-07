@@ -3,7 +3,7 @@
 > **Filename note:** path still says `coder` for link stability. The plan is for a **general agentic
 > mesh**; coding is the first **domain pack**, not the product identity.
 
-**Status**: implementation in progress, 2026-07-10  
+**Status**: implementation in progress, 2026-08-06 (**coding pack S1–S6 on develop; S5 /loop still design-only**)  
 **Architecture**: [`../spec/architecture/agentic-loops.md`](../spec/architecture/agentic-loops.md)  
 **Hygiene audit**: [`agentic-mesh-hygiene-audit-2026-07-10.md`](archive/agentic-mesh-hygiene-audit-2026-07-10.md)  
 **Modularity**: [`../spec/architecture/modularity.md`](../spec/architecture/modularity.md)  
@@ -208,11 +208,11 @@ generality: domain-neutral `Goal`/`Session` types (extract when a second domain 
 | Layer | Responsibility | Status |
 |---|---|---|
 | **Surfaces** | TUI / WebUI / CLI / PR MCP render events, send goals, approvals | Chat clients exist; goal-session API not yet |
-| **Goal session** | Multi-role outer loop, verifiers, subagents, terminals, durable state | MVP inside `coder-agent` (single role + post gates) |
+| **Goal session** | Multi-role outer loop, verifiers, subagents, terminals, durable state | Mature via coding pack: fan-out subagents (#72 S6), checkpoints (#73 S4), preflight gate (#74). Planner role still pending. |
 | **Inner loop** | `liberado-executor` tool turns | Production |
-| **Domain tools** | Coding tools, MCP tools, future domains | Coding + MCP both real |
-| **Sandbox / env** | Workspace isolation for coding; capability zones for mesh | Host + Docker scaffold |
-| **Meta-loop** | Evals + heuristics-tuner + draft PRs | Tuner exists; coder evals pending |
+| **Domain tools** | Coding tools, MCP tools, future domains | Coding + MCP both real; hashline edit landed (#76) |
+| **Sandbox / env** | Workspace isolation for coding; capability zones for mesh | Host + Docker scaffold; shadow-git checkpoints (#73); durable worktree park/resume |
+| **Meta-loop** | Evals + heuristics-tuner + draft PRs | Tuner exists; coder evals pending; self-PR quality ladder specced (#74) |
 
 ### Coding crate shape (landed / in progress)
 
@@ -466,13 +466,13 @@ the multi-role machinery. Until then, coding config is enough.
 - Live end-to-end smoke in a container.
 - No host FS access outside mounts and configured caches.
 
-### Phase 6: Multi-role goal session + subagents
+### Phase 6: Multi-role goal session + subagents 🔄 (partial)
 
-- Implement the outer loop graph in `coder-agent` (planner/critic/repair).
+- ~~Implement the outer loop graph in `coder-agent` (planner/critic/repair).~~ Critic + repair landed (Phase 3). **Subagent fan-out landed (S6, #72):** hub-spawned coding children, worktree isolation, parent LLM merge-back, max concurrent 3; nested fan-out refused. **Checkpoints + mid-build resume landed (S4, #73):** shadow-git snapshots per attempt + write-flush, durable worktree park/resume, rewind. **Preflight gate landed (#74):** generic `PreflightRunner` + CI-equivalent ship bar before terminal success.
 - Subagent tool or orchestrator path: child goal, narrowed tools/paths, worktree isolation option,
-  structured Report return, max depth/concurrency config.
-- Failure-signature repair routing (validation message → repair role with tight context).
-- Ensure terminal states cover success / blocked / budget / policy / needs-human / no-changes.
+  structured Report return, max depth/concurrency config. **Mechanism done; missing face `delegate` → coding entry.**
+- Failure-signature repair routing (validation message → repair role with tight context). **Partially landed.**
+- Ensure terminal states cover success / blocked / budget / policy / needs-human / no-changes. **Done.**
 
 ### Phase 7: Empirical evaluation
 

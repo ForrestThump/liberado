@@ -1,9 +1,9 @@
 # Liberado vs Grok Build / OpenCode / Kimi Code — Agentic Coding Harness Gap Analysis
 
-**Status:** research (architect roadmap input) — **updated on `develop` 2026-08-06 (post-#72)**  
+**Status:** research (architect roadmap input) — **updated on `develop` 2026-08-06 (post-#76)**  
 **Original cut:** 2026-08-05 (main + open-PRs-as-landed).  
-**Prior rebaseline:** 2026-08-06 morning (`cf2bb90` + open #71).  
-**Current baseline:** branch **`develop`** tip **`4080608`** (includes #66–#68, dogfood reliability **#71**, self-host dogfood **#70**, coding fan-out **#72**). Draft **#2** closed path only; dogfood artifact **#69** closed without merge (superseded).  
+**Prior rebaseline:** 2026-08-06 afternoon (`4080608` + open #73).  
+**Current baseline:** branch **`develop`** tip **`4fb57e1`** (includes #66–#76, dogfood reliability **#71**, self-host dogfood **#70**, coding fan-out **#72**, checkpoints + mid-build resume + rewind **#73**, generic ship preflight gate **#74**, coverage gap analysis + mutant tests **#75**, configurable hashline edit mode **#76**). Draft **#2** closed path only; dogfood artifact **#69** closed without merge (superseded).  
 **Scope:** Agentic *coding* harness capabilities only — outer loops, isolation, tools, plan/verify, permissions, subagents, resume, coding surfaces. Not life-OS product market, billing, or multi-tenant SaaS.  
 **Method:** In-tree sources for Liberado (`crates/*`, `docs/spec/architecture/*`, coding plans), three FOSS clones (`grok-build/`, `opencode/`, `kimi-code/`), and **live self-host dogfood** ([`self-host-coding-dogfood-2026-08.md`](../self-host-coding-dogfood-2026-08.md)).  
 **Baseline rule:** Judge Liberado from **what is on `develop` + proven dogfood**, not from “open on GitHub main.”  
@@ -13,9 +13,9 @@
 
 ## 1. Executive summary (architect one-pager)
 
-### What Liberado already is (coding) — `develop` tip `4080608`
+### What Liberado already is (coding) — `develop` tip `4fb57e1`
 
-Liberado is a **general agentic orchestration kernel** with a **first domain pack** for coding (`coder-*`). Self-host and **multi-worktree fan-out** are no longer theoretical:
+Liberado is a **general agentic orchestration kernel** with a **first domain pack** for coding (`coder-*`). Self-host, **multi-worktree fan-out**, and **mid-build checkpoint/resume** are no longer theoretical:
 
 | Strength | Why it matters | Develop evidence |
 |---|---|---|
@@ -26,23 +26,25 @@ Liberado is a **general agentic orchestration kernel** with a **first domain pac
 | **Worktree isolation** | Per-session isolation before fan-out | #60 + Windows path fix + data-dir worktrees (#71) |
 | **Self-host PR path (C2)** | Edit → commit → push → PR without TUI | #71 reliability + #70 clean re-dogfood (#69 closed as artifact) |
 | **Coding fan-out (S6 v1)** | Parallel worktree **hub children** + parent LLM merge-back | **#72 on develop** — `payload.subtasks`, concurrency default **3**, children never self-merge |
+| **Checkpoints + mid-build resume (S4)** | Shadow-git checkpoints per attempt + per write-flush; durable park/resume + rewind | **#73 on develop** — `ShadowGit`, `can_resume` after coder role, `POST …/rewind` |
+| **Ship preflight gate** | Generic `PreflightRunner` + coding pack hooks; CI-equivalent ship bar before `Succeeded` | **#74 on develop** — project-configurable preflight steps |
 | **Git tools** | branch/commit/push | Proven live (`liberado@local`) |
 | **Durable multi-surface** | Daemon + TUI + HTTP/SSE + Telegram | Unchanged |
-| **Coding tool core** | FS, search, patch, git, shell, `list_symbols` | On develop |
+| **Coding tool core** | FS, search, patch, git, shell, `list_symbols`, **hashline edit** | On develop; hashline edit mode (#76) |
 
 ### Where Liberado is still behind purpose-built coding harnesses
 
-| Gap class | Liberado on `develop` (post-#72) | FOSS reference |
+| Gap class | Liberado on `develop` (post-#76) | FOSS reference |
 |---|---|---|
 | **Time-based series (`/loop`)** | Design only — **still zero production code** | Grok `/loop`; Kimi session cron |
 | **Within-turn tool parallelism** | Executor tools still **serial** | OpenCode/Kimi parallel settle |
 | **Face `delegate` → coding** | Face still routes to **dispatch** domain only; coding fan-out is pack `subtasks`, not chat delegate | Grok/OpenCode/Kimi task tools from chat |
 | **Coding subagent productization** | **S6 v1 landed** (hub children + merge); missing: face entry, parent completion gate over merge, TUI multi-child chrome, nested fan-out | Grok/OpenCode/Kimi product UX |
 | **Plan mode as product UX** | Preset shipped; **no** approval UI / plan→build grant widen | All three FOSS |
-| **Workspace rewind / checkpoints** | Park yes; **mid-build resume false**; no `/rewind` | Grok/OpenCode |
+| **Workspace rewind / checkpoints** | **S4 landed (#73):** shadow-git checkpoints + park/resume + rewind | Grok/OpenCode |
 | **Gate default-on + bail taxonomy** | Gate opt-in; no Grok-style pause classifiers | Grok/Kimi |
 | **Interactive coding chrome** | Sidebar + stream; thin diffs/permission modes/dashboard | Grok/OpenCode/Kimi product UIs |
-| **Repo intelligence** | `list_symbols` + grep only | Grok graph+LSP; OpenCode LSP/glob |
+| **Repo intelligence** | `list_symbols` + grep + **hashline edit (#76)** | Grok graph+LSP; OpenCode LSP/glob |
 | **Headless CLI packaging** | Daemon+API headless **proven**; no `liberado goal -p` exit codes | `grok -p` / `kimi -p` |
 | **Skills / plugins market** | MCP topology, not skill marketplace | All three |
 
@@ -57,25 +59,25 @@ Liberado is a **general agentic orchestration kernel** with a **first domain pac
 
 Not “clone Grok Build’s TUI.” It means, for **coding jobs of comparable difficulty**:
 
-1. **Outer success loop reliability** — **Self-host PR path proven** (#70/#71); still short of Grok/Kimi bail taxonomy, gate default-on, mid-build resume.
+1. **Outer success loop reliability** — **Self-host PR path proven** (#70/#71); still short of Grok/Kimi bail taxonomy, gate default-on. **Mid-build resume landed (#73).**
 2. **Safe width** — Isolation + **hub fan-out + LLM merge (#72)** landed. Still missing face-entry, serial tools, classifier fan-out, product chrome.
-3. **Interactive control plane** — Plan *policy* shipped; approval UI + rewind **still missing**.
+3. **Interactive control plane** — Plan *policy* shipped; **rewind landed (#73)**; approval UI still missing.
 4. **Recurring improvement** — `/loop` **still unbuilt** (now the largest design-ready zero-code gap).
 5. **Repo orientation / CLI packaging** — efficiency and CI ergonomics, not blockers for single PRs.
 
-### Roadmap shape (recommended bands) — post-#72
+### Roadmap shape (recommended bands) — post-#76
 
 | Band | Theme | Status |
 |---|---|---|
-| **A — Goal product** | Auth, plan/explore, self-host reliability | **Mostly done.** Gate dogfood + chrome + resume remain |
+| **A — Goal product** | Auth, plan/explore, self-host reliability | **Mostly done.** Gate dogfood + chrome remain. Mid-build resume landed (#73). Preflight gate landed (#74). |
 | **B — Isolation → width** | Subagents + merge-back | **S6 v1 done (#72).** Face entry, tool parallel, polish remain |
 | **C — Series loops** | `loops-plan.md` | **Now the top major zero-code gap** |
-| **D — Continuity & chrome** | Checkpoints, UX, headless CLI, LSP | Unchanged |
+| **D — Continuity & chrome** | Checkpoints, UX, headless CLI, LSP | **S4 done (#73):** shadow-git checkpoints + rewind. Plan approval UX, headless CLI, LSP remain. |
 | **E — Measure** | Gate evals, cost on dogfood | Still thin |
 
 ---
 
-## 2. Liberado baseline — `develop` tip `4080608` (2026-08-06 evening)
+## 2. Liberado baseline — `develop` tip `4fb57e1` (2026-08-06 evening)
 
 ### 2.1 What `develop` is now
 
@@ -89,6 +91,10 @@ Integration branch cut from `main` (PR #65 gap analysis), then:
 | **#71** (+ path fix) | Self-host reliability: no-changes-after-commit, live tool events, intake flexible decode, data-dir worktrees, `gh pr create --base` preflight |
 | **#70** | Clean re-dogfood PR (docs note) |
 | **#72** | **S6 fan-out:** hub-spawned coding children on worktree branches, parent LLM merge-back, `max_concurrent_coding_subagents` **default 3** |
+| **#73** | **S4 checkpoints + mid-build resume + rewind:** shadow-git checkpoints per attempt + per write-flush; durable worktree park/resume; `can_resume` after coder role; `POST …/rewind` |
+| **#74** | **Generic ship preflight gate:** `PreflightRunner` + coding pack hooks; CI-equivalent full matrix blocks `Succeeded`; project-configurable steps |
+| **#75** | **Coverage gap analysis + mutant tests:** mutants covered in coder-sandbox, coder-core, config-loader; clippy fixes for Rust 1.94; ~50 tests added |
+| **#76** | **Hashline edit mode:** configurable hashline edit mode for the coding harness |
 
 **Closed without merge:** **#69** (first dogfood one-liner; superseded by write-up + #70/#71). Draft **#2** still not in develop.
 
@@ -107,7 +113,7 @@ Write-up: [`self-host-coding-dogfood-2026-08.md`](../self-host-coding-dogfood-20
 
 ### 2.3 How this changes the original cut
 
-| Original claim (2026-08-05) | Develop now (`4080608`) |
+| Original claim (2026-08-05) | Develop now (`4fb57e1`) |
 |---|---|
 | Project auth open (G-A3) | **Closed** (#66) |
 | Plan mode not first-class | **Preset shipped** (#67); FOSS approval UI still open |
@@ -115,8 +121,11 @@ Write-up: [`self-host-coding-dogfood-2026-08.md`](../self-host-coding-dogfood-20
 | C2 dogfood not run | **Run twice**; #69 closed as artifact; #70 clean |
 | Self-host reliability open | **Closed** (#71 on develop) |
 | Coding subagents / merge-back open (G-W2/G-W5) | **S6 v1 closed** (#72): hub children + parent LLM merge; concurrency default **3** |
-| Parallel width “major gap” | **Partial** — coding fan-out exists; tool serial + face delegate still open |
+| Parallel width "major gap" | **Partial** — coding fan-out exists; tool serial + face delegate still open |
 | Open-PR baseline forward-looking | Prefer develop tip over main-open list |
+| Checkpoints / mid-build resume open | **Closed** (#73): shadow-git snapshots + park/resume/rewind; `can_resume` after coder role |
+| Completion gate only single-reviewer | **Still opt-in**; preflight gate (#74) adds CI-equivalent ship bar before terminal success |
+| No hashline edit anchoring | **Closed** (#76): configurable hashline edit mode in coding harness |
 
 ### Doc drift warning
 
@@ -188,10 +197,11 @@ Legend: **Y** = productized / agent-reachable · **P** = partial / opt-in / test
 | Web search/fetch | **P** (MCP / life tools; not coding pack default) | **Y** | **Y** | **Y** |
 | Skills / plugins / hooks | **P** (MCP + topology) | **Y** | **Y** | **Y** |
 | Chat/session compaction | **Y** (chat); goal-turn compaction **P** | **Y** | **Y** | **Y** |
-| FS checkpoints / rewind | **N** (S4 plan) | **Y** | **Y** (snapshot/revert) | **N** (conversation undo) |
-| Mid-build coding resume | **N** (`can_resume` false after coder role) | **Y** | **Y** (session continue) | **Y** (session; goal → paused) |
+| FS checkpoints / rewind | **Y** (shadow-git #73: snapshots per attempt + write-flush; restore + rewind) | **Y** | **Y** (snapshot/revert) | **N** (conversation undo) |
+| Mid-build coding resume | **Y** (#73: `can_resume` after coder role; durable worktree park/resume) | **Y** | **Y** (session continue) | **Y** (session; goal → paused) |
 | Headless one-shot coding CLI | **P** (API/evals/PR factory) | **Y** (`grok -p`) | **Y** | **Y** (`kimi -p`, goal exit codes) |
 | ACP / editor protocol | **N** planned | **Y** | **Y** | **Y** |
+| Hashline edit anchoring | **Y** (#76: configurable hashline edit mode) | **Y** (hashline anchors) | **P** | **—** |
 
 ### 4.5 Surfaces
 
@@ -259,7 +269,7 @@ turn loop (executor) ⊂ goal (session hub + pack) ⊂ loop (planned) ⊂ meta-l
 | G-A1 | Gate default-off | **Still open** | Dogfood S7: measure cost/quality; enable for coding profiles / “strict” goals; keep opt-out |
 | G-A2 | Live goal stream incomplete | **Partial** — sidebar landed; tool events on #71; role/verifier panes still thin | Finish panes; ensure gate votes stream when gate on |
 | G-A3 | Project root auth | **Done on develop** (#66) | Keep operator `[[projects]]` hygiene; TUI picker polish optional |
-| G-A4 | Mid-build resume | **Still open** | Checkpoint + `can_resume` after coder role (E6-c(b)) |
+| G-A4 | Mid-build resume | **Done on develop** (#73) | Shadow-git checkpoints + `can_resume` + durable worktree park/resume landed; keep re-dogfood |
 | G-A5 | Goal queue | **Still open** | Optional Kimi-style queue on hub |
 | G-A6 | Premature bail | **Still open** | Stop-phrase / no-progress classifiers at goal layer (Grok) |
 | G-A7 | Headless goal CLI | **Still open** | `liberado goal -p` with exit codes for CI/self-improvement |
@@ -411,8 +421,8 @@ Consequence: Liberado is **no longer protected only by accident** — coding can
 | Mechanism | Liberado | Need |
 |---|---|---|
 | Park goal across restart | Y | Keep |
-| Mid-build coding resume | N | Shadow git or worktree snapshot per attempt |
-| `/rewind` file restore | N | OpenCode snapshot or Grok checkpoint store |
+| Mid-build coding resume | **Y** (#73) | Shadow-git per-attempt checkpoints + durable worktree park/resume; keep re-dogfood |
+| `/rewind` file restore | **Y** (#73) | Shadow-git restore over workspace; keep recovery tests |
 | Chat compaction | Y | Extend to long goal turn loops |
 | Cost / cache ordering | #64 + TE track | Finish catalog narrowing (TE1) — 56% spend is orchestrator base context |
 
@@ -444,7 +454,7 @@ These are not “missing features”; they are **performance and reliability deb
 3. **Sync delegate** — multi-hop coding research cannot overlap; face turn blocked.
 4. **Token economics** — orchestrator ~11k base context re-sent (TE1); face protection not paying off in measurements.
 5. **Worktree without apply UX** — isolation without merge productization; parallel workers (when added) still lack a user story. Dogfood used single-session worktree successfully.
-6. **Can_resume false after build starts** — long coding jobs are not restart-safe mid-diff.
+6. **~~Can_resume false after build starts~~** — **fixed on #73**; shadow-git checkpoints + durable worktree mean long coding jobs are now restart-safe. Keep re-dogfood as regression bar.
 7. **No series memory on cron** — until loops land.
 8. **Intake + non-schema providers** — DeepSeek rejects `json_schema`; unconstrained JSON breaks without flexible decode (#71) or `intake.enabled=false`.
 9. **Progress gate vs git_commit** — *was* a hard self-host bug (clean tree after commit = NoChanges); fixed on #71. Keep regression tests.
@@ -471,7 +481,7 @@ Relative to **coding harness job** (not life-OS), **`develop` + dogfood evidence
 | Plan / explore **modes** | Presets on develop; behind FOSS approval UX | **Partial** |
 | Interactive permission UX | Behind all three | **Gap** |
 | Coding tool depth (LSP/graph/web) | Behind Grok/OpenCode | **Gap** |
-| Checkpoints/rewind | Behind Grok/OpenCode | **Major gap** |
+| Checkpoints/rewind | On par after #73 (shadow-git + rewind); behind Grok/OpenCode polish | **Parity-capable** |
 | Multi-surface coding apps | Behind OpenCode/Kimi | Accept or W1 later |
 | Skills/plugins marketplace | Behind all three | **Medium** |
 | Capability/trust topology | **Ahead** | Preserve |
@@ -480,7 +490,7 @@ Relative to **coding harness job** (not life-OS), **`develop` + dogfood evidence
 
 ---
 
-## 11. Architect roadmap implications (ordered) — post-#72
+## 11. Architect roadmap implications (ordered) — post-#76
 
 Priority is for **coding harness performance + parity**, assuming life-OS P1 continues in parallel.
 
@@ -494,7 +504,7 @@ Priority is for **coding harness performance + parity**, assuming life-OS P1 con
 | 4 | Gate dogfood (S7) | **Open** — top remaining A-band quality lever |
 | 5 | Goal surface polish | Partial (sidebar + tool stream; panes/diff UX open) |
 | 6 | Plan approval UX + plan→build handoff | **Open** |
-| 7 | Mid-build resume | **Open** (E6-c(b)) |
+| 7 | Mid-build resume | **Done** (#73): shadow-git checkpoints + durable worktree park/resume |
 
 ### Band B — Width safely
 
@@ -516,9 +526,9 @@ Priority is for **coding harness performance + parity**, assuming life-OS P1 con
 
 ### Band D — Continuity & chrome
 
-16. Checkpoints / `/rewind` (S4).  
+16. ~~Checkpoints / `/rewind` (S4)~~ — **Done (#73).**  
 17. Headless coding CLI packaging (`goal -p` + exit codes) — distinct from proven daemon API headless.  
-18. Repo orientation beyond `list_symbols`.  
+18. Repo orientation beyond `list_symbols` + hashline edit (#76).  
 19. AGENTS.md / skills discovery.  
 20. Coding permission modes + diff review UX.  
 21. TUI multi-child fan-out chrome.
@@ -546,14 +556,17 @@ Priority is for **coding harness performance + parity**, assuming life-OS P1 con
 | 2 | Plan + explore presets | **Done** | — |
 | 3 | Dogfood reliability (#71) | **Done on develop** | — |
 | 4 | Coding fan-out + merge (#72) | **Done on develop** | Grok/OpenCode width |
-| 5 | Live dogfood of `subtasks` fan-out | **Next** | Honesty |
-| 6 | Gate default-on + measure | Open | Grok goal verify |
-| 7 | Checkpoint + mid-build resume | Open | Grok/OpenCode |
-| 8 | Plan approval UX | Open | All three |
-| 9 | Face coding entry / async delegate | Open | All three |
-| 10 | Loops P1–P2 | Open | Grok/Kimi |
-| 11 | TUI diff + permission modes + headless CLI packaging | Open | Grok/OpenCode |
-| 12 | Loops P3–P4 + series dogfood | Open | Grok/Kimi |
+| 5 | Checkpoint + mid-build resume (#73) | **Done on develop** | Grok/OpenCode |
+| 6 | Preflight gate (#74) | **Done on develop** | Self-PR quality |
+| 7 | Coverage gap analysis + mutants (#75) | **Done on develop** | — |
+| 8 | Hashline edit mode (#76) | **Done on develop** | Grok |
+| 9 | Live dogfood of `subtasks` fan-out | **Next** | Honesty |
+| 10 | Gate default-on + measure | Open | Grok goal verify |
+| 11 | Plan approval UX | Open | All three |
+| 12 | Face coding entry / async delegate | Open | All three |
+| 13 | Loops P1–P2 | Open | Grok/Kimi |
+| 14 | TUI diff + permission modes + headless CLI packaging | Open | Grok/OpenCode |
+| 15 | Loops P3–P4 + series dogfood | Open | Grok/Kimi |
 
 ---
 
@@ -616,14 +629,16 @@ Priority is for **coding harness performance + parity**, assuming life-OS P1 con
 
 ---
 
-## 14. Bottom line (updated 2026-08-06 evening — post-#72)
+## 14. Bottom line (updated 2026-08-06 evening — post-#76)
 
 ### Where we are
 
-On **`develop` `4080608`**, Liberado closed two clusters the original analysis treated as open or half-open:
+On **`develop` `4fb57e1`**, Liberado closed four clusters the original analysis treated as open or half-open:
 
 1. **Point at a real repo and ship a PR** — project auth, plan/explore presets, worktree isolation, git tools, self-host reliability (#71), proven re-dogfood (#70).
 2. **Safe parallel width for coding** — hub-spawned worktree children + parent LLM merge-back (#72), concurrency default **3**. Architecture questions (where workers work / how merge / who resolves conflict) are **answered in code**, not only in the plan.
+3. **Durable checkpoints + mid-build resume** — shadow-git snapshots per attempt + write-flush, durable worktree park/resume, rewind (#73). Long coding jobs are now restart-safe.
+4. **Ship preflight gate** — generic `PreflightRunner` + CI-equivalent full matrix (#74); blocks terminal success until green. Hashline edit anchoring landed (#76).
 
 Dogfood still taught the meta-lesson: **architecture ≠ performance** until a live run hits the bugs. Fan-out now needs the same honesty: **live multi-subtask dogfood** is the next proof, not more design.
 
@@ -632,11 +647,10 @@ Dogfood still taught the meta-lesson: **architecture ≠ performance** until a l
 | Rank | Gap | Why it still matters |
 |---|---|---|
 | **1** | **`/loop` series memory** | Design ready, **zero code** — largest remaining design-ready hole |
-| **2** | **Checkpoints / mid-build resume** | Long jobs not restart-safe |
-| **3** | **Gate default-on + bail taxonomy** | Maker≠checker still optional in practice |
-| **4** | **Product chrome** (plan approval, diffs, permission modes, multi-child TUI) | Presets + fan-out exist; FOSS cadence does not |
-| **5** | **Face entry + serial tools** | Fan-out is pack payload; chat still can’t casually `task` a coding swarm; tools still serial |
-| **6** | **Repo intelligence + CLI packaging** | Orientation efficiency + `goal -p` exit codes — not blockers for single PRs |
+| **2** | **Gate default-on + bail taxonomy** | Maker≠checker still optional in practice |
+| **3** | **Product chrome** (plan approval, diffs, permission modes, multi-child TUI) | Presets + fan-out exist; FOSS cadence does not |
+| **4** | **Face entry + serial tools** | Fan-out is pack payload; chat still can't casually `task` a coding swarm; tools still serial |
+| **5** | **Repo intelligence + CLI packaging** | Orientation efficiency + `goal -p` exit codes — not blockers for single PRs |
 
 ### Preserve
 
@@ -646,9 +660,9 @@ Dogfood still taught the meta-lesson: **architecture ≠ performance** until a l
 
 1. **Live dogfood** of `payload.subtasks` fan-out under a real model (unit tests already green).  
 2. **Gate measure / optional default-on** for coding profiles (S7).  
-3. **Mid-build resume** or **plan-approval chrome** (continuity / UX).  
+3. **Plan-approval chrome** or **face coding entry** (UX / width).  
 4. **`/loop` P1** when recurring improvement is the product bottleneck.  
-5. Keep **self-host + fan-out** re-dogfood as regression bars.  
+5. Keep **self-host + fan-out + checkpoint** re-dogfood as regression bars.  
 6. Land develop stack onto **main** when ready.
 
-**Baseline truth:** `develop` tip, dogfood write-up, PRs **#70–#72** — not “still open on main.”
+**Baseline truth:** `develop` tip, dogfood write-up, PRs **#70–#76** — not "still open on main."
