@@ -12,7 +12,8 @@ use liberado_common::{Error, Result};
 
 use crate::{
     CoderCommandConfig, CoderGateConfig, CoderRoleConfig, CoderRunConfig, CommandPolicy,
-    LIBERADO_LOOP_BACKEND, PathPolicy, PipelinePolicy, ProgressPolicy, SandboxSpec, VerifierSpec,
+    HashlineConfig, LIBERADO_LOOP_BACKEND, PathPolicy, PipelinePolicy, ProgressPolicy, SandboxSpec,
+    VerifierSpec,
 };
 use serde::{Deserialize, Serialize};
 
@@ -52,6 +53,9 @@ pub struct CoderTuning {
     pub verify_policy: PipelinePolicy,
     pub path_policy: PathPolicy,
     pub progress: ProgressPolicy,
+    /// `[tuning.coder.hashline]` — line-anchored hashline edit mode (default off).
+    #[serde(default)]
+    pub hashline: HashlineConfig,
 }
 
 impl CoderTuning {
@@ -85,6 +89,7 @@ impl CoderTuning {
             verify_policy: self.verify_policy.clone(),
             path_policy: self.path_policy.clone(),
             progress: self.progress.clone(),
+            hashline: self.hashline.clone(),
         }
     }
 
@@ -157,6 +162,9 @@ impl CoderTuning {
                 "tuning.coder.validation_command.program must not be empty".into(),
             ));
         }
+        self.hashline
+            .validate()
+            .map_err(|e| Error::Config(format!("tuning.coder.{e}")))?;
         Ok(())
     }
 }
@@ -178,6 +186,7 @@ impl Default for CoderTuning {
             verify_policy: PipelinePolicy::default(),
             path_policy: PathPolicy::default(),
             progress: ProgressPolicy::default(),
+            hashline: HashlineConfig::default(),
         }
     }
 }
@@ -328,6 +337,30 @@ mod tests {
         let config = tuning.run_config();
         assert_eq!(config.backend, tuning.backend);
         assert_eq!(config.planner.model, tuning.planner.model);
+        assert_eq!(config.hashline, tuning.hashline);
+    }
+
+    #[test]
+    fn parses_hashline_section() {
+        let value: toml::Value = toml::from_str(
+            r#"
+            [hashline]
+            enabled = true
+            hash_length = 8
+            "#,
+        )
+        .unwrap();
+        let tuning = CoderTuning::from_value(Some(&value)).unwrap();
+        assert!(tuning.hashline.enabled);
+        assert_eq!(tuning.hashline.hash_length, 8);
+    }
+
+    #[test]
+    fn validation_rejects_hashline_length_out_of_range() {
+        let mut tuning = CoderTuning::default();
+        tuning.hashline.hash_length = 2;
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("hash_length"));
     }
 
     #[test]

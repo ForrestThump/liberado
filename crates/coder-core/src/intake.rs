@@ -1040,6 +1040,7 @@ mod tests {
                 verify_policy: Default::default(),
                 path_policy: Default::default(),
                 progress: Default::default(),
+                hashline: Default::default(),
             },
             attempt: 0,
             prior_feedback: vec![],

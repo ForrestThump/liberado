@@ -416,6 +416,7 @@ fn build_request(
                 max_attempts,
                 event_preview_max_chars: 200,
             },
+            hashline: liberado_coder_core::HashlineConfig::default(),
         },
         attempt: 0,
         prior_feedback: Vec::new(),

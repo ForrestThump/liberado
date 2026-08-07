@@ -90,6 +90,16 @@
 # max_attempts = 3
 # event_preview_max_chars = 500
 
+# --- Hashline edit mode --------------------------------------------------------------------
+# Line-anchored patches (oh-my-pi style): read_file emits [path#TAG] + LINE:content; the
+# hashline_edit tool applies PUT/CUT/REM patches bound to the content-hash tag so stale
+# anchors fail closed. TAG alphabet is uppercase base-36 (0-9A-Z).
+#
+# Default off — exact-string edit_file/apply_patch remain the default path.
+# [coder.hashline]
+# enabled = false
+# hash_length = 4              # 4–10 characters
+
 # Harness gates (docs/architecture/verifiers.md). Prefer a frozen GoalContract from intake /
 # PR-dispatch freeze in product flows; these are static defaults for a project / eval run.
 # Legacy single command still works:

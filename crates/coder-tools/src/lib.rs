@@ -1,5 +1,7 @@
 //! Coding tool runtime for Liberado's Rust-native agent loop.
 
+mod hashline;
+
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
@@ -7,7 +9,9 @@ use std::{
 };
 
 use async_trait::async_trait;
-use liberado_coder_core::{CommandPolicy, EXPLORE_TOOL_NAMES, PathPolicy, SandboxSpec};
+use liberado_coder_core::{
+    CommandPolicy, EXPLORE_TOOL_NAMES, HashlineConfig, PathPolicy, SandboxSpec,
+};
 use liberado_coder_sandbox::{
     CommandRequest, DockerWorkspace, HostWorkspace, SandboxError, Workspace, WorktreeWorkspace,
 };
@@ -17,6 +21,10 @@ use liberado_provider::{ToolDef, ToolInvocation};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
+
+pub use hashline::{
+    compute_file_hash as hashline_compute_file_hash, prompt_guidance as hashline_prompt_guidance,
+};
 
 #[derive(Debug, Error)]
 pub enum ToolError {
@@ -35,6 +43,7 @@ pub struct CodingToolRuntime {
     workspace: Arc<dyn Workspace>,
     path_policy: PathPolicy,
     validation_command: Option<CommandRequest>,
+    hashline: HashlineConfig,
 }
 
 /// Base directory for coding worktrees (`LIBERADO_DATA_DIR/coding-worktrees`, else
@@ -174,12 +183,23 @@ impl CodingToolRuntime {
             workspace: Arc::new(workspace),
             path_policy,
             validation_command: None,
+            hashline: HashlineConfig::default(),
         }
     }
 
     pub fn with_validation_command(mut self, command: CommandRequest) -> Self {
         self.validation_command = Some(command);
         self
+    }
+
+    /// Enable or configure hashline (line-anchored) edit mode.
+    pub fn with_hashline(mut self, config: HashlineConfig) -> Self {
+        self.hashline = config;
+        self
+    }
+
+    pub fn hashline(&self) -> &HashlineConfig {
+        &self.hashline
     }
 
     pub fn workspace_root(&self) -> &Path {
@@ -213,6 +233,7 @@ impl CodingToolRuntime {
             "write_file" => self.write_file(args).await,
             "edit_file" => self.edit_file(args).await,
             "apply_patch" => self.apply_patch(args).await,
+            "hashline_edit" => self.hashline_edit(args).await,
             "git_status" => self.git_status().await,
             "git_diff" => self.git_diff(args).await,
             "git_branch" => self.git_branch(args).await,
@@ -343,9 +364,122 @@ impl CodingToolRuntime {
         let path = self.rel_path(&args.path, false)?;
         let bytes = std::fs::read(&path).map_err(fs_err)?;
         let capped = cap_bytes(bytes, self.path_policy.read_max_bytes);
-        let content = String::from_utf8_lossy(&capped).into_owned();
-        let content = slice_lines(&content, args.start_line, args.line_count);
+        let full = String::from_utf8_lossy(&capped).into_owned();
+        let start = args.start_line.unwrap_or(1).max(1);
+        let content = slice_lines(&full, args.start_line, args.line_count);
+
+        if self.hashline.enabled {
+            // Hash is always over the full file so tags stay stable across partial reads.
+            let tag = hashline::compute_file_hash(&full, self.hashline.hash_length);
+            let mut formatted = hashline::format_header(&args.path, &tag);
+            formatted.push('\n');
+            for (i, line) in content.split('\n').enumerate() {
+                let line = line.strip_suffix('\r').unwrap_or(line);
+                if i > 0 {
+                    formatted.push('\n');
+                }
+                formatted.push_str(&format!("{}:{line}", start + i));
+            }
+            if content.ends_with('\n') {
+                formatted.push('\n');
+            }
+            return Ok(json!({
+                "path": args.path,
+                "content": formatted,
+                "hashline": true,
+                "tag": tag,
+                "start_line": start,
+            }));
+        }
+
         Ok(json!({ "path": args.path, "content": content }))
+    }
+
+    async fn hashline_edit(&self, args: Value) -> Result<Value, ToolError> {
+        if !self.hashline.enabled {
+            return Err(ToolError::BadRequest(
+                "hashline_edit is disabled; set [coder.hashline] enabled = true in tuning.toml"
+                    .into(),
+            ));
+        }
+        #[derive(Deserialize)]
+        struct Args {
+            /// Full hashline patch: one or more `[path#TAG]` sections with PUT/CUT/REM ops.
+            input: String,
+        }
+        let args: Args = parse_args(args)?;
+        if args.input.trim().is_empty() {
+            return Err(ToolError::BadRequest(
+                "input must not be empty".to_string(),
+            ));
+        }
+
+        let sections = hashline::parse_patch(&args.input).map_err(ToolError::BadRequest)?;
+        let hash_length = self.hashline.hash_length;
+
+        // Resolve policy + read all targets first (all-or-nothing preflight helpers).
+        let mut resolved: Vec<(String, PathBuf, bool)> = Vec::with_capacity(sections.len());
+        for section in &sections {
+            let write = true;
+            let path = self.rel_path(&section.path, write)?;
+            resolved.push((section.path.clone(), path, write));
+        }
+
+        let reports = {
+            let resolved = &resolved;
+            hashline::apply_patch_sections(
+                &sections,
+                hash_length,
+                true,
+                |rel| {
+                    let path = resolved
+                        .iter()
+                        .find(|(p, _, _)| p == rel)
+                        .map(|(_, path, _)| path.clone())
+                        .ok_or_else(|| format!("unknown path {rel}"))?;
+                    std::fs::read_to_string(&path).map_err(|e| format!("read {rel}: {e}"))
+                },
+                |rel, content| {
+                    let path = resolved
+                        .iter()
+                        .find(|(p, _, _)| p == rel)
+                        .map(|(_, path, _)| path.clone())
+                        .ok_or_else(|| format!("unknown path {rel}"))?;
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| format!("mkdir {rel}: {e}"))?;
+                    }
+                    std::fs::write(&path, content.as_bytes())
+                        .map_err(|e| format!("write {rel}: {e}"))
+                },
+                |rel| {
+                    let path = resolved
+                        .iter()
+                        .find(|(p, _, _)| p == rel)
+                        .map(|(_, path, _)| path.clone())
+                        .ok_or_else(|| format!("unknown path {rel}"))?;
+                    std::fs::remove_file(&path).map_err(|e| format!("remove {rel}: {e}"))
+                },
+            )
+            .map_err(ToolError::BadRequest)?
+        };
+
+        let files: Vec<Value> = reports
+            .iter()
+            .map(|r| {
+                json!({
+                    "path": r.path,
+                    "op": r.op,
+                    "tag": r.file_hash,
+                    "first_changed_line": r.first_changed_line,
+                })
+            })
+            .collect();
+        Ok(json!({
+            "files": files,
+            "sections": files.len(),
+            "hashline": true,
+        }))
     }
 
     async fn write_file(&self, args: Value) -> Result<Value, ToolError> {
@@ -762,6 +896,20 @@ impl ToolRuntime for CodingToolRuntime {
                 }),
             ),
             tool(
+                "hashline_edit",
+                "Apply a line-anchored hashline patch. Each section starts with [path#TAG] from read_file; use PUT N.=M: / PUT <N: / PUT >N: / CUT N.=M / REM with + body rows.",
+                json!({
+                    "type": "object",
+                    "required": ["input"],
+                    "properties": {
+                        "input": {
+                            "type": "string",
+                            "description": "Hashline patch text with [path#TAG] sections and PUT/CUT/REM operations."
+                        }
+                    }
+                }),
+            ),
+            tool(
                 "git_status",
                 "Return git status --porcelain.",
                 json!({ "type": "object" }),
@@ -832,6 +980,13 @@ impl ToolRuntime for CodingToolRuntime {
                 json!({ "type": "object" }),
             ),
         ];
+        let full: Vec<ToolDef> = if self.hashline.enabled {
+            full
+        } else {
+            full.into_iter()
+                .filter(|t| t.name != "hashline_edit")
+                .collect()
+        };
         if self.path_policy.writes_disabled() {
             full.into_iter()
                 .filter(|t| EXPLORE_TOOL_NAMES.contains(&t.name.as_str()))
@@ -1365,6 +1520,261 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(read["content"], "pub fn answer() -> u8 { 42 }");
+    }
+
+    #[tokio::test]
+    async fn hashline_read_and_edit_when_enabled() {
+        let (dir, runtime) = runtime();
+        let runtime = runtime.with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 6,
+        });
+        std::fs::write(dir.path().join("greet.py"), "def greet(name):\n    print(name)\n").unwrap();
+
+        let read = runtime
+            .invoke_json("read_file", json!({"path": "greet.py"}))
+            .await
+            .unwrap();
+        assert_eq!(read["hashline"], true);
+        let tag = read["tag"].as_str().unwrap();
+        assert_eq!(tag.len(), 6);
+        let content = read["content"].as_str().unwrap();
+        assert!(content.starts_with(&format!("[greet.py#{tag}]")));
+        assert!(content.contains("1:def greet(name):"));
+
+        // hashline_edit is in the catalog only when enabled
+        assert!(
+            runtime
+                .catalog()
+                .iter()
+                .any(|t| t.name == "hashline_edit")
+        );
+
+        let patch = format!(
+            "[greet.py#{tag}]\nPUT 1.=2:\n+def greet(name):\n+    print(f'Hi {{name}}')\n"
+        );
+        let result = runtime
+            .invoke_json("hashline_edit", json!({ "input": patch }))
+            .await
+            .unwrap();
+        assert_eq!(result["sections"], 1);
+        let updated = std::fs::read_to_string(dir.path().join("greet.py")).unwrap();
+        assert!(updated.contains("Hi {name}") || updated.contains("f'Hi"));
+    }
+
+    #[tokio::test]
+    async fn hashline_edit_absent_when_disabled() {
+        let (_dir, runtime) = runtime();
+        assert!(
+            !runtime
+                .catalog()
+                .iter()
+                .any(|t| t.name == "hashline_edit")
+        );
+        let err = runtime
+            .invoke_json("hashline_edit", json!({ "input": "[a#AAAA]\nREM" }))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("disabled"));
+    }
+
+    #[tokio::test]
+    async fn hashline_partial_read_uses_full_file_tag() {
+        let (dir, runtime) = runtime();
+        let runtime = runtime.with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 5,
+        });
+        let full = "line1\nline2\nline3\nline4\n";
+        std::fs::write(dir.path().join("n.txt"), full).unwrap();
+        let expected_tag = hashline_compute_file_hash(full, 5);
+
+        let read = runtime
+            .invoke_json(
+                "read_file",
+                json!({"path": "n.txt", "start_line": 2, "line_count": 2}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read["tag"], expected_tag);
+        let content = read["content"].as_str().unwrap();
+        assert!(content.starts_with(&format!("[n.txt#{expected_tag}]")));
+        assert!(content.contains("2:line2"));
+        assert!(content.contains("3:line3"));
+        assert!(!content.contains("1:line1"));
+    }
+
+    #[tokio::test]
+    async fn hashline_edit_rejects_stale_tag_without_write() {
+        let (dir, runtime) = runtime();
+        let runtime = runtime.with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 4,
+        });
+        std::fs::write(dir.path().join("a.txt"), "original\n").unwrap();
+        let err = runtime
+            .invoke_json(
+                "hashline_edit",
+                json!({ "input": "[a.txt#ZZZZ]\nPUT 1.=1:\n+mutated\n" }),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("stale"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "original\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn hashline_edit_rejects_empty_input() {
+        let (_dir, runtime) = runtime();
+        let runtime = runtime.with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 4,
+        });
+        let err = runtime
+            .invoke_json("hashline_edit", json!({ "input": "  \n" }))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("empty") || err.to_string().contains("hashline"));
+    }
+
+    #[tokio::test]
+    async fn hashline_edit_multi_file_atomic() {
+        let (dir, runtime) = runtime();
+        let runtime = runtime.with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 4,
+        });
+        std::fs::write(dir.path().join("a.txt"), "aaa\n").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "bbb\n").unwrap();
+        let a_tag = hashline_compute_file_hash("aaa\n", 4);
+        let b_tag = hashline_compute_file_hash("bbb\n", 4);
+        let patch = format!(
+            "[a.txt#{a_tag}]\nPUT 1.=1:\n+AAA\n[b.txt#{b_tag}]\nPUT 1.=1:\n+BBB"
+        );
+        let result = runtime
+            .invoke_json("hashline_edit", json!({ "input": patch }))
+            .await
+            .unwrap();
+        assert_eq!(result["sections"], 2);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "AAA\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("b.txt")).unwrap(),
+            "BBB\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn hashline_edit_rem_deletes_file() {
+        let (dir, runtime) = runtime();
+        let runtime = runtime.with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 4,
+        });
+        let content = "delete me\n";
+        std::fs::write(dir.path().join("trash.txt"), content).unwrap();
+        let tag = hashline_compute_file_hash(content, 4);
+        let result = runtime
+            .invoke_json(
+                "hashline_edit",
+                json!({ "input": format!("[trash.txt#{tag}]\nREM") }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["files"][0]["op"], "delete");
+        assert!(!dir.path().join("trash.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn hashline_edit_respects_path_policy() {
+        let (dir, _base) = runtime();
+        let mut policy = PathPolicy::default();
+        policy.allow_write_globs = vec!["ok/**".into()];
+        let runtime = CodingToolRuntime::new(dir.path(), CommandPolicy::default(), policy)
+            .unwrap()
+            .with_hashline(HashlineConfig {
+                enabled: true,
+                hash_length: 4,
+            });
+        std::fs::create_dir_all(dir.path().join("ok")).unwrap();
+        std::fs::write(dir.path().join("ok/a.txt"), "x\n").unwrap();
+        std::fs::write(dir.path().join("secret.txt"), "y\n").unwrap();
+        let secret_tag = hashline_compute_file_hash("y\n", 4);
+        let err = runtime
+            .invoke_json(
+                "hashline_edit",
+                json!({
+                    "input": format!("[secret.txt#{secret_tag}]\nPUT 1.=1:\n+z\n")
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("denied") || err.to_string().contains("path"),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("secret.txt")).unwrap(),
+            "y\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn hashline_edit_cut_and_insert() {
+        let (dir, runtime) = runtime();
+        let runtime = runtime.with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 6,
+        });
+        let content = "one\ntwo\nthree\n";
+        std::fs::write(dir.path().join("c.txt"), content).unwrap();
+        let tag = hashline_compute_file_hash(content, 6);
+        let patch = format!(
+            "[c.txt#{tag}]\nCUT 2.=2\nPUT >1:\n+inserted\n"
+        );
+        runtime
+            .invoke_json("hashline_edit", json!({ "input": patch }))
+            .await
+            .unwrap();
+        let after = std::fs::read_to_string(dir.path().join("c.txt")).unwrap();
+        assert_eq!(after, "one\ninserted\nthree\n");
+    }
+
+    #[tokio::test]
+    async fn hashline_catalog_present_only_when_enabled() {
+        let (_dir, off) = runtime();
+        assert!(!off.catalog().iter().any(|t| t.name == "hashline_edit"));
+        let on = off.with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 4,
+        });
+        assert!(on.catalog().iter().any(|t| t.name == "hashline_edit"));
+        // Explore (read-only) still omits write tools including hashline_edit.
+        let dir = tempfile::tempdir().unwrap();
+        let ro = CodingToolRuntime::new(
+            dir.path(),
+            CommandPolicy::default(),
+            PathPolicy::read_only(),
+        )
+        .unwrap()
+        .with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 4,
+        });
+        assert!(!ro.catalog().iter().any(|t| t.name == "hashline_edit"));
+        assert!(ro.catalog().iter().any(|t| t.name == "read_file"));
+    }
+
+    #[test]
+    fn hashline_prompt_guidance_export_is_nonempty() {
+        let g = hashline_prompt_guidance(4);
+        assert!(g.contains("hashline_edit"));
+        assert!(g.contains('4'));
     }
 
     #[tokio::test]
