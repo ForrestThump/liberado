@@ -20,6 +20,7 @@ use liberado_coder_core::{
     CoderTask, CommandPolicy, HashlineConfig, ProgressPolicy, SandboxSpec, VerifierSpec,
     WorkspaceRef,
 };
+use liberado_coder_tools::repo_map::{self, RepoMapOptions};
 use liberado_common::Outcome;
 use liberado_config_loader::{ProviderProfile, Topology};
 use liberado_provider::Provider;
@@ -106,6 +107,12 @@ async fn run_headless(
 
     let workspace_summary = build_workspace_summary(&workspace).unwrap_or_default();
 
+    let repo_map = repo_map::generate_repo_map(
+        &workspace,
+        &RepoMapOptions::default(),
+    )
+    .await;
+
     let session_context = if let Some(ref sid) = session_id {
         let prior = load_prior_rounds(&workspace, sid)?;
         if !prior.is_empty() {
@@ -117,7 +124,12 @@ async fn run_headless(
         None
     };
 
-    let mut task_context = workspace_summary;
+    let mut task_context = String::new();
+    if let Some(rm) = repo_map {
+        task_context.push_str(&rm);
+        task_context.push_str("\n\n");
+    }
+    task_context.push_str(&workspace_summary);
     if let Some(sc) = session_context {
         if !task_context.is_empty() {
             task_context.push_str("\n\n");

@@ -1,6 +1,7 @@
 //! Coding tool runtime for Liberado's Rust-native agent loop.
 
 mod hashline;
+pub mod repo_map;
 
 use std::{
     collections::{HashMap, VecDeque},

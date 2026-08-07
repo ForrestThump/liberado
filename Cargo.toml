@@ -48,6 +48,11 @@ sha2 = "0.10"
 rand = "0.8"
 cron = "0.12"
 regex = "1"
+tree-sitter = "0.25"
+tree-sitter-rust = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.23"
 
 # --- internal crates ---
 liberado-bootstrap = { path = "crates/bootstrap" }
@@ -145,3 +150,4 @@ codegen-units = 1
 inherits = "release"
 opt-level = "s"   # dx's value; release's 3 costs ~250 KB here
 strip = "debuginfo"
+# vim: set ts=4 sw=4 sts=4 et:
