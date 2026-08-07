@@ -16,8 +16,9 @@ use std::{
 
 use liberado_coder_agent::{CoderProviderFactory, LiberadoLoopBackend};
 use liberado_coder_core::{
-    CoderBackend, CoderError, CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask,
-    CommandPolicy, ProgressPolicy, SandboxSpec, WorkspaceRef,
+    CoderBackend, CoderError, CoderGateConfig, CoderRoleConfig, CoderRunConfig, CoderRunRequest,
+    CoderTask, CommandPolicy, HashlineConfig, ProgressPolicy, SandboxSpec, VerifierSpec,
+    WorkspaceRef,
 };
 use liberado_common::Outcome;
 use liberado_config_loader::{ProviderProfile, Topology};
@@ -27,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 const PROVIDER_ENV: &str = "LIBERADO_CODER_PROVIDER";
 const DEFAULT_MODEL: &str = "deepseek-chat";
-const DEFAULT_MAX_TURNS: u32 = 30;
+const DEFAULT_MAX_TURNS: u32 = 50;
 const DEFAULT_API_KEY_ENV: &str = "DEEPSEEK_API_KEY";
 const DEFAULT_BASE_URL: &str = "https://api.deepseek.com/v1";
 
@@ -103,6 +104,8 @@ async fn run_headless(
 
     ensure_git_repo(&workspace).await?;
 
+    let workspace_summary = build_workspace_summary(&workspace).unwrap_or_default();
+
     let session_context = if let Some(ref sid) = session_id {
         let prior = load_prior_rounds(&workspace, sid)?;
         if !prior.is_empty() {
@@ -114,7 +117,14 @@ async fn run_headless(
         None
     };
 
-    let task_context = session_context;
+    let mut task_context = workspace_summary;
+    if let Some(sc) = session_context {
+        if !task_context.is_empty() {
+            task_context.push_str("\n\n");
+        }
+        task_context.push_str(&sc);
+    }
+    let task_context = if task_context.is_empty() { None } else { Some(task_context) };
 
     let request = CoderRunRequest {
         task: CoderTask {
@@ -136,13 +146,18 @@ async fn run_headless(
                 prompt_path: None,
                 prompt: Some(
                     "You are Liberado's coding agent. Edit files in the workspace to complete \
-                     the task. Use these tools as needed: \
+                     the task. Use these tools: \
                      read_file, write_file (auto-creates parent directories), edit_file, \
-                     apply_patch, hashline_edit, search_text, list_files, list_symbols, \
+                     apply_patch, hashline_edit (line-anchored edits — use read_file first \
+                     to get [path#TAG] headers, then hashline_edit with PUT/CUT/REM ops), \
+                     search_text, list_files, list_symbols, \
                      git_status, git_diff, git_log, git_branch, git_commit, git_push, \
-                     git_fetch, git_merge, run_command, validate. \
-                     Git safe.directory is configured automatically — do not waste turns on it. \
-                     When done, call submit_report with a summary of what changed."
+                     git_fetch, git_merge, run_command, run_command_background (start long \
+                     builds/tests without blocking; use check_background to poll for results), \
+                     validate. \
+                     Git safe.directory is configured automatically. write_file creates \
+                     missing directories. You have TWO attempts — if the first fails, \
+                     you will see feedback and can retry. When done, call submit_report."
                         .to_string(),
                 ),
                 temperature: None,
@@ -150,19 +165,28 @@ async fn run_headless(
                 max_turns: Some(max_turns),
             },
             critic: disabled_role(),
-            gate: Default::default(),
+            gate: CoderGateConfig {
+                enabled: false,
+                ..Default::default()
+            },
             repair: None,
             sandbox: SandboxSpec::HostLocal,
             command_policy: CommandPolicy::default(),
             validation_command: None,
-            verifiers: Vec::new(),
+            verifiers: vec![VerifierSpec::GitNonemptyDiff {
+                id: "nonempty-diff".into(),
+            }],
             verify_policy: Default::default(),
             path_policy: Default::default(),
             progress: ProgressPolicy {
-                max_attempts: 1,
+                max_attempts: 2,
+                read_only_turn_limit: 6,
                 ..Default::default()
             },
-            hashline: Default::default(),
+            hashline: HashlineConfig {
+                enabled: true,
+                hash_length: 7,
+            },
         },
         attempt: 0,
         prior_feedback: Vec::new(),
@@ -217,6 +241,50 @@ fn disabled_role() -> CoderRoleConfig {
         max_tokens: None,
         max_turns: Some(4),
     }
+}
+
+// --- workspace summary (cold-start context injection) -------------------
+
+fn build_workspace_summary(workspace: &Path) -> Option<String> {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("Workspace contents:".to_string());
+
+    let mut files: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(workspace) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let rel = path.strip_prefix(workspace).unwrap_or(&path);
+            let rel_str = rel.display().to_string();
+            if rel_str.starts_with(".git") || rel_str.starts_with(".liberado") {
+                continue;
+            }
+            if path.is_dir() {
+                let count = std::fs::read_dir(&path)
+                    .map(|d| d.flatten().count())
+                    .unwrap_or(0);
+                files.push(format!("  {}/  ({} files)", rel_str, count));
+            } else {
+                let size = std::fs::metadata(&path)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                files.push(format!("  {}  ({} bytes)", rel_str, size));
+            }
+        }
+    }
+
+    if files.is_empty() {
+        lines.push("  (empty workspace)".to_string());
+    } else {
+        // Cap at 40 entries
+        let total = files.len();
+        files.truncate(40);
+        lines.extend(files);
+        if total > 40 {
+            lines.push(format!("  ... and {} more entries", total - 40));
+        }
+    }
+
+    Some(lines.join("\n"))
 }
 
 // --- session state (multi-round task memory) ----------------------------

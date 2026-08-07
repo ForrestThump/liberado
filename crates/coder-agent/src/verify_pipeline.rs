@@ -277,22 +277,51 @@ fn command_output_to_verdict(id: &str, program: &str, output: &CommandOutput) ->
 }
 
 async fn git_nonempty_diff(root: &Path, id: &str) -> Verdict {
-    match gates::changed_files(&root.to_string_lossy()).await {
+    let root_str = root.to_string_lossy();
+    // Check uncommitted changes first (git status), then committed changes
+    // (git log -1) — covers git-merge+commit workflows where the tree is clean.
+    match gates::changed_files(&root_str).await {
         Ok(files) if !files.is_empty() => {
-            Verdict::pass(format!("non-empty diff ({} paths)", files.len()))
+            return Verdict::pass(format!("non-empty diff ({} uncommitted paths)", files.len()));
         }
-        Ok(_) => Verdict::fail(
-            "empty git status (no workspace changes)",
-            vec![Finding {
-                check_id: id.to_string(),
-                kind: FindingKind::EmptyDiff,
-                message: "no files changed in workspace".into(),
-                detail: None,
-            }],
-            None,
-        ),
-        Err(e) => Verdict::error(e.to_string()),
+        Err(e) => return Verdict::error(e.to_string()),
+        _ => {}
     }
+    // No uncommitted changes — check the most recent commit.
+    match changed_files_in_last_commit(&root_str).await {
+        Ok(files) if !files.is_empty() => {
+            return Verdict::pass(format!(
+                "non-empty diff ({} paths in last commit)",
+                files.len()
+            ));
+        }
+        Err(e) => return Verdict::error(e.to_string()),
+        _ => {}
+    }
+    Verdict::fail(
+        "empty diff (no workspace or committed changes)",
+        vec![Finding {
+            check_id: id.to_string(),
+            kind: FindingKind::EmptyDiff,
+            message: "no files changed in workspace or last commit".into(),
+            detail: None,
+        }],
+        None,
+    )
+}
+
+async fn changed_files_in_last_commit(workspace_root: &str) -> Result<Vec<String>, CoderError> {
+    let output = tokio::process::Command::new("git")
+        .args(["log", "-1", "--name-only", "--format="])
+        .current_dir(workspace_root)
+        .output()
+        .await
+        .map_err(|e| CoderError::Backend(format!("git log: {e}")))?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.lines().filter(|l| !l.is_empty()).map(str::to_string).collect())
 }
 
 fn truncate_log(s: &str) -> String {
