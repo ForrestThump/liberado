@@ -546,4 +546,34 @@ mod tests {
         assert!(!looks_like_a_path("todos."), "trailing dot is not a path");
         assert!(!looks_like_a_path("e.g."), "trailing dot, generic ext/word");
     }
+
+    #[test]
+    fn looks_like_a_path_accepts_exactly_4_chars() {
+        assert!(looks_like_a_path("a.py"), "4 chars — len > 3");
+    }
+
+    #[test]
+    fn looks_like_a_path_rejects_3_chars_with_extension() {
+        assert!(!looks_like_a_path("a.b"), "3 chars — not > 3");
+    }
+
+    #[test]
+    fn looks_like_a_path_rejects_extension_with_non_alnum() {
+        assert!(!looks_like_a_path("src/file.c++"));
+    }
+
+    #[test]
+    fn looks_like_a_path_strips_leading_punctuation() {
+        // Backtick-prefixed in markdown: `src/main.rs` should match.
+        assert!(looks_like_a_path("`src/main.rs`"), "should strip backticks");
+    }
+
+    #[test]
+    fn looks_like_a_path_strips_trailing_paren() {
+        // "...in src/main.rs (" should match.
+        assert!(
+            looks_like_a_path("src/main.rs)"),
+            "should strip trailing paren"
+        );
+    }
 }

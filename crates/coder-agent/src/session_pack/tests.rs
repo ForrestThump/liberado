@@ -868,11 +868,7 @@ async fn ship_preflight_failure_blocks_terminal_succeeded() {
     let (_c_tx, cancel) = tokio::sync::watch::channel(false);
 
     let workspace = tempfile::tempdir().unwrap();
-    let fail = if cfg!(windows) {
-        "exit /B 1"
-    } else {
-        "exit 1"
-    };
+    let fail = if cfg!(windows) { "exit /B 1" } else { "exit 1" };
     let mut g = goal("ship me");
     g.payload = serde_json::json!({
         "workspace_root": workspace.path().to_string_lossy(),
@@ -914,10 +910,10 @@ async fn ship_preflight_failure_blocks_terminal_succeeded() {
     // Surface evidence: ValidationFinished with ok=false for preflight
     let mut saw_preflight_validation = false;
     while let Ok(ev) = ev_rx.try_recv() {
-        if let SessionEventKind::ValidationFinished { ok: false, summary } = ev.kind {
-            if summary.contains("preflight") || summary.contains("must-fail") {
-                saw_preflight_validation = true;
-            }
+        if let SessionEventKind::ValidationFinished { ok: false, summary } = ev.kind
+            && (summary.contains("preflight") || summary.contains("must-fail"))
+        {
+            saw_preflight_validation = true;
         }
     }
     assert!(
@@ -1027,10 +1023,7 @@ async fn an_external_workspace_gets_durable_session_isolation() {
     );
     let attempt_root = PathBuf::from(&requests[0].workspace.root);
     assert!(
-        attempt_root.ends_with("s1")
-            || attempt_root
-                .file_name()
-                .is_some_and(|n| n == "s1"),
+        attempt_root.ends_with("s1") || attempt_root.file_name().is_some_and(|n| n == "s1"),
         "attempt workspace should be coding-worktrees/s1, got {}",
         attempt_root.display()
     );

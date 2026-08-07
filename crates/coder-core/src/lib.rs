@@ -681,4 +681,74 @@ mod tests {
         assert_eq!(report.artifacts, result.files_changed);
         assert!(report.summary.contains("copy button"));
     }
+
+    #[test]
+    fn gate_config_default_is_disabled() {
+        let gate = CoderGateConfig::default();
+        assert!(!gate.enabled);
+        assert_eq!(gate.fresh_reviewers, 2);
+        assert_eq!(gate.strategist_after, 3);
+        assert!(gate.gatekeeper.is_none());
+        assert!(gate.fresh.is_none());
+        assert!(gate.strategist.is_none());
+    }
+
+    #[test]
+    fn plan_mode_coder_prompt_is_non_empty() {
+        assert!(!PLAN_MODE_CODER_PROMPT.is_empty());
+        assert!(PLAN_MODE_CODER_PROMPT.contains(".liberado/plan.md"));
+    }
+
+    #[test]
+    fn explore_mode_coder_prompt_is_non_empty() {
+        assert!(!EXPLORE_MODE_CODER_PROMPT.is_empty());
+        assert!(EXPLORE_MODE_CODER_PROMPT.contains("read-only"));
+    }
+
+    #[test]
+    fn explore_tool_names_are_write_free() {
+        assert!(EXPLORE_TOOL_NAMES.contains(&"list_files"));
+        assert!(EXPLORE_TOOL_NAMES.contains(&"read_file"));
+        assert!(!EXPLORE_TOOL_NAMES.contains(&"write_file"));
+        assert!(!EXPLORE_TOOL_NAMES.contains(&"edit_file"));
+    }
+
+    #[test]
+    fn command_policy_none_allowed_denies_everything() {
+        let p = CommandPolicy::none_allowed();
+        assert!(
+            !p.allow.is_empty(),
+            "non-empty allow list with sentinel blocks all commands"
+        );
+        assert_eq!(p.output_max_bytes, 64 * 1024);
+        assert_eq!(p.timeout_secs, 120);
+    }
+
+    #[test]
+    fn path_policy_plan_mode_restricts_to_plan_artifact() {
+        let p = PathPolicy::plan_mode();
+        assert_eq!(p.allow_write_globs, vec![PLAN_ARTIFACT_REL]);
+        assert!(!p.writes_disabled());
+    }
+
+    #[test]
+    fn path_policy_read_only_disables_all_writes() {
+        let p = PathPolicy::read_only();
+        assert!(p.allow_write_globs.is_empty());
+        assert!(p.writes_disabled());
+    }
+
+    #[test]
+    fn path_policy_writes_disabled_when_no_globs() {
+        let mut p = PathPolicy::default();
+        assert!(!p.writes_disabled());
+        p.allow_write_globs.clear();
+        assert!(p.writes_disabled());
+    }
+
+    #[test]
+    fn path_policy_writes_not_disabled_when_globs_present() {
+        let p = PathPolicy::default();
+        assert!(!p.writes_disabled());
+    }
 }

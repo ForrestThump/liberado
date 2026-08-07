@@ -834,4 +834,240 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
     }
+
+    #[test]
+    fn profile_verifiers_known_profiles() {
+        assert!(!profile_verifiers("rust-check").is_empty());
+        assert!(!profile_verifiers("rust-strict").is_empty());
+        assert!(!profile_verifiers("node-test").is_empty());
+    }
+
+    #[test]
+    fn profile_verifiers_unknown_returns_empty() {
+        assert!(profile_verifiers("").is_empty());
+        assert!(profile_verifiers("bogus").is_empty());
+        assert!(profile_verifiers("  unknown  ").is_empty());
+    }
+
+    #[test]
+    fn sanitize_draft_drops_empty_command_verifier() {
+        let mut draft = GoalContractDraft {
+            description: "test".into(),
+            success_criteria: vec![],
+            verifiers: vec![
+                VerifierSpec::Command {
+                    id: "cmd".into(),
+                    program: String::new(),
+                    args: vec![],
+                    env: Default::default(),
+                    timeout_secs: None,
+                    output_max_bytes: None,
+                    network: false,
+                },
+                VerifierSpec::Command {
+                    id: "ok".into(),
+                    program: "echo".into(),
+                    args: vec![],
+                    env: Default::default(),
+                    timeout_secs: None,
+                    output_max_bytes: None,
+                    network: false,
+                },
+            ],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        sanitize_draft(&mut draft);
+        assert_eq!(draft.verifiers.len(), 1, "empty program should be dropped");
+        assert_eq!(draft.verifiers[0].id(), "ok");
+    }
+
+    #[test]
+    fn sanitize_draft_drops_paths_exist_with_no_paths() {
+        let mut draft = GoalContractDraft {
+            description: "test".into(),
+            success_criteria: vec![],
+            verifiers: vec![VerifierSpec::PathsExist {
+                id: "pe".into(),
+                paths: vec![],
+            }],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        sanitize_draft(&mut draft);
+        assert!(draft.verifiers.is_empty());
+    }
+
+    #[test]
+    fn sanitize_draft_drops_paths_absent_with_no_paths() {
+        let mut draft = GoalContractDraft {
+            description: "test".into(),
+            success_criteria: vec![],
+            verifiers: vec![VerifierSpec::PathsAbsent {
+                id: "pa".into(),
+                paths: vec![],
+            }],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        sanitize_draft(&mut draft);
+        assert!(draft.verifiers.is_empty());
+    }
+
+    #[test]
+    fn sanitize_draft_drops_content_contains_with_empty_path() {
+        let mut draft = GoalContractDraft {
+            description: "test".into(),
+            success_criteria: vec![],
+            verifiers: vec![VerifierSpec::ContentContains {
+                id: "cc".into(),
+                path: String::new(),
+                must_include: vec!["needed".into()],
+            }],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        sanitize_draft(&mut draft);
+        assert!(draft.verifiers.is_empty());
+    }
+
+    #[test]
+    fn sanitize_draft_drops_content_contains_with_empty_must_include() {
+        let mut draft = GoalContractDraft {
+            description: "test".into(),
+            success_criteria: vec![],
+            verifiers: vec![VerifierSpec::ContentContains {
+                id: "cc".into(),
+                path: "README.md".into(),
+                must_include: vec![],
+            }],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        sanitize_draft(&mut draft);
+        assert!(
+            draft.verifiers.is_empty(),
+            "verifier with non-empty path but empty must_include should be dropped"
+        );
+    }
+
+    #[test]
+    fn sanitize_draft_keeps_git_diff_verifier() {
+        let mut draft = GoalContractDraft {
+            description: "test".into(),
+            success_criteria: vec![],
+            verifiers: vec![VerifierSpec::GitNonemptyDiff { id: "diff".into() }],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        sanitize_draft(&mut draft);
+        assert_eq!(draft.verifiers.len(), 1);
+    }
+
+    #[test]
+    fn validate_draft_rejects_content_contains_without_must_include() {
+        let draft = GoalContractDraft {
+            description: "test".into(),
+            success_criteria: vec![],
+            verifiers: vec![VerifierSpec::ContentContains {
+                id: "cc".into(),
+                path: "README.md".into(),
+                must_include: vec![],
+            }],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        assert!(validate_draft(&draft).is_err());
+    }
+
+    #[test]
+    fn apply_to_request_populates_task_and_config() {
+        let now = chrono::Utc::now();
+        let draft = GoalContractDraft {
+            description: "add feature".into(),
+            success_criteria: vec!["test passes".into()],
+            verifiers: vec![VerifierSpec::GitNonemptyDiff { id: "diff".into() }],
+            out_of_scope: vec!["no db".into()],
+            assumed_defaults: vec!["Rust".into()],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        let content_hash = hash_draft(&draft);
+        let contract = GoalContract {
+            id: "g1".into(),
+            draft,
+            frozen_at: now,
+            frozen_by: FreezeAuthority::Human,
+            content_hash,
+        };
+        let empty_role = crate::CoderRoleConfig {
+            model: String::new(),
+            prompt_path: None,
+            prompt: None,
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        };
+        let mut request = crate::CoderRunRequest {
+            task: crate::CoderTask::new("x", "old"),
+            workspace: crate::WorkspaceRef::new("/tmp", "main"),
+            config: crate::CoderRunConfig {
+                backend: String::new(),
+                trace_dir: None,
+                planner: empty_role.clone(),
+                coder: empty_role.clone(),
+                critic: empty_role.clone(),
+                gate: Default::default(),
+                repair: None,
+                sandbox: Default::default(),
+                command_policy: Default::default(),
+                validation_command: Some(crate::CoderCommandConfig::new("legacy")),
+                verifiers: vec![],
+                verify_policy: Default::default(),
+                path_policy: Default::default(),
+                progress: Default::default(),
+            },
+            attempt: 0,
+            prior_feedback: vec![],
+            strategist_directive: None,
+        };
+        contract.apply_to_request(&mut request);
+        assert_eq!(request.task.description, "add feature");
+        assert_eq!(request.task.success_criteria, vec!["test passes"]);
+        assert_eq!(request.config.verifiers.len(), 1);
+        assert_eq!(request.config.verifiers[0].id(), "diff");
+        assert!(
+            request.config.validation_command.is_none(),
+            "validation_command should be cleared when verifiers present"
+        );
+    }
+
+    #[test]
+    fn intake_outcome_schema_has_expected_shape() {
+        let schema = intake_outcome_schema();
+        assert_eq!(schema["type"], "object");
+        let required = schema["required"].as_array().unwrap();
+        assert!(required.iter().any(|v| v == "status"));
+        let props = &schema["properties"];
+        assert!(
+            props["status"]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("needs_clarification"))
+        );
+    }
 }

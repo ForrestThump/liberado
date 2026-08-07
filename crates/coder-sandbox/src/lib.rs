@@ -318,7 +318,38 @@ pub fn strip_extended_path_prefix(path: &Path) -> PathBuf {
 
 /// Path string safe for `git -C` and similar CLIs (extended prefix stripped).
 pub fn path_for_cli(path: &Path) -> String {
-    strip_extended_path_prefix(path).to_string_lossy().into_owned()
+    strip_extended_path_prefix(path)
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Canonical git binary name (shared constant so crates don't each spell "git").
+pub const GIT: &str = "git";
+
+/// Run git under `current_dir`, return trimmed stdout.
+///
+/// Errors map to [`SandboxError::Spawn`] so callers can keep their own error wrapping.
+pub async fn run_git(current_dir: &Path, args: &[&str]) -> Result<String, SandboxError> {
+    let dir = path_for_cli(current_dir);
+    let output = Command::new(GIT)
+        .args(args)
+        .current_dir(&dir)
+        .output()
+        .await
+        .map_err(|e| SandboxError::Spawn(format!("git {args:?}: {e}")))?;
+    if !output.status.success() {
+        return Err(SandboxError::Spawn(format!(
+            "git {args:?} exited {:?}: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Like [`run_git`] but failures are logged and swallowed (best-effort operations).
+pub async fn run_git_best_effort(current_dir: &Path, args: &[&str]) {
+    let _ = run_git(current_dir, args).await;
 }
 
 #[async_trait]
@@ -420,7 +451,10 @@ fn absolute_path(path: &Path) -> PathBuf {
 }
 
 /// Path of the durable session worktree (`worktrees_base/session_id`) — may not exist yet.
-pub fn session_worktree_path(worktrees_base: &Path, session_id: &str) -> Result<PathBuf, SandboxError> {
+pub fn session_worktree_path(
+    worktrees_base: &Path,
+    session_id: &str,
+) -> Result<PathBuf, SandboxError> {
     validate_session_worktree_id(session_id)?;
     Ok(absolute_path(worktrees_base).join(session_id))
 }
@@ -449,9 +483,7 @@ pub async fn ensure_session_worktree(
     // Reuse: mid-build park/resume must land on the same files as the last attempt.
     if dest.exists() && dest.join(".git").exists() {
         return Ok(strip_extended_path_prefix(
-            &dest
-                .canonicalize()
-                .unwrap_or_else(|_| dest.clone()),
+            &dest.canonicalize().unwrap_or_else(|_| dest.clone()),
         ));
     }
     // Broken leftover (dir without git) — remove and recreate.
@@ -468,11 +500,9 @@ pub async fn ensure_session_worktree(
             }
         }
     }
-    Ok(strip_extended_path_prefix(
-        &dest
-            .canonicalize()
-            .map_err(|e| SandboxError::MissingRoot(format!("worktree canonicalize: {e}")))?,
-    ))
+    Ok(strip_extended_path_prefix(&dest.canonicalize().map_err(
+        |e| SandboxError::MissingRoot(format!("worktree canonicalize: {e}")),
+    )?))
 }
 
 /// Create a linked worktree at `dest` from `parent_root` (must not already exist).
@@ -1079,5 +1109,83 @@ mod tests {
         .unwrap();
         assert!(ws2.root().exists());
         drop(ws2);
+    }
+}
+
+#[cfg(test)]
+mod git_helper_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique() -> u128 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    }
+
+    fn init_repo(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        for args in [
+            ["init", "--quiet"].as_slice(),
+            ["config", "user.email", "test@liberado.local"].as_slice(),
+            ["config", "user.name", "liberado-test"].as_slice(),
+        ] {
+            assert!(
+                std::process::Command::new(GIT)
+                    .args(args)
+                    .current_dir(dir)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn run_git_returns_stdout() {
+        let dir = std::env::temp_dir().join(format!("lib-git-helper-{}", unique()));
+        init_repo(&dir);
+        std::fs::write(dir.join("test.txt"), "hello").unwrap();
+        let status = run_git(&dir, &["status", "--porcelain"]).await.unwrap();
+        assert!(
+            status.contains("test.txt"),
+            "expected test.txt in status: {status}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn run_git_errors_on_bad_command() {
+        let dir = std::env::temp_dir().join(format!("lib-git-err-{}", unique()));
+        init_repo(&dir);
+        let err = run_git(&dir, &["this-is-not-a-git-subcommand"]).await;
+        assert!(err.is_err(), "bad git command should fail");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn run_git_best_effort_does_not_panic_on_failure() {
+        let dir = std::env::temp_dir().join(format!("lib-git-be-{}", unique()));
+        init_repo(&dir);
+        run_git_best_effort(&dir, &["this-is-not-a-git-subcommand"]).await;
+        // Should not panic.
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validate_session_worktree_id_rejects_bad_ids() {
+        assert!(validate_session_worktree_id("").is_err());
+        assert!(validate_session_worktree_id("a/b").is_err());
+        assert!(validate_session_worktree_id("a\\b").is_err());
+        assert!(validate_session_worktree_id("..").is_err());
+        assert!(validate_session_worktree_id("a../b").is_err());
+    }
+
+    #[test]
+    fn validate_session_worktree_id_accepts_good_ids() {
+        assert!(validate_session_worktree_id("session-1").is_ok());
+        assert!(validate_session_worktree_id("abc_def").is_ok());
+        assert!(validate_session_worktree_id("task42").is_ok());
     }
 }

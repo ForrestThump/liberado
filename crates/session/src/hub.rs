@@ -675,7 +675,9 @@ impl GoalSessionHub {
             // back to answer. `set_status` records the status and leaves both alone.
             self.store.set_status(&session_id, status).await;
         } else {
-            self.store.finish(&session_id, status, goal_result.clone()).await;
+            self.store
+                .finish(&session_id, status, goal_result.clone())
+                .await;
         }
 
         let fin = SessionEvent::new(

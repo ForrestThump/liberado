@@ -93,7 +93,12 @@ impl ShadowGit {
         }
         // Parent: previous HEAD if any.
         let parent = self.run_git_async_stdout(&["rev-parse", "HEAD"]).await.ok();
-        let mut commit_args = vec!["commit-tree".to_string(), tree.clone(), "-m".into(), label.into()];
+        let mut commit_args = vec![
+            "commit-tree".to_string(),
+            tree.clone(),
+            "-m".into(),
+            label.into(),
+        ];
         if let Some(p) = parent {
             let p = p.trim().to_string();
             if !p.is_empty() && !p.contains("fatal") {
@@ -102,7 +107,11 @@ impl ShadowGit {
             }
         }
         let args_ref: Vec<&str> = commit_args.iter().map(|s| s.as_str()).collect();
-        let commit = self.run_git_async_stdout(&args_ref).await?.trim().to_string();
+        let commit = self
+            .run_git_async_stdout(&args_ref)
+            .await?
+            .trim()
+            .to_string();
         // Update HEAD ref so the next snapshot has a parent chain.
         self.run_git_async(&["update-ref", "HEAD", &commit]).await?;
         Ok(Checkpoint {
@@ -164,14 +173,9 @@ impl ShadowGit {
 
     /// List checkpoints newest-first by walking HEAD parents (bounded).
     pub async fn list(&self, limit: usize) -> Result<Vec<Checkpoint>, CheckpointError> {
-        let limit = limit.max(1).min(100);
+        let limit = limit.clamp(1, 100);
         let log = self
-            .run_git_async_stdout(&[
-                "log",
-                "--format=%H\t%T\t%s",
-                &format!("-n{limit}"),
-                "HEAD",
-            ])
+            .run_git_async_stdout(&["log", "--format=%H\t%T\t%s", &format!("-n{limit}"), "HEAD"])
             .await;
         let Ok(log) = log else {
             return Ok(Vec::new());
@@ -272,8 +276,6 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let base = std::env::temp_dir().join(format!("lib-ckpt-{}", unique()));
         let root = base.join("ws");
-        // Side repo lives outside the work tree (production-shaped); also covers the
-        // under-worktree case via exclude rules in restore.
         let data = base.join("data");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("a.txt"), "hello\n").unwrap();
@@ -283,6 +285,8 @@ mod tests {
             std::env::set_var("LIBERADO_DATA_DIR", &data);
         }
         let sg = ShadowGit::open_or_init(&root, "sess1").unwrap();
+        drop(_guard); // drop before .await for clippy await_holding_lock
+
         let cp = sg.snapshot("base").await.unwrap();
         assert!(!cp.id.is_empty());
         assert!(!cp.tree_hash.is_empty());
@@ -327,6 +331,8 @@ mod tests {
             std::env::set_var("LIBERADO_DATA_DIR", &data);
         }
         let sg = ShadowGit::open_or_init(&root, "sess2").unwrap();
+        drop(_guard);
+
         let c1 = sg.snapshot("v1").await.unwrap();
         std::fs::write(root.join("f.txt"), "v2\n").unwrap();
         let c2 = sg.snapshot("v2").await.unwrap();
@@ -347,17 +353,21 @@ mod tests {
         let root = std::env::temp_dir().join(format!("lib-ckpt-nested-{}", unique()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("f.txt"), "keep\n").unwrap();
-        // Deliberately nested — used to make `git clean -fd` wipe the shadow repo.
         let data = root.join("data");
         unsafe {
             std::env::set_var("LIBERADO_DATA_DIR", &data);
         }
         let sg = ShadowGit::open_or_init(&root, "nested").unwrap();
+        drop(_guard);
+
         let cp = sg.snapshot("base").await.unwrap();
         std::fs::write(root.join("f.txt"), "mut\n").unwrap();
         std::fs::write(root.join("extra.txt"), "x\n").unwrap();
         sg.restore(&cp.id).await.unwrap();
-        assert_eq!(std::fs::read_to_string(root.join("f.txt")).unwrap(), "keep\n");
+        assert_eq!(
+            std::fs::read_to_string(root.join("f.txt")).unwrap(),
+            "keep\n"
+        );
         assert!(!root.join("extra.txt").exists());
         let list = sg.list(5).await.unwrap();
         assert_eq!(list[0].id, cp.id);
@@ -365,5 +375,62 @@ mod tests {
             std::env::remove_var("LIBERADO_DATA_DIR");
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn open_or_init_rejects_path_traversal() {
+        assert!(ShadowGit::open_or_init(Path::new("."), "a/b").is_err());
+        assert!(ShadowGit::open_or_init(Path::new("."), "a\\b").is_err());
+        assert!(ShadowGit::open_or_init(Path::new("."), "..").is_err());
+        assert!(ShadowGit::open_or_init(Path::new("."), "").is_err());
+        assert!(ShadowGit::open_or_init(Path::new("."), "a../b").is_err());
+    }
+
+    #[test]
+    fn git_dir_and_work_tree_accessors() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("lib-ckpt-getters-{}", unique()));
+        let root = base.join("ws");
+        let data = base.join("data");
+        std::fs::create_dir_all(&root).unwrap();
+        unsafe {
+            std::env::set_var("LIBERADO_DATA_DIR", &data);
+        }
+        let sg = ShadowGit::open_or_init(&root, "g1").unwrap();
+        assert!(sg.git_dir().to_string_lossy().contains("checkpoints"));
+        assert!(sg.git_dir().to_string_lossy().contains("g1"));
+        assert!(sg.work_tree().ends_with("ws"));
+        unsafe {
+            std::env::remove_var("LIBERADO_DATA_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn list_clamps_limit_to_valid_range() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("lib-ckpt-list-{}", unique()));
+        let root = base.join("ws");
+        let data = base.join("data");
+        std::fs::create_dir_all(&root).unwrap();
+        unsafe {
+            std::env::set_var("LIBERADO_DATA_DIR", &data);
+        }
+        let sg = ShadowGit::open_or_init(&root, "sess-list").unwrap();
+        drop(_guard);
+
+        for i in 1..=3 {
+            std::fs::write(root.join("f.txt"), format!("v{i}\n")).unwrap();
+            sg.snapshot(&format!("v{i}")).await.unwrap();
+        }
+        let items = sg.list(0).await.unwrap();
+        assert!(!items.is_empty(), "list(0) should clamp to at least 1");
+        let items = sg.list(500).await.unwrap();
+        assert!(!items.is_empty());
+        assert!(items.len() <= 100);
+        unsafe {
+            std::env::remove_var("LIBERADO_DATA_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

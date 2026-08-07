@@ -83,9 +83,7 @@ fn preflight_gh_pr_create(program: &str, args: &[String]) -> Option<String> {
     if !(saw_pr && saw_create) {
         return None;
     }
-    let Some(base) = base.filter(|b| !b.is_empty()) else {
-        return None;
-    };
+    let base = base.filter(|b| !b.is_empty())?;
     if base.starts_with('-') {
         return Some(format!(
             "refusing gh pr create: invalid --base '{base}' (looks like a flag)"
@@ -157,10 +155,7 @@ impl CodingToolRuntime {
                 // Sanitize: worktree dir name must not contain path separators.
                 let session_id = session_id
                     .filter(|s| {
-                        !s.is_empty()
-                            && !s.contains("..")
-                            && !s.contains('/')
-                            && !s.contains('\\')
+                        !s.is_empty() && !s.contains("..") && !s.contains('/') && !s.contains('\\')
                     })
                     .unwrap_or(fallback);
                 // Prefer LIBERADO_DATA_DIR/coding-worktrees (or .liberado/coding-worktrees) so
@@ -2259,8 +2254,11 @@ mod tests {
     #[test]
     fn preflight_gh_pr_create_ignores_without_base() {
         assert!(
-            preflight_gh_pr_create("gh", &["pr".into(), "create".into(), "--title".into(), "t".into()])
-                .is_none()
+            preflight_gh_pr_create(
+                "gh",
+                &["pr".into(), "create".into(), "--title".into(), "t".into()]
+            )
+            .is_none()
         );
     }
 
@@ -2277,8 +2275,9 @@ mod tests {
             ],
         );
         assert!(
-            err.as_ref()
-                .is_some_and(|e| e.contains("refusing gh pr create") && e.contains("origin has no branch")),
+            err.as_ref().is_some_and(
+                |e| e.contains("refusing gh pr create") && e.contains("origin has no branch")
+            ),
             "expected refusal for missing base, got {err:?}"
         );
     }

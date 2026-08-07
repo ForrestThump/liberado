@@ -370,4 +370,118 @@ mod tests {
         let err = tuning.validate().unwrap_err();
         assert!(err.to_string().contains("path_policy.search_max_results"));
     }
+
+    #[test]
+    fn validation_rejects_gate_enabled_with_zero_reviewers() {
+        let mut tuning = CoderTuning::default();
+        tuning.gate.enabled = true;
+        tuning.gate.fresh_reviewers = 0;
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("fresh_reviewers"));
+    }
+
+    #[test]
+    fn validation_allows_gate_disabled_with_zero_reviewers() {
+        let mut tuning = CoderTuning::default();
+        tuning.gate.enabled = false;
+        tuning.gate.fresh_reviewers = 0;
+        assert!(tuning.validate().is_ok());
+    }
+
+    #[test]
+    fn validation_allows_gate_enabled_with_reviewers() {
+        let mut tuning = CoderTuning::default();
+        tuning.gate.enabled = true;
+        tuning.gate.fresh_reviewers = 1;
+        // Need a complete role config for gatekeeper too.
+        tuning.gate.gatekeeper = Some(CoderRoleConfig {
+            model: "test-model".into(),
+            prompt_path: None,
+            prompt: Some("gatekeeper".into()),
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        });
+        assert!(tuning.validate().is_ok());
+    }
+
+    #[test]
+    fn validation_rejects_progress_zero_fields_individually() {
+        let fields = [
+            ("read_only_turn_limit", 0, 1, 1, 1, 1),
+            ("same_tool_limit", 1, 0, 1, 1, 1),
+            ("validation_repeat_limit", 1, 1, 0, 1, 1),
+            ("max_attempts", 1, 1, 1, 0, 1),
+            ("event_preview_max_chars", 1, 1, 1, 1, 0),
+        ];
+        for (name, read_only, same_tool, val_repeat, max_att, preview) in &fields {
+            let tuning = CoderTuning {
+                progress: ProgressPolicy {
+                    read_only_turn_limit: *read_only,
+                    same_tool_limit: *same_tool,
+                    validation_repeat_limit: *val_repeat,
+                    max_attempts: *max_att,
+                    event_preview_max_chars: *preview,
+                },
+                ..CoderTuning::default()
+            };
+            let err = tuning.validate().unwrap_err();
+            assert!(
+                err.to_string().contains("progress"),
+                "progress field {name} = 0 should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_role_identity_rejects_empty_model() {
+        let role = CoderRoleConfig {
+            model: "  ".into(),
+            prompt_path: None,
+            prompt: Some("prompt".into()),
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        };
+        assert!(validate_role_identity("test", &role).is_err());
+    }
+
+    #[test]
+    fn validate_role_identity_rejects_empty_prompt_and_path() {
+        let role = CoderRoleConfig {
+            model: "m".into(),
+            prompt_path: None,
+            prompt: None,
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        };
+        assert!(validate_role_identity("test", &role).is_err());
+    }
+
+    #[test]
+    fn validate_role_identity_accepts_model_with_prompt() {
+        let role = CoderRoleConfig {
+            model: "m".into(),
+            prompt_path: None,
+            prompt: Some("p".into()),
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        };
+        assert!(validate_role_identity("test", &role).is_ok());
+    }
+
+    #[test]
+    fn validate_single_shot_role_delegates_to_role_identity() {
+        let bad = CoderRoleConfig {
+            model: String::new(),
+            prompt_path: None,
+            prompt: None,
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        };
+        assert!(validate_single_shot_role("x", &bad).is_err());
+    }
 }

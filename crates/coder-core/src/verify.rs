@@ -203,18 +203,17 @@ impl Verdict {
 }
 
 fn signature_for(findings: &[Finding], log: Option<&str>) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
     for f in findings {
-        f.check_id.hash(&mut h);
-        format!("{:?}", f.kind).hash(&mut h);
-        f.message.hash(&mut h);
+        h.update(f.check_id.as_bytes());
+        h.update(format!("{:?}", f.kind).as_bytes());
+        h.update(f.message.as_bytes());
     }
     if let Some(log) = log {
-        log.chars().take(200).collect::<String>().hash(&mut h);
+        h.update(log.chars().take(200).collect::<String>().as_bytes());
     }
-    format!("{:x}", h.finish())
+    format!("{:x}", h.finalize())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -387,5 +386,115 @@ mod tests {
         let sig2 = signature_for(&findings, Some("log"));
         assert_eq!(sig1, sig2, "signature must be deterministic");
         assert!(!sig1.is_empty());
+    }
+
+    #[test]
+    fn signature_for_produces_non_empty_hex() {
+        let findings = vec![Finding {
+            check_id: "x".into(),
+            kind: FindingKind::MissingPath,
+            message: "m".into(),
+            detail: None,
+        }];
+        let sig = signature_for(&findings, None);
+        assert!(!sig.is_empty());
+        assert!(sig.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn default_id_paths_exist_is_correct() {
+        assert_eq!(default_id_paths_exist(), "paths_exist");
+    }
+
+    #[test]
+    fn default_id_paths_absent_is_correct() {
+        assert_eq!(default_id_paths_absent(), "paths_absent");
+    }
+
+    #[test]
+    fn default_id_content_contains_is_correct() {
+        assert_eq!(default_id_content_contains(), "content_contains");
+    }
+
+    #[test]
+    fn default_id_command_is_correct() {
+        assert_eq!(default_id_command(), "command");
+    }
+
+    #[test]
+    fn default_id_git_diff_is_correct() {
+        assert_eq!(default_id_git_diff(), "has_diff");
+    }
+
+    #[test]
+    fn default_true_is_true() {
+        assert!(default_true());
+    }
+
+    #[test]
+    fn pipeline_result_is_pass_when_overall_is_pass() {
+        let r = PipelineResult {
+            overall: VerdictStatus::Pass,
+            results: vec![],
+            combined_findings: vec![],
+            combined_signature: None,
+        };
+        assert!(r.is_pass());
+    }
+
+    #[test]
+    fn pipeline_result_is_not_pass_when_overall_is_fail() {
+        let r = PipelineResult {
+            overall: VerdictStatus::Fail,
+            results: vec![],
+            combined_findings: vec![],
+            combined_signature: None,
+        };
+        assert!(!r.is_pass());
+    }
+
+    #[test]
+    fn pipeline_result_repair_feedback_includes_failed_results() {
+        let r = PipelineResult {
+            overall: VerdictStatus::Fail,
+            results: vec![
+                NamedVerdict {
+                    id: "check1".into(),
+                    kind: "command".into(),
+                    verdict: Verdict::pass("ok"),
+                },
+                NamedVerdict {
+                    id: "check2".into(),
+                    kind: "command".into(),
+                    verdict: Verdict::fail("bad", vec![], None),
+                },
+            ],
+            combined_findings: vec![],
+            combined_signature: None,
+        };
+        let fb = r.repair_feedback();
+        assert!(fb.contains("validation failed"));
+        assert!(fb.contains("check2"));
+        assert!(
+            !fb.contains("check1"),
+            "passing check should not appear in feedback"
+        );
+    }
+
+    #[test]
+    fn pipeline_result_repair_feedback_uses_combined_when_present() {
+        let r = PipelineResult {
+            overall: VerdictStatus::Fail,
+            results: vec![],
+            combined_findings: vec![Finding {
+                check_id: "combined".into(),
+                kind: FindingKind::MissingPath,
+                message: "gone".into(),
+                detail: None,
+            }],
+            combined_signature: Some("abc".into()),
+        };
+        let fb = r.repair_feedback();
+        assert!(fb.contains("gone"));
     }
 }

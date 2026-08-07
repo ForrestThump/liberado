@@ -249,11 +249,10 @@ fn first_line(s: &str) -> &str {
 }
 
 fn short_sig(s: &str) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    s.chars().take(400).collect::<String>().hash(&mut h);
-    format!("{:x}", h.finish())
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(s.chars().take(400).collect::<String>().as_bytes());
+    format!("{:x}", h.finalize())
 }
 
 #[cfg(test)]

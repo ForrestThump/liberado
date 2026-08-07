@@ -32,7 +32,11 @@ pub fn ship_preflight_required(goal: &GoalSpec) -> bool {
     {
         return false;
     }
-    if goal.payload.get("preflight").and_then(|v| v.get("required")).and_then(|v| v.as_bool())
+    if goal
+        .payload
+        .get("preflight")
+        .and_then(|v| v.get("required"))
+        .and_then(|v| v.as_bool())
         == Some(false)
     {
         return false;
@@ -47,7 +51,12 @@ pub fn ship_preflight_required(goal: &GoalSpec) -> bool {
     {
         return true;
     }
-    if goal.payload.get("preflight").and_then(|v| v.get("steps")).is_some() {
+    if goal
+        .payload
+        .get("preflight")
+        .and_then(|v| v.get("steps"))
+        .is_some()
+    {
         return true;
     }
     if goal
@@ -70,17 +79,17 @@ pub fn ship_spec_from_goal(goal: &GoalSpec) -> Option<PreflightSpec> {
         .map(str::trim)
         .filter(|s| !s.is_empty());
 
-    if let Some(steps) = steps_from_payload(&goal.payload) {
-        if !steps.is_empty() {
-            let id = goal
-                .payload
-                .get("preflight")
-                .and_then(|v| v.get("profile"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("ship")
-                .to_string();
-            return Some(PreflightSpec::new(id, steps));
-        }
+    if let Some(steps) = steps_from_payload(&goal.payload)
+        && !steps.is_empty()
+    {
+        let id = goal
+            .payload
+            .get("preflight")
+            .and_then(|v| v.get("profile"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("ship")
+            .to_string();
+        return Some(PreflightSpec::new(id, steps));
     }
 
     // profile: "ship" with no steps → liberado defaults when project is liberado
@@ -250,5 +259,84 @@ mod tests {
         let g = goal_with(json!({}));
         assert!(!ship_preflight_required(&g));
         assert!(ship_spec_from_goal(&g).is_none());
+    }
+
+    #[test]
+    fn payload_steps_skip_empty_name_or_run() {
+        // An entry missing "name" causes steps_from_payload to propagate None for the
+        // whole array, so the function falls through to resolve_ship_spec for project.
+        let g = goal_with(json!({
+            "project": "liberado",
+            "preflight": {
+                "steps": [
+                    { "name": "good", "run": "echo y" }
+                ]
+            }
+        }));
+        let spec = ship_spec_from_goal(&g).unwrap();
+        assert_eq!(spec.steps.len(), 1);
+        assert_eq!(spec.steps[0].name, "good");
+    }
+
+    #[test]
+    fn payload_steps_with_empty_name_field_skips_whole_array() {
+        // steps_from_payload uses `?` on each field get, so a missing/bad field
+        // causes the whole function to return None, falling back to resolve_ship_spec.
+        let g = goal_with(json!({
+            "project": "liberado",
+            "preflight": {
+                "steps": [
+                    { "name": "", "run": "echo x" }
+                ]
+            }
+        }));
+        // Empty name passes s.get("name")?.as_str()? (returns empty string "")
+        // but then name.is_empty() skips it, leaving an empty vec,
+        // so ship_spec_from_goal falls through to liberado default.
+        let spec = ship_spec_from_goal(&g).unwrap();
+        assert!(
+            spec.steps.iter().any(|s| s.name == "test"),
+            "should fall back to liberado default when payload steps all skip"
+        );
+    }
+
+    #[test]
+    fn payload_steps_empty_array_falls_back_to_default() {
+        let g = goal_with(json!({
+            "project": "liberado",
+            "preflight": { "steps": [] }
+        }));
+        let spec = ship_spec_from_goal(&g).unwrap();
+        assert!(
+            spec.steps.iter().any(|s| s.name == "test"),
+            "empty payload steps should fall back to liberado default"
+        );
+    }
+
+    #[test]
+    fn payload_steps_missing_top_level_fields_returns_none() {
+        // Entry missing "name" causes steps_from_payload to return None via ?.
+        let g = goal_with(json!({
+            "project": "liberado",
+            "preflight": {
+                "steps": [
+                    { "run": "echo x" }
+                ]
+            }
+        }));
+        // steps_from_payload returns None (name missing), falls through to default.
+        let spec = ship_spec_from_goal(&g).unwrap();
+        assert!(spec.steps.iter().any(|s| s.name == "test"));
+    }
+
+    #[test]
+    fn payload_preflight_no_steps_falls_back_for_liberado() {
+        let g = goal_with(json!({
+            "project": "liberado",
+            "preflight": { "required": false }
+        }));
+        // No steps in payload → falls through → default for liberado project.
+        let spec = ship_spec_from_goal(&g).unwrap();
+        assert!(spec.steps.iter().any(|s| s.name == "test"));
     }
 }

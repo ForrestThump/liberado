@@ -30,11 +30,7 @@ use super::policies::WorkspacePolicies;
 /// Everything else (`Setup`, `Sandbox`, `Provider`, `Tool`, `Backend`) is a broken *environment*.
 /// No answer you could type fixes a dead sandbox or an unreachable provider, so those still fail
 /// fast: paging a human for them would be noise, and the whole value of the ask is that it is rare.
-fn is_stuck(e: &liberado_coder_core::CoderError) -> bool {
-    use liberado_coder_core::CoderError;
-    matches!(e, CoderError::NoChanges | CoderError::Validation(_))
-}
-
+///
 /// Whether `dir` is inside a git working tree — **not** merely whether it is a repo *root*.
 ///
 /// `dir.join(".git").exists()` only answers for a root. A workspace pointed at a subdirectory of an
@@ -255,34 +251,30 @@ impl CodingSessionPack {
             let mut diagnostics = serde_json::json!({ "fanout": report });
             if terminal == TerminalKind::Succeeded
                 && super::preflight_hook::ship_preflight_required(goal)
+                && let Some(spec) = super::preflight_hook::ship_spec_from_goal(goal)
             {
-                if let Some(spec) = super::preflight_hook::ship_spec_from_goal(goal) {
-                    match super::preflight_hook::run_ship_preflight(
-                        session_id,
-                        &workspace,
-                        &spec,
-                        &events,
-                    )
-                    .await
-                    {
-                        Ok(pf) => {
-                            diagnostics = serde_json::json!({
-                                "fanout": report,
-                                "preflight": pf,
-                            });
-                            if !pf.ok {
-                                terminal = TerminalKind::Failed;
-                                summary = pf.summary;
-                            }
+                match super::preflight_hook::run_ship_preflight(
+                    session_id, &workspace, &spec, &events,
+                )
+                .await
+                {
+                    Ok(pf) => {
+                        diagnostics = serde_json::json!({
+                            "fanout": report,
+                            "preflight": pf,
+                        });
+                        if !pf.ok {
+                            terminal = TerminalKind::Failed;
+                            summary = pf.summary;
                         }
-                        Err(e) => {
-                            return Ok(GoalResult {
-                                terminal: TerminalKind::Failed,
-                                summary: format!("ship preflight error: {e}"),
-                                artifacts: files,
-                                diagnostics: serde_json::json!({ "fanout": report, "preflight_error": e }),
-                            });
-                        }
+                    }
+                    Err(e) => {
+                        return Ok(GoalResult {
+                            terminal: TerminalKind::Failed,
+                            summary: format!("ship preflight error: {e}"),
+                            artifacts: files,
+                            diagnostics: serde_json::json!({ "fanout": report, "preflight_error": e }),
+                        });
                     }
                 }
             }
@@ -370,12 +362,8 @@ impl CodingSessionPack {
             (workspace.clone(), SandboxSpec::HostLocal)
         } else if is_git_repo(&workspace) {
             let base = liberado_coder_tools::coding_worktrees_base();
-            match liberado_coder_sandbox::ensure_session_worktree(
-                &workspace,
-                session_id,
-                &base,
-            )
-            .await
+            match liberado_coder_sandbox::ensure_session_worktree(&workspace, session_id, &base)
+                .await
             {
                 Ok(sess) => {
                     let _ = events
@@ -392,9 +380,7 @@ impl CodingSessionPack {
                     (sess, SandboxSpec::HostLocal)
                 }
                 Err(e) => {
-                    return Err(PackError::Setup(format!(
-                        "durable session worktree: {e}"
-                    )));
+                    return Err(PackError::Setup(format!("durable session worktree: {e}")));
                 }
             }
         } else {
@@ -596,7 +582,7 @@ impl CodingSessionPack {
                         .await;
                     (ok, r.summary, r.files_changed, r.diagnostics)
                 }
-                Err(e) if is_stuck(&e) => {
+                Err(e) if crate::is_stuck_error(&e) => {
                     let msg = e.to_string();
                     let _ = events
                         .send(SessionEvent::new(
@@ -645,40 +631,35 @@ impl CodingSessionPack {
                 // Ship preflight: CI-equivalent project bar before terminal Succeeded.
                 if terminal == TerminalKind::Succeeded
                     && super::preflight_hook::ship_preflight_required(goal)
+                    && let Some(spec) = super::preflight_hook::ship_spec_from_goal(goal)
                 {
-                    if let Some(spec) = super::preflight_hook::ship_spec_from_goal(goal) {
-                        // Prefer durable session worktree when present (same root as build).
-                        let preflight_root = request.workspace.root.as_str();
-                        let root_path = PathBuf::from(preflight_root);
-                        match super::preflight_hook::run_ship_preflight(
-                            session_id,
-                            &root_path,
-                            &spec,
-                            &events,
-                        )
-                        .await
-                        {
-                            Ok(report) => {
-                                diagnostics = serde_json::json!({
+                    let preflight_root = request.workspace.root.as_str();
+                    let root_path = PathBuf::from(preflight_root);
+                    match super::preflight_hook::run_ship_preflight(
+                        session_id, &root_path, &spec, &events,
+                    )
+                    .await
+                    {
+                        Ok(report) => {
+                            diagnostics = serde_json::json!({
+                                "build": diagnostics,
+                                "preflight": report,
+                            });
+                            if !report.ok {
+                                terminal = TerminalKind::Failed;
+                                summary = report.summary;
+                            }
+                        }
+                        Err(e) => {
+                            return Ok(GoalResult {
+                                terminal: TerminalKind::Failed,
+                                summary: format!("ship preflight error: {e}"),
+                                artifacts,
+                                diagnostics: serde_json::json!({
                                     "build": diagnostics,
-                                    "preflight": report,
-                                });
-                                if !report.ok {
-                                    terminal = TerminalKind::Failed;
-                                    summary = report.summary;
-                                }
-                            }
-                            Err(e) => {
-                                return Ok(GoalResult {
-                                    terminal: TerminalKind::Failed,
-                                    summary: format!("ship preflight error: {e}"),
-                                    artifacts,
-                                    diagnostics: serde_json::json!({
-                                        "build": diagnostics,
-                                        "preflight_error": e,
-                                    }),
-                                });
-                            }
+                                    "preflight_error": e,
+                                }),
+                            });
                         }
                     }
                 }

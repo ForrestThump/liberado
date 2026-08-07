@@ -5,11 +5,11 @@ use chrono::Utc;
 use liberado_coder_core::{CoderError, CoderEvent, CoderRunRequest, CriticVerdict};
 use liberado_provider::{CompletionRequest, Message};
 use serde_json::json;
-use tokio::process::Command;
 
 use crate::CoderProviderFactory;
 use crate::roles::{role_instructions, truncate_chars};
 use crate::trace::{self, EventLog};
+use crate::workspace_diff;
 
 pub async fn run_critic(
     providers: &dyn CoderProviderFactory,
@@ -27,7 +27,7 @@ pub async fn run_critic(
 
     let provider = providers.provider_for("critic", &request.config.critic)?;
     let instructions = role_instructions(&request.config.critic, "critic").await?;
-    let diff = git_diff_for_critic(&request.workspace.root).await?;
+    let diff = workspace_diff(&request.workspace.root).await?;
     let mut user = format!(
         "Task:\n{}\n\nSuccess criteria:\n{}\n\nUnified git diff (against HEAD / worktree):\n```\n{}\n```\n\n\
          Respond with JSON only: {{\"quality\":\"acceptable\"}} or \
@@ -110,41 +110,4 @@ fn extract_json_object(text: &str) -> Option<&str> {
     } else {
         None
     }
-}
-
-async fn git_diff_for_critic(workspace_root: &str) -> Result<String, CoderError> {
-    let staged = Command::new("git")
-        .args(["diff", "HEAD"])
-        .current_dir(workspace_root)
-        .output()
-        .await
-        .map_err(|e| CoderError::Backend(format!("git diff: {e}")))?;
-    if !staged.status.success() {
-        return Err(CoderError::Backend(format!(
-            "git diff exited {:?}: {}",
-            staged.status.code(),
-            String::from_utf8_lossy(&staged.stderr)
-        )));
-    }
-    let mut diff = String::from_utf8_lossy(&staged.stdout).into_owned();
-    let untracked = Command::new("git")
-        .args(["ls-files", "--others", "--exclude-standard"])
-        .current_dir(workspace_root)
-        .output()
-        .await
-        .map_err(|e| CoderError::Backend(format!("git ls-files: {e}")))?;
-    if untracked.status.success() {
-        let names = String::from_utf8_lossy(&untracked.stdout);
-        if !names.trim().is_empty() {
-            if !diff.is_empty() {
-                diff.push('\n');
-            }
-            diff.push_str("# untracked files\n");
-            diff.push_str(&names);
-        }
-    }
-    if diff.trim().is_empty() {
-        diff = "(empty diff)".to_string();
-    }
-    Ok(diff)
 }

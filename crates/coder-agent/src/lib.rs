@@ -26,11 +26,11 @@ pub use fanout::{
 pub use intake_session::{
     IntakeAnswer, freeze_if_ready, request_from_contract, run_intake, run_intake_until_ready,
 };
-pub use session_pack::CodingSessionPack;
-/// Durable coding session workspace path (`coding-worktrees/<session_id>`).
-pub use liberado_coder_tools::durable_session_workspace;
 /// Shadow-git checkpoint store (S4).
 pub use liberado_coder_sandbox::{Checkpoint, CheckpointError, ShadowGit};
+/// Durable coding session workspace path (`coding-worktrees/<session_id>`).
+pub use liberado_coder_tools::durable_session_workspace;
+pub use session_pack::CodingSessionPack;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -215,6 +215,53 @@ impl CoderBackend for LiberadoLoopBackend {
 
 fn is_retryable(err: &CoderError) -> bool {
     matches!(err, CoderError::NoChanges | CoderError::Validation(_))
+}
+
+/// A single source of truth for retryable/stuck errors. `session_pack::build` calls this
+/// so the same match arms don't need to be kept in sync across modules.
+pub(crate) use is_retryable as is_stuck_error;
+
+/// Shared git workspace diff for the critic and completion gate.
+///
+/// Assembles tracked diff against HEAD plus untracked file names, falling back to
+/// `"(empty diff)"` when the workspace is clean. Used by both the legacy single-critic
+/// path and the quorum-based completion gate.
+pub(crate) async fn workspace_diff(workspace_root: &str) -> Result<String, CoderError> {
+    let tracked = tokio::process::Command::new("git")
+        .args(["diff", "HEAD"])
+        .current_dir(workspace_root)
+        .output()
+        .await
+        .map_err(|e| CoderError::Backend(format!("git diff: {e}")))?;
+    if !tracked.status.success() {
+        return Err(CoderError::Backend(format!(
+            "git diff exited {:?}: {}",
+            tracked.status.code(),
+            String::from_utf8_lossy(&tracked.stderr)
+        )));
+    }
+    let mut diff = String::from_utf8_lossy(&tracked.stdout).into_owned();
+
+    let untracked = tokio::process::Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .current_dir(workspace_root)
+        .output()
+        .await
+        .map_err(|e| CoderError::Backend(format!("git ls-files: {e}")))?;
+    if untracked.status.success() {
+        let names = String::from_utf8_lossy(&untracked.stdout);
+        if !names.trim().is_empty() {
+            if !diff.is_empty() {
+                diff.push('\n');
+            }
+            diff.push_str("# untracked files\n");
+            diff.push_str(&names);
+        }
+    }
+    if diff.trim().is_empty() {
+        diff = "(empty diff)".to_string();
+    }
+    Ok(diff)
 }
 
 impl LiberadoLoopBackend {
@@ -500,7 +547,8 @@ impl LiberadoLoopBackend {
             };
             critic_verdict = Some(verdict);
         } else if reviewable && roles::critic_enabled(&request) {
-            let verdict = critic::run_critic(self.providers.as_ref(), &request, &events).await?;
+            let verdict: CriticVerdict =
+                critic::run_critic(self.providers.as_ref(), &request, &events).await?;
             trace::push_event(
                 &events,
                 CoderEvent::CriticVerdict {
@@ -556,7 +604,8 @@ impl LiberadoLoopBackend {
 /// Best-effort shadow-git snapshot of `workspace_root`, keyed by `session_key`.
 /// Emits a live `Checkpoint` event when the coding pack's LIVE_GATE is installed.
 async fn take_workspace_checkpoint(workspace_root: &Path, session_key: &str, label: &str) {
-    let Ok(sg) = liberado_coder_sandbox::ShadowGit::open_or_init(workspace_root, session_key) else {
+    let Ok(sg) = liberado_coder_sandbox::ShadowGit::open_or_init(workspace_root, session_key)
+    else {
         return;
     };
     match sg.snapshot(label).await {

@@ -1548,3 +1548,85 @@ mod proptest_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod session_profile_tests {
+    use super::SessionProfile;
+
+    #[test]
+    fn empty_has_no_domain_no_authority() {
+        let p = SessionProfile::empty("basic");
+        assert_eq!(p.name, "basic");
+        assert!(p.enabled);
+        assert!(p.domain.is_none());
+        assert!(!p.declares_authority());
+    }
+
+    #[test]
+    fn component_key_falls_back_to_name() {
+        let p = SessionProfile {
+            component: None,
+            ..SessionProfile::empty("my-profile")
+        };
+        assert_eq!(p.component_key(), "my-profile");
+    }
+
+    #[test]
+    fn component_key_uses_explicit_value() {
+        let p = SessionProfile {
+            component: Some("grant-x".into()),
+            ..SessionProfile::empty("my-profile")
+        };
+        assert_eq!(p.component_key(), "grant-x");
+    }
+
+    #[test]
+    fn declares_authority_when_mcps_or_read_or_write_present() {
+        let p = SessionProfile {
+            mcps: vec![super::McpGrant::Whole("spider".into())],
+            ..SessionProfile::empty("p")
+        };
+        assert!(p.declares_authority());
+
+        let p = SessionProfile {
+            read: vec!["z1".into()],
+            ..SessionProfile::empty("p")
+        };
+        assert!(p.declares_authority());
+
+        let p = SessionProfile {
+            write: vec!["z2".into()],
+            ..SessionProfile::empty("p")
+        };
+        assert!(p.declares_authority());
+    }
+
+    #[test]
+    fn declared_capabilities_returns_empty_when_no_authority() {
+        let p = SessionProfile::empty("p");
+        assert!(!p.declares_authority());
+        let caps = p.declared_capabilities();
+        assert_eq!(caps.capabilities.len(), 0);
+    }
+
+    #[test]
+    fn default_path_arg_is_path_string() {
+        assert_eq!(super::default_path_arg(), "path");
+    }
+
+    #[test]
+    fn default_content_arg_is_content_string() {
+        assert_eq!(super::default_content_arg(), "content");
+    }
+
+    #[test]
+    fn default_true_is_true() {
+        assert!(super::default_true());
+    }
+
+    #[test]
+    fn default_project_write_class_is_agent_writable() {
+        let wc = super::default_project_write_class();
+        assert_eq!(wc, liberado_common::WriteClass::AgentWritable);
+    }
+}
