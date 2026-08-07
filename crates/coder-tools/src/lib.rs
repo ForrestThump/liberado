@@ -3,9 +3,9 @@
 mod hashline;
 
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use async_trait::async_trait;
@@ -13,7 +13,8 @@ use liberado_coder_core::{
     CommandPolicy, EXPLORE_TOOL_NAMES, HashlineConfig, PathPolicy, SandboxSpec,
 };
 use liberado_coder_sandbox::{
-    CommandRequest, DockerWorkspace, HostWorkspace, SandboxError, Workspace, WorktreeWorkspace,
+    CommandOutput, CommandRequest, DockerWorkspace, HostWorkspace, SandboxError, Workspace,
+    WorktreeWorkspace,
 };
 pub use liberado_coder_sandbox::{ensure_session_worktree, session_worktree_path};
 use liberado_executor::ToolRuntime;
@@ -21,6 +22,7 @@ use liberado_provider::{ToolDef, ToolInvocation};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
+use tokio::sync::oneshot;
 
 pub use hashline::{
     compute_file_hash as hashline_compute_file_hash, prompt_guidance as hashline_prompt_guidance,
@@ -44,6 +46,11 @@ pub struct CodingToolRuntime {
     path_policy: PathPolicy,
     validation_command: Option<CommandRequest>,
     hashline: HashlineConfig,
+    background_jobs: Arc<Mutex<HashMap<String, BackgroundJob>>>,
+}
+
+struct BackgroundJob {
+    receiver: oneshot::Receiver<Result<CommandOutput, SandboxError>>,
 }
 
 /// Base directory for coding worktrees (`LIBERADO_DATA_DIR/coding-worktrees`, else
@@ -184,6 +191,7 @@ impl CodingToolRuntime {
             path_policy,
             validation_command: None,
             hashline: HashlineConfig::default(),
+            background_jobs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -242,6 +250,8 @@ impl CodingToolRuntime {
             "git_log" => self.git_log(args).await,
             "git_fetch" => self.git_fetch(args).await,
             "git_merge" => self.git_merge(args).await,
+            "run_command_background" => self.run_command_background(args).await,
+            "check_background" => self.check_background(args).await,
             "run_command" => self.run_command(args).await,
             "validate" => self.validate().await,
             other => Err(ToolError::BadRequest(format!("unknown tool: {other}"))),
@@ -854,6 +864,101 @@ impl CodingToolRuntime {
         }))
     }
 
+    async fn run_command_background(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            program: String,
+            #[serde(default)]
+            args: Vec<String>,
+        }
+        let args: Args = parse_args(args)?;
+        let mut request = CommandRequest::new(args.program.clone());
+        request.args = args.args;
+
+        let (tx, rx) = oneshot::channel();
+        let workspace = Arc::clone(&self.workspace);
+
+        tokio::spawn(async move {
+            let output = workspace.run_command(request).await;
+            let _ = tx.send(output);
+        });
+
+        let job_id = format!(
+            "job-{:x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+
+        let mut jobs = self
+            .background_jobs
+            .lock()
+            .map_err(|e| ToolError::BadRequest(format!("background job lock: {e}")))?;
+        jobs.insert(
+            job_id.clone(),
+            BackgroundJob {
+                receiver: rx,
+            },
+        );
+
+        Ok(json!({
+            "job_id": job_id,
+            "status": "running",
+            "program": args.program,
+        }))
+    }
+
+    async fn check_background(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            job_id: String,
+        }
+        let args: Args = parse_args(args)?;
+
+        let mut jobs = self
+            .background_jobs
+            .lock()
+            .map_err(|e| ToolError::BadRequest(format!("background job lock: {e}")))?;
+
+        let Some(mut job) = jobs.remove(&args.job_id) else {
+            return Ok(json!({
+                "job_id": args.job_id,
+                "status": "unknown",
+                "error": "no such background job",
+            }));
+        };
+
+        let jid = args.job_id.clone();
+        match job.receiver.try_recv() {
+            Ok(Ok(output)) => Ok(json!({
+                "job_id": jid,
+                "status": "completed",
+                "exit_code": output.exit_code,
+                "stdout": output.stdout,
+                "stderr": output.stderr,
+                "timed_out": output.timed_out,
+            })),
+            Ok(Err(e)) => Ok(json!({
+                "job_id": jid,
+                "status": "failed",
+                "error": e.to_string(),
+            })),
+            Err(oneshot::error::TryRecvError::Empty) => {
+                jobs.insert(jid.clone(), job);
+                Ok(json!({
+                    "job_id": jid,
+                    "status": "running",
+                }))
+            }
+            Err(oneshot::error::TryRecvError::Closed) => Ok(json!({
+                "job_id": jid,
+                "status": "failed",
+                "error": "background task panicked or was dropped",
+            })),
+        }
+    }
+
     async fn run_command(&self, args: Value) -> Result<Value, ToolError> {
         #[derive(Deserialize)]
         struct Args {
@@ -1088,6 +1193,29 @@ impl ToolRuntime for CodingToolRuntime {
                     "properties": {
                         "branch": { "type": "string" },
                         "fast_forward_only": { "type": "boolean" }
+                    }
+                }),
+            ),
+            tool(
+                "run_command_background",
+                "Start a long-running command (build, test suite) in the background. Returns a job_id immediately; use check_background to poll for completion.",
+                json!({
+                    "type": "object",
+                    "required": ["program"],
+                    "properties": {
+                        "program": { "type": "string" },
+                        "args": { "type": "array", "items": { "type": "string" } }
+                    }
+                }),
+            ),
+            tool(
+                "check_background",
+                "Check the status of a background job started with run_command_background. Returns 'running', 'completed' (with output), or 'failed'.",
+                json!({
+                    "type": "object",
+                    "required": ["job_id"],
+                    "properties": {
+                        "job_id": { "type": "string" }
                     }
                 }),
             ),
