@@ -1,8 +1,12 @@
-//! Minimal process boundary for the Rust-native coding backend.
+//! Process boundary for the Rust-native coding backend.
 //!
-//! This binary intentionally speaks the stable `liberado-coder-core` JSON contracts so callers
-//! such as `liberado-pr-dispatch-mcp` can replace a subprocess backend without linking directly
-//! against the full in-process loop stack.
+//! Two modes:
+//!
+//! 1. **JSON bridge** (PR-dispatch path):
+//!    `liberado-coder-run --request <path|-> [--config-dir <dir>]`
+//!
+//! 2. **Headless task runner** (harness-bench / one-shot coding):
+//!    `liberado-coder-run task run --prompt "..." --workspace <path> [--model ...] [--max-turns N]`
 
 use std::{
     env,
@@ -11,12 +15,20 @@ use std::{
 };
 
 use liberado_coder_agent::{CoderProviderFactory, LiberadoLoopBackend};
-use liberado_coder_core::{CoderBackend, CoderError, CoderRoleConfig, CoderRunRequest};
+use liberado_coder_core::{
+    CoderBackend, CoderError, CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask,
+    CommandPolicy, ProgressPolicy, SandboxSpec, WorkspaceRef,
+};
+use liberado_common::Outcome;
 use liberado_config_loader::{ProviderProfile, Topology};
 use liberado_provider::Provider;
 use liberado_provider_openai_compat::OpenAiCompatibleProvider;
 
 const PROVIDER_ENV: &str = "LIBERADO_CODER_PROVIDER";
+const DEFAULT_MODEL: &str = "deepseek-chat";
+const DEFAULT_MAX_TURNS: u32 = 30;
+const DEFAULT_API_KEY_ENV: &str = "DEEPSEEK_API_KEY";
+const DEFAULT_BASE_URL: &str = "https://api.deepseek.com/v1";
 
 #[tokio::main]
 async fn main() {
@@ -36,8 +48,27 @@ async fn main() {
 
 async fn run() -> Result<(), String> {
     let args = Args::parse(env::args().skip(1))?;
-    let request = read_request(args.request.as_deref()).await?;
-    let profile = provider_profile(args.config_dir.as_deref())?;
+    match args.command {
+        CliCommand::Request { path, config_dir } => run_request(path, config_dir).await,
+        CliCommand::TaskRun {
+            prompt,
+            workspace,
+            model,
+            max_turns,
+            config_dir,
+            api_key_env,
+            base_url,
+        } => run_headless(prompt, workspace, model, max_turns, config_dir, api_key_env, base_url)
+            .await,
+    }
+}
+
+async fn run_request(
+    path: Option<PathBuf>,
+    config_dir: Option<PathBuf>,
+) -> Result<(), String> {
+    let request = read_request(path.as_deref()).await?;
+    let profile = provider_profile(config_dir.as_deref())?;
     let providers = Arc::new(OpenAiProfileProviderFactory::from_profile(profile)?);
     let backend = LiberadoLoopBackend::with_provider_factory(providers);
     let result = backend
@@ -50,36 +81,346 @@ async fn run() -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
-struct Args {
-    request: Option<PathBuf>,
+async fn run_headless(
+    prompt: String,
+    workspace: PathBuf,
+    model: Option<String>,
+    max_turns: Option<u32>,
     config_dir: Option<PathBuf>,
+    api_key_env: Option<String>,
+    base_url: Option<String>,
+) -> Result<(), String> {
+    let model = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
+    let max_turns = max_turns.unwrap_or(DEFAULT_MAX_TURNS);
+    let api_key_env = api_key_env.unwrap_or_else(|| DEFAULT_API_KEY_ENV.to_string());
+    let base_url = base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+
+    let api_key = env::var(&api_key_env)
+        .map_err(|_| format!("{api_key_env} is required for headless task runner"))?;
+
+    ensure_git_repo(&workspace).await?;
+
+    let request = CoderRunRequest {
+        task: CoderTask {
+            id: "task-1".to_string(),
+            description: prompt,
+            context: None,
+            success_criteria: Vec::new(),
+        },
+        workspace: WorkspaceRef::new(
+            workspace.to_string_lossy().to_string(),
+            "HEAD",
+        ),
+        config: CoderRunConfig {
+            backend: "liberado-loop".to_string(),
+            trace_dir: None,
+            planner: disabled_role(),
+            coder: CoderRoleConfig {
+                model,
+                prompt_path: None,
+                prompt: Some(
+                    "You are Liberado's coding agent. Edit files in the workspace to complete \
+                     the task. Use read_file, write_file, edit_file, apply_patch, search_text, \
+                     list_files, git_status, git_diff, run_command, and validate tools as needed. \
+                     When done, call submit_report with a summary of what changed."
+                        .to_string(),
+                ),
+                temperature: None,
+                max_tokens: None,
+                max_turns: Some(max_turns),
+            },
+            critic: disabled_role(),
+            gate: Default::default(),
+            repair: None,
+            sandbox: SandboxSpec::HostLocal,
+            command_policy: CommandPolicy::default(),
+            validation_command: None,
+            verifiers: Vec::new(),
+            verify_policy: Default::default(),
+            path_policy: Default::default(),
+            progress: ProgressPolicy {
+                max_attempts: 1,
+                ..Default::default()
+            },
+            hashline: Default::default(),
+        },
+        attempt: 0,
+        prior_feedback: Vec::new(),
+        strategist_directive: None,
+    };
+
+    let providers: Arc<dyn CoderProviderFactory> = match config_dir {
+        Some(ref dir) => {
+            let profile = provider_profile(Some(dir))?;
+            Arc::new(OpenAiProfileProviderFactory::from_profile(profile)?)
+        }
+        None => Arc::new(DirectProviderFactory {
+            api_key,
+            base_url,
+        }),
+    };
+
+    let backend = LiberadoLoopBackend::with_provider_factory(providers);
+    let result = backend
+        .run(request)
+        .await
+        .map_err(|error| {
+            eprintln!("CoderError: {error:?}");
+            format!("coder backend failed: {error}")
+        })?;
+
+    let json = serde_json::to_string_pretty(&result)
+        .map_err(|error| format!("serialize coder result: {error}"))?;
+    println!("{json}");
+
+    match result.outcome {
+        Outcome::Succeeded => Ok(()),
+        _ => Err(format!(
+            "task completed with outcome: {:?}",
+            result.outcome
+        )),
+    }
+}
+
+fn disabled_role() -> CoderRoleConfig {
+    CoderRoleConfig {
+        model: "mock".to_string(),
+        prompt_path: None,
+        prompt: None,
+        temperature: None,
+        max_tokens: None,
+        max_turns: Some(4),
+    }
+}
+
+async fn ensure_git_repo(workspace: &Path) -> Result<(), String> {
+    let git_dir = workspace.join(".git");
+    if git_dir.exists() {
+        tracing::info!("workspace already a git repo: {}", workspace.display());
+        return Ok(());
+    }
+    tracing::info!("initialising git repo in bare workspace: {}", workspace.display());
+
+    let run_git = |args: &[&str]| -> Result<(), String> {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(workspace)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .map_err(|e| format!("git {}: {e}", args.join(" ")))?;
+        if !output.status.success() {
+            return Err(format!(
+                "git {} exited {:?}",
+                args.join(" "),
+                output.status.code()
+            ));
+        }
+        Ok(())
+    };
+
+    run_git(&["init"])?;
+    run_git(&["add", "-A"])?;
+    run_git(&["commit", "-m", "harness-bench baseline", "--allow-empty"])?;
+    Ok(())
+}
+
+// --- args ------------------------------------------------------------------
+
+#[derive(Debug)]
+enum CliCommand {
+    Request {
+        path: Option<PathBuf>,
+        config_dir: Option<PathBuf>,
+    },
+    TaskRun {
+        prompt: String,
+        workspace: PathBuf,
+        model: Option<String>,
+        max_turns: Option<u32>,
+        config_dir: Option<PathBuf>,
+        api_key_env: Option<String>,
+        base_url: Option<String>,
+    },
+}
+
+impl Default for CliCommand {
+    fn default() -> Self {
+        CliCommand::Request {
+            path: None,
+            config_dir: None,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct Args {
+    command: CliCommand,
 }
 
 impl Args {
     fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
-        let mut parsed = Args::default();
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "--request" => {
-                    parsed.request =
-                        Some(PathBuf::from(args.next().ok_or_else(|| {
-                            "--request requires a path or '-'".to_string()
-                        })?));
+        let first = args.next();
+        match first.as_deref() {
+            Some("task") => Self::parse_task_run(args),
+            Some("--help") | Some("-h") => Err(usage()),
+            _ => {
+                let mut parsed = Args::default();
+                let mut path = None;
+                let mut config_dir = None;
+
+                let iter = first.into_iter().chain(args);
+                let mut iter = iter.peekable();
+                while let Some(arg) = iter.next() {
+                    match arg.as_str() {
+                        "--request" => {
+                            path = Some(PathBuf::from(iter.next().ok_or_else(|| {
+                                "--request requires a path or '-'".to_string()
+                            })?));
+                        }
+                        "--config-dir" => {
+                            config_dir = Some(PathBuf::from(
+                                iter.next().ok_or_else(|| {
+                                    "--config-dir requires a path".to_string()
+                                })?,
+                            ));
+                        }
+                        "--help" | "-h" => return Err(usage()),
+                        other => {
+                            return Err(format!("unknown argument '{other}'\n{}", usage()))
+                        }
+                    }
                 }
-                "--config-dir" => {
-                    parsed.config_dir = Some(PathBuf::from(
-                        args.next()
-                            .ok_or_else(|| "--config-dir requires a path".to_string())?,
-                    ));
-                }
-                "--help" | "-h" => return Err(usage()),
-                other => return Err(format!("unknown argument '{other}'\n{}", usage())),
+
+                parsed.command = CliCommand::Request { path, config_dir };
+                Ok(parsed)
             }
         }
-        Ok(parsed)
+    }
+
+    fn parse_task_run(
+        mut args: impl Iterator<Item = String>,
+    ) -> Result<Self, String> {
+        let sub = args.next();
+        if sub.as_deref() != Some("run") {
+            return Err(format!(
+                "expected 'run', got {:?}\n{}",
+                sub,
+                task_usage()
+            ));
+        }
+
+        let mut prompt = None;
+        let mut workspace = None;
+        let mut model = None;
+        let mut max_turns = None;
+        let mut config_dir = None;
+        let mut api_key_env = None;
+        let mut base_url = None;
+
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--prompt" => {
+                    prompt = Some(
+                        args.next()
+                            .ok_or_else(|| "--prompt requires a value".to_string())?,
+                    );
+                }
+                "--workspace" => {
+                    workspace = Some(PathBuf::from(
+                        args.next().ok_or_else(|| {
+                            "--workspace requires a path".to_string()
+                        })?,
+                    ));
+                }
+                "--model" => {
+                    model = Some(
+                        args.next()
+                            .ok_or_else(|| "--model requires a value".to_string())?,
+                    );
+                }
+                "--max-turns" => {
+                    let val = args.next().ok_or_else(|| {
+                        "--max-turns requires a number".to_string()
+                    })?;
+                    max_turns = Some(val.parse::<u32>().map_err(|_| {
+                        format!("--max-turns must be a number, got '{val}'")
+                    })?);
+                }
+                "--config-dir" => {
+                    config_dir = Some(PathBuf::from(
+                        args.next().ok_or_else(|| {
+                            "--config-dir requires a path".to_string()
+                        })?,
+                    ));
+                }
+                "--api-key-env" => {
+                    api_key_env = Some(
+                        args.next().ok_or_else(|| {
+                            "--api-key-env requires a value".to_string()
+                        })?,
+                    );
+                }
+                "--base-url" => {
+                    base_url = Some(
+                        args.next().ok_or_else(|| {
+                            "--base-url requires a value".to_string()
+                        })?,
+                    );
+                }
+                "--help" | "-h" => return Err(task_usage()),
+                other => {
+                    return Err(format!(
+                        "unknown argument '{other}'\n{}",
+                        task_usage()
+                    ))
+                }
+            }
+        }
+
+        let prompt = prompt.ok_or_else(|| {
+            format!("--prompt is required\n{}", task_usage())
+        })?;
+        let workspace = workspace.ok_or_else(|| {
+            format!("--workspace is required\n{}", task_usage())
+        })?;
+
+        Ok(Args {
+            command: CliCommand::TaskRun {
+                prompt,
+                workspace,
+                model,
+                max_turns,
+                config_dir,
+                api_key_env,
+                base_url,
+            },
+        })
     }
 }
+
+// --- provider factory (direct mode, no topology.toml) ----------------------
+
+#[derive(Debug, Clone)]
+struct DirectProviderFactory {
+    api_key: String,
+    base_url: String,
+}
+
+impl CoderProviderFactory for DirectProviderFactory {
+    fn provider_for(
+        &self,
+        _role: &str,
+        config: &CoderRoleConfig,
+    ) -> Result<Arc<dyn Provider>, CoderError> {
+        let provider =
+            OpenAiCompatibleProvider::new(&self.api_key, &config.model, &self.base_url)
+                .with_extra_client_error_status(vec![429]);
+        Ok(Arc::new(provider))
+    }
+}
+
+// --- request reading (unchanged from original) -----------------------------
 
 async fn read_request(path: Option<&Path>) -> Result<CoderRunRequest, String> {
     let bytes = match path {
@@ -98,6 +439,8 @@ async fn read_request(path: Option<&Path>) -> Result<CoderRunRequest, String> {
     };
     serde_json::from_slice(&bytes).map_err(|error| format!("parse CoderRunRequest JSON: {error}"))
 }
+
+// --- provider profile (unchanged from original) ----------------------------
 
 fn provider_profile(config_dir: Option<&Path>) -> Result<ProviderProfile, String> {
     let topology = match config_dir {
@@ -121,6 +464,8 @@ fn read_topology(config_dir: &Path) -> Result<Topology, String> {
         .map_err(|error| format!("read topology {}: {error}", path.display()))?;
     toml::from_str(&raw).map_err(|error| format!("parse topology {}: {error}", path.display()))
 }
+
+// --- provider factory from profile (unchanged from original) ---------------
 
 #[derive(Debug, Clone)]
 struct OpenAiProfileProviderFactory {
@@ -153,34 +498,197 @@ impl CoderProviderFactory for OpenAiProfileProviderFactory {
     }
 }
 
+// --- usage -----------------------------------------------------------------
+
 fn usage() -> String {
-    "usage: liberado-coder-run [--request <path|->] [--config-dir <dir>]".to_string()
+    concat!(
+        "liberado-coder-run\n\n",
+        "  JSON bridge mode:\n",
+        "    liberado-coder-run --request <path|-> [--config-dir <dir>]\n\n",
+        "  Headless task mode:\n",
+        "    liberado-coder-run task run --prompt <text> --workspace <path> \\\n",
+        "      [--model <name>] [--max-turns <n>] [--api-key-env <env>] [--base-url <url>]\n",
+    )
+    .to_string()
 }
+
+fn task_usage() -> String {
+    concat!(
+        "liberado-coder-run task run --prompt <text> --workspace <path> \\\n",
+        "    [--model <name>] [--max-turns <n>] [--config-dir <dir>] \\\n",
+        "    [--api-key-env <env>] [--base-url <url>]\n",
+        "\n",
+        "  --prompt       Task description (required)\n",
+        "  --workspace    Working directory path (required)\n",
+        "  --model        Model name (default: deepseek-chat)\n",
+        "  --max-turns    Max tool turns (default: 30)\n",
+        "  --config-dir   Config directory for topology.toml provider lookup\n",
+        "  --api-key-env  Env var for API key (default: DEEPSEEK_API_KEY)\n",
+        "  --base-url     API base URL (default: https://api.deepseek.com/v1)\n",
+    )
+    .to_string()
+}
+
+// --- tests -----------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn parses_args() {
+    fn parses_request_args() {
         let args = Args::parse(
             ["--request", "request.json", "--config-dir", "config"]
                 .into_iter()
                 .map(str::to_string),
         )
         .unwrap();
-        assert_eq!(
-            args,
-            Args {
-                request: Some(PathBuf::from("request.json")),
-                config_dir: Some(PathBuf::from("config")),
+        match args.command {
+            CliCommand::Request { path, config_dir } => {
+                assert_eq!(path, Some(PathBuf::from("request.json")));
+                assert_eq!(config_dir, Some(PathBuf::from("config")));
             }
-        );
+            _ => panic!("expected Request command"),
+        }
     }
 
     #[test]
     fn unknown_arg_is_an_error() {
         let err = Args::parse(["--wat"].into_iter().map(str::to_string)).unwrap_err();
         assert!(err.contains("unknown argument"));
+    }
+
+    #[test]
+    fn parses_task_run_minimal() {
+        let args = Args::parse(
+            [
+                "task",
+                "run",
+                "--prompt",
+                "write hello.txt",
+                "--workspace",
+                "/tmp/ws",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+        match args.command {
+            CliCommand::TaskRun {
+                prompt,
+                workspace,
+                model,
+                max_turns,
+                ..
+            } => {
+                assert_eq!(prompt, "write hello.txt");
+                assert_eq!(workspace, PathBuf::from("/tmp/ws"));
+                assert!(model.is_none());
+                assert!(max_turns.is_none());
+            }
+            _ => panic!("expected TaskRun command"),
+        }
+    }
+
+    #[test]
+    fn parses_task_run_full() {
+        let args = Args::parse(
+            [
+                "task",
+                "run",
+                "--prompt",
+                "do thing",
+                "--workspace",
+                "/tmp/ws",
+                "--model",
+                "deepseek-v4-pro",
+                "--max-turns",
+                "15",
+                "--api-key-env",
+                "OPENROUTER_API_KEY",
+                "--base-url",
+                "https://openrouter.ai/api/v1",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+        match args.command {
+            CliCommand::TaskRun {
+                prompt,
+                workspace,
+                model,
+                max_turns,
+                api_key_env,
+                base_url,
+                ..
+            } => {
+                assert_eq!(prompt, "do thing");
+                assert_eq!(workspace, PathBuf::from("/tmp/ws"));
+                assert_eq!(model, Some("deepseek-v4-pro".to_string()));
+                assert_eq!(max_turns, Some(15));
+                assert_eq!(api_key_env, Some("OPENROUTER_API_KEY".to_string()));
+                assert_eq!(base_url, Some("https://openrouter.ai/api/v1".to_string()));
+            }
+            _ => panic!("expected TaskRun command"),
+        }
+    }
+
+    #[test]
+    fn task_run_missing_prompt_errors() {
+        let err = Args::parse(
+            ["task", "run", "--workspace", "/tmp"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .unwrap_err();
+        assert!(err.contains("--prompt is required"));
+    }
+
+    #[test]
+    fn task_run_missing_workspace_errors() {
+        let err = Args::parse(
+            ["task", "run", "--prompt", "hi"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .unwrap_err();
+        assert!(err.contains("--workspace is required"));
+    }
+
+    #[test]
+    fn task_run_bad_subcommand_errors() {
+        let err = Args::parse(
+            ["task", "wat", "--prompt", "hi"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .unwrap_err();
+        assert!(err.contains("expected 'run'"));
+    }
+
+    #[test]
+    fn task_run_bad_max_turns_errors() {
+        let err = Args::parse(
+            [
+                "task", "run", "--prompt", "hi", "--workspace", "/tmp",
+                "--max-turns", "abc",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap_err();
+        assert!(err.contains("--max-turns must be a number"));
+    }
+
+    #[test]
+    fn task_run_help_is_an_error() {
+        let err = Args::parse(
+            ["task", "run", "--help"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .unwrap_err();
+        assert!(err.contains("--prompt"));
     }
 }
