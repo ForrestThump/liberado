@@ -136,8 +136,12 @@ async fn run_headless(
                 prompt_path: None,
                 prompt: Some(
                     "You are Liberado's coding agent. Edit files in the workspace to complete \
-                     the task. Use read_file, write_file, edit_file, apply_patch, search_text, \
-                     list_files, git_status, git_diff, run_command, and validate tools as needed. \
+                     the task. Use these tools as needed: \
+                     read_file, write_file (auto-creates parent directories), edit_file, \
+                     apply_patch, hashline_edit, search_text, list_files, list_symbols, \
+                     git_status, git_diff, git_log, git_branch, git_commit, git_push, \
+                     git_fetch, git_merge, run_command, validate. \
+                     Git safe.directory is configured automatically — do not waste turns on it. \
                      When done, call submit_report with a summary of what changed."
                         .to_string(),
                 ),
@@ -320,6 +324,7 @@ async fn ensure_git_repo(workspace: &Path) -> Result<(), String> {
     let git_dir = workspace.join(".git");
     if git_dir.exists() {
         tracing::info!("workspace already a git repo: {}", workspace.display());
+        configure_git_safe_directory()?;
         return Ok(());
     }
     std::fs::create_dir_all(workspace)
@@ -347,6 +352,23 @@ async fn ensure_git_repo(workspace: &Path) -> Result<(), String> {
     run_git(&["init"])?;
     run_git(&["add", "-A"])?;
     run_git(&["commit", "-m", "harness-bench baseline", "--allow-empty"])?;
+    configure_git_safe_directory()?;
+    Ok(())
+}
+
+fn configure_git_safe_directory() -> Result<(), String> {
+    let output = std::process::Command::new("git")
+        .args(["config", "--global", "--add", "safe.directory", "*"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("git config safe.directory: {e}"))?;
+    if !output.status.success() {
+        tracing::warn!(
+            "git config safe.directory failed (non-fatal): {:?}",
+            output.status.code()
+        );
+    }
     Ok(())
 }
 

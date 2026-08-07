@@ -239,6 +239,9 @@ impl CodingToolRuntime {
             "git_branch" => self.git_branch(args).await,
             "git_commit" => self.git_commit(args).await,
             "git_push" => self.git_push(args).await,
+            "git_log" => self.git_log(args).await,
+            "git_fetch" => self.git_fetch(args).await,
+            "git_merge" => self.git_merge(args).await,
             "run_command" => self.run_command(args).await,
             "validate" => self.validate().await,
             other => Err(ToolError::BadRequest(format!("unknown tool: {other}"))),
@@ -760,6 +763,97 @@ impl CodingToolRuntime {
         }))
     }
 
+    async fn git_log(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            #[serde(default = "default_log_limit")]
+            limit: u32,
+            #[serde(default)]
+            branch: Option<String>,
+            #[serde(default)]
+            format: Option<String>,
+        }
+        fn default_log_limit() -> u32 {
+            20
+        }
+        let args: Args = parse_args(args)?;
+        let limit = args.limit.min(100);
+        let mut request = CommandRequest::new("git");
+        let fmt = args
+            .format
+            .unwrap_or_else(|| "%h %s".to_string());
+        request.args = vec![
+            "log".to_string(),
+            format!("--max-count={limit}"),
+            format!("--format={fmt}"),
+        ];
+        if let Some(ref branch) = args.branch {
+            if !branch.is_empty() {
+                request.args.push(branch.clone());
+            }
+        }
+        let output = self.workspace.run_command(request).await?;
+        Ok(json!({
+            "exit_code": output.exit_code,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+            "timed_out": output.timed_out,
+        }))
+    }
+
+    async fn git_fetch(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            #[serde(default = "default_remote")]
+            remote: String,
+            #[serde(default)]
+            branch: Option<String>,
+        }
+        let args: Args = parse_args(args)?;
+        let mut request = CommandRequest::new("git");
+        request.args = vec!["fetch".to_string(), args.remote];
+        if let Some(ref branch) = args.branch {
+            if !branch.is_empty() {
+                request.args.push(branch.clone());
+            }
+        }
+        let output = self.workspace.run_command(request).await?;
+        Ok(json!({
+            "exit_code": output.exit_code,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+            "timed_out": output.timed_out,
+        }))
+    }
+
+    async fn git_merge(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            branch: String,
+            #[serde(default)]
+            fast_forward_only: bool,
+        }
+        let args: Args = parse_args(args)?;
+        if args.branch.is_empty() {
+            return Err(ToolError::BadRequest(
+                "branch must not be empty".to_string(),
+            ));
+        }
+        let mut request = CommandRequest::new("git");
+        request.args = vec!["merge".to_string()];
+        if args.fast_forward_only {
+            request.args.push("--ff-only".to_string());
+        }
+        request.args.push(args.branch);
+        let output = self.workspace.run_command(request).await?;
+        Ok(json!({
+            "exit_code": output.exit_code,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+            "timed_out": output.timed_out,
+        }))
+    }
+
     async fn run_command(&self, args: Value) -> Result<Value, ToolError> {
         #[derive(Deserialize)]
         struct Args {
@@ -959,6 +1053,41 @@ impl ToolRuntime for CodingToolRuntime {
                         "remote": { "type": "string" },
                         "branch": { "type": "string" },
                         "set_upstream": { "type": "boolean" }
+                    }
+                }),
+            ),
+            tool(
+                "git_log",
+                "Show structured commit history (--format, --max-count, optional branch).",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "limit": { "type": "integer", "default": 20 },
+                        "branch": { "type": "string" },
+                        "format": { "type": "string", "default": "%h %s" }
+                    }
+                }),
+            ),
+            tool(
+                "git_fetch",
+                "Fetch refs from a remote. Use before reviewing remote branches.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "remote": { "type": "string", "default": "origin" },
+                        "branch": { "type": "string" }
+                    }
+                }),
+            ),
+            tool(
+                "git_merge",
+                "Merge a branch into the current branch. Use after review.",
+                json!({
+                    "type": "object",
+                    "required": ["branch"],
+                    "properties": {
+                        "branch": { "type": "string" },
+                        "fast_forward_only": { "type": "boolean" }
                     }
                 }),
             ),
