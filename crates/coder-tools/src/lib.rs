@@ -1140,6 +1140,20 @@ impl ToolRuntime for CodingToolRuntime {
             })
             .map_err(|e| e.to_string())
     }
+
+    fn is_read_only(&self, tool_name: &str) -> bool {
+        matches!(
+            tool_name,
+            "read_file"
+                | "search_text"
+                | "list_files"
+                | "list_symbols"
+                | "git_status"
+                | "git_diff"
+                | "git_log"
+                | "validate"
+        )
+    }
 }
 
 fn tool(name: &str, description: &str, parameters: Value) -> ToolDef {

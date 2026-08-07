@@ -314,6 +314,13 @@ pub trait ToolRuntime: Send + Sync {
     /// errors (which abort the whole loop) for infrastructure faults, by surfacing them through the
     /// runtime's own state rather than here.
     async fn invoke(&self, call: &ToolInvocation) -> Result<String, String>;
+
+    /// Whether a tool is safe to run concurrently with other tool calls in the same turn.
+    /// Read-only tools (file reads, searches, git inspection) return true.
+    /// Default: false (conservative — treat every tool as potentially stateful).
+    fn is_read_only(&self, _tool_name: &str) -> bool {
+        false
+    }
 }
 
 /// Failure building a [`ToolRuntime`] for an execution (connection/handshake/etc.).
@@ -873,37 +880,26 @@ impl Executor {
                 }
             }
 
-            // Process every tool call in this turn *before* doom/cycle escalations that jump to
-            // the next provider call. OpenAI-compat providers require one tool-result message per
-            // `tool_call_id` after an assistant tool_calls message (dogfood D3, 01KX7AGD).
+            // --- pre-pass: special-case tools (in-process, never reach ToolRuntime) ---
             let mut submitted_report: Option<Report> = None;
             let mut doom_hit: Option<String> = None;
             let mut cycle_hit: Option<Vec<String>> = None;
+
             for call in &response.tool_calls {
                 if call.name == SUBMIT_REPORT_TOOL {
                     tracing::info!(turn, "subagent filed report");
-                    // Still emit a tool result so the transcript is well-formed if we ever
-                    // re-use `messages` after this; then stop after the batch.
                     messages.push(Message::tool_result(
                         &call.id,
                         "report accepted".to_string(),
                     ));
                     match serde_json::from_value::<Report>(call.arguments.clone()) {
-                        // `repeat_calls` is stamped at the return site below, not here. This arm
-                        // runs *before* the counting block for the rest of the batch, so a model
-                        // that emits `submit_report` ahead of another repeated call in the same
-                        // response would otherwise file a count short by those calls.
                         Ok(report) => submitted_report = Some(report),
                         Err(e) => return Err(ExecError::Decode(e.to_string())),
                     }
-                    continue;
                 }
-                // Withdrawing a tool from the offered catalog only changes what the model is
-                // *shown*; nothing stops it calling a name it still remembers from earlier turns.
-                // During the wrap-up reserve that distinction matters, because the whole point is
-                // that the extra turns cannot buy more work — so refuse the call outright and say
-                // why, rather than quietly running it.
-                if wrapping_up {
+                if wrapping_up
+                    && call.name != SUBMIT_REPORT_TOOL
+                {
                     tracing::debug!(turn, tool = %call.name, "refused a tool call during wrap-up");
                     messages.push(Message::tool_result(
                         &call.id,
@@ -913,29 +909,86 @@ impl Executor {
                             call.name, SUBMIT_REPORT_TOOL
                         ),
                     ));
-                    continue;
                 }
-                // Engine-injected, like `submit_report` above: handled in-process, never reaches
-                // `ToolRuntime`, and — deliberately, before `call_history.push` below — never
-                // enters doom-loop/cycle tracking. Legitimate scratchpad usage (update after a
-                // real tool call, repeated; several updates in a row while planning) would
-                // otherwise misfire both guards (see `liberado-scratchpad`'s module docs).
                 if let Some(pad) = scratchpad
                     && call.name == SCRATCHPAD_TOOL
                 {
                     let result = pad.apply(&call.arguments);
                     messages.push(Message::tool_result(&call.id, result));
-                    continue;
                 }
-                let tool_span = tracing::debug_span!("tool_call", name = %call.name, id = %call.id);
+            }
+
+            // --- partition remaining regular tools into read/write ---
+            let regular: Vec<_> = response
+                .tool_calls
+                .iter()
+                .filter(|c| {
+                    c.name != SUBMIT_REPORT_TOOL
+                        && c.name != SCRATCHPAD_TOOL
+                        && !wrapping_up
+                })
+                .collect();
+
+            let (reads, writes): (Vec<_>, Vec<_>) =
+                regular.iter().partition(|c| runtime.is_read_only(&c.name));
+
+            // Run read-only tools concurrently.
+            if !reads.is_empty() {
+                let futures: Vec<_> = reads
+                    .iter()
+                    .map(|call: &&ToolInvocation| {
+                        let call = (*call).clone();
+                        async move {
+                            let id = call.id.clone();
+                            let tool_span = tracing::debug_span!(
+                                "tool_call",
+                                name = %call.name,
+                                id = %id
+                            );
+                            let result =
+                                async { run_tool(runtime, &call).await }.instrument(tool_span);
+                            (id, result.await)
+                        }
+                    })
+                    .collect();
+                let read_results = futures::future::join_all(futures).await;
+                for (id, result) in read_results {
+                    let call = response.tool_calls.iter().find(|c| c.id == id).unwrap();
+                    call_history.push((
+                        call.name.clone(),
+                        call.arguments.clone(),
+                        result.clone(),
+                    ));
+                    if call_history[..call_history.len() - 1]
+                        .iter()
+                        .any(|(n, a, _)| n == &call.name && a == &call.arguments)
+                    {
+                        repeat_calls += 1;
+                    }
+                    messages.push(Message::tool_result(&call.id, result));
+                }
+                if doom_hit.is_none() && is_doom_loop(&call_history, policy.loop_profile) {
+                    doom_hit = Some("(read batch)".to_string());
+                }
+                if cycle_hit.is_none()
+                    && let Some(cycling) = detect_short_cycle(&call_history)
+                {
+                    cycle_hit = Some(cycling);
+                }
+            }
+
+            // Run write tools serially.
+            for call in writes {
+                let tool_span =
+                    tracing::debug_span!("tool_call", name = %call.name, id = %call.id);
                 let result = async { run_tool(runtime, call).await }
                     .instrument(tool_span)
                     .await;
-                call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
-                // Byte-exact matching: tool name + arguments identical to any earlier call in
-                // this run. `serde_json::Value::PartialEq` is structural (key-order-agnostic for
-                // objects), which is correct here — the model sees the same schema each turn and
-                // the point is identical *arguments*, not identical serialization bytes.
+                call_history.push((
+                    call.name.clone(),
+                    call.arguments.clone(),
+                    result.clone(),
+                ));
                 if call_history[..call_history.len() - 1]
                     .iter()
                     .any(|(n, a, _)| n == &call.name && a == &call.arguments)
@@ -943,7 +996,6 @@ impl Executor {
                     repeat_calls += 1;
                 }
                 messages.push(Message::tool_result(&call.id, result));
-
                 if doom_hit.is_none() && is_doom_loop(&call_history, policy.loop_profile) {
                     doom_hit = Some(call.name.clone());
                 }
