@@ -17,8 +17,8 @@ use std::{
 use liberado_coder_agent::{CoderProviderFactory, LiberadoLoopBackend};
 use liberado_coder_core::{
     CoderBackend, CoderError, CoderGateConfig, CoderRoleConfig, CoderRunConfig, CoderRunRequest,
-    CoderTask, CommandPolicy, HashlineConfig, ProgressPolicy, SandboxSpec, VerifierSpec,
-    WorkspaceRef,
+    CoderTask, CoderTuning, CommandPolicy, HashlineConfig, ProgressPolicy, SandboxSpec,
+    VerifierSpec, WorkspaceRef,
 };
 use liberado_coder_tools::repo_map::{self, RepoMapOptions};
 use liberado_common::Outcome;
@@ -107,11 +107,20 @@ async fn run_headless(
 
     let workspace_summary = build_workspace_summary(&workspace).unwrap_or_default();
 
-    let repo_map = repo_map::generate_repo_map(
-        &workspace,
-        &RepoMapOptions::default(),
-    )
-    .await;
+    let tuning = read_tuning(config_dir.as_deref());
+    let repo_map = if tuning.repo_map.enabled {
+        repo_map::generate_repo_map(
+            &workspace,
+            &RepoMapOptions {
+                max_map_tokens: tuning.repo_map.max_map_tokens,
+                min_source_files: tuning.repo_map.min_source_files,
+                ..Default::default()
+            },
+        )
+        .await
+    } else {
+        None
+    };
 
     let session_context = if let Some(ref sid) = session_id {
         let prior = load_prior_rounds(&workspace, sid)?;
@@ -700,6 +709,24 @@ fn read_topology(config_dir: &Path) -> Result<Topology, String> {
     let raw = std::fs::read_to_string(&path)
         .map_err(|error| format!("read topology {}: {error}", path.display()))?;
     toml::from_str(&raw).map_err(|error| format!("parse topology {}: {error}", path.display()))
+}
+
+fn read_tuning(config_dir: Option<&Path>) -> CoderTuning {
+    let Some(dir) = config_dir else {
+        return CoderTuning::default();
+    };
+    let path = dir.join("tuning.toml");
+    if !path.exists() {
+        return CoderTuning::default();
+    }
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return CoderTuning::default();
+    };
+    let Ok(value) = toml::from_str::<toml::Value>(&raw) else {
+        return CoderTuning::default();
+    };
+    let coder_section = value.get("coder");
+    CoderTuning::from_value(coder_section).unwrap_or_default()
 }
 
 // --- provider factory from profile (unchanged from original) ---------------
