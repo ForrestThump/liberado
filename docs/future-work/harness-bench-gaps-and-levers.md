@@ -74,6 +74,22 @@ Tasks with restricted tools or budgets.
 
 **Why this matters:** Liberado's capability topology and budget system are unique. These tasks prove narrowing actually works.
 
+### Disposition: which belong in harness-bench vs Liberado's own test suite
+
+The line: **if it tests Liberado's implementation, it's a unit/integration test. If it tests model behavior across any harness, it's a harness-bench task.**
+
+| Category | Liberado unit/integration tests | harness-bench tasks | Rationale |
+|---|---|---|---|
+| **A: Verifier-gated** | ✅ Pipeline correctness: does the gate fire? block submit_report? feed back prior_feedback? (Already covered by `completion_gate_e2e.rs`) | ✅ **A1–A3**: can the model self-correct under verifier pressure? | Pipeline is impl-specific; model behavior under verifiers is generic |
+| **B: Fan-out** | ✅ Hub spawning, worktree isolation, merge protocol, concurrency limits (already covered by `fanout.rs` unit tests) | ❌ Too harness-specific — Grok uses task+wait_tasks, OpenCode uses task tool, Kimi uses AgentSwarm. No standard fan-out protocol | Each harness has incompatible subagent architecture |
+| **C: Plan-then-build** | ✅ Plan mode FSM: does PathPolicy actually block writes outside `.liberado/plan.md`? Does explore mode deny write tools? | 🟡 **C1** could work as a generic "plan first" prompt; **C2** (plan drift detection) is Liberado-specific | Plan artifact location varies; policy enforcement is impl-specific |
+| **D: Session memory** | ✅ Checkpoint state machine: does shadow-git snapshot/restore correctly? Does park/resume preserve session state? | ✅ **D2** (memory across rounds) — same pattern as existing 007-session-memory; **D1** (checkpoint resume) is Liberado-specific | State mechanism is impl-specific; memory behavior is generic |
+| **E: Deep chains** | ❌ Not architecture-specific — the executor loop is already tested | ✅ **E1, E2**: model reasoning depth across 5–10 sequential tool calls. Tests any harness equally | Pure model capability test |
+| **F: Constrained autonomy** | ✅ Capability narrowing: does PathPolicy deny unauthorized paths? Does CommandPolicy block disallowed commands? (Already covered by `coder-tools` tests) | 🟡 **F1** (no shell commands) is a generic constraint any harness can apply; **F2** (turn budget) is Liberado-specific | Narrowing mechanism is impl-specific; working within constraints is generic |
+
+**Net: 7 harness-bench tasks (A1–A3, C1, D2, E1, E2), 5 Liberado-specific tests (B1–B2 fan-out, C2 plan-drift, D1 checkpoint-resume, F2 turn-budget).**
+The Liberado-specific ones already have partial coverage in existing tests; the gaps are mostly in edge cases and live-model verification.
+
 ---
 ## Part 2 — Performance levers (what to tune)
 
