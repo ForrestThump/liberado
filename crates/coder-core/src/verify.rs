@@ -497,4 +497,51 @@ mod tests {
         let fb = r.repair_feedback();
         assert!(fb.contains("gone"));
     }
+
+    #[test]
+    fn deserialize_paths_absent() {
+        let v: VerifierSpec = serde_json::from_str(r#"{"type":"paths_absent","paths":["target"]}"#).unwrap();
+        assert_eq!(v.id(), "paths_absent");
+        assert_eq!(v.kind(), "paths_absent");
+    }
+
+    #[test]
+    fn deserialize_content_contains() {
+        let v: VerifierSpec =
+            serde_json::from_str(r#"{"type":"content_contains","path":"Cargo.toml","must_include":"edition"}"#)
+                .unwrap();
+        assert_eq!(v.kind(), "content_contains");
+    }
+
+    #[test]
+    fn deserialize_command_verifier() {
+        let v: VerifierSpec =
+            serde_json::from_str(r#"{"type":"command","program":"cargo","args":["test"]}"#).unwrap();
+        assert_eq!(v.kind(), "command");
+    }
+
+    #[test]
+    fn deserialize_git_nonempty_diff() {
+        let v: VerifierSpec =
+            serde_json::from_str(r#"{"type":"git_nonempty_diff","id":"has_diff"}"#).unwrap();
+        assert_eq!(v.id(), "has_diff");
+        assert_eq!(v.kind(), "git_nonempty_diff");
+    }
+
+    #[test]
+    fn resolve_with_both_verifiers_and_validation_command() {
+        let v: VerifierSpec =
+            serde_json::from_str(r#"{"type":"paths_exist","paths":["src"]}"#).unwrap();
+        let cmd = CoderCommandConfig::new("echo");
+        let specs = resolve_verifier_specs(&[v], Some(&cmd));
+        // verifiers take priority over legacy validation_command
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].kind(), "paths_exist");
+    }
+
+    #[test]
+    fn resolve_with_neither_yields_empty() {
+        let specs = resolve_verifier_specs(&[], None);
+        assert!(specs.is_empty());
+    }
 }

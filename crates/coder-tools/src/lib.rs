@@ -821,6 +821,11 @@ impl CodingToolRuntime {
             branch: Option<String>,
         }
         let args: Args = parse_args(args)?;
+        if args.remote.starts_with('-') {
+            return Err(ToolError::BadRequest(
+                "remote must not start with '-'".to_string(),
+            ));
+        }
         let mut request = CommandRequest::new("git");
         request.args = vec!["fetch".to_string(), args.remote];
         if let Some(ref branch) = args.branch {
@@ -848,6 +853,11 @@ impl CodingToolRuntime {
         if args.branch.is_empty() {
             return Err(ToolError::BadRequest(
                 "branch must not be empty".to_string(),
+            ));
+        }
+        if args.branch.starts_with('-') {
+            return Err(ToolError::BadRequest(
+                "branch must not start with '-'".to_string(),
             ));
         }
         let mut request = CommandRequest::new("git");
@@ -3064,4 +3074,317 @@ mod tests {
             "nothing past read_max_bytes should be reachable: {symbols:?}"
         );
     }
+
+    // ── git_log ───────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn git_log_returns_recent_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        std::fs::write(dir.path().join("b.txt"), "b\n").unwrap();
+        git_add_commit(dir.path(), "second commit");
+
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let result = runtime
+            .invoke_json("git_log", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(result["exit_code"], 0);
+        let stdout = result["stdout"].as_str().unwrap();
+        assert!(stdout.contains("second commit"));
+        assert!(stdout.contains("initial commit"));
+    }
+
+    #[tokio::test]
+    async fn git_log_respects_limit_and_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        for i in 0..5 {
+            std::fs::write(dir.path().join(format!("f{i}.txt")), format!("{i}\n")).unwrap();
+            git_add_commit(dir.path(), &format!("commit {i}"));
+        }
+
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let result = runtime
+            .invoke_json("git_log", json!({"limit": 2}))
+            .await
+            .unwrap();
+        let stdout = result["stdout"].as_str().unwrap();
+        let count = stdout.lines().filter(|l| !l.is_empty()).count();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn git_diff_stat_and_patch_modes() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        // seed.txt already exists from init, modify it so git diff has something to show
+        std::fs::write(dir.path().join("seed.txt"), "modified content\n").unwrap();
+
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let stat = runtime
+            .invoke_json("git_diff", json!({"mode": "stat"}))
+            .await
+            .unwrap();
+        assert!(stat["stdout"].as_str().unwrap().contains("seed.txt"));
+
+        let patch = runtime
+            .invoke_json("git_diff", json!({"mode": "patch"}))
+            .await
+            .unwrap();
+        assert!(patch["stdout"].as_str().unwrap().contains("@@"));
+    }
+
+    #[tokio::test]
+    async fn git_diff_rejects_unsupported_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json("git_diff", json!({"mode": "invalid"}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("unsupported diff mode"));
+    }
+
+    #[tokio::test]
+    async fn git_push_rejects_empty_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json("git_push", json!({"remote": "origin", "branch": ""}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must not be empty"));
+    }
+
+    #[tokio::test]
+    async fn git_fetch_rejects_dash_prefixed_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json("git_fetch", json!({"remote": "--depth"}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must not start with '-'"));
+    }
+
+    #[tokio::test]
+    async fn git_merge_rejects_dash_prefixed_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json("git_merge", json!({"branch": "--no-ff"}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must not start with '-'"));
+    }
+
+    #[tokio::test]
+    async fn git_merge_rejects_empty_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json("git_merge", json!({"branch": ""}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must not be empty"));
+    }
+
+    // ── background jobs ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn background_job_roundtrip_running_then_completed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let started = runtime
+            .invoke_json(
+                "run_command_background",
+                json!({"program": "cmd", "args": ["/c", "echo", "hello-from-background"]}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(started["status"], "running");
+        let job_id = started["job_id"].as_str().unwrap().to_string();
+        assert!(!job_id.is_empty());
+
+        // Poll until completed — echo finishes fast, handle race
+        let mut completed = false;
+        for _ in 0..50 {
+            let poll = runtime
+                .invoke_json("check_background", json!({"job_id": job_id}))
+                .await
+                .unwrap();
+            let status = poll["status"].as_str().unwrap();
+            if status == "completed" {
+                assert!(poll["stdout"].as_str().unwrap_or("").contains("hello-from-background"));
+                assert_eq!(poll["exit_code"], 0);
+                completed = true;
+                break;
+            }
+            assert!(
+                status == "running" || status == "unknown",
+                "unexpected status: {status}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(completed, "background job did not complete in time");
+    }
+
+    #[tokio::test]
+    async fn check_background_unknown_job_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let result = runtime
+            .invoke_json("check_background", json!({"job_id": "nonexistent"}))
+            .await
+            .unwrap();
+        assert_eq!(result["status"], "unknown");
+    }
+
+    // ── validate with configured command ──────────────────────────────
+
+    #[tokio::test]
+    async fn validate_with_configured_command_reports_configured_true() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+            .unwrap()
+            .with_validation_command({
+                let mut req = CommandRequest::new("cmd");
+                req.args = vec!["/c".into(), "echo".into(), "ok".into()];
+                req
+            });
+
+        let result = runtime.invoke_json("validate", json!({})).await.unwrap();
+        assert_eq!(result["configured"], true);
+        assert_eq!(result["passed"], true);
+        assert_eq!(result["exit_code"], 0);
+    }
+
+    // ── file-tool error paths ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn edit_file_rejects_empty_old_text() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f.txt"), "hello\n").unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json(
+                "edit_file",
+                json!({"path": "f.txt", "old": "", "new": "x"}),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("old must not be empty"));
+    }
+
+    #[tokio::test]
+    async fn edit_file_rejects_text_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f.txt"), "hello\n").unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json(
+                "edit_file",
+                json!({"path": "f.txt", "old": "zzz", "new": "x"}),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("old text was not found"));
+    }
+
+    #[tokio::test]
+    async fn apply_patch_rejects_empty_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json("apply_patch", json!({"edits": []}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().to_lowercase().contains("at least one edit")
+            || err.to_string().to_lowercase().contains("empty"));
+    }
+
+    #[tokio::test]
+    async fn search_text_rejects_empty_query() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f.txt"), "hello\n").unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json("search_text", json!({"query": ""}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("query must not be empty"));
+    }
+
+    // ── Java symbol extraction ────────────────────────────────────────
+
+    #[test]
+    fn extract_java_non_public_class_interface_enum() {
+        assert_eq!(
+            extract_java_symbol("class PackagePrivate { }"),
+            Some("class PackagePrivate".to_string())
+        );
+        assert_eq!(
+            extract_java_symbol("interface Contract { }"),
+            Some("interface Contract".to_string())
+        );
+        assert_eq!(
+            extract_java_symbol("enum Color { RED, GREEN }"),
+            Some("enum Color".to_string())
+        );
+    }
+
+    fn git_add_commit(dir: &std::path::Path, message: &str) {
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", message])
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "test")
+            .env("GIT_AUTHOR_EMAIL", "test@test")
+            .env("GIT_COMMITTER_NAME", "test")
+            .env("GIT_COMMITTER_EMAIL", "test@test")
+            .output()
+            .unwrap();
+    }
 }
+
