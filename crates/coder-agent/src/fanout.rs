@@ -168,10 +168,7 @@ pub async fn run_coding_fanout(
         let wt_base = worktrees_base.clone();
         let model = model.to_string();
         handles.push(tokio::spawn(async move {
-            let _permit = sem
-                .acquire()
-                .await
-                .expect("semaphore closed unexpectedly");
+            let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
             run_one_child_backend(backend, &parent, &wt_base, &task, i, &model).await
         }));
     }
@@ -195,6 +192,7 @@ pub async fn run_coding_fanout(
 /// - `payload.fanout_child = true` + `force_host_local` (already on a worktree — no nested isolation)
 /// - no `subtasks` (no recursive fan-out)
 /// - `parent_session_id` for audit
+#[allow(clippy::too_many_arguments)]
 pub async fn run_coding_fanout_via_hub(
     hub: Arc<liberado_session::GoalSessionHub>,
     parent_grant: liberado_session::SessionGrant,
@@ -225,12 +223,8 @@ pub async fn run_coding_fanout_via_hub(
         let parent_sid = parent_session_id.to_string();
         let model = model.to_string();
         handles.push(tokio::spawn(async move {
-            let _permit = sem
-                .acquire()
-                .await
-                .expect("semaphore closed unexpectedly");
-            run_one_child_hub(hub, grant, &parent, &wt_base, &task, i, &parent_sid, &model)
-                .await
+            let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
+            run_one_child_hub(hub, grant, &parent, &wt_base, &task, i, &parent_sid, &model).await
         }));
     }
 
@@ -259,7 +253,9 @@ fn join_fail(msg: String) -> ChildOutcome {
 }
 
 /// Child grant: same ceiling as parent minus AskHuman (unattended; no nested human stall).
-pub fn child_session_grant(parent: &liberado_session::SessionGrant) -> liberado_session::SessionGrant {
+pub fn child_session_grant(
+    parent: &liberado_session::SessionGrant,
+) -> liberado_session::SessionGrant {
     let mut capabilities = liberado_common::CapabilitySet::empty();
     for cap in &parent.capabilities.capabilities {
         if *cap != liberado_common::Capability::AskHuman {
@@ -402,6 +398,7 @@ async fn run_one_child_backend(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_one_child_hub(
     hub: Arc<liberado_session::GoalSessionHub>,
     grant: liberado_session::SessionGrant,
@@ -586,11 +583,7 @@ fn child_request(worktree_root: &Path, task: &CodingSubtask, model: &str) -> Cod
     }
 }
 
-async fn merge_one_branch(
-    merger: &dyn Provider,
-    parent_root: &Path,
-    branch: &str,
-) -> MergeStep {
+async fn merge_one_branch(merger: &dyn Provider, parent_root: &Path, branch: &str) -> MergeStep {
     match merge_branch(parent_root, branch).await {
         Ok(MergeAttempt::Clean { merge_commit }) => MergeStep {
             branch: branch.into(),
@@ -617,12 +610,7 @@ async fn merge_one_branch(
                     warn!(branch = %branch, error = %e, "coding fan-out: conflict resolution failed");
                     // Leave repo mid-merge? Abort to leave parent clean for next attempt.
                     let _ = tokio::process::Command::new("git")
-                        .args([
-                            "-C",
-                            &parent_root.to_string_lossy(),
-                            "merge",
-                            "--abort",
-                        ])
+                        .args(["-C", &parent_root.to_string_lossy(), "merge", "--abort"])
                         .output()
                         .await;
                     MergeStep {
@@ -699,10 +687,7 @@ async fn llm_resolve_file(
     // Strip accidental fences.
     let trimmed = text.trim();
     let body = if let Some(rest) = trimmed.strip_prefix("```") {
-        let rest = rest
-            .find('\n')
-            .map(|i| &rest[i + 1..])
-            .unwrap_or(rest);
+        let rest = rest.find('\n').map(|i| &rest[i + 1..]).unwrap_or(rest);
         rest.strip_suffix("```").unwrap_or(rest).trim()
     } else {
         trimmed

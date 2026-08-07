@@ -185,10 +185,7 @@ pub async fn committed_files_since(
         )));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout
-        .lines()
-        .filter_map(parse_name_status_line)
-        .collect())
+    Ok(stdout.lines().filter_map(parse_name_status_line).collect())
 }
 
 fn parse_name_status_line(line: &str) -> Option<(String, &'static str)> {

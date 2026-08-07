@@ -32,7 +32,11 @@ pub fn ship_preflight_required(goal: &GoalSpec) -> bool {
     {
         return false;
     }
-    if goal.payload.get("preflight").and_then(|v| v.get("required")).and_then(|v| v.as_bool())
+    if goal
+        .payload
+        .get("preflight")
+        .and_then(|v| v.get("required"))
+        .and_then(|v| v.as_bool())
         == Some(false)
     {
         return false;
@@ -47,7 +51,12 @@ pub fn ship_preflight_required(goal: &GoalSpec) -> bool {
     {
         return true;
     }
-    if goal.payload.get("preflight").and_then(|v| v.get("steps")).is_some() {
+    if goal
+        .payload
+        .get("preflight")
+        .and_then(|v| v.get("steps"))
+        .is_some()
+    {
         return true;
     }
     if goal
@@ -70,17 +79,17 @@ pub fn ship_spec_from_goal(goal: &GoalSpec) -> Option<PreflightSpec> {
         .map(str::trim)
         .filter(|s| !s.is_empty());
 
-    if let Some(steps) = steps_from_payload(&goal.payload) {
-        if !steps.is_empty() {
-            let id = goal
-                .payload
-                .get("preflight")
-                .and_then(|v| v.get("profile"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("ship")
-                .to_string();
-            return Some(PreflightSpec::new(id, steps));
-        }
+    if let Some(steps) = steps_from_payload(&goal.payload)
+        && !steps.is_empty()
+    {
+        let id = goal
+            .payload
+            .get("preflight")
+            .and_then(|v| v.get("profile"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("ship")
+            .to_string();
+        return Some(PreflightSpec::new(id, steps));
     }
 
     // profile: "ship" with no steps → liberado defaults when project is liberado
@@ -285,7 +294,10 @@ mod tests {
         // but then name.is_empty() skips it, leaving an empty vec,
         // so ship_spec_from_goal falls through to liberado default.
         let spec = ship_spec_from_goal(&g).unwrap();
-        assert!(spec.steps.iter().any(|s| s.name == "test"), "should fall back to liberado default when payload steps all skip");
+        assert!(
+            spec.steps.iter().any(|s| s.name == "test"),
+            "should fall back to liberado default when payload steps all skip"
+        );
     }
 
     #[test]
@@ -295,7 +307,10 @@ mod tests {
             "preflight": { "steps": [] }
         }));
         let spec = ship_spec_from_goal(&g).unwrap();
-        assert!(spec.steps.iter().any(|s| s.name == "test"), "empty payload steps should fall back to liberado default");
+        assert!(
+            spec.steps.iter().any(|s| s.name == "test"),
+            "empty payload steps should fall back to liberado default"
+        );
     }
 
     #[test]

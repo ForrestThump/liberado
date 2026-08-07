@@ -209,11 +209,8 @@ impl DomainPackRunner for CodingSessionPack {
         // HostLocal / non-git sessions.
         if mid_build_resume {
             if let Some((id, label)) = last_checkpoint(&prior) {
-                let workspace = coding_checkpoint_workspace(
-                    session_id,
-                    goal,
-                    &self.default_workspace_parent,
-                );
+                let workspace =
+                    coding_checkpoint_workspace(session_id, goal, &self.default_workspace_parent);
                 match liberado_coder_sandbox::ShadowGit::open_or_init(&workspace, session_id) {
                     Ok(sg) => {
                         if let Err(e) = sg.restore(&id).await {
@@ -349,10 +346,10 @@ pub(crate) fn coding_checkpoint_workspace(
     goal: &GoalSpec,
     default_parent: &std::path::Path,
 ) -> std::path::PathBuf {
-    if let Some(sess) = liberado_coder_tools::durable_session_workspace(session_id) {
-        if sess.exists() {
-            return sess;
-        }
+    if let Some(sess) = liberado_coder_tools::durable_session_workspace(session_id)
+        && sess.exists()
+    {
+        return sess;
     }
     goal.payload
         .get("workspace_root")

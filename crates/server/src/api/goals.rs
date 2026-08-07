@@ -180,37 +180,39 @@ pub async fn goals_start(
                 payload.insert("workspace_root".into(), serde_json::json!(root_s));
                 // Inject ship preflight from topology when the client did not supply steps.
                 // Pack still applies liberado built-in defaults when project is "liberado".
-                if payload.get("preflight").and_then(|v| v.get("steps")).is_none() {
-                    if let Some(proj) = state.config.project_by_name(&name) {
-                        if let Some(ship) = &proj.preflight.ship {
-                            let mut steps = Vec::new();
-                            if let Some(script) = &ship.script {
-                                if !script.is_empty() {
-                                    steps.push(serde_json::json!({
-                                        "name": "script",
-                                        "run": script,
-                                    }));
-                                }
-                            }
-                            for s in &ship.steps {
-                                steps.push(serde_json::json!({
-                                    "name": s.name,
-                                    "run": s.run,
-                                    "timeout_secs": s.timeout_secs,
-                                    "required": s.required,
-                                }));
-                            }
-                            if !steps.is_empty() {
-                                payload.insert(
-                                    "preflight".into(),
-                                    serde_json::json!({
-                                        "required": true,
-                                        "profile": "ship",
-                                        "steps": steps,
-                                    }),
-                                );
-                            }
-                        }
+                if payload
+                    .get("preflight")
+                    .and_then(|v| v.get("steps"))
+                    .is_none()
+                    && let Some(proj) = state.config.project_by_name(&name)
+                    && let Some(ship) = &proj.preflight.ship
+                {
+                    let mut steps = Vec::new();
+                    if let Some(script) = &ship.script
+                        && !script.is_empty()
+                    {
+                        steps.push(serde_json::json!({
+                            "name": "script",
+                            "run": script,
+                        }));
+                    }
+                    for s in &ship.steps {
+                        steps.push(serde_json::json!({
+                            "name": s.name,
+                            "run": s.run,
+                            "timeout_secs": s.timeout_secs,
+                            "required": s.required,
+                        }));
+                    }
+                    if !steps.is_empty() {
+                        payload.insert(
+                            "preflight".into(),
+                            serde_json::json!({
+                                "required": true,
+                                "profile": "ship",
+                                "steps": steps,
+                            }),
+                        );
                     }
                 }
             }

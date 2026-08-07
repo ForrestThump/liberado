@@ -26,11 +26,11 @@ pub use fanout::{
 pub use intake_session::{
     IntakeAnswer, freeze_if_ready, request_from_contract, run_intake, run_intake_until_ready,
 };
-pub use session_pack::CodingSessionPack;
-/// Durable coding session workspace path (`coding-worktrees/<session_id>`).
-pub use liberado_coder_tools::durable_session_workspace;
 /// Shadow-git checkpoint store (S4).
 pub use liberado_coder_sandbox::{Checkpoint, CheckpointError, ShadowGit};
+/// Durable coding session workspace path (`coding-worktrees/<session_id>`).
+pub use liberado_coder_tools::durable_session_workspace;
+pub use session_pack::CodingSessionPack;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -547,7 +547,8 @@ impl LiberadoLoopBackend {
             };
             critic_verdict = Some(verdict);
         } else if reviewable && roles::critic_enabled(&request) {
-            let verdict: CriticVerdict = critic::run_critic(self.providers.as_ref(), &request, &events).await?;
+            let verdict: CriticVerdict =
+                critic::run_critic(self.providers.as_ref(), &request, &events).await?;
             trace::push_event(
                 &events,
                 CoderEvent::CriticVerdict {
@@ -603,7 +604,8 @@ impl LiberadoLoopBackend {
 /// Best-effort shadow-git snapshot of `workspace_root`, keyed by `session_key`.
 /// Emits a live `Checkpoint` event when the coding pack's LIVE_GATE is installed.
 async fn take_workspace_checkpoint(workspace_root: &Path, session_key: &str, label: &str) {
-    let Ok(sg) = liberado_coder_sandbox::ShadowGit::open_or_init(workspace_root, session_key) else {
+    let Ok(sg) = liberado_coder_sandbox::ShadowGit::open_or_init(workspace_root, session_key)
+    else {
         return;
     };
     match sg.snapshot(label).await {

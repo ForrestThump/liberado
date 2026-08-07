@@ -955,7 +955,10 @@ mod tests {
             verify_profile: None,
         };
         sanitize_draft(&mut draft);
-        assert!(draft.verifiers.is_empty(), "verifier with non-empty path but empty must_include should be dropped");
+        assert!(
+            draft.verifiers.is_empty(),
+            "verifier with non-empty path but empty must_include should be dropped"
+        );
     }
 
     #[test]
@@ -963,9 +966,7 @@ mod tests {
         let mut draft = GoalContractDraft {
             description: "test".into(),
             success_criteria: vec![],
-            verifiers: vec![VerifierSpec::GitNonemptyDiff {
-                id: "diff".into(),
-            }],
+            verifiers: vec![VerifierSpec::GitNonemptyDiff { id: "diff".into() }],
             out_of_scope: vec![],
             assumed_defaults: vec![],
             domain_hint: None,
@@ -999,9 +1000,7 @@ mod tests {
         let draft = GoalContractDraft {
             description: "add feature".into(),
             success_criteria: vec!["test passes".into()],
-            verifiers: vec![VerifierSpec::GitNonemptyDiff {
-                id: "diff".into(),
-            }],
+            verifiers: vec![VerifierSpec::GitNonemptyDiff { id: "diff".into() }],
             out_of_scope: vec!["no db".into()],
             assumed_defaults: vec!["Rust".into()],
             domain_hint: None,
@@ -1051,7 +1050,10 @@ mod tests {
         assert_eq!(request.task.success_criteria, vec!["test passes"]);
         assert_eq!(request.config.verifiers.len(), 1);
         assert_eq!(request.config.verifiers[0].id(), "diff");
-        assert!(request.config.validation_command.is_none(), "validation_command should be cleared when verifiers present");
+        assert!(
+            request.config.validation_command.is_none(),
+            "validation_command should be cleared when verifiers present"
+        );
     }
 
     #[test]
@@ -1061,6 +1063,11 @@ mod tests {
         let required = schema["required"].as_array().unwrap();
         assert!(required.iter().any(|v| v == "status"));
         let props = &schema["properties"];
-        assert!(props["status"]["enum"].as_array().unwrap().contains(&serde_json::json!("needs_clarification")));
+        assert!(
+            props["status"]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("needs_clarification"))
+        );
     }
 }

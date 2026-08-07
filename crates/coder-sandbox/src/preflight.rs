@@ -308,10 +308,10 @@ pub fn resolve_ship_spec(
     project_name: Option<&str>,
     configured_steps: Option<Vec<PreflightStep>>,
 ) -> Option<PreflightSpec> {
-    if let Some(steps) = configured_steps {
-        if !steps.is_empty() {
-            return Some(PreflightSpec::new("ship", steps));
-        }
+    if let Some(steps) = configured_steps
+        && !steps.is_empty()
+    {
+        return Some(PreflightSpec::new("ship", steps));
     }
     if project_name.is_some_and(|n| n.eq_ignore_ascii_case("liberado")) {
         return Some(liberado_ship_preflight_spec());
@@ -344,11 +344,7 @@ mod tests {
     #[tokio::test]
     async fn fail_fast_on_first_required_failure() {
         let dir = tempfile::tempdir().unwrap();
-        let fail = if cfg!(windows) {
-            "exit /B 1"
-        } else {
-            "exit 1"
-        };
+        let fail = if cfg!(windows) { "exit /B 1" } else { "exit 1" };
         let spec = PreflightSpec::new(
             "ship",
             vec![
@@ -398,11 +394,16 @@ mod tests {
         assert_eq!(spec.id, "ship");
         let names: Vec<_> = spec.steps.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["fmt", "clippy", "test", "deny"]);
-        assert!(spec.steps.iter().any(|s| s.run.contains("cargo test --workspace")));
-        assert!(spec
-            .steps
-            .iter()
-            .any(|s| s.run.contains("exclude liberado-webui") && s.run.contains("-D warnings")));
+        assert!(
+            spec.steps
+                .iter()
+                .any(|s| s.run.contains("cargo test --workspace"))
+        );
+        assert!(
+            spec.steps
+                .iter()
+                .any(|s| s.run.contains("exclude liberado-webui") && s.run.contains("-D warnings"))
+        );
     }
 
     #[test]
@@ -515,11 +516,7 @@ mod tests {
     #[tokio::test]
     async fn required_failure_breaks_before_optional_runs() {
         let dir = tempfile::tempdir().unwrap();
-        let fail = if cfg!(windows) {
-            "exit /B 1"
-        } else {
-            "exit 1"
-        };
+        let fail = if cfg!(windows) { "exit /B 1" } else { "exit 1" };
         let mut optional = PreflightStep::new("soft", fail);
         optional.required = false;
         let spec = PreflightSpec::new(
@@ -527,18 +524,21 @@ mod tests {
             vec![PreflightStep::new("hard-fail", fail), optional],
         );
         let report = run_preflight(dir.path(), &spec).await.unwrap();
-        assert!(!report.ok, "required step failed first, overall must be false");
-        assert_eq!(report.steps.len(), 1, "break after required failure; optional never runs");
+        assert!(
+            !report.ok,
+            "required step failed first, overall must be false"
+        );
+        assert_eq!(
+            report.steps.len(),
+            1,
+            "break after required failure; optional never runs"
+        );
     }
 
     #[tokio::test]
     async fn optional_failure_does_not_fail_profile() {
         let dir = tempfile::tempdir().unwrap();
-        let fail = if cfg!(windows) {
-            "exit /B 1"
-        } else {
-            "exit 1"
-        };
+        let fail = if cfg!(windows) { "exit /B 1" } else { "exit 1" };
         let mut optional = PreflightStep::new("soft", fail);
         optional.required = false;
         let spec = PreflightSpec::new(
@@ -548,5 +548,22 @@ mod tests {
         let report = run_preflight(dir.path(), &spec).await.unwrap();
         assert!(report.ok, "{:?}", report);
         assert_eq!(report.steps.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn step_with_stdout_and_stderr_captures_both() {
+        let dir = tempfile::tempdir().unwrap();
+        // Produce both stdout and stderr so the combining branches are exercised.
+        let cmd = if cfg!(windows) {
+            "echo out && echo err 1>&2"
+        } else {
+            "echo out && echo err >&2"
+        };
+        let spec = PreflightSpec::new("ship", vec![PreflightStep::new("both", cmd)]);
+        let report = run_preflight(dir.path(), &spec).await.unwrap();
+        assert!(report.ok);
+        let log = &report.steps[0].log_excerpt;
+        assert!(log.contains("out"));
+        assert!(log.contains("err"));
     }
 }

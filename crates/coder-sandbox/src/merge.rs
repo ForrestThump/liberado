@@ -96,7 +96,14 @@ pub async fn remove_worktree(parent_root: &Path, worktree_path: &Path) -> Result
     let parent_cli = path_for_cli(&strip_extended_path_prefix(parent_root));
     let dest_cli = path_for_cli(&strip_extended_path_prefix(worktree_path));
     let output = Command::new("git")
-        .args(["-C", &parent_cli, "worktree", "remove", "--force", &dest_cli])
+        .args([
+            "-C",
+            &parent_cli,
+            "worktree",
+            "remove",
+            "--force",
+            &dest_cli,
+        ])
         .output()
         .await
         .map_err(|e| MergeError::Git(format!("worktree remove: {e}")))?;
@@ -139,9 +146,7 @@ pub async fn merge_branch(repo_root: &Path, branch: &str) -> Result<MergeAttempt
 
     if output.status.success() {
         let sha = rev_parse(repo_root, "HEAD").await.ok();
-        return Ok(MergeAttempt::Clean {
-            merge_commit: sha,
-        });
+        return Ok(MergeAttempt::Clean { merge_commit: sha });
     }
 
     let conflicts = list_unmerged_paths(repo_root).await?;
@@ -190,8 +195,12 @@ pub async fn read_conflict_sides(
     rel_path: &str,
 ) -> Result<ConflictSides, MergeError> {
     let repo_cli = path_for_cli(&strip_extended_path_prefix(repo_root));
-    let ours = git_show(&repo_cli, ":2", rel_path).await.unwrap_or_default();
-    let theirs = git_show(&repo_cli, ":3", rel_path).await.unwrap_or_default();
+    let ours = git_show(&repo_cli, ":2", rel_path)
+        .await
+        .unwrap_or_default();
+    let theirs = git_show(&repo_cli, ":3", rel_path)
+        .await
+        .unwrap_or_default();
     let full = strip_extended_path_prefix(repo_root).join(rel_path);
     let combined = std::fs::read_to_string(&full).unwrap_or_default();
     Ok(ConflictSides {
@@ -444,8 +453,16 @@ mod tests {
             MergeAttempt::Conflicts { paths } => {
                 assert!(paths.iter().any(|p| p.contains("README")));
                 let sides = read_conflict_sides(&root, "README.md").await.unwrap();
-                assert!(sides.ours.contains("parent-content"), "ours: {}", sides.ours);
-                assert!(sides.theirs.contains("branch-content"), "theirs: {}", sides.theirs);
+                assert!(
+                    sides.ours.contains("parent-content"),
+                    "ours: {}",
+                    sides.ours
+                );
+                assert!(
+                    sides.theirs.contains("branch-content"),
+                    "theirs: {}",
+                    sides.theirs
+                );
             }
             other => {
                 // Abort and still check (merge might be clean in extremely rare cases).
@@ -477,23 +494,33 @@ mod tests {
 
     #[tokio::test]
     async fn commit_merge_returns_real_sha() {
-        let root = std::env::temp_dir().join(format!("lib-merge-cm-{}", unique()));
+        let root = std::env::temp_dir().join(format!("lib-merge-cm2-{}", unique()));
         let wt_base = root.join("wts");
         init_repo(&root);
 
-        let wt = add_worktree_on_branch(&root, &wt_base, "child-cm", "fanout/cm")
+        // Create conflicting branch so commit_merge has something staged.
+        let wt = add_worktree_on_branch(&root, &wt_base, "child-cm2", "fanout/cm2")
             .await
             .unwrap();
-        std::fs::write(wt.join("x.txt"), "x\n").unwrap();
-        git(&wt, &["add", "x.txt"]);
-        git(&wt, &["commit", "-m", "x", "--quiet"]);
+        std::fs::write(wt.join("README.md"), "branch\n").unwrap();
+        git(&wt, &["add", "README.md"]);
+        git(&wt, &["commit", "-m", "branch", "--quiet"]);
         remove_worktree(&root, &wt).await.unwrap();
 
-        match merge_branch(&root, "fanout/cm").await.unwrap() {
-            MergeAttempt::Clean { merge_commit: Some(sha) } => {
-                assert_eq!(sha.len(), 40, "merge commit SHA must be 40 hex chars");
+        std::fs::write(root.join("README.md"), "parent\n").unwrap();
+        git(&root, &["add", "README.md"]);
+        git(&root, &["commit", "-m", "parent", "--quiet"]);
+
+        match merge_branch(&root, "fanout/cm2").await.unwrap() {
+            MergeAttempt::Conflicts { .. } => {
+                stage_resolution(&root, "README.md", "resolved\n")
+                    .await
+                    .unwrap();
+                let sha = commit_merge(&root, "resolved").await.unwrap();
+                assert!(!sha.is_empty());
+                assert_eq!(sha.len(), 40, "commit SHA must be 40 hex chars: {sha}");
             }
-            other => panic!("expected clean merge with SHA, got {other:?}"),
+            other => panic!("expected conflicts, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&root);
     }

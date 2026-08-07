@@ -686,7 +686,10 @@ mod tests {
         let results = crate::dispatch::dispatch(&SlashCommand::Profile, &mut ctx);
         assert_eq!(
             results,
-            vec![CommandResult::ProfileInfoShown, CommandResult::OpenProfileBrowser]
+            vec![
+                CommandResult::ProfileInfoShown,
+                CommandResult::OpenProfileBrowser
+            ]
         );
         assert!(ctx.messages[0].contains("profile"));
     }
@@ -705,7 +708,6 @@ mod tests {
 mod goal_command_tests {
     use crate::commands::{GoalCmd, SlashCommand};
     use crate::dispatch::parse;
-    use crate::result::CommandResult;
     fn goal(input: &str) -> GoalCmd {
         match parse(input) {
             Some(SlashCommand::Goal(g)) => g,

@@ -475,7 +475,10 @@ mod tests {
         let fb = r.repair_feedback();
         assert!(fb.contains("validation failed"));
         assert!(fb.contains("check2"));
-        assert!(!fb.contains("check1"), "passing check should not appear in feedback");
+        assert!(
+            !fb.contains("check1"),
+            "passing check should not appear in feedback"
+        );
     }
 
     #[test]

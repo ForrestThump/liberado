@@ -716,7 +716,10 @@ mod tests {
     #[test]
     fn command_policy_none_allowed_denies_everything() {
         let p = CommandPolicy::none_allowed();
-        assert!(!p.allow.is_empty(), "non-empty allow list with sentinel blocks all commands");
+        assert!(
+            !p.allow.is_empty(),
+            "non-empty allow list with sentinel blocks all commands"
+        );
         assert_eq!(p.output_max_bytes, 64 * 1024);
         assert_eq!(p.timeout_secs, 120);
     }

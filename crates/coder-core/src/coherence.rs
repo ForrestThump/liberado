@@ -571,6 +571,9 @@ mod tests {
     #[test]
     fn looks_like_a_path_strips_trailing_paren() {
         // "...in src/main.rs (" should match.
-        assert!(looks_like_a_path("src/main.rs)"), "should strip trailing paren");
+        assert!(
+            looks_like_a_path("src/main.rs)"),
+            "should strip trailing paren"
+        );
     }
 }

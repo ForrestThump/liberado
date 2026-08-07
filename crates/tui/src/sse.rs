@@ -133,9 +133,9 @@ pub fn to_goal_event(event: &SseEvent) -> Result<Option<GoalUiEvent>, String> {
         SessionEventKind::FileChanged { path, change } => {
             Some(GoalUiEvent::FileChanged { path, change })
         }
-        SessionEventKind::Checkpoint { id, label, .. } => Some(GoalUiEvent::Progress(format!(
-            "checkpoint {label} ({id})"
-        ))),
+        SessionEventKind::Checkpoint { id, label, .. } => {
+            Some(GoalUiEvent::Progress(format!("checkpoint {label} ({id})")))
+        }
         SessionEventKind::LoopGuard { guard, action } => {
             Some(GoalUiEvent::LoopGuard(format!("{guard} → {action}")))
         }
