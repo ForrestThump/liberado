@@ -19,6 +19,7 @@ liberado-common.workspace = true
 liberado-config-loader.workspace = true
 liberado-provider.workspace = true
 liberado-provider-openai-compat.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio.workspace = true
 toml.workspace = true

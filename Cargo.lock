@@ -3484,6 +3484,7 @@ dependencies = [
  "liberado-config-loader",
  "liberado-provider",
  "liberado-provider-openai-compat",
+ "serde",
  "serde_json",
  "tokio",
  "toml 0.8.23",

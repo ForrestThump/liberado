@@ -23,6 +23,7 @@ use liberado_common::Outcome;
 use liberado_config_loader::{ProviderProfile, Topology};
 use liberado_provider::Provider;
 use liberado_provider_openai_compat::OpenAiCompatibleProvider;
+use serde::{Deserialize, Serialize};
 
 const PROVIDER_ENV: &str = "LIBERADO_CODER_PROVIDER";
 const DEFAULT_MODEL: &str = "deepseek-chat";
@@ -58,7 +59,8 @@ async fn run() -> Result<(), String> {
             config_dir,
             api_key_env,
             base_url,
-        } => run_headless(prompt, workspace, model, max_turns, config_dir, api_key_env, base_url)
+            session_id,
+        } => run_headless(prompt, workspace, model, max_turns, config_dir, api_key_env, base_url, session_id)
             .await,
     }
 }
@@ -89,6 +91,7 @@ async fn run_headless(
     config_dir: Option<PathBuf>,
     api_key_env: Option<String>,
     base_url: Option<String>,
+    session_id: Option<String>,
 ) -> Result<(), String> {
     let model = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
     let max_turns = max_turns.unwrap_or(DEFAULT_MAX_TURNS);
@@ -100,11 +103,24 @@ async fn run_headless(
 
     ensure_git_repo(&workspace).await?;
 
+    let session_context = if let Some(ref sid) = session_id {
+        let prior = load_prior_rounds(&workspace, sid)?;
+        if !prior.is_empty() {
+            Some(build_session_context(&prior))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let task_context = session_context;
+
     let request = CoderRunRequest {
         task: CoderTask {
             id: "task-1".to_string(),
-            description: prompt,
-            context: None,
+            description: prompt.clone(),
+            context: task_context,
             success_criteria: Vec::new(),
         },
         workspace: WorkspaceRef::new(
@@ -173,6 +189,12 @@ async fn run_headless(
         .map_err(|error| format!("serialize coder result: {error}"))?;
     println!("{json}");
 
+    if let Some(ref sid) = session_id {
+        if result.outcome == Outcome::Succeeded {
+            save_round_state(&workspace, sid, &prompt, &result)?;
+        }
+    }
+
     match result.outcome {
         Outcome::Succeeded => Ok(()),
         _ => Err(format!(
@@ -191,6 +213,107 @@ fn disabled_role() -> CoderRoleConfig {
         max_tokens: None,
         max_turns: Some(4),
     }
+}
+
+// --- session state (multi-round task memory) ----------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionRound {
+    pub session_id: String,
+    pub round: u32,
+    pub prompt: String,
+    pub summary: String,
+    pub files_changed: Vec<String>,
+}
+
+fn session_state_dir(workspace: &Path, session_id: &str) -> PathBuf {
+    workspace
+        .join(".liberado")
+        .join("task-sessions")
+        .join(session_id)
+}
+
+fn load_prior_rounds(workspace: &Path, session_id: &str) -> Result<Vec<SessionRound>, String> {
+    let dir = session_state_dir(workspace, session_id);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut rounds: Vec<SessionRound> = Vec::new();
+    let mut entries: Vec<_> = std::fs::read_dir(&dir)
+        .map_err(|e| format!("read session dir {}: {e}", dir.display()))?
+        .filter_map(|e| e.ok())
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let path = entry.path();
+        if path.extension().map_or(false, |ext| ext == "json") {
+            let raw = std::fs::read_to_string(&path)
+                .map_err(|e| format!("read {}: {e}", path.display()))?;
+            let round: SessionRound = serde_json::from_str(&raw)
+                .map_err(|e| format!("parse {}: {e}", path.display()))?;
+            rounds.push(round);
+        }
+    }
+    Ok(rounds)
+}
+
+fn build_session_context(prior_rounds: &[SessionRound]) -> String {
+    let mut ctx = String::from(
+        "[Session history — prior rounds]\n"
+    );
+    for round in prior_rounds {
+        ctx.push_str(&format!(
+            "Round {}: {}\n",
+            round.round + 1,
+            round.prompt
+        ));
+        ctx.push_str(&format!(
+            "  Outcome: {}\n",
+            round.summary
+        ));
+        if !round.files_changed.is_empty() {
+            ctx.push_str(&format!(
+                "  Files changed: {}\n",
+                round.files_changed.join(", ")
+            ));
+        }
+    }
+    ctx.push_str("\n[End session history]\n");
+    ctx
+}
+
+fn save_round_state(
+    workspace: &Path,
+    session_id: &str,
+    prompt: &str,
+    result: &liberado_coder_core::CoderRunResult,
+) -> Result<(), String> {
+    let dir = session_state_dir(workspace, session_id);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("create session dir {}: {e}", dir.display()))?;
+
+    let round_num = std::fs::read_dir(&dir)
+        .map_err(|e| format!("read session dir: {e}"))?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
+        .count() as u32;
+
+    let round = SessionRound {
+        session_id: session_id.to_string(),
+        round: round_num,
+        prompt: prompt.to_string(),
+        summary: result.summary.clone(),
+        files_changed: result.files_changed.clone(),
+    };
+
+    let path = dir.join(format!("round-{:02}.json", round_num));
+    let json = serde_json::to_string_pretty(&round)
+        .map_err(|e| format!("serialize round state: {e}"))?;
+    std::fs::write(&path, json)
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
+
+    tracing::info!("saved session round {round_num} to {}", path.display());
+    Ok(())
 }
 
 async fn ensure_git_repo(workspace: &Path) -> Result<(), String> {
@@ -243,6 +366,7 @@ enum CliCommand {
         config_dir: Option<PathBuf>,
         api_key_env: Option<String>,
         base_url: Option<String>,
+        session_id: Option<String>,
     },
 }
 
@@ -319,6 +443,7 @@ impl Args {
         let mut config_dir = None;
         let mut api_key_env = None;
         let mut base_url = None;
+        let mut session_id = None;
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -370,6 +495,13 @@ impl Args {
                         })?,
                     );
                 }
+                "--session-id" => {
+                    session_id = Some(
+                        args.next().ok_or_else(|| {
+                            "--session-id requires a value".to_string()
+                        })?,
+                    );
+                }
                 "--help" | "-h" => return Err(task_usage()),
                 other => {
                     return Err(format!(
@@ -396,6 +528,7 @@ impl Args {
                 config_dir,
                 api_key_env,
                 base_url,
+                session_id,
             },
         })
     }
@@ -518,7 +651,7 @@ fn task_usage() -> String {
     concat!(
         "liberado-coder-run task run --prompt <text> --workspace <path> \\\n",
         "    [--model <name>] [--max-turns <n>] [--config-dir <dir>] \\\n",
-        "    [--api-key-env <env>] [--base-url <url>]\n",
+        "    [--api-key-env <env>] [--base-url <url>] [--session-id <id>]\n",
         "\n",
         "  --prompt       Task description (required)\n",
         "  --workspace    Working directory path (required)\n",
@@ -527,6 +660,7 @@ fn task_usage() -> String {
         "  --config-dir   Config directory for topology.toml provider lookup\n",
         "  --api-key-env  Env var for API key (default: DEEPSEEK_API_KEY)\n",
         "  --base-url     API base URL (default: https://api.deepseek.com/v1)\n",
+        "  --session-id   Session ID for multi-round tasks (resumes prior state)\n",
     )
     .to_string()
 }
