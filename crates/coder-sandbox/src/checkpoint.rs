@@ -67,6 +67,13 @@ impl ShadowGit {
             // Identity for commit-tree.
             sg.run_git(&["config", "user.email", "checkpoint@liberado.local"])?;
             sg.run_git(&["config", "user.name", "liberado-checkpoint"])?;
+            // A checkpoint promises the workspace comes back byte-identical, so the shadow repo
+            // must not translate anything on the way in or out. With `core.autocrlf=true` — the
+            // default for Git for Windows, and set in this machine's *system* config — restore
+            // rewrites every LF to CRLF, quietly corrupting the tree it was meant to preserve.
+            // Pinned here rather than inherited, because the host's setting is not ours to trust.
+            sg.run_git(&["config", "core.autocrlf", "false"])?;
+            sg.run_git(&["config", "core.safecrlf", "false"])?;
         }
         Ok(sg)
     }
@@ -430,6 +437,53 @@ mod tests {
         assert!(items.len() <= 100);
         unsafe {
             std::env::remove_var("LIBERADO_DATA_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Restore stays byte-exact even when the host turns line-ending translation on.
+    ///
+    /// `core.autocrlf=true` is the Git for Windows default and is set in this machine's *system*
+    /// config; a developer-level `false` was the only thing hiding it locally, so the three
+    /// round-trip tests passed here and failed on every CI runner. Left inherited, restore
+    /// rewrites every LF to CRLF — silent corruption in the one operation whose entire promise is
+    /// that the bytes come back unchanged.
+    ///
+    /// The other tests would catch this only on a host that happens to enable autocrlf. This one
+    /// forces it on regardless, so the guarantee is pinned rather than left to the environment.
+    #[tokio::test]
+    async fn restore_is_byte_exact_even_when_the_host_enables_autocrlf() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("lib-ckpt-crlf-{}", unique()));
+        let root = base.join("ws");
+        let data = base.join("data");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+
+        let cfg = base.join("gitconfig");
+        std::fs::write(&cfg, "[core]\n\tautocrlf = true\n").unwrap();
+
+        unsafe {
+            std::env::set_var("LIBERADO_DATA_DIR", &data);
+            std::env::set_var("GIT_CONFIG_GLOBAL", &cfg);
+        }
+        let sg = ShadowGit::open_or_init(&root, "sess-crlf").unwrap();
+        drop(_guard);
+
+        let cp = sg.snapshot("base").await.unwrap();
+        std::fs::write(root.join("a.txt"), "MUTATED\n").unwrap();
+        sg.restore(&cp.id).await.unwrap();
+
+        // Compare bytes, not a string: `\r` is exactly what would be smuggled in.
+        assert_eq!(
+            std::fs::read(root.join("a.txt")).unwrap(),
+            b"one\ntwo\nthree\n",
+            "restore must not translate line endings"
+        );
+
+        unsafe {
+            std::env::remove_var("LIBERADO_DATA_DIR");
+            std::env::remove_var("GIT_CONFIG_GLOBAL");
         }
         let _ = std::fs::remove_dir_all(&base);
     }
