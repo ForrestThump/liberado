@@ -885,6 +885,12 @@ impl Executor {
             let mut doom_hit: Option<String> = None;
             let mut cycle_hit: Option<Vec<String>> = None;
 
+            // The arms are mutually exclusive on purpose: OpenAI-compat providers require exactly
+            // one tool-result message per `tool_call_id` (dogfood D3, 01KX7AGD), so a call that
+            // matches two categories — a scratchpad update arriving while the wrap-up reserve is
+            // running — must be answered once, by the first arm that claims it. Precedence is the
+            // same order the single-pass loop used before the read/write split: finish, then the
+            // wrap-up refusal, then the scratchpad.
             for call in &response.tool_calls {
                 if call.name == SUBMIT_REPORT_TOOL {
                     tracing::info!(turn, "subagent filed report");
@@ -896,10 +902,11 @@ impl Executor {
                         Ok(report) => submitted_report = Some(report),
                         Err(e) => return Err(ExecError::Decode(e.to_string())),
                     }
-                }
-                if wrapping_up
-                    && call.name != SUBMIT_REPORT_TOOL
-                {
+                } else if wrapping_up {
+                    // Withdrawing a tool from the offered catalog only changes what the model is
+                    // *shown*; nothing stops it calling a name it still remembers from earlier
+                    // turns. During the reserve that distinction matters — the whole point is that
+                    // the extra turns cannot buy more work — so refuse outright and say why.
                     tracing::debug!(turn, tool = %call.name, "refused a tool call during wrap-up");
                     messages.push(Message::tool_result(
                         &call.id,
@@ -909,10 +916,12 @@ impl Executor {
                             call.name, SUBMIT_REPORT_TOOL
                         ),
                     ));
-                }
-                if let Some(pad) = scratchpad
+                } else if let Some(pad) = scratchpad
                     && call.name == SCRATCHPAD_TOOL
                 {
+                    // Engine-injected, like `submit_report`: handled in-process, never reaches
+                    // `ToolRuntime`, and — deliberately — never enters doom-loop/cycle tracking.
+                    // Legitimate scratchpad usage would otherwise misfire both guards.
                     let result = pad.apply(&call.arguments);
                     messages.push(Message::tool_result(&call.id, result));
                 }
@@ -923,9 +932,7 @@ impl Executor {
                 .tool_calls
                 .iter()
                 .filter(|c| {
-                    c.name != SUBMIT_REPORT_TOOL
-                        && c.name != SCRATCHPAD_TOOL
-                        && !wrapping_up
+                    c.name != SUBMIT_REPORT_TOOL && c.name != SCRATCHPAD_TOOL && !wrapping_up
                 })
                 .collect();
 
@@ -954,11 +961,7 @@ impl Executor {
                 let read_results = futures::future::join_all(futures).await;
                 for (id, result) in read_results {
                     let call = response.tool_calls.iter().find(|c| c.id == id).unwrap();
-                    call_history.push((
-                        call.name.clone(),
-                        call.arguments.clone(),
-                        result.clone(),
-                    ));
+                    call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
                     if call_history[..call_history.len() - 1]
                         .iter()
                         .any(|(n, a, _)| n == &call.name && a == &call.arguments)
@@ -979,16 +982,11 @@ impl Executor {
 
             // Run write tools serially.
             for call in writes {
-                let tool_span =
-                    tracing::debug_span!("tool_call", name = %call.name, id = %call.id);
+                let tool_span = tracing::debug_span!("tool_call", name = %call.name, id = %call.id);
                 let result = async { run_tool(runtime, call).await }
                     .instrument(tool_span)
                     .await;
-                call_history.push((
-                    call.name.clone(),
-                    call.arguments.clone(),
-                    result.clone(),
-                ));
+                call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
                 if call_history[..call_history.len() - 1]
                     .iter()
                     .any(|(n, a, _)| n == &call.name && a == &call.arguments)
@@ -2946,6 +2944,53 @@ mod tests {
         assert!(runtime.invoked().is_empty());
     }
 
+    /// One `tool_result` per `tool_call_id`, even when the wrap-up reserve is running.
+    ///
+    /// OpenAI-compat providers reject an assistant `tool_calls` message answered by two results
+    /// carrying the same id (dogfood D3, 01KX7AGD). A scratchpad call that arrives while
+    /// `wrapping_up` is set matches both the wrap-up refusal and the scratchpad handler, so this
+    /// pins that only one of them may answer it.
+    #[tokio::test]
+    async fn scratchpad_during_wrap_up_emits_exactly_one_tool_result() {
+        let (provider, exec) = executor(
+            vec![
+                // Spends the 1-call budget, so the reserve is granted for the next turn.
+                call_tool("search"),
+                // Arrives while the reserve is running.
+                CompletionResponse::tool_calls(vec![scratchpad_call(
+                    "sp-wrap",
+                    serde_json::json!([{"content": "step one", "status": "in_progress"}]),
+                )]),
+                submit(serde_json::json!({
+                    "outcome": "partially_succeeded",
+                    "summary": "wrapped up",
+                    "artifacts": [],
+                })),
+            ],
+            Budget::new(1),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+
+        exec.execute(
+            &runtime,
+            Task::new("worker", "research everything").salvageable(true),
+        )
+        .await
+        .unwrap();
+
+        let requests = provider.received_requests();
+        let last = requests.last().expect("at least one request");
+        let answers = last
+            .messages
+            .iter()
+            .filter(|m| m.tool_call_id.as_deref() == Some("sp-wrap"))
+            .count();
+        assert_eq!(
+            answers, 1,
+            "exactly one tool_result may answer tool_call_id `sp-wrap`, got {answers}"
+        );
+    }
+
     #[tokio::test]
     async fn scratchpad_result_is_fed_back_as_a_tool_result() {
         let (provider, exec) = executor(
@@ -3373,7 +3418,10 @@ mod tests {
             Message::system("you are a helpful assistant"),
             Message::user("what is it?"),
         ];
-        let answer = exec.converse_messages(&runtime, &mut messages).await.unwrap();
+        let answer = exec
+            .converse_messages(&runtime, &mut messages)
+            .await
+            .unwrap();
         assert_eq!(answer, "the answer is 42");
         assert_eq!(messages.len(), 5);
     }
@@ -3383,25 +3431,22 @@ mod tests {
     #[tokio::test]
     async fn converse_stream_errors_on_budget_exhaustion() {
         let (_provider, exec) = executor(
-            vec![
-                call_tool("search"),
-                call_tool("search"),
-            ],
+            vec![call_tool("search"), call_tool("search")],
             Budget::new(1),
         );
         let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
         let (tx, _rx) = tokio::sync::mpsc::channel(64);
 
-        let mut messages = vec![
-            Message::system("helper"),
-            Message::user("find"),
-        ];
+        let mut messages = vec![Message::system("helper"), Message::user("find")];
         let err = exec
             .converse_stream(&runtime, &mut messages, &tx)
             .await
             .unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("BudgetExceeded") || msg.contains("turns"), "got: {msg}");
+        assert!(
+            msg.contains("BudgetExceeded") || msg.contains("turns"),
+            "got: {msg}"
+        );
     }
 }
 

@@ -62,15 +62,23 @@ async fn run() -> Result<(), String> {
             api_key_env,
             base_url,
             session_id,
-        } => run_headless(prompt, workspace, model, max_turns, config_dir, api_key_env, base_url, session_id)
-            .await,
+        } => {
+            run_headless(
+                prompt,
+                workspace,
+                model,
+                max_turns,
+                config_dir,
+                api_key_env,
+                base_url,
+                session_id,
+            )
+            .await
+        }
     }
 }
 
-async fn run_request(
-    path: Option<PathBuf>,
-    config_dir: Option<PathBuf>,
-) -> Result<(), String> {
+async fn run_request(path: Option<PathBuf>, config_dir: Option<PathBuf>) -> Result<(), String> {
     let request = read_request(path.as_deref()).await?;
     let profile = provider_profile(config_dir.as_deref())?;
     let providers = Arc::new(OpenAiProfileProviderFactory::from_profile(profile)?);
@@ -145,7 +153,11 @@ async fn run_headless(
         }
         task_context.push_str(&sc);
     }
-    let task_context = if task_context.is_empty() { None } else { Some(task_context) };
+    let task_context = if task_context.is_empty() {
+        None
+    } else {
+        Some(task_context)
+    };
 
     let request = CoderRunRequest {
         task: CoderTask {
@@ -154,10 +166,7 @@ async fn run_headless(
             context: task_context,
             success_criteria: Vec::new(),
         },
-        workspace: WorkspaceRef::new(
-            workspace.to_string_lossy().to_string(),
-            "HEAD",
-        ),
+        workspace: WorkspaceRef::new(workspace.to_string_lossy().to_string(), "HEAD"),
         config: CoderRunConfig {
             backend: "liberado-loop".to_string(),
             trace_dir: None,
@@ -219,20 +228,14 @@ async fn run_headless(
             let profile = provider_profile(Some(dir))?;
             Arc::new(OpenAiProfileProviderFactory::from_profile(profile)?)
         }
-        None => Arc::new(DirectProviderFactory {
-            api_key,
-            base_url,
-        }),
+        None => Arc::new(DirectProviderFactory { api_key, base_url }),
     };
 
     let backend = LiberadoLoopBackend::with_provider_factory(providers);
-    let result = backend
-        .run(request)
-        .await
-        .map_err(|error| {
-            eprintln!("CoderError: {error:?}");
-            format!("coder backend failed: {error}")
-        })?;
+    let result = backend.run(request).await.map_err(|error| {
+        eprintln!("CoderError: {error:?}");
+        format!("coder backend failed: {error}")
+    })?;
 
     let json = serde_json::to_string_pretty(&result)
         .map_err(|error| format!("serialize coder result: {error}"))?;
@@ -246,10 +249,7 @@ async fn run_headless(
 
     match result.outcome {
         Outcome::Succeeded => Ok(()),
-        _ => Err(format!(
-            "task completed with outcome: {:?}",
-            result.outcome
-        )),
+        _ => Err(format!("task completed with outcome: {:?}", result.outcome)),
     }
 }
 
@@ -285,9 +285,7 @@ fn build_workspace_summary(workspace: &Path) -> Option<String> {
                     .unwrap_or(0);
                 files.push(format!("  {}/  ({} files)", rel_str, count));
             } else {
-                let size = std::fs::metadata(&path)
-                    .map(|m| m.len())
-                    .unwrap_or(0);
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                 files.push(format!("  {}  ({} bytes)", rel_str, size));
             }
         }
@@ -342,8 +340,8 @@ fn load_prior_rounds(workspace: &Path, session_id: &str) -> Result<Vec<SessionRo
         if path.extension().map_or(false, |ext| ext == "json") {
             let raw = std::fs::read_to_string(&path)
                 .map_err(|e| format!("read {}: {e}", path.display()))?;
-            let round: SessionRound = serde_json::from_str(&raw)
-                .map_err(|e| format!("parse {}: {e}", path.display()))?;
+            let round: SessionRound =
+                serde_json::from_str(&raw).map_err(|e| format!("parse {}: {e}", path.display()))?;
             rounds.push(round);
         }
     }
@@ -351,19 +349,10 @@ fn load_prior_rounds(workspace: &Path, session_id: &str) -> Result<Vec<SessionRo
 }
 
 fn build_session_context(prior_rounds: &[SessionRound]) -> String {
-    let mut ctx = String::from(
-        "[Session history — prior rounds]\n"
-    );
+    let mut ctx = String::from("[Session history — prior rounds]\n");
     for round in prior_rounds {
-        ctx.push_str(&format!(
-            "Round {}: {}\n",
-            round.round + 1,
-            round.prompt
-        ));
-        ctx.push_str(&format!(
-            "  Outcome: {}\n",
-            round.summary
-        ));
+        ctx.push_str(&format!("Round {}: {}\n", round.round + 1, round.prompt));
+        ctx.push_str(&format!("  Outcome: {}\n", round.summary));
         if !round.files_changed.is_empty() {
             ctx.push_str(&format!(
                 "  Files changed: {}\n",
@@ -400,10 +389,9 @@ fn save_round_state(
     };
 
     let path = dir.join(format!("round-{:02}.json", round_num));
-    let json = serde_json::to_string_pretty(&round)
-        .map_err(|e| format!("serialize round state: {e}"))?;
-    std::fs::write(&path, json)
-        .map_err(|e| format!("write {}: {e}", path.display()))?;
+    let json =
+        serde_json::to_string_pretty(&round).map_err(|e| format!("serialize round state: {e}"))?;
+    std::fs::write(&path, json).map_err(|e| format!("write {}: {e}", path.display()))?;
 
     tracing::info!("saved session round {round_num} to {}", path.display());
     Ok(())
@@ -413,12 +401,15 @@ async fn ensure_git_repo(workspace: &Path) -> Result<(), String> {
     let git_dir = workspace.join(".git");
     if git_dir.exists() {
         tracing::info!("workspace already a git repo: {}", workspace.display());
-        configure_git_safe_directory()?;
+        configure_git_safe_directory(workspace)?;
         return Ok(());
     }
     std::fs::create_dir_all(workspace)
         .map_err(|e| format!("create workspace dir {}: {e}", workspace.display()))?;
-    tracing::info!("initialising git repo in bare workspace: {}", workspace.display());
+    tracing::info!(
+        "initialising git repo in bare workspace: {}",
+        workspace.display()
+    );
 
     let run_git = |args: &[&str]| -> Result<(), String> {
         let output = std::process::Command::new("git")
@@ -441,13 +432,38 @@ async fn ensure_git_repo(workspace: &Path) -> Result<(), String> {
     run_git(&["init"])?;
     run_git(&["add", "-A"])?;
     run_git(&["commit", "-m", "harness-bench baseline", "--allow-empty"])?;
-    configure_git_safe_directory()?;
+    configure_git_safe_directory(workspace)?;
     Ok(())
 }
 
-fn configure_git_safe_directory() -> Result<(), String> {
+/// Let git operate in `workspace` when the checkout is not owned by the running user.
+///
+/// Scoped to this one absolute path, and only added when it is not already listed. The earlier
+/// form — `--global --add safe.directory "*"` on every run — had two problems: `*` turns git's
+/// ownership check off for *every* repository on the machine, and `--add` with no membership test
+/// appended a duplicate line to `~/.gitconfig` on each invocation, so the file grew without bound.
+fn configure_git_safe_directory(workspace: &Path) -> Result<(), String> {
+    // Canonical form so the membership test matches what git itself would store.
+    let path = std::fs::canonicalize(workspace)
+        .unwrap_or_else(|_| workspace.to_path_buf())
+        .to_string_lossy()
+        .to_string();
+
+    let existing = std::process::Command::new("git")
+        .args(["config", "--global", "--get-all", "safe.directory"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("git config --get-all safe.directory: {e}"))?;
+    // Exit 1 just means the key is unset — that is not a failure here.
+    let already = String::from_utf8_lossy(&existing.stdout)
+        .lines()
+        .any(|line| line.trim() == path || line.trim() == "*");
+    if already {
+        return Ok(());
+    }
+
     let output = std::process::Command::new("git")
-        .args(["config", "--global", "--add", "safe.directory", "*"])
+        .args(["config", "--global", "--add", "safe.directory", &path])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .output()
@@ -511,21 +527,19 @@ impl Args {
                 while let Some(arg) = iter.next() {
                     match arg.as_str() {
                         "--request" => {
-                            path = Some(PathBuf::from(iter.next().ok_or_else(|| {
-                                "--request requires a path or '-'".to_string()
-                            })?));
+                            path =
+                                Some(PathBuf::from(iter.next().ok_or_else(|| {
+                                    "--request requires a path or '-'".to_string()
+                                })?));
                         }
                         "--config-dir" => {
                             config_dir = Some(PathBuf::from(
-                                iter.next().ok_or_else(|| {
-                                    "--config-dir requires a path".to_string()
-                                })?,
+                                iter.next()
+                                    .ok_or_else(|| "--config-dir requires a path".to_string())?,
                             ));
                         }
                         "--help" | "-h" => return Err(usage()),
-                        other => {
-                            return Err(format!("unknown argument '{other}'\n{}", usage()))
-                        }
+                        other => return Err(format!("unknown argument '{other}'\n{}", usage())),
                     }
                 }
 
@@ -535,16 +549,10 @@ impl Args {
         }
     }
 
-    fn parse_task_run(
-        mut args: impl Iterator<Item = String>,
-    ) -> Result<Self, String> {
+    fn parse_task_run(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
         let sub = args.next();
         if sub.as_deref() != Some("run") {
-            return Err(format!(
-                "expected 'run', got {:?}\n{}",
-                sub,
-                task_usage()
-            ));
+            return Err(format!("expected 'run', got {:?}\n{}", sub, task_usage()));
         }
 
         let mut prompt = None;
@@ -566,9 +574,8 @@ impl Args {
                 }
                 "--workspace" => {
                     workspace = Some(PathBuf::from(
-                        args.next().ok_or_else(|| {
-                            "--workspace requires a path".to_string()
-                        })?,
+                        args.next()
+                            .ok_or_else(|| "--workspace requires a path".to_string())?,
                     ));
                 }
                 "--model" => {
@@ -578,57 +585,46 @@ impl Args {
                     );
                 }
                 "--max-turns" => {
-                    let val = args.next().ok_or_else(|| {
-                        "--max-turns requires a number".to_string()
-                    })?;
-                    max_turns = Some(val.parse::<u32>().map_err(|_| {
-                        format!("--max-turns must be a number, got '{val}'")
-                    })?);
+                    let val = args
+                        .next()
+                        .ok_or_else(|| "--max-turns requires a number".to_string())?;
+                    max_turns = Some(
+                        val.parse::<u32>()
+                            .map_err(|_| format!("--max-turns must be a number, got '{val}'"))?,
+                    );
                 }
                 "--config-dir" => {
                     config_dir = Some(PathBuf::from(
-                        args.next().ok_or_else(|| {
-                            "--config-dir requires a path".to_string()
-                        })?,
+                        args.next()
+                            .ok_or_else(|| "--config-dir requires a path".to_string())?,
                     ));
                 }
                 "--api-key-env" => {
                     api_key_env = Some(
-                        args.next().ok_or_else(|| {
-                            "--api-key-env requires a value".to_string()
-                        })?,
+                        args.next()
+                            .ok_or_else(|| "--api-key-env requires a value".to_string())?,
                     );
                 }
                 "--base-url" => {
                     base_url = Some(
-                        args.next().ok_or_else(|| {
-                            "--base-url requires a value".to_string()
-                        })?,
+                        args.next()
+                            .ok_or_else(|| "--base-url requires a value".to_string())?,
                     );
                 }
                 "--session-id" => {
                     session_id = Some(
-                        args.next().ok_or_else(|| {
-                            "--session-id requires a value".to_string()
-                        })?,
+                        args.next()
+                            .ok_or_else(|| "--session-id requires a value".to_string())?,
                     );
                 }
                 "--help" | "-h" => return Err(task_usage()),
-                other => {
-                    return Err(format!(
-                        "unknown argument '{other}'\n{}",
-                        task_usage()
-                    ))
-                }
+                other => return Err(format!("unknown argument '{other}'\n{}", task_usage())),
             }
         }
 
-        let prompt = prompt.ok_or_else(|| {
-            format!("--prompt is required\n{}", task_usage())
-        })?;
-        let workspace = workspace.ok_or_else(|| {
-            format!("--workspace is required\n{}", task_usage())
-        })?;
+        let prompt = prompt.ok_or_else(|| format!("--prompt is required\n{}", task_usage()))?;
+        let workspace =
+            workspace.ok_or_else(|| format!("--workspace is required\n{}", task_usage()))?;
 
         Ok(Args {
             command: CliCommand::TaskRun {
@@ -659,9 +655,8 @@ impl CoderProviderFactory for DirectProviderFactory {
         _role: &str,
         config: &CoderRoleConfig,
     ) -> Result<Arc<dyn Provider>, CoderError> {
-        let provider =
-            OpenAiCompatibleProvider::new(&self.api_key, &config.model, &self.base_url)
-                .with_extra_client_error_status(vec![429]);
+        let provider = OpenAiCompatibleProvider::new(&self.api_key, &config.model, &self.base_url)
+            .with_extra_client_error_status(vec![429]);
         Ok(Arc::new(provider))
     }
 }
@@ -936,8 +931,14 @@ mod tests {
     fn task_run_bad_max_turns_errors() {
         let err = Args::parse(
             [
-                "task", "run", "--prompt", "hi", "--workspace", "/tmp",
-                "--max-turns", "abc",
+                "task",
+                "run",
+                "--prompt",
+                "hi",
+                "--workspace",
+                "/tmp",
+                "--max-turns",
+                "abc",
             ]
             .into_iter()
             .map(str::to_string),
@@ -948,12 +949,8 @@ mod tests {
 
     #[test]
     fn task_run_help_is_an_error() {
-        let err = Args::parse(
-            ["task", "run", "--help"]
-                .into_iter()
-                .map(str::to_string),
-        )
-        .unwrap_err();
+        let err =
+            Args::parse(["task", "run", "--help"].into_iter().map(str::to_string)).unwrap_err();
         assert!(err.contains("--prompt"));
     }
 }

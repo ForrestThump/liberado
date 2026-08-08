@@ -282,7 +282,10 @@ async fn git_nonempty_diff(root: &Path, id: &str) -> Verdict {
     // (git log -1) — covers git-merge+commit workflows where the tree is clean.
     match gates::changed_files(&root_str).await {
         Ok(files) if !files.is_empty() => {
-            return Verdict::pass(format!("non-empty diff ({} uncommitted paths)", files.len()));
+            return Verdict::pass(format!(
+                "non-empty diff ({} uncommitted paths)",
+                files.len()
+            ));
         }
         Err(e) => return Verdict::error(e.to_string()),
         _ => {}
@@ -321,7 +324,11 @@ async fn changed_files_in_last_commit(workspace_root: &str) -> Result<Vec<String
         return Ok(Vec::new());
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.lines().filter(|l| !l.is_empty()).map(str::to_string).collect())
+    Ok(stdout
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 fn truncate_log(s: &str) -> String {

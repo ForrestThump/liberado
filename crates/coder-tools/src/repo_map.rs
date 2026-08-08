@@ -50,7 +50,10 @@ fn detect_lang(path: &str) -> Option<(&'static str, Language)> {
     match ext {
         "rs" => Some(("rust", tree_sitter_rust::LANGUAGE.into())),
         "py" | "pyi" => Some(("python", tree_sitter_python::LANGUAGE.into())),
-        "ts" => Some(("typescript", tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())),
+        "ts" => Some((
+            "typescript",
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        )),
         "tsx" => Some(("tsx", tree_sitter_typescript::LANGUAGE_TSX.into())),
         "js" | "jsx" => Some(("tsx", tree_sitter_typescript::LANGUAGE_TSX.into())),
         "go" => Some(("go", tree_sitter_go::LANGUAGE.into())),
@@ -62,7 +65,8 @@ fn detect_lang(path: &str) -> Option<(&'static str, Language)> {
 
 fn query_source(lang_name: &str) -> &'static str {
     match lang_name {
-        "rust" => r#"
+        "rust" => {
+            r#"
 (function_item name: (identifier) @def.func)
 (struct_item name: (type_identifier) @def.type)
 (enum_item name: (type_identifier) @def.type)
@@ -76,14 +80,18 @@ fn query_source(lang_name: &str) -> &'static str {
 (call_expression function: (identifier) @ref.call)
 (call_expression function: (field_expression field: (field_identifier) @ref.call))
 (macro_invocation macro: (identifier) @ref.call)
-"#,
-        "python" => r#"
+"#
+        }
+        "python" => {
+            r#"
 (class_definition name: (identifier) @def.type)
 (function_definition name: (identifier) @def.func)
 (call function: (identifier) @ref.call)
 (call function: (attribute attribute: (identifier) @ref.call))
-"#,
-        "typescript" | "tsx" => r#"
+"#
+        }
+        "typescript" | "tsx" => {
+            r#"
 (function_declaration name: (identifier) @def.func)
 (method_definition name: (property_identifier) @def.func)
 (class_declaration name: (type_identifier) @def.type)
@@ -102,26 +110,24 @@ fn query_source(lang_name: &str) -> &'static str {
 (call_expression function: (identifier) @ref.call)
 (call_expression function: (member_expression property: (property_identifier) @ref.call))
 (new_expression constructor: (identifier) @ref.call)
-"#,
-        "go" => r#"
+"#
+        }
+        "go" => {
+            r#"
 (function_declaration name: (identifier) @def.func)
 (method_declaration name: (field_identifier) @def.func)
 (type_spec name: (type_identifier) @def.type)
 (call_expression function: (identifier) @ref.call)
 (call_expression function: (selector_expression field: (field_identifier) @ref.call))
-"#,
+"#
+        }
         _ => "",
     }
 }
 
 // ── tag extraction ─────────────────────────────────────────────────────────
 
-fn extract_tags(
-    file_path: &str,
-    source: &str,
-    lang_name: &str,
-    lang: &Language,
-) -> Vec<Tag> {
+fn extract_tags(file_path: &str, source: &str, lang_name: &str, lang: &Language) -> Vec<Tag> {
     let mut parser = Parser::new();
     if parser.set_language(lang).is_err() {
         return Vec::new();
@@ -505,10 +511,7 @@ impl Default for RepoMapOptions {
     }
 }
 
-pub async fn generate_repo_map(
-    workspace_root: &Path,
-    options: &RepoMapOptions,
-) -> Option<String> {
+pub async fn generate_repo_map(workspace_root: &Path, options: &RepoMapOptions) -> Option<String> {
     let file_paths = walk_source_files(workspace_root);
     if file_paths.len() < options.min_source_files {
         return None;
@@ -564,31 +567,18 @@ fn walk_source_files(root: &Path) -> Vec<(String, PathBuf)> {
     let mut files: Vec<(String, PathBuf)> = Vec::new();
     let ext_set: HashSet<&str> = SOURCE_EXTENSIONS.iter().copied().collect();
 
-    let mut stack: Vec<PathBuf> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let fname = path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if fname.starts_with('.')
-                || fname == "node_modules"
-                || fname == "target"
-                || fname == "__pycache__"
-            {
-                continue;
-            }
-            if path.is_dir() {
-                stack.push(path);
-            }
-        }
-    }
+    // Seed with the root itself so the loop below collects *its* files too. Walking the root's
+    // entries separately here (pushing only directories) silently dropped every source file
+    // sitting directly in the workspace — `main.rs` in a single-crate repo, a flat Python or Go
+    // entry point — which is exactly what a cold-start map most needs to name.
+    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
 
+    // The root now consumes one level, so the cap is one deeper than the 8 it replaced — the same
+    // reach below the workspace as before.
     let mut depth = 0;
     while !stack.is_empty() && files.len() < MAX_FILES {
         depth += 1;
-        if depth > 8 {
+        if depth > 9 {
             break;
         }
         let mut next: Vec<PathBuf> = Vec::new();
@@ -651,11 +641,10 @@ async fn extract_all_tags(file_paths: &[(String, PathBuf)]) -> Vec<Tag> {
             None => continue,
         };
         let rel = rel_path.clone();
-        let tags = tokio::task::spawn_blocking(move || {
-            extract_tags(&rel, &source, lang_name, &lang)
-        })
-        .await
-        .unwrap_or_default();
+        let tags =
+            tokio::task::spawn_blocking(move || extract_tags(&rel, &source, lang_name, &lang))
+                .await
+                .unwrap_or_default();
 
         all_tags.extend(tags);
     }
@@ -707,6 +696,34 @@ fn build_personalization(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Source files sitting directly in the workspace root belong in the map.
+    ///
+    /// Single-crate Rust repos put `main.rs`/`lib.rs` at the top level, and plenty of Python and
+    /// Go projects keep their entry point beside the manifest — dropping those hides exactly the
+    /// files a cold-start map most needs to name.
+    #[test]
+    fn walk_collects_source_files_directly_under_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("main.rs"), "fn main() {}").unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src").join("nested.rs"), "fn nested() {}").unwrap();
+
+        let found: Vec<String> = walk_source_files(root)
+            .into_iter()
+            .map(|(rel, _)| rel.replace('\\', "/"))
+            .collect();
+
+        assert!(
+            found.iter().any(|f| f == "src/nested.rs"),
+            "nested file should be found: {found:?}"
+        );
+        assert!(
+            found.iter().any(|f| f == "main.rs"),
+            "root-level source file should be found: {found:?}"
+        );
+    }
 
     #[test]
     fn test_pagerank_simple() {

@@ -423,9 +423,7 @@ impl CodingToolRuntime {
         }
         let args: Args = parse_args(args)?;
         if args.input.trim().is_empty() {
-            return Err(ToolError::BadRequest(
-                "input must not be empty".to_string(),
-            ));
+            return Err(ToolError::BadRequest("input must not be empty".to_string()));
         }
 
         let sections = hashline::parse_patch(&args.input).map_err(ToolError::BadRequest)?;
@@ -460,8 +458,7 @@ impl CodingToolRuntime {
                         .map(|(_, path, _)| path.clone())
                         .ok_or_else(|| format!("unknown path {rel}"))?;
                     if let Some(parent) = path.parent() {
-                        std::fs::create_dir_all(parent)
-                            .map_err(|e| format!("mkdir {rel}: {e}"))?;
+                        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {rel}: {e}"))?;
                     }
                     std::fs::write(&path, content.as_bytes())
                         .map_err(|e| format!("write {rel}: {e}"))
@@ -790,9 +787,7 @@ impl CodingToolRuntime {
         let args: Args = parse_args(args)?;
         let limit = args.limit.min(100);
         let mut request = CommandRequest::new("git");
-        let fmt = args
-            .format
-            .unwrap_or_else(|| "%h %s".to_string());
+        let fmt = args.format.unwrap_or_else(|| "%h %s".to_string());
         request.args = vec![
             "log".to_string(),
             format!("--max-count={limit}"),
@@ -906,12 +901,7 @@ impl CodingToolRuntime {
             .background_jobs
             .lock()
             .map_err(|e| ToolError::BadRequest(format!("background job lock: {e}")))?;
-        jobs.insert(
-            job_id.clone(),
-            BackgroundJob {
-                receiver: rx,
-            },
-        );
+        jobs.insert(job_id.clone(), BackgroundJob { receiver: rx });
 
         Ok(json!({
             "job_id": job_id,
@@ -1280,6 +1270,12 @@ impl ToolRuntime for CodingToolRuntime {
             .map_err(|e| e.to_string())
     }
 
+    /// Tools that only observe the workspace, so the executor may run them concurrently.
+    ///
+    /// `validate` is deliberately **not** here: it shells out to the operator's configured
+    /// validation command (`cargo test`, `pytest`, …), which writes build artefacts into the
+    /// workspace and is the most expensive call in the set. Running it as if it were a reader
+    /// would let a build mutate the tree while sibling reads are observing it.
     fn is_read_only(&self, tool_name: &str) -> bool {
         matches!(
             tool_name,
@@ -1290,7 +1286,6 @@ impl ToolRuntime for CodingToolRuntime {
                 | "git_status"
                 | "git_diff"
                 | "git_log"
-                | "validate"
         )
     }
 }
@@ -1811,7 +1806,11 @@ mod tests {
             enabled: true,
             hash_length: 6,
         });
-        std::fs::write(dir.path().join("greet.py"), "def greet(name):\n    print(name)\n").unwrap();
+        std::fs::write(
+            dir.path().join("greet.py"),
+            "def greet(name):\n    print(name)\n",
+        )
+        .unwrap();
 
         let read = runtime
             .invoke_json("read_file", json!({"path": "greet.py"}))
@@ -1825,16 +1824,10 @@ mod tests {
         assert!(content.contains("1:def greet(name):"));
 
         // hashline_edit is in the catalog only when enabled
-        assert!(
-            runtime
-                .catalog()
-                .iter()
-                .any(|t| t.name == "hashline_edit")
-        );
+        assert!(runtime.catalog().iter().any(|t| t.name == "hashline_edit"));
 
-        let patch = format!(
-            "[greet.py#{tag}]\nPUT 1.=2:\n+def greet(name):\n+    print(f'Hi {{name}}')\n"
-        );
+        let patch =
+            format!("[greet.py#{tag}]\nPUT 1.=2:\n+def greet(name):\n+    print(f'Hi {{name}}')\n");
         let result = runtime
             .invoke_json("hashline_edit", json!({ "input": patch }))
             .await
@@ -1847,12 +1840,7 @@ mod tests {
     #[tokio::test]
     async fn hashline_edit_absent_when_disabled() {
         let (_dir, runtime) = runtime();
-        assert!(
-            !runtime
-                .catalog()
-                .iter()
-                .any(|t| t.name == "hashline_edit")
-        );
+        assert!(!runtime.catalog().iter().any(|t| t.name == "hashline_edit"));
         let err = runtime
             .invoke_json("hashline_edit", json!({ "input": "[a#AAAA]\nREM" }))
             .await
@@ -1933,9 +1921,7 @@ mod tests {
         std::fs::write(dir.path().join("b.txt"), "bbb\n").unwrap();
         let a_tag = hashline_compute_file_hash("aaa\n", 4);
         let b_tag = hashline_compute_file_hash("bbb\n", 4);
-        let patch = format!(
-            "[a.txt#{a_tag}]\nPUT 1.=1:\n+AAA\n[b.txt#{b_tag}]\nPUT 1.=1:\n+BBB"
-        );
+        let patch = format!("[a.txt#{a_tag}]\nPUT 1.=1:\n+AAA\n[b.txt#{b_tag}]\nPUT 1.=1:\n+BBB");
         let result = runtime
             .invoke_json("hashline_edit", json!({ "input": patch }))
             .await
@@ -2016,9 +2002,7 @@ mod tests {
         let content = "one\ntwo\nthree\n";
         std::fs::write(dir.path().join("c.txt"), content).unwrap();
         let tag = hashline_compute_file_hash(content, 6);
-        let patch = format!(
-            "[c.txt#{tag}]\nCUT 2.=2\nPUT >1:\n+inserted\n"
-        );
+        let patch = format!("[c.txt#{tag}]\nCUT 2.=2\nPUT >1:\n+inserted\n");
         runtime
             .invoke_json("hashline_edit", json!({ "input": patch }))
             .await
@@ -3087,10 +3071,7 @@ mod tests {
         let runtime =
             CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
                 .unwrap();
-        let result = runtime
-            .invoke_json("git_log", json!({}))
-            .await
-            .unwrap();
+        let result = runtime.invoke_json("git_log", json!({})).await.unwrap();
         assert_eq!(result["exit_code"], 0);
         let stdout = result["stdout"].as_str().unwrap();
         assert!(stdout.contains("second commit"));
@@ -3242,7 +3223,12 @@ mod tests {
                 .unwrap();
             let status = poll["status"].as_str().unwrap();
             if status == "completed" {
-                assert!(poll["stdout"].as_str().unwrap_or("").contains("hello-from-background"));
+                assert!(
+                    poll["stdout"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains("hello-from-background")
+                );
                 assert_eq!(poll["exit_code"], 0);
                 completed = true;
                 break;
@@ -3274,13 +3260,14 @@ mod tests {
     #[tokio::test]
     async fn validate_with_configured_command_reports_configured_true() {
         let dir = tempfile::tempdir().unwrap();
-        let runtime = CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
-            .unwrap()
-            .with_validation_command({
-                let mut req = CommandRequest::new("cmd");
-                req.args = vec!["/c".into(), "echo".into(), "ok".into()];
-                req
-            });
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap()
+                .with_validation_command({
+                    let mut req = CommandRequest::new("cmd");
+                    req.args = vec!["/c".into(), "echo".into(), "ok".into()];
+                    req
+                });
 
         let result = runtime.invoke_json("validate", json!({})).await.unwrap();
         assert_eq!(result["configured"], true);
@@ -3298,10 +3285,7 @@ mod tests {
             CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
                 .unwrap();
         let err = runtime
-            .invoke_json(
-                "edit_file",
-                json!({"path": "f.txt", "old": "", "new": "x"}),
-            )
+            .invoke_json("edit_file", json!({"path": "f.txt", "old": "", "new": "x"}))
             .await
             .unwrap_err();
         assert!(err.to_string().contains("old must not be empty"));
@@ -3334,8 +3318,10 @@ mod tests {
             .invoke_json("apply_patch", json!({"edits": []}))
             .await
             .unwrap_err();
-        assert!(err.to_string().to_lowercase().contains("at least one edit")
-            || err.to_string().to_lowercase().contains("empty"));
+        assert!(
+            err.to_string().to_lowercase().contains("at least one edit")
+                || err.to_string().to_lowercase().contains("empty")
+        );
     }
 
     #[tokio::test]
@@ -3387,4 +3373,3 @@ mod tests {
             .unwrap();
     }
 }
-

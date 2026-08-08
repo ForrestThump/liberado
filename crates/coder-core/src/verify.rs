@@ -500,23 +500,26 @@ mod tests {
 
     #[test]
     fn deserialize_paths_absent() {
-        let v: VerifierSpec = serde_json::from_str(r#"{"type":"paths_absent","paths":["target"]}"#).unwrap();
+        let v: VerifierSpec =
+            serde_json::from_str(r#"{"type":"paths_absent","paths":["target"]}"#).unwrap();
         assert_eq!(v.id(), "paths_absent");
         assert_eq!(v.kind(), "paths_absent");
     }
 
     #[test]
     fn deserialize_content_contains() {
-        let v: VerifierSpec =
-            serde_json::from_str(r#"{"type":"content_contains","path":"Cargo.toml","must_include":"edition"}"#)
-                .unwrap();
+        let v: VerifierSpec = serde_json::from_str(
+            r#"{"type":"content_contains","path":"Cargo.toml","must_include":"edition"}"#,
+        )
+        .unwrap();
         assert_eq!(v.kind(), "content_contains");
     }
 
     #[test]
     fn deserialize_command_verifier() {
         let v: VerifierSpec =
-            serde_json::from_str(r#"{"type":"command","program":"cargo","args":["test"]}"#).unwrap();
+            serde_json::from_str(r#"{"type":"command","program":"cargo","args":["test"]}"#)
+                .unwrap();
         assert_eq!(v.kind(), "command");
     }
 

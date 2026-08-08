@@ -124,10 +124,8 @@ mod tests {
 
     #[test]
     fn parse_critic_verdict_needs_revision() {
-        let v = parse_critic_verdict(
-            r#"{"quality":"needs_revision","issues":["add more tests"]}"#,
-        )
-        .unwrap();
+        let v = parse_critic_verdict(r#"{"quality":"needs_revision","issues":["add more tests"]}"#)
+            .unwrap();
         assert_eq!(
             v,
             CriticVerdict::NeedsRevision {

@@ -209,10 +209,7 @@ async fn handle_request(
     }
 }
 
-fn emit_notification(
-    method: &str,
-    params: Option<Value>,
-) -> Result<(), String> {
+fn emit_notification(method: &str, params: Option<Value>) -> Result<(), String> {
     let json = serde_json::to_string(&AcpOutput::Notification {
         method: method.to_string(),
         params,

@@ -193,7 +193,10 @@ fn is_valid_tag(tag: &str) -> bool {
 }
 
 fn normalize_path(path: &str) -> String {
-    path.trim().trim_matches('"').trim_matches('\'').replace('\\', "/")
+    path.trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .replace('\\', "/")
 }
 
 fn parse_section_body(lines: &[&str]) -> Result<(Vec<Edit>, FileOp), String> {
@@ -256,7 +259,8 @@ fn parse_section_body(lines: &[&str]) -> Result<(Vec<Edit>, FileOp), String> {
                 let body_line = lines[i].trim_end_matches('\r');
                 let body_trim = body_line.trim_start();
                 // Next op or section?
-                if is_op_header(body_trim) || (body_trim.starts_with('[') && body_trim.ends_with(']'))
+                if is_op_header(body_trim)
+                    || (body_trim.starts_with('[') && body_trim.ends_with(']'))
                 {
                     break;
                 }
@@ -338,7 +342,11 @@ fn strip_read_prefix(line: &str) -> String {
     line.to_string()
 }
 
-fn apply_put_locator(locator: &str, payloads: &[String], edits: &mut Vec<Edit>) -> Result<(), String> {
+fn apply_put_locator(
+    locator: &str,
+    payloads: &[String],
+    edits: &mut Vec<Edit>,
+) -> Result<(), String> {
     let locator = locator.trim();
 
     // Block ops not supported: N*
@@ -354,9 +362,7 @@ fn apply_put_locator(locator: &str, payloads: &[String], edits: &mut Vec<Edit>) 
         let rest = rest.trim();
         if rest == "1" {
             for text in payloads {
-                edits.push(Edit::InsertBof {
-                    text: text.clone(),
-                });
+                edits.push(Edit::InsertBof { text: text.clone() });
             }
             if payloads.is_empty() {
                 return Err("PUT <1: requires at least one + body row".into());
@@ -380,9 +386,7 @@ fn apply_put_locator(locator: &str, payloads: &[String], edits: &mut Vec<Edit>) 
         let rest = rest.trim();
         if rest == "$" {
             for text in payloads {
-                edits.push(Edit::InsertEof {
-                    text: text.clone(),
-                });
+                edits.push(Edit::InsertEof { text: text.clone() });
             }
             if payloads.is_empty() {
                 return Err("PUT >$: requires at least one + body row".into());
@@ -431,9 +435,7 @@ fn parse_range(s: &str) -> Result<(usize, usize), String> {
             let start = parse_line_number(a.trim())?;
             let end = parse_line_number(b.trim())?;
             if end < start {
-                return Err(format!(
-                    "range end {end} is before start {start}"
-                ));
+                return Err(format!("range end {end} is before start {start}"));
             }
             return Ok((start, end));
         }
@@ -468,9 +470,10 @@ fn apply_edits(text: &str, edits: &[Edit]) -> Result<(String, Option<usize>), St
     }
 
     // Preserve whether the original ended with a trailing newline via split behaviour.
-    let mut file_lines: Vec<String> = text.split('\n').map(|l| {
-        l.strip_suffix('\r').unwrap_or(l).to_string()
-    }).collect();
+    let mut file_lines: Vec<String> = text
+        .split('\n')
+        .map(|l| l.strip_suffix('\r').unwrap_or(l).to_string())
+        .collect();
 
     // Phantom trailing empty from split on trailing newline is addressable for inserts.
     let mut first_changed: Option<usize> = None;
@@ -483,7 +486,8 @@ fn apply_edits(text: &str, edits: &[Edit]) -> Result<(String, Option<usize>), St
     // Partition BOF/EOF vs anchor edits.
     let mut bof: Vec<String> = Vec::new();
     let mut eof: Vec<String> = Vec::new();
-    let mut by_line: std::collections::BTreeMap<usize, Vec<&Edit>> = std::collections::BTreeMap::new();
+    let mut by_line: std::collections::BTreeMap<usize, Vec<&Edit>> =
+        std::collections::BTreeMap::new();
 
     for edit in edits {
         match edit {
@@ -518,9 +522,7 @@ fn apply_edits(text: &str, edits: &[Edit]) -> Result<(String, Option<usize>), St
             }
         }
         if line_count == 0 && line > 0 {
-            return Err(format!(
-                "line {line} does not exist (file is empty)"
-            ));
+            return Err(format!("line {line} does not exist (file is empty)"));
         }
     }
 
@@ -642,7 +644,12 @@ where
         if section.file_op == FileOp::Remove {
             let before = read(&section.path)?;
             if require_tag {
-                verify_tag(&section.path, &before, section.file_hash.as_deref(), hash_length)?;
+                verify_tag(
+                    &section.path,
+                    &before,
+                    section.file_hash.as_deref(),
+                    hash_length,
+                )?;
             }
             prepared.push(Prepared {
                 path: section.path.clone(),
@@ -656,7 +663,12 @@ where
 
         let before = read(&section.path)?;
         if require_tag {
-            verify_tag(&section.path, &before, section.file_hash.as_deref(), hash_length)?;
+            verify_tag(
+                &section.path,
+                &before,
+                section.file_hash.as_deref(),
+                hash_length,
+            )?;
         }
         let (after, first) = apply_edits(&before, &section.edits)?;
         let new_hash = compute_file_hash(&after, hash_length);
@@ -779,10 +791,7 @@ mod tests {
     #[test]
     fn apply_replace_single_line() {
         let content = "aaa\nbbb\nccc";
-        let patch = format!(
-            "[f.txt#{}]\nPUT 2.=2:\n+BBB",
-            compute_file_hash(content, 4)
-        );
+        let patch = format!("[f.txt#{}]\nPUT 2.=2:\n+BBB", compute_file_hash(content, 4));
         let sections = parse_patch(&patch).unwrap();
         let (after, first) = apply_edits(content, &sections[0].edits).unwrap();
         assert_eq!(after, "aaa\nBBB\nccc");
@@ -853,9 +862,7 @@ mod tests {
             ("b.txt".to_string(), "bbb\n".to_string()),
         ]));
         let a_tag = compute_file_hash("aaa\n", 4);
-        let patch = format!(
-            "[a.txt#{a_tag}]\nPUT 1.=1:\n+AAA\n[b.txt#DEAD]\nPUT 1.=1:\n+BBB"
-        );
+        let patch = format!("[a.txt#{a_tag}]\nPUT 1.=1:\n+AAA\n[b.txt#DEAD]\nPUT 1.=1:\n+BBB");
         let sections = parse_patch(&patch).unwrap();
         let err = apply_patch_sections(
             &sections,
@@ -966,7 +973,10 @@ mod tests {
     #[test]
     fn parse_rejects_colonless_register_put() {
         let err = parse_patch("[f#A1B2]\nPUT >1 @reg").unwrap_err();
-        assert!(err.contains("register") || err.contains("not supported"), "{err}");
+        assert!(
+            err.contains("register") || err.contains("not supported"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -999,10 +1009,7 @@ mod tests {
     #[test]
     fn apply_cut_range() {
         let content = "a\nb\nc\nd";
-        let edits = parse_patch("[f#A1B2]\nCUT 2.=3")
-            .unwrap()
-            .remove(0)
-            .edits;
+        let edits = parse_patch("[f#A1B2]\nCUT 2.=3").unwrap().remove(0).edits;
         let (after, _) = apply_edits(content, &edits).unwrap();
         assert_eq!(after, "a\nd");
     }
@@ -1010,10 +1017,7 @@ mod tests {
     #[test]
     fn apply_out_of_bounds_line_errors() {
         let content = "only\n";
-        let edits = parse_patch("[f#A1B2]\nCUT 5.=5")
-            .unwrap()
-            .remove(0)
-            .edits;
+        let edits = parse_patch("[f#A1B2]\nCUT 5.=5").unwrap().remove(0).edits;
         let err = apply_edits(content, &edits).unwrap_err();
         assert!(err.contains("does not exist"), "{err}");
     }
@@ -1057,7 +1061,13 @@ mod tests {
             &sections,
             4,
             true,
-            |p| files.borrow().get(p).cloned().ok_or_else(|| "missing".into()),
+            |p| {
+                files
+                    .borrow()
+                    .get(p)
+                    .cloned()
+                    .ok_or_else(|| "missing".into())
+            },
             |_, _| Ok(()),
             |_| Ok(()),
         )
@@ -1079,7 +1089,13 @@ mod tests {
             &sections,
             4,
             true,
-            |p| files.borrow().get(p).cloned().ok_or_else(|| "missing".into()),
+            |p| {
+                files
+                    .borrow()
+                    .get(p)
+                    .cloned()
+                    .ok_or_else(|| "missing".into())
+            },
             |_, _| Ok(()),
             |p| {
                 files.borrow_mut().remove(p);
@@ -1102,15 +1118,19 @@ mod tests {
             ("a.txt".to_string(), a.to_string()),
             ("b.txt".to_string(), b.to_string()),
         ]));
-        let patch = format!(
-            "[a.txt#{a_tag}]\nPUT 1.=1:\n+AAA\n[b.txt#{b_tag}]\nPUT 1.=1:\n+BBB"
-        );
+        let patch = format!("[a.txt#{a_tag}]\nPUT 1.=1:\n+AAA\n[b.txt#{b_tag}]\nPUT 1.=1:\n+BBB");
         let sections = parse_patch(&patch).unwrap();
         let reports = apply_patch_sections(
             &sections,
             4,
             true,
-            |p| files.borrow().get(p).cloned().ok_or_else(|| format!("missing {p}")),
+            |p| {
+                files
+                    .borrow()
+                    .get(p)
+                    .cloned()
+                    .ok_or_else(|| format!("missing {p}"))
+            },
             |p, c| {
                 files.borrow_mut().insert(p.to_string(), c.to_string());
                 Ok(())
@@ -1150,7 +1170,13 @@ mod tests {
             &sections,
             4,
             true,
-            |p| files.borrow().get(p).cloned().ok_or_else(|| "missing".into()),
+            |p| {
+                files
+                    .borrow()
+                    .get(p)
+                    .cloned()
+                    .ok_or_else(|| "missing".into())
+            },
             |p, c| {
                 files.borrow_mut().insert(p.to_string(), c.to_string());
                 Ok(())
