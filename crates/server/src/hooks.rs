@@ -352,6 +352,7 @@ mod tests {
             reactions: Arc::new(Mutex::new(Vec::new())),
             dispatcher_attached: false,
             orchestrator_attached: false,
+            watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             vault_path: "/tmp/vault".to_string(),
             goals: Arc::new(liberado_session::GoalSessionHub::new(
                 liberado_session::GoalSessionStore::new(),
@@ -424,6 +425,7 @@ mod tests {
             reactions: Arc::new(Mutex::new(Vec::new())),
             dispatcher_attached: false,
             orchestrator_attached: false,
+            watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             vault_path: "/tmp/vault".to_string(),
             goals: Arc::new(liberado_session::GoalSessionHub::new(
                 liberado_session::GoalSessionStore::new(),
@@ -480,6 +482,7 @@ mod tests {
             reactions: Arc::new(Mutex::new(Vec::new())),
             dispatcher_attached: false,
             orchestrator_attached: false,
+            watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             vault_path: "/tmp/vault".to_string(),
             goals: Arc::new(liberado_session::GoalSessionHub::new(
                 liberado_session::GoalSessionStore::new(),
@@ -630,6 +633,7 @@ mod tests {
             reactions: Arc::new(Mutex::new(Vec::new())),
             dispatcher_attached: false,
             orchestrator_attached: false,
+            watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             vault_path: "/tmp/vault".to_string(),
             goals: Arc::new(liberado_session::GoalSessionHub::new(
                 liberado_session::GoalSessionStore::new(),

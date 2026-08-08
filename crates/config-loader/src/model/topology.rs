@@ -970,6 +970,13 @@ pub struct CronSchedule {
     /// can opt in; crons without a profile keep the pool grant, which should omit `AskHuman` (D-d).
     #[serde(default)]
     pub profile: Option<String>,
+    /// Push this schedule's result to the notifier when it finishes. Omitted means yes, which is
+    /// the behaviour every schedule had before this existed.
+    ///
+    /// Set `false` for maintenance schedules that fire often and usually do nothing — hourly with
+    /// delivery on is 24 notifications a day for "nothing to report".
+    #[serde(default)]
+    pub deliver: Option<bool>,
 }
 
 /// A configured external webhook hook: wiring only (Decision 14) — `liberado-server` resolves

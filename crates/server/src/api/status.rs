@@ -33,7 +33,9 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         running: true,
         vault_path: state.vault_path.clone(),
         uptime_seconds: state.start_time.elapsed().as_secs(),
-        watcher_active: true,
+        watcher_active: state
+            .watcher_active
+            .load(std::sync::atomic::Ordering::Relaxed),
         dispatcher_attached: state.dispatcher_attached,
         orchestrator_attached: state.orchestrator_attached,
         reactions_seen: reactions_len as u64,
@@ -290,7 +292,9 @@ pub async fn vault(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     Json(VaultInfo {
         root: state.vault_path.clone(),
         note_count: 0,
-        watcher_active: true,
+        watcher_active: state
+            .watcher_active
+            .load(std::sync::atomic::Ordering::Relaxed),
     })
 }
 

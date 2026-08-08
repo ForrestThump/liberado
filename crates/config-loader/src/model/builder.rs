@@ -402,6 +402,7 @@ max_turns = 44
             goal: "do something".into(),
             pool: None,
             profile: None,
+            deliver: None,
         }
     }
 
