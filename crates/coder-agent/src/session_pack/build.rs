@@ -397,7 +397,9 @@ impl CodingSessionPack {
                 planner: disabled.clone(),
                 coder: role.clone(),
                 critic: disabled,
-                gate: liberado_coder_core::CoderGateConfig::default(),
+                // The pack's configured gate, not a hardcoded default: `[tuning.coder.gate]` was
+                // otherwise unreachable through the daemon at any setting.
+                gate: self.gate.clone(),
                 // Neither restricted tier gets a repair loop: explore must not mutate the tree at
                 // all, and plan mode is one pass to the plan file.
                 repair: if policies.mode.is_restricted() {

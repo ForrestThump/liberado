@@ -1052,3 +1052,89 @@ async fn an_external_workspace_gets_durable_session_isolation() {
         std::env::remove_var("LIBERADO_DATA_DIR");
     }
 }
+
+/// `[tuning.coder.gate]` reaches the `CoderRunConfig` the pack actually hands the backend.
+///
+/// Every run config this pack built previously hardcoded `CoderGateConfig::default()`, so the gate
+/// — 1,767 lines of gatekeeper plus cold-reviewer quorum, and a documented config table — could not
+/// be switched on through the daemon at any setting. The backend already honoured
+/// `request.config.gate.enabled`; only the wire between them was missing.
+///
+/// Asserted against the recorded request rather than the builder, because the builder was never
+/// the broken part: a test that only reads `pack.gate` passes with the hardcoded default still in
+/// place, which is exactly what the first version of this test did.
+#[tokio::test]
+async fn the_configured_gate_reaches_the_backends_run_config() {
+    use liberado_coder_core::CoderGateConfig;
+
+    async fn gate_seen_by_backend(configure: bool) -> CoderGateConfig {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let backend = Arc::new(ScriptedBackend {
+            seen: seen.clone(),
+            fail_attempts: 0,
+        });
+        let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+        let mut pack = CodingSessionPack::with_backend(backend, provider, std::env::temp_dir());
+        if configure {
+            pack = pack.with_gate(CoderGateConfig {
+                enabled: true,
+                fresh_reviewers: 3,
+                ..CoderGateConfig::default()
+            });
+        }
+
+        let (ev_tx, _ev_rx) = mpsc::channel::<SessionEvent>(64);
+        let (in_tx, in_rx) = mpsc::channel::<HumanInput>(16);
+        drop(in_tx);
+        let inputs = InputChannel::new(in_rx, None);
+        let (_c_tx, cancel) = tokio::sync::watch::channel(false);
+
+        let workspace = std::env::temp_dir().join(format!(
+            "liberado-gate-wire-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let mut g = goal("wire check");
+        g.payload = serde_json::json!({
+            "workspace_root": workspace.to_string_lossy(),
+            "intake": { "enabled": false },
+            "force_host_local": true,
+            "skip_preflight": true,
+        });
+
+        let store = Arc::new(liberado_session::GoalSessionStore::new());
+        let mut spec = g.clone();
+        spec.id = Some("gate1".into());
+        liberado_session::SessionRecordStore::insert(
+            store.as_ref(),
+            liberado_session::GoalSessionRecord::new(spec),
+        )
+        .await;
+        let grant = liberado_session::SessionGrant::default();
+        let ctx = PackContext::new(&grant, store.clone(), "gate1");
+
+        let _ = pack.run("gate1", &g, &ctx, ev_tx, inputs, cancel).await;
+        let requests = seen.lock().unwrap().clone();
+        let _ = std::fs::remove_dir_all(&workspace);
+        assert!(!requests.is_empty(), "backend was never invoked");
+        requests[0].config.gate.clone()
+    }
+
+    // Unconfigured stays off — this makes the gate reachable, not enabled. It costs
+    // `1 + fresh_reviewers` extra model calls per attempt, so switching it on is the operator's.
+    assert!(!gate_seen_by_backend(false).await.enabled);
+
+    let configured = gate_seen_by_backend(true).await;
+    assert!(
+        configured.enabled,
+        "a configured gate must reach the backend, not be replaced by the default"
+    );
+    assert_eq!(
+        configured.fresh_reviewers, 3,
+        "the whole config must survive, not just the enabled flag"
+    );
+}

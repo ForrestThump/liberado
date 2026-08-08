@@ -63,6 +63,13 @@ pub struct CodingSessionPack {
     max_concurrent_coding_subagents: u32,
     /// Default hashline settings from `[coder.hashline]` in tuning.toml.
     hashline: liberado_coder_core::HashlineConfig,
+    /// Completion gate settings from `[coder.gate]` in tuning.toml.
+    ///
+    /// Defaults to off, exactly as before. What changed is that it is now *reachable*: every
+    /// `CoderRunConfig` this pack built previously hardcoded `CoderGateConfig::default()`, so
+    /// `[tuning.coder.gate]` parsed, validated, and could not be switched on through the daemon at
+    /// any setting.
+    gate: liberado_coder_core::CoderGateConfig,
 }
 
 impl CodingSessionPack {
@@ -75,6 +82,7 @@ impl CodingSessionPack {
             max_concurrent_coding_subagents: crate::fanout::DEFAULT_MAX_CONCURRENT_CODING_SUBAGENTS
                 as u32,
             hashline: liberado_coder_core::HashlineConfig::default(),
+            gate: liberado_coder_core::CoderGateConfig::default(),
         }
     }
 
@@ -91,6 +99,7 @@ impl CodingSessionPack {
             max_concurrent_coding_subagents: crate::fanout::DEFAULT_MAX_CONCURRENT_CODING_SUBAGENTS
                 as u32,
             hashline: liberado_coder_core::HashlineConfig::default(),
+            gate: liberado_coder_core::CoderGateConfig::default(),
         }
     }
 
@@ -101,6 +110,15 @@ impl CodingSessionPack {
     }
 
     /// Seed hashline edit mode from `[coder.hashline]` (payload/overrides can still override).
+    /// Completion-gate settings for sessions this pack runs (`[coder.gate]`).
+    ///
+    /// Off by default and left that way: the gate costs `1 + fresh_reviewers` extra model calls
+    /// per attempt, so it stays opt-in. This only makes the opt-in possible.
+    pub fn with_gate(mut self, config: liberado_coder_core::CoderGateConfig) -> Self {
+        self.gate = config;
+        self
+    }
+
     pub fn with_hashline(mut self, config: liberado_coder_core::HashlineConfig) -> Self {
         self.hashline = config;
         self
