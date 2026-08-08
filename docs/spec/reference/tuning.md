@@ -370,12 +370,16 @@ inference, no extra instrumentation:
 
 ```bash
 # What does delegating cost the turns that follow it?
-cargo run -p liberado-cost --example delegation_cost   -- <data-dir>
+liberado-cost delegation-cost  [--data-dir PATH] [--json]
 # Which delegated answers did the model mostly write itself? (provenance, not quality)
-cargo run -p liberado-cost --example provenance_ratio  -- <data-dir> [ratio-threshold]
+liberado-cost provenance-ratio [--data-dir PATH] [--threshold RATIO] [--json]
 ```
 
-`provenance_ratio` compares what the face agent *received* from a delegation against what it then
+Both were `cargo run --example` until they earned a place on the CLI (D1). `--data-dir`, `--json`,
+`--topology` and `--prices` are global, so they read the same before a subcommand as after one, and
+the bare `liberado-cost …` form still runs the cost report.
+
+`provenance-ratio` compares what the face agent *received* from a delegation against what it then
 *wrote*. It flags rather than judges — a short lookup expanded into a readable sentence is fine — but
 it independently ranked the known [seam bug](../../future-work/delegated-work-is-discarded-at-the-seam.md)
 first at 29x against a median of 0.9x. Why this rather than an eval harness:

@@ -110,6 +110,12 @@ pub const SECS_IN_MINUTE: u64 = 60;
 /// unbounded growth) rather than pruning mid-conversation.
 pub const MAX_MESSAGE_COUNT: usize = 500;
 
+/// Maximum number of gate votes retained for the goal sidebar. Unlike messages, votes arrive on a
+/// stream with no history load to prune at, and a long goal — every attempt costs
+/// `1 + fresh_reviewers` votes — would grow the vector for the life of the session. The sidebar
+/// only ever renders the tail of it, so oldest-first eviction loses nothing that was on screen.
+pub const MAX_GATE_VOTES: usize = 100;
+
 // ── Text helpers ────────────────────────────────────────────────────
 
 /// Number of characters in an ellipsis (always 3 for "…" or "...").

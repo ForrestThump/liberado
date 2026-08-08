@@ -679,7 +679,7 @@ mod tests {
 
 #[cfg(test)]
 mod goal_command_tests {
-    use crate::commands::{GoalCmd, SlashCommand};
+    use crate::commands::{CodingGoalMode, GoalCmd, SlashCommand};
     use crate::dispatch::parse;
 
     fn goal(input: &str) -> GoalCmd {
@@ -772,6 +772,8 @@ mod goal_command_tests {
             "/goal resume use postgres",
             "/goal add a --version flag",
             "/goal in liberado add a --version flag",
+            "/plan design a CLI flag",
+            "/plan in liberado design a CLI flag",
             "/explore how auth works",
             "/explore in liberado how auth works",
         ] {
@@ -785,21 +787,37 @@ mod goal_command_tests {
     }
 
     #[test]
+    fn plan_parses_like_goal_start_with_project() {
+        match parse("/plan in liberado design the CLI") {
+            Some(SlashCommand::Coding {
+                mode: CodingGoalMode::Plan,
+                project: Some(p),
+                text,
+            }) => {
+                assert_eq!(p, "liberado");
+                assert_eq!(text, "design the CLI");
+            }
+            other => panic!("expected Coding/Plan, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn explore_parses_with_project() {
         match parse("/explore in liberado how sessions park") {
-            Some(SlashCommand::Explore {
+            Some(SlashCommand::Coding {
+                mode: CodingGoalMode::Explore,
                 project: Some(p),
                 text,
             }) => {
                 assert_eq!(p, "liberado");
                 assert_eq!(text, "how sessions park");
             }
-            other => panic!("expected Explore, got {other:?}"),
+            other => panic!("expected Coding/Explore, got {other:?}"),
         }
     }
 
     #[test]
-    fn explore_handler_sets_explore_mode_flag() {
+    fn coding_handler_stamps_the_requested_mode() {
         use crate::context::{CommandContext, StatusInfo};
         use crate::result::CommandResult;
 
@@ -852,14 +870,33 @@ mod goal_command_tests {
             }
         }
 
-        let results =
-            crate::handlers::focus::explore(Some("liberado"), "how auth works", &mut NullCtx);
+        let results = crate::handlers::focus::coding(
+            CodingGoalMode::Plan,
+            Some("liberado"),
+            "design X",
+            &mut NullCtx,
+        );
+        assert_eq!(
+            results,
+            vec![CommandResult::StartCodingGoal {
+                project: Some("liberado".into()),
+                text: "design X".into(),
+                mode: Some(CodingGoalMode::Plan),
+            }]
+        );
+
+        let results = crate::handlers::focus::coding(
+            CodingGoalMode::Explore,
+            Some("liberado"),
+            "how auth works",
+            &mut NullCtx,
+        );
         assert_eq!(
             results,
             vec![CommandResult::StartCodingGoal {
                 project: Some("liberado".into()),
                 text: "how auth works".into(),
-                explore_mode: true,
+                mode: Some(CodingGoalMode::Explore),
             }]
         );
     }

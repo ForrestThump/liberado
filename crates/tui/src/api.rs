@@ -296,23 +296,63 @@ pub async fn post_goal_message(
 /// Note `payload.interactive` is only a *request*: whether the session may actually ask the human is
 /// decided by its grant (`AskHuman`), not by this flag. Spawning a profile without that capability
 /// yields a session that runs to completion without ever prompting.
+/// One row from `GET /api/projects` (coding-tui S3 / G4).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ProjectRow {
+    pub name: String,
+    pub root: String,
+    #[serde(default)]
+    pub write_class: Option<String>,
+}
+
+/// `GET /api/projects` — declared coding roots for `/goal in` pickers.
+pub async fn list_projects(client: &Client, server: &str) -> Result<Vec<ProjectRow>, String> {
+    let resp = client
+        .get(format!("{server}/api/projects"))
+        .send()
+        .await
+        .map_err(|e| format!("could not reach daemon: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("server returned {status}: {text}"));
+    }
+    let value: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let projects = value
+        .get("projects")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    projects
+        .into_iter()
+        .map(|p| {
+            serde_json::from_value::<ProjectRow>(p).map_err(|e| format!("bad project row: {e}"))
+        })
+        .collect()
+}
+
 /// `POST /api/goals` for a **coding** goal. Domain is always `coding`; `project` rides in the
 /// payload where the coding pack reads it (and where G4's project authorization will check it).
-/// `explore_mode` selects the read-only tool/path preset in the coding pack.
+/// `mode` selects a restricted tier (plan or explore); `None` is a normal full-write goal. It
+/// travels as the payload `mode` string, which the coding pack maps back to its policy presets.
+///
+/// Only `project` is transmitted — `workspace_root` is not yet wired through the TUI client.
+/// The server's `(None, Some(path))` auth arm (direct-path workspace authorization) is HTTP-only
+/// until a TUI picker lets the user browse to a subdirectory under a declared project root.
 pub async fn start_coding_goal(
     client: &Client,
     server: &str,
     project: Option<&str>,
     text: &str,
-    explore_mode: bool,
+    mode: Option<liberado_commands::CodingGoalMode>,
     origin_conversation: Option<&str>,
 ) -> Result<String, String> {
     let mut payload = serde_json::json!({ "interactive": true });
     if let Some(project) = project {
         payload["project"] = serde_json::json!(project);
     }
-    if explore_mode {
-        payload["explore_mode"] = serde_json::json!(true);
+    if let Some(mode) = mode {
+        payload["mode"] = serde_json::json!(mode.as_wire_str());
     }
     let mut body = serde_json::json!({
         "description": text,

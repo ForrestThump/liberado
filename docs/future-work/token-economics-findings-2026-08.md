@@ -7,7 +7,7 @@ real read of it, over the deployed journal at build `e85a0eb`: **1,338 inference
 tokens, 193 conversations, 469 turns, 12 configured MCPs.**
 
 Every number below is from that journal. The scripts are one-offs; the reusable one is
-[`crates/cost/examples/delegation_cost.rs`](../../crates/cost/examples/delegation_cost.rs).
+`liberado-cost delegation-cost` ([`crates/cost/src/lib.rs`](../../crates/cost/src/lib.rs)).
 
 ---
 

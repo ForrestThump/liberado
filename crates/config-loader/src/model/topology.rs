@@ -63,6 +63,12 @@ pub struct Topology {
     /// session's authority is `capabilities_for(<domain>)`.
     #[serde(default)]
     pub session_profiles: Vec<SessionProfile>,
+    /// Declared coding project roots (coding-tui S3 / G4). A coding goal may only touch a path that
+    /// resolves inside one of these; undeclared directories are refused (fail-closed). Empty means no
+    /// real repo is authorized — only ephemeral temp workspaces (no `project` / `workspace_root`
+    /// in the goal payload) remain allowed.
+    #[serde(default)]
+    pub projects: Vec<ProjectConfig>,
     /// How the conversational main agent presents itself and which tools it sees.
     /// Default: human-interfacer + built-in `delegate` tool (specialist MCPs stay on the dispatcher).
     pub main_agent: MainAgentConfig,
@@ -395,6 +401,7 @@ impl Default for Topology {
             schedules: Vec::new(),
             pools: Vec::new(),
             session_profiles: Vec::new(),
+            projects: Vec::new(),
             main_agent: MainAgentConfig::default(),
             webui: WebUiConfig::default(),
             roles: HashMap::new(),
@@ -476,6 +483,32 @@ pub struct PoolConfig {
     pub name: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+/// A declared **coding project** (coding-tui S3 / G4) — an authorized workspace root.
+///
+/// The human typing `/goal in <name>` is the authorization *moment*; this config entry is the
+/// authorization *fact*. Undeclared paths are refused for coding sessions (`PolicyDenied`), the
+/// same fail-safe default the zone model uses for unlisted vault zones.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectConfig {
+    /// Stable id used by `/goal in <name>` and `payload.project`.
+    pub name: String,
+    /// Absolute filesystem root the coding pack may use as `workspace_root` (or a subdirectory of).
+    pub root: PathBuf,
+    /// Whether agents may write directly under this root. Coding sessions require
+    /// [`WriteClass::AgentWritable`] (or [`WriteClass::Shared`]); [`WriteClass::ProposalOnly`]
+    /// (and human-only) refuse the session at start — a coding loop that cannot write is useless.
+    #[serde(default = "default_project_write_class")]
+    pub write_class: liberado_common::WriteClass,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_project_write_class() -> liberado_common::WriteClass {
+    // Declaring a project is an explicit allow; default to direct agent writes so operators are not
+    // surprised by a listed project that still refuses every coding goal.
+    liberado_common::WriteClass::AgentWritable
 }
 
 /// A named **session profile** (session-focus S6) — "run this pack wearing this hat".

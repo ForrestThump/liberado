@@ -3609,6 +3609,7 @@ dependencies = [
 name = "liberado-cost"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "liberado-common",
  "liberado-config-loader",
  "liberado-provider",

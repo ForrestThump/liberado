@@ -6,7 +6,7 @@
 //! Conflating those is what made the ask seam unreachable from the case that most needed it.
 
 use liberado_coder_core::{
-    CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask, GoalContract,
+    CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask, CodingMode, GoalContract,
     LIBERADO_LOOP_BACKEND, ProgressPolicy, SandboxSpec, WorkspaceRef,
 };
 use liberado_common::Outcome;
@@ -34,18 +34,6 @@ fn is_stuck(e: &liberado_coder_core::CoderError) -> bool {
     matches!(e, CoderError::NoChanges | CoderError::Validation(_))
 }
 
-/// Make a freshly-created session workspace its **own** git repo.
-///
-/// Without this, a workspace created under the daemon's data dir (`.liberado/…`, which is a
-/// *relative* path and so usually sits inside the user's own checkout) is not a repo, and every git
-/// command run there — `git status` for `files_changed`, the coder's `git_diff` tool, a
-/// `git_nonempty_diff` verifier — silently resolves against the **enclosing** repo instead. The
-/// session would then report, and be graded on, changes it never made.
-///
-/// Best-effort: a workspace that is already a repo (the dogfood case, where the caller passes a real
-/// checkout) never reaches here, and a git failure just leaves things as they were.
-/// Whether `dir` is a git repository (or worktree). Used to decide whether to enable
-/// worktree-isolated sandboxing.
 /// Whether `dir` is inside a git working tree — **not** merely whether it is a repo *root*.
 ///
 /// `dir.join(".git").exists()` only answers for a root. A workspace pointed at a subdirectory of an
@@ -61,10 +49,12 @@ fn is_git_repo(dir: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Initialize `dir` as a git repo if it is not already one — a workspace without version control
-/// cannot report what the worker changed, so the worker would be asked to test something it has
-/// never seen done, and the verifier would grade the parent workspace (which the worker did not
-/// touch) rather than the child it did. The gap where a freshly-initialised repo sat empty so the
+/// Make a freshly-created session workspace its **own** git repo.
+///
+/// Without this, a workspace created under the daemon's data dir (`.liberado/…`, which is a
+/// *relative* path and so usually sits inside the user's own checkout) is not a repo, and every git
+/// command run there — `git status` for `files_changed`, the coder's `git_diff` tool, a
+/// `git_nonempty_diff` verifier — silently resolves against the **enclosing** repo instead. The
 /// session would then report, and be graded on, changes it never made.
 ///
 /// Best-effort: a workspace that is already a repo (the dogfood case, where the caller passes a real
@@ -148,16 +138,24 @@ impl CodingSessionPack {
             .unwrap_or("session-coder")
             .to_string();
 
-        // Path/command policy from profile overrides + payload (explore = read-only preset).
+        // Path/command policy from profile overrides + payload (plan and explore are presets).
         let policies = WorkspacePolicies::resolve(ctx.overrides(), &goal.payload);
         let prompt = policies.coder_prompt(
             &goal.payload,
             "You are Liberado's coding worker. Inspect, edit with tools, then submit_report.",
         );
 
-        let max_turns = if goal.max_turns > 0 {
+        let max_turns = if policies.plan_mode() {
+            // Plans are short; keep the bound tight so a looping planner cannot burn a full build
+            // budget. Cap an explicit max_turns from a direct API call too.
+            if goal.max_turns > 0 {
+                8.min(goal.max_turns)
+            } else {
+                8
+            }
+        } else if goal.max_turns > 0 {
             goal.max_turns
-        } else if policies.explore_mode {
+        } else if policies.explore_mode() {
             // Exploration is bounded research, not a long build.
             10
         } else {
@@ -186,7 +184,7 @@ impl CodingSessionPack {
 
         // Explore is read-only: HostLocal is enough (no worktree isolation required for readers).
         // Build mode still uses Worktree when the workspace is a git repo (C7).
-        let sandbox = if policies.explore_mode {
+        let sandbox = if policies.explore_mode() {
             SandboxSpec::HostLocal
         } else if is_git_repo(&workspace) {
             SandboxSpec::Worktree
@@ -204,8 +202,9 @@ impl CodingSessionPack {
                 coder: role.clone(),
                 critic: disabled,
                 gate: liberado_coder_core::CoderGateConfig::default(),
-                // Explore: no repair loop mutating the tree.
-                repair: if policies.explore_mode {
+                // Neither restricted tier gets a repair loop: explore must not mutate the tree at
+                // all, and plan mode is one pass to the plan file.
+                repair: if policies.mode.is_restricted() {
                     None
                 } else {
                     Some(role)
@@ -217,18 +216,19 @@ impl CodingSessionPack {
                 verify_policy: Default::default(),
                 path_policy: policies.path_policy.clone(),
                 progress: ProgressPolicy {
-                    max_attempts: if policies.explore_mode { 1 } else { 2 },
+                    max_attempts: if policies.mode.is_restricted() { 1 } else { 2 },
                     // Explore mode is exclusively read-only tools — the progress guard's
                     // read_only_turn_limit and same_tool_limit would trigger false
                     // ReadOnlyStall / SameToolChurn fatals because every explore tool is
                     // classified as non-mutating. Disable the guard so max_turns is the
-                    // only bound.
-                    read_only_turn_limit: if policies.explore_mode {
+                    // only bound. Plan mode keeps the guard: it is expected to *write* the
+                    // plan file, so a run that never writes really has stalled.
+                    read_only_turn_limit: if policies.explore_mode() {
                         u32::MAX
                     } else {
                         ProgressPolicy::default().read_only_turn_limit
                     },
-                    same_tool_limit: if policies.explore_mode {
+                    same_tool_limit: if policies.explore_mode() {
                         u32::MAX
                     } else {
                         ProgressPolicy::default().same_tool_limit
@@ -241,13 +241,22 @@ impl CodingSessionPack {
             strategist_directive: None,
         };
 
-        if policies.explore_mode {
+        // Announce a restricted tier so the human sees why the session cannot write or shell out.
+        let mode_notice = match policies.mode {
+            CodingMode::Normal => None,
+            CodingMode::Plan => Some(format!(
+                "plan mode: writes limited to {}; shell disabled",
+                liberado_coder_core::PLAN_ARTIFACT_REL
+            )),
+            CodingMode::Explore => {
+                Some("explore mode: read-only tools; writes and shell disabled".to_string())
+            }
+        };
+        if let Some(message) = mode_notice {
             let _ = events
                 .send(SessionEvent::new(
                     session_id,
-                    SessionEventKind::Progress {
-                        message: "explore mode: read-only tools; writes and shell disabled".into(),
-                    },
+                    SessionEventKind::Progress { message },
                 ))
                 .await;
         }

@@ -24,15 +24,42 @@ vault_path = "/home/shiloh/vault"
 # needs to hold *deltas* — you don't have to redeclare deepseek/openrouter just to select one.
 # provider = "deepseek"
 
-# Coding explore (read-only subagent): `/explore <text>` or goal payload `explore_mode = true`.
-# Uses PathPolicy::read_only() + CommandPolicy::none_allowed() + a filtered tool catalog — no
-# parallel permission system. Optional profile that always explores:
+# Coding project roots (coding-tui S3 / G4). A coding goal may only touch a path under one of these;
+# undeclared directories are refused (fail-closed). `/goal in <name>` picks by `name`; the daemon
+# injects the absolute `workspace_root` before the coding pack runs. Roots must be absolute.
+# write_class: "agent_writable" (default) | "proposal_only" | "human_only" | "shared".
+# Coding sessions require agent_writable (or shared); proposal_only entries list but refuse starts.
+#
+# [[projects]]
+# name = "liberado"
+# root = "/home/shiloh/Code/life-os"
+# write_class = "agent_writable"
+#
+# [[projects]]
+# name = "notes-site"
+# root = "/home/shiloh/Code/notes-site"
+
+# Coding modes. Each is a preset over the existing path/command policy — not a separate permission
+# system — selected by the goal payload `mode` ("plan" | "explore"), or by the older
+# `plan_mode` / `explore_mode` booleans. No extra topology is required to use them:
+#
+#   /plan <text>     writes only `.liberado/plan.md`, no shell   (PathPolicy::plan_mode())
+#   /explore <text>  no writes at all, read-only tool catalog     (PathPolicy::read_only())
+#
+# When both a profile and a payload name a mode, the stricter one wins — restriction never relaxes.
+# Optional profiles that always start in a given mode:
+#
+# [[session_profiles]]
+# name = "coding-plan"
+# domain = "coding"
+# [session_profiles.overrides]
+# mode = "plan"
 #
 # [[session_profiles]]
 # name = "coding-explore"
 # domain = "coding"
 # [session_profiles.overrides]
-# explore_mode = true
+# mode = "explore"
 
 # Main chat agent = human interfacer. Specialist work goes through the built-in `delegate` tool
 # to the dispatcher mesh (grant ExecuteMcp specialists to component `dispatcher` in policy.toml).

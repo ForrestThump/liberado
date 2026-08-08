@@ -1,3 +1,5 @@
+use crate::commands::CodingGoalMode;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandResult {
     Quit,
@@ -59,15 +61,16 @@ pub enum CommandResult {
         domain: String,
         goal: String,
     },
-    /// Start a **coding** goal session (`/goal <text>` or `/explore <text>`). Distinct from
+    /// Start a **coding** goal session (`/goal`, `/plan`, or `/explore`). Distinct from
     /// `SpawnGoalSession`: that one takes a domain/profile token from the human, while this one is
     /// always the coding pack and carries a project instead. `project` is `None` when the surface
-    /// should use its current project context. `explore_mode` selects the read-only tool preset.
+    /// should use its current project context.
     StartCodingGoal {
         project: Option<String>,
         text: String,
-        /// When true, payload includes `explore_mode: true` (read-only PathPolicy + catalog).
-        explore_mode: bool,
+        /// `None` for a plain `/goal` (full write access). `Some(mode)` sends that mode in the
+        /// payload, and the pack turns it into the matching path/command policy preset.
+        mode: Option<CodingGoalMode>,
     },
     /// Open the goal view for the focused session (bare `/goal`).
     OpenGoalView,
