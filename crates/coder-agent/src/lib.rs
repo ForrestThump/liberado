@@ -358,8 +358,7 @@ impl LiberadoLoopBackend {
         let provider = self
             .providers
             .provider_for(worker_role_name, worker_config)?;
-        let mut instructions =
-            roles::role_instructions(worker_config, worker_role_name).await?;
+        let mut instructions = roles::role_instructions(worker_config, worker_role_name).await?;
         if request.config.hashline.enabled {
             instructions.push_str(&liberado_coder_tools::hashline_prompt_guidance(
                 request.config.hashline.hash_length,
@@ -809,9 +808,8 @@ mod tests {
             enabled: true,
             hash_length: 6,
         };
-        request.config.coder.prompt = Some(
-            "You are a coding agent. Use tools then submit_report.".into(),
-        );
+        request.config.coder.prompt =
+            Some("You are a coding agent. Use tools then submit_report.".into());
 
         let result = backend.run(request).await.unwrap();
         assert_eq!(result.outcome, Outcome::Succeeded);
@@ -1584,12 +1582,7 @@ __main__) intact.\n"
         request.config.progress.event_preview_max_chars = 2_000;
         request.config.progress.max_attempts = 2;
         request.config.progress.read_only_turn_limit = 6;
-        request.config.trace_dir = Some(
-            dir.path()
-                .join("traces")
-                .to_string_lossy()
-                .into_owned(),
-        );
+        request.config.trace_dir = Some(dir.path().join("traces").to_string_lossy().into_owned());
         request.config.verifiers = vec![VerifierSpec::ContentContains {
             id: "hi-fstring".into(),
             path: "greet.py".into(),
@@ -1604,10 +1597,7 @@ __main__) intact.\n"
 
         eprintln!(
             "hashline live smoke: outcome={:?} summary={} files={:?} diagnostics={}",
-            result.outcome,
-            result.summary,
-            result.files_changed,
-            result.diagnostics
+            result.outcome, result.summary, result.files_changed, result.diagnostics
         );
         if let Some(path) = &result.trace_path {
             eprintln!("trace: {path}");
@@ -1615,9 +1605,7 @@ __main__) intact.\n"
                 // Surface whether the model actually used hashline tools.
                 let used_hashline = raw.contains("hashline_edit");
                 let used_read = raw.contains("\"read_file\"") || raw.contains("read_file");
-                eprintln!(
-                    "trace tool hints: hashline_edit={used_hashline} read_file={used_read}"
-                );
+                eprintln!("trace tool hints: hashline_edit={used_hashline} read_file={used_read}");
                 // Print tool names from events for diagnosis.
                 for line in raw.lines().take(80) {
                     if line.contains("ToolStarted")

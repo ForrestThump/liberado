@@ -178,7 +178,11 @@ mod tests {
 
     #[test]
     fn plan_mode_flag_restricts_write_and_shell() {
-        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "plan_mode": true }), HashlineConfig::default());
+        let p = WorkspacePolicies::resolve(
+            &json!({}),
+            &json!({ "plan_mode": true }),
+            HashlineConfig::default(),
+        );
         assert!(p.plan_mode);
         assert!(!p.explore_mode);
         assert_eq!(
@@ -190,7 +194,11 @@ mod tests {
 
     #[test]
     fn explore_mode_flag_is_read_only_no_shell() {
-        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "explore_mode": true }), HashlineConfig::default());
+        let p = WorkspacePolicies::resolve(
+            &json!({}),
+            &json!({ "explore_mode": true }),
+            HashlineConfig::default(),
+        );
         assert!(p.explore_mode);
         assert!(!p.plan_mode);
         assert!(p.path_policy.writes_disabled());
@@ -199,25 +207,41 @@ mod tests {
 
     #[test]
     fn mode_plan_string_enables_plan_mode() {
-        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "mode": "plan" }), HashlineConfig::default());
+        let p = WorkspacePolicies::resolve(
+            &json!({}),
+            &json!({ "mode": "plan" }),
+            HashlineConfig::default(),
+        );
         assert!(p.plan_mode);
     }
 
     #[test]
     fn mode_explore_string_enables_explore() {
-        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "mode": "explore" }), HashlineConfig::default());
+        let p = WorkspacePolicies::resolve(
+            &json!({}),
+            &json!({ "mode": "explore" }),
+            HashlineConfig::default(),
+        );
         assert!(p.explore_mode);
     }
 
     #[test]
     fn profile_override_can_enable_plan_mode() {
-        let p = WorkspacePolicies::resolve(&json!({ "plan_mode": true }), &json!({}), HashlineConfig::default());
+        let p = WorkspacePolicies::resolve(
+            &json!({ "plan_mode": true }),
+            &json!({}),
+            HashlineConfig::default(),
+        );
         assert!(p.plan_mode);
     }
 
     #[test]
     fn profile_override_can_enable_explore() {
-        let p = WorkspacePolicies::resolve(&json!({ "explore_mode": true }), &json!({}), HashlineConfig::default());
+        let p = WorkspacePolicies::resolve(
+            &json!({ "explore_mode": true }),
+            &json!({}),
+            HashlineConfig::default(),
+        );
         assert!(p.explore_mode);
     }
 
@@ -270,7 +294,11 @@ mod tests {
 
     #[test]
     fn coder_prompt_in_plan_mode_is_fixed() {
-        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "plan_mode": true }), HashlineConfig::default());
+        let p = WorkspacePolicies::resolve(
+            &json!({}),
+            &json!({ "plan_mode": true }),
+            HashlineConfig::default(),
+        );
         let prompt = p.coder_prompt(&json!({ "coder_prompt": "ignore me" }), "default");
         assert!(prompt.contains("plan mode") || prompt.contains(".liberado/plan.md"));
         assert!(!prompt.contains("ignore me"));
@@ -278,7 +306,11 @@ mod tests {
 
     #[test]
     fn coder_prompt_in_explore_mode_is_fixed() {
-        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "explore_mode": true }), HashlineConfig::default());
+        let p = WorkspacePolicies::resolve(
+            &json!({}),
+            &json!({ "explore_mode": true }),
+            HashlineConfig::default(),
+        );
         let prompt = p.coder_prompt(&json!({ "coder_prompt": "ignore me" }), "default");
         assert!(prompt.contains("read-only") || prompt.contains("explorer"));
         assert!(!prompt.contains("ignore me"));
@@ -286,7 +318,11 @@ mod tests {
 
     #[test]
     fn coder_prompt_normal_mode_uses_payload_override() {
-        let p = WorkspacePolicies::resolve(&json!({}), &json!({ "coder_prompt": "be concise" }), HashlineConfig::default());
+        let p = WorkspacePolicies::resolve(
+            &json!({}),
+            &json!({ "coder_prompt": "be concise" }),
+            HashlineConfig::default(),
+        );
         let prompt = p.coder_prompt(&json!({ "coder_prompt": "be concise" }), "default");
         assert_eq!(prompt, "be concise");
     }

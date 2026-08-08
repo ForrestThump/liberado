@@ -56,6 +56,32 @@ pub struct CoderTuning {
     /// `[tuning.coder.hashline]` — line-anchored hashline edit mode (default off).
     #[serde(default)]
     pub hashline: HashlineConfig,
+    /// `[tuning.coder.repo_map]` — Aider-style repository map for cold-start context.
+    #[serde(default)]
+    pub repo_map: RepoMapConfig,
+}
+
+/// Configuration for the Aider-style repository map feature.
+/// Lives under `[tuning.coder.repo_map]` in tuning.toml.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RepoMapConfig {
+    /// Enable the repo map.  When false the feature is completely off.
+    pub enabled: bool,
+    /// Approximate token budget for the rendered map (in tokens).
+    pub max_map_tokens: usize,
+    /// Skip the map entirely when the workspace has fewer than this many source files.
+    pub min_source_files: usize,
+}
+
+impl Default for RepoMapConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_map_tokens: 1024,
+            min_source_files: 20,
+        }
+    }
 }
 
 impl CoderTuning {
@@ -187,6 +213,7 @@ impl Default for CoderTuning {
             path_policy: PathPolicy::default(),
             progress: ProgressPolicy::default(),
             hashline: HashlineConfig::default(),
+            repo_map: RepoMapConfig::default(),
         }
     }
 }
@@ -516,5 +543,86 @@ mod tests {
             max_turns: None,
         };
         assert!(validate_single_shot_role("x", &bad).is_err());
+    }
+
+    #[test]
+    fn repo_map_config_serde_disabled() {
+        let value: toml::Value = toml::from_str(
+            r#"
+            enabled = false
+            max_map_tokens = 500
+            min_source_files = 50
+            "#,
+        )
+        .unwrap();
+        let cfg: RepoMapConfig = value.try_into().unwrap();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.max_map_tokens, 500);
+        assert_eq!(cfg.min_source_files, 50);
+    }
+
+    #[test]
+    fn repo_map_absent_in_tuning_uses_defaults() {
+        let value: toml::Value = toml::from_str(
+            r#"
+            [coder]
+            model = "test"
+            prompt = "p"
+            max_turns = 1
+            "#,
+        )
+        .unwrap();
+        let tuning = CoderTuning::from_value(Some(&value)).unwrap();
+        assert!(tuning.repo_map.enabled);
+        assert_eq!(tuning.repo_map.max_map_tokens, 1024);
+        assert_eq!(tuning.repo_map.min_source_files, 20);
+    }
+
+    #[test]
+    fn validation_rejects_planner_zero_max_turns() {
+        let mut tuning = CoderTuning::default();
+        tuning.planner.max_turns = Some(0);
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("tuning.coder.planner.max_turns"));
+    }
+
+    #[test]
+    fn validation_rejects_critic_zero_max_turns() {
+        let mut tuning = CoderTuning::default();
+        tuning.critic.max_turns = Some(0);
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("tuning.coder.critic.max_turns"));
+    }
+
+    #[test]
+    fn validation_rejects_repair_bad_model() {
+        let mut tuning = CoderTuning::default();
+        tuning.repair = Some(CoderRoleConfig {
+            model: String::new(),
+            prompt_path: None,
+            prompt: None,
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        });
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("tuning.coder.repair.model"));
+    }
+
+    #[test]
+    fn validation_rejects_gate_fresh_invalid() {
+        let mut tuning = CoderTuning::default();
+        tuning.gate.enabled = true;
+        tuning.gate.fresh_reviewers = 1;
+        tuning.gate.fresh = Some(CoderRoleConfig {
+            model: String::new(),
+            prompt_path: None,
+            prompt: None,
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        });
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("tuning.coder.gate.fresh.model"));
     }
 }

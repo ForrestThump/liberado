@@ -314,6 +314,13 @@ pub trait ToolRuntime: Send + Sync {
     /// errors (which abort the whole loop) for infrastructure faults, by surfacing them through the
     /// runtime's own state rather than here.
     async fn invoke(&self, call: &ToolInvocation) -> Result<String, String>;
+
+    /// Whether a tool is safe to run concurrently with other tool calls in the same turn.
+    /// Read-only tools (file reads, searches, git inspection) return true.
+    /// Default: false (conservative — treat every tool as potentially stateful).
+    fn is_read_only(&self, _tool_name: &str) -> bool {
+        false
+    }
 }
 
 /// Failure building a [`ToolRuntime`] for an execution (connection/handshake/etc.).
@@ -873,37 +880,33 @@ impl Executor {
                 }
             }
 
-            // Process every tool call in this turn *before* doom/cycle escalations that jump to
-            // the next provider call. OpenAI-compat providers require one tool-result message per
-            // `tool_call_id` after an assistant tool_calls message (dogfood D3, 01KX7AGD).
+            // --- pre-pass: special-case tools (in-process, never reach ToolRuntime) ---
             let mut submitted_report: Option<Report> = None;
             let mut doom_hit: Option<String> = None;
             let mut cycle_hit: Option<Vec<String>> = None;
+
+            // The arms are mutually exclusive on purpose: OpenAI-compat providers require exactly
+            // one tool-result message per `tool_call_id` (dogfood D3, 01KX7AGD), so a call that
+            // matches two categories — a scratchpad update arriving while the wrap-up reserve is
+            // running — must be answered once, by the first arm that claims it. Precedence is the
+            // same order the single-pass loop used before the read/write split: finish, then the
+            // wrap-up refusal, then the scratchpad.
             for call in &response.tool_calls {
                 if call.name == SUBMIT_REPORT_TOOL {
                     tracing::info!(turn, "subagent filed report");
-                    // Still emit a tool result so the transcript is well-formed if we ever
-                    // re-use `messages` after this; then stop after the batch.
                     messages.push(Message::tool_result(
                         &call.id,
                         "report accepted".to_string(),
                     ));
                     match serde_json::from_value::<Report>(call.arguments.clone()) {
-                        // `repeat_calls` is stamped at the return site below, not here. This arm
-                        // runs *before* the counting block for the rest of the batch, so a model
-                        // that emits `submit_report` ahead of another repeated call in the same
-                        // response would otherwise file a count short by those calls.
                         Ok(report) => submitted_report = Some(report),
                         Err(e) => return Err(ExecError::Decode(e.to_string())),
                     }
-                    continue;
-                }
-                // Withdrawing a tool from the offered catalog only changes what the model is
-                // *shown*; nothing stops it calling a name it still remembers from earlier turns.
-                // During the wrap-up reserve that distinction matters, because the whole point is
-                // that the extra turns cannot buy more work — so refuse the call outright and say
-                // why, rather than quietly running it.
-                if wrapping_up {
+                } else if wrapping_up {
+                    // Withdrawing a tool from the offered catalog only changes what the model is
+                    // *shown*; nothing stops it calling a name it still remembers from earlier
+                    // turns. During the reserve that distinction matters — the whole point is that
+                    // the extra turns cannot buy more work — so refuse outright and say why.
                     tracing::debug!(turn, tool = %call.name, "refused a tool call during wrap-up");
                     messages.push(Message::tool_result(
                         &call.id,
@@ -913,29 +916,77 @@ impl Executor {
                             call.name, SUBMIT_REPORT_TOOL
                         ),
                     ));
-                    continue;
-                }
-                // Engine-injected, like `submit_report` above: handled in-process, never reaches
-                // `ToolRuntime`, and — deliberately, before `call_history.push` below — never
-                // enters doom-loop/cycle tracking. Legitimate scratchpad usage (update after a
-                // real tool call, repeated; several updates in a row while planning) would
-                // otherwise misfire both guards (see `liberado-scratchpad`'s module docs).
-                if let Some(pad) = scratchpad
+                } else if let Some(pad) = scratchpad
                     && call.name == SCRATCHPAD_TOOL
                 {
+                    // Engine-injected, like `submit_report`: handled in-process, never reaches
+                    // `ToolRuntime`, and — deliberately — never enters doom-loop/cycle tracking.
+                    // Legitimate scratchpad usage would otherwise misfire both guards.
                     let result = pad.apply(&call.arguments);
                     messages.push(Message::tool_result(&call.id, result));
-                    continue;
                 }
+            }
+
+            // --- partition remaining regular tools into read/write ---
+            let regular: Vec<_> = response
+                .tool_calls
+                .iter()
+                .filter(|c| {
+                    c.name != SUBMIT_REPORT_TOOL && c.name != SCRATCHPAD_TOOL && !wrapping_up
+                })
+                .collect();
+
+            let (reads, writes): (Vec<_>, Vec<_>) =
+                regular.iter().partition(|c| runtime.is_read_only(&c.name));
+
+            // Run read-only tools concurrently.
+            if !reads.is_empty() {
+                let futures: Vec<_> = reads
+                    .iter()
+                    .map(|call: &&ToolInvocation| {
+                        let call = (*call).clone();
+                        async move {
+                            let id = call.id.clone();
+                            let tool_span = tracing::debug_span!(
+                                "tool_call",
+                                name = %call.name,
+                                id = %id
+                            );
+                            let result =
+                                async { run_tool(runtime, &call).await }.instrument(tool_span);
+                            (id, result.await)
+                        }
+                    })
+                    .collect();
+                let read_results = futures::future::join_all(futures).await;
+                for (id, result) in read_results {
+                    let call = response.tool_calls.iter().find(|c| c.id == id).unwrap();
+                    call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
+                    if call_history[..call_history.len() - 1]
+                        .iter()
+                        .any(|(n, a, _)| n == &call.name && a == &call.arguments)
+                    {
+                        repeat_calls += 1;
+                    }
+                    messages.push(Message::tool_result(&call.id, result));
+                }
+                if doom_hit.is_none() && is_doom_loop(&call_history, policy.loop_profile) {
+                    doom_hit = Some("(read batch)".to_string());
+                }
+                if cycle_hit.is_none()
+                    && let Some(cycling) = detect_short_cycle(&call_history)
+                {
+                    cycle_hit = Some(cycling);
+                }
+            }
+
+            // Run write tools serially.
+            for call in writes {
                 let tool_span = tracing::debug_span!("tool_call", name = %call.name, id = %call.id);
                 let result = async { run_tool(runtime, call).await }
                     .instrument(tool_span)
                     .await;
                 call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
-                // Byte-exact matching: tool name + arguments identical to any earlier call in
-                // this run. `serde_json::Value::PartialEq` is structural (key-order-agnostic for
-                // objects), which is correct here — the model sees the same schema each turn and
-                // the point is identical *arguments*, not identical serialization bytes.
                 if call_history[..call_history.len() - 1]
                     .iter()
                     .any(|(n, a, _)| n == &call.name && a == &call.arguments)
@@ -943,7 +994,6 @@ impl Executor {
                     repeat_calls += 1;
                 }
                 messages.push(Message::tool_result(&call.id, result));
-
                 if doom_hit.is_none() && is_doom_loop(&call_history, policy.loop_profile) {
                     doom_hit = Some(call.name.clone());
                 }
@@ -1462,6 +1512,7 @@ fn cycle_failed_report() -> Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use liberado_provider::{CompletionResponse, MockProvider};
     use std::sync::Mutex;
 
@@ -2893,6 +2944,53 @@ mod tests {
         assert!(runtime.invoked().is_empty());
     }
 
+    /// One `tool_result` per `tool_call_id`, even when the wrap-up reserve is running.
+    ///
+    /// OpenAI-compat providers reject an assistant `tool_calls` message answered by two results
+    /// carrying the same id (dogfood D3, 01KX7AGD). A scratchpad call that arrives while
+    /// `wrapping_up` is set matches both the wrap-up refusal and the scratchpad handler, so this
+    /// pins that only one of them may answer it.
+    #[tokio::test]
+    async fn scratchpad_during_wrap_up_emits_exactly_one_tool_result() {
+        let (provider, exec) = executor(
+            vec![
+                // Spends the 1-call budget, so the reserve is granted for the next turn.
+                call_tool("search"),
+                // Arrives while the reserve is running.
+                CompletionResponse::tool_calls(vec![scratchpad_call(
+                    "sp-wrap",
+                    serde_json::json!([{"content": "step one", "status": "in_progress"}]),
+                )]),
+                submit(serde_json::json!({
+                    "outcome": "partially_succeeded",
+                    "summary": "wrapped up",
+                    "artifacts": [],
+                })),
+            ],
+            Budget::new(1),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+
+        exec.execute(
+            &runtime,
+            Task::new("worker", "research everything").salvageable(true),
+        )
+        .await
+        .unwrap();
+
+        let requests = provider.received_requests();
+        let last = requests.last().expect("at least one request");
+        let answers = last
+            .messages
+            .iter()
+            .filter(|m| m.tool_call_id.as_deref() == Some("sp-wrap"))
+            .count();
+        assert_eq!(
+            answers, 1,
+            "exactly one tool_result may answer tool_call_id `sp-wrap`, got {answers}"
+        );
+    }
+
     #[tokio::test]
     async fn scratchpad_result_is_fed_back_as_a_tool_result() {
         let (provider, exec) = executor(
@@ -3254,6 +3352,100 @@ mod tests {
         assert_eq!(
             report.repeat_calls, 1,
             "the repeat trailing submit_report in the same batch must be counted"
+        );
+    }
+
+    // ── parallel read-only execution ──────────────────────────────────
+
+    struct ReadOnlyAwareRuntime {
+        inner: MockToolRuntime,
+        read_only_tools: Vec<String>,
+    }
+
+    #[async_trait]
+    impl ToolRuntime for ReadOnlyAwareRuntime {
+        fn catalog(&self) -> Vec<ToolDef> {
+            self.inner.catalog()
+        }
+        fn is_read_only(&self, tool_name: &str) -> bool {
+            self.read_only_tools.contains(&tool_name.to_string())
+        }
+        async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
+            self.inner.invoke(call).await
+        }
+    }
+
+    #[tokio::test]
+    async fn parallel_read_retains_tool_invocation_order_in_request() {
+        let (provider, exec) = executor(
+            vec![
+                CompletionResponse::tool_calls(vec![
+                    ToolInvocation::new("c", "read_file", serde_json::json!({"path": "a.txt"})),
+                    ToolInvocation::new("c", "search_text", serde_json::json!({"query": "x"})),
+                ]),
+                submit(valid_report_args()),
+            ],
+            Budget::default(),
+        );
+        let runtime = ReadOnlyAwareRuntime {
+            inner: MockToolRuntime::new(&["read_file", "search_text"], Ok("data".into())),
+            read_only_tools: vec!["read_file".into(), "search_text".into()],
+        };
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do the thing"))
+            .await
+            .unwrap();
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        let invoked = runtime.inner.invoked();
+        assert_eq!(invoked.len(), 2);
+    }
+
+    // ── converse_messages ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn converse_messages_returns_final_prose() {
+        let (_provider, exec) = executor(
+            vec![
+                call_tool("search"),
+                CompletionResponse::text("the answer is 42"),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+
+        let mut messages = vec![
+            Message::system("you are a helpful assistant"),
+            Message::user("what is it?"),
+        ];
+        let answer = exec
+            .converse_messages(&runtime, &mut messages)
+            .await
+            .unwrap();
+        assert_eq!(answer, "the answer is 42");
+        assert_eq!(messages.len(), 5);
+    }
+
+    // ── converse_stream budget exhaustion ────────────────────────────
+
+    #[tokio::test]
+    async fn converse_stream_errors_on_budget_exhaustion() {
+        let (_provider, exec) = executor(
+            vec![call_tool("search"), call_tool("search")],
+            Budget::new(1),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let (tx, _rx) = tokio::sync::mpsc::channel(64);
+
+        let mut messages = vec![Message::system("helper"), Message::user("find")];
+        let err = exec
+            .converse_stream(&runtime, &mut messages, &tx)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("BudgetExceeded") || msg.contains("turns"),
+            "got: {msg}"
         );
     }
 }

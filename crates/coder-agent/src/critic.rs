@@ -111,3 +111,60 @@ fn extract_json_object(text: &str) -> Option<&str> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_critic_verdict_acceptable() {
+        let v = parse_critic_verdict(r#"{"quality":"acceptable"}"#).unwrap();
+        assert_eq!(v, CriticVerdict::Acceptable);
+    }
+
+    #[test]
+    fn parse_critic_verdict_needs_revision() {
+        let v = parse_critic_verdict(r#"{"quality":"needs_revision","issues":["add more tests"]}"#)
+            .unwrap();
+        assert_eq!(
+            v,
+            CriticVerdict::NeedsRevision {
+                issues: vec!["add more tests".into()]
+            }
+        );
+    }
+
+    #[test]
+    fn parse_critic_verdict_fenced_json() {
+        let v = parse_critic_verdict("```json\n{\"quality\":\"acceptable\"}\n```").unwrap();
+        assert_eq!(v, CriticVerdict::Acceptable);
+    }
+
+    #[test]
+    fn parse_critic_verdict_malformed() {
+        let err = parse_critic_verdict("not json at all").unwrap_err();
+        assert!(err.contains("body="));
+    }
+
+    #[test]
+    fn extract_json_object_plain() {
+        let result = extract_json_object(r#"{"key":"val"}"#);
+        assert_eq!(result, Some(r#"{"key":"val"}"#));
+    }
+
+    #[test]
+    fn extract_json_object_embedded() {
+        let result = extract_json_object(r#"prefix{"key":"val"}suffix"#);
+        assert_eq!(result, Some(r#"{"key":"val"}"#));
+    }
+
+    #[test]
+    fn extract_json_object_no_braces() {
+        assert_eq!(extract_json_object("no braces at all"), None);
+    }
+
+    #[test]
+    fn extract_json_object_unbalanced() {
+        assert_eq!(extract_json_object(r#"{"open only"#), None);
+    }
+}
