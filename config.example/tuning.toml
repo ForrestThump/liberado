@@ -65,6 +65,27 @@
 # temperature = 0.1
 # max_turns = 8
 
+# --- Progress guard ----------------------------------------------------------------------------
+# Stops a run that inspects forever without editing anything. Both limits count TOOL CALLS, not
+# turns, and each escalates twice: a one-time nudge at the limit, then a hard stop at 2x. So the
+# real ceilings are double the numbers below.
+#
+# Tune these per repo. How many files a model must read before it can edit anything depends on how
+# far the change spans, and that is a property of the codebase, not of the guard. The shipped
+# defaults were 4/3 (hard stop at 8 inspect calls), which is fine for a single-file edit and far
+# too tight for anything crossing crates — a real task filed a complete implementation plan it had
+# no budget left to carry out, twice, reporting "blocked from making edits by the progress guard".
+#
+# Raising these is cheap. Genuine repetition — the same call over and over — is caught separately
+# and more precisely by the executor's argument-aware doom-loop and cycle guards, which fire on
+# calls that actually repeat rather than on inspection generally.
+# [coder.progress]
+# read_only_turn_limit = 20   # inspect calls with no successful edit; nudge at 20, stop at 40
+# same_tool_limit = 10        # same tool consecutively; nudge at 10, stop at 20
+# validation_repeat_limit = 2 # identical validate failures before the run is called stuck
+# max_attempts = 3            # attempts per task
+# event_preview_max_chars = 500
+
 # --- Completion gate (S1) --------------------------------------------------------------------
 # Replaces the single critic with a REMEMBERED gatekeeper plus a quorum of cold reviewers, so
 # "done" stops being the implementer's own claim. Deterministic verifiers still run first and are

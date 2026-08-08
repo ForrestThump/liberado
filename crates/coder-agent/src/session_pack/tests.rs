@@ -1139,6 +1139,94 @@ async fn the_configured_gate_reaches_the_backends_run_config() {
     );
 }
 
+/// `[tuning.coder.progress]` reaches the `CoderRunConfig` the pack hands the backend.
+///
+/// `CoderTuning` has carried a validated `progress` table since the guard was written, and this
+/// build path hardcoded `ProgressPolicy::default()`, so the one set of thresholds an operator most
+/// needs to adjust per repo could only be changed by editing Rust and recompiling. The limits
+/// govern how many inspect calls a task may spend before the guard declares a stall — which depends
+/// entirely on how many files the change spans, i.e. on the repo, not on the code.
+///
+/// Asserted against the recorded request, not the builder, for the reason the gate test gives.
+#[tokio::test]
+async fn the_configured_progress_policy_reaches_the_backends_run_config() {
+    use liberado_coder_core::ProgressPolicy;
+
+    async fn progress_seen_by_backend(configure: bool) -> ProgressPolicy {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let backend = Arc::new(ScriptedBackend {
+            seen: seen.clone(),
+            fail_attempts: 0,
+        });
+        let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+        let mut pack = CodingSessionPack::with_backend(backend, provider, std::env::temp_dir());
+        if configure {
+            pack = pack.with_progress(ProgressPolicy {
+                read_only_turn_limit: 37,
+                same_tool_limit: 19,
+                ..ProgressPolicy::default()
+            });
+        }
+
+        let (ev_tx, _ev_rx) = mpsc::channel::<SessionEvent>(64);
+        let (in_tx, in_rx) = mpsc::channel::<HumanInput>(16);
+        drop(in_tx);
+        let inputs = InputChannel::new(in_rx, None);
+        let (_c_tx, cancel) = tokio::sync::watch::channel(false);
+
+        let workspace = std::env::temp_dir().join(format!(
+            "liberado-progress-wire-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let mut g = goal("wire check");
+        g.payload = serde_json::json!({
+            "workspace_root": workspace.to_string_lossy(),
+            "intake": { "enabled": false },
+            "force_host_local": true,
+            "skip_preflight": true,
+        });
+
+        let store = Arc::new(liberado_session::GoalSessionStore::new());
+        let mut spec = g.clone();
+        spec.id = Some("prog1".into());
+        liberado_session::SessionRecordStore::insert(
+            store.as_ref(),
+            liberado_session::GoalSessionRecord::new(spec),
+        )
+        .await;
+        let grant = liberado_session::SessionGrant::default();
+        let ctx = PackContext::new(&grant, store.clone(), "prog1");
+
+        let _ = pack.run("prog1", &g, &ctx, ev_tx, inputs, cancel).await;
+        let requests = seen.lock().unwrap().clone();
+        let _ = std::fs::remove_dir_all(&workspace);
+        assert!(!requests.is_empty(), "backend was never invoked");
+        requests[0].config.progress.clone()
+    }
+
+    // Unconfigured keeps the code-owned defaults, so this changes reachability, not behaviour.
+    let unconfigured = progress_seen_by_backend(false).await;
+    assert_eq!(
+        unconfigured.read_only_turn_limit,
+        ProgressPolicy::default().read_only_turn_limit
+    );
+
+    let configured = progress_seen_by_backend(true).await;
+    assert_eq!(
+        configured.read_only_turn_limit, 37,
+        "a configured read_only_turn_limit must reach the backend, not be replaced by the default"
+    );
+    assert_eq!(
+        configured.same_tool_limit, 19,
+        "the whole table must survive, not just one field"
+    );
+}
+
 /// The configured `[coder.coder]` model and turn ceiling reach the run the backend is handed.
 ///
 /// The pack previously passed the literal `"session-coder"` — a name no provider resolves — and

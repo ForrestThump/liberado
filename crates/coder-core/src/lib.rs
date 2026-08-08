@@ -453,6 +453,10 @@ impl Default for CoderGateConfig {
 }
 
 /// Progress-loop thresholds. Values come from config; these defaults are only code-owned fallbacks.
+///
+/// Both limits count **tool calls, not turns** (`read_only_turn_limit` is misnamed), and each
+/// escalates twice: a one-time nudge at the limit, then a latched fatal at 2×. So the operative
+/// ceilings are double the numbers below.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProgressPolicy {
     pub read_only_turn_limit: u32,
@@ -465,8 +469,23 @@ pub struct ProgressPolicy {
 impl Default for ProgressPolicy {
     fn default() -> Self {
         Self {
-            read_only_turn_limit: 4,
-            same_tool_limit: 3,
+            // Was 4 (fatal at 8). Eight inspect calls is not enough to understand a change that
+            // spans crates: wiring one config field from `config-loader` through `server` into
+            // `daemon` meant reading five files and searching for their call sites, and the guard
+            // latched partway through. The model then filed a complete implementation plan it had
+            // no remaining budget to carry out — twice, in two independent runs, reporting
+            // "blocked from making edits by the progress guard". Exploration is the cheap part of
+            // a coding task; starving it does not produce edits, it produces plans.
+            //
+            // Runaway repetition is still caught, and caught better, by the executor's args-aware
+            // `is_doom_loop`/`detect_short_cycle` guards — those fire on calls that *repeat*, which
+            // is the actual pathology. This limit only needs to bound the pathological case those
+            // miss, so it can afford real headroom.
+            read_only_turn_limit: 20,
+            // Was 3 (fatal at 6). Reading six files in a row is ordinary orientation, not churn,
+            // and parallel batches count each call separately — a single batched read of six files
+            // tripped this on its own.
+            same_tool_limit: 10,
             validation_repeat_limit: 2,
             max_attempts: 3,
             event_preview_max_chars: 500,

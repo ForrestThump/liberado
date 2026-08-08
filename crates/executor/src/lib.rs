@@ -110,6 +110,14 @@ pub const WRAP_UP_TURNS: u32 = 3;
 /// two distinct tool calls scored 0/6 across two independent runs, even under system prompts that
 /// explicitly instructed both calls — the nudge's own wording was working against the prompt at
 /// exactly the moment it mattered, docs/roadmap/heuristics-tuning-engine-plan.md).
+/// How many times a run will hand a malformed `submit_report` back to the model before giving up.
+///
+/// Two, because the failure it guards is a schema slip the model corrects on being told (a missing
+/// `outcome` field), not a capability gap — and a model that has not produced the right shape twice
+/// will not find it on a third try. Every other tool error is already fed back in-band; this makes
+/// `submit_report` consistent with them instead of uniquely fatal.
+const MAX_MALFORMED_REPORTS: u32 = 2;
+
 const REPORT_NUDGE: &str = "If the goal isn't finished yet, continue by calling whatever tool you \
 still need — don't stop partway through a multi-step plan. Once it's actually done (or you \
 genuinely cannot proceed), call `submit_report` with your final result. Do not reply in plain text.";
@@ -739,6 +747,9 @@ impl Executor {
         // same serialised arguments). Tallying at the tool boundary rather than at call time so the
         // count survives every exit path (including the guard escalations) without extra plumbing.
         let mut repeat_calls: usize = 0;
+        // Malformed `submit_report` arguments are handed back to the model for correction rather
+        // than aborting the run; run-scoped so the bound is total, not per turn.
+        let mut malformed_reports: u32 = 0;
         // How much of `repeat_calls` has already been journaled, so each event carries only its own
         // share (see the delta comment at the completion call below).
         let mut reported_repeats: usize = 0;
@@ -893,13 +904,41 @@ impl Executor {
             // wrap-up refusal, then the scratchpad.
             for call in &response.tool_calls {
                 if call.name == SUBMIT_REPORT_TOOL {
-                    tracing::info!(turn, "subagent filed report");
-                    messages.push(Message::tool_result(
-                        &call.id,
-                        "report accepted".to_string(),
-                    ));
                     match serde_json::from_value::<Report>(call.arguments.clone()) {
-                        Ok(report) => submitted_report = Some(report),
+                        Ok(report) => {
+                            tracing::info!(turn, "subagent filed report");
+                            messages.push(Message::tool_result(
+                                &call.id,
+                                "report accepted".to_string(),
+                            ));
+                            submitted_report = Some(report);
+                        }
+                        // A malformed argument object is the model getting a schema slightly wrong,
+                        // which is exactly the class of mistake it can fix when told. Every *other*
+                        // tool failure is already fed back in-band; this one used to abort the whole
+                        // run, discarding completed work over a missing field (live: a coding run
+                        // ended at turn 12 on `missing field \`outcome\``). Hand it the error and let
+                        // it retry — but bound the retries, since a model that cannot produce the
+                        // shape will not discover it by repetition.
+                        Err(e) if malformed_reports < MAX_MALFORMED_REPORTS => {
+                            malformed_reports += 1;
+                            tracing::warn!(
+                                turn,
+                                attempt = malformed_reports,
+                                error = %e,
+                                "submit_report arguments did not match the Report schema; asking the model to correct them"
+                            );
+                            messages.push(Message::tool_result(
+                                &call.id,
+                                format!(
+                                    "`{SUBMIT_REPORT_TOOL}` was NOT accepted — your arguments did \
+                                     not match the required schema: {e}. Call it again with the \
+                                     full object: `outcome` (one of succeeded/partially_succeeded/\
+                                     failed) and `summary` are both required. Nothing else about \
+                                     your work is lost; only this call needs redoing."
+                                ),
+                            ));
+                        }
                         Err(e) => return Err(ExecError::Decode(e.to_string())),
                     }
                 } else if wrapping_up {
@@ -1342,29 +1381,54 @@ fn is_doom_loop(history: &[(String, serde_json::Value, String)], profile: LoopPr
         })
 }
 
-/// Whether the tool-name sequence at the tail of `history` is a short repeating cycle (period 2 or
-/// 3 — e.g. A,B,A,B or A,B,C,A,B,C). Exact tool-name match only, no argument comparison: see
-/// [`CYCLE_NUDGE`]'s doc comment for why that's an acceptable, deliberately simpler bar than
-/// `is_doom_loop`'s. Returns the distinct tool names participating in the cycle (so the caller can
-/// remove exactly those, not the whole catalog) rather than a bare bool.
+/// Whether the tail of `history` is a short repeating cycle (period 2 or 3 — e.g. A,B,A,B or
+/// A,B,C,A,B,C) *over the same arguments*. Returns the distinct tool names participating in the
+/// cycle (so the caller can remove exactly those, not the whole catalog) rather than a bare bool.
+///
+/// Matching tool names is necessary but **not** sufficient. `read_file(a)`, `search_text(x)`,
+/// `read_file(b)`, `search_text(y)` is what reading an unfamiliar codebase looks like: the names
+/// alternate, but every call names a different resource and every call makes progress. Requiring
+/// the positionally-corresponding arguments to be near-duplicates too — the same bar
+/// [`is_doom_loop`] already applies, via [`args_similarity`] and [`IDENTITY_ARG_KEYS`] — separates
+/// that from genuine thrash.
+///
+/// This was not academic: with names-only matching the guard fired on turn 4 of a 60-turn coding
+/// run, removed `read_file`/`search_text` for the rest of the task, and the model filed a complete
+/// implementation plan it had no remaining way to carry out ("blocked from making edits by the
+/// progress guard"). Period 2 needs only four calls, so *any* task requiring more than four
+/// alternating inspections was unreachable.
 ///
 /// A mono-tool streak (`read_note`×4 in one parallel batch) is **not** a cycle — period-2 would
 /// match `AAAA` as two copies of `AA`, which is a false positive that used to mid-batch-nudge and
 /// leave unanswered `tool_call_id`s (dogfood session `01KX7BWV`). Same-tool thrash is
-/// [`is_doom_loop`]'s job (args-aware).
+/// [`is_doom_loop`]'s job.
 fn detect_short_cycle(history: &[(String, serde_json::Value, String)]) -> Option<Vec<String>> {
-    let names: Vec<&str> = history.iter().map(|(name, ..)| name.as_str()).collect();
     for period in 2..=3 {
         let window = period * 2;
-        if names.len() < window {
+        if history.len() < window {
             continue;
         }
-        let tail = &names[names.len() - window..];
+        let tail = &history[history.len() - window..];
         let (first_half, second_half) = tail.split_at(period);
-        if first_half != second_half {
+        // Same tool in the same slot of both halves...
+        if !first_half
+            .iter()
+            .zip(second_half)
+            .all(|((a_name, ..), (b_name, ..))| a_name == b_name)
+        {
             continue;
         }
-        let mut distinct: Vec<String> = first_half.iter().map(|s| s.to_string()).collect();
+        // ...called on the same thing. A single distinct target means the model is still moving.
+        if !first_half
+            .iter()
+            .zip(second_half)
+            .all(|((_, a_args, _), (_, b_args, _))| {
+                args_similarity(a_args, b_args) >= ARG_SIMILARITY_THRESHOLD
+            })
+        {
+            continue;
+        }
+        let mut distinct: Vec<String> = first_half.iter().map(|(name, ..)| name.clone()).collect();
         distinct.sort_unstable();
         distinct.dedup();
         // Require a real multi-tool pattern, not "the same tool N times in a row".
@@ -1903,11 +1967,38 @@ mod tests {
         assert!(report.summary.contains("3 hits"), "{}", report.summary);
     }
 
+    /// A schema slip is correctable, so the run continues instead of throwing the work away.
+    ///
+    /// Live failure this encodes: a coding run reached turn 12, called `submit_report` with
+    /// `outcome` missing, and the whole run aborted — every edit and every read discarded over one
+    /// absent field.
     #[tokio::test]
-    async fn malformed_submit_report_args_is_a_decode_error() {
-        // Missing the required `summary` field.
+    async fn malformed_submit_report_is_handed_back_and_the_retry_is_accepted() {
         let (_provider, exec) = executor(
-            vec![submit(serde_json::json!({ "outcome": "succeeded" }))],
+            vec![
+                // Missing the required `summary` field.
+                submit(serde_json::json!({ "outcome": "succeeded" })),
+                submit(valid_report_args()),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .expect("a corrected report should be accepted");
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+    }
+
+    /// The retry is bounded — a model that never produces the shape still terminates the run.
+    #[tokio::test]
+    async fn repeatedly_malformed_submit_report_args_is_a_decode_error() {
+        let malformed = || submit(serde_json::json!({ "outcome": "succeeded" }));
+        let (_provider, exec) = executor(
+            // One more than MAX_MALFORMED_REPORTS, so the last one is fatal.
+            vec![malformed(), malformed(), malformed()],
             Budget::default(),
         );
         let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
@@ -2476,6 +2567,76 @@ mod tests {
         assert_eq!(
             cycling,
             vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+    }
+
+    /// Alternating read/search over *different* targets is exploration, not a cycle.
+    ///
+    /// Verbatim from the coding run this guard broke: the model was wiring `inbox_ignore_globs`
+    /// across crates, the names alternated `read_file`/`search_text`, and a names-only detector
+    /// flagged it on the 4th call and removed both tools for the rest of the task. Every call here
+    /// names a distinct file or query, so nothing is being repeated.
+    #[test]
+    fn alternating_reads_over_distinct_targets_are_not_a_cycle() {
+        let h = hist(&[
+            (
+                "read_file",
+                serde_json::json!({"path": "crates/config-loader/src/model/tuning.rs"}),
+            ),
+            ("search_text", serde_json::json!({"query": "CaptureTuning"})),
+            (
+                "read_file",
+                serde_json::json!({"path": "crates/daemon/src/vault_source.rs"}),
+            ),
+            (
+                "search_text",
+                serde_json::json!({"query": "inbox_ignore_globs"}),
+            ),
+        ]);
+        assert!(
+            detect_short_cycle(&h).is_none(),
+            "distinct targets each turn is progress, not thrash"
+        );
+        assert!(!is_doom_loop(&h, LoopProfile::semantic()));
+    }
+
+    /// The other side of the same line: same names *and* same arguments really is a cycle.
+    #[test]
+    fn alternating_reads_over_identical_targets_are_a_cycle() {
+        let h = hist(&[
+            ("read_file", serde_json::json!({"path": "a.rs"})),
+            ("search_text", serde_json::json!({"query": "needle"})),
+            ("read_file", serde_json::json!({"path": "a.rs"})),
+            ("search_text", serde_json::json!({"query": "needle"})),
+        ]);
+        let cycling = detect_short_cycle(&h).expect("same tools on the same targets is a cycle");
+        assert_eq!(
+            cycling,
+            vec!["read_file".to_string(), "search_text".to_string()]
+        );
+    }
+
+    /// Partial progress still counts as progress: one slot repeats, the other advances.
+    ///
+    /// The queries here are deliberately realistic identifiers rather than toy words. Two very
+    /// short strings under a shared key (`{"query":"first"}` vs `{"query":"second"}`) score 0.26 —
+    /// above [`ARG_SIMILARITY_THRESHOLD`] — because the shared `query` token carries most of the
+    /// weight when there is almost no other text to compare. Real search terms of ordinary length
+    /// separate cleanly (this pair scores 0.16).
+    #[test]
+    fn cycle_requires_every_slot_to_repeat_not_just_one() {
+        let h = hist(&[
+            ("read_file", serde_json::json!({"path": "same.rs"})),
+            ("search_text", serde_json::json!({"query": "CaptureTuning"})),
+            ("read_file", serde_json::json!({"path": "same.rs"})),
+            (
+                "search_text",
+                serde_json::json!({"query": "inbox_ignore_globs"}),
+            ),
+        ]);
+        assert!(
+            detect_short_cycle(&h).is_none(),
+            "a re-read paired with a new search is still moving forward"
         );
     }
 
