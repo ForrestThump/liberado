@@ -453,6 +453,16 @@ impl Orchestrator {
     /// way acting is not and a long ceiling costs only tokens. The cap is what makes depth safe to
     /// let any dispatch source raise: an orchestration agent can ask for room within an envelope the
     /// operator set, never past it.
+    /// The budget a run actually gets: the depth's configured ceiling, with `max_turns` replaced
+    /// when the caller supplied one. Zero is treated as absent, matching `GoalSpec::max_turns`,
+    /// where 0 already means "pack default".
+    fn effective_budget(&self, base: &Budget, max_turns: Option<u32>) -> Budget {
+        match max_turns.filter(|t| *t > 0) {
+            Some(turns) => base.clone().with_max_turns(turns),
+            None => base.clone(),
+        }
+    }
+
     fn budget_for(&self, depth: Depth) -> &Budget {
         match depth {
             Depth::Deep => &self.research_budget,
@@ -816,6 +826,33 @@ impl Orchestrator {
         trigger_correlation: &str,
         capabilities: &CapabilitySet,
     ) -> Result<Disposition, OrchestratorError> {
+        self.run_with_turn_budget(decision, goal, trigger_correlation, capabilities, None)
+            .await
+    }
+
+    /// [`run`](Self::run), with a caller-supplied turn cap replacing the one this run would
+    /// otherwise inherit from its depth.
+    ///
+    /// Exists because the turn budgets are deployment constants — `DIRECT_MAX_TURNS` and the
+    /// subagent default — while the work is not. A cron schedule doing N-item vault maintenance
+    /// cannot ask for more, and it does not choose its own path either: the dispatcher picks
+    /// `ExecuteDirect` (4 turns) or `DispatchSubagent` (8) from how the goal happens to be worded.
+    /// Observed live: an inbox schedule routed to `ExecuteDirect` spent all four turns reading the
+    /// vault and filed nothing.
+    ///
+    /// The override applies to whichever path is chosen, which is the point — it makes the routing
+    /// decision stop determining whether the work can finish.
+    ///
+    /// `None`, or `Some(0)`, keeps the configured budget. Extra limits (wall-clock, tokens) are
+    /// preserved: this raises the turn ceiling, it does not remove the others.
+    pub async fn run_with_turn_budget(
+        &self,
+        decision: DispatchDecision,
+        goal: &str,
+        trigger_correlation: &str,
+        capabilities: &CapabilitySet,
+        max_turns: Option<u32>,
+    ) -> Result<Disposition, OrchestratorError> {
         // Pool ceiling ∩ per-run grant. Order is deliberate: `narrow` filters *self* by *other*, so
         // nothing outside the pool can appear even if the caller passes a wider set.
         let mut effective = self.capabilities.narrow(capabilities);
@@ -876,6 +913,9 @@ impl Orchestrator {
                     seed_calls,
                     relevant_mcps,
                 } => {
+                    // The direct path has no `Depth` to select a budget from — it is always the
+                    // shallow one — so the override is applied here rather than in `budget_for`.
+                    let direct_budget = self.effective_budget(&self.direct_budget, max_turns);
                     // Scope to exactly the MCPs `effective` grants — an empty allow-list means
                     // "every registered MCP" to `RuntimeFactory`/`ScopedRuntime` (the wrong sense
                     // here, same reason `ChatSessions` special-cases it for its own scoping), which
@@ -902,8 +942,7 @@ impl Orchestrator {
                     );
                     let task = Task::new(DIRECT_INSTRUCTIONS, goal).with_seed(seed_calls);
                     let report = if allowed_mcps.is_empty() {
-                        self.execute(&self.direct_budget, &NoMcpRuntime, task)
-                            .await?
+                        self.execute(&direct_budget, &NoMcpRuntime, task).await?
                     } else {
                         let provenance =
                             WriteProvenance::agent(self.source.clone(), trigger_correlation);
@@ -911,7 +950,7 @@ impl Orchestrator {
                         let (runtime, deferral) =
                             self.gate(runtime, effective.clone(), goal, trigger_correlation);
                         Self::instrument_catalog(&allowed_mcps, &*runtime);
-                        let mut report = self.execute(&self.direct_budget, &*runtime, task).await?;
+                        let mut report = self.execute(&direct_budget, &*runtime, task).await?;
                         // If the gate deferred a call to the human out-of-band mid-run, mark it so a
                         // chat surface can drop the redundant reply (Gap 2).
                         report.deferred_to_human = deferred_flag_of(&deferral);
@@ -954,7 +993,8 @@ impl Orchestrator {
                     // Depth decides the budget; consequence decides salvage. These used to be one
                     // predicate (`is_read_only_dispatch`) and the conflation is what made a
                     // deep-research goal that merely *mentioned* the vault run on 8 turns and fail.
-                    let budget = self.budget_for(depth);
+                    let budget = self.effective_budget(self.budget_for(depth), max_turns);
+                    let budget = &budget;
                     // Salvageable = nothing irreversible could have happened, so returning partial
                     // findings is safe and honest. That is a consequence question, not a depth one —
                     // and deliberately still inferred: it is a safety property, not a preference,
@@ -2124,6 +2164,72 @@ mod tests {
         );
         assert_eq!(effective, Delivery::Summarize);
         assert!(downgrade.is_some_and(|d| d.contains("act outside the vault")));
+    }
+
+    /// A caller-supplied ceiling replaces the depth's, on every path.
+    ///
+    /// The budgets are deployment constants and the *path* is chosen by the dispatcher from goal
+    /// phrasing, so before this a schedule could neither raise its budget nor predict which one it
+    /// would get. Observed live: an inbox schedule routed to `ExecuteDirect` spent all four turns
+    /// reading the vault and filed nothing.
+    #[test]
+    fn a_supplied_turn_budget_replaces_the_one_depth_would_choose() {
+        let orch = delivering_orchestrator();
+
+        for depth in [Depth::Deep, Depth::Normal, Depth::Shallow] {
+            let base = orch.budget_for(depth);
+            assert_eq!(
+                orch.effective_budget(base, Some(25)).max_turns,
+                25,
+                "an override must win on every path, not just the subagent one"
+            );
+        }
+        // The direct path has no `Depth`; it must honour the override too.
+        assert_eq!(
+            orch.effective_budget(&orch.direct_budget, Some(25))
+                .max_turns,
+            25
+        );
+    }
+
+    /// Absent — and zero, which `GoalSpec::max_turns` already uses to mean "pack default" — must
+    /// leave the configured ceiling exactly as it was.
+    #[test]
+    fn no_override_leaves_the_configured_budget_untouched() {
+        let orch = delivering_orchestrator();
+        let configured = orch.budget_for(Depth::Normal).max_turns;
+
+        assert_eq!(
+            orch.effective_budget(orch.budget_for(Depth::Normal), None)
+                .max_turns,
+            configured
+        );
+        assert_eq!(
+            orch.effective_budget(orch.budget_for(Depth::Normal), Some(0))
+                .max_turns,
+            configured,
+            "0 means `pack default`, not `no turns` — treating it literally would deadlock the run"
+        );
+    }
+
+    /// Raising the turn ceiling must not quietly discard the other limits an operator set.
+    #[test]
+    fn an_override_preserves_extra_limits() {
+        use liberado_executor::WallClockLimit;
+        let base = Budget::new(4).with_limit(WallClockLimit(std::time::Duration::from_secs(60)));
+        let raised = base.clone().with_max_turns(40);
+
+        assert_eq!(raised.max_turns, 40);
+        assert_eq!(
+            raised.extra_limit_count(),
+            base.extra_limit_count(),
+            "wall-clock and token limits must survive a turn-cap change"
+        );
+        assert_eq!(
+            base.extra_limit_count(),
+            1,
+            "fixture must actually carry a limit"
+        );
     }
 
     /// The Telegram failure, root cause. A deep-research goal that merely *mentioned* the vault

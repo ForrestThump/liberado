@@ -84,12 +84,21 @@ pub(crate) fn reaction_goal(event: &Event, goal: &str, pool: &str) -> GoalSpec {
         .get("profile")
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    // A schedule's own turn ceiling, if it declared one. `GoalSpec::max_turns` already means
+    // "0 = pack default", so an absent value maps straight onto it.
+    let max_turns = event
+        .payload
+        .data
+        .get("max_turns")
+        .and_then(|v| v.as_u64())
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(0);
     GoalSpec {
         id: None,
         description: goal.to_string(),
         success_criteria: Vec::new(),
         domain: DomainHint::from(REACTION_DOMAIN),
-        max_turns: 0,
+        max_turns,
         max_idle_secs: None,
         origin: Some(SessionOrigin::from_correlation(&event.correlation_id)),
         profile,

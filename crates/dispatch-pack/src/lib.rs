@@ -214,11 +214,15 @@ impl DomainPackRunner for DispatchPack {
 
         let disposition = liberado_provider::latency::with_correlation(
             correlation_id.clone(),
-            pool.orchestrator.run(
+            // `GoalSpec::max_turns` is documented as the pack's soft turn budget with 0 meaning
+            // "pack default"; this is the pack honouring it. Without this the field was accepted
+            // from every caller and silently ignored.
+            pool.orchestrator.run_with_turn_budget(
                 decision,
                 &goal.description,
                 &correlation_id,
                 &ctx.grant.capabilities,
+                Some(goal.max_turns).filter(|t| *t > 0),
             ),
         )
         .await

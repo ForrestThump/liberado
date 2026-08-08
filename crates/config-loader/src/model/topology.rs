@@ -977,6 +977,10 @@ pub struct CronSchedule {
     /// delivery on is 24 notifications a day for "nothing to report".
     #[serde(default)]
     pub deliver: Option<bool>,
+    /// Turn ceiling for this schedule's run. Omitted keeps the dispatch path's default (4 turns
+    /// direct, 8 for a subagent) — which the schedule does not choose and cannot see.
+    #[serde(default)]
+    pub max_turns: Option<u32>,
 }
 
 /// A configured external webhook hook: wiring only (Decision 14) — `liberado-server` resolves
