@@ -79,6 +79,7 @@ pub fn goal(cmd: &GoalCmd, ctx: &mut dyn CommandContext) -> Vec<CommandResult> {
             vec![CommandResult::StartCodingGoal {
                 project: project.clone().filter(|p| !p.trim().is_empty()),
                 text: text.to_string(),
+                plan_mode: false,
             }]
         }
         GoalCmd::View => vec![CommandResult::OpenGoalView],
@@ -89,4 +90,30 @@ pub fn goal(cmd: &GoalCmd, ctx: &mut dyn CommandContext) -> Vec<CommandResult> {
         }],
         GoalCmd::Clear => vec![CommandResult::CancelGoalSession],
     }
+}
+
+/// `/plan …` — coding goal in plan mode (write only `.liberado/plan.md`, no shell).
+pub fn plan(project: Option<&str>, text: &str, ctx: &mut dyn CommandContext) -> Vec<CommandResult> {
+    ctx.clear_input();
+    let text = text.trim();
+    if text.is_empty() {
+        ctx.push_system_message(
+            "Usage: /plan <what you want designed>
+             e.g. /plan add a --version flag to the CLI
+             e.g. /plan in liberado add a --version flag
+
+             Plan mode: the agent may write only `.liberado/plan.md` and cannot run shell.
+             After the plan is ready, start a normal /goal to implement it."
+                .into(),
+        );
+        return vec![CommandResult::None];
+    }
+    vec![CommandResult::StartCodingGoal {
+        project: project
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_string),
+        text: text.to_string(),
+        plan_mode: true,
+    }]
 }

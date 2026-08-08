@@ -149,6 +149,30 @@ impl Default for CommandPolicy {
     }
 }
 
+impl CommandPolicy {
+    /// No shell programs may run (coding plan mode).
+    ///
+    /// Reuses the existing allow-list rule in `coder-sandbox`: a **non-empty** `allow` list that
+    /// matches nothing denies every command. Empty `allow` would mean "allow all".
+    pub fn none_allowed() -> Self {
+        Self {
+            allow: vec!["!plan-mode-no-shell".into()],
+            deny: Vec::new(),
+            timeout_secs: 120,
+            output_max_bytes: 64 * 1024,
+        }
+    }
+}
+
+/// System instructions injected when a coding session runs in plan mode.
+///
+/// Kept next to the policy helpers so pack and surfaces do not each invent plan-mode prose.
+pub const PLAN_MODE_CODER_PROMPT: &str = "\
+You are Liberado's coding planner (plan mode). Explore the codebase with read-only tools, then \
+write a clear implementation plan ONLY to `.liberado/plan.md`. \
+Do NOT edit any other files. Do NOT run shell commands, git commits, or apply patches outside that path. \
+When the plan is written, call submit_report summarizing the plan and key risks.";
+
 /// A configured command the backend can expose through `validate` and run as a deterministic gate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoderCommandConfig {
@@ -175,6 +199,13 @@ impl CoderCommandConfig {
     }
 }
 
+/// Relative workspace path of the **only** file plan mode may write.
+///
+/// Plan mode reuses [`PathPolicy::allow_write_globs`] — it is not a second permission system.
+/// Surfaces and packs that need a stable plan artifact path should use this constant rather than
+/// inventing a parallel location.
+pub const PLAN_ARTIFACT_REL: &str = ".liberado/plan.md";
+
 /// Path containment and write policy for the workspace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PathPolicy {
@@ -197,6 +228,19 @@ impl Default for PathPolicy {
             ],
             read_max_bytes: 128 * 1024,
             search_max_results: 200,
+        }
+    }
+}
+
+impl PathPolicy {
+    /// Writes restricted to [`PLAN_ARTIFACT_REL`] only (coding plan mode).
+    ///
+    /// Reads still follow the usual deny list (`.git/**`, build dirs, …). Enforcement lives in
+    /// `coder-tools` via the existing write-glob check — plan mode does not add a parallel gate.
+    pub fn plan_mode() -> Self {
+        Self {
+            allow_write_globs: vec![PLAN_ARTIFACT_REL.to_string()],
+            ..Self::default()
         }
     }
 }

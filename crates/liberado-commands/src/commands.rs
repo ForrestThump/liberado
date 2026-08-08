@@ -40,6 +40,14 @@ pub enum SlashCommand {
     /// Coding-goal surface (S2/G2): `/goal <text>`, `/goal in <project> <text>`, and the
     /// lifecycle subcommands.
     Goal(GoalCmd),
+    /// Plan mode coding goal (`/plan <text>`, `/plan in <project> <text>`).
+    ///
+    /// Same coding pack as `/goal`, but the session payload sets `plan_mode` so the pack applies
+    /// restricted path/command policy (exclusive plan-file writes). Not a second engine.
+    Plan {
+        project: Option<String>,
+        text: String,
+    },
 }
 
 /// `/goal` subcommands.
@@ -128,6 +136,14 @@ impl std::fmt::Display for SlashCommand {
                 GoalCmd::Resume(a) => write!(f, "/goal resume {a}"),
                 GoalCmd::Clear => write!(f, "/goal clear"),
             },
+            SlashCommand::Plan {
+                project: Some(p),
+                text,
+            } => write!(f, "/plan in {p} {text}"),
+            SlashCommand::Plan {
+                project: None,
+                text,
+            } => write!(f, "/plan {text}"),
             SlashCommand::Back => write!(f, "/back"),
             SlashCommand::Fork { after_turn: None } => write!(f, "/fork"),
             SlashCommand::Fork {

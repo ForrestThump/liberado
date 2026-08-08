@@ -59,13 +59,15 @@ pub enum CommandResult {
         domain: String,
         goal: String,
     },
-    /// Start a **coding** goal session (`/goal <text>`). Distinct from `SpawnGoalSession`: that one
-    /// takes a domain/profile token from the human, while this one is always the coding pack and
-    /// carries a project instead. `project` is `None` when the surface should use its current
-    /// project context.
+    /// Start a **coding** goal session (`/goal <text>` or `/plan <text>`). Distinct from
+    /// `SpawnGoalSession`: that one takes a domain/profile token from the human, while this one is
+    /// always the coding pack and carries a project instead. `project` is `None` when the surface
+    /// should use its current project context. `plan_mode` restricts writes to `.liberado/plan.md`.
     StartCodingGoal {
         project: Option<String>,
         text: String,
+        /// When true, payload includes `plan_mode: true` (path/command policy preset in the pack).
+        plan_mode: bool,
     },
     /// Open the goal view for the focused session (bare `/goal`).
     OpenGoalView,

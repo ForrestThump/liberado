@@ -39,6 +39,16 @@ vault_path = "/home/shiloh/vault"
 # name = "notes-site"
 # root = "/home/shiloh/Code/notes-site"
 
+# Coding plan mode: `/plan <text>` (or goal payload `plan_mode = true`). No extra topology required —
+# the coding pack applies PathPolicy::plan_mode() (writes only `.liberado/plan.md`) and
+# CommandPolicy::none_allowed(). Optional profile that always starts plan mode:
+#
+# [[session_profiles]]
+# name = "coding-plan"
+# domain = "coding"
+# [session_profiles.overrides]
+# plan_mode = true
+
 # Main chat agent = human interfacer. Specialist work goes through the built-in `delegate` tool
 # to the dispatcher mesh (grant ExecuteMcp specialists to component `dispatcher` in policy.toml).
 #
