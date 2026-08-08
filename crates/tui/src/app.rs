@@ -943,7 +943,7 @@ impl App {
                 liberado_commands::CommandResult::StartCodingGoal {
                     project,
                     text,
-                    plan_mode,
+                    mode,
                 } => {
                     if self.joined.as_ref().map(|j| j.finished).unwrap_or(false) {
                         self.joined = None;
@@ -951,7 +951,7 @@ impl App {
                     effects.push(Effect::StartCodingGoal {
                         project: project.clone(),
                         text: text.clone(),
-                        plan_mode: *plan_mode,
+                        mode: *mode,
                         origin_conversation: self.session.clone(),
                     });
                 }
@@ -1258,13 +1258,13 @@ pub enum Effect {
         goal: String,
         origin_conversation: Option<String>,
     },
-    /// Start a **coding** goal (`/goal <text>`): `POST /api/goals` with domain `coding`, then focus
-    /// it. Separate from `SpawnGoalSession` because the coding pack takes a project, not a profile.
+    /// Start a **coding** goal (`/goal` or `/explore`): `POST /api/goals` with domain `coding`.
     StartCodingGoal {
         project: Option<String>,
         text: String,
-        /// Restrict writes to `.liberado/plan.md` and disable shell (plan mode).
-        plan_mode: bool,
+        /// Restricted tier for this goal: plan (writes only the plan file) or explore
+        /// (no writes at all). `None` is a normal full-write coding goal.
+        mode: Option<liberado_commands::CodingGoalMode>,
         origin_conversation: Option<String>,
     },
     /// Park the joined session (`POST /api/goals/{id}/park`) — graceful, resumable.

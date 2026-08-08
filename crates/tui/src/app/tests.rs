@@ -2736,7 +2736,7 @@ fn slash_goal_in_project_carries_the_project() {
             Effect::StartCodingGoal {
                 project: Some(p),
                 text,
-                plan_mode: false,
+                mode: None,
                 ..
             } if p == "liberado" && text == "add a --version flag"
         )
@@ -2754,12 +2754,30 @@ fn slash_plan_starts_coding_goal_in_plan_mode() {
             Effect::StartCodingGoal {
                 project: Some(p),
                 text,
-                plan_mode: true,
+                mode: Some(liberado_commands::CodingGoalMode::Plan),
                 ..
             } if p == "liberado" && text == "design a --version flag"
         )
     });
     assert!(started, "expected plan-mode goal, got {effects:?}");
+}
+
+#[test]
+fn slash_explore_starts_coding_goal_in_explore_mode() {
+    let mut app = test_app();
+    let effects = run_slash(&mut app, "/explore in liberado how auth works");
+    let started = effects.iter().any(|e| {
+        matches!(
+            e,
+            Effect::StartCodingGoal {
+                project: Some(p),
+                text,
+                mode: Some(liberado_commands::CodingGoalMode::Explore),
+                ..
+            } if p == "liberado" && text == "how auth works"
+        )
+    });
+    assert!(started, "expected explore-mode goal, got {effects:?}");
 }
 
 #[test]

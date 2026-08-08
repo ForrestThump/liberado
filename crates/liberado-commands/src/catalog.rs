@@ -100,6 +100,11 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
         description: "plan mode: write only .liberado/plan.md (no shell) — /plan <text> | in <project> <text>",
     },
     CommandSpec {
+        insert: "/explore ",
+        name: "/explore",
+        description: "read-only coding explore: /explore <text> | in <project> <text>",
+    },
+    CommandSpec {
         insert: "/join ",
         name: "/join",
         description: "join a goal session by id (focus its input)",

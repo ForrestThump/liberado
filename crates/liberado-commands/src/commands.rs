@@ -40,14 +40,49 @@ pub enum SlashCommand {
     /// Coding-goal surface (S2/G2): `/goal <text>`, `/goal in <project> <text>`, and the
     /// lifecycle subcommands.
     Goal(GoalCmd),
-    /// Plan mode coding goal (`/plan <text>`, `/plan in <project> <text>`).
+    /// A coding goal started in a restricted tier — `/plan …` or `/explore …`.
     ///
-    /// Same coding pack as `/goal`, but the session payload sets `plan_mode` so the pack applies
-    /// restricted path/command policy (exclusive plan-file writes). Not a second engine.
-    Plan {
+    /// Same coding pack and the same `in <project>` grammar as `/goal`; only the `mode` differs,
+    /// and the pack turns that into path/command policy presets. Not a second engine, and not a
+    /// second parser — see [`CodingGoalMode`].
+    Coding {
+        mode: CodingGoalMode,
         project: Option<String>,
         text: String,
     },
+}
+
+/// Which capability tier a `/plan` or `/explore` goal asks the coding pack for.
+///
+/// This is the **client-layer** spelling of the mode. `liberado-commands` is a `client` crate with
+/// no dependencies (the layer-rules test keeps it that way), so it cannot name the pack's
+/// `CodingMode` type — what crosses the boundary is the wire string in [`Self::as_wire_str`],
+/// which the pack parses back. One enum here rather than a `plan_mode`/`explore_mode` bool pair,
+/// for the same reason as on the pack side: the tiers are mutually exclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodingGoalMode {
+    /// Writes only the plan artifact; no shell.
+    Plan,
+    /// No writes at all; read-only tool catalog.
+    Explore,
+}
+
+impl CodingGoalMode {
+    /// The `mode` value sent in the goal payload — the contract with the coding pack.
+    pub fn as_wire_str(&self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Explore => "explore",
+        }
+    }
+
+    /// The slash command that selects this mode.
+    pub fn slash(&self) -> &'static str {
+        match self {
+            Self::Plan => "/plan",
+            Self::Explore => "/explore",
+        }
+    }
 }
 
 /// `/goal` subcommands.
@@ -136,14 +171,16 @@ impl std::fmt::Display for SlashCommand {
                 GoalCmd::Resume(a) => write!(f, "/goal resume {a}"),
                 GoalCmd::Clear => write!(f, "/goal clear"),
             },
-            SlashCommand::Plan {
+            SlashCommand::Coding {
+                mode,
                 project: Some(p),
                 text,
-            } => write!(f, "/plan in {p} {text}"),
-            SlashCommand::Plan {
+            } => write!(f, "{} in {p} {text}", mode.slash()),
+            SlashCommand::Coding {
+                mode,
                 project: None,
                 text,
-            } => write!(f, "/plan {text}"),
+            } => write!(f, "{} {text}", mode.slash()),
             SlashCommand::Back => write!(f, "/back"),
             SlashCommand::Fork { after_turn: None } => write!(f, "/fork"),
             SlashCommand::Fork {

@@ -96,10 +96,10 @@ impl EffectRunner {
             Effect::StartCodingGoal {
                 project,
                 text,
-                plan_mode,
+                mode,
                 origin_conversation,
             } => {
-                self.start_coding_goal(project, text, plan_mode, origin_conversation)
+                self.start_coding_goal(project, text, mode, origin_conversation)
                     .await
             }
             Effect::ParkGoalSession(id) => self.goal_action(id, "park", "parked").await,
@@ -229,7 +229,7 @@ impl EffectRunner {
         &self,
         project: Option<String>,
         text: String,
-        plan_mode: bool,
+        mode: Option<liberado_commands::CodingGoalMode>,
         origin_conversation: Option<String>,
     ) {
         let client = self.client.clone();
@@ -241,7 +241,7 @@ impl EffectRunner {
                 &server,
                 project.as_deref(),
                 &text,
-                plan_mode,
+                mode,
                 origin_conversation.as_deref(),
             )
             .await
