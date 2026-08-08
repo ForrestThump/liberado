@@ -161,7 +161,16 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
                 {
                     pack = pack
                         .with_hashline(coder_tuning.hashline)
-                        .with_gate(coder_tuning.gate);
+                        .with_gate(coder_tuning.gate)
+                        .with_coder_role(coder_tuning.coder);
+                }
+                // Without this the pack's provider factory returns the daemon's provider for every
+                // role, so the coder's configured model is ignored and the run reports a model
+                // name nothing resolves.
+                if let Some(factory) =
+                    liberado_bootstrap::CoderRoleProviderFactory::for_config(&config)
+                {
+                    pack = pack.with_provider_factory(std::sync::Arc::new(factory));
                 }
                 Arc::new(pack)
             }

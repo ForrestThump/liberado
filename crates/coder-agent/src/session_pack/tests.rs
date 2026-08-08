@@ -1138,3 +1138,80 @@ async fn the_configured_gate_reaches_the_backends_run_config() {
         "the whole config must survive, not just the enabled flag"
     );
 }
+
+/// The configured `[coder.coder]` model and turn ceiling reach the run the backend is handed.
+///
+/// The pack previously passed the literal `"session-coder"` — a name no provider resolves — and
+/// its own 12-turn constant, so an operator reading `deepseek/deepseek-v4-pro` and `max_turns = 30`
+/// in tuning.toml got neither. It went unnoticed because `SingleProviderFactory` ignored the model
+/// anyway, which made the wrong string harmless right up until the factory started honouring it.
+#[tokio::test]
+async fn the_configured_coder_role_reaches_the_backends_run_config() {
+    use liberado_coder_core::CoderRoleConfig;
+
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let backend = Arc::new(ScriptedBackend {
+        seen: seen.clone(),
+        fail_attempts: 0,
+    });
+    let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+    let pack = CodingSessionPack::with_backend(backend, provider, std::env::temp_dir())
+        .with_coder_role(CoderRoleConfig {
+            model: "deepseek/deepseek-v4-pro".into(),
+            prompt_path: None,
+            prompt: None,
+            temperature: None,
+            max_tokens: None,
+            max_turns: Some(30),
+        });
+
+    let (ev_tx, _ev_rx) = mpsc::channel::<SessionEvent>(64);
+    let (in_tx, in_rx) = mpsc::channel::<HumanInput>(16);
+    drop(in_tx);
+    let inputs = InputChannel::new(in_rx, None);
+    let (_c_tx, cancel) = tokio::sync::watch::channel(false);
+
+    let workspace = std::env::temp_dir().join(format!(
+        "liberado-role-wire-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    let mut g = goal("role check");
+    g.payload = serde_json::json!({
+        "workspace_root": workspace.to_string_lossy(),
+        "intake": { "enabled": false },
+        "force_host_local": true,
+        "skip_preflight": true,
+    });
+
+    let store = Arc::new(liberado_session::GoalSessionStore::new());
+    let mut spec = g.clone();
+    spec.id = Some("role1".into());
+    liberado_session::SessionRecordStore::insert(
+        store.as_ref(),
+        liberado_session::GoalSessionRecord::new(spec),
+    )
+    .await;
+    let grant = liberado_session::SessionGrant::default();
+    let ctx = PackContext::new(&grant, store.clone(), "role1");
+
+    let _ = pack.run("role1", &g, &ctx, ev_tx, inputs, cancel).await;
+    let requests = seen.lock().unwrap().clone();
+    let _ = std::fs::remove_dir_all(&workspace);
+
+    assert!(!requests.is_empty(), "backend was never invoked");
+    let coder = &requests[0].config.coder;
+    assert_eq!(
+        coder.model, "deepseek/deepseek-v4-pro",
+        "the configured model must reach the run, not the `session-coder` placeholder"
+    );
+    assert_eq!(
+        coder.max_turns,
+        Some(30),
+        "the configured ceiling must reach the run, not the pack's 12-turn constant"
+    );
+}

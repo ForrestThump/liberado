@@ -128,11 +128,15 @@ impl CodingSessionPack {
         let _ = std::fs::create_dir_all(&workspace);
         init_git_repo(&workspace);
 
+        // Payload wins, then the configured `[coder.coder]` role. The old fallback was the
+        // literal `"session-coder"`, which is not a model any provider knows — and it did not
+        // matter, because `SingleProviderFactory` ignored the requested model entirely. With a
+        // model-aware factory installed this string is what actually gets called.
         let model = goal
             .payload
             .get("model")
             .and_then(|v| v.as_str())
-            .unwrap_or("session-coder")
+            .unwrap_or(self.coder_role.model.as_str())
             .to_string();
 
         // ── Parallel coding subagents (S6): payload.subtasks → worktrees → LLM merge ──
@@ -321,7 +325,10 @@ impl CodingSessionPack {
         } else if goal.max_turns > 0 {
             goal.max_turns
         } else {
-            12
+            // `[coder.coder].max_turns` when set, not a bare 12. A configured ceiling that the
+            // pack overrode with a smaller constant is worse than no setting at all: the operator
+            // sees 30 in the file and the run stops at 12.
+            self.coder_role.max_turns.unwrap_or(12)
         };
 
         let role = CoderRoleConfig {

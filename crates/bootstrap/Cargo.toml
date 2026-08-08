@@ -9,6 +9,8 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+liberado-coder-agent = { workspace = true }
+liberado-coder-core = { workspace = true }
 liberado-common = { workspace = true }
 liberado-config = { workspace = true }
 liberado-cron = { workspace = true }

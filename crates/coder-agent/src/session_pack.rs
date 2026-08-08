@@ -63,6 +63,11 @@ pub struct CodingSessionPack {
     max_concurrent_coding_subagents: u32,
     /// Default hashline settings from `[coder.hashline]` in tuning.toml.
     hashline: liberado_coder_core::HashlineConfig,
+    /// The coder role from `[coder.coder]` — its model and turn ceiling.
+    ///
+    /// The pack previously passed the literal `"session-coder"` as a model name and its own
+    /// 12-turn default, so `[coder.coder]`'s configured model and budget governed nothing here.
+    coder_role: liberado_coder_core::CoderRoleConfig,
     /// Completion gate settings from `[coder.gate]` in tuning.toml.
     ///
     /// Defaults to off, exactly as before. What changed is that it is now *reachable*: every
@@ -82,6 +87,7 @@ impl CodingSessionPack {
             max_concurrent_coding_subagents: crate::fanout::DEFAULT_MAX_CONCURRENT_CODING_SUBAGENTS
                 as u32,
             hashline: liberado_coder_core::HashlineConfig::default(),
+            coder_role: liberado_coder_core::CoderTuning::default().coder,
             gate: liberado_coder_core::CoderGateConfig::default(),
         }
     }
@@ -99,6 +105,7 @@ impl CodingSessionPack {
             max_concurrent_coding_subagents: crate::fanout::DEFAULT_MAX_CONCURRENT_CODING_SUBAGENTS
                 as u32,
             hashline: liberado_coder_core::HashlineConfig::default(),
+            coder_role: liberado_coder_core::CoderTuning::default().coder,
             gate: liberado_coder_core::CoderGateConfig::default(),
         }
     }
@@ -110,6 +117,27 @@ impl CodingSessionPack {
     }
 
     /// Seed hashline edit mode from `[coder.hashline]` (payload/overrides can still override).
+    /// Seed the coder role (model + turn ceiling) from `[coder.coder]`.
+    pub fn with_coder_role(mut self, role: liberado_coder_core::CoderRoleConfig) -> Self {
+        self.coder_role = role;
+        self
+    }
+
+    /// Replace the backend with one that mints a provider per role, so `CoderRoleConfig::model`
+    /// selects a model instead of being ignored.
+    ///
+    /// `SingleProviderFactory` — what `new` installs — hands back the one daemon provider for
+    /// every role regardless of the model asked for. It cannot simply `set_model` on that shared
+    /// provider either: the model sits behind a `RwLock` on the trait object, so mutating it would
+    /// change the model for every other holder, the chat face agent included.
+    pub fn with_provider_factory(
+        mut self,
+        providers: Arc<dyn crate::CoderProviderFactory>,
+    ) -> Self {
+        self.backend = Arc::new(crate::LiberadoLoopBackend::with_provider_factory(providers));
+        self
+    }
+
     /// Completion-gate settings for sessions this pack runs (`[coder.gate]`).
     ///
     /// Off by default and left that way: the gate costs `1 + fresh_reviewers` extra model calls
