@@ -1,11 +1,15 @@
 //! Top-level Config: compose topology/policy/tuning and validate.
 
-use liberado_common::{CapabilitySet, DEFAULT_POOL, Error, Result};
+use std::path::{Component, Path, PathBuf};
+
+use liberado_common::{CapabilitySet, DEFAULT_POOL, Error, Result, WriteClass};
 use serde::{Deserialize, Serialize};
 
 use super::builder::ConfigBuilder;
 use super::policy::Policy;
-use super::topology::{McpGrant, McpTransport, SessionProfile, Topology, empty_table};
+use super::topology::{
+    McpGrant, McpTransport, ProjectConfig, SessionProfile, Topology, empty_table,
+};
 
 /// What a session profile resolves to — everything a caller needs to start a session under it.
 ///
@@ -214,6 +218,121 @@ impl Config {
             .iter()
             .filter(|p| p.enabled)
             .collect()
+    }
+
+    /// Every enabled coding project, for `GET /api/projects` and `/goal in` pickers.
+    pub fn enabled_projects(&self) -> Vec<&ProjectConfig> {
+        self.topology
+            .projects
+            .iter()
+            .filter(|p| p.enabled)
+            .collect()
+    }
+
+    /// Look up an enabled project by exact name (`/goal in <name>`).
+    pub fn project_by_name(&self, name: &str) -> Option<&ProjectConfig> {
+        self.topology
+            .projects
+            .iter()
+            .find(|p| p.enabled && p.name == name)
+    }
+
+    /// Authorize a coding goal's `project` / `workspace_root` payload fields (coding-tui S3 / G4).
+    ///
+    /// * Neither field → [`CodingWorkspaceAuth::Ephemeral`] (temp workspace; always allowed).
+    /// * `project` name → must match an enabled `[[projects]]` entry with a write class that allows
+    ///   direct agent writes; optional `workspace_root` must sit under that project's root.
+    /// * `workspace_root` alone → must canonicalize under some enabled project's root.
+    ///
+    /// Fail-closed: unknown names and undeclared paths are errors, never silently allowed.
+    pub fn authorize_coding_workspace(
+        &self,
+        project: Option<&str>,
+        workspace_root: Option<&str>,
+    ) -> std::result::Result<CodingWorkspaceAuth, CodingAuthError> {
+        let project = project.map(str::trim).filter(|s| !s.is_empty());
+        let workspace_root = workspace_root.map(str::trim).filter(|s| !s.is_empty());
+
+        match (project, workspace_root) {
+            (None, None) => Ok(CodingWorkspaceAuth::Ephemeral),
+            (Some(name), path_opt) => {
+                let proj =
+                    self.project_by_name(name)
+                        .ok_or_else(|| CodingAuthError::UnknownProject {
+                            name: name.to_string(),
+                        })?;
+                if !proj.write_class.allows_direct_agent_write() {
+                    return Err(CodingAuthError::NotWritable {
+                        name: proj.name.clone(),
+                        write_class: proj.write_class,
+                    });
+                }
+                let root = canonicalize_existing_dir(&proj.root).map_err(|reason| {
+                    CodingAuthError::InvalidPath {
+                        reason: format!(
+                            "project '{}' root '{}': {reason}",
+                            proj.name,
+                            proj.root.display()
+                        ),
+                    }
+                })?;
+                let workspace = if let Some(path) = path_opt {
+                    let cand = resolve_workspace_path(Path::new(path))
+                        .map_err(|reason| CodingAuthError::InvalidPath { reason })?;
+                    if !path_is_within(&root, &cand) {
+                        return Err(CodingAuthError::UndeclaredWorkspace {
+                            path: cand.display().to_string(),
+                        });
+                    }
+                    cand
+                } else {
+                    root
+                };
+                Ok(CodingWorkspaceAuth::Project {
+                    name: proj.name.clone(),
+                    root: workspace,
+                })
+            }
+            (None, Some(path)) => {
+                let cand = resolve_workspace_path(Path::new(path))
+                    .map_err(|reason| CodingAuthError::InvalidPath { reason })?;
+                // Most-specific project wins — a narrower `agent_writable` entry under a broad
+                // `proposal_only` umbrella must not be shadowed by the umbrella.
+                let mut best: Option<(&ProjectConfig, usize)> = None;
+                for proj in self.enabled_projects() {
+                    let Ok(root) = canonicalize_existing_dir(&proj.root) else {
+                        tracing::warn!(
+                            project = %proj.name,
+                            root = %proj.root.display(),
+                            "skipping project with unreadable root during workspace auth"
+                        );
+                        continue;
+                    };
+                    if !path_is_within(&root, &cand) {
+                        continue;
+                    }
+                    let depth = root.components().count();
+                    if best.is_none_or(|(_, d)| depth > d) {
+                        best = Some((proj, depth));
+                    }
+                }
+                let Some((proj, _)) = best else {
+                    return Err(CodingAuthError::UndeclaredWorkspace {
+                        path: cand.display().to_string(),
+                    });
+                };
+                if !proj.write_class.allows_direct_agent_write() {
+                    return Err(CodingAuthError::NotWritable {
+                        name: proj.name.clone(),
+                        write_class: proj.write_class,
+                    });
+                }
+                Ok(CodingWorkspaceAuth::Project {
+                    name: proj.name.clone(),
+                    root: cand,
+                })
+            }
+        }
     }
 
     /// Validate invariants checkable from the resolved model alone. The daemon's loader layers
@@ -542,6 +661,501 @@ impl Config {
             }
         }
 
+        // Coding projects (S3/G4): unique names, non-empty absolute roots.
+        let mut seen_project_names = std::collections::HashSet::new();
+        for project in &self.topology.projects {
+            if project.name.trim().is_empty() {
+                return Err(Error::Config(
+                    "topology.projects entry has an empty name".into(),
+                ));
+            }
+            if !seen_project_names.insert(project.name.as_str()) {
+                return Err(Error::Config(format!(
+                    "topology.projects has a duplicate name '{}'",
+                    project.name
+                )));
+            }
+            if project.root.as_os_str().is_empty() {
+                return Err(Error::Config(format!(
+                    "topology.projects['{}'].root is empty",
+                    project.name
+                )));
+            }
+            if !project.root.is_absolute() {
+                return Err(Error::Config(format!(
+                    "topology.projects['{}'].root must be an absolute path (got '{}')",
+                    project.name,
+                    project.root.display()
+                )));
+            }
+        }
+
         Ok(())
+    }
+}
+
+/// Result of authorizing a coding goal's workspace (G4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CodingWorkspaceAuth {
+    /// No project/path requested — the coding pack may use its ephemeral temp workspace.
+    Ephemeral,
+    /// Operator-authorized project; `root` is the resolved absolute workspace path.
+    Project { name: String, root: PathBuf },
+}
+
+/// Why a coding workspace was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CodingAuthError {
+    UnknownProject {
+        name: String,
+    },
+    UndeclaredWorkspace {
+        path: String,
+    },
+    NotWritable {
+        name: String,
+        write_class: WriteClass,
+    },
+    InvalidPath {
+        reason: String,
+    },
+}
+
+impl std::fmt::Display for CodingAuthError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownProject { name } => write!(
+                f,
+                "unknown coding project '{name}' — declare it under topology.toml [[projects]] \
+                 or pick a name from GET /api/projects"
+            ),
+            Self::UndeclaredWorkspace { path } => write!(
+                f,
+                "workspace '{path}' is not under any declared [[projects]] root — undeclared \
+                 paths are refused (fail-closed)"
+            ),
+            Self::NotWritable { name, write_class } => write!(
+                f,
+                "project '{name}' has write_class={write_class:?}, which does not allow direct \
+                 agent writes — coding sessions require agent_writable (or shared)"
+            ),
+            Self::InvalidPath { reason } => write!(f, "invalid coding workspace path: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for CodingAuthError {}
+
+/// Canonicalize an existing directory, or error with a stable reason string.
+///
+/// Callers that may receive non-canonical spellings (client `workspace_root`) must go through
+/// [`resolve_workspace_path`] so Phase-1 openability runs first. Project roots from operator
+/// config are already absolute and normally already canonical.
+fn canonicalize_existing_dir(path: &Path) -> std::result::Result<PathBuf, String> {
+    if !path.exists() {
+        return Err(format!("path does not exist: {}", path.display()));
+    }
+    if !path.is_dir() {
+        return Err(format!("path is not a directory: {}", path.display()));
+    }
+    std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Collapse `.` / `..` components without consulting the filesystem.
+///
+/// **Not a security boundary.** Lexical cleanup exists so Windows can open paths that still
+/// contain `..` under a verbatim (`\\?\`) prefix — Win32 does not process those components for
+/// verbatim paths, so `exists`/`canonicalize` would fail before Phase 2 can run. Authorization
+/// must use only the result of [`canonicalize_existing_dir`] (symlinks resolved).
+fn lexically_normalize(path: &Path) -> PathBuf {
+    let mut out: Vec<Component<'_>> = Vec::new();
+    for c in path.components() {
+        match c {
+            Component::Prefix(_) | Component::RootDir => out.push(c),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                match out.last() {
+                    Some(Component::Normal(_)) => {
+                        out.pop();
+                    }
+                    // Absolute path at drive/root: extra `..` is a no-op (same as GetFullPathName).
+                    Some(Component::Prefix(_) | Component::RootDir) => {}
+                    // Relative path still above the starting point — keep the `..`.
+                    _ => out.push(c),
+                }
+            }
+            Component::Normal(_) => out.push(c),
+        }
+    }
+    out.iter().collect()
+}
+
+/// Phase 1: absolute path the OS can open. Collapses `.`/`..`; does **not** resolve symlinks.
+///
+/// Security decisions use Phase 2 ([`canonicalize_existing_dir`]) only.
+fn make_openable_absolute(path: &Path) -> std::result::Result<PathBuf, String> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        // std::path::absolute processes `.`/`..` for non-verbatim paths via the OS; verbatim
+        // inputs are returned as-is, so lexical normalize still runs below.
+        std::path::absolute(path).map_err(|e| format!("{}: {e}", path.display()))?
+    };
+    Ok(lexically_normalize(&absolute))
+}
+
+/// Resolve an untrusted workspace path to an existing absolute directory.
+///
+/// 1. **Phase 1** — [`make_openable_absolute`]: make the path openable (esp. Windows `\\?\` + `..`).
+/// 2. **Phase 2** — [`canonicalize_existing_dir`]: filesystem truth for authorization.
+///
+/// Missing paths are rejected (coding sessions need a real checkout, not a future directory).
+fn resolve_workspace_path(path: &Path) -> std::result::Result<PathBuf, String> {
+    if path.as_os_str().is_empty() {
+        return Err("path is empty".into());
+    }
+    let openable = make_openable_absolute(path)?;
+    canonicalize_existing_dir(&openable)
+}
+
+/// True when `candidate` is `root` or a strict subdirectory of `root` (after both are absolute).
+fn path_is_within(root: &Path, candidate: &Path) -> bool {
+    if candidate == root {
+        return true;
+    }
+    let mut root_components = root.components().peekable();
+    let mut cand_components = candidate.components().peekable();
+    // Reject `..` escapes in either path after canonicalization should already have removed them;
+    // still refuse if present so a non-canonical fallback cannot walk out.
+    if root.components().any(|c| matches!(c, Component::ParentDir))
+        || candidate
+            .components()
+            .any(|c| matches!(c, Component::ParentDir))
+    {
+        return false;
+    }
+    loop {
+        match (root_components.next(), cand_components.next()) {
+            (Some(r), Some(c)) if r == c => continue,
+            (None, Some(_)) => return true, // candidate longer → under root
+            (None, None) => return true,    // equal
+            _ => return false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod project_auth_tests {
+    use super::*;
+    use liberado_common::WriteClass;
+    use std::fs;
+
+    fn cfg_with_projects(projects: Vec<ProjectConfig>) -> Config {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/tmp/vault");
+        cfg.topology.projects = projects;
+        cfg
+    }
+
+    fn temp_project(name: &str, write_class: WriteClass) -> (tempfile::TempDir, ProjectConfig) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let project = ProjectConfig {
+            name: name.into(),
+            root: root.clone(),
+            write_class,
+            enabled: true,
+        };
+        (dir, project)
+    }
+
+    #[test]
+    fn ephemeral_when_neither_project_nor_path() {
+        let cfg = cfg_with_projects(vec![]);
+        assert_eq!(
+            cfg.authorize_coding_workspace(None, None).unwrap(),
+            CodingWorkspaceAuth::Ephemeral
+        );
+    }
+
+    #[test]
+    fn named_project_resolves_to_root() {
+        let (_dir, project) = temp_project("liberado", WriteClass::AgentWritable);
+        let root = project.root.clone();
+        let cfg = cfg_with_projects(vec![project]);
+        match cfg
+            .authorize_coding_workspace(Some("liberado"), None)
+            .unwrap()
+        {
+            CodingWorkspaceAuth::Project { name, root: r } => {
+                assert_eq!(name, "liberado");
+                assert_eq!(r, root);
+            }
+            other => panic!("expected Project, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_project_name_is_refused() {
+        let cfg = cfg_with_projects(vec![]);
+        let err = cfg
+            .authorize_coding_workspace(Some("nope"), None)
+            .unwrap_err();
+        assert!(matches!(err, CodingAuthError::UnknownProject { .. }));
+        assert!(err.to_string().contains("nope"));
+    }
+
+    #[test]
+    fn undeclared_workspace_path_is_refused() {
+        let outside = tempfile::tempdir().unwrap();
+        let outside = fs::canonicalize(outside.path()).unwrap();
+        let (_dir, project) = temp_project("liberado", WriteClass::AgentWritable);
+        let cfg = cfg_with_projects(vec![project]);
+        let err = cfg
+            .authorize_coding_workspace(None, Some(outside.to_str().unwrap()))
+            .unwrap_err();
+        assert!(matches!(err, CodingAuthError::UndeclaredWorkspace { .. }));
+    }
+
+    #[test]
+    fn workspace_under_project_root_is_allowed() {
+        let (_dir, project) = temp_project("liberado", WriteClass::AgentWritable);
+        let sub = project.root.join("crates");
+        fs::create_dir_all(&sub).unwrap();
+        let sub = fs::canonicalize(&sub).unwrap();
+        let cfg = cfg_with_projects(vec![project]);
+        match cfg
+            .authorize_coding_workspace(None, Some(sub.to_str().unwrap()))
+            .unwrap()
+        {
+            CodingWorkspaceAuth::Project { name, root } => {
+                assert_eq!(name, "liberado");
+                assert_eq!(root, sub);
+            }
+            other => panic!("expected Project, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn proposal_only_project_refuses_coding() {
+        let (_dir, project) = temp_project("docs", WriteClass::ProposalOnly);
+        let cfg = cfg_with_projects(vec![project]);
+        let err = cfg
+            .authorize_coding_workspace(Some("docs"), None)
+            .unwrap_err();
+        assert!(matches!(err, CodingAuthError::NotWritable { .. }));
+    }
+
+    #[test]
+    fn proposal_only_project_refuses_path_only_coding() {
+        let (_dir, project) = temp_project("docs", WriteClass::ProposalOnly);
+        let sub = project.root.join("pages");
+        std::fs::create_dir_all(&sub).unwrap();
+        let sub = std::fs::canonicalize(&sub).unwrap();
+        let cfg = cfg_with_projects(vec![project]);
+        let err = cfg
+            .authorize_coding_workspace(None, Some(sub.to_str().unwrap()))
+            .unwrap_err();
+        assert!(matches!(err, CodingAuthError::NotWritable { .. }));
+    }
+
+    #[test]
+    fn disabled_project_is_not_found() {
+        let (_dir, mut project) = temp_project("liberado", WriteClass::AgentWritable);
+        project.enabled = false;
+        let cfg = cfg_with_projects(vec![project]);
+        assert!(matches!(
+            cfg.authorize_coding_workspace(Some("liberado"), None),
+            Err(CodingAuthError::UnknownProject { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_project_names() {
+        let (_a, p1) = temp_project("same", WriteClass::AgentWritable);
+        let (_b, mut p2) = temp_project("same", WriteClass::AgentWritable);
+        p2.name = "same".into();
+        let cfg = cfg_with_projects(vec![p1, p2]);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("duplicate name"), "got {err}");
+    }
+
+    #[test]
+    fn validate_rejects_relative_project_root() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/tmp/vault");
+        cfg.topology.projects.push(ProjectConfig {
+            name: "rel".into(),
+            root: PathBuf::from("relative/path"),
+            write_class: WriteClass::AgentWritable,
+            enabled: true,
+        });
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("absolute"), "got {err}");
+    }
+
+    #[test]
+    fn most_specific_project_wins_over_broad_non_writable() {
+        // broad proposal_only umbrella + narrow agent_writable sub-project
+        let umbrella = tempfile::tempdir().unwrap();
+        let umbrella_root = std::fs::canonicalize(umbrella.path()).unwrap();
+        let nested = umbrella_root.join("life-os");
+        std::fs::create_dir_all(&nested).unwrap();
+        let cfg = cfg_with_projects(vec![
+            ProjectConfig {
+                name: "umbrella".into(),
+                root: umbrella_root.clone(),
+                write_class: WriteClass::ProposalOnly,
+                enabled: true,
+            },
+            ProjectConfig {
+                name: "life-os".into(),
+                root: nested.clone(),
+                write_class: WriteClass::AgentWritable,
+                enabled: true,
+            },
+        ]);
+        match cfg
+            .authorize_coding_workspace(None, Some(nested.to_str().unwrap()))
+            .unwrap()
+        {
+            CodingWorkspaceAuth::Project { name, .. } => {
+                assert_eq!(name, "life-os", "narrower writable project must win");
+            }
+            other => panic!("expected Project, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scenic_workspace_path_with_parent_components_is_resolved() {
+        // Built as a *string*: PathBuf::join would collapse `..` on Windows verbatim roots
+        // before we ever see it, so the bug (exists fails on `\\?\…\crates\..\crates`) never
+        // appears. Authorization must still accept the scenic spelling and return the canonical
+        // child.
+        let (_dir, project) = temp_project("liberado", WriteClass::AgentWritable);
+        let sub = project.root.join("crates");
+        fs::create_dir_all(&sub).unwrap();
+        let sub = fs::canonicalize(&sub).unwrap();
+        let sep = std::path::MAIN_SEPARATOR;
+        let scenic = format!("{}{sep}crates{sep}..{sep}crates", project.root.display());
+        let cfg = cfg_with_projects(vec![project]);
+        match cfg.authorize_coding_workspace(None, Some(&scenic)).unwrap() {
+            CodingWorkspaceAuth::Project { name, root } => {
+                assert_eq!(name, "liberado");
+                assert_eq!(root, sub, "pack-facing root must be canonical, not scenic");
+            }
+            other => panic!("expected Project, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scenic_path_that_escapes_every_project_is_refused() {
+        // `project_root/../<sibling>` resolves outside every declared root.
+        // Built as a string so Windows verbatim roots keep the ParentDir component.
+        let (_dir, project) = temp_project("liberado", WriteClass::AgentWritable);
+        let parent = project.root.parent().expect("canonical temp has a parent");
+        let sibling = tempfile::Builder::new()
+            .prefix("escape-")
+            .tempdir_in(parent)
+            .unwrap();
+        let sibling_name = sibling.path().file_name().unwrap().to_string_lossy();
+        let sep = std::path::MAIN_SEPARATOR;
+        let scenic = format!("{}{sep}..{sep}{sibling_name}", project.root.display());
+        let cfg = cfg_with_projects(vec![project]);
+        let err = cfg
+            .authorize_coding_workspace(None, Some(&scenic))
+            .unwrap_err();
+        assert!(
+            matches!(err, CodingAuthError::UndeclaredWorkspace { .. }),
+            "escape via .. must be refused after resolve, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn missing_workspace_path_is_invalid() {
+        let (_dir, project) = temp_project("liberado", WriteClass::AgentWritable);
+        let missing = project.root.join("does-not-exist");
+        let cfg = cfg_with_projects(vec![project]);
+        let err = cfg
+            .authorize_coding_workspace(None, Some(&missing.to_string_lossy()))
+            .unwrap_err();
+        assert!(
+            matches!(err, CodingAuthError::InvalidPath { .. }),
+            "missing checkout must be InvalidPath, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn empty_workspace_path_is_treated_as_absent() {
+        let cfg = cfg_with_projects(vec![]);
+        assert_eq!(
+            cfg.authorize_coding_workspace(None, Some("   ")).unwrap(),
+            CodingWorkspaceAuth::Ephemeral
+        );
+    }
+
+    #[test]
+    fn path_is_within_rejects_sibling() {
+        let a = PathBuf::from("/tmp/projects/a");
+        let b = PathBuf::from("/tmp/projects/b");
+        assert!(!path_is_within(&a, &b));
+        assert!(path_is_within(&a, &a));
+        assert!(path_is_within(&a, &a.join("src")));
+    }
+
+    #[test]
+    fn a_sibling_whose_name_merely_starts_with_the_root_is_not_inside_it() {
+        // The failure this boundary is most often written with: `starts_with` on the string form
+        // says `/tmp/projects/app-evil` is under `/tmp/projects/app`, because it is — as text.
+        // Comparing components is what makes it not so, and nothing here pinned that.
+        let root = PathBuf::from("/tmp/projects/app");
+        for outside in [
+            "/tmp/projects/app-evil",
+            "/tmp/projects/app2",
+            "/tmp/projects/appendix/src",
+        ] {
+            assert!(
+                !path_is_within(&root, Path::new(outside)),
+                "{outside} shares a textual prefix with the root but is not under it"
+            );
+        }
+        assert!(
+            path_is_within(&root, Path::new("/tmp/projects/app/src")),
+            "a genuine child must still be allowed"
+        );
+    }
+
+    #[test]
+    fn an_authorized_project_refuses_a_prefix_sibling_end_to_end() {
+        // The unit above is about the predicate; this is about the answer the daemon acts on.
+        let parent = tempfile::tempdir().unwrap();
+        let parent = std::fs::canonicalize(parent.path()).unwrap();
+        let root = parent.join("app");
+        let sibling = parent.join("app-evil");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&sibling).unwrap();
+
+        let cfg = cfg_with_projects(vec![ProjectConfig {
+            name: "app".into(),
+            root: root.clone(),
+            write_class: WriteClass::AgentWritable,
+            enabled: true,
+        }]);
+
+        let err = cfg
+            .authorize_coding_workspace(Some("app"), Some(&sibling.to_string_lossy()))
+            .unwrap_err();
+        assert!(
+            matches!(err, CodingAuthError::UndeclaredWorkspace { .. }),
+            "a prefix sibling must be refused, got {err:?}"
+        );
+        // …and the same path with no project named, so neither branch is the lenient one.
+        let err = cfg
+            .authorize_coding_workspace(None, Some(&sibling.to_string_lossy()))
+            .unwrap_err();
+        assert!(
+            matches!(err, CodingAuthError::UndeclaredWorkspace { .. }),
+            "path-only auth must refuse it too, got {err:?}"
+        );
     }
 }
