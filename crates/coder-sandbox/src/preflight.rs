@@ -114,6 +114,11 @@ pub enum PreflightError {
 ///
 /// Not multi-OS; remote CI still owns the matrix. Prefer project config / shared script when
 /// present; this is the built-in default for project `liberado` when config omits steps.
+///
+/// `--no-fail-fast` on the test step for the same reason CI uses it: cargo otherwise stops at the
+/// first failing test binary, so the failures it reports are truncated. A truncated set breaks
+/// [`diff_against_baseline`] — fixing an early failure lets cargo reach later ones, and they then
+/// look like new regressions caused by the fix.
 pub fn liberado_ship_preflight_steps() -> Vec<PreflightStep> {
     vec![
         PreflightStep::new("fmt", "cargo fmt --check"),
@@ -121,9 +126,101 @@ pub fn liberado_ship_preflight_steps() -> Vec<PreflightStep> {
             "clippy",
             "cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings",
         ),
-        PreflightStep::new("test", "cargo test --workspace"),
+        PreflightStep::new("test", "cargo test --workspace --no-fail-fast"),
         PreflightStep::new("deny", "cargo deny check"),
     ]
+}
+
+/// What failed in one step, as a set of stable identities.
+///
+/// Keyed by step name so the same test name failing under two different steps stays two facts.
+pub type FailureSet = std::collections::BTreeMap<String, std::collections::BTreeSet<String>>;
+
+/// Pull stable identities out of one step's log.
+///
+/// Identity, never count: a count can stay flat while one test starts failing and another stops,
+/// which is a regression a numeric check waves through.
+///
+/// Recognised today:
+/// * `test <name> ... FAILED` — cargo test, the dominant case.
+/// * `RUSTSEC-YYYY-NNNN` — cargo-deny advisories. These appear on their own as the world
+///   publishes CVEs, with no change to the code, so forgiving pre-existing ones matters as much
+///   here as for tests.
+///
+/// Anything else that failed collapses to the opaque marker [`OPAQUE_FAILURE`]. That is
+/// deliberately coarse: for a step like `fmt` or `clippy`, a base that was already failing
+/// forgives *any* failure of that step. It is a bounded, documented hole, and still strictly
+/// better than the alternative — a gate the agent cannot pass and cannot fix.
+pub fn failure_identities(log: &str) -> std::collections::BTreeSet<String> {
+    let mut found = std::collections::BTreeSet::new();
+    for line in log.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("test ")
+            && let Some(name) = rest.split(" ... ").next()
+            && rest.contains("... FAILED")
+            && !name.is_empty()
+            && !name.starts_with("result:")
+        {
+            found.insert(name.trim().to_string());
+        }
+        if let Some(idx) = line.find("RUSTSEC-") {
+            let id: String = line[idx..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+                .collect();
+            if id.len() > "RUSTSEC-".len() {
+                found.insert(id);
+            }
+        }
+    }
+    found
+}
+
+/// Marker for a failing step whose log yielded no parseable identity.
+pub const OPAQUE_FAILURE: &str = "<step failed>";
+
+/// Identities for every failing step in a report.
+pub fn report_failures(report: &PreflightReport) -> FailureSet {
+    let mut out = FailureSet::new();
+    for step in &report.steps {
+        if step.ok {
+            continue;
+        }
+        let mut ids = failure_identities(&step.log_excerpt);
+        if ids.is_empty() {
+            ids.insert(OPAQUE_FAILURE.to_string());
+        }
+        out.insert(step.name.clone(), ids);
+    }
+    out
+}
+
+/// Failures present now but not in `baseline`, per step.
+///
+/// This is the whole point of the gate: "did you break something" and "was it already broken"
+/// need opposite responses, and an absolute pass/fail cannot tell them apart. Requiring absolute
+/// green locks out the entire class of work that *fixes* a red base.
+pub fn diff_against_baseline(current: &FailureSet, baseline: &FailureSet) -> FailureSet {
+    let mut new = FailureSet::new();
+    for (step, ids) in current {
+        let known = baseline.get(step);
+        let fresh: std::collections::BTreeSet<String> = ids
+            .iter()
+            .filter(|id| known.is_none_or(|k| !k.contains(*id)))
+            .cloned()
+            .collect();
+        if !fresh.is_empty() {
+            new.insert(step.clone(), fresh);
+        }
+    }
+    new
+}
+
+/// Flatten a [`FailureSet`] to `step: identity` lines, for prompts and logs.
+pub fn describe_failures(set: &FailureSet) -> Vec<String> {
+    set.iter()
+        .flat_map(|(step, ids)| ids.iter().map(move |id| format!("{step}: {id}")))
+        .collect()
 }
 
 pub fn liberado_ship_preflight_spec() -> PreflightSpec {
@@ -317,6 +414,126 @@ pub fn resolve_ship_spec(
         return Some(liberado_ship_preflight_spec());
     }
     None
+}
+
+#[cfg(test)]
+mod differential_tests {
+    use super::*;
+
+    fn set(step: &str, ids: &[&str]) -> FailureSet {
+        let mut m = FailureSet::new();
+        m.insert(
+            step.to_string(),
+            ids.iter().map(|s| s.to_string()).collect(),
+        );
+        m
+    }
+
+    #[test]
+    fn parses_cargo_test_failures_and_ignores_the_summary_line() {
+        let log = "\
+running 3 tests
+test gates::foo ... ok
+test gates::bar ... FAILED
+test gates::baz ... FAILED
+test result: FAILED. 1 passed; 2 failed; 0 ignored
+";
+        let ids = failure_identities(log);
+        assert_eq!(
+            ids.iter().cloned().collect::<Vec<_>>(),
+            vec!["gates::bar".to_string(), "gates::baz".to_string()],
+            "the `test result: FAILED.` summary must not be mistaken for a test name"
+        );
+    }
+
+    /// Advisories appear with no code change at all, as the world publishes CVEs. Forgiving a
+    /// pre-existing one matters as much as forgiving a pre-existing test failure — otherwise
+    /// every goal starts failing overnight on something the agent cannot fix.
+    #[test]
+    fn parses_cargo_deny_advisory_ids() {
+        let ids = failure_identities("error[vulnerability]: crate has RUSTSEC-2024-0011 filed");
+        assert!(ids.contains("RUSTSEC-2024-0011"), "{ids:?}");
+    }
+
+    #[test]
+    fn unparseable_failure_collapses_to_the_opaque_marker() {
+        let report = PreflightReport {
+            profile_id: "ship".into(),
+            ok: false,
+            duration_ms: 1,
+            summary: String::new(),
+            steps: vec![PreflightStepResult {
+                name: "fmt".into(),
+                exit_code: Some(1),
+                duration_ms: 1,
+                timed_out: false,
+                ok: false,
+                log_excerpt: "Diff in src/lib.rs at line 4".into(),
+            }],
+        };
+        assert_eq!(
+            report_failures(&report).get("fmt").unwrap().iter().next(),
+            Some(&OPAQUE_FAILURE.to_string())
+        );
+    }
+
+    #[test]
+    fn a_failure_already_in_the_baseline_is_not_new() {
+        let base = set("test", &["a", "b"]);
+        let current = set("test", &["a", "b"]);
+        assert!(diff_against_baseline(&current, &base).is_empty());
+    }
+
+    #[test]
+    fn a_failure_absent_from_the_baseline_is_new() {
+        let base = set("test", &["a"]);
+        let current = set("test", &["a", "b"]);
+        assert_eq!(
+            describe_failures(&diff_against_baseline(&current, &base)),
+            vec!["test: b".to_string()]
+        );
+    }
+
+    /// The case a count-based check waves through: same number of failures, but a different one.
+    #[test]
+    fn equal_counts_with_a_different_test_is_still_a_regression() {
+        let base = set("test", &["a", "b"]);
+        let current = set("test", &["a", "c"]);
+        let new = diff_against_baseline(&current, &base);
+        assert_eq!(describe_failures(&new), vec!["test: c".to_string()]);
+    }
+
+    /// A branch that only *fixes* things must pass. This is the case absolute-green got wrong:
+    /// it blocks the work that repairs a red base.
+    #[test]
+    fn fixing_baseline_failures_yields_nothing_new() {
+        let base = set("test", &["a", "b"]);
+        let current = FailureSet::new();
+        assert!(diff_against_baseline(&current, &base).is_empty());
+    }
+
+    /// Steps are separate namespaces — the same identity under a different step is a new fact.
+    #[test]
+    fn the_same_identity_under_a_different_step_is_new() {
+        let base = set("test", &["a"]);
+        let current = set("clippy", &["a"]);
+        assert_eq!(
+            describe_failures(&diff_against_baseline(&current, &base)),
+            vec!["clippy: a".to_string()]
+        );
+    }
+
+    /// No baseline at all (first run on an unknown base) means every failure is new — the gate
+    /// stays fail-closed rather than defaulting to "probably fine".
+    #[test]
+    fn an_empty_baseline_treats_every_failure_as_new() {
+        let current = set("test", &["a", "b"]);
+        assert_eq!(diff_against_baseline(&current, &FailureSet::new()).len(), 1);
+        assert_eq!(
+            describe_failures(&diff_against_baseline(&current, &FailureSet::new())).len(),
+            2
+        );
+    }
 }
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ description = "Workspace and command sandbox abstractions for Liberado's Rust-na
 async-trait.workspace = true
 liberado-coder-core.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
