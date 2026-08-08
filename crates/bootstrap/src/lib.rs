@@ -117,6 +117,53 @@ fn build_provider_from_profile(
     Some(Arc::new(provider))
 }
 
+/// A [`CoderProviderFactory`] that honours the model each coding role asks for.
+///
+/// The pack's own `SingleProviderFactory` returns the one daemon provider for every role,
+/// whatever `CoderRoleConfig::model` says — so `[coder.coder].model` selected nothing, and the
+/// session event log reported the placeholder `"session-coder"` as the model in use.
+///
+/// A fresh provider per call, deliberately. `Provider::set_model` writes through a `RwLock` on the
+/// shared trait object, so re-modelling the daemon's provider would change the model for every
+/// other holder — the chat face agent included.
+pub struct CoderRoleProviderFactory {
+    profile: ProviderProfile,
+}
+
+impl CoderRoleProviderFactory {
+    /// `None` when the configured provider has no profile or its API key is unset, so the caller
+    /// keeps whatever provider it already had rather than silently losing coding.
+    pub fn for_config(config: &Config) -> Option<Self> {
+        let profile = resolve_provider_profile(config, &config.topology.provider)?;
+        std::env::var(&profile.api_key_env).ok()?;
+        Some(Self {
+            profile: profile.clone(),
+        })
+    }
+}
+
+impl liberado_coder_agent::CoderProviderFactory for CoderRoleProviderFactory {
+    fn provider_for(
+        &self,
+        _role: &str,
+        config: &liberado_coder_core::CoderRoleConfig,
+    ) -> Result<Arc<dyn Provider>, liberado_coder_core::CoderError> {
+        let provider = OpenAiCompatibleProvider::from_env(
+            &self.profile.api_key_env,
+            self.profile.model_env.as_deref(),
+            &self.profile.default_model,
+            &self.profile.base_url,
+            self.profile.extra_client_error_status.clone(),
+        )
+        .map_err(|e| liberado_coder_core::CoderError::Backend(e.to_string()))?;
+        provider.set_model(config.model.clone());
+        if let Some(t) = config.temperature {
+            return Ok(Arc::new(provider.with_temperature(Some(t))));
+        }
+        Ok(Arc::new(provider))
+    }
+}
+
 /// The two subagent-tagged providers, built together — an `Option` pair where both are `Some` or
 /// both `None`, so the `.expect("subagent_worker built alongside subagent")` unwraps that used to
 /// exist at two sites are structurally impossible now.  The invariant was always true (the builder
