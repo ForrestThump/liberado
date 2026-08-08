@@ -156,13 +156,23 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
                     .with_max_concurrent_coding_subagents(
                         config.tuning.dispatch.max_concurrent_coding_subagents,
                     );
-                if let Ok(coder_tuning) =
-                    liberado_coder_core::CoderTuning::from_value(config.tuning.coder.as_ref())
-                {
-                    pack = pack
-                        .with_hashline(coder_tuning.hashline)
-                        .with_gate(coder_tuning.gate)
-                        .with_coder_role(coder_tuning.coder);
+                // A malformed `[coder]` section used to be swallowed by `if let Ok(..)`, so the
+                // pack silently kept its defaults and the operator's settings did nothing — with
+                // no line anywhere saying why. Cost an hour of "why is my configured model being
+                // ignored"; say it out loud instead.
+                match liberado_coder_core::CoderTuning::from_value(config.tuning.coder.as_ref()) {
+                    Ok(coder_tuning) => {
+                        pack = pack
+                            .with_hashline(coder_tuning.hashline)
+                            .with_gate(coder_tuning.gate)
+                            .with_coder_role(coder_tuning.coder);
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            "[coder] tuning section is invalid and was IGNORED; the coding pack is running on built-in defaults, not your config"
+                        );
+                    }
                 }
                 // Without this the pack's provider factory returns the daemon's provider for every
                 // role, so the coder's configured model is ignored and the run reports a model
