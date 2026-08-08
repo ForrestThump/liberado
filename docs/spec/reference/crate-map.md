@@ -2,10 +2,10 @@
 
 > **Generated file - do not edit.** Regenerate with `powershell -File scripts/gen-crate-map.ps1`.
 > Source of truth: each crate's `Cargo.toml` (`description` + `[package.metadata.liberado] role`).
-> Layer semantics and dependency rules: [contracts.md](../../spec/architecture/contracts.md) and
+> Layer semantics and dependency rules: [contracts.md](../architecture/contracts.md) and
 > `crates/test-support/tests/layer_rules.rs` (the same role tags, mechanically enforced).
 
-43 workspace crates as of 2026-07-31 (excluding `liberado-webui`).
+46 workspace crates as of 2026-08-08.
 
 ## foundation
 
@@ -16,7 +16,7 @@ The bottom layer: vocabulary and narrow-waist traits. Depends on nothing above i
 | [`liberado-common`](../../../crates/common/) | *none* | Shared types for the Liberado system: capabilities/zones, write provenance, events, dispatch decisions, proposals, and model profiles. |
 | [`liberado-config-loader`](../../../crates/config-loader/) | `liberado-common` | ConfigSource trait + ChainLoader for layered Liberado configuration loading. |
 | [`liberado-messaging`](../../../crates/messaging/) | *none* | Channel-agnostic messaging traits for Liberado chat clients (Telegram today; Matrix, Signal, Discord later). Transport only — no network deps. |
-| [`liberado-notify`](../../../crates/notify/) | *none* | A minimal, pluggable notification sink for events a human should know about even when nothing else in the daemon's own surfaces is open in front of them right now — the motivating case is an unattended (cron-triggered, Phase 3) proposal nobody's watching for. Telegram is the first implementation (free, mature); the Notifier trait exists so it isn't the only one. |
+| [`liberado-notify`](../../../crates/notify/) | `liberado-messaging` | A minimal, pluggable notification sink for events a human should know about even when nothing else in the daemon's own surfaces is open in front of them right now — the motivating case is an unattended (cron-triggered, Phase 3) proposal nobody's watching for. Telegram is the first implementation (free, mature); the Notifier trait exists so it isn't the only one. Also hosts Telegram's MessagingChannel impl so Matrix/Discord/Signal can plug in via the same trait. |
 | [`liberado-provider`](../../../crates/provider/) | *none* | The provider-agnostic inference interface for Liberado: a narrow async `Provider` trait (tool-calling + structured output) plus a scriptable mock for deterministic tests. |
 
 ## client
@@ -26,7 +26,7 @@ Front-end building blocks, liftable into any UI without dragging the system alon
 | Crate | Internal deps | Description |
 |---|---|---|
 | [`chat-client-contract`](../../../crates/chat-client-contract/) | *none* | Shared HTTP/SSE wire DTOs + the SseDecoder incremental parser -- the one contract every chat surface (TUI, WebUI, CLI) speaks. |
-| [`liberado-commands`](../../../crates/liberado-commands/) | `liberado-theme` | Shared slash-command parser and handlers for Liberado chat clients (TUI, WebUI, CLI) |
+| [`liberado-commands`](../../../crates/liberado-commands/) | *none* | Shared slash-command parser and handlers for Liberado chat clients (TUI, WebUI, CLI) |
 | [`liberado-markdown`](../../../crates/markdown/) | *none* | Lightweight Markdown parser for Liberado — UI-agnostic blocks and inline spans consumed by ratatui, Dioxus, and terminal output. |
 | [`liberado-theme`](../../../crates/theme/) | *none* | Shared theme definitions for Liberado UIs — color tokens consumed by ratatui, Dioxus/CSS, and terminal output. No UI dependency. |
 
@@ -54,7 +54,7 @@ Persistent and shared information: vault, conversations, memory, search.
 | Crate | Internal deps | Description |
 |---|---|---|
 | [`liberado-chat-search`](../../../crates/chat-search/) | `liberado-conversation-store`, `liberado-session-store`, `liberado-provider` | Full-text and regex search over Liberado session history — it scans the converged session store's JSONL logs directly. Query parsing, per-file scanning, snippet extraction, shared by liberado-server's REST endpoint and the chat-search MCP tool so search logic exists exactly once. |
-| [`liberado-conversation-store`](../../../crates/conversation-store/) | `liberado-provider` | The Decision-17 conversation CONTRACT: the ConversationStore trait plus the message-node DAG types (id, parent_id, Author) every session transcript is made of. No implementation lives here — liberado-session-store implements it. |
+| [`liberado-conversation-store`](../../../crates/conversation-store/) | `liberado-provider`, `liberado-session` | The Decision-17 conversation CONTRACT: the ConversationStore trait plus the message-node DAG types (id, parent_id, Author) every session transcript is made of. No implementation lives here — liberado-session-store implements it. |
 | [`liberado-memory-store`](../../../crates/memory-store/) | `liberado-common`, `liberado-vault` | Vault-backed general (facts/preferences) and procedural (tool-selection guidance) memory stores shared by liberado-memory-mcp and the dispatcher. Cleartext markdown notes are the source of truth; each store also maintains a turbovault-vector HNSW index for semantic recall. Native Rust — no external mem0 dependency. |
 | [`liberado-session-store`](../../../crates/session-store/) | `liberado-common`, `liberado-conversation-store`, `liberado-provider`, `liberado-session` | The converged Session store (D7): one append-only JSONL log per session holding both message nodes (the DAG) and pack events. Two typed lenses — ConversationStore and SessionRecordStore — over one engine. |
 | [`liberado-vault`](../../../crates/vault/) | `liberado-common` | Liberado's thin adapter over Turbovault: provenance-tagged writes (Decision 5) and consumer-side hash-join attribution for loop-breaking. The single place the upstream-dependency fallbacks (concurrency spec §8.1) are isolated. |
@@ -70,7 +70,7 @@ Domain packs (coding first). Never sit beneath kernel/config/store layers.
 | [`liberado-coder-runner`](../../../crates/coder-runner/) | *none* | Process boundary for the coding pack: the liberado-coder-run subprocess bridge nested consumers (PR factory) drive over JSON. |
 | [`liberado-coder-sandbox`](../../../crates/coder-sandbox/) | *none* | Workspace and command sandbox abstractions for Liberado's Rust-native coder |
 | [`liberado-coder-tools`](../../../crates/coder-tools/) | *none* | Executor ToolRuntime implementation for Liberado's Rust-native coder |
-| [`liberado-dispatch-pack`](../../../crates/dispatch-pack/) | `liberado-common`, `liberado-dispatcher`, `liberado-notify`, `liberado-orchestrator`, `liberado-session` | Domain pack that runs the dispatcher + orchestrator as a GoalSessionHub pack — the one-execution-engine convergence (E2). |
+| [`liberado-dispatch-pack`](../../../crates/dispatch-pack/) | `liberado-common`, `liberado-dispatcher`, `liberado-notify`, `liberado-orchestrator`, `liberado-provider`, `liberado-session` | Domain pack that runs the dispatcher + orchestrator as a GoalSessionHub pack — the one-execution-engine convergence (E2). |
 
 ## service
 
@@ -81,7 +81,7 @@ Out-of-process adapters: MCP servers, bots, the forge.
 | [`liberado-chat-search-mcp`](../../../crates/chat-search-mcp/) | `liberado-chat-search`, `liberado-config` | MCP server exposing conversation history search as a tool, so the dispatcher can search chat history mid-reasoning (not just the human, via the webui). Registered in topology.toml as a stdio MCP; built in-workspace, not a managed (cargo-installed-from-git) MCP. |
 | [`liberado-mcp-forge`](../../../crates/mcp-forge/) | `liberado-common`, `liberado-config` | Builds and installs Liberado MCP servers from git URLs via `cargo install --git`, wiring them to `McpTransport::Managed` entries in topology.toml by convention. |
 | [`liberado-memory-mcp`](../../../crates/memory-mcp/) | `liberado-common`, `liberado-config`, `liberado-vault`, `liberado-memory-store` | MCP server exposing general memory (user facts/preferences) and procedural memory (tool-selection guidance) as agent-callable tools, backed by liberado-memory-store. Registered in topology.toml as a stdio MCP; built in-workspace, not a managed (cargo-installed-from-git) MCP. Replaces the old liberado-tool-helper-mcp, which proxied every call over HTTP to an external mem0 service. |
-| [`liberado-telegram-approvals`](../../../crates/telegram-approvals/) | `liberado-common`, `liberado-config-loader`, `liberado-provider`, `liberado-vault` | A Telegram bot that turns Approve/Reject/Revise button taps into pure-code proposal frontmatter edits — Approve/Reject never touch an LLM; Revise hands free text to the shared provider only to redraft a proposal's content, which still requires a fresh human tap to execute. |
+| [`liberado-telegram-approvals`](../../../crates/telegram-approvals/) | `liberado-common`, `liberado-config-loader`, `liberado-messaging`, `liberado-notify`, `liberado-provider`, `liberado-vault` | Channel-agnostic approval/chat bot: Approve/Reject/Revise button taps become pure-code proposal frontmatter edits (Approve/Reject never touch an LLM; Revise redrafts content only). Telegram is the default MessagingChannel; Matrix/Discord/Signal plug in via the same trait. |
 
 ## surface
 
@@ -98,18 +98,20 @@ Composition roots: the only crates allowed to see everything.
 
 | Crate | Internal deps | Description |
 |---|---|---|
+| [`liberado-acp-bridge`](../../../crates/acp-bridge/) | *none* | ACP (Agent Client Protocol) bridge over stdio for Paseo integration. |
 | [`liberado-bootstrap`](../../../crates/bootstrap/) | `liberado-common`, `liberado-config`, `liberado-cron`, `liberado-daemon`, `liberado-dispatcher`, `liberado-dispatch-pack`, `liberado-notify`, `liberado-orchestrator`, `liberado-executor`, `liberado-mcp`, `liberado-provider`, `liberado-provider-openai-compat` | Composition helpers that build Liberado's provider/dispatcher/orchestrator from the process environment — the shared daemon-assembly logic for every binary, so the env wiring lives in one place. |
 | [`liberado-cli`](../../../crates/cli/) | `liberado-server`, `chat-client-contract` | the `liberado` binary: a client + launcher — `serve` runs the daemon/API, `chat` is a streaming client |
-| [`liberado-daemon`](../../../crates/daemon/) | `liberado-common`, `liberado-notify`, `liberado-vault`, `liberado-dispatcher`, `liberado-orchestrator`, `liberado-provider`, `liberado-session` | The Liberado daemon (Decision 2, daemon-first): the long-running core that watches the vault, attributes changes (loop-breaking), and emits reactable events. v1 vertical slice. |
-| [`liberado-server`](../../../crates/server/) | `chat-client-contract`, `liberado-bootstrap`, `liberado-chat-search`, `liberado-common`, `liberado-config`, `liberado-daemon`, `liberado-dispatcher`, `liberado-mcp`, `liberado-executor`, `liberado-main-agent`, `liberado-conversation-store`, `liberado-provider`, `liberado-telegram-approvals`, `liberado-memory-store`, `liberado-vault`, `liberado-session`, `liberado-session-store`, `liberado-coder-agent`, `liberado-notify` | The Liberado daemon's API server (library): the watch loop + chat + HTTP/SSE API. Runnable via `liberado serve`. |
+| [`liberado-daemon`](../../../crates/daemon/) | `liberado-common`, `liberado-config`, `liberado-notify`, `liberado-vault`, `liberado-dispatcher`, `liberado-orchestrator`, `liberado-session`, `liberado-provider` | The Liberado daemon (Decision 2, daemon-first): the long-running core that watches the vault, attributes changes (loop-breaking), and emits reactable events. v1 vertical slice. |
+| [`liberado-server`](../../../crates/server/) | `chat-client-contract`, `liberado-bootstrap`, `liberado-chat-search`, `liberado-common`, `liberado-cost`, `liberado-config`, `liberado-daemon`, `liberado-dispatcher`, `liberado-mcp`, `liberado-executor`, `liberado-main-agent`, `liberado-conversation-store`, `liberado-provider`, `liberado-telegram-approvals`, `liberado-commands`, `liberado-memory-store`, `liberado-vault`, `liberado-session`, `liberado-session-store`, `liberado-coder-agent`, `liberado-coder-core`, `liberado-notify`, `liberado-messaging` | The Liberado daemon's API server (library): the watch loop + chat + HTTP/SSE API. Runnable via `liberado serve`. |
 
 ## tooling
 
-Meta tooling (evals, heuristics tuner, cost accounting). Not build dependencies of the system.
+Meta tooling (evals, heuristics tuner). Not build dependencies of the system.
 
 | Crate | Internal deps | Description |
 |---|---|---|
-| [`liberado-cost`](../../../crates/cost/) | `liberado-common`, `liberado-config-loader` | Token cost accounting over the existing latency journal (D1+D2 of `token-cost-accounting-plan.md`). Applies `[[models]]` per-million rates **at read time** — the journal never stores money — and rolls a conversation up through the dispatch journal's `parent_conversation`, so delegated subagent spend is attributed to the turn that caused it. Reads JSONL rather than depending on `liberado-provider`; `tests/journal_shape.rs` is the guard that the two shapes still agree. |
+| [`liberado-conformance`](../../../crates/conformance/) | `chat-client-contract` | Tier 3 live conformance runner: exercises each execution path against a deployed daemon over HTTP, asserts ground-truth outcomes, writes vault reports. Hand-run on the box for v1. |
+| [`liberado-cost`](../../../crates/cost/) | `liberado-common`, `liberado-config-loader` | Token cost accounting over the latency journal (D1+D2): read-time pricing from [[models]] rates, conversation rollup via dispatch journals, per-role / turn growth / cache-hit reports. |
 | [`liberado-eval`](../../../crates/eval/) | `liberado-common`, `liberado-config-loader`, `liberado-dispatcher`, `liberado-provider`, `liberado-provider-openai-compat` | The heuristic-tuning instrument (testing-and-eval-spec §4.2): runs the real dispatcher over a labeled set of routing scenarios and reports routing accuracy, safe-default rate, and the safety-regression gate — used to A/B the system prompt and tune the guards. |
 | [`liberado-heuristics-tuner`](../../../crates/heuristics-tuner/) | `liberado-coder-agent`, `liberado-coder-core`, `liberado-common`, `liberado-config`, `liberado-dispatcher`, `liberado-eval`, `liberado-executor`, `liberado-orchestrator`, `liberado-provider`, `liberado-provider-openai-compat` | Automates prompt-tuning for dispatcher, executor/subagent tool loops, and Liberado coder-role system prompts via beam search; proposes diffs + rubrics for human review. Never auto-applies prompt changes. |
 
@@ -119,4 +121,4 @@ Dev-dependency-only test support.
 
 | Crate | Internal deps | Description |
 |---|---|---|
-| [`liberado-test-support`](../../../crates/test-support/) | `liberado-common`, `liberado-executor`, `liberado-provider` | Shared ToolRuntime/RuntimeFactory test doubles, consolidating what used to be duplicated across liberado-orchestrator's and liberado-daemon's own test modules. Test-only: consumed exclusively as a dev-dependency. |
+| [`liberado-test-support`](../../../crates/test-support/) | `liberado-common`, `liberado-executor`, `liberado-provider`, `liberado-notify` | Shared ToolRuntime/RuntimeFactory test doubles, consolidating what used to be duplicated across liberado-orchestrator's and liberado-daemon's own test modules. Test-only: consumed exclusively as a dev-dependency. |

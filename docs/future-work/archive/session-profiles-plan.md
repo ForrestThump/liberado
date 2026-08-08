@@ -82,10 +82,10 @@ turn.
 The switch is `POST /api/conversations/{id}/profile`, reachable from surfaces only and **never
 registered as a tool in any runtime catalog**. `delegate` cannot reach it, so the agent cannot
 re-authorise itself. This is an authority-channel act, not an information-channel one
-([`channels-and-interactivity.md`](../spec/architecture/channels-and-interactivity.md)).
+([`channels-and-interactivity.md`](../../spec/architecture/channels-and-interactivity.md)).
 
 Do not rest that claim on "no tool does this" alone — see the loopback exposure in
-[`../spec/reference/api.md`](../spec/reference/api.md#trust-boundary-the-api-is-unauthenticated-and-agent-reachable).
+[`../spec/reference/api.md`](../../spec/reference/api.md#trust-boundary-the-api-is-unauthenticated-and-agent-reachable).
 A granted web-fetching MCP can `GET` the daemon's own API. `POST` is out of reach of a GET-only
 fetcher, which is why the switch is a `POST` — an incidental defence, but a real one. **Tracked
 separately; not part of this plan.**
@@ -325,14 +325,14 @@ The chip, the picker, and profile-before-first-message all worked end to end.
 
 **And the session did nothing.** Asked "What tasks do I have open?", the model replied *"I'll fetch
 your open tasks first."* and issued **zero tool calls** — announced an action, took none. The exact
-symptom [`pr-dispatch-vtcode-no-write-finding.md`](pr-dispatch-vtcode-no-write-finding.md) spent
+symptom [`pr-dispatch-vtcode-no-write-finding.md`](../pr-dispatch-vtcode-no-write-finding.md) spent
 three rounds on, reproduced in our own system on the first live run.
 
 The cause is the drift step 7 predicts, now concrete:
 
-- [`crates/server/src/lib.rs`](../../crates/server/src/lib.rs) ~750 picks the system prompt **once at
+- [`crates/server/src/lib.rs`](../../../crates/server/src/lib.rs) ~750 picks the system prompt **once at
   daemon construction** from the global `main_agent.delegation_mode`.
-- [`crates/main-agent/src/sessions.rs`](../../crates/main-agent/src/sessions.rs) ~479 persists that
+- [`crates/main-agent/src/sessions.rs`](../../../crates/main-agent/src/sessions.rs) ~479 persists that
   one prompt as every conversation's root node.
 - The same file ~580/~640 resolves `uses_face_agent(settings.delegation)` **per turn, per profile**.
 

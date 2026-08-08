@@ -1,4 +1,4 @@
-# Regenerate docs/reference/crate-map.md from the crate manifests.
+# Regenerate docs/spec/reference/crate-map.md from the crate manifests.
 #
 # Single source of truth: each crate's Cargo.toml provides `description` and
 # `[package.metadata.liberado] role`. The same role tags drive the layer-rules test
@@ -10,7 +10,10 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $cratesDir = Join-Path $root 'crates'
-$outPath = Join-Path $root 'docs/reference/crate-map.md'
+# Must match where the map actually lives. This said 'docs/reference/' while the file
+# was at 'docs/spec/reference/', so running the script created a second, stray copy instead
+# of refreshing the real one -- and the real one silently went stale (43 crates vs 46).
+$outPath = Join-Path $root 'docs/spec/reference/crate-map.md'
 
 $roleOrder = @('foundation', 'client', 'kernel', 'store', 'pack', 'service', 'surface', 'root', 'tooling', 'testing')
 $roleBlurbs = @{
@@ -70,7 +73,7 @@ foreach ($role in $roleOrder) {
     foreach ($c in $group) {
         $depsStr = if ($c.Deps.Count -gt 0) { ($c.Deps | ForEach-Object { '`{0}`' -f $_ }) -join ', ' } else { '*none*' }
         $descStr = if ($c.Desc) { $c.Desc } else { '*(no description in Cargo.toml)*' }
-        [void]$sb.AppendLine(('| [`{0}`](../../crates/{1}/) | {2} | {3} |' -f $c.Name, $c.Dir, $depsStr, $descStr))
+        [void]$sb.AppendLine(('| [`{0}`](../../../crates/{1}/) | {2} | {3} |' -f $c.Name, $c.Dir, $depsStr, $descStr))
     }
 }
 

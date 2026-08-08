@@ -8,6 +8,7 @@
 # Scans, by default:
 #   - docs/                      (whole tree, recursively)
 #   - README.md                  (repo root)
+#   - CLAUDE.md                  (agent entry point - kept honest, it is read every session)
 #   - crates/*/ARCHITECTURE.md   (every crate architecture doc)
 #
 # The scanned roots are configurable via -Paths; each entry is resolved
@@ -31,7 +32,7 @@ param(
     # Files, directories, or globs to scan for markdown links. Directories are
     # walked recursively; globs are expanded. All paths resolve from the repo
     # root (the parent of scripts/).
-    [string[]]$Paths = @('docs', 'README.md', 'crates/*/ARCHITECTURE.md')
+    [string[]]$Paths = @('docs', 'README.md', 'CLAUDE.md', 'crates/*/ARCHITECTURE.md')
 )
 
 $ErrorActionPreference = 'Stop'
