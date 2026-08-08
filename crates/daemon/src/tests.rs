@@ -59,6 +59,63 @@ async fn watcher_health_is_false_before_run_spawns_the_watch() {
     assert!(std::sync::Arc::ptr_eq(&health, &daemon.watcher_health()));
 }
 
+/// A schedule's declared ceiling reaches the pack as `GoalSpec::max_turns`.
+///
+/// The daemon builds the goal from the event alone, so if the payload stopped carrying this the
+/// schedule would silently fall back to the path default — the exact failure the field exists to
+/// prevent, and one that looks like the agent simply running out of turns.
+#[test]
+fn a_schedules_max_turns_reaches_the_goal_spec() {
+    use crate::helpers::reaction_goal;
+    use liberado_common::{Event, EventPayload};
+
+    let with = |data: serde_json::Value| {
+        Event::trigger(
+            "CronFired",
+            "cron:bigjob",
+            "c1",
+            EventPayload {
+                data,
+                ..Default::default()
+            },
+        )
+    };
+
+    assert_eq!(
+        reaction_goal(
+            &with(serde_json::json!({"max_turns": 20})),
+            "do it",
+            "default"
+        )
+        .max_turns,
+        20
+    );
+
+    // Absent, null, and a non-number all mean "pack default" (0) — the behaviour every schedule
+    // had before the field existed. Anything else would change existing deployments silently.
+    for payload in [
+        serde_json::json!({}),
+        serde_json::Value::Null,
+        serde_json::json!({"max_turns": "20"}),
+    ] {
+        assert_eq!(
+            reaction_goal(&with(payload), "do it", "default").max_turns,
+            0
+        );
+    }
+
+    // Coexists with the other payload riders.
+    assert_eq!(
+        reaction_goal(
+            &with(serde_json::json!({"profile": "hat", "deliver": false, "max_turns": 12})),
+            "do it",
+            "default"
+        )
+        .max_turns,
+        12
+    );
+}
+
 #[test]
 fn cron_delivery_is_suppressed_only_by_an_explicit_false() {
     use crate::helpers::cron_delivery_suppressed;
@@ -330,6 +387,7 @@ async fn cron_and_vault_watch_are_interchangeable_event_sources() {
         pool: None,
         profile: None,
         deliver: None,
+        max_turns: None,
     }])
     .unwrap();
 
@@ -461,6 +519,7 @@ async fn a_cron_firing_is_recorded_as_a_background_session_instead_of_vanishing(
         pool: None,
         profile: None,
         deliver: None,
+        max_turns: None,
     }])
     .unwrap();
 

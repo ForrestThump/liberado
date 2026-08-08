@@ -353,6 +353,7 @@ pub fn cron_source_from_config(
             pool: s.pool.clone(),
             profile: s.profile.clone(),
             deliver: s.deliver,
+            max_turns: s.max_turns,
         })
         .collect();
     if schedules.is_empty() {
@@ -891,6 +892,7 @@ mod tests {
             pool: None,
             profile: None,
             deliver: None,
+            max_turns: None,
         }
     }
 

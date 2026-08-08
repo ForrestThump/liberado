@@ -261,12 +261,22 @@ transport = { kind = "stdio", command = "riggers-mcp", args = ["--config", "rigg
 # to the goal so "today"/"this evening" land correctly. No catch-up/backfill on restart. `pool`
 # (optional) routes this schedule's dispatch through a named pool declared above instead of
 # "default" — e.g. an unattended nightly job that should run with narrower authority than chat.
+# `max_turns` sets this schedule's turn ceiling. Omitted, a run gets whichever default its
+# dispatch path carries (4 direct, 8 for a subagent) — and the schedule does not choose that path:
+# the dispatcher picks from how the goal is worded. Set it when the work has a known size, e.g. a
+# sweep over N items; the override applies whichever path is chosen.
+#
+# `deliver = false` silences the notifier for this schedule. Omitted, results are delivered as
+# before — worth setting for a maintenance schedule that runs often and usually finds nothing.
+#
 # [[schedules]]
 # name = "nightly-summary"
 # cron_expr = "0 0 2 * * * *"   # 02:00 UTC ≈ 21:00 America/Chicago (CDT)
 # goal = "Summarize today's decisions and post the summary."
 # enabled = true
 # pool = "unattended"
+# max_turns = 20
+# deliver = true
 
 # Periodic memory consolidation — a cheap, general-purpose model reviews recent notes in
 # memory/general and memory/procedural via liberado-memory-mcp's own tools (search_memory /

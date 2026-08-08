@@ -43,6 +43,13 @@ pub struct Schedule {
     /// only alternative was asking the goal prompt politely to be brief — prompt-level etiquette
     /// standing in for a config flag.
     pub deliver: Option<bool>,
+    /// Turn ceiling for this schedule's run, replacing the one its dispatch path would supply.
+    ///
+    /// The defaults are deployment constants (4 turns direct, 8 for a subagent) and a schedule
+    /// neither chooses its budget nor its path — the dispatcher picks from goal phrasing. A
+    /// schedule doing N-item work therefore had to be written around a budget it could not see.
+    /// `None` keeps the path's default.
+    pub max_turns: Option<u32>,
 }
 
 /// Errors constructing a [`CronEventSource`] — both fail-fast at construction time (Decision 14's
@@ -68,6 +75,7 @@ struct ParsedSchedule {
     pool: Option<String>,
     profile: Option<String>,
     deliver: Option<bool>,
+    max_turns: Option<u32>,
     parsed: cron::Schedule,
 }
 
@@ -103,6 +111,7 @@ impl CronEventSource {
                 pool: s.pool,
                 profile: s.profile,
                 deliver: s.deliver,
+                max_turns: s.max_turns,
                 parsed: expr,
             });
         }
@@ -179,6 +188,9 @@ fn build_event(schedule: &ParsedSchedule, fire_at: DateTime<Utc>) -> Event {
                 if let Some(d) = schedule.deliver {
                     map.insert("deliver".into(), serde_json::Value::Bool(d));
                 }
+                if let Some(t) = schedule.max_turns {
+                    map.insert("max_turns".into(), serde_json::Value::from(t));
+                }
                 if map.is_empty() {
                     serde_json::Value::Null
                 } else {
@@ -202,7 +214,32 @@ mod tests {
             pool: None,
             profile: None,
             deliver: None,
+            max_turns: None,
         }
+    }
+
+    /// A schedule's turn ceiling rides on the event payload, because the daemon builds the
+    /// `GoalSpec` from the event and never sees the `Schedule` itself.
+    #[test]
+    fn max_turns_is_carried_on_the_event() {
+        let mut s = schedule("bigjob", "0 0 * * * * *", "process everything");
+        s.max_turns = Some(20);
+        let parsed = CronEventSource::new(vec![s]).unwrap().schedules;
+        let event = build_event(&parsed[0], Utc::now());
+        assert_eq!(
+            event.payload.data.get("max_turns").and_then(|v| v.as_u64()),
+            Some(20)
+        );
+    }
+
+    /// Absent must stay indistinguishable from before the field existed.
+    #[test]
+    fn absent_max_turns_puts_nothing_on_the_event() {
+        let parsed = CronEventSource::new(vec![schedule("plain", "0 0 * * * * *", "tidy")])
+            .unwrap()
+            .schedules;
+        let event = build_event(&parsed[0], Utc::now());
+        assert!(event.payload.data.get("max_turns").is_none());
     }
 
     /// `deliver` rides on the event payload because the daemon's delivery gate sees only the

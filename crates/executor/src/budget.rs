@@ -85,6 +85,25 @@ impl Budget {
         }
     }
 
+    /// How many extra [`ResourceLimit`]s this budget carries.
+    ///
+    /// `extra_limits` is private, so a caller adjusting the turn cap has no other way to assert it
+    /// did not drop the wall-clock or token limits along with it.
+    pub fn extra_limit_count(&self) -> usize {
+        self.extra_limits.len()
+    }
+
+    /// This budget with a different turn cap, keeping every extra limit.
+    ///
+    /// For callers that take a configured ceiling and adjust only the turns — a schedule that
+    /// declares its own `max_turns`, say. `extra_limits` is private, so struct-update syntax is
+    /// not available outside this crate, and rebuilding with `Budget::new` would silently drop
+    /// wall-clock and token limits an operator had set.
+    pub fn with_max_turns(mut self, max_turns: u32) -> Self {
+        self.max_turns = max_turns;
+        self
+    }
+
     /// Add an arbitrary [`ResourceLimit`] to this budget, checked every turn alongside the turn
     /// cap. Chainable: `Budget::new(4).with_limit(WallClockLimit(...)).with_limit(TokenLimit(...))`.
     pub fn with_limit(mut self, limit: impl ResourceLimit + 'static) -> Self {

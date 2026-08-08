@@ -403,6 +403,7 @@ max_turns = 44
             pool: None,
             profile: None,
             deliver: None,
+            max_turns: None,
         }
     }
 
