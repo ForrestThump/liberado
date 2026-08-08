@@ -7,6 +7,7 @@
 mod checkpoint;
 mod merge;
 mod preflight;
+mod preflight_baseline;
 pub use checkpoint::{Checkpoint, CheckpointError, ShadowGit};
 pub use merge::{
     ConflictSides, MergeAttempt, MergeError, add_worktree_on_branch, branch_tip, commit_merge,
@@ -14,9 +15,14 @@ pub use merge::{
     rev_parse as git_rev_parse, stage_resolution,
 };
 pub use preflight::{
-    DEFAULT_LOG_CAP_BYTES, DEFAULT_STEP_TIMEOUT_SECS, PreflightError, PreflightReport,
-    PreflightSpec, PreflightStep, PreflightStepResult, liberado_ship_preflight_spec,
-    liberado_ship_preflight_steps, resolve_ship_spec, run_preflight, run_preflight_with_options,
+    DEFAULT_LOG_CAP_BYTES, DEFAULT_STEP_TIMEOUT_SECS, FailureSet, OPAQUE_FAILURE, PreflightError,
+    PreflightReport, PreflightSpec, PreflightStep, PreflightStepResult, describe_failures,
+    diff_against_baseline, failure_identities, liberado_ship_preflight_spec,
+    liberado_ship_preflight_steps, report_failures, resolve_ship_spec, run_preflight,
+    run_preflight_with_options,
+};
+pub use preflight_baseline::{
+    BaselineOptions, baseline_cache_path, compute_baseline, load_baseline, store_baseline,
 };
 // Durable session worktree helpers are defined below next to WorktreeWorkspace.
 

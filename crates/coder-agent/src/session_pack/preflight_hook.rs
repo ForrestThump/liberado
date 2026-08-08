@@ -129,7 +129,34 @@ fn steps_from_payload(payload: &Value) -> Option<Vec<PreflightStep>> {
     Some(out)
 }
 
+/// Where preflight baselines are cached, keyed by base commit.
+///
+/// Beside the coding worktrees rather than inside a session's own tree, so every session sharing
+/// a base pays for the baseline once instead of once each.
+fn baseline_cache_dir() -> std::path::PathBuf {
+    let data = std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into());
+    std::path::PathBuf::from(data).join("preflight-baselines")
+}
+
+/// The commit this line of work started from — what "already broken" is measured against.
+///
+/// `merge-base` against the default branch, not `HEAD`: the question is what was failing before
+/// this branch existed, and `HEAD` would move with every commit the agent makes.
+async fn base_commit(workspace: &Path) -> Option<String> {
+    for base in ["origin/main", "main", "origin/develop", "develop"] {
+        if let Ok(sha) =
+            liberado_coder_sandbox::run_git(workspace, &["merge-base", "HEAD", base]).await
+            && !sha.trim().is_empty()
+        {
+            return Some(sha.trim().to_string());
+        }
+    }
+    None
+}
+
 /// Run ship preflight under `workspace`, emit progress + validation events, return the report.
+///
+/// A failing run is compared against the base commit before it is believed — see the body.
 pub async fn run_ship_preflight(
     session_id: &str,
     workspace: &Path,
@@ -150,9 +177,68 @@ pub async fn run_ship_preflight(
         ))
         .await;
 
-    let report = run_preflight(workspace, spec)
+    let mut report = run_preflight(workspace, spec)
         .await
         .map_err(|e| e.to_string())?;
+
+    // Only a failing run needs a baseline, so a clean one costs exactly what it always did.
+    //
+    // Demanding absolute green conflates "you broke it" with "it was already broken", and since
+    // this gate sits before terminal `Succeeded`, the second case traps the agent: it spends its
+    // whole attempt budget on a failure it did not cause and cannot fix. Compare instead.
+    if !report.ok {
+        let current = liberado_coder_sandbox::report_failures(&report);
+        let failing_steps: std::collections::BTreeSet<String> = current.keys().cloned().collect();
+
+        match base_commit(workspace).await {
+            Some(base_sha) => {
+                let cache_dir = baseline_cache_dir();
+                let target_dir = workspace.join("target");
+                let opts = liberado_coder_sandbox::BaselineOptions {
+                    project_root: workspace,
+                    base_sha: &base_sha,
+                    cache_dir: &cache_dir,
+                    target_dir: Some(&target_dir),
+                };
+                match liberado_coder_sandbox::compute_baseline(&opts, spec, &failing_steps).await {
+                    Ok(baseline) => {
+                        let new =
+                            liberado_coder_sandbox::diff_against_baseline(&current, &baseline);
+                        let preexisting = liberado_coder_sandbox::describe_failures(&current).len()
+                            - liberado_coder_sandbox::describe_failures(&new).len();
+                        if new.is_empty() {
+                            report.ok = true;
+                            report.summary = format!(
+                                "preflight '{}': no new failures ({preexisting} pre-existing at \
+                                 {}, ignored)",
+                                spec.id,
+                                &base_sha[..12.min(base_sha.len())]
+                            );
+                        } else {
+                            report.summary = format!(
+                                "preflight '{}': {} new failure(s) vs {}: {}",
+                                spec.id,
+                                liberado_coder_sandbox::describe_failures(&new).len(),
+                                &base_sha[..12.min(base_sha.len())],
+                                liberado_coder_sandbox::describe_failures(&new).join(", ")
+                            );
+                        }
+                    }
+                    // A baseline we could not compute is not evidence of innocence — stay
+                    // fail-closed and say why, rather than waving the run through.
+                    Err(e) => {
+                        report.summary = format!("{} (baseline unavailable: {e})", report.summary);
+                    }
+                }
+            }
+            None => {
+                report.summary = format!(
+                    "{} (no base commit found; cannot tell new failures from pre-existing)",
+                    report.summary
+                );
+            }
+        }
+    }
 
     let _ = events
         .send(SessionEvent::new(
