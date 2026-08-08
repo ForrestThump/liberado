@@ -39,3 +39,13 @@ Everything here is in git history regardless; the archive just keeps it reachabl
 | *Other hygiene/hardening audits and phase reports* | Same directory — treat as historical |
 
 Living roadmap: [`../../roadmap.md`](../../roadmap.md) · Future work index: [`../README.md`](../README.md).
+
+## Moved here 2026-08-08
+
+Both were verified against `main` before moving — the feature is in the tree, not merely on a
+branch, which is what the headers here had drifted on:
+
+| Doc | Verified by |
+|-----|-------------|
+| `durable-chat-turns-plan.md` | `POST /api/conversations/{id}/cancel` and the attach stream exist in `crates/server/src/api/chat.rs` and `crates/tui/src/api.rs` |
+| `session-profiles-plan.md` | `SessionProfile` resolved in `crates/config-loader/src/model/` — the index still said "parked on `feat/session-profiles`" |

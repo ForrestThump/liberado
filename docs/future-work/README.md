@@ -17,7 +17,6 @@ Index of forward-looking work.
 | [loops-plan.md](loops-plan.md) | Scheduled recurrence over goals |
 | [chat-search-plan.md](chat-search-plan.md) | History search tiers |
 | [context-compaction-plan.md](context-compaction-plan.md) | Chat context compaction (CH3 — Tier 1 landed; known residual documented) |
-| [durable-chat-turns-plan.md](durable-chat-turns-plan.md) | A turn outlives the connection watching it (**built + verified live** 2026-08-02; all steps landed) |
 | [delegation-failure-modes.md](delegation-failure-modes.md) | **How delegated PRs go wrong**, over 15 PRs: Grok over-claims, DeepSeek omits, and why per-site mutation evidence misses the dominant failure |
 | [backlog.md](backlog.md) | **Pick-from-here backlog** (2026-08-03): four bands — token economics, correctness gaps, agentic coding, low-risk breadth. Self-scoped work starts here; carries the verify-first and per-behaviour-mutation rules |
 | [parallel-deliverables-2026-08-round-3.md](parallel-deliverables-2026-08-round-3.md) | **Round 3 — status + open work.** §1 done; §2 (subagent vs direct in the journal) is next and has one mandated approach with verified line numbers; §3 split into a delegable measurement and a reserved fix. Carries the R1–R8 pre-PR checklist |
@@ -32,7 +31,6 @@ Index of forward-looking work.
 | [rust-native-agentic-coder-plan.md](rust-native-agentic-coder-plan.md) | Coding pack roadmap |
 | [tui-maturity-roadmap.md](tui-maturity-roadmap.md) | TUI surface |
 | [turbovault-modules-integration-roadmap.md](turbovault-modules-integration-roadmap.md) | TurboVault plugins umbrella |
-| [session-profiles-plan.md](session-profiles-plan.md) | Per-conversation tool authority (steps 1–6 landed on `feat/session-profiles`, parked) |
 | [turbovault-vault-events-plugin-plan.md](turbovault-vault-events-plugin-plan.md) | vault_events module |
 | [mcp-forge-backlog.md](mcp-forge-backlog.md) | MCP forge service |
 | [mcp-suite-standardization.md](mcp-suite-standardization.md) | Peer MCP suite norms |
