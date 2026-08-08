@@ -77,8 +77,14 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings
 
+      # `--no-fail-fast` so the run reports EVERY failing test, not just the ones up to the
+      # first failing crate. Without it cargo stops at the first broken test binary, and the
+      # failure set CI reports is truncated — which is fine for a human reading a red build,
+      # but breaks any tooling that compares a branch's failures against its base: fixing an
+      # early failure lets cargo reach later ones, and they then look like new regressions
+      # introduced by the fix. Observed exactly that on PR #80.
       - name: Tests (includes layer-rules gate)
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
 
   audit:
     name: cargo-deny (advisories + licenses)
