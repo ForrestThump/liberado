@@ -26,11 +26,16 @@ const CORRELATION_HASH_LEN: usize = 12;
 pub(crate) struct VaultEventSource {
     vault: Vault,
     debounce: Duration,
+    ignore_globs: Vec<String>,
 }
 
 impl VaultEventSource {
-    pub(crate) fn new(vault: Vault, debounce: Duration) -> Self {
-        Self { vault, debounce }
+    pub(crate) fn new(vault: Vault, debounce: Duration, ignore_globs: Vec<String>) -> Self {
+        Self {
+            vault,
+            debounce,
+            ignore_globs,
+        }
     }
 }
 
@@ -49,6 +54,7 @@ impl EventSource for VaultEventSource {
             }
         };
         let mut debouncer = Debouncer::new(self.debounce);
+        let ignore_globs = self.ignore_globs;
         tracing::info!(
             vault = %self.vault.root().display(),
             debounce_ms = self.debounce.as_millis() as u64,
@@ -74,13 +80,13 @@ impl EventSource for VaultEventSource {
 
                 _ = sleep_until(next_deadline) => {
                     for rel in debouncer.drain_ready(Instant::now()) {
-                        match attribute_and_build_event(&self.vault, &rel).await {
+                        match attribute_and_build_event(&self.vault, &rel, &ignore_globs).await {
                             Ok(Some(event)) => {
                                 if tx.send(event).is_err() {
                                     return; // receiver gone
                                 }
                             }
-                            Ok(None) => {} // our own write or vanished path — suppressed
+                            Ok(None) => {} // our own write, vanished path, or ignored glob — suppressed
                             Err(e) => tracing::warn!(error = %e, ?rel, "attribution failed"),
                         }
                     }
@@ -93,10 +99,17 @@ impl EventSource for VaultEventSource {
 /// The pure, deterministic attribution decision for a changed path: attribute, and build the
 /// standardized [`Event`] for an external change. Shared between [`VaultEventSource::run`] and
 /// [`crate::Daemon::process_change`] (kept as a thin public wrapper for direct testability).
+///
+/// `ignore_globs` are vault-relative glob patterns; a path matching any of them is dropped
+/// without attribution — the same `Ok(None)` as an agent-authored or missing path.
 pub(crate) async fn attribute_and_build_event(
     vault: &Vault,
     rel_path: &Path,
+    ignore_globs: &[String],
 ) -> Result<Option<Event>, VaultError> {
+    if matches_any_glob(rel_path, ignore_globs) {
+        return Ok(None);
+    }
     match vault.attribute(rel_path).await? {
         Attribution::External => match build_event(vault, rel_path).await {
             Ok(event) => Ok(Some(event)),
@@ -107,6 +120,28 @@ pub(crate) async fn attribute_and_build_event(
         },
         Attribution::Agent(_) | Attribution::Missing => Ok(None),
     }
+}
+
+/// True when `rel_path` matches any pattern in `globs`. An empty list always returns `false`.
+/// Patterns are matched against the vault-relative path string (with forward slashes).
+fn matches_any_glob(rel_path: &Path, globs: &[String]) -> bool {
+    if globs.is_empty() {
+        return false;
+    }
+    let path_str = rel_path.to_string_lossy().replace('\\', "/");
+    // Also check just the file name for patterns that are simple basename globs like `~*` or `*.tmp`.
+    let file_name = rel_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    globs.iter().any(|pattern| {
+        // A trailing `/` means "match everything under this directory".
+        let effective = if pattern.ends_with('/') {
+            format!("{pattern}**")
+        } else {
+            pattern.clone()
+        };
+        glob::Pattern::new(&effective)
+            .map(|p| p.matches(&path_str) || p.matches(file_name))
+            .unwrap_or(false)
+    })
 }
 
 /// Build the standardized event for an attributed-external change. The `correlation_id` keys
@@ -138,5 +173,115 @@ async fn sleep_until(deadline: Option<Instant>) {
             tokio::time::sleep(deadline.saturating_duration_since(Instant::now())).await
         }
         None => std::future::pending::<()>().await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a real on-disk vault in a temp dir, with one test file written directly
+    /// (no audit entry, so `attribute()` returns `External`).
+    async fn test_vault() -> (tempfile::TempDir, Vault, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let vault = Vault::open("test", dir.path()).await.expect("open vault");
+        let note_rel = std::path::PathBuf::from("test-note.md");
+        let note_abs = dir.path().join(&note_rel);
+        std::fs::create_dir_all(note_abs.parent().unwrap()).ok();
+        std::fs::write(&note_abs, "# hello").expect("write note");
+        (dir, vault, note_rel)
+    }
+
+    #[tokio::test]
+    async fn matching_glob_is_dropped() {
+        let (_dir, vault, rel) = test_vault().await;
+        let ignore_globs = vec!["*.md".to_string()];
+        let result = attribute_and_build_event(&vault, &rel, &ignore_globs)
+            .await
+            .expect("should not error");
+        assert!(result.is_none(), "path matching glob must be dropped");
+    }
+
+    #[tokio::test]
+    async fn non_matching_glob_still_produces_event() {
+        let (_dir, vault, rel) = test_vault().await;
+        let ignore_globs = vec!["*.txt".to_string()];
+        let result = attribute_and_build_event(&vault, &rel, &ignore_globs)
+            .await
+            .expect("should not error");
+        assert!(
+            result.is_some(),
+            "non-matching path must still produce an event"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_glob_list_changes_nothing() {
+        let (_dir, vault, rel) = test_vault().await;
+        let result_no_globs = attribute_and_build_event(&vault, &rel, &[])
+            .await
+            .expect("should not error");
+        let result_empty_vec = attribute_and_build_event(&vault, &rel, &Vec::new())
+            .await
+            .expect("should not error");
+        assert!(result_no_globs.is_some(), "no globs → event");
+        assert!(result_empty_vec.is_some(), "empty vec → event");
+    }
+
+    #[tokio::test]
+    async fn agent_attributed_writes_are_still_dropped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let vault = Vault::open("test", dir.path()).await.expect("open vault");
+        let rel = std::path::PathBuf::from("agent-note.md");
+        let abs = dir.path().join(&rel);
+        std::fs::create_dir_all(abs.parent().unwrap()).ok();
+        // Write through the vault with Agent provenance so attribution sees it as Agent.
+        let prov = liberado_common::WriteProvenance::agent("test-agent", "c1");
+        vault
+            .write(&rel, "# agent wrote this", None, &prov)
+            .await
+            .expect("vault write");
+        // Even with empty ignore globs, agent-attributed writes must still be dropped.
+        let result = attribute_and_build_event(&vault, &rel, &[])
+            .await
+            .expect("should not error");
+        assert!(
+            result.is_none(),
+            "agent-attributed writes must be dropped regardless of globs"
+        );
+    }
+
+    #[tokio::test]
+    async fn glob_on_filename_matches() {
+        let (dir, vault, _rel) = test_vault().await;
+        // Create a file matching a basename glob (like `~*` for temp files).
+        let rel = std::path::PathBuf::from("~tempfile.md");
+        let abs = dir.path().join(&rel);
+        std::fs::write(&abs, "# temp").expect("write temp");
+        let ignore_globs = vec!["~*".to_string()];
+        let result = attribute_and_build_event(&vault, &rel, &ignore_globs)
+            .await
+            .expect("should not error");
+        assert!(
+            result.is_none(),
+            "basename glob `~*` must match ~tempfile.md"
+        );
+    }
+
+    #[tokio::test]
+    async fn glob_on_directory_matches() {
+        let (dir, vault, _rel) = test_vault().await;
+        let rel = std::path::PathBuf::from(".stversions/some-file.md");
+        let abs = dir.path().join(&rel);
+        std::fs::create_dir_all(abs.parent().unwrap()).ok();
+        std::fs::write(&abs, "# versioned").expect("write versioned");
+        let ignore_globs = vec![".stversions/".to_string()];
+        let result = attribute_and_build_event(&vault, &rel, &ignore_globs)
+            .await
+            .expect("should not error");
+        assert!(
+            result.is_none(),
+            "directory glob .stversions/ must match paths under .stversions/"
+        );
     }
 }

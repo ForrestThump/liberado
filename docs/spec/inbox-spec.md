@@ -1,9 +1,10 @@
 ﻿# Liberado Capture & Ambient Analysis Spec — Inbox + Whole-Vault Awareness
 
 > [!WARNING]
-> **NOT IMPLEMENTED as of 2026-08-08.** This spec describes the intended design, not the running
-> system. `[tuning.capture]` parses and validates but **no code reads it**: there are no settle
-> windows, no `#ready-now` / `#hold-off` handling, no ambient sweep, and no watcher ignore list.
+> **PARTIALLY IMPLEMENTED as of 2026-08-08.** This spec describes the intended design; only the
+> watcher ignore list (`inbox_ignore_globs`) is live as of this writing. The remaining fields parse
+> and validate but no code reads them: there are no settle windows, no `#ready-now` / `#hold-off`
+> handling, and no ambient sweep.
 >
 > What *is* live: the vault watcher fires on changes under the vault, and a change gets the generic
 > "a note changed, decide how to react" reaction. The inbox layer above that — tiers, quiescence,

@@ -68,6 +68,7 @@ impl Daemon {
             watcher_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             goals: None,
             user_timezone: None,
+            inbox_ignore_globs: Vec::new(),
         })
     }
 
@@ -75,6 +76,15 @@ impl Daemon {
     /// Production wiring: `config.topology.user_timezone()` via bootstrap.
     pub fn with_user_timezone(mut self, tz: UserTimezone) -> Self {
         self.user_timezone = Some(tz);
+        self
+    }
+
+    /// Vault-relative glob patterns the watcher must never react to (Syncthing conflict files,
+    /// editor temp files, `Inbox/` when a dedicated schedule already processes it, etc.).
+    /// An empty list (the default) is a no-op. Populated from
+    /// `[tuning.capture].inbox_ignore_globs`.
+    pub fn with_inbox_ignore_globs(mut self, globs: Vec<String>) -> Self {
+        self.inbox_ignore_globs = globs;
         self
     }
 
@@ -295,7 +305,11 @@ impl Daemon {
             .take()
             .expect("Daemon::run must only be called once");
 
-        let vault_source = VaultEventSource::new(self.vault.clone(), self.debounce);
+        let vault_source = VaultEventSource::new(
+            self.vault.clone(),
+            self.debounce,
+            self.inbox_ignore_globs.clone(),
+        );
         // Supervised rather than fire-and-forget: the handle was previously dropped on the floor,
         // so a watch task that died took the daemon's only vault input with it and nothing
         // anywhere could tell. The flag is the observable.

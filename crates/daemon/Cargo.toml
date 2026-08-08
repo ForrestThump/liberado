@@ -11,6 +11,7 @@ repository.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 liberado-common = { workspace = true }
+glob = { workspace = true }
 liberado-config = { workspace = true }
 liberado-notify = { workspace = true }
 liberado-vault = { workspace = true }
