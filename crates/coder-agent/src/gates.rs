@@ -251,6 +251,18 @@ mod changed_files_tests {
         assert!(ok, "git {args:?} failed in {}", dir.display());
     }
 
+    /// `git init` plus a commit identity.
+    ///
+    /// A bare `git init` is not enough to commit in: a clean CI runner has no global `user.email`
+    /// or `user.name`, so `git commit` exits non-zero there while passing on any dev machine that
+    /// has them set. Every test in this module that commits must go through here — two of them
+    /// were written without the identity lines and only failed once CI could actually run.
+    fn init_repo_with_identity(dir: &std::path::Path) {
+        git(dir, &["init", "--quiet"]);
+        git(dir, &["config", "user.email", "test@liberado.local"]);
+        git(dir, &["config", "user.name", "liberado-test"]);
+    }
+
     /// The escape this guards against: a session workspace that is **not itself a repo** but sits
     /// inside one (exactly what `<repo>/.liberado/goal-workspaces/…` is, since `data_dir()` is a
     /// relative path). `git status` there walks *up* to the enclosing repo, so without the `-- .`
@@ -303,10 +315,7 @@ mod changed_files_tests {
 
         let ws = std::env::temp_dir().join(format!("lib-gates-commit-{}", unique()));
         std::fs::create_dir_all(&ws).unwrap();
-        git(&ws, &["init", "--quiet"]);
-        // Identity for commit on clean CI machines.
-        git(&ws, &["config", "user.email", "test@liberado.local"]);
-        git(&ws, &["config", "user.name", "liberado-test"]);
+        init_repo_with_identity(&ws);
         std::fs::write(ws.join("seed.txt"), "seed").unwrap();
         git(&ws, &["add", "seed.txt"]);
         git(&ws, &["commit", "-m", "seed", "--quiet"]);
@@ -341,7 +350,7 @@ mod changed_files_tests {
 
         let ws = std::env::temp_dir().join(format!("lib-gates-none-base-{}", unique()));
         std::fs::create_dir_all(&ws).unwrap();
-        git(&ws, &["init", "--quiet"]);
+        init_repo_with_identity(&ws);
         std::fs::write(ws.join("readme.md"), "base\n").unwrap();
         git(&ws, &["add", "readme.md"]);
         git(&ws, &["commit", "-m", "base", "--quiet"]);
@@ -360,7 +369,7 @@ mod changed_files_tests {
 
         let ws = std::env::temp_dir().join(format!("lib-gates-empty-base-{}", unique()));
         std::fs::create_dir_all(&ws).unwrap();
-        git(&ws, &["init", "--quiet"]);
+        init_repo_with_identity(&ws);
         std::fs::write(ws.join("readme.md"), "base\n").unwrap();
         git(&ws, &["add", "readme.md"]);
         git(&ws, &["commit", "-m", "base", "--quiet"]);
