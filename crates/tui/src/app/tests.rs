@@ -2840,3 +2840,170 @@ fn bare_goal_without_a_session_points_somewhere_useful() {
         "bare /goal with nothing focused must say what to do next"
     );
 }
+
+#[test]
+fn gate_votes_accumulate_in_joined_session() {
+    let mut app = test_app();
+    app.join_session_with(
+        "g1".into(),
+        Some(SessionKind::Coding),
+        Some("fix bug".into()),
+    );
+
+    app.apply_goal_event(GoalUiEvent::CriticVerdict {
+        reviewer: "gate-0".into(),
+        kind: "gatekeeper".into(),
+        approved: true,
+        issues: vec![],
+        coerced: false,
+    });
+    app.apply_goal_event(GoalUiEvent::CriticVerdict {
+        reviewer: "fresh-1".into(),
+        kind: "fresh".into(),
+        approved: false,
+        issues: vec!["no tests".into()],
+        coerced: false,
+    });
+
+    let j = app.joined.as_ref().unwrap();
+    assert_eq!(j.gate_votes.len(), 2);
+    assert!(j.gate_votes[0].approved);
+    assert!(!j.gate_votes[1].approved);
+    assert_eq!(j.gate_votes[0].kind, "gatekeeper");
+    assert_eq!(j.gate_votes[1].kind, "fresh");
+    assert!(!j.gate_votes[0].coerced);
+}
+
+#[test]
+fn gate_votes_mark_coerced_votes() {
+    let mut app = test_app();
+    app.join_session_with("g2".into(), Some(SessionKind::Coding), Some("task".into()));
+
+    app.apply_goal_event(GoalUiEvent::CriticVerdict {
+        reviewer: "unavailable".into(),
+        kind: "fresh".into(),
+        approved: false,
+        issues: vec![],
+        coerced: true,
+    });
+
+    let j = app.joined.as_ref().unwrap();
+    assert_eq!(j.gate_votes.len(), 1);
+    assert!(j.gate_votes[0].coerced);
+    assert!(!j.gate_votes[0].approved);
+}
+
+#[test]
+fn active_role_is_tracked() {
+    let mut app = test_app();
+    app.join_session_with("g3".into(), Some(SessionKind::Coding), Some("task".into()));
+
+    app.apply_goal_event(GoalUiEvent::Role {
+        role: "worker".into(),
+        model: Some("deepseek/v4".into()),
+    });
+
+    let j = app.joined.as_ref().unwrap();
+    assert_eq!(j.active_role.as_deref(), Some("worker"));
+}
+
+#[test]
+fn active_role_cleared_on_finish() {
+    let mut app = test_app();
+    app.join_session_with("g4".into(), Some(SessionKind::Coding), Some("task".into()));
+
+    app.apply_goal_event(GoalUiEvent::Role {
+        role: "worker".into(),
+        model: Some("deepseek/v4".into()),
+    });
+    app.apply_goal_event(GoalUiEvent::Finished {
+        status: "succeeded".into(),
+        summary: "done".into(),
+    });
+
+    let j = app.joined.as_ref().unwrap();
+    assert!(j.active_role.is_none());
+    assert!(j.finished);
+}
+
+#[test]
+fn last_validation_is_tracked() {
+    let mut app = test_app();
+    app.join_session_with("g5".into(), Some(SessionKind::Coding), Some("task".into()));
+
+    app.apply_goal_event(GoalUiEvent::Validation {
+        ok: true,
+        summary: "cargo test passed".into(),
+    });
+
+    let j = app.joined.as_ref().unwrap();
+    let v = j.last_validation.as_ref().unwrap();
+    assert!(v.ok);
+    assert!(v.summary.contains("cargo test"));
+}
+
+#[test]
+fn apply_goal_event_is_noop_when_not_joined() {
+    let mut app = test_app();
+    app.apply_goal_event(GoalUiEvent::CriticVerdict {
+        reviewer: "x".into(),
+        kind: "fresh".into(),
+        approved: true,
+        issues: vec![],
+        coerced: false,
+    });
+    assert!(app.joined.is_none());
+}
+
+#[test]
+fn new_role_clears_stale_validation() {
+    let mut app = test_app();
+    app.join_session_with("g6".into(), Some(SessionKind::Coding), Some("task".into()));
+
+    app.apply_goal_event(GoalUiEvent::Validation {
+        ok: false,
+        summary: "tests failed".into(),
+    });
+    assert!(app.joined.as_ref().unwrap().last_validation.is_some());
+
+    app.apply_goal_event(GoalUiEvent::Role {
+        role: "worker".into(),
+        model: Some("deepseek/v4".into()),
+    });
+
+    let j = app.joined.as_ref().unwrap();
+    assert!(
+        j.last_validation.is_none(),
+        "a new role starts fresh — stale validation from a prior attempt must be cleared"
+    );
+}
+
+#[test]
+fn gate_votes_are_capped_so_a_long_goal_does_not_grow_the_vector_forever() {
+    // `messages` prunes on history load; votes have no such boundary — they arrive on a stream
+    // that runs until the goal ends, at `1 + fresh_reviewers` per attempt. The sidebar only ever
+    // renders the tail, so evicting the head costs nothing visible.
+    let mut app = test_app();
+    app.join_session_with(
+        "g1".into(),
+        Some(SessionKind::Coding),
+        Some("long goal".into()),
+    );
+    for i in 0..(MAX_GATE_VOTES + 25) {
+        app.apply_goal_event(GoalUiEvent::CriticVerdict {
+            reviewer: format!("rev-{i}"),
+            kind: "fresh".into(),
+            approved: true,
+            issues: vec![],
+            coerced: false,
+        });
+    }
+    let j = app.joined.as_ref().unwrap();
+    assert_eq!(j.gate_votes.len(), MAX_GATE_VOTES);
+    // The oldest go, not the newest — the newest are the ones the sidebar shows.
+    assert_eq!(
+        j.gate_votes.last().unwrap().reviewer,
+        format!("rev-{}", MAX_GATE_VOTES + 24)
+    );
+    assert_eq!(j.gate_votes[0].reviewer, "rev-25");
+}

@@ -112,6 +112,7 @@ impl CodingToolRuntime {
         match name {
             "list_files" => self.list_files(args).await,
             "search_text" => self.search_text(args).await,
+            "list_symbols" => self.list_symbols(args).await,
             "read_file" => self.read_file(args).await,
             "write_file" => self.write_file(args).await,
             "edit_file" => self.edit_file(args).await,
@@ -135,12 +136,15 @@ impl CodingToolRuntime {
         }
         let args: Args = parse_args(args)?;
         let mut files = Vec::new();
-        walk_files(self.workspace.root(), args.limit, |path| {
-            let rel = relative_string(self.workspace.root(), path);
-            if !path_denied(&rel, &self.path_policy) {
-                files.push(rel);
-            }
-        })?;
+        walk_files(
+            self.workspace.root(),
+            args.limit,
+            &self.path_policy,
+            |_, rel| {
+                files.push(rel.to_string());
+                true
+            },
+        )?;
         Ok(json!({ "files": files, "limit": args.limit }))
     }
 
@@ -160,16 +164,13 @@ impl CodingToolRuntime {
         walk_files(
             self.workspace.root(),
             self.path_policy.search_max_results,
-            |path| {
+            &self.path_policy,
+            |path, rel| {
                 if matches.len() >= args.limit {
-                    return;
-                }
-                let rel = relative_string(self.workspace.root(), path);
-                if path_denied(&rel, &self.path_policy) {
-                    return;
+                    return false;
                 }
                 let Ok(content) = std::fs::read_to_string(path) else {
-                    return;
+                    return true;
                 };
                 for (idx, line) in content.lines().enumerate() {
                     if line.contains(&args.query) {
@@ -183,9 +184,54 @@ impl CodingToolRuntime {
                         }
                     }
                 }
+                true
             },
         )?;
         Ok(json!({ "matches": matches }))
+    }
+
+    async fn list_symbols(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            #[serde(default = "default_limit")]
+            limit: usize,
+        }
+        let args: Args = parse_args(args)?;
+        let mut files = Vec::new();
+        // `limit` bounds files *returned*; `SYMBOL_SCAN_MAX_FILES` bounds files looked at. A tree
+        // is mostly not source, so spending the same budget on both is what made this return one
+        // file — a stray `validate.py` — against this repo: the 200 slots went to markdown and
+        // manifests before the walk reached `crates/`.
+        walk_files(
+            self.workspace.root(),
+            SYMBOL_SCAN_MAX_FILES,
+            &self.path_policy,
+            |path, rel| {
+                if files.len() >= args.limit {
+                    return false;
+                }
+                // Decide from the extension before touching the file. Reading first loads every
+                // asset, lockfile and binary in the tree whole and then discards it — and
+                // `read_to_string` only fails on a binary *after* it has read all of it.
+                if lang_from_path(rel).is_empty() {
+                    return true;
+                }
+                let Ok(bytes) = std::fs::read(path) else {
+                    return true;
+                };
+                let capped = cap_bytes(bytes, self.path_policy.read_max_bytes);
+                let content = String::from_utf8_lossy(&capped);
+                let symbols = extract_symbols(rel, &content);
+                if !symbols.is_empty() {
+                    files.push(json!({
+                        "path": rel,
+                        "symbols": symbols,
+                    }));
+                }
+                true
+            },
+        )?;
+        Ok(json!({ "files": files, "limit": args.limit }))
     }
 
     async fn read_file(&self, args: Value) -> Result<Value, ToolError> {
@@ -544,6 +590,14 @@ impl ToolRuntime for CodingToolRuntime {
                 }),
             ),
             tool(
+                "list_symbols",
+                "Walk workspace files and extract top-level symbols (functions, structs, classes, etc.) across supported languages. Returns a structured map of file→symbols for quick codebase orientation.",
+                json!({
+                    "type": "object",
+                    "properties": { "limit": { "type": "integer", "minimum": 1 } }
+                }),
+            ),
+            tool(
                 "read_file",
                 "Read a file, optionally by line range.",
                 json!({
@@ -699,6 +753,12 @@ fn default_limit() -> usize {
     200
 }
 
+/// How many files `list_symbols` will look at while trying to fill its result limit.
+///
+/// The walk still has to terminate on a repository far larger than any limit could describe, but
+/// this is a scan bound rather than a result bound — the two are not the same number.
+const SYMBOL_SCAN_MAX_FILES: usize = 20_000;
+
 fn default_diff_mode() -> String {
     "patch".to_string()
 }
@@ -753,17 +813,39 @@ fn slice_lines(content: &str, start_line: Option<usize>, line_count: Option<usiz
         .join("\n")
 }
 
-fn walk_files(root: &Path, limit: usize, mut visit: impl FnMut(&Path)) -> Result<(), ToolError> {
+/// Walk `root` breadth-first, visiting up to `limit` files the policy does not deny.
+///
+/// The deny list prunes **directories** as well as files, and a denied entry does not spend a
+/// slot. Filtering at the visitor instead — after the walk has already counted the file — means
+/// the budget goes to paths the caller was never allowed to read. `PathPolicy::default()` denies
+/// `.git/**`, `target/**` and `node_modules/**`, which between them are almost every file in a
+/// working checkout: run against this repo, `list_symbols` at the default limit of 200 came back
+/// with one file, and it was a stray Python script.
+/// `visit` returns whether to keep walking — `false` stops immediately. A caller whose limit is on
+/// what it *collects* rather than what it *reads* needs that: `list_symbols` has to look past the
+/// markdown and lockfiles to find any source at all, so its `limit` cannot also be the walk budget.
+fn walk_files(
+    root: &Path,
+    limit: usize,
+    policy: &PathPolicy,
+    mut visit: impl FnMut(&Path, &str) -> bool,
+) -> Result<(), ToolError> {
     let mut queue = VecDeque::from([root.to_path_buf()]);
     let mut visited = 0usize;
     while let Some(dir) = queue.pop_front() {
         for entry in std::fs::read_dir(&dir).map_err(fs_err)? {
             let entry = entry.map_err(fs_err)?;
             let path = entry.path();
+            let rel = relative_string(root, &path);
+            if path_denied(&rel, policy) {
+                continue;
+            }
             if path.is_dir() {
                 queue.push_back(path);
             } else if path.is_file() {
-                visit(&path);
+                if !visit(&path, &rel) {
+                    return Ok(());
+                }
                 visited += 1;
                 if visited >= limit {
                     return Ok(());
@@ -779,6 +861,363 @@ fn relative_string(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+fn lang_from_path(path: &str) -> &str {
+    let lower = path.to_lowercase();
+    if lower.ends_with(".rs") {
+        "rust"
+    } else if lower.ends_with(".py") {
+        "python"
+    } else if lower.ends_with(".ts")
+        || lower.ends_with(".tsx")
+        || lower.ends_with(".js")
+        || lower.ends_with(".jsx")
+    {
+        "typescript"
+    } else if lower.ends_with(".go") {
+        "go"
+    } else if lower.ends_with(".java") {
+        "java"
+    } else {
+        ""
+    }
+}
+
+fn extract_symbols(path: &str, content: &str) -> Vec<String> {
+    let lang = lang_from_path(path);
+    if lang.is_empty() {
+        return Vec::new();
+    }
+    let mut symbols = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        let sym = match lang {
+            "rust" => extract_rust_symbol(trimmed),
+            // Python alone gets the raw line: indentation *is* its nesting, so a trimmed line
+            // cannot tell a module-level `def` from a method. Passing `trimmed` here made the
+            // column-0 guard in `extract_python_symbol` a check that could not fire.
+            "python" => extract_python_symbol(line),
+            "typescript" => extract_ts_symbol(trimmed),
+            "go" => extract_go_symbol(trimmed),
+            "java" => extract_java_symbol(trimmed),
+            _ => None,
+        };
+        if let Some(s) = sym {
+            if symbols.len() >= 50 {
+                break;
+            }
+            symbols.push(s);
+        }
+    }
+    symbols
+}
+
+fn extract_rust_symbol(line: &str) -> Option<String> {
+    let line = line.trim();
+    if line.starts_with("//")
+        || line.starts_with("///")
+        || line.starts_with("//!")
+        || line.starts_with("/*")
+        || line.starts_with("* ")
+        || line == "*"
+    {
+        return None;
+    }
+    // Strip #[derive(...)] and other same-line attributes.
+    let line = if line.starts_with("#[") {
+        line.split(']').nth(1).unwrap_or("").trim()
+    } else {
+        line
+    };
+    if line.is_empty() {
+        return None;
+    }
+    // Strip visibility and qualifier prefixes, leaving just the keyword prefix.
+    // Handles: pub, pub(crate), pub(super), pub(in path), const, unsafe, async, extern "C"
+    let rest = line
+        .trim_start_matches("pub(crate) ")
+        .trim_start_matches("pub(super) ")
+        .trim_start_matches("pub ")
+        .trim_start_matches("const ")
+        .trim_start_matches("unsafe ")
+        .trim_start_matches("async ")
+        .trim_start_matches("extern \"C\" ");
+    // fn
+    if rest.starts_with("fn ") {
+        let name = rest
+            .trim_start_matches("fn ")
+            .split(['(', '<'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("fn {name}"));
+        }
+    }
+    // struct
+    if rest.starts_with("struct ") {
+        let name = rest
+            .trim_start_matches("struct ")
+            .split(['<', '{', '(', ';'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("struct {name}"));
+        }
+    }
+    // enum
+    if rest.starts_with("enum ") {
+        let name = rest
+            .trim_start_matches("enum ")
+            .split(['<', '{'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("enum {name}"));
+        }
+    }
+    // trait
+    if rest.starts_with("trait ") {
+        let name = rest
+            .trim_start_matches("trait ")
+            .split(['<', '{'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("trait {name}"));
+        }
+    }
+    // impl
+    if rest.starts_with("impl<") || rest.starts_with("impl ") {
+        let rest = rest.trim_start_matches("impl").trim_start_matches(' ');
+        let name = if rest.starts_with('<') {
+            rest.split('>')
+                .nth(1)
+                .and_then(|s| s.trim().split(' ').next())?
+                .to_string()
+        } else {
+            rest.split(['<', '{', ' ']).next()?.trim().to_string()
+        };
+        if !name.is_empty() && !name.starts_with("for") {
+            return Some(format!("impl {name}"));
+        }
+    }
+    // mod
+    if rest.starts_with("mod ") {
+        let name = rest
+            .trim_start_matches("mod ")
+            .split(['{', ';'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("mod {name}"));
+        }
+    }
+    None
+}
+
+fn extract_python_symbol(line: &str) -> Option<String> {
+    if line.starts_with(' ') || line.starts_with('\t') {
+        return None;
+    }
+    let trimmed = line.trim();
+    if trimmed.starts_with('#') {
+        return None;
+    }
+    if trimmed.starts_with("def ") {
+        let name = trimmed
+            .trim_start_matches("def ")
+            .split('(')
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() && !name.starts_with('_') {
+            return Some(format!("def {name}"));
+        }
+    }
+    if trimmed.starts_with("class ") {
+        let name = trimmed
+            .trim_start_matches("class ")
+            .split(['(', ':'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("class {name}"));
+        }
+    }
+    None
+}
+
+fn extract_ts_symbol(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+        return None;
+    }
+    if trimmed.starts_with("function ") {
+        let name = trimmed
+            .trim_start_matches("function ")
+            .split('(')
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("function {name}"));
+        }
+    }
+    if trimmed.starts_with("export function ")
+        || trimmed.starts_with("export default function ")
+        || trimmed.starts_with("export default async function ")
+    {
+        let name = trimmed
+            .trim_start_matches("export default async ")
+            .trim_start_matches("export default ")
+            .trim_start_matches("export ")
+            .trim_start_matches("function ")
+            .split('(')
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("export function {name}"));
+        }
+    }
+    if trimmed.contains(" class ") || trimmed.starts_with("class ") {
+        let rest = if trimmed.starts_with("export ") {
+            trimmed
+                .trim_start_matches("export ")
+                .trim_start_matches("default ")
+                .trim_start_matches("abstract ")
+        } else {
+            trimmed.trim_start_matches("abstract ")
+        };
+        if rest.starts_with("class ") {
+            let name = rest
+                .trim_start_matches("class ")
+                .split(['<', '{', ' ', ':'])
+                .next()?
+                .trim()
+                .to_string();
+            if !name.is_empty() && name != "extends" && name != "implements" {
+                return Some(format!("class {name}"));
+            }
+        }
+    }
+    if trimmed.starts_with("interface ") || trimmed.starts_with("export interface ") {
+        let name = trimmed
+            .trim_start_matches("export ")
+            .trim_start_matches("interface ")
+            .split(['<', '{'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("interface {name}"));
+        }
+    }
+    if trimmed.starts_with("export const ") || trimmed.starts_with("const ") {
+        let rest = trimmed.trim_start_matches("export ");
+        if rest.starts_with("const ") {
+            let name = rest
+                .trim_start_matches("const ")
+                .split([':', '='])
+                .next()?
+                .trim()
+                .to_string();
+            if !name.is_empty() && rest.contains("=>") {
+                return Some(format!("const {name}"));
+            }
+        }
+    }
+    None
+}
+
+fn extract_go_symbol(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+        return None;
+    }
+    if trimmed.starts_with("func ") {
+        let name = trimmed
+            .trim_start_matches("func ")
+            .split('(')
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("func {name}"));
+        }
+    }
+    if trimmed.starts_with("type ") && trimmed.contains(" struct") {
+        let name = trimmed
+            .trim_start_matches("type ")
+            .split_whitespace()
+            .next()?
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("type {name} struct"));
+        }
+    }
+    if trimmed.starts_with("type ") && trimmed.contains(" interface") {
+        let name = trimmed
+            .trim_start_matches("type ")
+            .split_whitespace()
+            .next()?
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("type {name} interface"));
+        }
+    }
+    None
+}
+
+fn extract_java_symbol(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+        return None;
+    }
+    if trimmed.starts_with("public class ") || trimmed.starts_with("class ") {
+        let name = trimmed
+            .trim_start_matches("public ")
+            .trim_start_matches("class ")
+            .split(['<', '{'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("class {name}"));
+        }
+    }
+    if trimmed.starts_with("public interface ") || trimmed.starts_with("interface ") {
+        let name = trimmed
+            .trim_start_matches("public ")
+            .trim_start_matches("interface ")
+            .split(['<', '{'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("interface {name}"));
+        }
+    }
+    if trimmed.starts_with("public enum ") || trimmed.starts_with("enum ") {
+        let name = trimmed
+            .trim_start_matches("public ")
+            .trim_start_matches("enum ")
+            .split(['<', '{'])
+            .next()?
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            return Some(format!("enum {name}"));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1118,6 +1557,7 @@ mod tests {
         for tool in &[
             "list_files",
             "search_text",
+            "list_symbols",
             "read_file",
             "write_file",
             "edit_file",
@@ -1229,12 +1669,215 @@ mod tests {
         }
 
         let mut count = 0usize;
-        walk_files(dir.path(), 3, |_| {
+        walk_files(dir.path(), 3, &PathPolicy::default(), |_, _| {
             count += 1;
+            true
         })
         .unwrap();
 
         assert_eq!(count, 3, "walk_files should visit at most 3 files");
+    }
+
+    #[tokio::test]
+    async fn a_denied_directory_neither_counts_against_the_limit_nor_is_descended_into() {
+        // The budget is what makes this matter. `.git` alone is thousands of files in a real
+        // checkout, so a walk that counts them first and filters them second returns nothing the
+        // caller can use — which is what `list_symbols` did against this repo.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        for i in 0..20 {
+            std::fs::write(dir.path().join(".git").join(format!("o{i}")), "x\n").unwrap();
+        }
+        std::fs::write(dir.path().join("real.rs"), "pub fn kept() {}\n").unwrap();
+
+        let mut seen = Vec::new();
+        walk_files(dir.path(), 5, &PathPolicy::default(), |_, rel| {
+            seen.push(rel.to_string());
+            true
+        })
+        .unwrap();
+
+        assert_eq!(
+            seen,
+            vec!["real.rs".to_string()],
+            "a denied directory must not spend the caller's budget"
+        );
+    }
+
+    #[test]
+    fn extract_rust_visibility_variants() {
+        let content = "pub(crate) fn internal() {}\npub(super) fn semi_public() {}\npub fn public() {}\nfn private() {}";
+        let symbols = extract_symbols("src/lib.rs", content);
+        assert!(symbols.contains(&"fn internal".to_string()));
+        assert!(symbols.contains(&"fn semi_public".to_string()));
+        assert!(symbols.contains(&"fn public".to_string()));
+        assert!(symbols.contains(&"fn private".to_string()));
+    }
+
+    #[test]
+    fn extract_rust_const_and_unsafe_fn() {
+        let content = "const fn compile_time() -> u32 { 42 }\npub const fn pub_compile() {}\nunsafe fn raw_op() {}\npub unsafe fn pub_raw() {}";
+        let symbols = extract_symbols("src/lib.rs", content);
+        assert!(symbols.contains(&"fn compile_time".to_string()));
+        assert!(symbols.contains(&"fn pub_compile".to_string()));
+        assert!(symbols.contains(&"fn raw_op".to_string()));
+        assert!(symbols.contains(&"fn pub_raw".to_string()));
+    }
+
+    #[test]
+    fn extract_rust_attribute_prefixed() {
+        let content = "#[derive(Debug)]\npub struct Foo;\n\n#[inline]\npub fn bar() {}";
+        let symbols = extract_symbols("src/lib.rs", content);
+        assert!(symbols.contains(&"struct Foo".to_string()));
+        assert!(symbols.contains(&"fn bar".to_string()));
+    }
+
+    #[test]
+    fn extract_rust_generic_impl() {
+        let content = "impl<T> MyType<T> {\n    fn new() -> Self {}\n}\n\nimpl PlainType {\n    fn method() {}\n}";
+        let symbols = extract_symbols("src/lib.rs", content);
+        assert!(
+            symbols.iter().any(|s| s.contains("MyType")),
+            "should find generic impl"
+        );
+        assert!(symbols.contains(&"impl PlainType".to_string()));
+    }
+
+    #[test]
+    fn extract_ts_export_default_function() {
+        let content = "export default function main() {}\nexport function helper() {}";
+        let symbols = extract_symbols("app.ts", content);
+        assert!(symbols.contains(&"export function main".to_string()));
+        assert!(symbols.contains(&"export function helper".to_string()));
+    }
+
+    #[test]
+    fn extract_rust_traits_and_enums() {
+        let content = "pub trait Handler {\n    fn handle(&self);\n}\n\npub enum Status {\n    Ok,\n    Err,\n}";
+        let symbols = extract_symbols("src/types.rs", content);
+        assert!(symbols.contains(&"trait Handler".to_string()));
+        assert!(symbols.contains(&"enum Status".to_string()));
+    }
+
+    #[test]
+    fn extract_rust_mods_and_impls() {
+        let content =
+            "pub mod sub;\nmod private_mod {\n}\n\nimpl MyType {\n    fn new() -> Self {}\n}";
+        let symbols = extract_symbols("src/lib.rs", content);
+        assert!(symbols.contains(&"mod sub".to_string()));
+        assert!(symbols.contains(&"mod private_mod".to_string()));
+        assert!(symbols.contains(&"impl MyType".to_string()));
+    }
+
+    #[test]
+    fn extract_python_symbols() {
+        let content = "def handle_request(req):\n    pass\n\nclass Router:\n    def route(self):\n        pass";
+        let symbols = extract_symbols("app.py", content);
+        assert!(symbols.contains(&"def handle_request".to_string()));
+        assert!(symbols.contains(&"class Router".to_string()));
+        // Indentation is Python's nesting. `route` is a method on `Router`; listing it beside the
+        // module-level names says the module exports something it does not. The guard for this
+        // was already written — it just never saw an indented line to reject.
+        assert!(
+            !symbols.contains(&"def route".to_string()),
+            "a nested def is not a top-level symbol: {symbols:?}"
+        );
+    }
+
+    #[test]
+    fn extract_typescript_symbols() {
+        let content = "export function main() {}\n\nclass App {\n    render() {}\n}\n\ninterface Config {\n    port: number;\n}\n\nconst handler = (req: Request) => { return 200; };";
+        let symbols = extract_symbols("app.ts", content);
+        assert!(symbols.contains(&"export function main".to_string()));
+        assert!(symbols.contains(&"class App".to_string()));
+        assert!(symbols.contains(&"interface Config".to_string()));
+        assert!(symbols.contains(&"const handler".to_string()));
+    }
+
+    #[test]
+    fn extract_go_symbols() {
+        let content = "func main() {\n}\n\ntype Server struct {\n    port int\n}\n\ntype Handler interface {\n    Serve()\n}";
+        let symbols = extract_symbols("main.go", content);
+        assert!(symbols.contains(&"func main".to_string()));
+        assert!(symbols.contains(&"type Server struct".to_string()));
+        assert!(symbols.contains(&"type Handler interface".to_string()));
+    }
+
+    #[test]
+    fn extract_java_symbols() {
+        let content = "public class Main {\n    public static void main(String[] args) {}\n}\n\npublic enum State {\n    ON, OFF\n}\n\npublic interface Runnable {\n    void run();\n}";
+        let symbols = extract_symbols("Main.java", content);
+        assert!(symbols.contains(&"class Main".to_string()));
+        assert!(symbols.contains(&"enum State".to_string()));
+        assert!(symbols.contains(&"interface Runnable".to_string()));
+    }
+
+    #[test]
+    fn unknown_extension_returns_empty() {
+        let content = "fn main() {}";
+        let symbols = extract_symbols("README.md", content);
+        assert!(symbols.is_empty());
+    }
+
+    #[test]
+    fn skips_comments() {
+        let content = "// fn not_a_fn() {}\n/* struct Fake {} */\n\nfn real() {}";
+        let symbols = extract_symbols("src/lib.rs", content);
+        assert_eq!(symbols.len(), 1);
+        assert!(symbols.contains(&"fn real".to_string()));
+    }
+
+    #[tokio::test]
+    async fn list_symbols_returns_workspace_symbols() {
+        let (dir, runtime) = runtime();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn answer() -> u8 { 42 }\n\npub struct Config { pub port: u16 }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("README.md"),
+            "# Project\nfn not_extracted() {}\n",
+        )
+        .unwrap();
+
+        let result = runtime
+            .invoke_json("list_symbols", json!({}))
+            .await
+            .unwrap();
+        let files = result["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["path"], "src/lib.rs");
+        let symbols: Vec<String> = files[0]["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str().unwrap().to_string())
+            .collect();
+        assert!(symbols.contains(&"fn answer".to_string()));
+        assert!(symbols.contains(&"struct Config".to_string()));
+    }
+
+    #[tokio::test]
+    async fn list_symbols_respects_limit() {
+        let (dir, runtime) = runtime();
+        for i in 0..5 {
+            std::fs::write(
+                dir.path().join(format!("f{i}.rs")),
+                format!("fn f{i}() {{}}"),
+            )
+            .unwrap();
+        }
+
+        let result = runtime
+            .invoke_json("list_symbols", json!({"limit": 2}))
+            .await
+            .unwrap();
+
+        let files = result["files"].as_array().unwrap();
+        assert!(files.len() <= 2, "limit 2 should cap results");
+        assert_eq!(result["limit"], 2);
     }
 
     fn init_temp_git_repo(dir: &std::path::Path) {
@@ -1463,6 +2106,91 @@ mod tests {
         assert!(
             result["exit_code"].is_number() || result["timed_out"] == false,
             "git_push with no args should default to origin"
+        );
+    }
+    #[tokio::test]
+    async fn list_symbols_limit_bounds_what_is_returned_not_what_is_walked() {
+        // A source tree is mostly not source. When `limit` doubled as the walk budget, the
+        // non-source files ahead of the code in breadth-first order consumed it — against this
+        // repo the tool returned exactly one file, a stray `validate.py`, and no Rust at all.
+        let (dir, runtime) = runtime();
+        for i in 0..10 {
+            std::fs::write(
+                dir.path().join(format!("a{i}.md")),
+                "# not source
+",
+            )
+            .unwrap();
+        }
+        for i in 0..3 {
+            std::fs::write(
+                dir.path().join(format!("z{i}.rs")),
+                format!(
+                    "pub fn thing{i}() {{}}
+"
+                ),
+            )
+            .unwrap();
+        }
+
+        let result = runtime
+            .invoke_json("list_symbols", json!({"limit": 2}))
+            .await
+            .unwrap();
+
+        let files = result["files"].as_array().unwrap();
+        assert_eq!(
+            files.len(),
+            2,
+            "limit is a result bound, and there are 3 source files past 10 non-source ones: {files:?}"
+        );
+        for f in files {
+            let path = f["path"].as_str().unwrap();
+            assert!(
+                path.ends_with(".rs"),
+                "only source files carry symbols: {path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn list_symbols_stops_reading_a_file_at_the_policy_cap() {
+        // `read_file` caps at `read_max_bytes`; this walked every file with an uncapped
+        // `read_to_string`, which on a binary reads the whole thing before failing to decode it.
+        let dir = tempfile::tempdir().unwrap();
+        let policy = PathPolicy {
+            read_max_bytes: 64,
+            ..PathPolicy::default()
+        };
+        let runtime = CodingToolRuntime::new(dir.path(), CommandPolicy::default(), policy).unwrap();
+        let mut content = String::from(
+            "pub fn early() {}
+",
+        );
+        content.push_str(
+            &"// padding padding padding
+"
+            .repeat(20),
+        );
+        content.push_str(
+            "pub fn beyond_the_cap() {}
+",
+        );
+        std::fs::write(dir.path().join("big.rs"), &content).unwrap();
+
+        let result = runtime
+            .invoke_json("list_symbols", json!({}))
+            .await
+            .unwrap();
+
+        let symbols = result["files"][0]["symbols"].as_array().unwrap();
+        assert!(
+            symbols.iter().any(|s| s == "fn early"),
+            "the head of the file is still read: {symbols:?}"
+        );
+        assert!(
+            !symbols.iter().any(|s| s == "fn beyond_the_cap"),
+            "nothing past read_max_bytes should be reachable: {symbols:?}"
         );
     }
 }
