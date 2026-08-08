@@ -67,6 +67,15 @@ pub(crate) fn archive_outcome_subdir(
     }
 }
 
+/// Whether this cron event's schedule opted out of notifier delivery (`deliver = false`).
+///
+/// The flag rides on the event payload because the delivery site sees only the `Event` — the same
+/// channel `profile` uses. Anything other than an explicit `false` means deliver, so every event
+/// produced before the flag existed behaves exactly as it did.
+pub(crate) fn cron_delivery_suppressed(event: &Event) -> bool {
+    event.payload.data.get("deliver").and_then(|v| v.as_bool()) == Some(false)
+}
+
 /// `pool` is stamped into `payload` so the dispatch pack routes to the same pool the event named.
 pub(crate) fn reaction_goal(event: &Event, goal: &str, pool: &str) -> GoalSpec {
     let profile = event

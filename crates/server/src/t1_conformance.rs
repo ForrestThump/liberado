@@ -122,6 +122,7 @@ impl T1Harness {
             reactions: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             dispatcher_attached: false,
             orchestrator_attached: false,
+            watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             vault_path: root.join("vault").to_string_lossy().into_owned(),
             goals: goals.clone(),
             chat: None,

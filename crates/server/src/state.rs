@@ -25,6 +25,9 @@ pub struct AppState {
     pub reactions: Arc<Mutex<Vec<ReactionEvent>>>,
     pub dispatcher_attached: bool,
     pub orchestrator_attached: bool,
+    /// Live view of whether the vault watch task is running, shared with the daemon that owns it.
+    /// Reported by `GET /api/status`, which used to answer with a literal `true`.
+    pub watcher_active: Arc<std::sync::atomic::AtomicBool>,
     pub vault_path: String,
     /// Domain-neutral goal sessions (coding + life packs). Surfaces are clients of this hub.
     pub goals: Arc<GoalSessionHub>,
@@ -232,6 +235,7 @@ impl AppState {
             reactions: Arc::new(Mutex::new(Vec::new())),
             dispatcher_attached: false,
             orchestrator_attached: false,
+            watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             vault_path: root.join("vault").to_string_lossy().into_owned(),
             goals: Arc::new(GoalSessionHub::new(
                 liberado_session_store::SessionStore::clone(&sessions),

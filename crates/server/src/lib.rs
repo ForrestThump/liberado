@@ -276,6 +276,8 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // channel every `EventSource` (vault-watch, cron) pushes onto. Grabbed before `daemon` moves
     // into its own spawned task below, same pattern as the vault/signer clones just above it.
     let hook_tx = daemon.event_sender();
+    // Same constraint as `event_sender` above: grab it before `daemon` moves into its task.
+    let watcher_active = daemon.watcher_health();
     let resolved_hooks = hooks::resolve_hooks(&config.topology);
     info!(hooks = resolved_hooks.len(), "webhook hooks resolved");
 
@@ -290,6 +292,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         reactions: Arc::new(Mutex::new(Vec::new())),
         dispatcher_attached,
         orchestrator_attached,
+        watcher_active,
         vault_path: vault_path.clone(),
         goals,
         chat,

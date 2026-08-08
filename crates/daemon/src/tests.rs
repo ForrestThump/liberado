@@ -40,6 +40,63 @@ fn cron_schedule_name_only_matches_cron_sources() {
     assert_eq!(cron_schedule_name("cron"), None); // no name
 }
 
+/// `watcher_health()` starts false and is only true once `run()` has actually spawned the watch.
+///
+/// `GET /api/status` used to answer this with the literal `true`, so every dashboard asserted a
+/// live capture pipeline whether or not one was running — which reads as "the pipeline broke" to
+/// anyone debugging, rather than "it was never started". The flag is only worth anything if it can
+/// be false, so that is what this pins.
+#[tokio::test]
+async fn watcher_health_is_false_before_run_spawns_the_watch() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open("test", dir.path()).await.unwrap();
+    let health = daemon.watcher_health();
+    assert!(
+        !health.load(std::sync::atomic::Ordering::Relaxed),
+        "a daemon that has not run yet is not watching anything"
+    );
+    // The handle is shared, not a snapshot — the surface holds this across `run()` taking `self`.
+    assert!(std::sync::Arc::ptr_eq(&health, &daemon.watcher_health()));
+}
+
+#[test]
+fn cron_delivery_is_suppressed_only_by_an_explicit_false() {
+    use crate::helpers::cron_delivery_suppressed;
+    use liberado_common::{Event, EventPayload};
+
+    let with = |data: serde_json::Value| {
+        Event::trigger(
+            "CronFired",
+            "cron:sweep",
+            "c1",
+            EventPayload {
+                data,
+                ..Default::default()
+            },
+        )
+    };
+
+    assert!(cron_delivery_suppressed(&with(
+        serde_json::json!({"deliver": false})
+    )));
+
+    // Everything else delivers. `Null` and a missing key are what every event looked like before
+    // the flag existed, so treating either as "suppress" would silence the whole system.
+    assert!(!cron_delivery_suppressed(&with(
+        serde_json::json!({"deliver": true})
+    )));
+    assert!(!cron_delivery_suppressed(&with(serde_json::json!({}))));
+    assert!(!cron_delivery_suppressed(&with(serde_json::Value::Null)));
+    // A non-bool is a config mistake; delivering is the safe reading of an unclear answer.
+    assert!(!cron_delivery_suppressed(&with(
+        serde_json::json!({"deliver": "false"})
+    )));
+    // Coexists with profile, which shares the payload map.
+    assert!(cron_delivery_suppressed(&with(
+        serde_json::json!({"profile": "hat", "deliver": false})
+    )));
+}
+
 #[test]
 fn format_cron_delivery_flags_non_success() {
     let ok = format_cron_delivery("daily-planning", "your brief", TerminalKind::Succeeded);
@@ -272,6 +329,7 @@ async fn cron_and_vault_watch_are_interchangeable_event_sources() {
         goal: "a cron-dispatched goal".into(),
         pool: None,
         profile: None,
+        deliver: None,
     }])
     .unwrap();
 
@@ -402,6 +460,7 @@ async fn a_cron_firing_is_recorded_as_a_background_session_instead_of_vanishing(
         goal: "summarize today's decisions".into(),
         pool: None,
         profile: None,
+        deliver: None,
     }])
     .unwrap();
 

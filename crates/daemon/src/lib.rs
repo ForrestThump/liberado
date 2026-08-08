@@ -65,6 +65,7 @@ impl Daemon {
             cron_source: None,
             event_tx: Some(event_tx),
             event_rx: Some(event_rx),
+            watcher_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             goals: None,
             user_timezone: None,
         })
@@ -123,6 +124,19 @@ impl Daemon {
             .as_ref()
             .expect("event_sender() called after run() already started")
             .clone()
+    }
+
+    /// A handle to whether the vault watch is actually running.
+    ///
+    /// `false` until [`run`](Self::run) spawns the watch task, and `false` again once that task
+    /// ends. Grab this **before** calling `run`, which consumes `self` — same constraint as
+    /// [`event_sender`](Self::event_sender).
+    ///
+    /// Exists because `GET /api/status` used to answer this question with the literal `true`, so
+    /// every dashboard asserted a live capture pipeline whether or not one was running — which
+    /// reads as "the pipeline broke" to anyone debugging, rather than "it was never started".
+    pub fn watcher_health(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        std::sync::Arc::clone(&self.watcher_active)
     }
 
     /// Override the debounce window (e.g. a short window in tests).
@@ -282,7 +296,20 @@ impl Daemon {
             .expect("Daemon::run must only be called once");
 
         let vault_source = VaultEventSource::new(self.vault.clone(), self.debounce);
-        tokio::spawn(Box::new(vault_source).run(event_tx.clone()));
+        // Supervised rather than fire-and-forget: the handle was previously dropped on the floor,
+        // so a watch task that died took the daemon's only vault input with it and nothing
+        // anywhere could tell. The flag is the observable.
+        let watcher_active = std::sync::Arc::clone(&self.watcher_active);
+        let watch_handle = tokio::spawn(Box::new(vault_source).run(event_tx.clone()));
+        watcher_active.store(true, std::sync::atomic::Ordering::Relaxed);
+        tokio::spawn(async move {
+            let outcome = watch_handle.await;
+            watcher_active.store(false, std::sync::atomic::Ordering::Relaxed);
+            match outcome {
+                Ok(()) => tracing::warn!("vault watch task ended; watcher_active is now false"),
+                Err(e) => tracing::error!(error = %e, "vault watch task died"),
+            }
+        });
 
         if let Some(cron_source) = self.cron_source.take() {
             tracing::info!(

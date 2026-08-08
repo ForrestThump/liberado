@@ -142,7 +142,22 @@ impl Default for ConcurrencyTuning {
 }
 
 /// Capture / inbox tunables (`liberado-inbox-spec.md` §11).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # NOT IMPLEMENTED
+///
+/// **No production code reads any field on this struct.** It parses, validates, and is re-exported
+/// from `liberado-config`, and that is all — there is no settle window, no `#ready-now` /
+/// `#hold-off` handling, no ambient sweep, and no watcher ignore list. Setting these knobs changes
+/// nothing.
+///
+/// The vault watcher itself *is* live and does fire; what is missing is the inbox layer above it.
+/// A change under `inbox_path` gets the same generic "a note changed, decide how to react" handling
+/// as any other note.
+///
+/// Kept rather than deleted because the spec it implements is still the intended design and the
+/// shape is agreed. [`Config::validate`] warns when an operator sets these, so config that looks
+/// live but is inert says so out loud instead of being discovered on a running box.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CaptureTuning {
     pub inbox_path: String,

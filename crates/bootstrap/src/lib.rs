@@ -352,6 +352,7 @@ pub fn cron_source_from_config(
             goal: s.goal.clone(),
             pool: s.pool.clone(),
             profile: s.profile.clone(),
+            deliver: s.deliver,
         })
         .collect();
     if schedules.is_empty() {
@@ -889,6 +890,7 @@ mod tests {
             goal: "summarize today's decisions".into(),
             pool: None,
             profile: None,
+            deliver: None,
         }
     }
 

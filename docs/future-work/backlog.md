@@ -122,6 +122,33 @@ measurement is in [`token-economics-findings-2026-08.md`](token-economics-findin
 |---|---|---|
 | **B1** | **`ExecuteDirect` gets no output contract**, and `DIRECT_INSTRUCTIONS` asks for a *"concise, high-signal result"* — the shape of the seam bug. **Do not blanket-fix**: it carries no `Delivery`, so this would tell every cron and vault run to write documents. Needs a destination first. | [`delegated-work-is-discarded-at-the-seam.md`](delegated-work-is-discarded-at-the-seam.md) |
 
+## Band E — homelab dogfood asks (2026-08-08)
+
+Raised by an agent adding an hourly inbox-ingestion schedule on the homelab; each one had a live
+workaround in `topology.toml` standing in for it. **#1, #2 and the cheap half of #4 landed** — this
+is what is left. Full write-up and line refs: the report is reproduced in the PR that closed the
+first three.
+
+Every claim below was verified against `main` before being written down. One claim from the same
+report was **not** reproducible and is recorded at the bottom so nobody re-opens it.
+
+| # | What | Size | Pointer |
+|---|---|---|---|
+| **E1** | **Per-schedule turn budget.** `DIRECT_MAX_TURNS` (4) and the subagent default (8) are compile-time; a schedule can neither raise them nor choose which path it lands on — the dispatcher picks `ExecuteDirect` vs `DispatchSubagent` from goal phrasing. Observed live: an inbox goal spent all 4 turns on vault reads and filed nothing. Wants `max_turns: Option<u32>` on `Schedule`, plumbed through `budget_for(depth)`. | medium | `crates/orchestrator/src/lib.rs` (`budget_for`) |
+| **E2** | **Implement the inbox layer, or delete the spec.** `[tuning.capture]` now warns and `inbox-spec.md` carries a NOT IMPLEMENTED banner, so it no longer *misleads* — but tiers, settle windows, `#ready-now`/`#hold-off` and the ambient sweep still do not exist. | large | [`../spec/inbox-spec.md`](../spec/inbox-spec.md) |
+| **E3** | **Watcher ignore list.** `inbox_ignore_globs` has no wired equivalent, so the generic vault-watch reaction fires on `Inbox/` writes *alongside* any ingestion schedule — the same capture is processed twice. Independent of the rest of E2 and worth doing first. | small | `crates/daemon/src/vault_source.rs` |
+| **E4** | **turbovault cannot enumerate a directory** (turbovault repo, not this one). `query_frontmatter_sql` needs the `sql` feature compiled in; `advanced_search` takes `exclude_paths` but no positive path scope; `get_notes_info` needs paths you already have. So "process everything in this folder" is not expressible. Any one of: enable `sql` in the homelab image, add `path_prefix` to `advanced_search`, or add `list_notes(path)`. | medium | turbovault `crates/turbovault-tools/src/search_engine.rs` |
+| **E5** | **SSE reconnect storm.** `turbomcp_http::transport` logs read-error → stream-ended → reconnect in a tight loop: ~93.5k occurrences in 24h, ~50/min while idle. Survivable, but it evicts real diagnostics under log rotation. Likely a turbomcp keepalive/EOF issue. | medium | turbomcp |
+
+**Not a bug — do not re-open.** The same report proposed routing MCP vault writes through the
+capability check, on the grounds that they bypass the zone model. They do not. `write_target`
+resolves a three-state answer whose `Undeterminable` variant **refuses**, and it is called on both
+paths (`executor/src/risk_gated.rs`, `server/src/lib.rs`); `turbovault` is declared with
+`zone_from_arg`/`write_tools`, and no component grants `Write { Vault = "Briefs" }`. The observed
+`Briefs/` write is real but has some other cause — the homelab's own `policy.toml`, or a writer
+outside Liberado (turbovault holds an `rw` mount and ships its own git/batch/plugin crates). Chase
+it with a daemon log showing whether a refusal fired, not with a code change.
+
 ## Band C — agentic coding: get to self-hosting
 
 **The bar is concrete: run these PRs on our own coder instead of OpenCode.** That is more useful

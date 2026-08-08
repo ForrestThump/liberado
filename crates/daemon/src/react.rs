@@ -151,12 +151,19 @@ impl Daemon {
     ///
     /// Spawned onto the runtime rather than awaited inline: the reaction loop must not block on a
     /// session that may run for minutes. Best-effort delivery, matching every other `notify` call —
-    /// a failed send is logged, never fatal. (A future per-schedule `deliver = false` opt-out would
-    /// gate here; v1 delivers every cron.)
+    /// a failed send is logged, never fatal.
+    ///
+    /// A schedule may opt out with `deliver = false`, which rides on the event payload (the same
+    /// channel `profile` uses) because this sees only the `Event`. Absent means deliver, so every
+    /// schedule that predates the flag behaves exactly as before.
     pub(crate) fn maybe_deliver_cron_result(&self, event: &Event, session_id: &str) {
         let Some(schedule) = cron_schedule_name(&event.source) else {
             return;
         };
+        if crate::helpers::cron_delivery_suppressed(event) {
+            tracing::debug!(%schedule, %session_id, "schedule opted out of delivery");
+            return;
+        }
         let (Some(hub), Some(notifier)) = (self.goals.clone(), self.notifier.clone()) else {
             return;
         };

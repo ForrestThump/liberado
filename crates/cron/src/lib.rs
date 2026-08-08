@@ -36,6 +36,13 @@ pub struct Schedule {
     /// Optional session profile name (E7) — carried into the event so the hub session can resolve
     /// a grant that may include `AskHuman` / a long idle budget.
     pub profile: Option<String>,
+    /// Whether this schedule's result is pushed to the notifier when it finishes.
+    ///
+    /// `None` keeps today's behaviour (deliver). `Some(false)` silences it: a maintenance schedule
+    /// that runs hourly and usually finds nothing to do otherwise posts 24 messages a day, and the
+    /// only alternative was asking the goal prompt politely to be brief — prompt-level etiquette
+    /// standing in for a config flag.
+    pub deliver: Option<bool>,
 }
 
 /// Errors constructing a [`CronEventSource`] — both fail-fast at construction time (Decision 14's
@@ -60,6 +67,7 @@ struct ParsedSchedule {
     goal: String,
     pool: Option<String>,
     profile: Option<String>,
+    deliver: Option<bool>,
     parsed: cron::Schedule,
 }
 
@@ -94,6 +102,7 @@ impl CronEventSource {
                 goal: s.goal,
                 pool: s.pool,
                 profile: s.profile,
+                deliver: s.deliver,
                 parsed: expr,
             });
         }
@@ -160,13 +169,21 @@ fn build_event(schedule: &ParsedSchedule, fire_at: DateTime<Utc>) -> Event {
         EventPayload {
             summary: Some(schedule.goal.clone()),
             pool: schedule.pool.clone(),
-            data: match &schedule.profile {
-                Some(p) => {
-                    let mut map = serde_json::Map::new();
+            // The daemon's delivery gate sees only the `Event`, so `deliver` rides here for the
+            // same reason `profile` does. Absent means deliver — the pre-existing behaviour.
+            data: {
+                let mut map = serde_json::Map::new();
+                if let Some(p) = &schedule.profile {
                     map.insert("profile".into(), serde_json::Value::String(p.clone()));
+                }
+                if let Some(d) = schedule.deliver {
+                    map.insert("deliver".into(), serde_json::Value::Bool(d));
+                }
+                if map.is_empty() {
+                    serde_json::Value::Null
+                } else {
                     serde_json::Value::Object(map)
                 }
-                None => serde_json::Value::Null,
             },
             ..Default::default()
         },
@@ -184,7 +201,54 @@ mod tests {
             goal: goal.into(),
             pool: None,
             profile: None,
+            deliver: None,
         }
+    }
+
+    /// `deliver` rides on the event payload because the daemon's delivery gate sees only the
+    /// `Event` — if it stopped being carried, the opt-out would silently stop working.
+    #[test]
+    fn deliver_false_is_carried_on_the_event() {
+        let mut s = schedule("quiet", "0 0 * * * * *", "sweep");
+        s.deliver = Some(false);
+        let parsed = CronEventSource::new(vec![s]).unwrap().schedules;
+        let event = build_event(&parsed[0], Utc::now());
+        assert_eq!(
+            event.payload.data.get("deliver").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+    }
+
+    /// Omitting it must stay indistinguishable from before the flag existed.
+    #[test]
+    fn absent_deliver_puts_nothing_on_the_event() {
+        let parsed = CronEventSource::new(vec![schedule("loud", "0 0 * * * * *", "report")])
+            .unwrap()
+            .schedules;
+        let event = build_event(&parsed[0], Utc::now());
+        assert!(
+            event.payload.data.get("deliver").is_none(),
+            "{:?}",
+            event.payload.data
+        );
+    }
+
+    /// A schedule with both must carry both — the payload map is built once for the pair.
+    #[test]
+    fn profile_and_deliver_coexist_on_the_event() {
+        let mut s = schedule("both", "0 0 * * * * *", "work");
+        s.profile = Some("hat".into());
+        s.deliver = Some(false);
+        let parsed = CronEventSource::new(vec![s]).unwrap().schedules;
+        let event = build_event(&parsed[0], Utc::now());
+        assert_eq!(
+            event.payload.data.get("profile").and_then(|v| v.as_str()),
+            Some("hat")
+        );
+        assert_eq!(
+            event.payload.data.get("deliver").and_then(|v| v.as_bool()),
+            Some(false)
+        );
     }
 
     #[test]

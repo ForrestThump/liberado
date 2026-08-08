@@ -186,6 +186,13 @@ pub struct Daemon {
     pub(crate) event_tx: Option<UnboundedSender<Event>>,
     /// Taken by `run()`; `None` after the daemon has started running once (it can only run once).
     pub(crate) event_rx: Option<tokio::sync::mpsc::UnboundedReceiver<Event>>,
+    /// Whether the vault watch task is actually alive.
+    ///
+    /// Built in `open()` — like `event_tx`, and for the same reason — so a surface can hold the
+    /// same flag before `run()` consumes `self`. `run()` sets it once the watch task is spawned
+    /// and clears it when that task ends, so a status endpoint reports what is true rather than a
+    /// literal. The watch task is spawned detached, so without this nothing observes its death.
+    pub(crate) watcher_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// The **one** execution engine (one-execution-engine plan E3). When present, a reaction
     /// starts a hosted background session on this hub (domain `"dispatch"`) and returns
     /// [`ReactionOutcome::Dispatched`]. When absent, the daemon falls back to inline
