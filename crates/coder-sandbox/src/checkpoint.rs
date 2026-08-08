@@ -60,6 +60,15 @@ impl ShadowGit {
         let data = std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into());
         let git_dir = PathBuf::from(data).join("checkpoints").join(session_id);
         std::fs::create_dir_all(&git_dir).map_err(|e| CheckpointError::Io(e.to_string()))?;
+        // Canonicalized the same way as `work_tree`, because `restore` decides whether the shadow
+        // repo sits inside the work tree by `strip_prefix`-ing one against the other — a literal
+        // component comparison. Left in whatever spelling the environment supplied, the two sides
+        // disagree over things that name the same directory: a `.` segment, a case difference, or
+        // on Windows an 8.3 short name (`RUNNER~1` vs `runneradmin`, which is exactly what a CI
+        // runner's TEMP looks like and why this passed on every developer machine). The guard then
+        // silently does nothing and `git clean -fd` deletes the checkpoint history it was added to
+        // protect.
+        let git_dir = strip_extended_path_prefix(&git_dir.canonicalize().unwrap_or(git_dir));
 
         let sg = Self { git_dir, work_tree };
         if !sg.git_dir.join("HEAD").exists() {
@@ -67,6 +76,13 @@ impl ShadowGit {
             // Identity for commit-tree.
             sg.run_git(&["config", "user.email", "checkpoint@liberado.local"])?;
             sg.run_git(&["config", "user.name", "liberado-checkpoint"])?;
+            // A checkpoint promises the workspace comes back byte-identical, so the shadow repo
+            // must not translate anything on the way in or out. With `core.autocrlf=true` — the
+            // default for Git for Windows, and set in this machine's *system* config — restore
+            // rewrites every LF to CRLF, quietly corrupting the tree it was meant to preserve.
+            // Pinned here rather than inherited, because the host's setting is not ours to trust.
+            sg.run_git(&["config", "core.autocrlf", "false"])?;
+            sg.run_git(&["config", "core.safecrlf", "false"])?;
         }
         Ok(sg)
     }
@@ -377,6 +393,53 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// `git_dir` is stored canonicalized, in the same spelling as `work_tree`.
+    ///
+    /// `restore` decides whether the shadow repo sits inside the work tree by `strip_prefix`-ing
+    /// one against the other, which compares components literally. `work_tree` is canonicalized;
+    /// if `git_dir` keeps whatever spelling the environment supplied, the two disagree over paths
+    /// that name the same directory — on Windows a runner's `TEMP` gives the 8.3 short form
+    /// (`RUNNER~1`) while canonicalize yields `runneradmin`. The guard then matches nothing and
+    /// `git clean -fd` deletes the checkpoint history it exists to protect, surfacing as an empty
+    /// `list()` rather than as anything that mentions paths.
+    ///
+    /// Asserted as an invariant rather than by staging an odd spelling: `Path::components()`
+    /// normalizes `.` away on its own, so the obvious repro tests nothing, and the spellings that
+    /// *do* break it (8.3, case-insensitivity) exist only on some platforms.
+    #[test]
+    fn git_dir_is_stored_canonicalized_so_the_clean_guard_can_match() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("lib-ckpt-canon-{}", unique()));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        // A `..` segment: names `root/data`, but is not the canonical spelling of it. Unlike `.`,
+        // which `Path::components()` quietly drops, `..` survives into the literal comparison —
+        // so this stands in for the runner's 8.3 `TEMP` without needing a Windows-only fixture.
+        let data = root.join("sub").join("..").join("data");
+        unsafe {
+            std::env::set_var("LIBERADO_DATA_DIR", &data);
+        }
+        let sg = ShadowGit::open_or_init(&root, "canon").unwrap();
+
+        let canonical = strip_extended_path_prefix(&sg.git_dir().canonicalize().unwrap());
+        assert_eq!(
+            sg.git_dir(),
+            canonical.as_path(),
+            "git_dir must be canonical or the clean-exclusion guard silently misses"
+        );
+        // And with both sides canonical the guard actually resolves.
+        assert!(
+            sg.git_dir().strip_prefix(sg.work_tree()).is_ok(),
+            "git_dir under the work tree must strip cleanly: {:?} vs {:?}",
+            sg.git_dir(),
+            sg.work_tree()
+        );
+
+        unsafe {
+            std::env::remove_var("LIBERADO_DATA_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn open_or_init_rejects_path_traversal() {
         assert!(ShadowGit::open_or_init(Path::new("."), "a/b").is_err());
@@ -430,6 +493,53 @@ mod tests {
         assert!(items.len() <= 100);
         unsafe {
             std::env::remove_var("LIBERADO_DATA_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Restore stays byte-exact even when the host turns line-ending translation on.
+    ///
+    /// `core.autocrlf=true` is the Git for Windows default and is set in this machine's *system*
+    /// config; a developer-level `false` was the only thing hiding it locally, so the three
+    /// round-trip tests passed here and failed on every CI runner. Left inherited, restore
+    /// rewrites every LF to CRLF — silent corruption in the one operation whose entire promise is
+    /// that the bytes come back unchanged.
+    ///
+    /// The other tests would catch this only on a host that happens to enable autocrlf. This one
+    /// forces it on regardless, so the guarantee is pinned rather than left to the environment.
+    #[tokio::test]
+    async fn restore_is_byte_exact_even_when_the_host_enables_autocrlf() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("lib-ckpt-crlf-{}", unique()));
+        let root = base.join("ws");
+        let data = base.join("data");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+
+        let cfg = base.join("gitconfig");
+        std::fs::write(&cfg, "[core]\n\tautocrlf = true\n").unwrap();
+
+        unsafe {
+            std::env::set_var("LIBERADO_DATA_DIR", &data);
+            std::env::set_var("GIT_CONFIG_GLOBAL", &cfg);
+        }
+        let sg = ShadowGit::open_or_init(&root, "sess-crlf").unwrap();
+        drop(_guard);
+
+        let cp = sg.snapshot("base").await.unwrap();
+        std::fs::write(root.join("a.txt"), "MUTATED\n").unwrap();
+        sg.restore(&cp.id).await.unwrap();
+
+        // Compare bytes, not a string: `\r` is exactly what would be smuggled in.
+        assert_eq!(
+            std::fs::read(root.join("a.txt")).unwrap(),
+            b"one\ntwo\nthree\n",
+            "restore must not translate line endings"
+        );
+
+        unsafe {
+            std::env::remove_var("LIBERADO_DATA_DIR");
+            std::env::remove_var("GIT_CONFIG_GLOBAL");
         }
         let _ = std::fs::remove_dir_all(&base);
     }

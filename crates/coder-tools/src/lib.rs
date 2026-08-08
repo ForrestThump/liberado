@@ -3197,6 +3197,18 @@ mod tests {
 
     // ── background jobs ───────────────────────────────────────────────
 
+    /// A shell echo that exists on every runner.
+    ///
+    /// These tests hardcoded `cmd /c echo`, which is Windows-only. They were written on Windows
+    /// while CI could not run, so nothing noticed until Linux executed them for the first time.
+    fn echo_command(text: &str) -> (String, Vec<String>) {
+        if cfg!(windows) {
+            ("cmd".into(), vec!["/c".into(), "echo".into(), text.into()])
+        } else {
+            ("sh".into(), vec!["-c".into(), format!("echo {text}")])
+        }
+    }
+
     #[tokio::test]
     async fn background_job_roundtrip_running_then_completed() {
         let dir = tempfile::tempdir().unwrap();
@@ -3205,10 +3217,11 @@ mod tests {
             CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
                 .unwrap();
 
+        let (program, args) = echo_command("hello-from-background");
         let started = runtime
             .invoke_json(
                 "run_command_background",
-                json!({"program": "cmd", "args": ["/c", "echo", "hello-from-background"]}),
+                json!({"program": program, "args": args}),
             )
             .await
             .unwrap();
@@ -3266,8 +3279,9 @@ mod tests {
             CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
                 .unwrap()
                 .with_validation_command({
-                    let mut req = CommandRequest::new("cmd");
-                    req.args = vec!["/c".into(), "echo".into(), "ok".into()];
+                    let (program, args) = echo_command("ok");
+                    let mut req = CommandRequest::new(program);
+                    req.args = args;
                     req
                 });
 
