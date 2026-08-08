@@ -159,7 +159,9 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
                 if let Ok(coder_tuning) =
                     liberado_coder_core::CoderTuning::from_value(config.tuning.coder.as_ref())
                 {
-                    pack = pack.with_hashline(coder_tuning.hashline);
+                    pack = pack
+                        .with_hashline(coder_tuning.hashline)
+                        .with_gate(coder_tuning.gate);
                 }
                 Arc::new(pack)
             }
