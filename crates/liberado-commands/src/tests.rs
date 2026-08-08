@@ -673,41 +673,15 @@ mod tests {
     fn format_uptime_zero() {
         assert_eq!(crate::format::format_uptime(0), "0m 0s");
     }
-
-    #[test]
-    fn parse_profile_command() {
-        use crate::dispatch::parse;
-        assert_eq!(parse("/profile"), Some(SlashCommand::Profile));
-    }
-
-    #[test]
-    fn dispatch_profile_opens_browser() {
-        let mut ctx = MockContext::new();
-        let results = crate::dispatch::dispatch(&SlashCommand::Profile, &mut ctx);
-        assert_eq!(
-            results,
-            vec![
-                CommandResult::ProfileInfoShown,
-                CommandResult::OpenProfileBrowser
-            ]
-        );
-        assert!(ctx.messages[0].contains("profile"));
-    }
-
-    #[test]
-    fn display_profile_round_trips() {
-        let parsed = crate::dispatch::parse("/profile");
-        assert_eq!(parsed, Some(SlashCommand::Profile));
-        assert_eq!(parsed.unwrap().to_string(), "/profile");
-    }
 }
 
 // ── /goal parsing (S2/G2) ───────────────────────────────────────────────────
 
 #[cfg(test)]
 mod goal_command_tests {
-    use crate::commands::{GoalCmd, SlashCommand};
+    use crate::commands::{CodingGoalMode, GoalCmd, SlashCommand};
     use crate::dispatch::parse;
+
     fn goal(input: &str) -> GoalCmd {
         match parse(input) {
             Some(SlashCommand::Goal(g)) => g,
@@ -815,33 +789,35 @@ mod goal_command_tests {
     #[test]
     fn plan_parses_like_goal_start_with_project() {
         match parse("/plan in liberado design the CLI") {
-            Some(SlashCommand::Plan {
+            Some(SlashCommand::Coding {
+                mode: CodingGoalMode::Plan,
                 project: Some(p),
                 text,
             }) => {
                 assert_eq!(p, "liberado");
                 assert_eq!(text, "design the CLI");
             }
-            other => panic!("expected Plan, got {other:?}"),
+            other => panic!("expected Coding/Plan, got {other:?}"),
         }
     }
 
     #[test]
     fn explore_parses_with_project() {
         match parse("/explore in liberado how sessions park") {
-            Some(SlashCommand::Explore {
+            Some(SlashCommand::Coding {
+                mode: CodingGoalMode::Explore,
                 project: Some(p),
                 text,
             }) => {
                 assert_eq!(p, "liberado");
                 assert_eq!(text, "how sessions park");
             }
-            other => panic!("expected Explore, got {other:?}"),
+            other => panic!("expected Coding/Explore, got {other:?}"),
         }
     }
 
     #[test]
-    fn plan_handler_sets_plan_mode_flag() {
+    fn coding_handler_stamps_the_requested_mode() {
         use crate::context::{CommandContext, StatusInfo};
         use crate::result::CommandResult;
 
@@ -894,81 +870,33 @@ mod goal_command_tests {
             }
         }
 
-        let results = crate::handlers::focus::plan(Some("liberado"), "design X", &mut NullCtx);
+        let results = crate::handlers::focus::coding(
+            CodingGoalMode::Plan,
+            Some("liberado"),
+            "design X",
+            &mut NullCtx,
+        );
         assert_eq!(
             results,
             vec![CommandResult::StartCodingGoal {
                 project: Some("liberado".into()),
                 text: "design X".into(),
-                plan_mode: true,
-                explore_mode: false,
+                mode: Some(CodingGoalMode::Plan),
             }]
         );
-    }
 
-    #[test]
-    fn explore_handler_sets_explore_mode_flag() {
-        use crate::context::{CommandContext, StatusInfo};
-        use crate::result::CommandResult;
-
-        struct NullCtx;
-        impl CommandContext for NullCtx {
-            fn active_session_id(&self) -> Option<&str> {
-                None
-            }
-            fn is_streaming(&self) -> bool {
-                false
-            }
-            fn conversation_count(&self) -> usize {
-                0
-            }
-            fn find_conversation_id_by_prefix(&self, _: &str) -> Option<String> {
-                None
-            }
-            fn status_info(&self) -> Option<StatusInfo> {
-                None
-            }
-            fn theme_names(&self) -> Vec<String> {
-                vec![]
-            }
-            fn current_theme_name(&self) -> &str {
-                ""
-            }
-            fn conversation_title_for(&self, _: &str) -> Option<String> {
-                None
-            }
-            fn conversation_parent_for(&self, _: &str) -> Option<String> {
-                None
-            }
-            fn message_count(&self) -> usize {
-                0
-            }
-            fn conversation_list(&self) -> Vec<(String, String)> {
-                vec![]
-            }
-            fn set_active_session(&mut self, _: Option<String>) {}
-            fn clear_chat(&mut self) {}
-            fn reset_for_new_conversation(&mut self) {}
-            fn push_system_message(&mut self, _: String) {}
-            fn clear_input(&mut self) {}
-            fn stop_streaming(&mut self) {}
-            fn set_theme(&mut self, _: &str) -> bool {
-                false
-            }
-            fn reload_themes(&mut self) -> Result<usize, Vec<String>> {
-                Ok(0)
-            }
-        }
-
-        let results =
-            crate::handlers::focus::explore(Some("liberado"), "how auth works", &mut NullCtx);
+        let results = crate::handlers::focus::coding(
+            CodingGoalMode::Explore,
+            Some("liberado"),
+            "how auth works",
+            &mut NullCtx,
+        );
         assert_eq!(
             results,
             vec![CommandResult::StartCodingGoal {
                 project: Some("liberado".into()),
                 text: "how auth works".into(),
-                plan_mode: false,
-                explore_mode: true,
+                mode: Some(CodingGoalMode::Explore),
             }]
         );
     }

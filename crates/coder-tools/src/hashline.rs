@@ -189,7 +189,7 @@ fn is_valid_tag(tag: &str) -> bool {
         return false;
     }
     tag.bytes()
-        .all(|b| b.is_ascii_digit() || (b'A'..=b'Z').contains(&b))
+        .all(|b: u8| b.is_ascii_digit() || b.is_ascii_uppercase())
 }
 
 fn normalize_path(path: &str) -> String {
@@ -910,7 +910,7 @@ mod tests {
                 assert_eq!(tag.len(), len as usize, "len={len} sample={sample:?}");
                 assert!(
                     tag.bytes()
-                        .all(|b| b.is_ascii_digit() || (b'A'..=b'Z').contains(&b)),
+                        .all(|b: u8| b.is_ascii_digit() || b.is_ascii_uppercase()),
                     "non base-36 char in {tag}"
                 );
             }

@@ -940,27 +940,31 @@ impl Executor {
                 regular.iter().partition(|c| runtime.is_read_only(&c.name));
 
             // Run read-only tools concurrently.
+            //
+            // `join_all` preserves input order, so results are zipped back onto `reads` by
+            // position. Matching on `call.id` instead would be wrong: nothing guarantees a model
+            // gives two calls in one batch distinct ids, and a repeated id made `find` return the
+            // same call for both — attributing one tool's output to another and answering that id
+            // twice. Position is the only correlation the batch actually has.
             if !reads.is_empty() {
                 let futures: Vec<_> = reads
                     .iter()
                     .map(|call: &&ToolInvocation| {
                         let call = (*call).clone();
                         async move {
-                            let id = call.id.clone();
                             let tool_span = tracing::debug_span!(
                                 "tool_call",
                                 name = %call.name,
-                                id = %id
+                                id = %call.id
                             );
-                            let result =
-                                async { run_tool(runtime, &call).await }.instrument(tool_span);
-                            (id, result.await)
+                            async { run_tool(runtime, &call).await }
+                                .instrument(tool_span)
+                                .await
                         }
                     })
                     .collect();
                 let read_results = futures::future::join_all(futures).await;
-                for (id, result) in read_results {
-                    let call = response.tool_calls.iter().find(|c| c.id == id).unwrap();
+                for (call, result) in reads.iter().zip(read_results) {
                     call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
                     if call_history[..call_history.len() - 1]
                         .iter()
@@ -3375,13 +3379,22 @@ mod tests {
         }
     }
 
+    /// Concurrent reads still answer each `tool_call_id` exactly once, in the order the model
+    /// asked — the results are zipped back by position, not looked up by id.
+    ///
+    /// The ids here are distinct so a mismatch is visible; `read_a` and `read_b` also carry
+    /// different arguments so a swapped result would show up as the wrong content.
     #[tokio::test]
     async fn parallel_read_retains_tool_invocation_order_in_request() {
         let (provider, exec) = executor(
             vec![
                 CompletionResponse::tool_calls(vec![
-                    ToolInvocation::new("c", "read_file", serde_json::json!({"path": "a.txt"})),
-                    ToolInvocation::new("c", "search_text", serde_json::json!({"query": "x"})),
+                    ToolInvocation::new(
+                        "read_a",
+                        "read_file",
+                        serde_json::json!({"path": "a.txt"}),
+                    ),
+                    ToolInvocation::new("read_b", "search_text", serde_json::json!({"query": "x"})),
                 ]),
                 submit(valid_report_args()),
             ],
@@ -3399,6 +3412,19 @@ mod tests {
         assert_eq!(report.outcome, Outcome::Succeeded);
         let invoked = runtime.inner.invoked();
         assert_eq!(invoked.len(), 2);
+
+        // The follow-up request must answer both calls, once each, in the asked order.
+        let requests = provider.received_requests();
+        let answered: Vec<&str> = requests[1]
+            .messages
+            .iter()
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .collect();
+        assert_eq!(
+            answered,
+            vec!["read_a", "read_b"],
+            "one tool_result per id, in tool_calls order"
+        );
     }
 
     // ── converse_messages ────────────────────────────────────────────

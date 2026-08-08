@@ -643,6 +643,25 @@ async fn take_workspace_checkpoint(workspace_root: &Path, session_key: &str, lab
     }
 }
 
+/// Serializes the tests that set `LIBERADO_DATA_DIR`.
+///
+/// The variable is process-global but several tests across this crate point it at their own
+/// tempdir and then remove it — `fanout`'s three merge tests and `session_pack`'s worktree test.
+/// Run concurrently in one test binary (which is how `cargo test` runs a crate's unit tests), one
+/// test's `remove_var` lands while another is mid-run, `coding_worktrees_base()` silently falls
+/// back to `.liberado`, and the fan-out merge fails against a directory it never wrote to. That
+/// showed up as an intermittent `fanout_two_children_clean_merge` failure that always passed when
+/// re-run alone.
+///
+/// Every test that touches the variable must hold this guard for as long as it depends on the
+/// value.
+///
+/// A `tokio` mutex rather than a `std` one because the guard is held across the awaits that make
+/// up the test body; a blocking guard held across an await can stall the runtime, which is what
+/// `clippy::await_holding_lock` warns about. This one yields instead.
+#[cfg(test)]
+pub(crate) static DATA_DIR_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;

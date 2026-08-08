@@ -63,7 +63,7 @@ async fn run() -> Result<(), String> {
             base_url,
             session_id,
         } => {
-            run_headless(
+            run_headless(HeadlessArgs {
                 prompt,
                 workspace,
                 model,
@@ -72,7 +72,7 @@ async fn run() -> Result<(), String> {
                 api_key_env,
                 base_url,
                 session_id,
-            )
+            })
             .await
         }
     }
@@ -93,7 +93,9 @@ async fn run_request(path: Option<PathBuf>, config_dir: Option<PathBuf>) -> Resu
     Ok(())
 }
 
-async fn run_headless(
+/// Everything `task run` needs. Grouped rather than passed as eight positional parameters —
+/// they are one request, and at that width the call site stops being readable.
+struct HeadlessArgs {
     prompt: String,
     workspace: PathBuf,
     model: Option<String>,
@@ -102,7 +104,19 @@ async fn run_headless(
     api_key_env: Option<String>,
     base_url: Option<String>,
     session_id: Option<String>,
-) -> Result<(), String> {
+}
+
+async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
+    let HeadlessArgs {
+        prompt,
+        workspace,
+        model,
+        max_turns,
+        config_dir,
+        api_key_env,
+        base_url,
+        session_id,
+    } = args;
     let model = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
     let max_turns = max_turns.unwrap_or(DEFAULT_MAX_TURNS);
     let api_key_env = api_key_env.unwrap_or_else(|| DEFAULT_API_KEY_ENV.to_string());
@@ -241,10 +255,10 @@ async fn run_headless(
         .map_err(|error| format!("serialize coder result: {error}"))?;
     println!("{json}");
 
-    if let Some(ref sid) = session_id {
-        if result.outcome == Outcome::Succeeded {
-            save_round_state(&workspace, sid, &prompt, &result)?;
-        }
+    if let Some(ref sid) = session_id
+        && result.outcome == Outcome::Succeeded
+    {
+        save_round_state(&workspace, sid, &prompt, &result)?;
     }
 
     match result.outcome {
@@ -337,7 +351,7 @@ fn load_prior_rounds(workspace: &Path, session_id: &str) -> Result<Vec<SessionRo
     entries.sort_by_key(|e| e.file_name());
     for entry in entries {
         let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "json") {
+        if path.extension().is_some_and(|ext| ext == "json") {
             let raw = std::fs::read_to_string(&path)
                 .map_err(|e| format!("read {}: {e}", path.display()))?;
             let round: SessionRound =
@@ -377,7 +391,7 @@ fn save_round_state(
     let round_num = std::fs::read_dir(&dir)
         .map_err(|e| format!("read session dir: {e}"))?
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
         .count() as u32;
 
     let round = SessionRound {

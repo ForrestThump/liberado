@@ -150,28 +150,20 @@ impl Default for CommandPolicy {
 }
 
 impl CommandPolicy {
-    /// No shell programs may run (plan / explore presets).
+    /// No shell programs may run — the shared preset behind every non-[`CodingMode::Normal`] mode.
     ///
     /// Reuses the existing allow-list rule in `coder-sandbox`: a **non-empty** `allow` list that
-    /// matches nothing denies every command. Empty `allow` would mean "allow all".
+    /// matches nothing denies every command. Empty `allow` would mean "allow all", which is why
+    /// this cannot simply be an empty list. The entry is a sentinel no command line can match.
     pub fn none_allowed() -> Self {
         Self {
-            allow: vec!["!mode-no-shell".into()],
+            allow: vec!["!no-shell".into()],
             deny: Vec::new(),
             timeout_secs: 120,
             output_max_bytes: 64 * 1024,
         }
     }
 }
-
-/// System instructions injected when a coding session runs in plan mode.
-///
-/// Kept next to the policy helpers so pack and surfaces do not each invent plan-mode prose.
-pub const PLAN_MODE_CODER_PROMPT: &str = "\
-You are Liberado's coding planner (plan mode). Explore the codebase with read-only tools, then \
-write a clear implementation plan ONLY to `.liberado/plan.md`. \
-Do NOT edit any other files. Do NOT run shell commands, git commits, or apply patches outside that path. \
-When the plan is written, call submit_report summarizing the plan and key risks.";
 
 /// Tool names exposed in coding **explore** mode (read-only catalog filter).
 ///
@@ -191,6 +183,124 @@ You are Liberado's read-only coding explorer. Inspect the codebase with list_fil
 read_file, git_status, and git_diff only. Do NOT edit files, apply patches, commit, push, or run \
 shell commands. When you have enough context, call submit_report with a concise findings summary \
 (relevant paths, how the code is structured, and anything the parent agent needs to act).";
+
+/// System instructions injected when a coding session runs in plan mode.
+///
+/// Kept next to the policy helpers so pack and surfaces do not each invent plan-mode prose.
+pub const PLAN_MODE_CODER_PROMPT: &str = "\
+You are Liberado's coding planner (plan mode). Explore the codebase with read-only tools, then \
+write a clear implementation plan ONLY to `.liberado/plan.md`. \
+Do NOT edit any other files. Do NOT run shell commands, git commits, or apply patches outside that path. \
+When the plan is written, call submit_report summarizing the plan and key risks.";
+
+/// Which capability tier a coding session runs under.
+///
+/// Modes are **presets over the existing [`PathPolicy`] / [`CommandPolicy`] types**, not a second
+/// permission system — `coding-tui-plan` calls them capability/path tiers, not different agents.
+/// One enum rather than a `plan_mode` and an `explore_mode` bool because the tiers are mutually
+/// exclusive: a pair of booleans makes "both set" representable, and then every consumer has to
+/// invent the same precedence rule independently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodingMode {
+    /// Full write access and the operator's normal command policy.
+    #[default]
+    Normal,
+    /// Writes restricted to [`PLAN_ARTIFACT_REL`]; no shell.
+    Plan,
+    /// No writes at all, no shell, read-only tool catalog.
+    Explore,
+}
+
+impl CodingMode {
+    /// Parse the wire spellings a surface may send: `mode: "plan"` / `"explore"`, or the older
+    /// `plan_mode` / `explore_mode` booleans. Returns `None` when the value names no mode, so a
+    /// caller can fall through to the next source rather than defaulting prematurely.
+    pub fn from_payload(root: &serde_json::Value) -> Option<Self> {
+        if let Some(m) = root.get("mode").and_then(|v| v.as_str()) {
+            if m.eq_ignore_ascii_case("plan") {
+                return Some(Self::Plan);
+            }
+            if m.eq_ignore_ascii_case("explore") {
+                return Some(Self::Explore);
+            }
+            if m.eq_ignore_ascii_case("normal") {
+                return Some(Self::Normal);
+            }
+        }
+        // Explore is the stricter tier, so it wins if a caller somehow sets both booleans.
+        if root
+            .get("explore_mode")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return Some(Self::Explore);
+        }
+        if root
+            .get("plan_mode")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return Some(Self::Plan);
+        }
+        None
+    }
+
+    /// The write-path preset for this mode.
+    pub fn path_policy(&self) -> PathPolicy {
+        match self {
+            Self::Normal => PathPolicy::default(),
+            Self::Plan => PathPolicy::plan_mode(),
+            Self::Explore => PathPolicy::read_only(),
+        }
+    }
+
+    /// The command preset for this mode. Only [`CodingMode::Normal`] may shell out.
+    pub fn command_policy(&self) -> CommandPolicy {
+        match self {
+            Self::Normal => CommandPolicy::default(),
+            Self::Plan | Self::Explore => CommandPolicy::none_allowed(),
+        }
+    }
+
+    /// Fixed worker prompt for the restricted tiers; `None` means "use the caller's prompt".
+    pub fn coder_prompt(&self) -> Option<&'static str> {
+        match self {
+            Self::Normal => None,
+            Self::Plan => Some(PLAN_MODE_CODER_PROMPT),
+            Self::Explore => Some(EXPLORE_MODE_CODER_PROMPT),
+        }
+    }
+
+    /// True for every tier that is not [`CodingMode::Normal`] — the ones that force their own
+    /// policies and so must not be overridden by payload `path_policy` / `command_policy`.
+    pub fn is_restricted(&self) -> bool {
+        !matches!(self, Self::Normal)
+    }
+
+    /// How much this tier denies; higher is stricter.
+    fn restriction_rank(&self) -> u8 {
+        match self {
+            Self::Normal => 0,
+            Self::Plan => 1,
+            Self::Explore => 2,
+        }
+    }
+
+    /// Combine two sources fail-closed: whichever names the stricter tier wins.
+    ///
+    /// Restriction only ever accumulates. A profile that forces `plan` cannot be talked back down
+    /// to `normal` by a goal payload, and a payload asking for `explore` still narrows a profile
+    /// that only asked for `plan` — the same "neither source can disable what the other set" rule
+    /// the single-mode presets shipped with, now with a defined answer when the tiers differ.
+    pub fn strictest(a: Self, b: Self) -> Self {
+        if b.restriction_rank() > a.restriction_rank() {
+            b
+        } else {
+            a
+        }
+    }
+}
 
 /// A configured command the backend can expose through `validate` and run as a deterministic gate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -252,17 +362,6 @@ impl Default for PathPolicy {
 }
 
 impl PathPolicy {
-    /// Writes restricted to [`PLAN_ARTIFACT_REL`] only (coding plan mode).
-    ///
-    /// Reads still follow the usual deny list (`.git/**`, build dirs, …). Enforcement lives in
-    /// `coder-tools` via the existing write-glob check — plan mode does not add a parallel gate.
-    pub fn plan_mode() -> Self {
-        Self {
-            allow_write_globs: vec![PLAN_ARTIFACT_REL.to_string()],
-            ..Self::default()
-        }
-    }
-
     /// No writes under the workspace (coding explore / read-only subagent).
     ///
     /// Reuses the existing write-glob check in `coder-tools`: an empty `allow_write_globs` list
@@ -277,6 +376,17 @@ impl PathPolicy {
     /// True when no write glob is allowed (explore mode and any future read-only preset).
     pub fn writes_disabled(&self) -> bool {
         self.allow_write_globs.is_empty()
+    }
+
+    /// Writes restricted to [`PLAN_ARTIFACT_REL`] only (coding plan mode).
+    ///
+    /// Reads still follow the usual deny list (`.git/**`, build dirs, …). Enforcement lives in
+    /// `coder-tools` via the existing write-glob check — plan mode does not add a parallel gate.
+    pub fn plan_mode() -> Self {
+        Self {
+            allow_write_globs: vec![PLAN_ARTIFACT_REL.to_string()],
+            ..Self::default()
+        }
     }
 }
 

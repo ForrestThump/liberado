@@ -2736,8 +2736,7 @@ fn slash_goal_in_project_carries_the_project() {
             Effect::StartCodingGoal {
                 project: Some(p),
                 text,
-                plan_mode: false,
-                explore_mode: false,
+                mode: None,
                 ..
             } if p == "liberado" && text == "add a --version flag"
         )
@@ -2755,8 +2754,7 @@ fn slash_plan_starts_coding_goal_in_plan_mode() {
             Effect::StartCodingGoal {
                 project: Some(p),
                 text,
-                plan_mode: true,
-                explore_mode: false,
+                mode: Some(liberado_commands::CodingGoalMode::Plan),
                 ..
             } if p == "liberado" && text == "design a --version flag"
         )
@@ -2774,8 +2772,7 @@ fn slash_explore_starts_coding_goal_in_explore_mode() {
             Effect::StartCodingGoal {
                 project: Some(p),
                 text,
-                plan_mode: false,
-                explore_mode: true,
+                mode: Some(liberado_commands::CodingGoalMode::Explore),
                 ..
             } if p == "liberado" && text == "how auth works"
         )

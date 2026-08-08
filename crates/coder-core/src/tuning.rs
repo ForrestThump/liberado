@@ -596,15 +596,17 @@ mod tests {
 
     #[test]
     fn validation_rejects_repair_bad_model() {
-        let mut tuning = CoderTuning::default();
-        tuning.repair = Some(CoderRoleConfig {
-            model: String::new(),
-            prompt_path: None,
-            prompt: None,
-            temperature: None,
-            max_tokens: None,
-            max_turns: None,
-        });
+        let tuning = CoderTuning {
+            repair: Some(CoderRoleConfig {
+                model: String::new(),
+                prompt_path: None,
+                prompt: None,
+                temperature: None,
+                max_tokens: None,
+                max_turns: None,
+            }),
+            ..CoderTuning::default()
+        };
         let err = tuning.validate().unwrap_err();
         assert!(err.to_string().contains("tuning.coder.repair.model"));
     }

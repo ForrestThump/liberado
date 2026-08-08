@@ -4,7 +4,7 @@
 //! its own focus machinery (open the switcher, subscribe to a goal-session stream, or return to the
 //! primary chat). No shared state changes here — focus is a per-surface concern.
 
-use crate::commands::GoalCmd;
+use crate::commands::{CodingGoalMode, GoalCmd};
 use crate::context::CommandContext;
 use crate::result::CommandResult;
 
@@ -79,8 +79,7 @@ pub fn goal(cmd: &GoalCmd, ctx: &mut dyn CommandContext) -> Vec<CommandResult> {
             vec![CommandResult::StartCodingGoal {
                 project: project.clone().filter(|p| !p.trim().is_empty()),
                 text: text.to_string(),
-                plan_mode: false,
-                explore_mode: false,
+                mode: None,
             }]
         }
         GoalCmd::View => vec![CommandResult::OpenGoalView],
@@ -93,35 +92,12 @@ pub fn goal(cmd: &GoalCmd, ctx: &mut dyn CommandContext) -> Vec<CommandResult> {
     }
 }
 
-/// `/plan …` — coding goal in plan mode (write only `.liberado/plan.md`, no shell).
-pub fn plan(project: Option<&str>, text: &str, ctx: &mut dyn CommandContext) -> Vec<CommandResult> {
-    ctx.clear_input();
-    let text = text.trim();
-    if text.is_empty() {
-        ctx.push_system_message(
-            "Usage: /plan <what you want designed>
-             e.g. /plan add a --version flag to the CLI
-             e.g. /plan in liberado add a --version flag
-
-             Plan mode: the agent may write only `.liberado/plan.md` and cannot run shell.
-             After the plan is ready, start a normal /goal to implement it."
-                .into(),
-        );
-        return vec![CommandResult::None];
-    }
-    vec![CommandResult::StartCodingGoal {
-        project: project
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-            .map(str::to_string),
-        text: text.to_string(),
-        plan_mode: true,
-        explore_mode: false,
-    }]
-}
-
-/// `/explore …` — coding goal in explore mode (read-only tools, no shell).
-pub fn explore(
+/// `/plan …` and `/explore …` — a coding goal in a restricted tier.
+///
+/// One handler for both: the usage text and the payload `mode` are all that differ, so the
+/// project/text handling is not duplicated per mode.
+pub fn coding(
+    mode: CodingGoalMode,
     project: Option<&str>,
     text: &str,
     ctx: &mut dyn CommandContext,
@@ -129,15 +105,7 @@ pub fn explore(
     ctx.clear_input();
     let text = text.trim();
     if text.is_empty() {
-        ctx.push_system_message(
-            "Usage: /explore <what to investigate>
-             e.g. /explore how auth middleware is wired
-             e.g. /explore in liberado how sessions park
-
-             Explore mode: read-only tools only (list/search/read/git status|diff); no writes or shell.
-             Findings return as the session summary — use a normal /goal to implement afterward."
-                .into(),
-        );
+        ctx.push_system_message(usage_for(mode).into());
         return vec![CommandResult::None];
     }
     vec![CommandResult::StartCodingGoal {
@@ -146,7 +114,28 @@ pub fn explore(
             .filter(|p| !p.is_empty())
             .map(str::to_string),
         text: text.to_string(),
-        plan_mode: false,
-        explore_mode: true,
+        mode: Some(mode),
     }]
+}
+
+/// What to show when the human types the command with no text.
+fn usage_for(mode: CodingGoalMode) -> &'static str {
+    match mode {
+        CodingGoalMode::Plan => {
+            "Usage: /plan <what you want designed>
+             e.g. /plan add a --version flag to the CLI
+             e.g. /plan in liberado add a --version flag
+
+             Plan mode: the agent may write only `.liberado/plan.md` and cannot run shell.
+             After the plan is ready, start a normal /goal to implement it."
+        }
+        CodingGoalMode::Explore => {
+            "Usage: /explore <what to investigate>
+             e.g. /explore how auth middleware is wired
+             e.g. /explore in liberado how sessions park
+
+             Explore mode: read-only tools only (list/search/read/git status|diff); no writes or shell.
+             Findings return as the session summary — use a normal /goal to implement afterward."
+        }
+    }
 }

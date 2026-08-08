@@ -6,7 +6,7 @@
 //! Conflating those is what made the ask seam unreachable from the case that most needed it.
 
 use liberado_coder_core::{
-    CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask, GoalContract,
+    CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask, CodingMode, GoalContract,
     LIBERADO_LOOP_BACKEND, ProgressPolicy, SandboxSpec, WorkspaceRef,
 };
 use liberado_common::Outcome;
@@ -303,14 +303,14 @@ impl CodingSessionPack {
              as a silent fallback.",
         );
 
-        let max_turns = if policies.explore_mode {
+        let max_turns = if policies.explore_mode() {
             // Exploration is bounded research, not a long build.
             if goal.max_turns > 0 {
                 10.min(goal.max_turns)
             } else {
                 10
             }
-        } else if policies.plan_mode {
+        } else if policies.plan_mode() {
             // Plans are short; keep the bound tight so a looping planner cannot burn a full build
             // budget. Cap an explicit max_turns from a direct API call too.
             if goal.max_turns > 0 {
@@ -359,7 +359,7 @@ impl CodingSessionPack {
                 .get("fanout_child")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-        let (attempt_workspace, sandbox) = if policies.explore_mode || force_host {
+        let (attempt_workspace, sandbox) = if policies.explore_mode() || force_host {
             (workspace.clone(), SandboxSpec::HostLocal)
         } else if is_git_repo(&workspace) {
             let base = liberado_coder_tools::coding_worktrees_base();
@@ -398,8 +398,9 @@ impl CodingSessionPack {
                 coder: role.clone(),
                 critic: disabled,
                 gate: liberado_coder_core::CoderGateConfig::default(),
-                // Plan/explore: no repair loop rewriting the workspace.
-                repair: if policies.plan_mode || policies.explore_mode {
+                // Neither restricted tier gets a repair loop: explore must not mutate the tree at
+                // all, and plan mode is one pass to the plan file.
+                repair: if policies.mode.is_restricted() {
                     None
                 } else {
                     Some(role)
@@ -411,22 +412,19 @@ impl CodingSessionPack {
                 verify_policy: Default::default(),
                 path_policy: policies.path_policy.clone(),
                 progress: ProgressPolicy {
-                    max_attempts: if policies.plan_mode || policies.explore_mode {
-                        1
-                    } else {
-                        2
-                    },
+                    max_attempts: if policies.mode.is_restricted() { 1 } else { 2 },
                     // Explore mode is exclusively read-only tools — the progress guard's
                     // read_only_turn_limit and same_tool_limit would trigger false
                     // ReadOnlyStall / SameToolChurn fatals because every explore tool is
                     // classified as non-mutating. Disable the guard so max_turns is the
-                    // only bound.
-                    read_only_turn_limit: if policies.explore_mode {
+                    // only bound. Plan mode keeps the guard: it is expected to *write* the
+                    // plan file, so a run that never writes really has stalled.
+                    read_only_turn_limit: if policies.explore_mode() {
                         u32::MAX
                     } else {
                         ProgressPolicy::default().read_only_turn_limit
                     },
-                    same_tool_limit: if policies.explore_mode {
+                    same_tool_limit: if policies.explore_mode() {
                         u32::MAX
                     } else {
                         ProgressPolicy::default().same_tool_limit
@@ -440,20 +438,22 @@ impl CodingSessionPack {
             strategist_directive: None,
         };
 
-        if policies.plan_mode || policies.explore_mode {
+        // Announce a restricted tier so the human sees why the session cannot write or shell out.
+        let mode_notice = match policies.mode {
+            CodingMode::Normal => None,
+            CodingMode::Plan => Some(format!(
+                "plan mode: writes limited to {}; shell disabled",
+                liberado_coder_core::PLAN_ARTIFACT_REL
+            )),
+            CodingMode::Explore => {
+                Some("explore mode: read-only tools; writes and shell disabled".to_string())
+            }
+        };
+        if let Some(message) = mode_notice {
             let _ = events
                 .send(SessionEvent::new(
                     session_id,
-                    SessionEventKind::Progress {
-                        message: if policies.explore_mode {
-                            "explore mode: read-only tools; writes and shell disabled".into()
-                        } else {
-                            format!(
-                                "plan mode: writes limited to {}; shell disabled",
-                                liberado_coder_core::PLAN_ARTIFACT_REL
-                            )
-                        },
-                    },
+                    SessionEventKind::Progress { message },
                 ))
                 .await;
         }

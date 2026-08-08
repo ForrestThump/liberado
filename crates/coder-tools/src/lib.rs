@@ -793,10 +793,10 @@ impl CodingToolRuntime {
             format!("--max-count={limit}"),
             format!("--format={fmt}"),
         ];
-        if let Some(ref branch) = args.branch {
-            if !branch.is_empty() {
-                request.args.push(branch.clone());
-            }
+        if let Some(ref branch) = args.branch
+            && !branch.is_empty()
+        {
+            request.args.push(branch.clone());
         }
         let output = self.workspace.run_command(request).await?;
         Ok(json!({
@@ -823,10 +823,10 @@ impl CodingToolRuntime {
         }
         let mut request = CommandRequest::new("git");
         request.args = vec!["fetch".to_string(), args.remote];
-        if let Some(ref branch) = args.branch {
-            if !branch.is_empty() {
-                request.args.push(branch.clone());
-            }
+        if let Some(ref branch) = args.branch
+            && !branch.is_empty()
+        {
+            request.args.push(branch.clone());
         }
         let output = self.workspace.run_command(request).await?;
         Ok(json!({
@@ -1961,8 +1961,10 @@ mod tests {
     #[tokio::test]
     async fn hashline_edit_respects_path_policy() {
         let (dir, _base) = runtime();
-        let mut policy = PathPolicy::default();
-        policy.allow_write_globs = vec!["ok/**".into()];
+        let policy = PathPolicy {
+            allow_write_globs: vec!["ok/**".into()],
+            ..PathPolicy::default()
+        };
         let runtime = CodingToolRuntime::new(dir.path(), CommandPolicy::default(), policy)
             .unwrap()
             .with_hashline(HashlineConfig {

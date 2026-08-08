@@ -154,7 +154,7 @@ fn extract_tags(file_path: &str, source: &str, lang_name: &str, lang: &Language)
 
     let mut captures = cursor.captures(&query, root, source_bytes);
     while let Some((m, capture_index)) = captures.next() {
-        let capture = &m.captures[*capture_index as usize];
+        let capture = &m.captures[*capture_index];
         let capture_name = query.capture_names()[capture.index as usize];
         let (is_def, _kind) = match capture_name.split_once('.') {
             Some(("def", kind)) => (true, kind),
@@ -425,7 +425,7 @@ fn render_repo_map(ranked: &[RankedDef], max_tokens: usize) -> String {
     let mut truncated = false;
     let chars_per_token = 3.5_f64;
 
-    for (_fi, file) in file_order.iter().enumerate() {
+    for file in file_order.iter() {
         if token_est > max_tokens {
             truncated = true;
             break;
@@ -601,17 +601,16 @@ fn walk_source_files(root: &Path) -> Vec<(String, PathBuf)> {
                         next.push(path);
                     } else if let Some(ext) = path.extension() {
                         let ext = ext.to_string_lossy().to_string();
-                        if ext_set.contains(ext.as_str()) {
-                            if let Ok(meta) = path.metadata() {
-                                if meta.len() < MAX_FILE_SIZE as u64 {
-                                    let rel = path
-                                        .strip_prefix(root)
-                                        .unwrap_or(&path)
-                                        .to_string_lossy()
-                                        .to_string();
-                                    files.push((rel, path));
-                                }
-                            }
+                        if ext_set.contains(ext.as_str())
+                            && let Ok(meta) = path.metadata()
+                            && meta.len() < MAX_FILE_SIZE as u64
+                        {
+                            let rel = path
+                                .strip_prefix(root)
+                                .unwrap_or(&path)
+                                .to_string_lossy()
+                                .to_string();
+                            files.push((rel, path));
                         }
                     }
                 }

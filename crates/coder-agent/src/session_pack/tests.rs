@@ -987,7 +987,10 @@ async fn an_external_workspace_gets_durable_session_isolation() {
     let workspace = tempfile::tempdir().unwrap();
     let workspace_root = workspace.path().to_path_buf();
     let data = tempfile::tempdir().unwrap();
-    // SAFETY: test-only env; restored below.
+    // `LIBERADO_DATA_DIR` is process-global and the fanout tests set it too; hold the guard for
+    // as long as this test depends on the value.
+    let _env = crate::DATA_DIR_ENV_LOCK.lock().await;
+    // SAFETY: test-only env mutation, serialized by the guard above; restored below.
     unsafe {
         std::env::set_var("LIBERADO_DATA_DIR", data.path());
     }

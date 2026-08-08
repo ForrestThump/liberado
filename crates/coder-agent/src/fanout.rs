@@ -848,9 +848,11 @@ mod tests {
     async fn fanout_two_children_clean_merge() {
         let root = tempfile::tempdir().unwrap();
         init_repo(root.path());
-        // Point coding worktrees at a temp dir via env.
+        // Point coding worktrees at a temp dir via env. The guard is held for the whole test:
+        // `LIBERADO_DATA_DIR` is process-global and other tests in this binary set it too.
+        let _env = crate::DATA_DIR_ENV_LOCK.lock().await;
         let wt = root.path().join("coding-worktrees");
-        // SAFETY: test-only env mutation in isolated test process.
+        // SAFETY: test-only env mutation, serialized by the guard above.
         unsafe {
             std::env::set_var("LIBERADO_DATA_DIR", root.path());
         }
@@ -991,6 +993,8 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         init_repo(root.path());
+        let _env = crate::DATA_DIR_ENV_LOCK.lock().await;
+        // SAFETY: test-only env mutation, serialized by the guard above.
         unsafe {
             std::env::set_var("LIBERADO_DATA_DIR", root.path());
         }
@@ -1058,6 +1062,8 @@ mod tests {
     async fn fanout_conflict_resolved_by_llm() {
         let root = tempfile::tempdir().unwrap();
         init_repo(root.path());
+        let _env = crate::DATA_DIR_ENV_LOCK.lock().await;
+        // SAFETY: test-only env mutation, serialized by the guard above.
         unsafe {
             std::env::set_var("LIBERADO_DATA_DIR", root.path());
         }

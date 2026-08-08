@@ -43,7 +43,7 @@ pub use catalog::{
     COMMAND_CATALOG, CommandSpec, accept_completion, complete_commands, filter_commands,
     ghost_suffix, is_slash_prefix, telegram_commands,
 };
-pub use commands::{SessionCmd, SlashCommand, ThemeCmd};
+pub use commands::{CodingGoalMode, GoalCmd, SessionCmd, SlashCommand, ThemeCmd};
 pub use constants::CTX_PCT_DISPLAY_CAP;
 pub use context::{CommandContext, StatusInfo};
 pub use dispatch::{dispatch, parse};

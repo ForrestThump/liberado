@@ -1,4 +1,4 @@
-use crate::commands::{GoalCmd, SessionCmd, SlashCommand, ThemeCmd};
+use crate::commands::{CodingGoalMode, GoalCmd, SessionCmd, SlashCommand, ThemeCmd};
 use crate::context::CommandContext;
 use crate::handlers;
 use crate::result::CommandResult;
@@ -36,14 +36,15 @@ pub fn parse(input: &str) -> Option<SlashCommand> {
         "/goal" => Some(parse_goal(
             trimmed.strip_prefix("/goal").unwrap_or("").trim(),
         )),
-        // Same shape as `/goal` (`/plan in <project> <text>`), but starts a coding session with
-        // `plan_mode: true` — restricted PathPolicy/CommandPolicy, not a second engine.
-        "/plan" => Some(parse_plan(
+        // Same grammar as `/goal` start; the payload carries `mode` for the coding pack, which
+        // turns it into PathPolicy/CommandPolicy presets — not a second engine.
+        "/plan" => Some(parse_coding(
             trimmed.strip_prefix("/plan").unwrap_or("").trim(),
+            CodingGoalMode::Plan,
         )),
-        // Same grammar as `/goal` start; payload sets `explore_mode` for the coding pack.
-        "/explore" => Some(parse_explore(
+        "/explore" => Some(parse_coding(
             trimmed.strip_prefix("/explore").unwrap_or("").trim(),
+            CodingGoalMode::Explore,
         )),
         "/back" => Some(SlashCommand::Back),
         // `/fork 3` branches after your 3rd turn; a bare `/fork` takes the whole conversation.
@@ -89,11 +90,14 @@ fn parse_goal(rest: &str) -> SlashCommand {
     SlashCommand::Goal(cmd)
 }
 
-/// `/plan …` — same argument grammar as `/goal` start, without lifecycle verbs.
-fn parse_plan(rest: &str) -> SlashCommand {
+/// `/plan …` and `/explore …` — the same start grammar as `/goal` (including `in <project>`),
+/// without the lifecycle verbs. Only the `mode` stamped on the result differs, so both commands
+/// share this parser rather than keeping a copy each.
+fn parse_coding(rest: &str, mode: CodingGoalMode) -> SlashCommand {
     let rest = rest.trim();
     if rest.is_empty() {
-        return SlashCommand::Plan {
+        return SlashCommand::Coding {
+            mode,
             project: None,
             text: String::new(),
         };
@@ -107,41 +111,14 @@ fn parse_plan(rest: &str) -> SlashCommand {
             Some((p, t)) => (p.trim(), t.trim()),
             None => (tail, ""),
         };
-        return SlashCommand::Plan {
+        return SlashCommand::Coding {
+            mode,
             project: Some(project.to_string()),
             text: text.to_string(),
         };
     }
-    SlashCommand::Plan {
-        project: None,
-        text: rest.to_string(),
-    }
-}
-
-/// `/explore …` — same start grammar as `/goal` (including `in <project>`).
-fn parse_explore(rest: &str) -> SlashCommand {
-    let rest = rest.trim();
-    if rest.is_empty() {
-        return SlashCommand::Explore {
-            project: None,
-            text: String::new(),
-        };
-    }
-    let (first, tail) = match rest.split_once(char::is_whitespace) {
-        Some((f, t)) => (f, t.trim()),
-        None => (rest, ""),
-    };
-    if first == "in" {
-        let (project, text) = match tail.split_once(char::is_whitespace) {
-            Some((p, t)) => (p.trim(), t.trim()),
-            None => (tail, ""),
-        };
-        return SlashCommand::Explore {
-            project: Some(project.to_string()),
-            text: text.to_string(),
-        };
-    }
-    SlashCommand::Explore {
+    SlashCommand::Coding {
+        mode,
         project: None,
         text: rest.to_string(),
     }
@@ -184,11 +161,10 @@ pub fn dispatch(cmd: &SlashCommand, ctx: &mut dyn CommandContext) -> Vec<Command
         SlashCommand::Back => handlers::focus::back(ctx),
         SlashCommand::Fork { after_turn } => handlers::fork::handle(ctx, *after_turn),
         SlashCommand::Goal(cmd) => handlers::focus::goal(cmd, ctx),
-        SlashCommand::Plan { project, text } => {
-            handlers::focus::plan(project.as_deref(), text, ctx)
-        }
-        SlashCommand::Explore { project, text } => {
-            handlers::focus::explore(project.as_deref(), text, ctx)
-        }
+        SlashCommand::Coding {
+            mode,
+            project,
+            text,
+        } => handlers::focus::coding(*mode, project.as_deref(), text, ctx),
     }
 }
