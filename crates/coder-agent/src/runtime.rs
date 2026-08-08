@@ -59,8 +59,14 @@ impl ToolRuntime for GuardedTracingRuntime {
 
     async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
         {
+            // A latched fatal refuses further *exploration*, which is the point — but it must not
+            // refuse the edit it is demanding. This used to return for every tool, ahead of
+            // `observe`, which made `observe`'s escape hatch dead code and left the deadlock it
+            // was written to fix fully live.
             let guard = self.progress.lock().expect("progress mutex poisoned");
-            if let Some(fatal) = guard.fatal() {
+            if let Some(fatal) = guard.fatal()
+                && !crate::progress::escapes_fatal(&call.name)
+            {
                 return Err(fatal.message());
             }
         }
@@ -139,5 +145,76 @@ impl ToolRuntime for GuardedTracingRuntime {
                 Err(fatal.message())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use liberado_coder_core::{CommandPolicy, PathPolicy, ProgressPolicy};
+    use serde_json::json;
+
+    fn call(name: &str, args: serde_json::Value) -> ToolInvocation {
+        ToolInvocation {
+            id: "1".into(),
+            name: name.into(),
+            arguments: args,
+        }
+    }
+
+    /// A latched progress fatal must not refuse the edit it is demanding.
+    ///
+    /// `ProgressGuard::observe` has an escape hatch for exactly this, added after a live run where
+    /// "8 inspect calls latched ReadOnlyStall, then write_file/write_file/edit_file were all
+    /// refused". It was dead code: `invoke` returned on `guard.fatal()` before `observe` ran, so
+    /// every tool stayed blocked and the deadlock persisted — a later run reported "All mutation
+    /// tools are blocked by the progress guard" and filed a plan it had no way to carry out.
+    #[tokio::test]
+    async fn a_latched_fatal_still_lets_the_demanded_edit_through() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.rs"), "fn main() {}\n").unwrap();
+
+        let inner = CodingToolRuntime::new(
+            dir.path(),
+            CommandPolicy::none_allowed(),
+            PathPolicy::default(),
+        )
+        .unwrap();
+        let guard = Arc::new(Mutex::new(ProgressGuard::new(ProgressPolicy {
+            // Nudge at 1 inspect call, latch fatal at 2.
+            read_only_turn_limit: 1,
+            same_tool_limit: 100,
+            ..ProgressPolicy::default()
+        })));
+        let rt = GuardedTracingRuntime::new(inner, EventLog::default(), guard.clone(), 500);
+
+        // Drive it into a latched ReadOnlyStall.
+        for _ in 0..4 {
+            let _ = rt.invoke(&call("read_file", json!({"path": "a.rs"}))).await;
+        }
+        assert!(
+            guard.lock().unwrap().fatal().is_some(),
+            "test setup: the guard should have latched"
+        );
+
+        // Exploration stays refused — that is what the guard is for.
+        let refused = rt.invoke(&call("read_file", json!({"path": "a.rs"}))).await;
+        assert!(refused.is_err(), "reads must still be refused once latched");
+
+        // The remedy must get through, and must actually reach disk.
+        let written = rt
+            .invoke(&call(
+                "write_file",
+                json!({"path": "new.rs", "content": "fn added() {}\n"}),
+            ))
+            .await;
+        assert!(
+            written.is_ok(),
+            "a latched guard refused the write it was demanding: {written:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("new.rs")).unwrap(),
+            "fn added() {}\n"
+        );
     }
 }

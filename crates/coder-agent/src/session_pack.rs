@@ -75,6 +75,15 @@ pub struct CodingSessionPack {
     /// `[tuning.coder.gate]` parsed, validated, and could not be switched on through the daemon at
     /// any setting.
     gate: liberado_coder_core::CoderGateConfig,
+    /// Progress-guard thresholds from `[coder.progress]` in tuning.toml.
+    ///
+    /// Same story as `gate`: `CoderTuning` has carried a validated `progress` table all along, and
+    /// every `CoderRunConfig` built here hardcoded `ProgressPolicy::default()`, so the table could
+    /// not change the guard at any setting. These are the thresholds most likely to need tuning per
+    /// repo — how many inspect calls a task may spend before the guard calls it a stall depends
+    /// entirely on how many files the change spans — and they were the one thing you had to
+    /// recompile to adjust.
+    progress: liberado_coder_core::ProgressPolicy,
 }
 
 impl CodingSessionPack {
@@ -89,6 +98,7 @@ impl CodingSessionPack {
             hashline: liberado_coder_core::HashlineConfig::default(),
             coder_role: liberado_coder_core::CoderTuning::default().coder,
             gate: liberado_coder_core::CoderGateConfig::default(),
+            progress: liberado_coder_core::ProgressPolicy::default(),
         }
     }
 
@@ -107,6 +117,7 @@ impl CodingSessionPack {
             hashline: liberado_coder_core::HashlineConfig::default(),
             coder_role: liberado_coder_core::CoderTuning::default().coder,
             gate: liberado_coder_core::CoderGateConfig::default(),
+            progress: liberado_coder_core::ProgressPolicy::default(),
         }
     }
 
@@ -144,6 +155,12 @@ impl CodingSessionPack {
     /// per attempt, so it stays opt-in. This only makes the opt-in possible.
     pub fn with_gate(mut self, config: liberado_coder_core::CoderGateConfig) -> Self {
         self.gate = config;
+        self
+    }
+
+    /// Progress-guard thresholds for sessions this pack runs (`[coder.progress]`).
+    pub fn with_progress(mut self, policy: liberado_coder_core::ProgressPolicy) -> Self {
+        self.progress = policy;
         self
     }
 

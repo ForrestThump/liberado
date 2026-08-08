@@ -431,14 +431,14 @@ impl CodingSessionPack {
                     read_only_turn_limit: if policies.explore_mode() {
                         u32::MAX
                     } else {
-                        ProgressPolicy::default().read_only_turn_limit
+                        self.progress.read_only_turn_limit
                     },
                     same_tool_limit: if policies.explore_mode() {
                         u32::MAX
                     } else {
-                        ProgressPolicy::default().same_tool_limit
+                        self.progress.same_tool_limit
                     },
-                    ..ProgressPolicy::default()
+                    ..self.progress.clone()
                 },
                 hashline: policies.hashline.clone(),
             },

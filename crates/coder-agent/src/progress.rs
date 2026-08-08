@@ -122,9 +122,7 @@ impl ProgressGuard {
         // So: keep refusing *exploration* — that is what the guard is for — but let the remedy
         // through. A successful mutation means the stall is over, so clear it and resume normally.
         if self.fatal.is_some() {
-            let escaping =
-                is_mutating(tool_name) || tool_name == liberado_executor::SUBMIT_REPORT_TOOL;
-            if !escaping {
+            if !escapes_fatal(tool_name) {
                 return ProgressAction::Fatal(self.fatal.clone().expect("fatal checked as Some"));
             }
             if is_mutating(tool_name)
@@ -274,6 +272,20 @@ impl ProgressGuard {
 
 fn is_mutating(name: &str) -> bool {
     MUTATING_TOOLS.contains(&name)
+}
+
+/// Tools that must still reach [`ProgressGuard::observe`] once a fatal has latched: the remedy the
+/// guard's own message demands, and the report that ends the run.
+///
+/// This lives here, next to `observe`'s handling, because it has to be applied in **two** places
+/// and was previously applied in only one. `CodingToolRuntime::invoke` short-circuits on a latched
+/// fatal before calling `observe`, so `observe`'s escape hatch — added specifically to stop the
+/// guard from refusing the edits it was demanding — could never run. The deadlock it documents
+/// stayed live: a model told to "make the required edits or submit_report" had both refused, and
+/// said so ("All mutation tools are blocked by the progress guard") while filing a plan it could
+/// not execute.
+pub(crate) fn escapes_fatal(tool_name: &str) -> bool {
+    is_mutating(tool_name) || tool_name == liberado_executor::SUBMIT_REPORT_TOOL
 }
 
 fn is_inspect(name: &str) -> bool {
