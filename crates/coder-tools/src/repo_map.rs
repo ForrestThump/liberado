@@ -474,8 +474,9 @@ fn format_rank(rank: f64) -> String {
         return "··········".to_string();
     }
     let scaled = ((rank * 10.0).min(10.0)) as usize;
-    let full = "█".repeat(scaled.max(1));
-    let empty = "·".repeat(10_usize.saturating_sub(scaled));
+    let clamped = scaled.max(1);
+    let full = "█".repeat(clamped);
+    let empty = "·".repeat(10_usize.saturating_sub(clamped));
     format!("{}{}", full, empty)
 }
 
@@ -879,5 +880,46 @@ def main():
         let output = render_repo_map(&ranked[..10], 10000);
         assert!(!output.contains("truncated"));
         assert!(!output.contains("omitted"));
+    }
+
+    mod proptests {
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn format_rank_never_panics(r: f64) {
+                let _ = super::format_rank(r);
+            }
+
+            #[test]
+            fn format_rank_always_10_chars(r: f64) {
+                let s = super::format_rank(r);
+                assert_eq!(s.chars().count(), 10, "rank={r} produced '{}'", s);
+            }
+
+            #[test]
+            fn format_rank_non_positive_is_all_dots(r in proptest::num::f64::NORMAL) {
+                let r = -r.abs();
+                let s = super::format_rank(r);
+                assert!(s.chars().all(|c| c == '·'), "negative rank {r} produced '{s}'");
+            }
+
+            #[test]
+            fn estimate_tokens_never_panics(s in "\\PC*", c in 0.1_f64..100.0) {
+                let _ = super::estimate_tokens(&s, c);
+            }
+
+            #[test]
+            fn estimate_tokens_empty_is_zero(c in 0.1_f64..100.0) {
+                assert_eq!(super::estimate_tokens("", c), 0);
+            }
+
+            #[test]
+            fn estimate_tokens_monotonic(s in "\\PC{0,50}", c in 0.1_f64..100.0) {
+                let base = super::estimate_tokens(&s, c);
+                let longer = super::estimate_tokens(&format!("{s}x"), c);
+                assert!(longer >= base, "longer string had fewer tokens ({longer} < {base})");
+            }
+        }
     }
 }

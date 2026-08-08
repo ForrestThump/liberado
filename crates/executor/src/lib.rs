@@ -1514,6 +1514,7 @@ fn cycle_failed_report() -> Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use liberado_provider::{CompletionResponse, MockProvider};
     use std::sync::Mutex;
 
@@ -3307,6 +3308,100 @@ mod tests {
             report.repeat_calls, 1,
             "the repeat trailing submit_report in the same batch must be counted"
         );
+    }
+
+    // ── parallel read-only execution ──────────────────────────────────
+
+    struct ReadOnlyAwareRuntime {
+        inner: MockToolRuntime,
+        read_only_tools: Vec<String>,
+    }
+
+    #[async_trait]
+    impl ToolRuntime for ReadOnlyAwareRuntime {
+        fn catalog(&self) -> Vec<ToolDef> {
+            self.inner.catalog()
+        }
+        fn is_read_only(&self, tool_name: &str) -> bool {
+            self.read_only_tools.contains(&tool_name.to_string())
+        }
+        async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
+            self.inner.invoke(call).await
+        }
+    }
+
+    #[tokio::test]
+    async fn parallel_read_retains_tool_invocation_order_in_request() {
+        let (provider, exec) = executor(
+            vec![
+                CompletionResponse::tool_calls(vec![
+                    ToolInvocation::new("c", "read_file", serde_json::json!({"path": "a.txt"})),
+                    ToolInvocation::new("c", "search_text", serde_json::json!({"query": "x"})),
+                ]),
+                submit(valid_report_args()),
+            ],
+            Budget::default(),
+        );
+        let runtime = ReadOnlyAwareRuntime {
+            inner: MockToolRuntime::new(&["read_file", "search_text"], Ok("data".into())),
+            read_only_tools: vec!["read_file".into(), "search_text".into()],
+        };
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do the thing"))
+            .await
+            .unwrap();
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        let invoked = runtime.inner.invoked();
+        assert_eq!(invoked.len(), 2);
+    }
+
+    // ── converse_messages ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn converse_messages_returns_final_prose() {
+        let (_provider, exec) = executor(
+            vec![
+                call_tool("search"),
+                CompletionResponse::text("the answer is 42"),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+
+        let mut messages = vec![
+            Message::system("you are a helpful assistant"),
+            Message::user("what is it?"),
+        ];
+        let answer = exec.converse_messages(&runtime, &mut messages).await.unwrap();
+        assert_eq!(answer, "the answer is 42");
+        assert_eq!(messages.len(), 5);
+    }
+
+    // ── converse_stream budget exhaustion ────────────────────────────
+
+    #[tokio::test]
+    async fn converse_stream_errors_on_budget_exhaustion() {
+        let (_provider, exec) = executor(
+            vec![
+                call_tool("search"),
+                call_tool("search"),
+            ],
+            Budget::new(1),
+        );
+        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let (tx, _rx) = tokio::sync::mpsc::channel(64);
+
+        let mut messages = vec![
+            Message::system("helper"),
+            Message::user("find"),
+        ];
+        let err = exec
+            .converse_stream(&runtime, &mut messages, &tx)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("BudgetExceeded") || msg.contains("turns"), "got: {msg}");
     }
 }
 

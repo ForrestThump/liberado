@@ -577,4 +577,52 @@ mod tests {
         assert_eq!(tuning.repo_map.max_map_tokens, 1024);
         assert_eq!(tuning.repo_map.min_source_files, 20);
     }
+
+    #[test]
+    fn validation_rejects_planner_zero_max_turns() {
+        let mut tuning = CoderTuning::default();
+        tuning.planner.max_turns = Some(0);
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("tuning.coder.planner.max_turns"));
+    }
+
+    #[test]
+    fn validation_rejects_critic_zero_max_turns() {
+        let mut tuning = CoderTuning::default();
+        tuning.critic.max_turns = Some(0);
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("tuning.coder.critic.max_turns"));
+    }
+
+    #[test]
+    fn validation_rejects_repair_bad_model() {
+        let mut tuning = CoderTuning::default();
+        tuning.repair = Some(CoderRoleConfig {
+            model: String::new(),
+            prompt_path: None,
+            prompt: None,
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        });
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("tuning.coder.repair.model"));
+    }
+
+    #[test]
+    fn validation_rejects_gate_fresh_invalid() {
+        let mut tuning = CoderTuning::default();
+        tuning.gate.enabled = true;
+        tuning.gate.fresh_reviewers = 1;
+        tuning.gate.fresh = Some(CoderRoleConfig {
+            model: String::new(),
+            prompt_path: None,
+            prompt: None,
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        });
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("tuning.coder.gate.fresh.model"));
+    }
 }
