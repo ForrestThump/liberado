@@ -7,6 +7,7 @@
 
 mod completion_gate;
 mod critic;
+mod fanout;
 mod gates;
 mod intake_session;
 mod planner;
@@ -18,11 +19,20 @@ mod session_pack;
 mod trace;
 mod verify_pipeline;
 
+pub use fanout::{
+    ChildOutcome, CodingSubtask, DEFAULT_MAX_CONCURRENT_CODING_SUBAGENTS, FanoutReport, MergeStep,
+    child_session_grant, run_coding_fanout, run_coding_fanout_via_hub, subtasks_from_payload,
+};
 pub use intake_session::{
     IntakeAnswer, freeze_if_ready, request_from_contract, run_intake, run_intake_until_ready,
 };
+/// Shadow-git checkpoint store (S4).
+pub use liberado_coder_sandbox::{Checkpoint, CheckpointError, ShadowGit};
+/// Durable coding session workspace path (`coding-worktrees/<session_id>`).
+pub use liberado_coder_tools::durable_session_workspace;
 pub use session_pack::CodingSessionPack;
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -207,6 +217,53 @@ fn is_retryable(err: &CoderError) -> bool {
     matches!(err, CoderError::NoChanges | CoderError::Validation(_))
 }
 
+/// A single source of truth for retryable/stuck errors. `session_pack::build` calls this
+/// so the same match arms don't need to be kept in sync across modules.
+pub(crate) use is_retryable as is_stuck_error;
+
+/// Shared git workspace diff for the critic and completion gate.
+///
+/// Assembles tracked diff against HEAD plus untracked file names, falling back to
+/// `"(empty diff)"` when the workspace is clean. Used by both the legacy single-critic
+/// path and the quorum-based completion gate.
+pub(crate) async fn workspace_diff(workspace_root: &str) -> Result<String, CoderError> {
+    let tracked = tokio::process::Command::new("git")
+        .args(["diff", "HEAD"])
+        .current_dir(workspace_root)
+        .output()
+        .await
+        .map_err(|e| CoderError::Backend(format!("git diff: {e}")))?;
+    if !tracked.status.success() {
+        return Err(CoderError::Backend(format!(
+            "git diff exited {:?}: {}",
+            tracked.status.code(),
+            String::from_utf8_lossy(&tracked.stderr)
+        )));
+    }
+    let mut diff = String::from_utf8_lossy(&tracked.stdout).into_owned();
+
+    let untracked = tokio::process::Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .current_dir(workspace_root)
+        .output()
+        .await
+        .map_err(|e| CoderError::Backend(format!("git ls-files: {e}")))?;
+    if untracked.status.success() {
+        let names = String::from_utf8_lossy(&untracked.stdout);
+        if !names.trim().is_empty() {
+            if !diff.is_empty() {
+                diff.push('\n');
+            }
+            diff.push_str("# untracked files\n");
+            diff.push_str(&names);
+        }
+    }
+    if diff.trim().is_empty() {
+        diff = "(empty diff)".to_string();
+    }
+    Ok(diff)
+}
+
 impl LiberadoLoopBackend {
     async fn run_attempt(&self, request: CoderRunRequest) -> Result<CoderRunResult, CoderError> {
         let session_id = trace::session_id(&request);
@@ -240,14 +297,19 @@ impl LiberadoLoopBackend {
         let event_preview_max_chars = request.config.progress.event_preview_max_chars;
 
         let workspace_root_in = request.workspace.root.clone();
-        let mut coding_runtime = CodingToolRuntime::from_sandbox(
+        // Pass the task/session id so Worktree isolation gets a unique directory name (not the
+        // project folder name — self-host on `life-os` would otherwise collide and fail on Windows
+        // extended paths under `…/worktrees/life-os`).
+        let mut coding_runtime = CodingToolRuntime::from_sandbox_with_session(
             &workspace_root_in,
             request.config.sandbox.clone(),
             request.config.command_policy.clone(),
             request.config.path_policy.clone(),
+            Some(request.task.id.as_str()),
         )
         .await
-        .map_err(|e| CoderError::Tool(e.to_string()))?;
+        .map_err(|e| CoderError::Tool(e.to_string()))?
+        .with_hashline(request.config.hashline.clone());
 
         // The sandbox may have created a separate workspace (e.g. Worktree).
         // Use the actual workspace root for change detection, verification,
@@ -256,6 +318,21 @@ impl LiberadoLoopBackend {
             .workspace_root()
             .to_string_lossy()
             .to_string();
+        // S4: shadow-git checkpoints keyed by stable goal/task id (not per-attempt trace id).
+        let checkpoint_key = if request.task.id.is_empty() {
+            session_id.clone()
+        } else {
+            request.task.id.clone()
+        };
+        take_workspace_checkpoint(
+            Path::new(&effective_root),
+            &checkpoint_key,
+            &format!("attempt-{}-start", request.attempt),
+        )
+        .await;
+        // Capture HEAD *before* the worker runs so a clean tree after `git_commit` still counts
+        // as real progress (dogfood finding #3 — porcelain is empty once the agent commits).
+        let baseline_sha = gates::rev_parse(&effective_root, "HEAD").await.ok();
         if let Some(command) = &request.config.validation_command {
             coding_runtime =
                 coding_runtime.with_validation_command(gates::command_request(command));
@@ -281,15 +358,25 @@ impl LiberadoLoopBackend {
         let provider = self
             .providers
             .provider_for(worker_role_name, worker_config)?;
-        let task = Task::new(
-            roles::role_instructions(worker_config, worker_role_name).await?,
-            roles::coder_goal(&request),
-        );
+        let mut instructions = roles::role_instructions(worker_config, worker_role_name).await?;
+        if request.config.hashline.enabled {
+            instructions.push_str(&liberado_coder_tools::hashline_prompt_guidance(
+                request.config.hashline.hash_length,
+            ));
+        }
+        let task = Task::new(instructions, roles::coder_goal(&request));
         let executor = Executor::new(provider, Budget::new(max_turns));
         let report = executor
             .execute(&runtime, task)
             .await
             .map_err(|e| CoderError::Provider(e.to_string()))?;
+        // Post-worker checkpoint captures mid-attempt FS state for park/resume (S4).
+        take_workspace_checkpoint(
+            Path::new(&effective_root),
+            &checkpoint_key,
+            &format!("attempt-{}-post", request.attempt),
+        )
+        .await;
         trace::push_event(
             &events,
             CoderEvent::RoleFinished {
@@ -317,7 +404,7 @@ impl LiberadoLoopBackend {
         }
 
         let file_changes: Vec<liberado_coder_core::FileChangeRecord> =
-            gates::changed_files_detailed(&effective_root)
+            gates::resolve_attempt_changes(&effective_root, baseline_sha.as_deref())
                 .await?
                 .into_iter()
                 .map(|(path, change)| liberado_coder_core::FileChangeRecord {
@@ -464,7 +551,8 @@ impl LiberadoLoopBackend {
             };
             critic_verdict = Some(verdict);
         } else if reviewable && roles::critic_enabled(&request) {
-            let verdict = critic::run_critic(self.providers.as_ref(), &request, &events).await?;
+            let verdict: CriticVerdict =
+                critic::run_critic(self.providers.as_ref(), &request, &events).await?;
             trace::push_event(
                 &events,
                 CoderEvent::CriticVerdict {
@@ -517,6 +605,63 @@ impl LiberadoLoopBackend {
     }
 }
 
+/// Best-effort shadow-git snapshot of `workspace_root`, keyed by `session_key`.
+/// Emits a live `Checkpoint` event when the coding pack's LIVE_GATE is installed.
+async fn take_workspace_checkpoint(workspace_root: &Path, session_key: &str, label: &str) {
+    let Ok(sg) = liberado_coder_sandbox::ShadowGit::open_or_init(workspace_root, session_key)
+    else {
+        return;
+    };
+    match sg.snapshot(label).await {
+        Ok(cp) => {
+            if let Ok((tx, sid)) =
+                completion_gate::LIVE_GATE.try_with(|(tx, id)| (tx.clone(), id.clone()))
+            {
+                let _ = tx.try_send(liberado_session::SessionEvent::new(
+                    sid,
+                    liberado_session::SessionEventKind::Checkpoint {
+                        id: cp.id.clone(),
+                        label: cp.label.clone(),
+                        tree_hash: cp.tree_hash.clone(),
+                    },
+                ));
+            }
+            tracing::debug!(
+                session = %session_key,
+                checkpoint = %cp.id,
+                label = %cp.label,
+                "coding checkpoint taken"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                session = %session_key,
+                error = %e,
+                "coding checkpoint snapshot failed (non-fatal)"
+            );
+        }
+    }
+}
+
+/// Serializes the tests that set `LIBERADO_DATA_DIR`.
+///
+/// The variable is process-global but several tests across this crate point it at their own
+/// tempdir and then remove it — `fanout`'s three merge tests and `session_pack`'s worktree test.
+/// Run concurrently in one test binary (which is how `cargo test` runs a crate's unit tests), one
+/// test's `remove_var` lands while another is mid-run, `coding_worktrees_base()` silently falls
+/// back to `.liberado`, and the fan-out merge fails against a directory it never wrote to. That
+/// showed up as an intermittent `fanout_two_children_clean_merge` failure that always passed when
+/// re-run alone.
+///
+/// Every test that touches the variable must hold this guard for as long as it depends on the
+/// value.
+///
+/// A `tokio` mutex rather than a `std` one because the guard is held across the awaits that make
+/// up the test body; a blocking guard held across an await can stall the runtime, which is what
+/// `clippy::await_holding_lock` warns about. This one yields instead.
+#[cfg(test)]
+pub(crate) static DATA_DIR_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,6 +713,7 @@ mod tests {
                 verify_policy: Default::default(),
                 path_policy: PathPolicy::default(),
                 progress: ProgressPolicy::default(),
+                hashline: liberado_coder_core::HashlineConfig::default(),
             },
             attempt: 0,
             prior_feedback: Vec::new(),
@@ -635,6 +781,110 @@ mod tests {
 
         assert_eq!(result.outcome, Outcome::Succeeded);
         assert_eq!(result.files_changed, vec!["hello.txt"]);
+    }
+
+    /// Mocked end-to-end: hashline enabled → tool catalog offers `hashline_edit`, system
+    /// prompt includes guidance, and a precomputed-tag patch mutates the workspace.
+    #[tokio::test]
+    async fn mocked_loop_hashline_edit_and_prompt_wiring() {
+        use liberado_coder_core::HashlineConfig;
+
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let seed = "alpha\nbeta\ngamma\n";
+        std::fs::write(dir.path().join("notes.txt"), seed).unwrap();
+        run(dir.path(), &["git", "add", "."]);
+        run(dir.path(), &["git", "commit", "-m", "seed notes"]);
+
+        let tag = liberado_coder_tools::hashline_compute_file_hash(seed, 6);
+        let patch = format!("[notes.txt#{tag}]\nPUT 2.=2:\n+BETA\n");
+
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "hl-1",
+                    "hashline_edit",
+                    json!({ "input": patch }),
+                )]),
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "report-1",
+                    liberado_executor::SUBMIT_REPORT_TOOL,
+                    json!({
+                        "outcome": "succeeded",
+                        "summary": "Patched notes.txt via hashline",
+                        "artifacts": ["notes.txt"],
+                        "new_high_signal_facts": [],
+                        "follow_up": null
+                    }),
+                )]),
+            ],
+        ));
+        let backend = LiberadoLoopBackend::new(provider.clone());
+        let mut request = request(dir.path(), "HEAD");
+        request.task.description = "Change beta to BETA in notes.txt using hashline.".into();
+        request.config.hashline = HashlineConfig {
+            enabled: true,
+            hash_length: 6,
+        };
+        request.config.coder.prompt =
+            Some("You are a coding agent. Use tools then submit_report.".into());
+
+        let result = backend.run(request).await.unwrap();
+        assert_eq!(result.outcome, Outcome::Succeeded);
+        assert!(
+            result.files_changed.iter().any(|p| p == "notes.txt"),
+            "files_changed={:?}",
+            result.files_changed
+        );
+        let after = std::fs::read_to_string(dir.path().join("notes.txt")).unwrap();
+        assert_eq!(after, "alpha\nBETA\ngamma\n");
+
+        // First completion request must advertise hashline_edit and carry prompt guidance.
+        let first = provider
+            .received_requests()
+            .into_iter()
+            .next()
+            .expect("provider received a completion request");
+        let tool_names: Vec<&str> = first.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            tool_names.contains(&"hashline_edit"),
+            "tools={tool_names:?}"
+        );
+        let system = first
+            .messages
+            .iter()
+            .find(|m| m.role == liberado_provider::Role::System)
+            .map(|m| m.content.as_str())
+            .unwrap_or("");
+        assert!(
+            system.contains("Hashline edit mode") || system.contains("hashline_edit"),
+            "system prompt missing hashline guidance:\n{system}"
+        );
+        assert!(
+            system.contains('6') || system.contains("6-char"),
+            "system prompt should mention configured hash length"
+        );
+    }
+
+    #[tokio::test]
+    async fn mocked_loop_hashline_disabled_omits_tool_from_catalog() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let provider = Arc::new(MockProvider::with_script("mock", write_then_report()));
+        let backend = LiberadoLoopBackend::new(provider.clone());
+        let mut request = request(dir.path(), "HEAD");
+        request.config.hashline = liberado_coder_core::HashlineConfig {
+            enabled: false,
+            hash_length: 4,
+        };
+        backend.run(request).await.unwrap();
+        let first = provider.received_requests().into_iter().next().unwrap();
+        let tool_names: Vec<&str> = first.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            !tool_names.contains(&"hashline_edit"),
+            "hashline_edit must be absent when disabled; tools={tool_names:?}"
+        );
     }
 
     #[tokio::test]
@@ -1280,6 +1530,142 @@ mod tests {
         assert_eq!(
             content.trim_end_matches(['\r', '\n']),
             "hello from liberado"
+        );
+    }
+
+    /// Live smoke for hashline edit mode: an *existing* multi-line file must be patched
+    /// via line anchors (not a greenfield `write_file` of hello.txt). Catches prompt/tool
+    /// wiring bugs that unit tests miss.
+    #[tokio::test]
+    #[ignore = "requires OPENROUTER_API_KEY and network access"]
+    async fn openrouter_deepseek_live_hashline_edit_smoke() {
+        use liberado_coder_core::{HashlineConfig, VerifierSpec};
+        use liberado_provider_openai_compat::OpenAiCompatibleProvider;
+
+        let api_key = std::env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY not set");
+        let model = std::env::var("LIBERADO_CODER_LIVE_MODEL")
+            .unwrap_or_else(|_| "deepseek/deepseek-v4-pro".to_string());
+        let provider = Arc::new(
+            OpenAiCompatibleProvider::new(
+                api_key,
+                &model,
+                OpenAiCompatibleProvider::OPENROUTER_BASE_URL,
+            )
+            .with_extra_client_error_status(vec![402]),
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        // Multi-line file so a middle-line edit is meaningful.
+        let seed = "\
+# greet helper
+def greet(name):
+    msg = \"Hello, \" + name
+    print(msg)
+    return msg
+
+if __name__ == \"__main__\":
+    greet(\"world\")
+";
+        std::fs::write(dir.path().join("greet.py"), seed).unwrap();
+        run(dir.path(), &["git", "add", "."]);
+        run(dir.path(), &["git", "commit", "-m", "seed greet.py"]);
+
+        let mut request = request(dir.path(), "HEAD");
+        request.task.id = "hashline-live-1".into();
+        request.task.description = "\
+In greet.py, change ONLY the message construction so it uses an f-string: \
+msg = f\"Hi, {name}\" instead of string concatenation. Do not rewrite the whole file \
+if you can avoid it. Keep the rest of the file (function structure, print, return, \
+__main__) intact.\n"
+            .to_string();
+        request.task.success_criteria = vec![
+            "greet.py uses f\"Hi, {name}\" (or equivalent f-string Hi greeting)".into(),
+            "greet.py still defines def greet(name)".into(),
+        ];
+        request.config.coder.model = model.clone();
+        request.config.coder.prompt = Some(
+            "You are a careful autonomous coding agent. Hashline edit mode is ENABLED.\n\
+             - read_file returns [path#TAG] and LINE:content anchors.\n\
+             - Prefer hashline_edit for existing files: pass a patch with [path#TAG] and \
+             PUT/CUT ops using + body rows. Re-read after every edit because the tag changes.\n\
+             - write_file is only for brand-new files. edit_file/apply_patch are fallbacks.\n\
+             - When done, submit_report with outcome=succeeded only if the file really changed."
+                .to_string(),
+        );
+        request.config.coder.max_turns = Some(16);
+        request.config.hashline = HashlineConfig {
+            enabled: true,
+            hash_length: 6,
+        };
+        request.config.progress.event_preview_max_chars = 2_000;
+        request.config.progress.max_attempts = 2;
+        request.config.progress.read_only_turn_limit = 6;
+        request.config.trace_dir = Some(dir.path().join("traces").to_string_lossy().into_owned());
+        request.config.verifiers = vec![VerifierSpec::ContentContains {
+            id: "hi-fstring".into(),
+            path: "greet.py".into(),
+            must_include: vec!["Hi,".into()],
+        }];
+
+        let backend = LiberadoLoopBackend::new(provider);
+        let result = match backend.run(request).await {
+            Ok(r) => r,
+            Err(e) => panic!("hashline live smoke backend error: {e:#}"),
+        };
+
+        eprintln!(
+            "hashline live smoke: outcome={:?} summary={} files={:?} diagnostics={}",
+            result.outcome, result.summary, result.files_changed, result.diagnostics
+        );
+        if let Some(path) = &result.trace_path {
+            eprintln!("trace: {path}");
+            if let Ok(raw) = std::fs::read_to_string(path) {
+                // Surface whether the model actually used hashline tools.
+                let used_hashline = raw.contains("hashline_edit");
+                let used_read = raw.contains("\"read_file\"") || raw.contains("read_file");
+                eprintln!("trace tool hints: hashline_edit={used_hashline} read_file={used_read}");
+                // Print tool names from events for diagnosis.
+                for line in raw.lines().take(80) {
+                    if line.contains("ToolStarted")
+                        || line.contains("tool_started")
+                        || line.contains("\"name\"")
+                    {
+                        eprintln!("trace-line: {line}");
+                    }
+                }
+            }
+        }
+
+        let content = std::fs::read_to_string(dir.path().join("greet.py")).unwrap();
+        eprintln!("--- greet.py after run ---\n{content}\n--- end ---");
+
+        assert_eq!(
+            result.outcome,
+            Outcome::Succeeded,
+            "expected success; summary={} validation={:?}",
+            result.summary,
+            result.validation_notes
+        );
+        assert!(
+            result
+                .files_changed
+                .iter()
+                .any(|p| p == "greet.py" || p.ends_with("greet.py")),
+            "greet.py should be in files_changed: {:?}",
+            result.files_changed
+        );
+        assert!(
+            content.contains("def greet(name)"),
+            "function signature must remain"
+        );
+        assert!(
+            content.contains("Hi,") && content.contains("name"),
+            "expected Hi greeting with name; got:\n{content}"
+        );
+        assert!(
+            !content.contains("Hello, \" + name") && !content.contains("Hello, \"+ name"),
+            "old concatenation should be gone; got:\n{content}"
         );
     }
 

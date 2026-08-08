@@ -1,7 +1,6 @@
 # Agentic Coding TUI — Plan (goal-driven session surface + kernel completion gate)
 
-**Status**: plan, 2026-07-31 — **S1 (completion gate) landed; S2 (wire events + goal surface) partial;
-S3–S7 open** (slice tracking in [`roadmap.md`](../roadmap.md) §Priority 3). Pulled forward from
+**Status**: plan, 2026-07-31; **updated 2026-08-06**. **S1 (completion gate) landed; S2 (wire events + goal surface) partial; S3 (project auth) landed (#66); S4 (checkpoints + mid-build resume + rewind) landed (#73); S5 (/loop) still unbuilt; S6 (coding fan-out + merge-back) landed (#72); S7 (strategist evals + gate default-on) still open.** (Slice tracking in [`roadmap.md`](../roadmap.md) §Priority 3). Pulled forward from
 Priority 3 by owner decision (2026-07-24): the daily-driver automation work continues in parallel;
 this is the chosen frontend-adjacent track because the TUI already exists and the engine underneath
 it is done.
@@ -61,11 +60,11 @@ authorization, new wire events, the loop scheduler).
 |---|---|---|
 | G1 | **Completion gate is single-reviewer and coding-internal.** One critic, one verdict, evidence hard-wired to `git diff`. No remembered gatekeeper, no quorum, no fail-closed verdict handling, no strategist on non-convergence. Not reusable by a non-coding pack. | kernel port + pack evidence |
 | G2 | **No goal surface anywhere.** `/goal` doesn't exist as a command; the TUI can watch a goal session but can't start one against a project, can't show the role timeline as a first-class view, can't render diffs or verdicts. | surface |
-| G3 | **No checkpoints/rewind.** Nothing snapshots the workspace per attempt; no restore. | pack service (coding) |
-| G4 | **No project-root authorization.** `workspace_root` arrives as an opaque payload string; nothing proves the session may touch that directory. Today it defaults to a temp dir — safe but useless for real work. | kernel/policy |
+| G3 | **No checkpoints/rewind.** ~~Nothing snapshots the workspace per attempt; no restore.~~ **Landed (#73):** shadow-git checkpoints per attempt + write-flush, `POST …/rewind`, durable worktree park/resume. | ~~pack service (coding)~~ done |
+| G4 | **No project-root authorization.** ~~`workspace_root` arrives as an opaque payload string; nothing proves the session may touch that directory.~~ **Landed (#66):** `[[projects]]` config, fail-closed payload validation, `GET /api/projects`. | ~~kernel/policy~~ done |
 | G5 | **Wire events missing for the gate + diffs.** No `critic_verdict`, `file_changed`, or `checkpoint` events (kernel enum + wire mirror + SSE map + TUI decoder — all four, per failure-modes §1). | kernel + contract |
 | G6 | **`/loop` unimplemented.** Full design in `loops-plan.md` (L1–L6, slices P1–P5); zero code. | kernel + surface |
-| G7 | **Coding subagent isolation.** `delegate` spawns dispatch-pack children; nothing spawns a *coding* child with its own worktree and merge-back. | pack |
+| G7 | **Coding subagent isolation.** ~~`delegate` spawns dispatch-pack children; nothing spawns a *coding* child with its own worktree and merge-back.~~ **S6 v1 landed (#72):** `payload.subtasks` → N worktrees/branches; hub-spawned child goal sessions; parent LLM merge-back. Missing: face `delegate` → coding, parent gate over merge, TUI chrome. | pack — **mechanism done** |
 | G8 | **Goal-session context compaction.** Chat compaction landed; executor turn loops inside goal sessions don't compact yet (follow-up already noted in `context-compaction-plan.md`). | kernel, later |
 
 ## What the references teach (and exactly where each pattern lands)
@@ -313,10 +312,10 @@ live runs where feasible).
 |---|---|---|
 | **S1** | **Completion gate kernel port** (`liberado-session::completion_gate`) + coding pack adoption (critic.rs → reviewer adapter; gatekeeper + 2-fresh quorum + fail-closed votes + `critic_verdict` events). Strategist included, config-gated. | Unit: quorum math (tie→refute, malformed→refute, gatekeeper veto). Integration over the real hub: mock reviewers — gate blocks `Succeeded` until quorum approves; refutation feeds `prior_feedback`. Break-check: silently approve-everything → test fails. |
 | **S2** | **Wire events + TUI goal view v1**: `critic_verdict`, `file_changed` (kernel+mirror+SSE+decoder); `/goal <text>` against a temp-dir project; role timeline + gate panel + verifier panel; answer/cancel via existing endpoints; **`hub.park()`** + park/resume endpoints (first-class `Parked`). | Contract tests on the wire types; TUI reducer tests; park→resume integration test over the real hub; live dogfood: `/goal add a CLI arg parser to <scratch repo>` watched end-to-end in the TUI. |
-| **S3** | **Project authorization**: `[[projects]]` config, fail-closed payload validation, `GET /api/projects`, TUI picker. | Config validation tests; API 403/PolicyDenied tests; live: undeclared dir refused by name. |
-| **S4** | **Checkpoints**: shadow-git in `coder-sandbox`, snapshot per attempt + per write-flush, `checkpoint` events, `POST …/rewind`, TUI `/rewind`. | Workspace tests (snapshot→mutate→restore byte-identical, `.gitignore` respected); live: worker breaks a file, `/rewind`, file restored, session continues. |
+| **S3** | **Project authorization**: `[[projects]]` config, fail-closed payload validation, `GET /api/projects`, TUI picker. **Landed (#66)**. | Config validation tests; API 403/PolicyDenied tests; live: undeclared dir refused by name. |
+| **S4** | **Checkpoints**: shadow-git in `coder-sandbox`, snapshot per attempt + per write-flush, `checkpoint` events, `POST …/rewind`, TUI `/rewind`. **Landed (#73):** `ShadowGit` + durable worktree park/resume + `can_resume` after coder role. | Workspace tests (snapshot→mutate→restore byte-identical, `.gitignore` respected); live: worker breaks a file, `/rewind`, file restored, session continues. |
 | **S5** | **`/loop`**: `loops-plan.md` P1–P4 + `/api/loops*` + TUI loop list/series view. | The loops-plan's own acceptance: a 2-pass loop on the life pack closing on green streak; then a week-long vault-grooming dogfood. |
-| **S6** | **Coding subagents**: delegate → coding domain, narrowed grant, `WorktreeWorkspace`, child diff into parent evidence. **`WorktreeWorkspace` is a hard prerequisite for any concurrency, not a component of it** — see `agentic-loops.md` §Concurrency, design rule 11. | Hub integration test (parent gate sees child diff); live: "split this feature into two subagent tasks" dogfood. |
+| **S6** | **Coding subagents**: parallel worktree children + **parent-only LLM merge-back**. **Landed (#72):** `payload.subtasks` → N worktrees/branches; **hub-spawned child goal sessions** when pack has hub (`start_background` / `await_terminal`, grant without AskHuman); in-process backend fallback for tests; concurrency default **3** (`max_concurrent_coding_subagents`); sequential parent merge + LLM conflict resolve. Children never self-merge. **Still open:** face `delegate` → coding, parent completion gate over merged tree, TUI multi-child chrome. | Unit: clean merge, conflict LLM, hub session ids; live: two-subtask fan-out. |
 | **S7** | **Strategist live + evals gate**: curriculum runs the gate (smoke tier in CI via mock reviewers; live tier opt-in); strategist fires on scripted non-convergence. | Curriculum accuracy stays 1.0 with the gate on; a scripted 3-refutation run shows the strategist directive in attempt 4's context. |
 
 Ordering rationale: S1 first because the gate is the product claim ("the agent may not return

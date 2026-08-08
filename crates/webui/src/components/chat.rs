@@ -363,7 +363,6 @@ pub fn Chat(
     // turn. Turns outlive their connection now, so closing alone would leave it running and only
     // hide it. The request is what stops it; closing the stream is still done so this client also
     // stops rendering.
-    let stop_base = api_base.clone();
     let mut stop_stream = move || {
         #[cfg(target_arch = "wasm32")]
         {

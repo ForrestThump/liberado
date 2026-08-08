@@ -15,6 +15,7 @@ use liberado_session::{
     TerminalKind,
 };
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 
 use super::CodingSessionPack;
@@ -29,11 +30,7 @@ use super::policies::WorkspacePolicies;
 /// Everything else (`Setup`, `Sandbox`, `Provider`, `Tool`, `Backend`) is a broken *environment*.
 /// No answer you could type fixes a dead sandbox or an unreachable provider, so those still fail
 /// fast: paging a human for them would be noise, and the whole value of the ask is that it is rare.
-fn is_stuck(e: &liberado_coder_core::CoderError) -> bool {
-    use liberado_coder_core::CoderError;
-    matches!(e, CoderError::NoChanges | CoderError::Validation(_))
-}
-
+///
 /// Whether `dir` is inside a git working tree — **not** merely whether it is a repo *root*.
 ///
 /// `dir.join(".git").exists()` only answers for a root. A workspace pointed at a subdirectory of an
@@ -138,14 +135,182 @@ impl CodingSessionPack {
             .unwrap_or("session-coder")
             .to_string();
 
-        // Path/command policy from profile overrides + payload (plan and explore are presets).
-        let policies = WorkspacePolicies::resolve(ctx.overrides(), &goal.payload);
+        // ── Parallel coding subagents (S6): payload.subtasks → worktrees → LLM merge ──
+        // Parent-only merge; children never self-merge. Prefer hub-spawned child goal sessions
+        // when the pack has an attached hub; fall back to in-process backend workers (tests).
+        // Nested fan-out is refused: children set fanout_child and must not carry subtasks.
+        if goal.payload.get("fanout_child").and_then(|v| v.as_bool()) == Some(true)
+            && crate::fanout::subtasks_from_payload(&goal.payload).is_some()
+        {
+            return Err(PackError::Setup(
+                "fanout child sessions cannot nest further subtasks".into(),
+            ));
+        }
+        if let Some(subtasks) = crate::fanout::subtasks_from_payload(&goal.payload) {
+            let max_concurrent = goal
+                .payload
+                .get("max_concurrent_subagents")
+                .and_then(|v| v.as_u64())
+                .or_else(|| {
+                    ctx.overrides()
+                        .get("max_concurrent_coding_subagents")
+                        .and_then(|v| v.as_u64())
+                })
+                .unwrap_or(self.max_concurrent_coding_subagents as u64)
+                .max(1) as usize;
+
+            let via_hub = self.hub().is_some();
+            let _ = events
+                .send(SessionEvent::new(
+                    session_id,
+                    SessionEventKind::Progress {
+                        message: format!(
+                            "coding fan-out: {} subtask(s), max_concurrent={max_concurrent}, mode={}",
+                            subtasks.len(),
+                            if via_hub { "hub-sessions" } else { "in-process" }
+                        ),
+                    },
+                ))
+                .await;
+            let _ = events
+                .send(SessionEvent::new(
+                    session_id,
+                    SessionEventKind::RoleStarted {
+                        role: "coder-fanout".into(),
+                        model: model.clone(),
+                    },
+                ))
+                .await;
+
+            let report = if let Some(hub) = self.hub() {
+                crate::fanout::run_coding_fanout_via_hub(
+                    hub,
+                    ctx.grant.clone(),
+                    session_id,
+                    Arc::clone(&self.provider),
+                    &workspace,
+                    subtasks,
+                    max_concurrent,
+                    &model,
+                )
+                .await
+            } else {
+                crate::fanout::run_coding_fanout(
+                    Arc::clone(&self.backend),
+                    Arc::clone(&self.provider),
+                    &workspace,
+                    subtasks,
+                    max_concurrent,
+                    &model,
+                )
+                .await
+            }
+            .map_err(|e| PackError::Failed(format!("coding fan-out: {e}")))?;
+
+            let _ = events
+                .send(SessionEvent::new(
+                    session_id,
+                    SessionEventKind::RoleFinished {
+                        role: "coder-fanout".into(),
+                    },
+                ))
+                .await;
+            let _ = events
+                .send(SessionEvent::new(
+                    session_id,
+                    SessionEventKind::ValidationFinished {
+                        ok: report.overall == liberado_common::Outcome::Succeeded,
+                        summary: report.summary.clone(),
+                    },
+                ))
+                .await;
+
+            let files = report
+                .children
+                .iter()
+                .flat_map(|c| c.files_changed.iter().cloned())
+                .collect::<Vec<_>>();
+            for path in &files {
+                let _ = events
+                    .send(SessionEvent::new(
+                        session_id,
+                        SessionEventKind::FileChanged {
+                            path: path.clone(),
+                            change: "modified".into(),
+                        },
+                    ))
+                    .await;
+            }
+
+            let mut terminal = if report.overall == liberado_common::Outcome::Succeeded {
+                TerminalKind::Succeeded
+            } else {
+                TerminalKind::Failed
+            };
+            let mut summary = report.summary.clone();
+            let mut diagnostics = serde_json::json!({ "fanout": report });
+            if terminal == TerminalKind::Succeeded
+                && super::preflight_hook::ship_preflight_required(goal)
+                && let Some(spec) = super::preflight_hook::ship_spec_from_goal(goal)
+            {
+                match super::preflight_hook::run_ship_preflight(
+                    session_id, &workspace, &spec, &events,
+                )
+                .await
+                {
+                    Ok(pf) => {
+                        diagnostics = serde_json::json!({
+                            "fanout": report,
+                            "preflight": pf,
+                        });
+                        if !pf.ok {
+                            terminal = TerminalKind::Failed;
+                            summary = pf.summary;
+                        }
+                    }
+                    Err(e) => {
+                        return Ok(GoalResult {
+                            terminal: TerminalKind::Failed,
+                            summary: format!("ship preflight error: {e}"),
+                            artifacts: files,
+                            diagnostics: serde_json::json!({ "fanout": report, "preflight_error": e }),
+                        });
+                    }
+                }
+            }
+            return Ok(GoalResult {
+                terminal,
+                summary,
+                artifacts: files,
+                diagnostics,
+            });
+        }
+
+        // Path/command policy from profile overrides + payload
+        // (plan = restricted write preset; explore = read-only preset).
+        let policies =
+            WorkspacePolicies::resolve(ctx.overrides(), &goal.payload, self.hashline.clone());
         let prompt = policies.coder_prompt(
             &goal.payload,
-            "You are Liberado's coding worker. Inspect, edit with tools, then submit_report.",
+            "You are Liberado's coding worker. Inspect, edit with tools, then submit_report.\n\
+             \n\
+             Git / PR rules (self-host):\n\
+             - Prefer git_branch, git_commit, git_push tools over shelling out to git.\n\
+             - Committing your edits is progress; do not leave a dirty tree just to satisfy gates.\n\
+             - When opening a PR with `gh pr create --base <branch>`, first verify origin has that \
+             branch: `git ls-remote --exit-code origin refs/heads/<branch>`. If it fails, stop and \
+             report that the base branch is missing on the remote — do not open a PR against main \
+             as a silent fallback.",
         );
 
-        let max_turns = if policies.plan_mode() {
+        let max_turns = if policies.explore_mode() {
+            // Exploration is bounded research, not a long build.
+            if goal.max_turns > 0 {
+                10.min(goal.max_turns)
+            } else {
+                10
+            }
+        } else if policies.plan_mode() {
             // Plans are short; keep the bound tight so a looping planner cannot burn a full build
             // budget. Cap an explicit max_turns from a direct API call too.
             if goal.max_turns > 0 {
@@ -155,9 +320,6 @@ impl CodingSessionPack {
             }
         } else if goal.max_turns > 0 {
             goal.max_turns
-        } else if policies.explore_mode() {
-            // Exploration is bounded research, not a long build.
-            10
         } else {
             12
         };
@@ -183,18 +345,52 @@ impl CodingSessionPack {
         task.success_criteria = goal.success_criteria.clone();
 
         // Explore is read-only: HostLocal is enough (no worktree isolation required for readers).
-        // Build mode still uses Worktree when the workspace is a git repo (C7).
-        let sandbox = if policies.explore_mode() {
-            SandboxSpec::HostLocal
+        // Fan-out children already sit on a dedicated worktree — force HostLocal to avoid nesting.
+        // Build mode on a git repo: **durable** session worktree under coding-worktrees/{session_id}
+        // + HostLocal (S4). Ephemeral Worktree Drop would delete the FS root that shadow-git
+        // checkpoints and mid-build park/resume need to survive attempt teardown (C7 + E6-c(b)).
+        let force_host = goal
+            .payload
+            .get("force_host_local")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+            || goal
+                .payload
+                .get("fanout_child")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+        let (attempt_workspace, sandbox) = if policies.explore_mode() || force_host {
+            (workspace.clone(), SandboxSpec::HostLocal)
         } else if is_git_repo(&workspace) {
-            SandboxSpec::Worktree
+            let base = liberado_coder_tools::coding_worktrees_base();
+            match liberado_coder_sandbox::ensure_session_worktree(&workspace, session_id, &base)
+                .await
+            {
+                Ok(sess) => {
+                    let _ = events
+                        .send(SessionEvent::new(
+                            session_id,
+                            SessionEventKind::Progress {
+                                message: format!(
+                                    "session workspace: {} (durable; survives park)",
+                                    sess.display()
+                                ),
+                            },
+                        ))
+                        .await;
+                    (sess, SandboxSpec::HostLocal)
+                }
+                Err(e) => {
+                    return Err(PackError::Setup(format!("durable session worktree: {e}")));
+                }
+            }
         } else {
-            SandboxSpec::HostLocal
+            (workspace.clone(), SandboxSpec::HostLocal)
         };
 
         let mut request = CoderRunRequest {
             task,
-            workspace: WorkspaceRef::new(workspace.to_string_lossy(), "HEAD"),
+            workspace: WorkspaceRef::new(attempt_workspace.to_string_lossy(), "HEAD"),
             config: CoderRunConfig {
                 backend: LIBERADO_LOOP_BACKEND.into(),
                 trace_dir: None,
@@ -235,6 +431,7 @@ impl CodingSessionPack {
                     },
                     ..ProgressPolicy::default()
                 },
+                hashline: policies.hashline.clone(),
             },
             attempt: 0,
             prior_feedback: Vec::new(),
@@ -387,7 +584,7 @@ impl CodingSessionPack {
                         .await;
                     (ok, r.summary, r.files_changed, r.diagnostics)
                 }
-                Err(e) if is_stuck(&e) => {
+                Err(e) if crate::is_stuck_error(&e) => {
                     let msg = e.to_string();
                     let _ = events
                         .send(SessionEvent::new(
@@ -426,12 +623,50 @@ impl CodingSessionPack {
 
             // Succeeded, or failed with no ask left to spend: this is the outcome.
             if ok || asks_remaining == 0 {
+                let mut terminal = if ok {
+                    TerminalKind::Succeeded
+                } else {
+                    TerminalKind::Failed
+                };
+                let mut summary = summary;
+                let mut diagnostics = diagnostics;
+                // Ship preflight: CI-equivalent project bar before terminal Succeeded.
+                if terminal == TerminalKind::Succeeded
+                    && super::preflight_hook::ship_preflight_required(goal)
+                    && let Some(spec) = super::preflight_hook::ship_spec_from_goal(goal)
+                {
+                    let preflight_root = request.workspace.root.as_str();
+                    let root_path = PathBuf::from(preflight_root);
+                    match super::preflight_hook::run_ship_preflight(
+                        session_id, &root_path, &spec, &events,
+                    )
+                    .await
+                    {
+                        Ok(report) => {
+                            diagnostics = serde_json::json!({
+                                "build": diagnostics,
+                                "preflight": report,
+                            });
+                            if !report.ok {
+                                terminal = TerminalKind::Failed;
+                                summary = report.summary;
+                            }
+                        }
+                        Err(e) => {
+                            return Ok(GoalResult {
+                                terminal: TerminalKind::Failed,
+                                summary: format!("ship preflight error: {e}"),
+                                artifacts,
+                                diagnostics: serde_json::json!({
+                                    "build": diagnostics,
+                                    "preflight_error": e,
+                                }),
+                            });
+                        }
+                    }
+                }
                 return Ok(GoalResult {
-                    terminal: if ok {
-                        TerminalKind::Succeeded
-                    } else {
-                        TerminalKind::Failed
-                    },
+                    terminal,
                     summary,
                     artifacts,
                     diagnostics,

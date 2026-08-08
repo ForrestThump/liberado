@@ -195,6 +195,7 @@ async fn a_failed_build_asks_the_human_and_retries_with_their_answer() {
     g.payload = serde_json::json!({
         "workspace_root": workspace.to_string_lossy(),
         "intake": { "enabled": false },
+        "force_host_local": true,
     });
 
     let store = Arc::new(liberado_session::GoalSessionStore::new());
@@ -300,6 +301,8 @@ async fn a_stuck_build_asks_the_human_instead_of_dying_silently() {
     g.payload = serde_json::json!({
         "workspace_root": workspace.to_string_lossy(),
         "intake": { "enabled": false },
+        // Mock backend — no real durable worktree needed (avoids shared s1 collisions).
+        "force_host_local": true,
     });
 
     let store = Arc::new(liberado_session::GoalSessionStore::new());
@@ -368,6 +371,7 @@ async fn a_broken_environment_fails_fast_instead_of_paging_you() {
     g.payload = serde_json::json!({
         "workspace_root": workspace.to_string_lossy(),
         "intake": { "enabled": false },
+        "force_host_local": true,
     });
 
     let store = Arc::new(liberado_session::GoalSessionStore::new());
@@ -425,6 +429,7 @@ async fn the_ask_budget_bounds_the_retries_so_a_stuck_pack_cannot_interrogate_yo
     g.payload = serde_json::json!({
         "workspace_root": workspace.to_string_lossy(),
         "intake": { "enabled": false },
+        "force_host_local": true,
     });
 
     let store = Arc::new(liberado_session::GoalSessionStore::new());
@@ -824,12 +829,146 @@ async fn the_coding_pack_will_not_resume_once_the_build_has_started() {
 
     assert!(
         !pack.can_resume(&ctx).await,
-        "once the build has touched the workspace, resume is no longer safe"
+        "once the build has started without a checkpoint, resume is refused"
+    );
+
+    // A checkpoint event makes mid-build resume safe (S4 / E6-c(b)).
+    liberado_session::SessionRecordStore::push_event(
+        store.as_ref(),
+        SessionEvent::new(
+            "s1",
+            SessionEventKind::Checkpoint {
+                id: "abc123".into(),
+                label: "attempt-0-post".into(),
+                tree_hash: "tree1".into(),
+            },
+        ),
+    )
+    .await;
+    assert!(
+        pack.can_resume(&ctx).await,
+        "mid-build resume is allowed once a workspace checkpoint exists"
     );
 }
 
 #[tokio::test]
-async fn an_external_workspace_gets_worktree_isolation() {
+async fn ship_preflight_failure_blocks_terminal_succeeded() {
+    // Build "succeeds" but ship preflight is required and its step fails → Failed, not Succeeded.
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let backend = Arc::new(ScriptedBackend {
+        seen: seen.clone(),
+        fail_attempts: 0,
+    });
+    let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+    let pack = CodingSessionPack::with_backend(backend, provider, std::env::temp_dir());
+
+    let (ev_tx, mut ev_rx) = mpsc::channel::<SessionEvent>(64);
+    let (_in_tx, in_rx) = mpsc::channel::<HumanInput>(16);
+    let inputs = InputChannel::new(in_rx, None);
+    let (_c_tx, cancel) = tokio::sync::watch::channel(false);
+
+    let workspace = tempfile::tempdir().unwrap();
+    let fail = if cfg!(windows) { "exit /B 1" } else { "exit 1" };
+    let mut g = goal("ship me");
+    g.payload = serde_json::json!({
+        "workspace_root": workspace.path().to_string_lossy(),
+        "intake": { "enabled": false },
+        "force_host_local": true,
+        "preflight": {
+            "required": true,
+            "steps": [
+                { "name": "must-fail", "run": fail }
+            ]
+        }
+    });
+
+    let store = Arc::new(liberado_session::GoalSessionStore::new());
+    let mut spec = g.clone();
+    spec.id = Some("pf1".into());
+    liberado_session::SessionRecordStore::insert(
+        store.as_ref(),
+        liberado_session::GoalSessionRecord::new(spec),
+    )
+    .await;
+    let grant = liberado_session::SessionGrant::default();
+    let ctx = PackContext::new(&grant, store.clone(), "pf1");
+
+    let out = pack
+        .run("pf1", &g, &ctx, ev_tx, inputs, cancel)
+        .await
+        .unwrap();
+    assert_eq!(
+        out.terminal,
+        TerminalKind::Failed,
+        "failed ship preflight must not Succeeded: {out:?}"
+    );
+    assert!(
+        out.summary.contains("preflight") || out.summary.contains("must-fail"),
+        "summary should mention preflight: {}",
+        out.summary
+    );
+    // Surface evidence: ValidationFinished with ok=false for preflight
+    let mut saw_preflight_validation = false;
+    while let Ok(ev) = ev_rx.try_recv() {
+        if let SessionEventKind::ValidationFinished { ok: false, summary } = ev.kind
+            && (summary.contains("preflight") || summary.contains("must-fail"))
+        {
+            saw_preflight_validation = true;
+        }
+    }
+    assert!(
+        saw_preflight_validation,
+        "preflight failure must emit validation_finished"
+    );
+}
+
+#[tokio::test]
+async fn ship_preflight_green_allows_succeeded() {
+    let backend = Arc::new(ScriptedBackend {
+        seen: Arc::new(std::sync::Mutex::new(Vec::new())),
+        fail_attempts: 0,
+    });
+    let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+    let pack = CodingSessionPack::with_backend(backend, provider, std::env::temp_dir());
+    let (ev_tx, _ev_rx) = mpsc::channel::<SessionEvent>(64);
+    let (_in_tx, in_rx) = mpsc::channel::<HumanInput>(16);
+    let inputs = InputChannel::new(in_rx, None);
+    let (_c_tx, cancel) = tokio::sync::watch::channel(false);
+    let workspace = tempfile::tempdir().unwrap();
+    let mut g = goal("ship me green");
+    g.payload = serde_json::json!({
+        "workspace_root": workspace.path().to_string_lossy(),
+        "intake": { "enabled": false },
+        "force_host_local": true,
+        "preflight": {
+            "required": true,
+            "steps": [ { "name": "ok", "run": "echo green" } ]
+        }
+    });
+    let store = Arc::new(liberado_session::GoalSessionStore::new());
+    let mut spec = g.clone();
+    spec.id = Some("pf2".into());
+    liberado_session::SessionRecordStore::insert(
+        store.as_ref(),
+        liberado_session::GoalSessionRecord::new(spec),
+    )
+    .await;
+    let grant = liberado_session::SessionGrant::default();
+    let ctx = PackContext::new(&grant, store.clone(), "pf2");
+    let out = pack
+        .run("pf2", &g, &ctx, ev_tx, inputs, cancel)
+        .await
+        .unwrap();
+    assert_eq!(out.terminal, TerminalKind::Succeeded, "{out:?}");
+    assert!(
+        out.diagnostics.get("preflight").is_some(),
+        "diagnostics should include preflight report: {}",
+        out.diagnostics
+    );
+}
+
+#[tokio::test]
+async fn an_external_workspace_gets_durable_session_isolation() {
     use std::process::Command;
 
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -847,6 +986,14 @@ async fn an_external_workspace_gets_worktree_isolation() {
 
     let workspace = tempfile::tempdir().unwrap();
     let workspace_root = workspace.path().to_path_buf();
+    let data = tempfile::tempdir().unwrap();
+    // `LIBERADO_DATA_DIR` is process-global and the fanout tests set it too; hold the guard for
+    // as long as this test depends on the value.
+    let _env = crate::DATA_DIR_ENV_LOCK.lock().await;
+    // SAFETY: test-only env mutation, serialized by the guard above; restored below.
+    unsafe {
+        std::env::set_var("LIBERADO_DATA_DIR", data.path());
+    }
 
     let mut g = goal("edit README.md");
     g.payload = serde_json::json!({
@@ -874,11 +1021,22 @@ async fn an_external_workspace_gets_worktree_isolation() {
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].config.sandbox,
-        SandboxSpec::Worktree,
-        "a coding workspace must default to worktree isolation"
+        SandboxSpec::HostLocal,
+        "durable session worktree is operated as HostLocal (survives park Drop)"
+    );
+    let attempt_root = PathBuf::from(&requests[0].workspace.root);
+    assert!(
+        attempt_root.ends_with("s1") || attempt_root.file_name().is_some_and(|n| n == "s1"),
+        "attempt workspace should be coding-worktrees/s1, got {}",
+        attempt_root.display()
+    );
+    assert!(
+        attempt_root.exists(),
+        "durable session worktree must remain after the attempt: {}",
+        attempt_root.display()
     );
 
-    // And the workspace is now a real git repo with a commit, so WorktreeWorkspace can proceed.
+    // Parent is a real git repo with a commit (seed for the linked worktree).
     let output = Command::new("git")
         .args(["-C", &workspace_root.to_string_lossy()])
         .args(["rev-parse", "HEAD"])
@@ -886,7 +1044,11 @@ async fn an_external_workspace_gets_worktree_isolation() {
         .unwrap();
     assert!(
         output.status.success(),
-        "init_git_repo must run so WorktreeWorkspace can proceed: {}",
+        "init_git_repo must run so session worktree can proceed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+
+    unsafe {
+        std::env::remove_var("LIBERADO_DATA_DIR");
+    }
 }

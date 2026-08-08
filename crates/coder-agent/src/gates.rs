@@ -139,6 +139,97 @@ pub fn parse_status_path(line: &str) -> Option<String> {
     Some(path.trim_matches('"').to_string())
 }
 
+/// Resolve `rev` to a full SHA in `workspace_root` (e.g. `"HEAD"`).
+pub async fn rev_parse(workspace_root: &str, rev: &str) -> Result<String, CoderError> {
+    let output = Command::new("git")
+        .args(["rev-parse", rev])
+        .current_dir(workspace_root)
+        .output()
+        .await
+        .map_err(|e| CoderError::Backend(format!("git rev-parse: {e}")))?;
+    if !output.status.success() {
+        return Err(CoderError::Backend(format!(
+            "git rev-parse {rev} exited {:?}: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Files changed by commits after `baseline_sha` (exclusive) through `HEAD`.
+///
+/// Used when the working tree is clean after `git_commit`: porcelain status is empty, but the
+/// attempt still produced real work. Dogfood finding #3
+/// (`docs/future-work/self-host-coding-dogfood-2026-08.md`).
+pub async fn committed_files_since(
+    workspace_root: &str,
+    baseline_sha: &str,
+) -> Result<Vec<(String, &'static str)>, CoderError> {
+    let head = rev_parse(workspace_root, "HEAD").await?;
+    if head == baseline_sha {
+        return Ok(Vec::new());
+    }
+    // Two-arg form: tree of baseline vs tree of HEAD (works when baseline is an ancestor).
+    let output = Command::new("git")
+        .args(["diff", "--name-status", baseline_sha, &head])
+        .current_dir(workspace_root)
+        .output()
+        .await
+        .map_err(|e| CoderError::Backend(format!("git diff name-status: {e}")))?;
+    if !output.status.success() {
+        return Err(CoderError::Backend(format!(
+            "git diff --name-status exited {:?}: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.lines().filter_map(parse_name_status_line).collect())
+}
+
+fn parse_name_status_line(line: &str) -> Option<(String, &'static str)> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let mut parts = line.split('\t');
+    let code = parts.next()?.trim();
+    let path = parts.next()?.trim();
+    if path.is_empty() {
+        return None;
+    }
+    // Renames: R100\told\tnew — take the new path.
+    let path = if code.starts_with('R') || code.starts_with('C') {
+        parts.next().unwrap_or(path).trim()
+    } else {
+        path
+    };
+    let change = match code.chars().next().unwrap_or('M') {
+        'A' => "added",
+        'D' => "deleted",
+        'R' | 'C' => "added",
+        _ => "modified",
+    };
+    Some((path.to_string(), change))
+}
+
+/// Uncommitted porcelain changes, or — if the tree is clean — files introduced by commits after
+/// `baseline_sha` (the SHA recorded at attempt start). Either counts as real workspace progress.
+pub async fn resolve_attempt_changes(
+    workspace_root: &str,
+    baseline_sha: Option<&str>,
+) -> Result<Vec<(String, &'static str)>, CoderError> {
+    let uncommitted = changed_files_detailed(workspace_root).await?;
+    if !uncommitted.is_empty() {
+        return Ok(uncommitted);
+    }
+    let Some(baseline) = baseline_sha.filter(|s| !s.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    committed_files_since(workspace_root, baseline).await
+}
+
 #[cfg(test)]
 mod changed_files_tests {
     use super::changed_files;
@@ -204,6 +295,81 @@ mod changed_files_tests {
 
         let _ = std::fs::remove_dir_all(&ws);
     }
+
+    /// Dogfood finding #3: after `git commit`, porcelain is empty but commits since baseline count.
+    #[tokio::test]
+    async fn committed_work_since_baseline_counts_as_attempt_changes() {
+        use super::{resolve_attempt_changes, rev_parse};
+
+        let ws = std::env::temp_dir().join(format!("lib-gates-commit-{}", unique()));
+        std::fs::create_dir_all(&ws).unwrap();
+        git(&ws, &["init", "--quiet"]);
+        // Identity for commit on clean CI machines.
+        git(&ws, &["config", "user.email", "test@liberado.local"]);
+        git(&ws, &["config", "user.name", "liberado-test"]);
+        std::fs::write(ws.join("seed.txt"), "seed").unwrap();
+        git(&ws, &["add", "seed.txt"]);
+        git(&ws, &["commit", "-m", "seed", "--quiet"]);
+        let baseline = rev_parse(ws.to_str().unwrap(), "HEAD").await.unwrap();
+
+        std::fs::write(ws.join("feature.txt"), "dogfood").unwrap();
+        git(&ws, &["add", "feature.txt"]);
+        git(&ws, &["commit", "-m", "feature", "--quiet"]);
+
+        // Working tree is clean — porcelain would be empty.
+        let porcelain = changed_files(ws.to_str().unwrap()).await.unwrap();
+        assert!(
+            porcelain.is_empty(),
+            "expected clean tree after commit, got {porcelain:?}"
+        );
+
+        let resolved = resolve_attempt_changes(ws.to_str().unwrap(), Some(&baseline))
+            .await
+            .unwrap();
+        assert!(
+            resolved.iter().any(|(p, _)| p.contains("feature.txt")),
+            "committed feature.txt must count as attempt progress: {resolved:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// No baseline means nothing to diff against — return empty even if there are uncommitted changes.
+    #[tokio::test]
+    async fn resolve_attempt_changes_with_none_baseline_returns_empty_when_clean() {
+        use super::resolve_attempt_changes;
+
+        let ws = std::env::temp_dir().join(format!("lib-gates-none-base-{}", unique()));
+        std::fs::create_dir_all(&ws).unwrap();
+        git(&ws, &["init", "--quiet"]);
+        std::fs::write(ws.join("readme.md"), "base\n").unwrap();
+        git(&ws, &["add", "readme.md"]);
+        git(&ws, &["commit", "-m", "base", "--quiet"]);
+        // Tree is clean, no baseline — should get empty.
+        let resolved = resolve_attempt_changes(ws.to_str().unwrap(), None)
+            .await
+            .unwrap();
+        assert!(resolved.is_empty());
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// Empty string baseline is treated like None — returns empty.
+    #[tokio::test]
+    async fn resolve_attempt_changes_with_empty_string_baseline_returns_empty() {
+        use super::resolve_attempt_changes;
+
+        let ws = std::env::temp_dir().join(format!("lib-gates-empty-base-{}", unique()));
+        std::fs::create_dir_all(&ws).unwrap();
+        git(&ws, &["init", "--quiet"]);
+        std::fs::write(ws.join("readme.md"), "base\n").unwrap();
+        git(&ws, &["add", "readme.md"]);
+        git(&ws, &["commit", "-m", "base", "--quiet"]);
+        let resolved = resolve_attempt_changes(ws.to_str().unwrap(), Some(""))
+            .await
+            .unwrap();
+        assert!(resolved.is_empty());
+        let _ = std::fs::remove_dir_all(&ws);
+    }
 }
 
 #[cfg(test)]
@@ -228,5 +394,104 @@ mod status_change_tests {
         // "touched" is the safe wrong answer — it never claims a file appeared or vanished.
         assert_eq!(parse_status_change("XY weird.rs"), "modified");
         assert_eq!(parse_status_change(""), "modified");
+    }
+}
+
+#[cfg(test)]
+mod name_status_line_tests {
+    use super::parse_name_status_line;
+
+    #[test]
+    fn parses_added_file() {
+        let (path, change) = parse_name_status_line("A\tsrc/new.rs").unwrap();
+        assert_eq!(path, "src/new.rs");
+        assert_eq!(change, "added");
+    }
+
+    #[test]
+    fn parses_deleted_file() {
+        let (path, change) = parse_name_status_line("D\told.rs").unwrap();
+        assert_eq!(path, "old.rs");
+        assert_eq!(change, "deleted");
+    }
+
+    #[test]
+    fn parses_modified_file() {
+        let (path, change) = parse_name_status_line("M\tlib.rs").unwrap();
+        assert_eq!(path, "lib.rs");
+        assert_eq!(change, "modified");
+    }
+
+    #[test]
+    fn parses_rename_takes_new_path() {
+        let (path, change) = parse_name_status_line("R100\told.rs\tnew.rs").unwrap();
+        assert_eq!(path, "new.rs");
+        assert_eq!(change, "added");
+    }
+
+    #[test]
+    fn parses_copy_takes_destination() {
+        let (path, change) = parse_name_status_line("C80\torig.rs\tcopy.rs").unwrap();
+        assert_eq!(path, "copy.rs");
+        assert_eq!(change, "added");
+    }
+
+    #[test]
+    fn empty_line_is_none() {
+        assert!(parse_name_status_line("").is_none());
+        assert!(parse_name_status_line("  ").is_none());
+    }
+
+    #[test]
+    fn unknown_code_defaults_to_modified() {
+        let (path, change) = parse_name_status_line("XY\tweird.rs").unwrap();
+        assert_eq!(path, "weird.rs");
+        assert_eq!(change, "modified");
+    }
+
+    #[test]
+    fn malformed_line_without_tab_is_none() {
+        assert!(parse_name_status_line("M").is_none());
+    }
+
+    #[test]
+    fn trailing_empty_segment_is_none() {
+        // code + tab + empty path
+        assert!(parse_name_status_line("M\t").is_none());
+    }
+}
+
+#[cfg(test)]
+mod command_request_tests {
+    use super::command_request;
+    use liberado_coder_core::CoderCommandConfig;
+
+    #[test]
+    fn builds_from_command_config() {
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("RUST_LOG".into(), "debug".into());
+        let config = CoderCommandConfig {
+            program: "cargo".into(),
+            args: vec!["test".into(), "--lib".into()],
+            env,
+            timeout_secs: Some(300),
+            output_max_bytes: Some(65536),
+        };
+        let req = command_request(&config);
+        assert_eq!(req.program, "cargo");
+        assert_eq!(req.args, vec!["test", "--lib"]);
+        assert_eq!(req.env.get("RUST_LOG").unwrap(), "debug");
+        assert_eq!(req.timeout_secs, Some(300));
+        assert_eq!(req.output_max_bytes, Some(65536));
+    }
+
+    #[test]
+    fn command_request_without_timeout_or_cap() {
+        let config = CoderCommandConfig::new("echo");
+        let req = command_request(&config);
+        assert_eq!(req.program, "echo");
+        assert!(req.args.is_empty());
+        assert!(req.timeout_secs.is_none());
+        assert!(req.output_max_bytes.is_none());
     }
 }

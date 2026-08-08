@@ -92,6 +92,14 @@ pub enum SessionEventKind {
         path: String,
         change: String,
     },
+    /// Workspace checkpoint (coding pack S4 / shadow-git). `id` is the restore handle
+    /// (shadow commit SHA); `tree_hash` is the git tree; `label` is human-readable.
+    Checkpoint {
+        id: String,
+        label: String,
+        #[serde(default)]
+        tree_hash: String,
+    },
     LoopGuard {
         guard: String,
         action: String,

@@ -9,11 +9,17 @@ extraction but by inversion: `config-loader` now carries `[tuning.coder]` as an 
 config stack no longer depends on the pack. Extraction into `liberado-verify` stays a
 second-domain decision per §7. See [modularity.md](modularity.md)'s extraction-trigger note.  
 **Related**: [`agentic-loops.md`](agentic-loops.md), [`coder-eval-curriculum.md`](../../future-work/coder-eval-curriculum.md),
-dispatcher `Clarify` / `success_criteria` in `liberado-common`.
+dispatcher `Clarify` / `success_criteria` in `liberado-common`,
+**project-level ship preflight** (complementary): [`self-pr-quality-roadmap.md`](../../future-work/self-pr-quality-roadmap.md#generic-preflight-gate).
 
 This document sketches **schema and trait boundaries** for harness-owned success checks: the “CI in
 the loop” idea — customizable criteria, force repair until green **or** hard stop, without locking
 the kernel to Rust or even to coding.
+
+**Attempt verifiers vs preflight:** verifiers here are **in-loop** checks attached to a frozen
+contract (often small and fast). **Preflight** is the **project ship bar** before ready/PR — ideally
+CI-equivalent, config-driven, pack-callable, not hard-coded cargo in the coding pack. See the
+self-PR roadmap section linked above.
 
 **Biggest product gap after the verifier machinery:** *where do the checks come from?* A vague human
 writeup is not a gate. Section 3 defines **criteria intake** — a structured planning session that

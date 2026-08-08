@@ -37,7 +37,9 @@ impl FailureClass {
     pub fn repair_hint(self) -> &'static str {
         match self {
             Self::NoChanges => {
-                "Make a real workspace mutation (write_file/edit_file/apply_patch) that leaves a git diff."
+                "Make a real workspace mutation (write_file/edit_file/apply_patch), or commit \
+                 changes with git_commit if you already edited — uncommitted *or* commits since \
+                 attempt start both count as progress."
             }
             Self::MissingPath => {
                 "Create the missing paths listed in findings before claiming success."
@@ -247,11 +249,10 @@ fn first_line(s: &str) -> &str {
 }
 
 fn short_sig(s: &str) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    s.chars().take(400).collect::<String>().hash(&mut h);
-    format!("{:x}", h.finish())
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(s.chars().take(400).collect::<String>().as_bytes());
+    format!("{:x}", h.finalize())
 }
 
 #[cfg(test)]

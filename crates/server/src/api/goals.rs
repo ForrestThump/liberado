@@ -23,6 +23,20 @@ use crate::state::AppState;
 
 /// The SSE item stream type shared with chat streaming.
 type SseBody = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
+
+/// Strip Windows extended-length prefixes (`\\?\C:\…`, `\\?\UNC\…`) so paths on the wire are
+/// usable by git and readable in session records.
+fn strip_windows_extended_path(path: &std::path::Path) -> String {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        if let Some(unc) = rest.strip_prefix(r"UNC\") {
+            return format!(r"\\{unc}");
+        }
+        return rest.to_string();
+    }
+    s.into_owned()
+}
+
 // â”€â”€ Goal sessions (scratchpad F) â€” surfaces are clients; packs own the loop â”€â”€
 
 /// `GET /api/goals/domains` â€” which domain packs are registered (coding, life, â€¦).
@@ -160,10 +174,47 @@ pub async fn goals_start(
                     .as_object_mut()
                     .expect("payload forced to object above");
                 payload.insert("project".into(), serde_json::json!(name));
-                payload.insert(
-                    "workspace_root".into(),
-                    serde_json::json!(root.to_string_lossy()),
-                );
+                // Strip Windows `\\?\` extended prefixes so session records and git tools see a
+                // plain drive path (dogfood finding #1 residual).
+                let root_s = strip_windows_extended_path(&root);
+                payload.insert("workspace_root".into(), serde_json::json!(root_s));
+                // Inject ship preflight from topology when the client did not supply steps.
+                // Pack still applies liberado built-in defaults when project is "liberado".
+                if payload
+                    .get("preflight")
+                    .and_then(|v| v.get("steps"))
+                    .is_none()
+                    && let Some(proj) = state.config.project_by_name(&name)
+                    && let Some(ship) = &proj.preflight.ship
+                {
+                    let mut steps = Vec::new();
+                    if let Some(script) = &ship.script
+                        && !script.is_empty()
+                    {
+                        steps.push(serde_json::json!({
+                            "name": "script",
+                            "run": script,
+                        }));
+                    }
+                    for s in &ship.steps {
+                        steps.push(serde_json::json!({
+                            "name": s.name,
+                            "run": s.run,
+                            "timeout_secs": s.timeout_secs,
+                            "required": s.required,
+                        }));
+                    }
+                    if !steps.is_empty() {
+                        payload.insert(
+                            "preflight".into(),
+                            serde_json::json!({
+                                "required": true,
+                                "profile": "ship",
+                                "steps": steps,
+                            }),
+                        );
+                    }
+                }
             }
             Err(e) => {
                 return (
@@ -371,6 +422,165 @@ pub async fn goals_park(
     }
 }
 
+/// Body for [`goals_rewind`]: optional checkpoint id (default = latest in session events).
+#[derive(Deserialize, Default)]
+pub struct GoalRewindRequest {
+    #[serde(default)]
+    pub checkpoint_id: Option<String>,
+}
+
+/// `POST /api/goals/{id}/rewind` — restore workspace files from a shadow-git checkpoint (S4).
+/// Conversation/transcript is untouched. Coding sessions only (needs `workspace_root` +
+/// checkpoint events). Returns the restored checkpoint id.
+pub async fn goals_rewind(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    body: Option<Json<GoalRewindRequest>>,
+) -> impl IntoResponse {
+    let want = body.and_then(|Json(b)| b.checkpoint_id);
+    let snap = match state.goals.snapshot(&id).await {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiError {
+                    error: format!("no such goal session '{id}'"),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if snap.session.goal.domain.as_str() != liberado_session::CODING_DOMAIN {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "rewind is only supported for coding goal sessions".into(),
+            }),
+        )
+            .into_response();
+    }
+    // Prefer durable session worktree (where attempt checkpoints are taken) when present.
+    let workspace = if let Some(sess) = liberado_coder_agent::durable_session_workspace(&id) {
+        if sess.exists() {
+            sess
+        } else {
+            match snap
+                .session
+                .goal
+                .payload
+                .get("workspace_root")
+                .and_then(|v| v.as_str())
+            {
+                Some(w) => std::path::PathBuf::from(w),
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(ApiError {
+                            error: "coding session has no workspace_root and no durable \
+                                    session worktree — cannot rewind"
+                                .into(),
+                        }),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    } else {
+        match snap
+            .session
+            .goal
+            .payload
+            .get("workspace_root")
+            .and_then(|v| v.as_str())
+        {
+            Some(w) => std::path::PathBuf::from(w),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiError {
+                        error: "coding session has no workspace_root in payload".into(),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    };
+    let (cp_id, label, tree_hash) = if let Some(id) = want {
+        // Prefer matching event for label; fall back to id alone.
+        let from_ev = snap.events.iter().rev().find_map(|e| match &e.kind {
+            liberado_session::SessionEventKind::Checkpoint {
+                id: cid,
+                label,
+                tree_hash,
+            } if cid == &id => Some((cid.clone(), label.clone(), tree_hash.clone())),
+            _ => None,
+        });
+        match from_ev {
+            Some(t) => t,
+            None => (id, "explicit".into(), String::new()),
+        }
+    } else {
+        match snap.events.iter().rev().find_map(|e| match &e.kind {
+            liberado_session::SessionEventKind::Checkpoint {
+                id,
+                label,
+                tree_hash,
+            } => Some((id.clone(), label.clone(), tree_hash.clone())),
+            _ => None,
+        }) {
+            Some(t) => t,
+            None => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(ApiError {
+                        error: "no checkpoint events on this session — cannot rewind".into(),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    let sg = match liberado_coder_agent::ShadowGit::open_or_init(&workspace, &id) {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: format!("open shadow-git: {e}"),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Err(e) = sg.restore(&cp_id).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: format!("restore checkpoint: {e}"),
+            }),
+        )
+            .into_response();
+    }
+    tracing::info!(
+        session = %id,
+        checkpoint = %cp_id,
+        label = %label,
+        "goals_rewind: restored workspace files"
+    );
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "session_id": id,
+            "checkpoint_id": cp_id,
+            "label": label,
+            "tree_hash": tree_hash,
+            "restored": true,
+        })),
+    )
+        .into_response()
+}
+
 pub async fn goals_message(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -485,6 +695,7 @@ fn session_event_to_sse(ev: &liberado_session::SessionEvent) -> Event {
         K::ValidationFinished { .. } => "validation_finished",
         K::CriticVerdict { .. } => "critic_verdict",
         K::FileChanged { .. } => "file_changed",
+        K::Checkpoint { .. } => "checkpoint",
         K::LoopGuard { .. } => "loop_guard",
         K::SessionFinished { .. } => "session_finished",
         K::Failed { .. } => "failed",
@@ -1425,6 +1636,7 @@ mod project_auth_http_tests {
             root,
             write_class: WriteClass::AgentWritable,
             enabled: true,
+            preflight: Default::default(),
         }));
         let (status, body) = post_goal(
             &app,
@@ -1453,6 +1665,7 @@ mod project_auth_http_tests {
             root,
             write_class: WriteClass::AgentWritable,
             enabled: true,
+            preflight: Default::default(),
         }));
         let (status, body) = post_goal(
             &app,
@@ -1482,6 +1695,7 @@ mod project_auth_http_tests {
             root: root.clone(),
             write_class: WriteClass::AgentWritable,
             enabled: true,
+            preflight: Default::default(),
         }));
         let response = app
             .oneshot(
@@ -1520,6 +1734,7 @@ mod project_auth_http_tests {
             root: root.clone(),
             write_class: WriteClass::AgentWritable,
             enabled: true,
+            preflight: Default::default(),
         }));
 
         let (status, body) = post_goal(
@@ -1552,9 +1767,11 @@ mod project_auth_http_tests {
         let injected = payload["workspace_root"]
             .as_str()
             .unwrap_or_else(|| panic!("no workspace_root reached the pack: {payload}"));
+        // Server strips Windows `\\?\` so git/tools see a plain drive path.
+        let expected = super::strip_windows_extended_path(&root);
         assert_eq!(
             std::path::Path::new(injected),
-            root.as_path(),
+            std::path::Path::new(&expected),
             "the pack must receive the project's resolved absolute root"
         );
     }
@@ -1573,6 +1790,7 @@ mod project_auth_http_tests {
             root: root.clone(),
             write_class: WriteClass::AgentWritable,
             enabled: true,
+            preflight: Default::default(),
         }));
 
         // Built as a *string*, not by `PathBuf::join`: pushing `..` onto a verbatim `\?\` path
@@ -1602,9 +1820,10 @@ mod project_auth_http_tests {
         .await
         .expect("the coding pack should have been started");
 
+        let expected = super::strip_windows_extended_path(&sub);
         assert_eq!(
             std::path::Path::new(payload["workspace_root"].as_str().unwrap()),
-            sub.as_path(),
+            std::path::Path::new(&expected),
             "the pack must get the canonical path, not the caller's spelling: {payload}"
         );
         assert_eq!(payload["project"], "liberado", "{payload}");

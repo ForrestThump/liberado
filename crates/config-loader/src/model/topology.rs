@@ -503,6 +503,43 @@ pub struct ProjectConfig {
     pub write_class: liberado_common::WriteClass,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Ship / fast / deep preflight profiles (language-agnostic ordered commands).
+    /// See `docs/future-work/self-pr-quality-roadmap.md` § Generic preflight gate.
+    #[serde(default)]
+    pub preflight: ProjectPreflightConfig,
+}
+
+/// Project-level preflight profiles (`ship` is the merge bar).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ProjectPreflightConfig {
+    /// CI-equivalent (or stricter) steps before ready / PR.
+    #[serde(default)]
+    pub ship: Option<PreflightProfileConfig>,
+    /// Optional short profile (docs-only / explicit opt-in).
+    #[serde(default)]
+    pub fast: Option<PreflightProfileConfig>,
+}
+
+/// One named profile: either a single script or an ordered step list.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PreflightProfileConfig {
+    /// If set, run as one step (preferred shared entrypoint with CI).
+    #[serde(default)]
+    pub script: Option<String>,
+    #[serde(default)]
+    pub steps: Vec<PreflightStepConfig>,
+}
+
+/// One preflight command from topology.toml.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PreflightStepConfig {
+    pub name: String,
+    /// Shell command line.
+    pub run: String,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+    #[serde(default = "default_true")]
+    pub required: bool,
 }
 
 fn default_project_write_class() -> liberado_common::WriteClass {
@@ -1509,5 +1546,87 @@ mod proptest_tests {
         ) {
             prop_assert!(zone_mirrors_agree(desc, config, tool));
         }
+    }
+}
+
+#[cfg(test)]
+mod session_profile_tests {
+    use super::SessionProfile;
+
+    #[test]
+    fn empty_has_no_domain_no_authority() {
+        let p = SessionProfile::empty("basic");
+        assert_eq!(p.name, "basic");
+        assert!(p.enabled);
+        assert!(p.domain.is_none());
+        assert!(!p.declares_authority());
+    }
+
+    #[test]
+    fn component_key_falls_back_to_name() {
+        let p = SessionProfile {
+            component: None,
+            ..SessionProfile::empty("my-profile")
+        };
+        assert_eq!(p.component_key(), "my-profile");
+    }
+
+    #[test]
+    fn component_key_uses_explicit_value() {
+        let p = SessionProfile {
+            component: Some("grant-x".into()),
+            ..SessionProfile::empty("my-profile")
+        };
+        assert_eq!(p.component_key(), "grant-x");
+    }
+
+    #[test]
+    fn declares_authority_when_mcps_or_read_or_write_present() {
+        let p = SessionProfile {
+            mcps: vec![super::McpGrant::Whole("spider".into())],
+            ..SessionProfile::empty("p")
+        };
+        assert!(p.declares_authority());
+
+        let p = SessionProfile {
+            read: vec!["z1".into()],
+            ..SessionProfile::empty("p")
+        };
+        assert!(p.declares_authority());
+
+        let p = SessionProfile {
+            write: vec!["z2".into()],
+            ..SessionProfile::empty("p")
+        };
+        assert!(p.declares_authority());
+    }
+
+    #[test]
+    fn declared_capabilities_returns_empty_when_no_authority() {
+        let p = SessionProfile::empty("p");
+        assert!(!p.declares_authority());
+        let caps = p.declared_capabilities();
+        assert_eq!(caps.capabilities.len(), 0);
+    }
+
+    #[test]
+    fn default_path_arg_is_path_string() {
+        assert_eq!(super::default_path_arg(), "path");
+    }
+
+    #[test]
+    fn default_content_arg_is_content_string() {
+        assert_eq!(super::default_content_arg(), "content");
+    }
+
+    #[test]
+    fn default_true_is_true() {
+        assert!(super::default_true());
+    }
+
+    #[test]
+    fn default_project_write_class_is_agent_writable() {
+        let wc = super::default_project_write_class();
+        assert_eq!(wc, liberado_common::WriteClass::AgentWritable);
     }
 }

@@ -16,11 +16,18 @@ liberado-executor.workspace = true
 liberado-provider.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tree-sitter.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-go.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+proptest.workspace = true
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)

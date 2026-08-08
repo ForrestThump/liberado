@@ -86,6 +86,13 @@ pub enum SessionEventKind {
     /// A workspace file was created, modified, or deleted. `path` is workspace-relative;
     /// `change` is `added` | `modified` | `deleted`.
     FileChanged { path: String, change: String },
+    /// Workspace checkpoint (shadow-git). `id` is the restore handle.
+    Checkpoint {
+        id: String,
+        label: String,
+        #[serde(default)]
+        tree_hash: String,
+    },
     /// A harness guard fired (doom-loop, no-progress, …).
     LoopGuard { guard: String, action: String },
     /// The turn / goal session completed. Chat turns finish with `status: "done"`.
@@ -142,6 +149,7 @@ impl SessionEvent {
             | "validation_finished"
             | "critic_verdict"
             | "file_changed"
+            | "checkpoint"
             | "loop_guard"
             | "session_finished"
             | "session_offered"

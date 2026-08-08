@@ -25,12 +25,16 @@ pub enum IntakeOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IntakeQuestion {
+    /// Models sometimes emit `prompt` as a string array (dogfood finding #2 — DeepSeek under
+    /// `json_object` fallback). Accept string or sequence-of-strings joined with newlines.
+    #[serde(deserialize_with = "deserialize_string_flexible")]
     pub id: String,
+    #[serde(deserialize_with = "deserialize_string_flexible")]
     pub prompt: String,
     /// Models sometimes return a single string; accept string or array.
     #[serde(default, deserialize_with = "deserialize_string_or_vec")]
     pub options: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_flexible")]
     pub affects: String,
 }
 
@@ -71,6 +75,73 @@ where
         }
     }
     Ok(out)
+}
+
+/// Accept a plain string, or a sequence of strings (joined with newlines), or a scalar coerced
+/// via `Display`. Live models under unconstrained `json_object` often put arrays where a string
+/// field is required (dogfood finding #2).
+pub(crate) fn deserialize_string_flexible<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::{self, SeqAccess, Visitor};
+    use std::fmt;
+
+    struct FlexString;
+
+    impl<'de> Visitor<'de> for FlexString {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a string, sequence of strings, or scalar")
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_string<E: de::Error>(self, v: String) -> Result<Self::Value, E> {
+            Ok(v)
+        }
+
+        fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(String::new())
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(String::new())
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut parts = Vec::new();
+            while let Some(item) = seq.next_element::<serde_json::Value>()? {
+                match item {
+                    serde_json::Value::String(s) => parts.push(s),
+                    serde_json::Value::Null => {}
+                    other => parts.push(other.to_string()),
+                }
+            }
+            Ok(parts.join("\n"))
+        }
+    }
+
+    deserializer.deserialize_any(FlexString)
 }
 
 /// Accept `["a","b"]` or `"a"` (wrapped as a one-element vec). Live models frequently mess this up.
@@ -737,5 +808,267 @@ mod tests {
     fn node_test_profile_resolves() {
         let profile = profile_verifiers("node-test");
         assert!(profile.iter().any(|v| v.id() == "npm-test"));
+    }
+
+    /// Dogfood finding #2: DeepSeek under json_object fallback emitted `prompt` as a sequence.
+    #[test]
+    fn question_prompt_accepts_string_array() {
+        let raw = r#"{
+            "status": "needs_clarification",
+            "questions": [
+                {
+                    "id": "workspace_path",
+                    "prompt": ["What is the absolute path?", "Please provide it."],
+                    "options": ["a", "b"]
+                }
+            ]
+        }"#;
+        let outcome: IntakeOutcome = serde_json::from_str(raw).unwrap();
+        match outcome {
+            IntakeOutcome::NeedsClarification { questions, .. } => {
+                assert_eq!(questions.len(), 1);
+                assert!(questions[0].prompt.contains("absolute path"));
+                assert!(questions[0].prompt.contains("Please provide"));
+                assert_eq!(questions[0].options, vec!["a", "b"]);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn profile_verifiers_known_profiles() {
+        assert!(!profile_verifiers("rust-check").is_empty());
+        assert!(!profile_verifiers("rust-strict").is_empty());
+        assert!(!profile_verifiers("node-test").is_empty());
+    }
+
+    #[test]
+    fn profile_verifiers_unknown_returns_empty() {
+        assert!(profile_verifiers("").is_empty());
+        assert!(profile_verifiers("bogus").is_empty());
+        assert!(profile_verifiers("  unknown  ").is_empty());
+    }
+
+    #[test]
+    fn sanitize_draft_drops_empty_command_verifier() {
+        let mut draft = GoalContractDraft {
+            description: "test".into(),
+            success_criteria: vec![],
+            verifiers: vec![
+                VerifierSpec::Command {
+                    id: "cmd".into(),
+                    program: String::new(),
+                    args: vec![],
+                    env: Default::default(),
+                    timeout_secs: None,
+                    output_max_bytes: None,
+                    network: false,
+                },
+                VerifierSpec::Command {
+                    id: "ok".into(),
+                    program: "echo".into(),
+                    args: vec![],
+                    env: Default::default(),
+                    timeout_secs: None,
+                    output_max_bytes: None,
+                    network: false,
+                },
+            ],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        sanitize_draft(&mut draft);
+        assert_eq!(draft.verifiers.len(), 1, "empty program should be dropped");
+        assert_eq!(draft.verifiers[0].id(), "ok");
+    }
+
+    #[test]
+    fn sanitize_draft_drops_paths_exist_with_no_paths() {
+        let mut draft = GoalContractDraft {
+            description: "test".into(),
+            success_criteria: vec![],
+            verifiers: vec![VerifierSpec::PathsExist {
+                id: "pe".into(),
+                paths: vec![],
+            }],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        sanitize_draft(&mut draft);
+        assert!(draft.verifiers.is_empty());
+    }
+
+    #[test]
+    fn sanitize_draft_drops_paths_absent_with_no_paths() {
+        let mut draft = GoalContractDraft {
+            description: "test".into(),
+            success_criteria: vec![],
+            verifiers: vec![VerifierSpec::PathsAbsent {
+                id: "pa".into(),
+                paths: vec![],
+            }],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        sanitize_draft(&mut draft);
+        assert!(draft.verifiers.is_empty());
+    }
+
+    #[test]
+    fn sanitize_draft_drops_content_contains_with_empty_path() {
+        let mut draft = GoalContractDraft {
+            description: "test".into(),
+            success_criteria: vec![],
+            verifiers: vec![VerifierSpec::ContentContains {
+                id: "cc".into(),
+                path: String::new(),
+                must_include: vec!["needed".into()],
+            }],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        sanitize_draft(&mut draft);
+        assert!(draft.verifiers.is_empty());
+    }
+
+    #[test]
+    fn sanitize_draft_drops_content_contains_with_empty_must_include() {
+        let mut draft = GoalContractDraft {
+            description: "test".into(),
+            success_criteria: vec![],
+            verifiers: vec![VerifierSpec::ContentContains {
+                id: "cc".into(),
+                path: "README.md".into(),
+                must_include: vec![],
+            }],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        sanitize_draft(&mut draft);
+        assert!(
+            draft.verifiers.is_empty(),
+            "verifier with non-empty path but empty must_include should be dropped"
+        );
+    }
+
+    #[test]
+    fn sanitize_draft_keeps_git_diff_verifier() {
+        let mut draft = GoalContractDraft {
+            description: "test".into(),
+            success_criteria: vec![],
+            verifiers: vec![VerifierSpec::GitNonemptyDiff { id: "diff".into() }],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        sanitize_draft(&mut draft);
+        assert_eq!(draft.verifiers.len(), 1);
+    }
+
+    #[test]
+    fn validate_draft_rejects_content_contains_without_must_include() {
+        let draft = GoalContractDraft {
+            description: "test".into(),
+            success_criteria: vec![],
+            verifiers: vec![VerifierSpec::ContentContains {
+                id: "cc".into(),
+                path: "README.md".into(),
+                must_include: vec![],
+            }],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        assert!(validate_draft(&draft).is_err());
+    }
+
+    #[test]
+    fn apply_to_request_populates_task_and_config() {
+        let now = chrono::Utc::now();
+        let draft = GoalContractDraft {
+            description: "add feature".into(),
+            success_criteria: vec!["test passes".into()],
+            verifiers: vec![VerifierSpec::GitNonemptyDiff { id: "diff".into() }],
+            out_of_scope: vec!["no db".into()],
+            assumed_defaults: vec!["Rust".into()],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        let content_hash = hash_draft(&draft);
+        let contract = GoalContract {
+            id: "g1".into(),
+            draft,
+            frozen_at: now,
+            frozen_by: FreezeAuthority::Human,
+            content_hash,
+        };
+        let empty_role = crate::CoderRoleConfig {
+            model: String::new(),
+            prompt_path: None,
+            prompt: None,
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        };
+        let mut request = crate::CoderRunRequest {
+            task: crate::CoderTask::new("x", "old"),
+            workspace: crate::WorkspaceRef::new("/tmp", "main"),
+            config: crate::CoderRunConfig {
+                backend: String::new(),
+                trace_dir: None,
+                planner: empty_role.clone(),
+                coder: empty_role.clone(),
+                critic: empty_role.clone(),
+                gate: Default::default(),
+                repair: None,
+                sandbox: Default::default(),
+                command_policy: Default::default(),
+                validation_command: Some(crate::CoderCommandConfig::new("legacy")),
+                verifiers: vec![],
+                verify_policy: Default::default(),
+                path_policy: Default::default(),
+                progress: Default::default(),
+                hashline: Default::default(),
+            },
+            attempt: 0,
+            prior_feedback: vec![],
+            strategist_directive: None,
+        };
+        contract.apply_to_request(&mut request);
+        assert_eq!(request.task.description, "add feature");
+        assert_eq!(request.task.success_criteria, vec!["test passes"]);
+        assert_eq!(request.config.verifiers.len(), 1);
+        assert_eq!(request.config.verifiers[0].id(), "diff");
+        assert!(
+            request.config.validation_command.is_none(),
+            "validation_command should be cleared when verifiers present"
+        );
+    }
+
+    #[test]
+    fn intake_outcome_schema_has_expected_shape() {
+        let schema = intake_outcome_schema();
+        assert_eq!(schema["type"], "object");
+        let required = schema["required"].as_array().unwrap();
+        assert!(required.iter().any(|v| v == "status"));
+        let props = &schema["properties"];
+        assert!(
+            props["status"]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("needs_clarification"))
+        );
     }
 }

@@ -12,7 +12,8 @@ use liberado_common::{Error, Result};
 
 use crate::{
     CoderCommandConfig, CoderGateConfig, CoderRoleConfig, CoderRunConfig, CommandPolicy,
-    LIBERADO_LOOP_BACKEND, PathPolicy, PipelinePolicy, ProgressPolicy, SandboxSpec, VerifierSpec,
+    HashlineConfig, LIBERADO_LOOP_BACKEND, PathPolicy, PipelinePolicy, ProgressPolicy, SandboxSpec,
+    VerifierSpec,
 };
 use serde::{Deserialize, Serialize};
 
@@ -52,6 +53,35 @@ pub struct CoderTuning {
     pub verify_policy: PipelinePolicy,
     pub path_policy: PathPolicy,
     pub progress: ProgressPolicy,
+    /// `[tuning.coder.hashline]` — line-anchored hashline edit mode (default off).
+    #[serde(default)]
+    pub hashline: HashlineConfig,
+    /// `[tuning.coder.repo_map]` — Aider-style repository map for cold-start context.
+    #[serde(default)]
+    pub repo_map: RepoMapConfig,
+}
+
+/// Configuration for the Aider-style repository map feature.
+/// Lives under `[tuning.coder.repo_map]` in tuning.toml.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RepoMapConfig {
+    /// Enable the repo map.  When false the feature is completely off.
+    pub enabled: bool,
+    /// Approximate token budget for the rendered map (in tokens).
+    pub max_map_tokens: usize,
+    /// Skip the map entirely when the workspace has fewer than this many source files.
+    pub min_source_files: usize,
+}
+
+impl Default for RepoMapConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_map_tokens: 1024,
+            min_source_files: 20,
+        }
+    }
 }
 
 impl CoderTuning {
@@ -85,6 +115,7 @@ impl CoderTuning {
             verify_policy: self.verify_policy.clone(),
             path_policy: self.path_policy.clone(),
             progress: self.progress.clone(),
+            hashline: self.hashline.clone(),
         }
     }
 
@@ -157,6 +188,9 @@ impl CoderTuning {
                 "tuning.coder.validation_command.program must not be empty".into(),
             ));
         }
+        self.hashline
+            .validate()
+            .map_err(|e| Error::Config(format!("tuning.coder.{e}")))?;
         Ok(())
     }
 }
@@ -178,6 +212,8 @@ impl Default for CoderTuning {
             verify_policy: PipelinePolicy::default(),
             path_policy: PathPolicy::default(),
             progress: ProgressPolicy::default(),
+            hashline: HashlineConfig::default(),
+            repo_map: RepoMapConfig::default(),
         }
     }
 }
@@ -328,6 +364,30 @@ mod tests {
         let config = tuning.run_config();
         assert_eq!(config.backend, tuning.backend);
         assert_eq!(config.planner.model, tuning.planner.model);
+        assert_eq!(config.hashline, tuning.hashline);
+    }
+
+    #[test]
+    fn parses_hashline_section() {
+        let value: toml::Value = toml::from_str(
+            r#"
+            [hashline]
+            enabled = true
+            hash_length = 8
+            "#,
+        )
+        .unwrap();
+        let tuning = CoderTuning::from_value(Some(&value)).unwrap();
+        assert!(tuning.hashline.enabled);
+        assert_eq!(tuning.hashline.hash_length, 8);
+    }
+
+    #[test]
+    fn validation_rejects_hashline_length_out_of_range() {
+        let mut tuning = CoderTuning::default();
+        tuning.hashline.hash_length = 2;
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("hash_length"));
     }
 
     #[test]
@@ -369,5 +429,202 @@ mod tests {
         tuning.path_policy.search_max_results = 0;
         let err = tuning.validate().unwrap_err();
         assert!(err.to_string().contains("path_policy.search_max_results"));
+    }
+
+    #[test]
+    fn validation_rejects_gate_enabled_with_zero_reviewers() {
+        let mut tuning = CoderTuning::default();
+        tuning.gate.enabled = true;
+        tuning.gate.fresh_reviewers = 0;
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("fresh_reviewers"));
+    }
+
+    #[test]
+    fn validation_allows_gate_disabled_with_zero_reviewers() {
+        let mut tuning = CoderTuning::default();
+        tuning.gate.enabled = false;
+        tuning.gate.fresh_reviewers = 0;
+        assert!(tuning.validate().is_ok());
+    }
+
+    #[test]
+    fn validation_allows_gate_enabled_with_reviewers() {
+        let mut tuning = CoderTuning::default();
+        tuning.gate.enabled = true;
+        tuning.gate.fresh_reviewers = 1;
+        // Need a complete role config for gatekeeper too.
+        tuning.gate.gatekeeper = Some(CoderRoleConfig {
+            model: "test-model".into(),
+            prompt_path: None,
+            prompt: Some("gatekeeper".into()),
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        });
+        assert!(tuning.validate().is_ok());
+    }
+
+    #[test]
+    fn validation_rejects_progress_zero_fields_individually() {
+        let fields = [
+            ("read_only_turn_limit", 0, 1, 1, 1, 1),
+            ("same_tool_limit", 1, 0, 1, 1, 1),
+            ("validation_repeat_limit", 1, 1, 0, 1, 1),
+            ("max_attempts", 1, 1, 1, 0, 1),
+            ("event_preview_max_chars", 1, 1, 1, 1, 0),
+        ];
+        for (name, read_only, same_tool, val_repeat, max_att, preview) in &fields {
+            let tuning = CoderTuning {
+                progress: ProgressPolicy {
+                    read_only_turn_limit: *read_only,
+                    same_tool_limit: *same_tool,
+                    validation_repeat_limit: *val_repeat,
+                    max_attempts: *max_att,
+                    event_preview_max_chars: *preview,
+                },
+                ..CoderTuning::default()
+            };
+            let err = tuning.validate().unwrap_err();
+            assert!(
+                err.to_string().contains("progress"),
+                "progress field {name} = 0 should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_role_identity_rejects_empty_model() {
+        let role = CoderRoleConfig {
+            model: "  ".into(),
+            prompt_path: None,
+            prompt: Some("prompt".into()),
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        };
+        assert!(validate_role_identity("test", &role).is_err());
+    }
+
+    #[test]
+    fn validate_role_identity_rejects_empty_prompt_and_path() {
+        let role = CoderRoleConfig {
+            model: "m".into(),
+            prompt_path: None,
+            prompt: None,
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        };
+        assert!(validate_role_identity("test", &role).is_err());
+    }
+
+    #[test]
+    fn validate_role_identity_accepts_model_with_prompt() {
+        let role = CoderRoleConfig {
+            model: "m".into(),
+            prompt_path: None,
+            prompt: Some("p".into()),
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        };
+        assert!(validate_role_identity("test", &role).is_ok());
+    }
+
+    #[test]
+    fn validate_single_shot_role_delegates_to_role_identity() {
+        let bad = CoderRoleConfig {
+            model: String::new(),
+            prompt_path: None,
+            prompt: None,
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        };
+        assert!(validate_single_shot_role("x", &bad).is_err());
+    }
+
+    #[test]
+    fn repo_map_config_serde_disabled() {
+        let value: toml::Value = toml::from_str(
+            r#"
+            enabled = false
+            max_map_tokens = 500
+            min_source_files = 50
+            "#,
+        )
+        .unwrap();
+        let cfg: RepoMapConfig = value.try_into().unwrap();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.max_map_tokens, 500);
+        assert_eq!(cfg.min_source_files, 50);
+    }
+
+    #[test]
+    fn repo_map_absent_in_tuning_uses_defaults() {
+        let value: toml::Value = toml::from_str(
+            r#"
+            [coder]
+            model = "test"
+            prompt = "p"
+            max_turns = 1
+            "#,
+        )
+        .unwrap();
+        let tuning = CoderTuning::from_value(Some(&value)).unwrap();
+        assert!(tuning.repo_map.enabled);
+        assert_eq!(tuning.repo_map.max_map_tokens, 1024);
+        assert_eq!(tuning.repo_map.min_source_files, 20);
+    }
+
+    #[test]
+    fn validation_rejects_planner_zero_max_turns() {
+        let mut tuning = CoderTuning::default();
+        tuning.planner.max_turns = Some(0);
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("tuning.coder.planner.max_turns"));
+    }
+
+    #[test]
+    fn validation_rejects_critic_zero_max_turns() {
+        let mut tuning = CoderTuning::default();
+        tuning.critic.max_turns = Some(0);
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("tuning.coder.critic.max_turns"));
+    }
+
+    #[test]
+    fn validation_rejects_repair_bad_model() {
+        let tuning = CoderTuning {
+            repair: Some(CoderRoleConfig {
+                model: String::new(),
+                prompt_path: None,
+                prompt: None,
+                temperature: None,
+                max_tokens: None,
+                max_turns: None,
+            }),
+            ..CoderTuning::default()
+        };
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("tuning.coder.repair.model"));
+    }
+
+    #[test]
+    fn validation_rejects_gate_fresh_invalid() {
+        let mut tuning = CoderTuning::default();
+        tuning.gate.enabled = true;
+        tuning.gate.fresh_reviewers = 1;
+        tuning.gate.fresh = Some(CoderRoleConfig {
+            model: String::new(),
+            prompt_path: None,
+            prompt: None,
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        });
+        let err = tuning.validate().unwrap_err();
+        assert!(err.to_string().contains("tuning.coder.gate.fresh.model"));
     }
 }

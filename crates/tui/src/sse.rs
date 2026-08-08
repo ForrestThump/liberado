@@ -71,6 +71,7 @@ impl ToAction for SseEvent {
                 | SessionEventKind::ValidationFinished { .. }
                 | SessionEventKind::CriticVerdict { .. }
                 | SessionEventKind::FileChanged { .. }
+                | SessionEventKind::Checkpoint { .. }
                 | SessionEventKind::LoopGuard { .. } => Action::SseToken(String::new()),
             }),
             Err(e) => Err(format!("malformed SSE data ({e}): {}", self.data)),
@@ -131,6 +132,9 @@ pub fn to_goal_event(event: &SseEvent) -> Result<Option<GoalUiEvent>, String> {
         }),
         SessionEventKind::FileChanged { path, change } => {
             Some(GoalUiEvent::FileChanged { path, change })
+        }
+        SessionEventKind::Checkpoint { id, label, .. } => {
+            Some(GoalUiEvent::Progress(format!("checkpoint {label} ({id})")))
         }
         SessionEventKind::LoopGuard { guard, action } => {
             Some(GoalUiEvent::LoopGuard(format!("{guard} → {action}")))

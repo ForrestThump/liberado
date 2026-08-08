@@ -78,25 +78,23 @@ also the one that matters least.
 | Slice | State | Notes |
 |---|---|---|
 | **S1** — completion gate | ✅ **landed** | `liberado_session::completion_gate` (gatekeeper veto + strict-majority fresh quorum + fail-closed votes), coding-pack adapter, `critic_verdict` on the wire, strategist on non-convergence. **Default OFF** (`[coder.gate] enabled`) — it costs `1 + fresh_reviewers` model calls per attempt, and stays opt-in until S7 measures it. |
-| **S2** — wire events + goal surface | 🟡 **partial** | Done: `file_changed`, first-class `hub.park()` + `POST /api/goals/{id}/park`, `/goal` commands (`start`/`in`/`status`/`pause`/`resume`/`clear`), TUI wiring for all of them. **Not done:** dedicated goal-view panes (role timeline / gate panel / verifier panel as separate widgets — gate votes and file changes currently render inline in the joined pane), `GET /api/goals/{id}/diff`, and the live dogfood run. |
-| **S3–S7** | ⬜ open | project authorization, checkpoints/rewind, `/loop`, coding subagents, strategist evals |
+| **S2** — wire events + goal surface | 🟡 **partial** | Done: `file_changed`, first-class `hub.park()` + `POST /api/goals/{id}/park`, `/goal` commands (`start`/`in`/`status`/`pause`/`resume`/`clear`), TUI wiring for all of them; **live dogfood run 2026-08-05** (self-host → [PR #69](https://github.com/ForrestThump/liberado/pull/69); write-up [`self-host-coding-dogfood-2026-08.md`](future-work/self-host-coding-dogfood-2026-08.md)). **Not done:** dedicated goal-view panes; tool/`file_changed` events still weak on the live session stream (see dogfood finding #4). |
+| **S3–S7** | 🟡 **partial** | **S3** project auth landed (PR #66). **S4** checkpoints + mid-build resume + rewind landed (PR #73). **S5** `/loop` still unbuilt (largest design-ready zero-code gap). **S6** fan-out + merge-back landed (PR #72). **S7** strategist evals + gate default-on still open. Still open: ship package / cold-review productization, plan approval UX |
 
-Two carried-forward limitations, both S2 leftovers worth knowing before building on this:
+Two carried-forward limitations worth knowing before building on this:
 
 - **Gate votes reach the wire batched at attempt end, not live per vote.** The kernel's
   `GateObserver` supports live emission; `CoderBackend::run` has no `SessionEvent` sender to plumb
   it through. Wiring one is the remaining half of "watch the quorum vote".
-- **No agent can fan out, and that is currently the only thing preventing a workspace race.**
-  `dispatch_parallel` is built but unreachable; `delegate` is synchronous; the executor runs tool
-  calls serially. `WorktreeWorkspace` does not exist yet, so isolation must land before any of those
-  change — [`agentic-loops.md`](spec/architecture/agentic-loops.md) §Concurrency, design rule 11.
 - **Compaction tail copies still exist on disk** (CH3.1 territory) — any *new* reader that walks a
   raw leaf path must skip `Author::is_compaction_tail_copy()`.
 
 | # | What | Why |
 |---|---|---|
 | **CT1** | **Agentic coding TUI** — [`coding-tui-plan.md`](future-work/coding-tui-plan.md) | `/goal` + critic-gated completion + `/loop`, on the existing TUI/hub/coding pack; loosely coupled kernel machinery. S1 done, S2 partial (see above) |
-| **E6-c(b)** | Resume mid-build coding session | Design pass (git suspend point) |
+| **SP1** | **Self-PR quality loop** — [`self-pr-quality-roadmap.md`](future-work/self-pr-quality-roadmap.md) | Ship package → cold review → fix → human residual review. Path to light-oversight self-PRs on liberado |
+| **E6-c(b)** | ~~Resume mid-build coding session~~ | **Landed** as S4 (PR #73: durable worktree + shadow-git checkpoints + park/resume + rewind) |
+| — | [`self-host-coding-dogfood-2026-08.md`](future-work/self-host-coding-dogfood-2026-08.md) | **C2 dogfood findings** — reliability fixes partially landed; continue as grading method for SP1 |
 | — | [`pr-dispatch-vtcode-no-write-finding.md`](future-work/pr-dispatch-vtcode-no-write-finding.md) | Open bug |
 | — | [`coder-eval-curriculum.md`](future-work/coder-eval-curriculum.md) | After P1/P2 not bottleneck |
 
@@ -106,6 +104,7 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
 - **Modularity** remains the enabler: [`spec/architecture/modularity.md`](spec/architecture/modularity.md). Hot-path **module splits** landed (server API, daemon, config-loader model, executor budget).
 - **A4 dual-store hub tests** (2026-07-23): list / cancel / park→resume / rehydrate via real `GoalSessionHub` on production `SessionStore` — `crates/session-store/tests/hub_dual_store.rs` (see [`spec/architecture/failure-modes.md`](spec/architecture/failure-modes.md) §1).
 - **TurboVault modules**: vector + tasks paying back; remaining **`vault_events`** and upstream merge. Umbrella: [`turbovault-modules-integration-roadmap.md`](future-work/turbovault-modules-integration-roadmap.md).
+- **Remote access via Paseo**: fork [Paseo](https://github.com/getpaseo/paseo) and mate Paseo + Liberado so the Liberado harness (daemon, TUI, API, coding sessions) can be accessed remotely. Paseo provides secure tunnel/remote-access primitives; Liberado's daemon + HTTP/SSE surface is naturally compatible. First slice: fork, vet the tunnel, document a `liberado serve --paseo` or equivalent remote-access profile. Then dogfood remote coding sessions.
 - **Redundant tool calls hidden by the doom-loop guard** (found 2026-07-28 in the passing
   `evening-debrief` live run, build `66b5771`). The subagent called `liberado-caldav-mcp:list_events`
   **four times for two dates** — twice on turn 2, twice again on turn 3 — before the guard fired
@@ -140,6 +139,7 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
 
 | When | What |
 |------|------|
+| **2026-08-06** | **Hashline edit mode** (PR #76): configurable hashline edit mode for the coding harness. **Coverage gap analysis** (PR #75): mutant-test coverage across coder-* crates, test additions, clippy fixes for Rust 1.94. **Generic ship preflight gate** (PR #74): `PreflightRunner` + preflight block before `Succeeded` + self-PR quality ladder design. **Checkpoints + mid-build resume** (PR #73): shadow-git checkpoints per attempt + per write-flush, durable worktree park/resume, rewind — S4 landed. **Fan-out merge** (PR #72): hub-spawned coding children on worktree branches, parent LLM merge-back, max concurrent 3 — S6 v1 landed. **Self-host dogfood reliability** (PR #70/#71): no-changes-after-commit fix, live tool events, intake flexible decode, data-dir worktrees, `gh pr create --base` preflight. **Plan + explore PathPolicy presets** (PR #67/#68). **Project-root authorization** (PR #66). |
 | **2026-08-03** | **Zone identity fix** (PR #38): a zone is identified by its *name*, not by which `Zone` variant spelled it. `Policy::write_class` always keyed on the name; `CapabilitySet` used derived structural equality, so a `Named` grant could never satisfy the write gate's `Zone::vault(..)` check — latent because nothing constructs `Named` yet, and waiting for the first non-vault CRUD surface. Serialization deliberately untouched (`Capability` is in `policy.toml` **and** the proposal HMAC). `tuning.md` gained the non-vault zone guide. **Seam boundary tests** (PR #39) and two read-only analysis tools: `delegation_cost.rs` and `provenance_ratio.rs` (examples then; promoted to `liberado-cost delegation-cost` / `provenance-ratio` in PR #63), which ranked the known seam conversation first at 29.4x against a median of 0.9x. **Evals decision** recorded in [`evals_implementation.md`](future-work/research/evals_implementation.md): no harness until there is a free oracle. |
 | **2026-08-02** | **Round 2's five deliverables** (PRs #33–#37): **correlation coverage** (the cost instrument's own 8% blind spot, incl. the approval path); **turn-aware cost** + `token_usage_total` corrected from a lifetime sum to context occupancy; **Telegram parity** — `/model` scopes to the sticky chat, `/stop`, turn-lifecycle replies; **goal sessions in the shutdown drain**, parked durably on disk rather than left `Running`; and **Tier 3 P7 restart survival**, passing live. Every branch shipped a test claiming more than it checked — the four mechanisms and rules R6–R8 are in [round 3](future-work/parallel-deliverables-2026-08-round-3.md). |
 | **2026-08-02** | **Five parallel deliverables** (PRs #28–#32), specced in [`parallel-deliverables-2026-08.md`](future-work/parallel-deliverables-2026-08.md) and executed on separate branches: **token cost accounting** (`liberado-cost` — `[[models]]` per-million rates applied at *read* time over the existing latency journal, rolled up per conversation through the dispatch journal's `parent_conversation` so delegated spend lands on the turn that caused it; the full read landed 2026-08-02 at **92.8%** orchestrator — see [P1.5](#priority-15--token-economics-foundational-measured-2026-08-02)); **per-conversation compaction trigger** (closes CH4's re-resolve gap above); **TUI stop / scoped `/model` / reattach** (durable turns had made Ctrl+S mean "stop showing me"); **graceful shutdown** (SIGTERM drains in-flight durable turns for a bounded grace before exit; `stop_grace_period: 2m` on the compose service); and **Tier 3 P6**, verified against the live daemon. Review notes and the recurring test-aim weakness are written up in [`parallel-deliverables-2026-08-round-2.md`](future-work/parallel-deliverables-2026-08-round-2.md). |
@@ -155,4 +155,4 @@ Two carried-forward limitations, both S2 leftovers worth knowing before building
 
 See [`spec/architecture/sessions.md`](spec/architecture/sessions.md) for the session model history pointers.
 
-**Last updated:** 2026-08-02.
+**Last updated:** 2026-08-06.

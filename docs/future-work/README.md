@@ -40,10 +40,14 @@ Index of forward-looking work.
 | [heuristics-tuning-engine-plan.md](heuristics-tuning-engine-plan.md) | Heuristics tuner tooling |
 | [coder-eval-curriculum.md](coder-eval-curriculum.md) | Coding quality instrument |
 | [pr-dispatch-vtcode-no-write-finding.md](pr-dispatch-vtcode-no-write-finding.md) | Open PR-dispatch bug |
+| [self-host-coding-dogfood-2026-08.md](self-host-coding-dogfood-2026-08.md) | **C2 dogfood:** first self-host `/goal` on liberado → PR #69; six findings (worktree paths fixed; no-changes-after-commit still open) |
+| [self-pr-quality-roadmap.md](self-pr-quality-roadmap.md) | **Self-PR quality:** ladder to light-oversight merges; **generic preflight gate** (CI-equivalent ship bar, not Rust-only) → cold review → human queue → self-improve |
 
 ### Coding pack / TUI
 - [`rust-native-agentic-coder-plan.md`](rust-native-agentic-coder-plan.md) — umbrella design
 - [`coding-tui-plan.md`](coding-tui-plan.md) — surface + completion-gate slices S1–S7
+- [`self-pr-quality-roadmap.md`](self-pr-quality-roadmap.md) — outcome roadmap: merge-cheap self-PRs with light oversight
 - [`tui-maturity-roadmap.md`](tui-maturity-roadmap.md) — TUI maturity audit
+- [`self-host-coding-dogfood-2026-08.md`](self-host-coding-dogfood-2026-08.md) — live self-host finding write-up (C2)
 
 Start every planning session at [roadmap.md](../roadmap.md).

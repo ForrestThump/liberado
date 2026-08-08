@@ -27,7 +27,6 @@ use liberado_session::{
 };
 use serde_json::json;
 use std::sync::Arc;
-use tokio::process::Command;
 use tokio::sync::mpsc;
 
 tokio::task_local! {
@@ -39,6 +38,7 @@ use crate::CoderProviderFactory;
 use crate::critic::parse_critic_verdict;
 use crate::roles::{role_instructions, truncate_chars};
 use crate::trace::{self, EventLog};
+use crate::workspace_diff;
 
 /// Cap on the diff handed to a reviewer. Matches the legacy critic's budget.
 const EVIDENCE_MAX_CHARS: usize = 48_000;
@@ -453,49 +453,6 @@ async fn build_reviewer(
         role.clone(),
         instructions,
     ))
-}
-
-/// The real change in the workspace: tracked diff against HEAD plus untracked file names.
-///
-/// Moved here from `critic.rs` — evidence assembly is a gate concern now. Untracked files are
-/// listed by name rather than content because a new-file body can be arbitrarily large and the
-/// reviewer's question ("was something added that shouldn't be?") is answerable from the name.
-async fn workspace_diff(workspace_root: &str) -> Result<String, CoderError> {
-    let tracked = Command::new("git")
-        .args(["diff", "HEAD"])
-        .current_dir(workspace_root)
-        .output()
-        .await
-        .map_err(|e| CoderError::Backend(format!("git diff: {e}")))?;
-    if !tracked.status.success() {
-        return Err(CoderError::Backend(format!(
-            "git diff exited {:?}: {}",
-            tracked.status.code(),
-            String::from_utf8_lossy(&tracked.stderr)
-        )));
-    }
-    let mut diff = String::from_utf8_lossy(&tracked.stdout).into_owned();
-
-    let untracked = Command::new("git")
-        .args(["ls-files", "--others", "--exclude-standard"])
-        .current_dir(workspace_root)
-        .output()
-        .await
-        .map_err(|e| CoderError::Backend(format!("git ls-files: {e}")))?;
-    if untracked.status.success() {
-        let names = String::from_utf8_lossy(&untracked.stdout);
-        if !names.trim().is_empty() {
-            if !diff.is_empty() {
-                diff.push('\n');
-            }
-            diff.push_str("# untracked files\n");
-            diff.push_str(&names);
-        }
-    }
-    if diff.trim().is_empty() {
-        diff = "(empty diff)".to_string();
-    }
-    Ok(diff)
 }
 
 /// The strategist's system prompt. Deliberately narrow: it may change the *approach*, never the

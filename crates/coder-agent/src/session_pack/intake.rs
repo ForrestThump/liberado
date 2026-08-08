@@ -158,11 +158,37 @@ impl CodingSessionPack {
             ))
             .await;
 
-        let context = goal
-            .payload
-            .get("context")
-            .and_then(|v| v.as_str())
-            .filter(|c| !c.trim().is_empty());
+        // Build intake context: explicit payload.context plus authorized project/workspace so the
+        // model does not re-ask for paths the daemon already resolved (dogfood finding #2).
+        let context_owned = {
+            let mut parts = Vec::new();
+            if let Some(c) = goal
+                .payload
+                .get("context")
+                .and_then(|v| v.as_str())
+                .filter(|c| !c.trim().is_empty())
+            {
+                parts.push(c.to_string());
+            }
+            if let Some(project) = goal.payload.get("project").and_then(|v| v.as_str()) {
+                parts.push(format!(
+                    "Authorized coding project name: `{project}`. Do not ask the human for the \
+                     project name or for a path under this project."
+                ));
+            }
+            if let Some(root) = goal.payload.get("workspace_root").and_then(|v| v.as_str()) {
+                parts.push(format!(
+                    "Authorized workspace_root (absolute, already injected by the daemon): `{root}`. \
+                     Do not ask for the absolute path to the workspace."
+                ));
+            }
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n"))
+            }
+        };
+        let context = context_owned.as_deref();
 
         // E6-c: on a resume, the transcript is our only memory of the negotiation. Rebuild the
         // answers from it so we do not re-ask what has already been answered. Empty on a fresh

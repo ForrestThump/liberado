@@ -4,6 +4,22 @@
 //! enforces command policy, caps command output, and defines the traits future Docker/remote
 //! sandboxes will implement.
 
+mod checkpoint;
+mod merge;
+mod preflight;
+pub use checkpoint::{Checkpoint, CheckpointError, ShadowGit};
+pub use merge::{
+    ConflictSides, MergeAttempt, MergeError, add_worktree_on_branch, branch_tip, commit_merge,
+    list_unmerged_paths, merge_branch, read_conflict_sides, remove_worktree,
+    rev_parse as git_rev_parse, stage_resolution,
+};
+pub use preflight::{
+    DEFAULT_LOG_CAP_BYTES, DEFAULT_STEP_TIMEOUT_SECS, PreflightError, PreflightReport,
+    PreflightSpec, PreflightStep, PreflightStepResult, liberado_ship_preflight_spec,
+    liberado_ship_preflight_steps, resolve_ship_spec, run_preflight, run_preflight_with_options,
+};
+// Durable session worktree helpers are defined below next to WorktreeWorkspace.
+
 use std::{
     collections::BTreeMap,
     path::{Component, Path, PathBuf},
@@ -101,6 +117,9 @@ impl HostWorkspace {
         let root = root
             .canonicalize()
             .map_err(|_| SandboxError::MissingRoot(root.display().to_string()))?;
+        // Windows `canonicalize` yields `\\?\C:\...` which breaks `git -C` / `current_dir`
+        // (git rewrites it to `//?/C:/...` and fails with "Invalid argument"). Strip for CLI use.
+        let root = strip_extended_path_prefix(&root);
         Ok(Self {
             root,
             command_policy,
@@ -274,6 +293,65 @@ fn normalize_docker_path(path: &str) -> String {
     path.replace('\\', "/")
 }
 
+/// Strip Windows extended-length prefixes so paths can be passed to git and other CLIs.
+///
+/// `std::fs::canonicalize` on Windows returns `\\?\C:\...` (or `\\?\UNC\...`). Git for Windows
+/// turns that into `//?/C:/...` and fails with "could not create leading directories … Invalid
+/// argument". Host `current_dir` is similarly happier with a plain drive path.
+///
+/// Idempotent on non-Windows / already-stripped paths.
+pub fn strip_extended_path_prefix(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        if let Some(unc) = rest.strip_prefix(r"UNC\") {
+            return PathBuf::from(format!(r"\\{unc}"));
+        }
+        return PathBuf::from(rest);
+    }
+    // Defensive: if a caller already stringified the extended form with forward slashes.
+    if let Some(rest) = s.strip_prefix("//?/") {
+        let rest = rest.replace('/', "\\");
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
+/// Path string safe for `git -C` and similar CLIs (extended prefix stripped).
+pub fn path_for_cli(path: &Path) -> String {
+    strip_extended_path_prefix(path)
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Canonical git binary name (shared constant so crates don't each spell "git").
+pub const GIT: &str = "git";
+
+/// Run git under `current_dir`, return trimmed stdout.
+///
+/// Errors map to [`SandboxError::Spawn`] so callers can keep their own error wrapping.
+pub async fn run_git(current_dir: &Path, args: &[&str]) -> Result<String, SandboxError> {
+    let dir = path_for_cli(current_dir);
+    let output = Command::new(GIT)
+        .args(args)
+        .current_dir(&dir)
+        .output()
+        .await
+        .map_err(|e| SandboxError::Spawn(format!("git {args:?}: {e}")))?;
+    if !output.status.success() {
+        return Err(SandboxError::Spawn(format!(
+            "git {args:?} exited {:?}: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Like [`run_git`] but failures are logged and swallowed (best-effort operations).
+pub async fn run_git_best_effort(current_dir: &Path, args: &[&str]) {
+    let _ = run_git(current_dir, args).await;
+}
+
 #[async_trait]
 impl CommandRunner for HostWorkspace {
     async fn run_command(&self, request: CommandRequest) -> Result<CommandOutput, SandboxError> {
@@ -343,10 +421,138 @@ fn capped_utf8(mut buf: Vec<u8>, max_bytes: usize) -> String {
 // must land before any concurrent workers. A worktree gives each child its own
 // filesystem view so sibling edits do not collide.
 
+/// Validate a session id for use as a worktree directory name under `worktrees_base`.
+fn validate_session_worktree_id(session_id: &str) -> Result<(), SandboxError> {
+    // `Drop` / remove_dir_all on worktree paths must not be steerable outside the base.
+    if session_id.is_empty()
+        || session_id.contains("..")
+        || session_id.contains('/')
+        || session_id.contains('\\')
+    {
+        return Err(SandboxError::MissingRoot(format!(
+            "session id '{session_id}' is not a safe worktree directory name"
+        )));
+    }
+    Ok(())
+}
+
+/// Make `path` absolute (via cwd if relative) and strip Windows extended prefixes.
+/// Git worktree paths must be absolute: a relative dest is resolved from the process cwd
+/// for `worktree add` but `-C dest` checkout can fail if the relative spelling is ambiguous.
+fn absolute_path(path: &Path) -> PathBuf {
+    let p = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    };
+    strip_extended_path_prefix(&p)
+}
+
+/// Path of the durable session worktree (`worktrees_base/session_id`) — may not exist yet.
+pub fn session_worktree_path(
+    worktrees_base: &Path,
+    session_id: &str,
+) -> Result<PathBuf, SandboxError> {
+    validate_session_worktree_id(session_id)?;
+    Ok(absolute_path(worktrees_base).join(session_id))
+}
+
+/// Ensure a **durable** linked git worktree at `worktrees_base/session_id`.
+///
+/// Unlike [`WorktreeWorkspace`], this path is **not** deleted when the agent attempt ends.
+/// Park / mid-build resume / shadow-git checkpoints (S4) all need the same filesystem root to
+/// survive attempt teardown. Reuses an existing worktree directory when present.
+///
+/// `parent_root` must be a git repository. The parent working tree is left untouched.
+pub async fn ensure_session_worktree(
+    parent_root: &Path,
+    session_id: &str,
+    worktrees_base: &Path,
+) -> Result<PathBuf, SandboxError> {
+    let dest = session_worktree_path(worktrees_base, session_id)?;
+    let parent_root = parent_root
+        .canonicalize()
+        .map_err(|_| SandboxError::MissingRoot(parent_root.display().to_string()))?;
+    let parent_root = strip_extended_path_prefix(&parent_root);
+    let worktrees_base = absolute_path(worktrees_base);
+    std::fs::create_dir_all(&worktrees_base)
+        .map_err(|e| SandboxError::MissingRoot(format!("worktree base dir: {e}")))?;
+
+    // Reuse: mid-build park/resume must land on the same files as the last attempt.
+    if dest.exists() && dest.join(".git").exists() {
+        return Ok(strip_extended_path_prefix(
+            &dest.canonicalize().unwrap_or_else(|_| dest.clone()),
+        ));
+    }
+    // Broken leftover (dir without git) — remove and recreate.
+    if dest.exists() {
+        let _ = std::fs::remove_dir_all(&dest);
+    }
+
+    match create_linked_worktree(&parent_root, &dest).await {
+        Ok(()) => {}
+        Err(e) => {
+            // Concurrent ensure (tests / double start): path appeared between check and add.
+            if !(dest.exists() && dest.join(".git").exists()) {
+                return Err(e);
+            }
+        }
+    }
+    Ok(strip_extended_path_prefix(&dest.canonicalize().map_err(
+        |e| SandboxError::MissingRoot(format!("worktree canonicalize: {e}")),
+    )?))
+}
+
+/// Create a linked worktree at `dest` from `parent_root` (must not already exist).
+async fn create_linked_worktree(parent_root: &Path, dest: &Path) -> Result<(), SandboxError> {
+    let parent_cli = path_for_cli(parent_root);
+    let dest_cli = path_for_cli(dest);
+
+    // Prune stale registration from a prior crashed run before `worktree add`.
+    let _ = tokio::process::Command::new("git")
+        .args(["-C", &parent_cli])
+        .args(["worktree", "prune"])
+        .output()
+        .await;
+
+    let output = tokio::process::Command::new("git")
+        .args(["-C", &parent_cli])
+        .args(["worktree", "add", "--no-checkout", &dest_cli])
+        .output()
+        .await
+        .map_err(|e| SandboxError::Spawn(format!("git worktree add: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(SandboxError::Spawn(format!(
+            "git worktree add failed: {stderr}"
+        )));
+    }
+
+    let output = tokio::process::Command::new("git")
+        .args(["-C", &dest_cli])
+        .args(["checkout", "HEAD", "--"])
+        .output()
+        .await
+        .map_err(|e| SandboxError::Spawn(format!("git checkout in worktree: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let _ = std::fs::remove_dir_all(dest);
+        return Err(SandboxError::Spawn(format!(
+            "git checkout in worktree failed: {stderr}"
+        )));
+    }
+    Ok(())
+}
+
 /// A git-worktree-isolated workspace. On construction, `git worktree add --no-checkout`
 /// creates a linked worktree under `<data>/worktrees/<session-id>/`, then the working tree
 /// is synchronised from the parent via `git checkout`. The parent repo is unaffected by
 /// any modification inside the worktree.
+///
+/// **Ephemeral:** the worktree is removed on [`Drop`]. Prefer [`ensure_session_worktree`] for
+/// coding goal sessions that must park/resume mid-build (S4).
 #[derive(Debug)]
 pub struct WorktreeWorkspace {
     inner: HostWorkspace,
@@ -362,6 +568,9 @@ impl WorktreeWorkspace {
     ///
     /// `parent_root` must be a git repository root. The parent working tree is left
     /// untouched; the worktree starts as a clean checkout of HEAD.
+    ///
+    /// Always creates a **fresh** worktree (removes any prior directory at the dest). For
+    /// durable park/resume, use [`ensure_session_worktree`] + [`HostWorkspace`] instead.
     pub async fn new(
         parent_root: &Path,
         session_id: &str,
@@ -371,62 +580,20 @@ impl WorktreeWorkspace {
         let parent_root = parent_root
             .canonicalize()
             .map_err(|_| SandboxError::MissingRoot(parent_root.display().to_string()))?;
-        // `Drop` recursively deletes `worktree_path`, so the id must not be able to steer that
-        // outside the base. Session ids are internally minted ULIDs today; this is the guard that
-        // keeps it true if one ever comes from somewhere else.
-        if session_id.is_empty()
-            || session_id.contains("..")
-            || session_id.contains('/')
-            || session_id.contains('\\')
-        {
-            return Err(SandboxError::MissingRoot(format!(
-                "session id '{session_id}' is not a safe worktree directory name"
-            )));
-        }
+        let parent_root = strip_extended_path_prefix(&parent_root);
+        let worktrees_base = strip_extended_path_prefix(worktrees_base);
+        validate_session_worktree_id(session_id)?;
+        let worktrees_base = absolute_path(&worktrees_base);
         let dest = worktrees_base.join(session_id);
-        std::fs::create_dir_all(worktrees_base)
+        std::fs::create_dir_all(&worktrees_base)
             .map_err(|e| SandboxError::MissingRoot(format!("worktree base dir: {e}")))?;
 
-        // Prune any stale registration from a prior crashed run before trying to
-        // create a new worktree with the same name — git will refuse otherwise.
-        let _ = tokio::process::Command::new("git")
-            .args(["-C", &parent_root.to_string_lossy()])
-            .args(["worktree", "prune"])
-            .output()
-            .await;
-
-        // Remove any leftover worktree directory from a prior crashed run.
+        // Ephemeral: wipe leftover from a prior crashed run.
         if dest.exists() {
             let _ = std::fs::remove_dir_all(&dest);
         }
 
-        let output = tokio::process::Command::new("git")
-            .args(["-C", &parent_root.to_string_lossy()])
-            .args(["worktree", "add", "--no-checkout", &dest.to_string_lossy()])
-            .output()
-            .await
-            .map_err(|e| SandboxError::Spawn(format!("git worktree add: {e}")))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(SandboxError::Spawn(format!(
-                "git worktree add failed: {stderr}"
-            )));
-        }
-
-        // Populate the working tree from the parent's HEAD.
-        let output = tokio::process::Command::new("git")
-            .args(["-C", &dest.to_string_lossy()])
-            .args(["checkout", "HEAD", "--"])
-            .output()
-            .await
-            .map_err(|e| SandboxError::Spawn(format!("git checkout in worktree: {e}")))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let _ = std::fs::remove_dir_all(&dest);
-            return Err(SandboxError::Spawn(format!(
-                "git checkout in worktree failed: {stderr}"
-            )));
-        }
+        create_linked_worktree(&parent_root, &dest).await?;
 
         let inner = HostWorkspace::new(&dest, command_policy)?;
 
@@ -722,6 +889,30 @@ mod tests {
 
     // ── WorktreeWorkspace tests ─────────────────────────────────────────
 
+    #[test]
+    fn strip_extended_path_prefix_removes_verbatim_drive_and_unc() {
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                strip_extended_path_prefix(Path::new(r"\\?\C:\Users\me\repo")),
+                PathBuf::from(r"C:\Users\me\repo")
+            );
+            assert_eq!(
+                strip_extended_path_prefix(Path::new(r"\\?\UNC\server\share\repo")),
+                PathBuf::from(r"\\server\share\repo")
+            );
+            assert_eq!(
+                strip_extended_path_prefix(Path::new(r"//?/C:/Users/me/repo")),
+                PathBuf::from(r"C:\Users\me\repo")
+            );
+        }
+        // Already-plain paths are unchanged on every platform.
+        assert_eq!(
+            strip_extended_path_prefix(Path::new("/home/me/repo")),
+            PathBuf::from("/home/me/repo")
+        );
+    }
+
     async fn worktree_setup() -> (tempfile::TempDir, tempfile::TempDir, WorktreeWorkspace) {
         let parent = tempfile::tempdir().unwrap();
         let base = tempfile::tempdir().unwrap();
@@ -813,6 +1004,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn durable_session_worktree_reuses_path_and_survives_drop() {
+        let parent = tempfile::tempdir().unwrap();
+        let base = tempfile::tempdir().unwrap();
+        let status = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(parent.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::fs::write(parent.path().join("seed.txt"), "v1\n").unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["-C", &parent.path().to_string_lossy()])
+            .args(["add", "seed.txt"])
+            .status();
+        let _ = std::process::Command::new("git")
+            .args(["-C", &parent.path().to_string_lossy()])
+            .args(["commit", "--quiet", "-m", "init"])
+            .env("GIT_AUTHOR_NAME", "test")
+            .env("GIT_AUTHOR_EMAIL", "test@test")
+            .env("GIT_COMMITTER_NAME", "test")
+            .env("GIT_COMMITTER_EMAIL", "test@test")
+            .status();
+
+        let p1 = ensure_session_worktree(parent.path(), "sess-durable", base.path())
+            .await
+            .unwrap();
+        std::fs::write(p1.join("marker.txt"), "kept\n").unwrap();
+        let p2 = ensure_session_worktree(parent.path(), "sess-durable", base.path())
+            .await
+            .unwrap();
+        assert_eq!(p1, p2, "second ensure must reuse the same path");
+        assert_eq!(
+            std::fs::read_to_string(p2.join("marker.txt")).unwrap(),
+            "kept\n",
+            "durable worktree must not wipe in-progress edits on re-ensure"
+        );
+    }
+
+    #[tokio::test]
     async fn worktree_resolve_path_is_contained() {
         let (_parent, _base, ws) = worktree_setup().await;
         let path = ws.resolve_path("src/lib.rs").unwrap();
@@ -879,5 +1109,83 @@ mod tests {
         .unwrap();
         assert!(ws2.root().exists());
         drop(ws2);
+    }
+}
+
+#[cfg(test)]
+mod git_helper_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique() -> u128 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    }
+
+    fn init_repo(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        for args in [
+            ["init", "--quiet"].as_slice(),
+            ["config", "user.email", "test@liberado.local"].as_slice(),
+            ["config", "user.name", "liberado-test"].as_slice(),
+        ] {
+            assert!(
+                std::process::Command::new(GIT)
+                    .args(args)
+                    .current_dir(dir)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn run_git_returns_stdout() {
+        let dir = std::env::temp_dir().join(format!("lib-git-helper-{}", unique()));
+        init_repo(&dir);
+        std::fs::write(dir.join("test.txt"), "hello").unwrap();
+        let status = run_git(&dir, &["status", "--porcelain"]).await.unwrap();
+        assert!(
+            status.contains("test.txt"),
+            "expected test.txt in status: {status}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn run_git_errors_on_bad_command() {
+        let dir = std::env::temp_dir().join(format!("lib-git-err-{}", unique()));
+        init_repo(&dir);
+        let err = run_git(&dir, &["this-is-not-a-git-subcommand"]).await;
+        assert!(err.is_err(), "bad git command should fail");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn run_git_best_effort_does_not_panic_on_failure() {
+        let dir = std::env::temp_dir().join(format!("lib-git-be-{}", unique()));
+        init_repo(&dir);
+        run_git_best_effort(&dir, &["this-is-not-a-git-subcommand"]).await;
+        // Should not panic.
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validate_session_worktree_id_rejects_bad_ids() {
+        assert!(validate_session_worktree_id("").is_err());
+        assert!(validate_session_worktree_id("a/b").is_err());
+        assert!(validate_session_worktree_id("a\\b").is_err());
+        assert!(validate_session_worktree_id("..").is_err());
+        assert!(validate_session_worktree_id("a../b").is_err());
+    }
+
+    #[test]
+    fn validate_session_worktree_id_accepts_good_ids() {
+        assert!(validate_session_worktree_id("session-1").is_ok());
+        assert!(validate_session_worktree_id("abc_def").is_ok());
+        assert!(validate_session_worktree_id("task42").is_ok());
     }
 }

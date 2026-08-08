@@ -91,7 +91,7 @@ impl Default for DispatchTuning {
             detach_soft_timeout_secs: 20,
             guidance_match_floor: 0.8,
             subagent_isolation: SubagentIsolation::InProcess,
-            max_concurrent_coding_subagents: 2,
+            max_concurrent_coding_subagents: 3,
             narrow_direct_tools: true,
         }
     }

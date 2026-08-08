@@ -19,7 +19,9 @@ liberado-common.workspace = true
 liberado-executor.workspace = true
 liberado-provider.workspace = true
 liberado-session.workspace = true
+serde = { workspace = true }
 serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

@@ -1,21 +1,33 @@
 //! Coding tool runtime for Liberado's Rust-native agent loop.
 
+mod hashline;
+pub mod repo_map;
+
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use async_trait::async_trait;
-use liberado_coder_core::{CommandPolicy, EXPLORE_TOOL_NAMES, PathPolicy, SandboxSpec};
-use liberado_coder_sandbox::{
-    CommandRequest, DockerWorkspace, HostWorkspace, SandboxError, Workspace, WorktreeWorkspace,
+use liberado_coder_core::{
+    CommandPolicy, EXPLORE_TOOL_NAMES, HashlineConfig, PathPolicy, SandboxSpec,
 };
+use liberado_coder_sandbox::{
+    CommandOutput, CommandRequest, DockerWorkspace, HostWorkspace, SandboxError, Workspace,
+    WorktreeWorkspace,
+};
+pub use liberado_coder_sandbox::{ensure_session_worktree, session_worktree_path};
 use liberado_executor::ToolRuntime;
 use liberado_provider::{ToolDef, ToolInvocation};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
+use tokio::sync::oneshot;
+
+pub use hashline::{
+    compute_file_hash as hashline_compute_file_hash, prompt_guidance as hashline_prompt_guidance,
+};
 
 #[derive(Debug, Error)]
 pub enum ToolError {
@@ -34,6 +46,85 @@ pub struct CodingToolRuntime {
     workspace: Arc<dyn Workspace>,
     path_policy: PathPolicy,
     validation_command: Option<CommandRequest>,
+    hashline: HashlineConfig,
+    background_jobs: Arc<Mutex<HashMap<String, BackgroundJob>>>,
+}
+
+struct BackgroundJob {
+    receiver: oneshot::Receiver<Result<CommandOutput, SandboxError>>,
+}
+
+/// Base directory for coding worktrees (`LIBERADO_DATA_DIR/coding-worktrees`, else
+/// `.liberado/coding-worktrees` under the process cwd — the same root the daemon uses for
+/// goal-workspaces when `LIBERADO_DATA_DIR` is unset).
+pub fn coding_worktrees_base() -> PathBuf {
+    let data = std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into());
+    PathBuf::from(data).join("coding-worktrees")
+}
+
+/// Durable coding-session workspace path (`coding-worktrees/<session_id>`).
+/// Returns `None` when `session_id` is not a safe directory name.
+pub fn durable_session_workspace(session_id: &str) -> Option<PathBuf> {
+    session_worktree_path(&coding_worktrees_base(), session_id).ok()
+}
+
+/// If this is `gh pr create … --base <name>`, ensure `origin` has that branch. Returns an error
+/// message when the base is missing or cannot be checked.
+fn preflight_gh_pr_create(program: &str, args: &[String]) -> Option<String> {
+    let prog = Path::new(program)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(program);
+    if !prog.eq_ignore_ascii_case("gh") {
+        return None;
+    }
+    // Match `gh pr create … --base <branch>` (also `--base=<branch>`).
+    let mut saw_pr = false;
+    let mut saw_create = false;
+    let mut base: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a == "pr" {
+            saw_pr = true;
+        } else if a == "create" {
+            saw_create = true;
+        } else if a == "--base" {
+            base = args.get(i + 1).cloned();
+            i += 1;
+        } else if let Some(rest) = a.strip_prefix("--base=") {
+            base = Some(rest.to_string());
+        }
+        i += 1;
+    }
+    if !(saw_pr && saw_create) {
+        return None;
+    }
+    let base = base.filter(|b| !b.is_empty())?;
+    if base.starts_with('-') {
+        return Some(format!(
+            "refusing gh pr create: invalid --base '{base}' (looks like a flag)"
+        ));
+    }
+    let refspec = format!("refs/heads/{base}");
+    let output = std::process::Command::new("git")
+        .args(["ls-remote", "--exit-code", "origin", &refspec])
+        .output();
+    match output {
+        Ok(o) if o.status.success() => None,
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            Some(format!(
+                "refusing gh pr create --base {base}: origin has no branch '{base}' \
+                 (git ls-remote exit {:?}). Push the integration branch first, or pick a base \
+                 that exists on origin. stderr: {stderr}",
+                o.status.code()
+            ))
+        }
+        Err(e) => Some(format!(
+            "refusing gh pr create --base {base}: could not run git ls-remote: {e}"
+        )),
+    }
 }
 
 impl CodingToolRuntime {
@@ -52,6 +143,20 @@ impl CodingToolRuntime {
         command_policy: CommandPolicy,
         path_policy: PathPolicy,
     ) -> Result<Self, ToolError> {
+        Self::from_sandbox_with_session(root, sandbox, command_policy, path_policy, None).await
+    }
+
+    /// Like [`from_sandbox`], but uses `session_id` as the worktree directory name when
+    /// `SandboxSpec::Worktree` is active. Prefer a unique goal/task id over the project folder
+    /// name so two coding sessions on the same repo do not collide, and so self-host dogfood
+    /// (workspace root = `…/life-os`) does not create `…/worktrees/life-os`.
+    pub async fn from_sandbox_with_session(
+        root: impl Into<PathBuf>,
+        sandbox: SandboxSpec,
+        command_policy: CommandPolicy,
+        path_policy: PathPolicy,
+        session_id: Option<&str>,
+    ) -> Result<Self, ToolError> {
         match sandbox {
             SandboxSpec::HostLocal => Self::new(root, command_policy, path_policy),
             SandboxSpec::Docker(spec) => {
@@ -60,11 +165,19 @@ impl CodingToolRuntime {
             }
             SandboxSpec::Worktree => {
                 let root = root.into();
-                let session_id = root
+                let fallback = root
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("session");
-                let worktrees_base = root.parent().unwrap_or(&root).join("worktrees");
+                // Sanitize: worktree dir name must not contain path separators.
+                let session_id = session_id
+                    .filter(|s| {
+                        !s.is_empty() && !s.contains("..") && !s.contains('/') && !s.contains('\\')
+                    })
+                    .unwrap_or(fallback);
+                // Prefer LIBERADO_DATA_DIR/coding-worktrees (or .liberado/coding-worktrees) so
+                // self-host does not create sibling dirs next to the project checkout (dogfood #1).
+                let worktrees_base = coding_worktrees_base();
                 let workspace =
                     WorktreeWorkspace::new(&root, session_id, &worktrees_base, command_policy)
                         .await?;
@@ -78,12 +191,24 @@ impl CodingToolRuntime {
             workspace: Arc::new(workspace),
             path_policy,
             validation_command: None,
+            hashline: HashlineConfig::default(),
+            background_jobs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     pub fn with_validation_command(mut self, command: CommandRequest) -> Self {
         self.validation_command = Some(command);
         self
+    }
+
+    /// Enable or configure hashline (line-anchored) edit mode.
+    pub fn with_hashline(mut self, config: HashlineConfig) -> Self {
+        self.hashline = config;
+        self
+    }
+
+    pub fn hashline(&self) -> &HashlineConfig {
+        &self.hashline
     }
 
     pub fn workspace_root(&self) -> &Path {
@@ -117,11 +242,17 @@ impl CodingToolRuntime {
             "write_file" => self.write_file(args).await,
             "edit_file" => self.edit_file(args).await,
             "apply_patch" => self.apply_patch(args).await,
+            "hashline_edit" => self.hashline_edit(args).await,
             "git_status" => self.git_status().await,
             "git_diff" => self.git_diff(args).await,
             "git_branch" => self.git_branch(args).await,
             "git_commit" => self.git_commit(args).await,
             "git_push" => self.git_push(args).await,
+            "git_log" => self.git_log(args).await,
+            "git_fetch" => self.git_fetch(args).await,
+            "git_merge" => self.git_merge(args).await,
+            "run_command_background" => self.run_command_background(args).await,
+            "check_background" => self.check_background(args).await,
             "run_command" => self.run_command(args).await,
             "validate" => self.validate().await,
             other => Err(ToolError::BadRequest(format!("unknown tool: {other}"))),
@@ -247,9 +378,119 @@ impl CodingToolRuntime {
         let path = self.rel_path(&args.path, false)?;
         let bytes = std::fs::read(&path).map_err(fs_err)?;
         let capped = cap_bytes(bytes, self.path_policy.read_max_bytes);
-        let content = String::from_utf8_lossy(&capped).into_owned();
-        let content = slice_lines(&content, args.start_line, args.line_count);
+        let full = String::from_utf8_lossy(&capped).into_owned();
+        let start = args.start_line.unwrap_or(1).max(1);
+        let content = slice_lines(&full, args.start_line, args.line_count);
+
+        if self.hashline.enabled {
+            // Hash is always over the full file so tags stay stable across partial reads.
+            let tag = hashline::compute_file_hash(&full, self.hashline.hash_length);
+            let mut formatted = hashline::format_header(&args.path, &tag);
+            formatted.push('\n');
+            for (i, line) in content.split('\n').enumerate() {
+                let line = line.strip_suffix('\r').unwrap_or(line);
+                if i > 0 {
+                    formatted.push('\n');
+                }
+                formatted.push_str(&format!("{}:{line}", start + i));
+            }
+            if content.ends_with('\n') {
+                formatted.push('\n');
+            }
+            return Ok(json!({
+                "path": args.path,
+                "content": formatted,
+                "hashline": true,
+                "tag": tag,
+                "start_line": start,
+            }));
+        }
+
         Ok(json!({ "path": args.path, "content": content }))
+    }
+
+    async fn hashline_edit(&self, args: Value) -> Result<Value, ToolError> {
+        if !self.hashline.enabled {
+            return Err(ToolError::BadRequest(
+                "hashline_edit is disabled; set [coder.hashline] enabled = true in tuning.toml"
+                    .into(),
+            ));
+        }
+        #[derive(Deserialize)]
+        struct Args {
+            /// Full hashline patch: one or more `[path#TAG]` sections with PUT/CUT/REM ops.
+            input: String,
+        }
+        let args: Args = parse_args(args)?;
+        if args.input.trim().is_empty() {
+            return Err(ToolError::BadRequest("input must not be empty".to_string()));
+        }
+
+        let sections = hashline::parse_patch(&args.input).map_err(ToolError::BadRequest)?;
+        let hash_length = self.hashline.hash_length;
+
+        // Resolve policy + read all targets first (all-or-nothing preflight helpers).
+        let mut resolved: Vec<(String, PathBuf, bool)> = Vec::with_capacity(sections.len());
+        for section in &sections {
+            let write = true;
+            let path = self.rel_path(&section.path, write)?;
+            resolved.push((section.path.clone(), path, write));
+        }
+
+        let reports = {
+            let resolved = &resolved;
+            hashline::apply_patch_sections(
+                &sections,
+                hash_length,
+                true,
+                |rel| {
+                    let path = resolved
+                        .iter()
+                        .find(|(p, _, _)| p == rel)
+                        .map(|(_, path, _)| path.clone())
+                        .ok_or_else(|| format!("unknown path {rel}"))?;
+                    std::fs::read_to_string(&path).map_err(|e| format!("read {rel}: {e}"))
+                },
+                |rel, content| {
+                    let path = resolved
+                        .iter()
+                        .find(|(p, _, _)| p == rel)
+                        .map(|(_, path, _)| path.clone())
+                        .ok_or_else(|| format!("unknown path {rel}"))?;
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {rel}: {e}"))?;
+                    }
+                    std::fs::write(&path, content.as_bytes())
+                        .map_err(|e| format!("write {rel}: {e}"))
+                },
+                |rel| {
+                    let path = resolved
+                        .iter()
+                        .find(|(p, _, _)| p == rel)
+                        .map(|(_, path, _)| path.clone())
+                        .ok_or_else(|| format!("unknown path {rel}"))?;
+                    std::fs::remove_file(&path).map_err(|e| format!("remove {rel}: {e}"))
+                },
+            )
+            .map_err(ToolError::BadRequest)?
+        };
+
+        let files: Vec<Value> = reports
+            .iter()
+            .map(|r| {
+                json!({
+                    "path": r.path,
+                    "op": r.op,
+                    "tag": r.file_hash,
+                    "first_changed_line": r.first_changed_line,
+                })
+            })
+            .collect();
+        Ok(json!({
+            "files": files,
+            "sections": files.len(),
+            "hashline": true,
+        }))
     }
 
     async fn write_file(&self, args: Value) -> Result<Value, ToolError> {
@@ -530,6 +771,195 @@ impl CodingToolRuntime {
         }))
     }
 
+    async fn git_log(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            #[serde(default = "default_log_limit")]
+            limit: u32,
+            #[serde(default)]
+            branch: Option<String>,
+            #[serde(default)]
+            format: Option<String>,
+        }
+        fn default_log_limit() -> u32 {
+            20
+        }
+        let args: Args = parse_args(args)?;
+        let limit = args.limit.min(100);
+        let mut request = CommandRequest::new("git");
+        let fmt = args.format.unwrap_or_else(|| "%h %s".to_string());
+        request.args = vec![
+            "log".to_string(),
+            format!("--max-count={limit}"),
+            format!("--format={fmt}"),
+        ];
+        if let Some(ref branch) = args.branch
+            && !branch.is_empty()
+        {
+            request.args.push(branch.clone());
+        }
+        let output = self.workspace.run_command(request).await?;
+        Ok(json!({
+            "exit_code": output.exit_code,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+            "timed_out": output.timed_out,
+        }))
+    }
+
+    async fn git_fetch(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            #[serde(default = "default_remote")]
+            remote: String,
+            #[serde(default)]
+            branch: Option<String>,
+        }
+        let args: Args = parse_args(args)?;
+        if args.remote.starts_with('-') {
+            return Err(ToolError::BadRequest(
+                "remote must not start with '-'".to_string(),
+            ));
+        }
+        let mut request = CommandRequest::new("git");
+        request.args = vec!["fetch".to_string(), args.remote];
+        if let Some(ref branch) = args.branch
+            && !branch.is_empty()
+        {
+            request.args.push(branch.clone());
+        }
+        let output = self.workspace.run_command(request).await?;
+        Ok(json!({
+            "exit_code": output.exit_code,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+            "timed_out": output.timed_out,
+        }))
+    }
+
+    async fn git_merge(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            branch: String,
+            #[serde(default)]
+            fast_forward_only: bool,
+        }
+        let args: Args = parse_args(args)?;
+        if args.branch.is_empty() {
+            return Err(ToolError::BadRequest(
+                "branch must not be empty".to_string(),
+            ));
+        }
+        if args.branch.starts_with('-') {
+            return Err(ToolError::BadRequest(
+                "branch must not start with '-'".to_string(),
+            ));
+        }
+        let mut request = CommandRequest::new("git");
+        request.args = vec!["merge".to_string()];
+        if args.fast_forward_only {
+            request.args.push("--ff-only".to_string());
+        }
+        request.args.push(args.branch);
+        let output = self.workspace.run_command(request).await?;
+        Ok(json!({
+            "exit_code": output.exit_code,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+            "timed_out": output.timed_out,
+        }))
+    }
+
+    async fn run_command_background(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            program: String,
+            #[serde(default)]
+            args: Vec<String>,
+        }
+        let args: Args = parse_args(args)?;
+        let mut request = CommandRequest::new(args.program.clone());
+        request.args = args.args;
+
+        let (tx, rx) = oneshot::channel();
+        let workspace = Arc::clone(&self.workspace);
+
+        tokio::spawn(async move {
+            let output = workspace.run_command(request).await;
+            let _ = tx.send(output);
+        });
+
+        let job_id = format!(
+            "job-{:x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+
+        let mut jobs = self
+            .background_jobs
+            .lock()
+            .map_err(|e| ToolError::BadRequest(format!("background job lock: {e}")))?;
+        jobs.insert(job_id.clone(), BackgroundJob { receiver: rx });
+
+        Ok(json!({
+            "job_id": job_id,
+            "status": "running",
+            "program": args.program,
+        }))
+    }
+
+    async fn check_background(&self, args: Value) -> Result<Value, ToolError> {
+        #[derive(Deserialize)]
+        struct Args {
+            job_id: String,
+        }
+        let args: Args = parse_args(args)?;
+
+        let mut jobs = self
+            .background_jobs
+            .lock()
+            .map_err(|e| ToolError::BadRequest(format!("background job lock: {e}")))?;
+
+        let Some(mut job) = jobs.remove(&args.job_id) else {
+            return Ok(json!({
+                "job_id": args.job_id,
+                "status": "unknown",
+                "error": "no such background job",
+            }));
+        };
+
+        let jid = args.job_id.clone();
+        match job.receiver.try_recv() {
+            Ok(Ok(output)) => Ok(json!({
+                "job_id": jid,
+                "status": "completed",
+                "exit_code": output.exit_code,
+                "stdout": output.stdout,
+                "stderr": output.stderr,
+                "timed_out": output.timed_out,
+            })),
+            Ok(Err(e)) => Ok(json!({
+                "job_id": jid,
+                "status": "failed",
+                "error": e.to_string(),
+            })),
+            Err(oneshot::error::TryRecvError::Empty) => {
+                jobs.insert(jid.clone(), job);
+                Ok(json!({
+                    "job_id": jid,
+                    "status": "running",
+                }))
+            }
+            Err(oneshot::error::TryRecvError::Closed) => Ok(json!({
+                "job_id": jid,
+                "status": "failed",
+                "error": "background task panicked or was dropped",
+            })),
+        }
+    }
+
     async fn run_command(&self, args: Value) -> Result<Value, ToolError> {
         #[derive(Deserialize)]
         struct Args {
@@ -538,6 +968,11 @@ impl CodingToolRuntime {
             args: Vec<String>,
         }
         let args: Args = parse_args(args)?;
+        // Dogfood finding #5: refuse `gh pr create --base X` when origin has no X, so we never
+        // silently land a PR on main with a multi-PR stack.
+        if let Some(err) = preflight_gh_pr_create(&args.program, &args.args) {
+            return Err(ToolError::BadRequest(err));
+        }
         let mut request = CommandRequest::new(args.program);
         request.args = args.args;
         let output = self.workspace.run_command(request).await?;
@@ -661,6 +1096,20 @@ impl ToolRuntime for CodingToolRuntime {
                 }),
             ),
             tool(
+                "hashline_edit",
+                "Apply a line-anchored hashline patch. Each section starts with [path#TAG] from read_file; use PUT N.=M: / PUT <N: / PUT >N: / CUT N.=M / REM with + body rows.",
+                json!({
+                    "type": "object",
+                    "required": ["input"],
+                    "properties": {
+                        "input": {
+                            "type": "string",
+                            "description": "Hashline patch text with [path#TAG] sections and PUT/CUT/REM operations."
+                        }
+                    }
+                }),
+            ),
+            tool(
                 "git_status",
                 "Return git status --porcelain.",
                 json!({ "type": "object" }),
@@ -714,6 +1163,64 @@ impl ToolRuntime for CodingToolRuntime {
                 }),
             ),
             tool(
+                "git_log",
+                "Show structured commit history (--format, --max-count, optional branch).",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "limit": { "type": "integer", "default": 20 },
+                        "branch": { "type": "string" },
+                        "format": { "type": "string", "default": "%h %s" }
+                    }
+                }),
+            ),
+            tool(
+                "git_fetch",
+                "Fetch refs from a remote. Use before reviewing remote branches.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "remote": { "type": "string", "default": "origin" },
+                        "branch": { "type": "string" }
+                    }
+                }),
+            ),
+            tool(
+                "git_merge",
+                "Merge a branch into the current branch. Use after review.",
+                json!({
+                    "type": "object",
+                    "required": ["branch"],
+                    "properties": {
+                        "branch": { "type": "string" },
+                        "fast_forward_only": { "type": "boolean" }
+                    }
+                }),
+            ),
+            tool(
+                "run_command_background",
+                "Start a long-running command (build, test suite) in the background. Returns a job_id immediately; use check_background to poll for completion.",
+                json!({
+                    "type": "object",
+                    "required": ["program"],
+                    "properties": {
+                        "program": { "type": "string" },
+                        "args": { "type": "array", "items": { "type": "string" } }
+                    }
+                }),
+            ),
+            tool(
+                "check_background",
+                "Check the status of a background job started with run_command_background. Returns 'running', 'completed' (with output), or 'failed'.",
+                json!({
+                    "type": "object",
+                    "required": ["job_id"],
+                    "properties": {
+                        "job_id": { "type": "string" }
+                    }
+                }),
+            ),
+            tool(
                 "run_command",
                 "Run a policy-checked command in the workspace.",
                 json!({
@@ -731,6 +1238,13 @@ impl ToolRuntime for CodingToolRuntime {
                 json!({ "type": "object" }),
             ),
         ];
+        let full: Vec<ToolDef> = if self.hashline.enabled {
+            full
+        } else {
+            full.into_iter()
+                .filter(|t| t.name != "hashline_edit")
+                .collect()
+        };
         if self.path_policy.writes_disabled() {
             full.into_iter()
                 .filter(|t| EXPLORE_TOOL_NAMES.contains(&t.name.as_str()))
@@ -754,6 +1268,25 @@ impl ToolRuntime for CodingToolRuntime {
                 serde_json::to_string(&value).map_err(|e| ToolError::BadRequest(e.to_string()))
             })
             .map_err(|e| e.to_string())
+    }
+
+    /// Tools that only observe the workspace, so the executor may run them concurrently.
+    ///
+    /// `validate` is deliberately **not** here: it shells out to the operator's configured
+    /// validation command (`cargo test`, `pytest`, …), which writes build artefacts into the
+    /// workspace and is the most expensive call in the set. Running it as if it were a reader
+    /// would let a build mutate the tree while sibling reads are observing it.
+    fn is_read_only(&self, tool_name: &str) -> bool {
+        matches!(
+            tool_name,
+            "read_file"
+                | "search_text"
+                | "list_files"
+                | "list_symbols"
+                | "git_status"
+                | "git_diff"
+                | "git_log"
+        )
     }
 }
 
@@ -1267,6 +1800,252 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hashline_read_and_edit_when_enabled() {
+        let (dir, runtime) = runtime();
+        let runtime = runtime.with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 6,
+        });
+        std::fs::write(
+            dir.path().join("greet.py"),
+            "def greet(name):\n    print(name)\n",
+        )
+        .unwrap();
+
+        let read = runtime
+            .invoke_json("read_file", json!({"path": "greet.py"}))
+            .await
+            .unwrap();
+        assert_eq!(read["hashline"], true);
+        let tag = read["tag"].as_str().unwrap();
+        assert_eq!(tag.len(), 6);
+        let content = read["content"].as_str().unwrap();
+        assert!(content.starts_with(&format!("[greet.py#{tag}]")));
+        assert!(content.contains("1:def greet(name):"));
+
+        // hashline_edit is in the catalog only when enabled
+        assert!(runtime.catalog().iter().any(|t| t.name == "hashline_edit"));
+
+        let patch =
+            format!("[greet.py#{tag}]\nPUT 1.=2:\n+def greet(name):\n+    print(f'Hi {{name}}')\n");
+        let result = runtime
+            .invoke_json("hashline_edit", json!({ "input": patch }))
+            .await
+            .unwrap();
+        assert_eq!(result["sections"], 1);
+        let updated = std::fs::read_to_string(dir.path().join("greet.py")).unwrap();
+        assert!(updated.contains("Hi {name}") || updated.contains("f'Hi"));
+    }
+
+    #[tokio::test]
+    async fn hashline_edit_absent_when_disabled() {
+        let (_dir, runtime) = runtime();
+        assert!(!runtime.catalog().iter().any(|t| t.name == "hashline_edit"));
+        let err = runtime
+            .invoke_json("hashline_edit", json!({ "input": "[a#AAAA]\nREM" }))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("disabled"));
+    }
+
+    #[tokio::test]
+    async fn hashline_partial_read_uses_full_file_tag() {
+        let (dir, runtime) = runtime();
+        let runtime = runtime.with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 5,
+        });
+        let full = "line1\nline2\nline3\nline4\n";
+        std::fs::write(dir.path().join("n.txt"), full).unwrap();
+        let expected_tag = hashline_compute_file_hash(full, 5);
+
+        let read = runtime
+            .invoke_json(
+                "read_file",
+                json!({"path": "n.txt", "start_line": 2, "line_count": 2}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read["tag"], expected_tag);
+        let content = read["content"].as_str().unwrap();
+        assert!(content.starts_with(&format!("[n.txt#{expected_tag}]")));
+        assert!(content.contains("2:line2"));
+        assert!(content.contains("3:line3"));
+        assert!(!content.contains("1:line1"));
+    }
+
+    #[tokio::test]
+    async fn hashline_edit_rejects_stale_tag_without_write() {
+        let (dir, runtime) = runtime();
+        let runtime = runtime.with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 4,
+        });
+        std::fs::write(dir.path().join("a.txt"), "original\n").unwrap();
+        let err = runtime
+            .invoke_json(
+                "hashline_edit",
+                json!({ "input": "[a.txt#ZZZZ]\nPUT 1.=1:\n+mutated\n" }),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("stale"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "original\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn hashline_edit_rejects_empty_input() {
+        let (_dir, runtime) = runtime();
+        let runtime = runtime.with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 4,
+        });
+        let err = runtime
+            .invoke_json("hashline_edit", json!({ "input": "  \n" }))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("empty") || err.to_string().contains("hashline"));
+    }
+
+    #[tokio::test]
+    async fn hashline_edit_multi_file_atomic() {
+        let (dir, runtime) = runtime();
+        let runtime = runtime.with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 4,
+        });
+        std::fs::write(dir.path().join("a.txt"), "aaa\n").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "bbb\n").unwrap();
+        let a_tag = hashline_compute_file_hash("aaa\n", 4);
+        let b_tag = hashline_compute_file_hash("bbb\n", 4);
+        let patch = format!("[a.txt#{a_tag}]\nPUT 1.=1:\n+AAA\n[b.txt#{b_tag}]\nPUT 1.=1:\n+BBB");
+        let result = runtime
+            .invoke_json("hashline_edit", json!({ "input": patch }))
+            .await
+            .unwrap();
+        assert_eq!(result["sections"], 2);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "AAA\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("b.txt")).unwrap(),
+            "BBB\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn hashline_edit_rem_deletes_file() {
+        let (dir, runtime) = runtime();
+        let runtime = runtime.with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 4,
+        });
+        let content = "delete me\n";
+        std::fs::write(dir.path().join("trash.txt"), content).unwrap();
+        let tag = hashline_compute_file_hash(content, 4);
+        let result = runtime
+            .invoke_json(
+                "hashline_edit",
+                json!({ "input": format!("[trash.txt#{tag}]\nREM") }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["files"][0]["op"], "delete");
+        assert!(!dir.path().join("trash.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn hashline_edit_respects_path_policy() {
+        let (dir, _base) = runtime();
+        let policy = PathPolicy {
+            allow_write_globs: vec!["ok/**".into()],
+            ..PathPolicy::default()
+        };
+        let runtime = CodingToolRuntime::new(dir.path(), CommandPolicy::default(), policy)
+            .unwrap()
+            .with_hashline(HashlineConfig {
+                enabled: true,
+                hash_length: 4,
+            });
+        std::fs::create_dir_all(dir.path().join("ok")).unwrap();
+        std::fs::write(dir.path().join("ok/a.txt"), "x\n").unwrap();
+        std::fs::write(dir.path().join("secret.txt"), "y\n").unwrap();
+        let secret_tag = hashline_compute_file_hash("y\n", 4);
+        let err = runtime
+            .invoke_json(
+                "hashline_edit",
+                json!({
+                    "input": format!("[secret.txt#{secret_tag}]\nPUT 1.=1:\n+z\n")
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("denied") || err.to_string().contains("path"),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("secret.txt")).unwrap(),
+            "y\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn hashline_edit_cut_and_insert() {
+        let (dir, runtime) = runtime();
+        let runtime = runtime.with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 6,
+        });
+        let content = "one\ntwo\nthree\n";
+        std::fs::write(dir.path().join("c.txt"), content).unwrap();
+        let tag = hashline_compute_file_hash(content, 6);
+        let patch = format!("[c.txt#{tag}]\nCUT 2.=2\nPUT >1:\n+inserted\n");
+        runtime
+            .invoke_json("hashline_edit", json!({ "input": patch }))
+            .await
+            .unwrap();
+        let after = std::fs::read_to_string(dir.path().join("c.txt")).unwrap();
+        assert_eq!(after, "one\ninserted\nthree\n");
+    }
+
+    #[tokio::test]
+    async fn hashline_catalog_present_only_when_enabled() {
+        let (_dir, off) = runtime();
+        assert!(!off.catalog().iter().any(|t| t.name == "hashline_edit"));
+        let on = off.with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 4,
+        });
+        assert!(on.catalog().iter().any(|t| t.name == "hashline_edit"));
+        // Explore (read-only) still omits write tools including hashline_edit.
+        let dir = tempfile::tempdir().unwrap();
+        let ro = CodingToolRuntime::new(
+            dir.path(),
+            CommandPolicy::default(),
+            PathPolicy::read_only(),
+        )
+        .unwrap()
+        .with_hashline(HashlineConfig {
+            enabled: true,
+            hash_length: 4,
+        });
+        assert!(!ro.catalog().iter().any(|t| t.name == "hashline_edit"));
+        assert!(ro.catalog().iter().any(|t| t.name == "read_file"));
+    }
+
+    #[test]
+    fn hashline_prompt_guidance_export_is_nonempty() {
+        let g = hashline_prompt_guidance(4);
+        assert!(g.contains("hashline_edit"));
+        assert!(g.contains('4'));
+    }
+
+    #[tokio::test]
     async fn edit_file_rejects_ambiguous_old_text() {
         let (dir, runtime) = runtime();
         std::fs::write(dir.path().join("a.txt"), "one\none\n").unwrap();
@@ -1634,45 +2413,11 @@ mod tests {
         assert_eq!(ok["written"], true);
     }
 
-    /// Explore mode reuses PathPolicy::read_only + catalog filter — no parallel tool stack.
-    #[tokio::test]
-    async fn explore_mode_catalog_is_read_only_and_writes_fail() {
-        use liberado_coder_core::EXPLORE_TOOL_NAMES;
-        use liberado_executor::ToolRuntime;
-
-        let dir = tempfile::tempdir().unwrap();
-        let runtime = CodingToolRuntime::new(
-            dir.path(),
-            CommandPolicy::none_allowed(),
-            PathPolicy::read_only(),
-        )
-        .unwrap();
-
-        let names: Vec<_> = runtime.catalog().into_iter().map(|t| t.name).collect();
-        for n in EXPLORE_TOOL_NAMES {
-            assert!(names.contains(&n.to_string()), "missing explore tool {n}");
-        }
-        assert!(!names.iter().any(|n| n == "write_file"));
-        assert!(!names.iter().any(|n| n == "run_command"));
-
-        let err = runtime
-            .invoke(&liberado_provider::ToolInvocation {
-                id: "1".into(),
-                name: "write_file".into(),
-                arguments: json!({"path": "x.rs", "content": "x"}),
-            })
-            .await
-            .unwrap_err();
-        assert!(
-            err.contains("explore") || err.contains("read-only") || err.contains("denied"),
-            "got {err}"
-        );
-    }
-
     /// Plan mode is PathPolicy::plan_mode() only — no parallel write gate in the tools crate.
     #[tokio::test]
     async fn plan_mode_path_policy_allows_only_plan_artifact() {
         use liberado_coder_core::PLAN_ARTIFACT_REL;
+
         let dir = tempfile::tempdir().unwrap();
         let runtime = CodingToolRuntime::new(
             dir.path(),
@@ -1709,6 +2454,41 @@ mod tests {
                 || format!("{shell_err:?}").to_lowercase().contains("denied")
                 || format!("{shell_err:?}").to_lowercase().contains("command"),
             "expected command denied, got {shell_err:?}"
+        );
+    }
+
+    /// Explore mode reuses PathPolicy::read_only + catalog filter — no parallel tool stack.
+    #[tokio::test]
+    async fn explore_mode_catalog_is_read_only_and_writes_fail() {
+        use liberado_coder_core::EXPLORE_TOOL_NAMES;
+        use liberado_executor::ToolRuntime;
+
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = CodingToolRuntime::new(
+            dir.path(),
+            CommandPolicy::none_allowed(),
+            PathPolicy::read_only(),
+        )
+        .unwrap();
+
+        let names: Vec<_> = runtime.catalog().into_iter().map(|t| t.name).collect();
+        for n in EXPLORE_TOOL_NAMES {
+            assert!(names.contains(&n.to_string()), "missing explore tool {n}");
+        }
+        assert!(!names.iter().any(|n| n == "write_file"));
+        assert!(!names.iter().any(|n| n == "run_command"));
+
+        let err = runtime
+            .invoke(&liberado_provider::ToolInvocation {
+                id: "1".into(),
+                name: "write_file".into(),
+                arguments: json!({"path": "x.rs", "content": "x"}),
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("explore") || err.contains("read-only") || err.contains("denied"),
+            "got {err}"
         );
     }
 
@@ -2144,6 +2924,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn preflight_gh_pr_create_ignores_non_gh() {
+        assert!(preflight_gh_pr_create("cargo", &["test".into()]).is_none());
+    }
+
+    #[test]
+    fn preflight_gh_pr_create_ignores_without_base() {
+        assert!(
+            preflight_gh_pr_create(
+                "gh",
+                &["pr".into(), "create".into(), "--title".into(), "t".into()]
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn preflight_gh_pr_create_flags_missing_remote_base() {
+        // A branch name that almost certainly does not exist on origin.
+        let err = preflight_gh_pr_create(
+            "gh",
+            &[
+                "pr".into(),
+                "create".into(),
+                "--base".into(),
+                "this-branch-does-not-exist-on-origin-zzzz".into(),
+            ],
+        );
+        assert!(
+            err.as_ref().is_some_and(
+                |e| e.contains("refusing gh pr create") && e.contains("origin has no branch")
+            ),
+            "expected refusal for missing base, got {err:?}"
+        );
+    }
+
     #[tokio::test]
     async fn git_push_defaults_to_origin() {
         let dir = tempfile::tempdir().unwrap();
@@ -2243,5 +3059,319 @@ mod tests {
             !symbols.iter().any(|s| s == "fn beyond_the_cap"),
             "nothing past read_max_bytes should be reachable: {symbols:?}"
         );
+    }
+
+    // ── git_log ───────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn git_log_returns_recent_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        std::fs::write(dir.path().join("b.txt"), "b\n").unwrap();
+        git_add_commit(dir.path(), "second commit");
+
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let result = runtime.invoke_json("git_log", json!({})).await.unwrap();
+        assert_eq!(result["exit_code"], 0);
+        let stdout = result["stdout"].as_str().unwrap();
+        assert!(stdout.contains("second commit"));
+        assert!(stdout.contains("initial commit"));
+    }
+
+    #[tokio::test]
+    async fn git_log_respects_limit_and_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        for i in 0..5 {
+            std::fs::write(dir.path().join(format!("f{i}.txt")), format!("{i}\n")).unwrap();
+            git_add_commit(dir.path(), &format!("commit {i}"));
+        }
+
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let result = runtime
+            .invoke_json("git_log", json!({"limit": 2}))
+            .await
+            .unwrap();
+        let stdout = result["stdout"].as_str().unwrap();
+        let count = stdout.lines().filter(|l| !l.is_empty()).count();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn git_diff_stat_and_patch_modes() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        // seed.txt already exists from init, modify it so git diff has something to show
+        std::fs::write(dir.path().join("seed.txt"), "modified content\n").unwrap();
+
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let stat = runtime
+            .invoke_json("git_diff", json!({"mode": "stat"}))
+            .await
+            .unwrap();
+        assert!(stat["stdout"].as_str().unwrap().contains("seed.txt"));
+
+        let patch = runtime
+            .invoke_json("git_diff", json!({"mode": "patch"}))
+            .await
+            .unwrap();
+        assert!(patch["stdout"].as_str().unwrap().contains("@@"));
+    }
+
+    #[tokio::test]
+    async fn git_diff_rejects_unsupported_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json("git_diff", json!({"mode": "invalid"}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("unsupported diff mode"));
+    }
+
+    #[tokio::test]
+    async fn git_push_rejects_empty_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json("git_push", json!({"remote": "origin", "branch": ""}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must not be empty"));
+    }
+
+    #[tokio::test]
+    async fn git_fetch_rejects_dash_prefixed_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json("git_fetch", json!({"remote": "--depth"}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must not start with '-'"));
+    }
+
+    #[tokio::test]
+    async fn git_merge_rejects_dash_prefixed_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json("git_merge", json!({"branch": "--no-ff"}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must not start with '-'"));
+    }
+
+    #[tokio::test]
+    async fn git_merge_rejects_empty_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json("git_merge", json!({"branch": ""}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must not be empty"));
+    }
+
+    // ── background jobs ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn background_job_roundtrip_running_then_completed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let started = runtime
+            .invoke_json(
+                "run_command_background",
+                json!({"program": "cmd", "args": ["/c", "echo", "hello-from-background"]}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(started["status"], "running");
+        let job_id = started["job_id"].as_str().unwrap().to_string();
+        assert!(!job_id.is_empty());
+
+        // Poll until completed — echo finishes fast, handle race
+        let mut completed = false;
+        for _ in 0..50 {
+            let poll = runtime
+                .invoke_json("check_background", json!({"job_id": job_id}))
+                .await
+                .unwrap();
+            let status = poll["status"].as_str().unwrap();
+            if status == "completed" {
+                assert!(
+                    poll["stdout"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains("hello-from-background")
+                );
+                assert_eq!(poll["exit_code"], 0);
+                completed = true;
+                break;
+            }
+            assert!(
+                status == "running" || status == "unknown",
+                "unexpected status: {status}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(completed, "background job did not complete in time");
+    }
+
+    #[tokio::test]
+    async fn check_background_unknown_job_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let result = runtime
+            .invoke_json("check_background", json!({"job_id": "nonexistent"}))
+            .await
+            .unwrap();
+        assert_eq!(result["status"], "unknown");
+    }
+
+    // ── validate with configured command ──────────────────────────────
+
+    #[tokio::test]
+    async fn validate_with_configured_command_reports_configured_true() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap()
+                .with_validation_command({
+                    let mut req = CommandRequest::new("cmd");
+                    req.args = vec!["/c".into(), "echo".into(), "ok".into()];
+                    req
+                });
+
+        let result = runtime.invoke_json("validate", json!({})).await.unwrap();
+        assert_eq!(result["configured"], true);
+        assert_eq!(result["passed"], true);
+        assert_eq!(result["exit_code"], 0);
+    }
+
+    // ── file-tool error paths ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn edit_file_rejects_empty_old_text() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f.txt"), "hello\n").unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json("edit_file", json!({"path": "f.txt", "old": "", "new": "x"}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("old must not be empty"));
+    }
+
+    #[tokio::test]
+    async fn edit_file_rejects_text_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f.txt"), "hello\n").unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json(
+                "edit_file",
+                json!({"path": "f.txt", "old": "zzz", "new": "x"}),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("old text was not found"));
+    }
+
+    #[tokio::test]
+    async fn apply_patch_rejects_empty_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json("apply_patch", json!({"edits": []}))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("at least one edit")
+                || err.to_string().to_lowercase().contains("empty")
+        );
+    }
+
+    #[tokio::test]
+    async fn search_text_rejects_empty_query() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f.txt"), "hello\n").unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+        let err = runtime
+            .invoke_json("search_text", json!({"query": ""}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("query must not be empty"));
+    }
+
+    // ── Java symbol extraction ────────────────────────────────────────
+
+    #[test]
+    fn extract_java_non_public_class_interface_enum() {
+        assert_eq!(
+            extract_java_symbol("class PackagePrivate { }"),
+            Some("class PackagePrivate".to_string())
+        );
+        assert_eq!(
+            extract_java_symbol("interface Contract { }"),
+            Some("interface Contract".to_string())
+        );
+        assert_eq!(
+            extract_java_symbol("enum Color { RED, GREEN }"),
+            Some("enum Color".to_string())
+        );
+    }
+
+    fn git_add_commit(dir: &std::path::Path, message: &str) {
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", message])
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "test")
+            .env("GIT_AUTHOR_EMAIL", "test@test")
+            .env("GIT_COMMITTER_NAME", "test")
+            .env("GIT_COMMITTER_EMAIL", "test@test")
+            .output()
+            .unwrap();
     }
 }
