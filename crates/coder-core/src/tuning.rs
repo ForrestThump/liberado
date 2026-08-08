@@ -227,27 +227,15 @@ fn default_coder_trace_dir() -> Option<String> {
 }
 
 fn default_coder_planner() -> CoderRoleConfig {
-    coder_role(
-        "deepseek/deepseek-v4-pro",
-        "prompts/coder/planner.md",
-        Some(8),
-    )
+    coder_role("deepseek-v4-pro", "prompts/coder/planner.md", Some(8))
 }
 
 fn default_coder_role() -> CoderRoleConfig {
-    coder_role(
-        "deepseek/deepseek-v4-pro",
-        "prompts/coder/coder.md",
-        Some(30),
-    )
+    coder_role("deepseek-v4-pro", "prompts/coder/coder.md", Some(30))
 }
 
 fn default_coder_critic() -> CoderRoleConfig {
-    coder_role(
-        "deepseek/deepseek-v4-flash",
-        "prompts/coder/critic.md",
-        Some(8),
-    )
+    coder_role("deepseek-v4-flash", "prompts/coder/critic.md", Some(8))
 }
 
 fn coder_role(model: &str, prompt_path: &str, max_turns: Option<u32>) -> CoderRoleConfig {
@@ -320,7 +308,7 @@ mod tests {
         let value: toml::Value = toml::from_str(
             r#"
             [coder]
-            model = "deepseek/deepseek-v4-pro"
+            model = "deepseek-v4-pro"
             prompt_path = "prompts/custom-coder.md"
             max_turns = 44
 
@@ -592,6 +580,41 @@ mod tests {
         tuning.critic.max_turns = Some(0);
         let err = tuning.validate().unwrap_err();
         assert!(err.to_string().contains("tuning.coder.critic.max_turns"));
+    }
+
+    /// The built-in role models must be callable by the built-in provider.
+    ///
+    /// The defaults were `deepseek/deepseek-v4-pro` — an aggregator-style slug — while the default
+    /// provider profile is DeepSeek's own API at `https://api.deepseek.com`, which answers:
+    ///
+    /// > The supported API model names are deepseek-v4-pro or deepseek-v4-flash, but you passed
+    /// > deepseek/deepseek-v4-pro.
+    ///
+    /// It went unnoticed because the session pack ignored the configured model entirely, so the
+    /// wrong default was never sent anywhere. The moment the model was honoured, every coding run
+    /// died on its first request.
+    ///
+    /// A `/` is the specific tell: DeepSeek's own API takes a bare name, aggregators take
+    /// `vendor/model`. A deployment pointed at an aggregator should set the slug explicitly rather
+    /// than relying on these.
+    #[test]
+    fn default_role_models_are_bare_names_not_aggregator_slugs() {
+        let t = CoderTuning::default();
+        for (role, cfg) in [
+            ("planner", &t.planner),
+            ("coder", &t.coder),
+            ("critic", &t.critic),
+        ] {
+            assert!(
+                !cfg.model.contains('/'),
+                "default {role} model `{}` is an aggregator slug; the default provider                  (api.deepseek.com) rejects it",
+                cfg.model
+            );
+            assert!(
+                !cfg.model.trim().is_empty(),
+                "default {role} model is empty"
+            );
+        }
     }
 
     #[test]
