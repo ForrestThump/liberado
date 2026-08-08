@@ -280,6 +280,26 @@ fn tool_removed_nudge(tool_name: &str) -> String {
     )
 }
 
+/// Said when a model keeps calling a tool that has already been withdrawn.
+///
+/// Withdrawing a tool only changes the catalog the model is *shown*; it can still name one it
+/// remembers from an earlier turn, and models do. That used to end the run outright — which is a
+/// severe response to a model that is otherwise working: a live coding run had edited ten files
+/// across six crates when it re-read one test file once too often, and the abort threw the attempt
+/// away, `outcome=Failed`, before it ever reached `validate` to discover it had left a syntax error
+/// behind. Refusing the call costs a turn. Ending the run costs everything the run had done.
+///
+/// The budget remains the real bound: a model that ignores this simply runs out of turns, and that
+/// path already files a report rather than discarding the work.
+fn tool_withdrawn_refusal(tool_name: &str) -> String {
+    format!(
+        "`{tool_name}` is withdrawn and every further call to it will be refused — repeating it \
+         cannot return anything new. You still have your other tools. Finish the work with those \
+         (including any verification step available to you), or call `submit_report` describing \
+         what you completed and what remains."
+    )
+}
+
 /// The second escalation step for a persisting tool-cycle — see [`tool_removed_nudge`]'s doc
 /// comment for why the model is told, not just silently restricted.
 /// Told to a salvageable run when its budget runs out and the wrap-up reserve is granted.
@@ -1081,14 +1101,15 @@ impl Executor {
                         continue 'turn_loop;
                     }
                     Escalation::GiveUp => {
+                        // Refuse the call, keep the run. See `tool_withdrawn_refusal`.
+                        tools.retain(|t| t.name != tool_name);
                         tracing::warn!(
                             turn,
                             tool = %tool_name,
-                            "doom loop persisted after tool removal; aborting"
+                            "doom loop persisted after tool removal; refusing the call and continuing"
                         );
-                        return Ok(Terminal::Filed(
-                            doom_loop_failed_report(&tool_name).with_repeat_calls(repeat_calls),
-                        ));
+                        messages.push(Message::user(tool_withdrawn_refusal(&tool_name)));
+                        continue 'turn_loop;
                     }
                 }
             }
@@ -1118,14 +1139,15 @@ impl Executor {
                         continue 'turn_loop;
                     }
                     Escalation::GiveUp => {
+                        // Refuse the calls, keep the run. See `tool_withdrawn_refusal`.
+                        tools.retain(|t| !cycling.contains(&t.name));
                         tracing::warn!(
                             turn,
                             ?cycling,
-                            "tool cycle persisted after tool removal; aborting"
+                            "tool cycle persisted after tool removal; refusing the calls and continuing"
                         );
-                        return Ok(Terminal::Filed(
-                            cycle_failed_report().with_repeat_calls(repeat_calls),
-                        ));
+                        messages.push(Message::user(tool_withdrawn_refusal(&cycling.join("`, `"))));
+                        continue 'turn_loop;
                     }
                 }
             }
@@ -1537,44 +1559,6 @@ fn cosine(
         return 0.0;
     }
     dot / (norm_a * norm_b)
-}
-
-/// The `Report` returned when the doom-loop guard fires a second time: the model kept calling the
-/// same tool with near-duplicate arguments even after one corrective nudge.
-fn doom_loop_failed_report(tool_name: &str) -> Report {
-    Report {
-        outcome: Outcome::Failed,
-        summary: format!(
-            "Stopped: called `{tool_name}` with near-duplicate arguments {DOOM_LOOP_THRESHOLD}+ \
-             times in a row without making progress, even after a correction."
-        ),
-        artifacts: Vec::new(),
-        new_high_signal_facts: Vec::new(),
-        deferred_to_human: false,
-        follow_up: Some(format!(
-            "The `{tool_name}` result may not carry enough information to act on, or the goal may \
-             need to be rephrased/split into smaller steps."
-        )),
-        repeat_calls: 0,
-    }
-}
-
-/// The `Report` returned when a short tool-name cycle (see [`is_short_cycle`]) persists past one
-/// corrective nudge.
-fn cycle_failed_report() -> Report {
-    Report {
-        outcome: Outcome::Failed,
-        summary: "Stopped: cycling between the same short sequence of tools without making \
-                   progress, even after a correction."
-            .to_string(),
-        artifacts: Vec::new(),
-        new_high_signal_facts: Vec::new(),
-        deferred_to_human: false,
-        follow_up: Some(
-            "The goal may need to be rephrased/split into smaller, more concrete steps.".into(),
-        ),
-        repeat_calls: 0,
-    }
 }
 
 #[cfg(test)]
@@ -2115,7 +2099,10 @@ mod tests {
     {
         // Escalation ladder: 1st detection (3rd identical call) nudges; 2nd (4th) removes the tool
         // from what's offered and explains why; 3rd (5th — the tool somehow got called again
-        // anyway) gives up rather than burn the rest of the turn budget.
+        // anyway) refuses that call and lets the run continue, so the model can still finish with
+        // the tools it has left. Ending the run here used to discard everything it had already
+        // done: a live coding run had edited ten files across six crates when it re-read one file
+        // once too often, and the abort threw the whole attempt away before it could verify.
         let (provider, exec) = executor(
             vec![
                 call_tool("search"),
@@ -2123,6 +2110,7 @@ mod tests {
                 call_tool("search"),
                 call_tool("search"),
                 call_tool("search"),
+                submit(valid_report_args()),
             ],
             Budget::default(),
         );
@@ -2133,9 +2121,18 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(report.outcome, Outcome::Failed);
-        assert!(report.summary.contains("search"), "{}", report.summary);
+        // The run survived the third strike and filed the model's own report.
+        assert_eq!(report.outcome, Outcome::Succeeded);
         assert_eq!(runtime.invoked().len(), 5);
+        assert!(
+            provider
+                .received_requests()
+                .iter()
+                .any(|r| r.messages.iter().any(|m| m
+                    .content
+                    .contains("every further call to it will be refused"))),
+            "expected the model to be told the tool is withdrawn, not silently cut off"
+        );
         // The tool was actually removed from the offered catalog, not just talked about — checked
         // on the final request, sent after removal.
         assert!(
@@ -2827,7 +2824,8 @@ mod tests {
     #[tokio::test]
     async fn short_cycle_escalates_to_removing_both_cycling_tools_then_aborts_if_it_persists() {
         // Same three-strike ladder as the doom-loop guard: nudge (turn 4), remove both cycling
-        // tools and explain why (turn 5), then give up if it somehow still repeats (turn 6).
+        // tools and explain why (turn 5), then — if it somehow still repeats — refuse the calls
+        // and let the run continue rather than discarding whatever it has already accomplished.
         let (provider, exec) = executor(
             vec![
                 call_tool("tool-a"),
@@ -2836,6 +2834,7 @@ mod tests {
                 call_tool("tool-b"),
                 call_tool("tool-a"),
                 call_tool("tool-b"),
+                submit(valid_report_args()),
             ],
             Budget::default(),
         );
@@ -2846,8 +2845,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(report.outcome, Outcome::Failed);
-        assert!(report.summary.contains("cycling"), "{}", report.summary);
+        assert_eq!(report.outcome, Outcome::Succeeded);
         assert!(
             provider
                 .received_requests()
