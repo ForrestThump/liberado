@@ -60,6 +60,15 @@ impl ShadowGit {
         let data = std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into());
         let git_dir = PathBuf::from(data).join("checkpoints").join(session_id);
         std::fs::create_dir_all(&git_dir).map_err(|e| CheckpointError::Io(e.to_string()))?;
+        // Canonicalized the same way as `work_tree`, because `restore` decides whether the shadow
+        // repo sits inside the work tree by `strip_prefix`-ing one against the other — a literal
+        // component comparison. Left in whatever spelling the environment supplied, the two sides
+        // disagree over things that name the same directory: a `.` segment, a case difference, or
+        // on Windows an 8.3 short name (`RUNNER~1` vs `runneradmin`, which is exactly what a CI
+        // runner's TEMP looks like and why this passed on every developer machine). The guard then
+        // silently does nothing and `git clean -fd` deletes the checkpoint history it was added to
+        // protect.
+        let git_dir = strip_extended_path_prefix(&git_dir.canonicalize().unwrap_or(git_dir));
 
         let sg = Self { git_dir, work_tree };
         if !sg.git_dir.join("HEAD").exists() {
@@ -378,6 +387,53 @@ mod tests {
         assert!(!root.join("extra.txt").exists());
         let list = sg.list(5).await.unwrap();
         assert_eq!(list[0].id, cp.id);
+        unsafe {
+            std::env::remove_var("LIBERADO_DATA_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `git_dir` is stored canonicalized, in the same spelling as `work_tree`.
+    ///
+    /// `restore` decides whether the shadow repo sits inside the work tree by `strip_prefix`-ing
+    /// one against the other, which compares components literally. `work_tree` is canonicalized;
+    /// if `git_dir` keeps whatever spelling the environment supplied, the two disagree over paths
+    /// that name the same directory — on Windows a runner's `TEMP` gives the 8.3 short form
+    /// (`RUNNER~1`) while canonicalize yields `runneradmin`. The guard then matches nothing and
+    /// `git clean -fd` deletes the checkpoint history it exists to protect, surfacing as an empty
+    /// `list()` rather than as anything that mentions paths.
+    ///
+    /// Asserted as an invariant rather than by staging an odd spelling: `Path::components()`
+    /// normalizes `.` away on its own, so the obvious repro tests nothing, and the spellings that
+    /// *do* break it (8.3, case-insensitivity) exist only on some platforms.
+    #[test]
+    fn git_dir_is_stored_canonicalized_so_the_clean_guard_can_match() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("lib-ckpt-canon-{}", unique()));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        // A `..` segment: names `root/data`, but is not the canonical spelling of it. Unlike `.`,
+        // which `Path::components()` quietly drops, `..` survives into the literal comparison —
+        // so this stands in for the runner's 8.3 `TEMP` without needing a Windows-only fixture.
+        let data = root.join("sub").join("..").join("data");
+        unsafe {
+            std::env::set_var("LIBERADO_DATA_DIR", &data);
+        }
+        let sg = ShadowGit::open_or_init(&root, "canon").unwrap();
+
+        let canonical = strip_extended_path_prefix(&sg.git_dir().canonicalize().unwrap());
+        assert_eq!(
+            sg.git_dir(),
+            canonical.as_path(),
+            "git_dir must be canonical or the clean-exclusion guard silently misses"
+        );
+        // And with both sides canonical the guard actually resolves.
+        assert!(
+            sg.git_dir().strip_prefix(sg.work_tree()).is_ok(),
+            "git_dir under the work tree must strip cleanly: {:?} vs {:?}",
+            sg.git_dir(),
+            sg.work_tree()
+        );
+
         unsafe {
             std::env::remove_var("LIBERADO_DATA_DIR");
         }
