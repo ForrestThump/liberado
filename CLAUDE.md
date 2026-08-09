@@ -93,3 +93,17 @@ tests; `cargo test` runs a crate's tests concurrently in one binary, so unguarde
 - `crates/executor/` — the bounded decide/act loop shared by all agents.
 - `Skills/` — task playbooks (e.g. `cold-review-pr.md`).
 - `scripts/pr-shepherd.py` — drives agent PRs to ready-or-blocked on the same differential rule.
+
+**Debugging an agent run: read its trace, do not re-derive it.** Every coding run writes
+`<workspace>/coder-traces/<session>.json` recording, per turn, the tools the model was *offered*
+(guards withdraw them mid-run, so this changes), its text verbatim, what it called, and why the turn
+ended. Four consecutive failures were once each diagnosed by reading Rust and guessing, while the
+model's own explanation of the problem sat unrecorded. `[coder] trace_formats` can additionally emit
+`openai-messages` — the flat message shape Kilo Code and OpenHands persist — for comparing a run
+against another harness on the same task.
+
+**A config value that parses is not a config value that is read.** Seven settings have shipped
+green while a consumer hardcoded a literal instead of reading them — `[coder.gate]`,
+`[coder.coder]`, `[coder.progress]`, `trace_dir`, the coder role model, and two in
+`coder-runner/src/main.rs`. Symptom: changing the setting does nothing, silently. When you add a
+field to `CoderTuning`, grep every `CoderRunConfig {` initializer and make sure yours arrives.

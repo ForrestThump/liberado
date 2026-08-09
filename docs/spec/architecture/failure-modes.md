@@ -2,7 +2,9 @@
 
 **Status**: living. Distilled 2026-07-14 from twelve audits and findings in
 [`../../future-work/archive/`](../../future-work/archive/), plus the live runs of 2026-07-13/14. Class 6 added
-2026-07-26 from a dogfooding session that produced five instances of it in one sitting.
+2026-07-26 from a dogfooding session that produced five instances of it in one sitting. Class 7
+added 2026-08-09 after eight instances surfaced in one day of changing settings and checking whether
+anything happened.
 
 Twelve separate audits, spread over two weeks, kept finding **the same handful of bugs wearing
 different clothes**. Reading all twelve teaches you the incidents. Reading this teaches you the pattern, which
@@ -180,6 +182,66 @@ from the same descriptors the daemon enforces).
 
 Related to **#4** — a machine check overruling a human is one *specific* way two authorities
 disagree. This entry is the general case, and it is usually silent rather than wrong.
+
+---
+
+## 7. The setting that parses, validates, and is never read
+
+Eight instances, found in a single day (2026-08-09) once someone started changing settings and
+checking whether anything happened.
+
+A value is declared in config. It parses. It validates. It has a default, a doc comment, and often a
+test proving the *loader* handles it. Then the consumer builds its own struct by hand and writes a
+literal in that field's place, and the setting reaches nothing. Changing it does nothing, silently.
+
+| The setting | Where it died |
+|---|---|
+| coder role model | PR #89 |
+| `[coder.gate]` | PR #87 |
+| `[coder.coder]` | PR #88 |
+| `[coder.progress]` | `session_pack/build.rs` used `ProgressPolicy::default()` |
+| `read_only_turn_limit` | `coder-runner` pinned `6` over the shared default |
+| gate `enabled` | `coder-runner/src/main.rs` hardcodes `false` |
+| `trace_dir` | `None` at every production call site, so the trace facility — which had a passing test — had never written a file |
+| `{"interactive": false}` | the PR shepherd sent it on every goal; nothing mapped it to `Capability::AskHuman`, so every unattended goal parked asking a human a question |
+
+That last one is the cost in full: the autonomous PR pipeline could not run *at all*, for months,
+because a payload key was sent and read by nobody.
+
+**This is not class 6.** There, two sides both held a correct value and drifted. Here the config side
+is correct the entire time and simply never arrives — there is nothing to compare, because the
+consumer never asked. Class 6's fix (add the thing that compares them) does not apply.
+
+> **The smell.** A struct literal that restates configuration away from the config: `Config { flag:
+> false, budget: 6, dir: None, .. }`. It compiles, every field is present, the types check, and
+> nothing can tell the compiler that the literal was supposed to be `tuning.dir`. Count them — this
+> codebase had **thirteen** literals of one such struct, eight of them outside the crate that owns it.
+
+There are two directions, and they need different fixes:
+
+| Direction | Example | What silence looks like |
+|---|---|---|
+| Set something nothing reads | the shepherd's `interactive` flag | payload accepted, ignored |
+| Present in both, never copied | `trace_dir`, `[coder.progress]` | the setting has no effect |
+
+**The fix is one constructor, not one instance.** A singleton is the tempting answer and the wrong
+one: it makes config *reachable*, not *read* — you can still write `dir: None` at the call site with
+the global in scope — and it breaks the layered per-session overrides this system needs (payload
+beats profile beats default) while making tests share mutable state.
+
+In order of strength:
+
+1. **Make the literal impossible across crates.** `#[non_exhaustive]` on the derived struct, plus
+   `from_tuning(&Tuning)` and `with_*` overrides. A new field then flows to every consumer by
+   default, and shadowing becomes something you must write on purpose.
+2. **`#[serde(deny_unknown_fields)]`** on config and payload structs, so a key nothing reads is an
+   error rather than silence. Currently used **zero** times here.
+3. **A field-equality test.** Build the tuning with every field non-default, convert, serialize both
+   sides, and assert every key present in both agrees — with a documented exception list. It
+   enumerates fields rather than naming them, so it cannot go stale.
+4. **An effective-config dump** (`liberado doctor`, or a startup log with provenance). The only one
+   that catches a value copied correctly and then overridden downstream, and the only one available
+   to an operator mid-incident.
 
 ---
 

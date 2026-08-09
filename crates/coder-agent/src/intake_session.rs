@@ -180,6 +180,7 @@ mod tests {
             config: CoderRunConfig {
                 backend: LIBERADO_LOOP_BACKEND.into(),
                 trace_dir: None,
+                trace_formats: Vec::new(),
                 planner: role(),
                 coder: role(),
                 critic: role(),

@@ -183,7 +183,12 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
         workspace: WorkspaceRef::new(workspace.to_string_lossy().to_string(), "HEAD"),
         config: CoderRunConfig {
             backend: "liberado-loop".to_string(),
-            trace_dir: None,
+            // Was `None`, which silently disabled the only durable record of a run. The headless
+            // runner is the unattended path, so it is the one that most needs a trace. Resolved
+            // relative to the workspace so a run's trace lands with the run, not in the cwd of
+            // whatever launched it.
+            trace_dir: Some(resolve_trace_dir(&workspace, tuning.trace_dir.as_deref())),
+            trace_formats: tuning.trace_formats.clone(),
             planner: disabled_role(),
             coder: CoderRoleConfig {
                 model,
@@ -217,14 +222,28 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
             sandbox: SandboxSpec::HostLocal,
             command_policy: CommandPolicy::default(),
             validation_command: None,
-            verifiers: vec![VerifierSpec::GitNonemptyDiff {
-                id: "nonempty-diff".into(),
-            }],
+            // "The diff is non-empty" was the *only* acceptance test on this path, so an
+            // unattended run could report `outcome: succeeded` while shipping code that does not
+            // compile — and one did (PR #92: `cargo fmt --check` red on both platforms, plus a
+            // test module that failed to build). `validation_command` is None and the completion
+            // gate is off here, so nothing else was checking either.
+            //
+            // `cargo check` rather than `cargo build`: it catches the type and syntax errors these
+            // runs actually produce, at a fraction of the time and disk — and disk is finite, as a
+            // run that filled 476 GB with nine concurrent `cargo build`s demonstrated.
+            //
+            // Both are advisory in the sense that a run still *files*; they change what
+            // "succeeded" is allowed to mean.
+            verifiers: verifiers_for(&workspace),
             verify_policy: Default::default(),
             path_policy: Default::default(),
             progress: ProgressPolicy {
                 max_attempts: 2,
-                read_only_turn_limit: 6,
+                // `read_only_turn_limit` was pinned to 6 here (fatal at 12), which silently
+                // overrode the shared default and starved exploration on anything spanning more
+                // than a couple of files — the headless runner is the path used for harness-bench
+                // and unattended runs, so it was the one place the tighter number hurt most.
+                // Take the shared default instead; it is tuned in one place, `ProgressPolicy`.
                 ..Default::default()
             },
             hashline: HashlineConfig {
@@ -254,6 +273,14 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
     let json = serde_json::to_string_pretty(&result)
         .map_err(|error| format!("serialize coder result: {error}"))?;
     println!("{json}");
+
+    // Preserve the work before anything else can lose it. A run's output lived only as dirty
+    // files in a scratch directory, so deleting that directory destroyed it — which is exactly what
+    // happened to one completed run. A commit is durable even when the workspace is a git worktree
+    // that later disappears, because the commit and the branch ref go to the *shared* object store.
+    if let Err(error) = preserve_work(&workspace, "task-1", push_enabled()).await {
+        tracing::warn!(%error, "preserving the run's work failed; the workspace is still on disk");
+    }
 
     if let Some(ref sid) = session_id
         && result.outcome == Outcome::Succeeded
@@ -805,6 +832,162 @@ fn task_usage() -> String {
 
 // --- tests -----------------------------------------------------------------
 
+/// Where this run's trace file goes.
+///
+/// A bare `coder-traces` (the `[coder] trace_dir` default) is relative, and the headless runner is
+/// launched from arbitrary working directories — CI, a shepherd kickback, a shell in some other
+/// checkout — so honouring it literally scatters traces wherever the process happened to start.
+/// Anchoring a relative setting to the workspace keeps a run's evidence next to the run. An
+/// absolute setting is respected as given, which is what someone collecting traces centrally wants.
+fn resolve_trace_dir(workspace: &Path, configured: Option<&str>) -> String {
+    let configured = configured.unwrap_or("coder-traces");
+    let path = Path::new(configured);
+    if path.is_absolute() {
+        configured.to_string()
+    } else {
+        workspace.join(path).to_string_lossy().to_string()
+    }
+}
+
+/// Commit whatever the run produced to a branch, and optionally push it.
+///
+/// Committing is unconditional and local. A worktree's commits and its branch ref are written to
+/// the shared `.git`, not to the worktree directory, so the work survives that directory being
+/// deleted — which is how a finished run was lost, its output existing only as uncommitted files
+/// in a scratch dir that got swept.
+///
+/// Pushing is opt-in (`--push`) because it is outward-facing: it publishes to a shared remote,
+/// where a half-finished agent branch is visible to everyone and cannot be quietly un-published.
+/// Local commit alone already removes the data-loss risk, so the default does the safe thing and
+/// the network action stays a deliberate choice.
+///
+/// Never fatal. The run's result is what the caller came for, and failing it over a git problem
+/// would discard a successful run to report a bookkeeping error.
+async fn preserve_work(workspace: &Path, task_id: &str, push: bool) -> Result<(), String> {
+    let dirty = git_output(workspace, &["status", "--porcelain"]).await?;
+    if dirty.trim().is_empty() {
+        tracing::info!("no changes to preserve");
+        return Ok(());
+    }
+
+    let slug: String = task_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    let branch = format!("agent/{}-{stamp}", slug.trim_matches('-'));
+
+    git_output(workspace, &["checkout", "-b", &branch]).await?;
+    git_output(workspace, &["add", "-A"]).await?;
+    // Identity is set explicitly: `user.email`/`user.name` exist on every dev machine and on no
+    // CI runner, so relying on ambient config passes locally and fails in the unattended case
+    // this whole function exists to protect.
+    git_output(
+        workspace,
+        &[
+            "-c",
+            "user.name=liberado-coder",
+            "-c",
+            "user.email=coder@liberado.local",
+            "commit",
+            "-m",
+            &format!(
+                "wip({slug}): agent run output
+
+Uncommitted output of an unattended coding run, committed so it survives the workspace."
+            ),
+        ],
+    )
+    .await?;
+    tracing::info!(%branch, "committed the run's work");
+
+    if push {
+        match git_output(workspace, &["push", "-u", "origin", &branch]).await {
+            Ok(_) => tracing::info!(%branch, "pushed"),
+            Err(error) => {
+                tracing::warn!(%branch, %error, "push failed; the commit is safe locally")
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether to push the preservation branch. Opt-in via `LIBERADO_CODER_PUSH=1`.
+///
+/// An env var rather than a flag so the unattended callers (shepherd, cron, CI) can turn it on for
+/// a whole environment without every call site growing an argument, and so the default stays local.
+fn push_enabled() -> bool {
+    matches!(
+        env::var("LIBERADO_CODER_PUSH").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
+async fn git_output(workspace: &Path, args: &[&str]) -> Result<String, String> {
+    let out = tokio::process::Command::new("git")
+        .current_dir(workspace)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| format!("git {}: {e}", args.join(" ")))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// The acceptance gates for a headless run.
+///
+/// A non-empty diff proves the agent did *something*; it says nothing about whether the something
+/// compiles. Both matter, and only the first was ever checked here.
+///
+/// The build check is skipped when the workspace has no `Cargo.toml`, because a verifier that
+/// always fails is indistinguishable from one that is broken, and this runner is not Rust-only by
+/// contract. `LIBERADO_CODER_VERIFY_CMD` overrides the whole thing for another stack.
+fn verifiers_for(workspace: &Path) -> Vec<VerifierSpec> {
+    let mut specs = vec![VerifierSpec::GitNonemptyDiff {
+        id: "nonempty-diff".into(),
+    }];
+
+    if let Ok(custom) = env::var("LIBERADO_CODER_VERIFY_CMD") {
+        let mut parts = custom.split_whitespace().map(str::to_string);
+        if let Some(program) = parts.next() {
+            specs.push(VerifierSpec::Command {
+                id: "verify-cmd".into(),
+                program,
+                args: parts.collect(),
+                env: Default::default(),
+                timeout_secs: Some(900),
+                output_max_bytes: None,
+                network: false,
+            });
+            return specs;
+        }
+    }
+
+    if workspace.join("Cargo.toml").exists() {
+        specs.push(VerifierSpec::Command {
+            id: "cargo-check".into(),
+            program: "cargo".into(),
+            args: vec!["check".into(), "--workspace".into(), "--all-targets".into()],
+            env: Default::default(),
+            // A cold workspace check on this repo takes minutes; the default would time it out and
+            // report a failure that is really a stopwatch.
+            timeout_secs: Some(900),
+            output_max_bytes: None,
+            network: false,
+        });
+    }
+    specs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -966,5 +1149,67 @@ mod tests {
         let err =
             Args::parse(["task", "run", "--help"].into_iter().map(str::to_string)).unwrap_err();
         assert!(err.contains("--prompt"));
+    }
+}
+
+#[cfg(test)]
+mod verifier_tests {
+    use super::*;
+
+    fn ids(specs: &[VerifierSpec]) -> Vec<String> {
+        specs
+            .iter()
+            .map(|s| match s {
+                VerifierSpec::GitNonemptyDiff { id } => id.clone(),
+                VerifierSpec::Command { id, .. } => id.clone(),
+                other => format!("{other:?}"),
+            })
+            .collect()
+    }
+
+    /// A run that produces code which does not compile must not be able to report success.
+    ///
+    /// Before this, the only acceptance test on the headless path was "the diff is non-empty", so
+    /// `outcome: succeeded` meant the model said so and touched a file. PR #92 was filed that way:
+    /// `cargo fmt --check` red on both platforms and a test module that would not build.
+    #[test]
+    fn a_rust_workspace_gets_a_build_check_not_just_a_diff_check() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[workspace]\n").unwrap();
+
+        let specs = verifiers_for(dir.path());
+        assert!(
+            ids(&specs).iter().any(|id| id == "cargo-check"),
+            "a Rust workspace must be compile-checked, got {:?}",
+            ids(&specs)
+        );
+        // The diff check still has to be there — "it compiles" is satisfied by changing nothing.
+        assert!(ids(&specs).iter().any(|id| id == "nonempty-diff"));
+
+        let uses_check = specs.iter().any(|s| {
+            matches!(s, VerifierSpec::Command { program, args, .. }
+                if program == "cargo" && args.first().map(String::as_str) == Some("check"))
+        });
+        assert!(
+            uses_check,
+            "prefer `cargo check` over a full build — it catches these errors far cheaper, and \
+             disk is finite"
+        );
+    }
+
+    /// A verifier that always fails is indistinguishable from a broken one, so a non-Rust
+    /// workspace must not be handed a cargo command it can never satisfy.
+    #[test]
+    fn a_workspace_without_cargo_gets_no_cargo_check() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), "{}").unwrap();
+
+        let specs = verifiers_for(dir.path());
+        assert!(
+            !ids(&specs).iter().any(|id| id == "cargo-check"),
+            "must not require cargo where there is no Cargo.toml: {:?}",
+            ids(&specs)
+        );
+        assert!(ids(&specs).iter().any(|id| id == "nonempty-diff"));
     }
 }

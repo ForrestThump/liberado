@@ -108,6 +108,7 @@ pub fn base_request(root: &Path) -> CoderRunRequest {
         config: CoderRunConfig {
             backend: LIBERADO_LOOP_BACKEND.into(),
             trace_dir: None,
+            trace_formats: Vec::new(),
             planner: disabled_role(),
             coder: role(
                 "Implement the frozen contract. Use tools, then submit a report.",

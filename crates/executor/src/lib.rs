@@ -457,11 +457,49 @@ enum Mode {
     Conversational,
 }
 
+/// What the model was sent on one turn, and what it sent back.
+///
+/// Exists because none of it was recorded anywhere. Diagnosing a coding run meant re-deriving the
+/// tool catalog from `catalog()` and `PathPolicy` by hand, and the model's own account of why it
+/// stopped — "blocked from making edits by the progress guard" — was invisible through four
+/// consecutive failed runs until someone happened to attach `RUST_LOG=liberado_executor=debug` to
+/// a live one. A turn is the unit at which that becomes answerable.
+#[derive(Debug, Clone)]
+pub struct TurnRecord {
+    pub turn: u32,
+    /// Names of the tools **offered** on this turn, in catalog order. Guards withdraw tools as a
+    /// run proceeds, so this changes turn to turn and is the only record of what the model could
+    /// actually reach when it made its choice.
+    pub tools_offered: Vec<String>,
+    /// How many messages the model was sent — conversation depth, without the payload.
+    pub message_count: usize,
+    /// The model's own text for this turn, verbatim and untruncated. `None` when it emitted only
+    /// tool calls.
+    pub content: Option<String>,
+    /// `"tool_calls"` or `"prose"` — why the turn ended, in the loop's own vocabulary.
+    pub finish_reason: &'static str,
+    /// Tool names the model asked for, in call order.
+    pub tool_calls: Vec<String>,
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+}
+
+/// Receives a [`TurnRecord`] per completed turn.
+///
+/// Deliberately domain-neutral: the executor knows nothing about coding sessions, and the coding
+/// pack adapts these into its own trace vocabulary. Implementations must not block — they run
+/// inline in the turn loop.
+pub trait TurnObserver: Send + Sync {
+    fn on_turn(&self, record: TurnRecord);
+}
+
 /// The bounded, adaptive tool-loop engine. Cheap to clone-share via the inner `Arc`.
 #[derive(Clone)]
 pub struct Executor {
     provider: Arc<dyn Provider>,
     budget: Budget,
+    /// Optional per-turn observer. `None` costs nothing and keeps every existing caller unchanged.
+    observer: Option<Arc<dyn TurnObserver>>,
     /// Model for the calls this executor makes. `None` = the provider's own.
     ///
     /// Held here rather than on the provider because a provider is shared by every session, and a
@@ -476,7 +514,42 @@ impl Executor {
             provider,
             budget,
             model: None,
+            observer: None,
         }
+    }
+
+    /// Hand one completed turn to the observer, if any. No-op when unobserved.
+    #[allow(clippy::too_many_arguments)]
+    fn observe_turn(
+        &self,
+        turn: u32,
+        tools_offered: &[String],
+        message_count: usize,
+        content: Option<&str>,
+        finish_reason: &'static str,
+        tool_calls: &[String],
+        usage: &(u32, u32),
+    ) {
+        let Some(observer) = self.observer.as_ref() else {
+            return;
+        };
+        observer.on_turn(TurnRecord {
+            turn,
+            tools_offered: tools_offered.to_vec(),
+            message_count,
+            content: content.filter(|t| !t.is_empty()).map(str::to_string),
+            finish_reason,
+            tool_calls: tool_calls.to_vec(),
+            prompt_tokens: usage.0,
+            completion_tokens: usage.1,
+        });
+    }
+
+    /// Attach a per-turn observer. See [`TurnRecord`] for why this exists.
+    #[must_use]
+    pub fn with_observer(mut self, observer: Arc<dyn TurnObserver>) -> Self {
+        self.observer = Some(observer);
+        self
     }
 
     /// A copy of this executor that runs its calls on `model`. `None` returns an equivalent
@@ -841,6 +914,14 @@ impl Executor {
                 tool_calls = tracing::field::Empty,
                 finish_reason = tracing::field::Empty,
             );
+            // Snapshot what this turn was actually offered. Guards withdraw tools mid-run, so
+            // this differs turn to turn and is the only record of what the model could reach.
+            let offered: Vec<String> = self
+                .observer
+                .as_ref()
+                .map(|_| tools.iter().map(|t| t.name.clone()).collect())
+                .unwrap_or_default();
+            let sent_messages = messages.len();
             let response = async {
                 let request = CompletionRequest::new(messages.clone())
                     .with_tools(tools.clone())
@@ -861,6 +942,11 @@ impl Executor {
             .instrument(tracing::debug_span!("provider_complete", turn))
             .await?;
 
+            let usage_delta = response
+                .usage
+                .as_ref()
+                .map(|u| (u.prompt_tokens, u.completion_tokens))
+                .unwrap_or((0, 0));
             if let Some(response_usage) = &response.usage {
                 usage.tokens += u64::from(response_usage.total_tokens);
             }
@@ -871,6 +957,15 @@ impl Executor {
             if response.tool_calls.is_empty() {
                 let text = response.content.unwrap_or_default();
                 turn_span.record("finish_reason", "prose");
+                self.observe_turn(
+                    turn,
+                    &offered,
+                    sent_messages,
+                    Some(&text),
+                    "prose",
+                    &[],
+                    &usage_delta,
+                );
                 match mode {
                     Mode::Conversational => return Ok(Terminal::Spoke(text)),
                     Mode::Report if !nudged => {
@@ -897,6 +992,19 @@ impl Executor {
             let tool_count = response.tool_calls.len();
             turn_span.record("tool_calls", tool_count);
             turn_span.record("finish_reason", "tool_calls");
+            {
+                let called: Vec<String> =
+                    response.tool_calls.iter().map(|c| c.name.clone()).collect();
+                self.observe_turn(
+                    turn,
+                    &offered,
+                    sent_messages,
+                    response.content.as_deref(),
+                    "tool_calls",
+                    &called,
+                    &usage_delta,
+                );
+            }
             if tool_count > 0 {
                 let names: Vec<&str> = response
                     .tool_calls
@@ -3631,6 +3739,100 @@ mod tests {
         assert!(
             msg.contains("BudgetExceeded") || msg.contains("turns"),
             "got: {msg}"
+        );
+    }
+
+    #[derive(Default)]
+    struct Recorder {
+        turns: Mutex<Vec<TurnRecord>>,
+    }
+
+    impl TurnObserver for Recorder {
+        fn on_turn(&self, record: TurnRecord) {
+            self.turns.lock().expect("recorder poisoned").push(record);
+        }
+    }
+
+    /// The observer must answer, without reading any source, the three questions that cost the
+    /// most time debugging real runs: what could the model reach, what did it say, and why did the
+    /// turn end.
+    #[tokio::test]
+    async fn a_turn_record_answers_what_was_offered_what_was_said_and_why_it_ended() {
+        let rec = Arc::new(Recorder::default());
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            vec![
+                CompletionResponse::text("Let me look at the config first."),
+                submit(valid_report_args()),
+            ],
+        ));
+        let exec = Executor::new(provider, Budget::default()).with_observer(rec.clone());
+        let runtime = MockToolRuntime::new(&["search", "write_file"], Ok("data".into()));
+
+        let _ = exec.execute(&runtime, Task::new("worker", "do it")).await;
+
+        let turns = rec.turns.lock().unwrap().clone();
+        assert!(
+            turns.len() >= 2,
+            "expected a record per turn, got {}",
+            turns.len()
+        );
+
+        // Turn 1: the model spoke instead of calling a tool. That is the failure mode that read as
+        // "it did nothing" for four runs, because the text was never persisted anywhere.
+        assert_eq!(turns[0].finish_reason, "prose");
+        assert_eq!(
+            turns[0].content.as_deref(),
+            Some("Let me look at the config first."),
+            "the model's own words must survive verbatim — this is the whole point"
+        );
+        assert!(turns[0].tool_calls.is_empty());
+
+        // What it could reach, at the moment it chose. Answering this by hand meant reading
+        // `catalog()` and `PathPolicy` and reasoning about which mode was active.
+        assert!(
+            turns[0].tools_offered.iter().any(|t| t == "write_file"),
+            "offered tools must be recorded, got {:?}",
+            turns[0].tools_offered
+        );
+        assert!(turns[0].message_count > 0);
+
+        // Turn 2: it called a tool, and which one is on the record.
+        assert_eq!(turns[1].finish_reason, "tool_calls");
+        assert_eq!(turns[1].tool_calls, vec![SUBMIT_REPORT_TOOL.to_string()]);
+    }
+
+    /// Tool withdrawal is a guard decision that changes what the model can do; the record has to
+    /// show the catalog shrinking, or a run that "inexplicably stopped exploring" stays inexplicable.
+    #[tokio::test]
+    async fn the_record_shows_the_catalog_shrinking_when_a_guard_withdraws_a_tool() {
+        let rec = Arc::new(Recorder::default());
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            vec![
+                call_tool("search"),
+                call_tool("search"),
+                call_tool("search"),
+                call_tool("search"),
+                submit(valid_report_args()),
+            ],
+        ));
+        let exec = Executor::new(provider, Budget::default()).with_observer(rec.clone());
+        let runtime = MockToolRuntime::new(&["search"], Ok("same result".into()));
+
+        let _ = exec.execute(&runtime, Task::new("worker", "do it")).await;
+
+        let turns = rec.turns.lock().unwrap().clone();
+        let first = turns.first().expect("at least one turn");
+        let last = turns.last().expect("at least one turn");
+        assert!(
+            first.tools_offered.iter().any(|t| t == "search"),
+            "search should be offered at the start"
+        );
+        assert!(
+            !last.tools_offered.iter().any(|t| t == "search"),
+            "after the doom-loop guard removes it, the record must show it gone: {:?}",
+            last.tools_offered
         );
     }
 }

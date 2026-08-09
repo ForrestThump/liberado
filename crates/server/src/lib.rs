@@ -166,6 +166,8 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
                             .with_hashline(coder_tuning.hashline)
                             .with_gate(coder_tuning.gate)
                             .with_progress(coder_tuning.progress)
+                            .with_trace_dir(coder_tuning.trace_dir)
+                            .with_trace_formats(coder_tuning.trace_formats)
                             .with_coder_role(coder_tuning.coder);
                     }
                     Err(e) => {

@@ -73,6 +73,27 @@ also the one that matters least.
 > alongside P1/P2 — plan: [`coding-tui-plan.md`](future-work/coding-tui-plan.md) (goal-driven TUI surface +
 > kernel completion gate, Grok Build-style disputed-claim completion, slices S1–S7).
 
+**Self-hosting status (2026-08-09).** The bar in the backlog is "run these PRs on our own coder
+instead of OpenCode". It is now cleared once: [PR #90](https://github.com/ForrestThump/liberado/pull/90)
+was written end-to-end by the coding pack running unattended, compiles, passes CI on both platforms,
+and includes tests the agent wrote — with two compile errors it found and fixed itself by running
+cargo and reading the output.
+
+Getting there took five harness fixes ([PR #91](https://github.com/ForrestThump/liberado/pull/91)),
+all of the same shape: **the guards were right that something was wrong and wrong about the remedy.**
+A cycle detector compared tool names and ignored arguments, so normal exploration read as a loop. A
+latched progress guard refused the very edits it was demanding, because the escape hatch written for
+exactly that case sat behind an early return and had never executed. A doom-loop strike ended the
+run rather than refusing the call, discarding ten files of correct work two turns before the build
+step that would have caught its one mistake. None of these were model failures.
+
+**Runs are now replayable.** Every coding run writes a trace (`[coder] trace_dir`,
+`[coder] trace_formats`) recording what was sent, what the model said verbatim, which tools it was
+*offered* each turn, and why each turn ended. Before this, none of that existed anywhere, and four
+consecutive failures were each diagnosed by reading Rust and guessing. **Start a review of an agent
+run by reading its trace.** An `openai-messages` export is also available for comparing a run
+against another harness on the same task and model.
+
 **Slice status** (plan: [`coding-tui-plan.md`](future-work/coding-tui-plan.md) §Slices):
 
 | Slice | State | Notes |

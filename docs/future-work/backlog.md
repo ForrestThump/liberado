@@ -1,6 +1,6 @@
 # Backlog — pick from here, scope it yourself
 
-Maintained 2026-08-03. **This is the direction; you choose the shape.** Take the highest item you
+Maintained 2026-08-09. **This is the direction; you choose the shape.** Take the highest item you
 can do well, scope it, open a PR. One item per PR.
 
 Items are ordered within each band. Bands matter more than positions inside them.
@@ -135,8 +135,8 @@ report was **not** reproducible and is recorded at the bottom so nobody re-opens
 | # | What | Size | Pointer |
 |---|---|---|---|
 | **E1** | **Per-schedule turn budget.** `DIRECT_MAX_TURNS` (4) and the subagent default (8) are compile-time; a schedule can neither raise them nor choose which path it lands on — the dispatcher picks `ExecuteDirect` vs `DispatchSubagent` from goal phrasing. Observed live: an inbox goal spent all 4 turns on vault reads and filed nothing. Wants `max_turns: Option<u32>` on `Schedule`, plumbed through `budget_for(depth)`. | medium | `crates/orchestrator/src/lib.rs` (`budget_for`) |
-| **E2** | **Implement the inbox layer.** Design settled 2026-08-08 (`inbox-spec.md` §14): two capture surfaces (pinned widget file + folder), compare-and-swap clearing, and a hybrid trigger where the flag routes ownership — unflagged notes belong to the schedule, `#now` notes to the watcher. Human-vs-agent attribution and content-hash idempotency already exist and the design leans on both. **Blocked on E3** (see below). | large | [`../spec/inbox-spec.md`](../spec/inbox-spec.md) §14 |
-| **E3** | **Watcher ignore list.** `inbox_ignore_globs` has no wired equivalent, so the generic vault-watch reaction fires on `Inbox/` writes *alongside* any ingestion schedule — the same capture is processed twice. **Prerequisite for E2**: without it you debug double-processing and the new pipeline simultaneously. Small and independent — do it first. | small | `crates/daemon/src/vault_source.rs` |
+| **E2** | **Implement the inbox layer.** Design settled 2026-08-08 (`inbox-spec.md` §14): two capture surfaces (pinned widget file + folder), compare-and-swap clearing, and a hybrid trigger where the flag routes ownership — unflagged notes belong to the schedule, `#now` notes to the watcher. Human-vs-agent attribution and content-hash idempotency already exist and the design leans on both. **Was blocked on E3**, which is implemented in PR #90 — unblocked once that merges. | large | [`../spec/inbox-spec.md`](../spec/inbox-spec.md) §14 |
+| **E3** | ~~**Watcher ignore list.**~~ **PR #90 — agent-authored, CI green, awaiting review.** `inbox_ignore_globs` has no wired equivalent, so the generic vault-watch reaction fires on `Inbox/` writes *alongside* any ingestion schedule — the same capture is processed twice. **Prerequisite for E2**: without it you debug double-processing and the new pipeline simultaneously. Small and independent — do it first. | small | `crates/daemon/src/vault_source.rs` |
 | **E4** | **turbovault cannot enumerate a directory** (turbovault repo, not this one). `query_frontmatter_sql` needs the `sql` feature compiled in; `advanced_search` takes `exclude_paths` but no positive path scope; `get_notes_info` needs paths you already have. So "process everything in this folder" is not expressible. Any one of: enable `sql` in the homelab image, add `path_prefix` to `advanced_search`, or add `list_notes(path)`. | medium | turbovault `crates/turbovault-tools/src/search_engine.rs` |
 | **E5** | **SSE reconnect storm.** `turbomcp_http::transport` logs read-error → stream-ended → reconnect in a tight loop: ~93.5k occurrences in 24h, ~50/min while idle. Survivable, but it evicts real diagnostics under log rotation. Likely a turbomcp keepalive/EOF issue. | medium | turbomcp |
 
@@ -197,6 +197,78 @@ Crates in there that map onto items below, so nobody reads the whole 94 MB:
 | **C5** | **Turn on the completion gate and measure it.** S1 is default-off pending S7 because it costs `1 + fresh_reviewers` model calls per attempt. With `liberado-cost --json` that price is now measurable — run a handful of tasks with it on and off. | `[coder.gate] enabled` |
 | **C6** | **Repo map / context selection** — the biggest context lever, and we have nothing equivalent. **Split the seam on the way in**: "rank and select the relevant context for a goal" is general and belongs in the kernel — a research or vault pack wants exactly that — while "walk a source tree and build a symbol graph" is coding and belongs in `coder-*`. Build it whole inside the pack and the next pack rebuilds the ranking half. Read `xai-codebase-graph` first. **This item is both the highest-leverage coding work and the most likely duplication source**; get the seam right rather than fixing it later. | kernel + `crates/coder-*` |
 | **C7** | **Use the isolation #58 unblocked.** `dispatch_parallel` is built and unreachable; `delegate` is synchronous. Scope one of them onto `WorktreeWorkspace` rather than both. **Placement check while you are there:** `WorktreeWorkspace` lives in `coder-sandbox` (pack), but "give a parallel worker an isolated workspace" is general and `dispatch_parallel` is kernel-side. If the orchestrator needs it, it is on the wrong side of the line — say so rather than reaching across. | `crates/orchestrator/`, `crates/coder-agent/` |
+
+## Band F — harness observability and the delegation split (2026-08-09)
+
+Six coding runs of one task (E3) produced zero files for four of them, then a complete, compiling,
+tested implementation on the sixth: PR #90, the first agent-authored PR here. The model was never
+the limit. Five harness defects were, and the fixes are on `main` (#91).
+
+**The pattern behind almost all of them.** A config value parses, validates, and reaches nothing,
+because a consumer hardcodes a literal instead of reading it. Seven instances are now known, and
+each was invisible until someone ran the thing and asked why a setting had no effect:
+
+| shadowed | consumer that hardcoded it |
+|---|---|
+| coder role model | PR #89 |
+| `[coder.gate]` | PR #87 |
+| `[coder.coder]` | PR #88 |
+| `[coder.progress]` | `session_pack/build.rs` |
+| `read_only_turn_limit` | `coder-runner` pinned 6 over the shared default |
+| gate `enabled` | `coder-runner/src/main.rs:212` — still hardcoded `false`, not yet fixed |
+| `trace_dir` | every production call site, so the trace facility had never written a file |
+
+**F5 exists to make the eighth impossible**, and is the highest-value item in this band.
+
+### Routing: which model gets which item
+
+**Read [`delegation-failure-modes.md`](delegation-failure-modes.md) first.** It is the authority
+here, written from 15 delegated PRs (#33–#45) across three rounds, and its conclusion outranks any
+routing table:
+
+> **Spec accuracy is a bigger lever than model choice.**
+
+Today's runs are an independent confirmation. DeepSeek landed E3 correctly — right file, right
+function, right drop mechanism, Windows path normalization unprompted — from a prompt naming files
+and functions. The same model, the same day, given a vaguer prompt, wrote
+`fn job_is_build_like(..) -> bool { true }` with a comment justifying the constant. **Name the file
+and the function, or expect a stub.**
+
+With that said, the two failure modes differ enough to change how you *review*, which is what the
+routing below is actually for:
+
+- **Grok over-claims.** Ambitious code, usually correct, described as doing more than it does.
+  Review budget goes on **checking claims**, and its tests are the least trustworthy artifact in the
+  PR — #35 shipped an acceptance item with no test, #37 shipped one that could not fail. So give it
+  work whose result you can *run*: if correctness is visible by executing the thing, an over-claim
+  is caught in seconds instead of by auditing fixtures.
+- **DeepSeek omits.** Narrower code, described accurately. Review budget goes on **finding gaps** —
+  count the paths changed against the paths tested (#40 was three vs two). So give it work with
+  exact pointers, where "what's missing" is enumerable from the spec.
+
+**This round is not recorded.** The doc covers #33–#45. The later round (~#60–#73, written by
+DeepSeek and Grok while Claude usage was exhausted, then reviewed and fixed) left almost nothing on
+GitHub — those reviews happened in-session, and the PRs carry 0–1 comments each. Two consequences
+worth fixing: the findings are lost, and **which model wrote which PR is not recorded anywhere**, so
+none of the routing above can be checked against the largest sample we have. Going forward, name the
+model in the PR body and append each round to the failure-modes doc.
+
+> **Grok Build capacity expires 2026-08-10.** F1–F4 are sized to be spent before then. If it lapses,
+> they are still worth doing — they just lose their reason to jump the queue.
+
+| # | What | Size | → |
+|---|---|---|---|
+| **F1** | **`liberado coder trace <session-id>`** — render a trace as a turn-by-turn transcript: prompt → tools offered → model text → calls → results → guard events. The data is already written; nothing exists to read it but `python -c`. **Self-evidently correct or not:** run it against `coder-traces/*.json` and look at the output. | small | Grok |
+| **F2** | **Run-comparison report.** Two traces in, one table out: turns used, tools offered per turn, refused calls, turn of first successful mutation, terminal cause. This is the metric set that would have caught every bug in #91 — "did it finish" would have caught none of them. | medium | Grok |
+| **F3** | **Foreign-trace importer.** Read Kilo Code's `api_conversation_history.json` (`~/.config/kilo/…/tasks/<id>/`) and an OpenHands trajectory, emit our `.messages.json` shape. Makes F2 work across harnesses, which is the whole point of the A/B: same task, same model, different harness. | medium | Grok |
+| **F4** | **Stuck-session panel in the WebUI.** List `parked` sessions with age and a cancel control. Four orphaned parked sessions — two of them days old — silently blocked the PR shepherd against `MAX_CONCURRENT=2`, and every pass logged `deferred: at concurrency cap` where nobody was looking. Visible list, obvious fix. | medium | Grok |
+| **F5** | **Make a shadowed config value fail the build.** A test that walks `CoderTuning`'s fields and asserts each reaches `CoderRunConfig` — or an equivalent that makes the table above impossible to extend. Seven instances is a pattern, not a run of bad luck, and every one shipped green. State the mechanism you chose and what it cannot catch. | medium | DeepSeek |
+| **F6** | **Preserve work on signal.** `preserve_work` (coder-runner) commits the run's output to `agent/<slug>-<stamp>` after a normal return, so a SIGTERM'd run preserves nothing — exactly the case it was written for. A run killed at a 10-minute cap left seven modified files uncommitted. Wants a signal handler, or a periodic checkpoint. **Also fix the branch name**: it commits to `agent/<task-id>-<stamp>`, and the headless path hardcodes the task id to `task-1`, so every run produces `agent/task-1-<epoch>` — carrying no information about what the run did. | small | DeepSeek |
+| **F7** | **Reconcile orphaned parked sessions at daemon startup.** `parked` persists in the store; the live hub does not survive a restart. The session is then unresumable *and* uncancellable — `/cancel` answers `"not found or already finished"` — and holds a concurrency slot forever. Shepherd-side mitigation landed (`57bfc1a`); the daemon-side bug is untouched. | medium | DeepSeek |
+| **F8** | **`ModelRequestSent` event.** `TurnRecord` records the tool catalog at *response* time. Recording it at request time, with a hash of the system prompt actually sent, closes the last "what did the model see" gap — prompt-vs-`prompt_path` resolution is still invisible. | small | DeepSeek |
+| **F11** | **Intake parks an unattended goal to ask a question.** A shepherd kickback goal reached `awaiting_input` **5 seconds in**, asking *"do you want me to fix both failures, or focus on one first?"* — after a prompt that already said "these appeared with your change and are yours to fix" and listed both. No human is attached to a shepherd goal, so it parks forever and holds a `MAX_CONCURRENT` slot. **Both** shepherd paths do it: the cold-review goal parked the same way, asking whether its contract should cover the review process — from a prompt that specified it. **This is the cause of the four orphaned parked sessions** that silently blocked every shepherd pass; `57bfc1a` only stopped them from consuming capacity. Every autonomous goal this system has started has ended here, which makes this the top item in the band: F10 makes an unattended run trustworthy, but F11 is why unattended runs do not happen at all. Note the questions were answerable from the prompt already — intake wants confirmation, not information — so withholding the capability costs nothing. **Answering does not help.** Both sessions were answered by hand and both immediately asked a second question, each one quoting the very instruction it was asking about: *"The goal says 'Do not delete, skip, or #[ignore] a test to get green' … is it acceptable to modify test code"*, and *"The writeup says 'If you found nothing Real, push nothing' … should the agent be allowed to push if it finds and fixes Real issues?"*. With `max_clarify_rounds: 3` that is up to three human round-trips before any work begins, which is why the shepherd was never going to run overnight however correct its gate logic was. **The mechanism already exists and is correct** — do not build a second one. `CodingSessionPack::run` computes `may_ask = ctx.can(&Capability::AskHuman)` and, when it is absent, *skips intake entirely* and builds from the goal description (`session_pack.rs:349`, and the Progress event at :409 says so). The pack is right. The bug is one layer up: `goals_start` grants `AskHuman` to a goal that declared itself non-interactive. **The shepherd already sends `{"interactive": false}` in its payload** (`start_goal`, `pr-shepherd.py:304`) and nothing maps it onto the capability set — an eighth shadowed setting, sent and ignored. Fix it at the grant, in `crates/server/src/api/goals.rs`, not in the pack. An attempt to add an `intake.ask_human` knob was written and reverted: it duplicated a capability the architecture already owns, which is the exact failure `CLAUDE.md` warns about. Same principle as the progress-guard fix: do not stop the run, note it and continue. A timeout-then-auto-answer is the wrong shape — it pays the latency and still picks an answer. | medium | DeepSeek |
+| **F10** | **The headless runner has no acceptance check.** Its only verifier is `GitNonemptyDiff` — "the diff is non-empty" — with `validation_command: None` and the completion gate hardcoded `false` (`coder-runner/src/main.rs:217`). So on the unattended path, `outcome: succeeded` means *the model said so and touched a file*. A run shipped non-compiling tests and reported success (PR #92). `VerifierSpec::Command` already exists; wire `cargo check` (configurable, cheaper than a build) so "it compiles" is an acceptance condition rather than a hope. **Highest-value item in this band after F5** — it is the gate that would have caught F9's defect before a human saw it. | small | DeepSeek |
+| **F9** | **Cap concurrent background commands.** One build-like program at a time, two background jobs total, refused in band. A run launched nine concurrent `cargo` builds and filled a 476 GB disk. **In flight** — do not take. | medium | DeepSeek |
 
 ## Band D — breadth, low risk
 

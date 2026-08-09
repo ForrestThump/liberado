@@ -60,7 +60,15 @@ vault_path = "/home/shiloh/vault"
 # When both a profile and a payload name a mode, the stricter one wins — restriction never relaxes.
 # Optional profiles that always start in a given mode:
 #
-# [[session_profiles]]
+# # The hat the PR shepherd starts goals under: coding pack, no AskHuman (see `coding-unattended` in
+# policy.toml). A goal that cannot ask is a goal that cannot park waiting for someone who is asleep.
+[[session_profiles]]
+name = "coding-unattended"
+domain = "coding"
+component = "coding-unattended"
+enabled = true
+
+[[session_profiles]]
 # name = "coding-plan"
 # domain = "coding"
 # [session_profiles.overrides]

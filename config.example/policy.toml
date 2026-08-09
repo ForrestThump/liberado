@@ -119,6 +119,26 @@ capabilities = [
     "AskHuman",
 ]
 
+
+# The unattended coding hat: the SAME coding pack, minus `AskHuman`. Used by the PR shepherd and
+# anything else that starts a goal with no human behind it.
+#
+# Without this, every shepherd-started goal parked within seconds. Intake asked a clarifying question
+# — twice re-litigating an instruction the goal prompt had already given — and nobody was there to
+# answer, so the session sat in `awaiting_input` forever, survived daemon restarts as unresumable and
+# uncancellable, and held a concurrency slot until the shepherd could start nothing at all. Four such
+# orphans accumulated before anyone noticed, because a parked session looks exactly like a busy one.
+#
+# The pack already does the right thing when the capability is absent: it skips intake entirely and
+# builds straight from the goal description. That behaviour existed and had never been reachable,
+# because the `coding` grant hands `AskHuman` to attended and unattended sessions alike.
+[[grants]]
+component = "coding-unattended"
+capabilities = [
+    { Read = { Vault = "decisions" } },
+    # No AskHuman. An unattended session must never be able to wedge on a prompt nobody will answer.
+]
+
 # The S6 worked example: the SAME life pack under a strictly narrower hat — read-only, and no
 # AskHuman, so it can neither interrupt you nor write the vault. Paired with the
 # `[[session_profiles]]` entry named `research` in topology.toml.
