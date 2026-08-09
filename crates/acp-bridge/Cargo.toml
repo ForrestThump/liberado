@@ -9,27 +9,45 @@ authors.workspace = true
 repository.workspace = true
 
 [package.metadata.liberado]
-# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
+# Layer role for the layer-rules test + crate-map generator (docs/spec/architecture/contracts.md)
 #
 # `root`, not `surface`: this binary composes the agent stack itself (main-agent, provider,
-# config-loader, conversation-store) rather than speaking the wire contract to a running daemon.
+# coding tools, config) rather than speaking the wire contract to a running daemon.
 # A surface may depend only on `client` crates, which this does not — it is an executable entry
 # point in the same class as `daemon` and `server`.
 role = "root"
+
+[lib]
+name = "liberado_acp_bridge"
+path = "src/lib.rs"
 
 [[bin]]
 name = "liberado-acp"
 path = "src/main.rs"
 
 [dependencies]
+async-trait.workspace = true
+chat-client-contract = { workspace = true }
+futures.workspace = true
+liberado-bootstrap.workspace = true
+liberado-coder-agent.workspace = true
+liberado-coder-core.workspace = true
+liberado-coder-sandbox.workspace = true
+liberado-coder-tools.workspace = true
+liberado-common.workspace = true
+liberado-config.workspace = true
+liberado-executor.workspace = true
 liberado-main-agent.workspace = true
 liberado-provider.workspace = true
 liberado-provider-openai-compat.workspace = true
-liberado-config-loader.workspace = true
-liberado-conversation-store.workspace = true
-liberado-common.workspace = true
+reqwest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

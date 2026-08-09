@@ -132,6 +132,24 @@ capabilities = [
 # The pack already does the right thing when the capability is absent: it skips intake entirely and
 # builds straight from the goal description. That behaviour existed and had never been reachable,
 # because the `coding` grant hands `AskHuman` to attended and unattended sessions alike.
+# The local coding hat: the ACP bridge (`liberado-acp`) that Paseo spawns on your own machine.
+#
+# It KEEPS `AskHuman` — unlike `coding-unattended`, there is a human sitting in the editor, and a
+# question they can answer is the whole point of an interactive coding session.
+#
+# This grant exists so the bridge's authority is *stated* rather than implied by what its code
+# happens to do. The bridge runs the coding pack in-process, outside the daemon, so it does not pass
+# through `goals_start`'s profile resolution; without a row here its authority would be unauditable
+# and impossible to tighten later without a refactor. The bridge refuses to start coding mode when
+# this component resolves to nothing, which is the same fail-closed rule `goals_start` applies to a
+# session that may do nothing.
+[[grants]]
+component = "coding-local"
+capabilities = [
+    { Read = { Vault = "decisions" } },
+    "AskHuman",
+]
+
 [[grants]]
 component = "coding-unattended"
 capabilities = [

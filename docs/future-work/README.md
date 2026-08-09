@@ -40,6 +40,8 @@ Index of forward-looking work.
 | [pr-dispatch-vtcode-no-write-finding.md](pr-dispatch-vtcode-no-write-finding.md) | Open PR-dispatch bug |
 | [self-host-coding-dogfood-2026-08.md](self-host-coding-dogfood-2026-08.md) | **C2 dogfood:** first self-host `/goal` on liberado → PR #69; six findings (worktree paths fixed; no-changes-after-commit still open) |
 | [self-pr-quality-roadmap.md](self-pr-quality-roadmap.md) | **Self-PR quality:** ladder to light-oversight merges; **generic preflight gate** (CI-equivalent ship bar, not Rust-only) → cold review → human queue → self-improve |
+| [paseo-liberado-integration-roadmap.md](paseo-liberado-integration-roadmap.md) | **Paseo ↔ Liberado:** ordered gaps after ACP core landed — P0 wire correctness, tests, modes, durable load, fork polish, remote tunnel (Track B) |
+| [acp-bridge-completion-roadmap.md](acp-bridge-completion-roadmap.md) | ACP bridge residuals — **superseded** by paseo-liberado-integration-roadmap (kept for links) |
 
 ### Coding pack / TUI
 - [`rust-native-agentic-coder-plan.md`](rust-native-agentic-coder-plan.md) — umbrella design

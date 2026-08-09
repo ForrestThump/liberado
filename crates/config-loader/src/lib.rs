@@ -37,14 +37,14 @@ pub use chain::ChainLoader;
 pub use file_source::FileSource;
 pub use liberado_common::DEFAULT_POOL;
 pub use model::{
-    COMPACTION_TRIGGER_PCT_DEFAULT, COMPACTION_TRIGGER_TOKENS_FALLBACK, CURRENT_SCHEMA_VERSION,
-    CaptureTuning, CodingAuthError, CodingWorkspaceAuth, CompactionSettings,
-    CompactionTriggerSource, ConcurrencyTuning, Config, ConfigBuilder, ContextTuning,
-    CronDeliveryTuning, CronSchedule, DispatchTuning, EnterKey, Grant, HookConfig, MainAgentConfig,
-    MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport, ModelCompactionSettings, Policy,
-    PoolConfig, ProjectConfig, ProviderProfile, RoleOverride, SubagentIsolation,
-    TelegramApprovalsTuning, ToolImpact, Topology, Tuning, WebUiConfig, ZonePolicy,
-    managed_binary_path, resolve_declared_zone,
+    AcpConfig, COMPACTION_TRIGGER_PCT_DEFAULT, COMPACTION_TRIGGER_TOKENS_FALLBACK,
+    CURRENT_SCHEMA_VERSION, CaptureTuning, CodingAuthError, CodingWorkspaceAuth,
+    CompactionSettings, CompactionTriggerSource, ConcurrencyTuning, Config, ConfigBuilder,
+    ContextTuning, CronDeliveryTuning, CronSchedule, DispatchTuning, EnterKey, Grant, HookConfig,
+    MainAgentConfig, MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport,
+    ModelCompactionSettings, Policy, PoolConfig, ProjectConfig, ProviderProfile, RoleOverride,
+    SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning, WebUiConfig,
+    ZonePolicy, managed_binary_path, resolve_declared_zone,
 };
 pub use source::{ConfigLoadError, ConfigSource};
 pub use validation::validate_merged_config;

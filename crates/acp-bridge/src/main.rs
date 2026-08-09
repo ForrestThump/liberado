@@ -1,78 +1,159 @@
 //! ACP (Agent Client Protocol) bridge over stdio for Paseo integration.
 //!
-//! Reads NDJSON from stdin, routes to Liberado's chat engine, writes NDJSON to stdout.
+//! Speaks **JSON-RPC 2.0 NDJSON** on stdin/stdout — the wire shape Paseo and
+//! `@agentclientprotocol/sdk` expect. Methods:
 //!
-//! Protocol messages implemented:
-//!   initialize  → handshake
-//!   newSession  → create a chat conversation
-//!   loadSession → resume an existing conversation
-//!   prompt      → send user message, stream agentMessage notifications
-//!   cancel      → abort the running turn
+//! | Method | Role |
+//! |---|---|
+//! | `initialize` | Handshake + agent capabilities |
+//! | `session/new` | Start a session rooted at `cwd` (coding tools enabled) |
+//! | `session/prompt` | User turn; streams `session/update` chunks |
+//! | `session/cancel` | Abort the in-flight turn (notification) |
+//! | `session/load` | Not advertised (`loadSession: false`) until history is durable |
+//! | `session/set_mode` | Switch coding / chat / face (Liberado-owned; one Paseo provider) |
+//! | `session/set_model` | Hot-swap the active model (must be in the live catalog) |
 //!
-//! Usage: liberado-acp   (reads ACP NDJSON from stdin)
+//! Modes (same process; switch via ACP or `--mode` / `LIBERADO_ACP_MODE`):
+//! - **coding** — full coding pack + durable worktrees (default)
+//! - **chat** — in-process conversation (no tools, no daemon)
+//! - **face** — daemon face agent (`liberado serve`; vault + delegate)
+//!
+//! Usage (spawned by Paseo — one provider is enough):
+//! ```text
+//! liberado-acp
+//! liberado-acp --mode chat
+//! liberado-acp --mode face
+//! ```
+//!
+//! Environment:
+//! - `OPENROUTER_API_KEY` / `DEEPSEEK_API_KEY` / `OPENAI_API_KEY`
+//! - `LIBERADO_ACP_MODE` — default mode (`coding` \| `chat` \| `face`)
+//! - `LIBERADO_ACP_MODEL` — initial model id
+//! - `LIBERADO_ACP_MAX_TURNS` — per-launch override of `[acp] max_turns`
+//! - `LIBERADO_CONFIG_DIR` — optional Liberado config (topology + `[coder]` tuning)
+//! - `LIBERADO_SERVER` — face-mode daemon base URL (default `http://127.0.0.1:4201`)
+//!
+//! Model catalog: live `GET /models` from the configured backend, A–Z by id.
 
-use std::io::{BufRead, Write};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+mod coding_run;
+mod provider;
+mod wire;
 
-fn new_id() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{nanos:016x}-{:04x}", rand_u16())
+use wire::{
+    JsonRpcErrorBody, JsonRpcIncoming, StdoutWire, WireSink, emit_agent_text_chunk, emit_tool_call,
+    emit_tool_call_update, pop_tool_call_id, push_tool_call_id,
+};
+
+use provider::{
+    CatalogModel, build_provider, description_for, display_name_for, load_model_catalog,
+};
+mod face_client;
+mod mode;
+
+use liberado_executor::{AgentEvent, Budget, Executor, ToolRuntime};
+use liberado_main_agent::{Conversation, DEFAULT_SYSTEM_PROMPT};
+use liberado_provider::Provider;
+use mode::AgentMode;
+use serde_json::{Value, json};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::sync::{Mutex, mpsc, watch};
+
+/// ACP protocol version negotiated with current `@agentclientprotocol/sdk`.
+const PROTOCOL_VERSION: u32 = 1;
+
+/// Whether `initialize` advertises `loadSession`. Must stay false until durable history +
+/// replay exist (integration roadmap P3); true made Paseo resume into an empty transcript.
+const LOAD_SESSION_CAPABILITY: bool = false;
+
+/// JSON-RPC 2.0 error codes. Named because "-32602" at a call site says nothing about which of the
+/// spec's four failure kinds it is, and every one of these used to be -32603.
+const JSONRPC_METHOD_NOT_FOUND: i32 = -32601;
+const JSONRPC_INVALID_PARAMS: i32 = -32602;
+const JSONRPC_INTERNAL_ERROR: i32 = -32603;
+
+/// Marks a `handle_request` error as "no such method" so the wire layer can pick -32601.
+const METHOD_NOT_FOUND_PREFIX: &str = "Method not found: ";
+
+// ── Bridge state ────────────────────────────────────────────────────────────
+
+/// One row in the ACP session model picker (`availableModels`).
+/// Per-ACP-session state (mode + engine-specific handles).
+struct AcpSession {
+    mode: AgentMode,
+    cwd: PathBuf,
+    coding: coding_run::CodingSessionState,
+    /// In-process chat (mode=chat).
+    chat: Option<Arc<SessionHandle>>,
+    /// Daemon conversation id (mode=face).
+    face_daemon_session: Option<String>,
+    /// Cooperative cancel for the in-flight turn (coding / chat / face).
+    cancel_tx: watch::Sender<bool>,
+    cancel_rx: watch::Receiver<bool>,
 }
 
-fn rand_u16() -> u16 {
-    use std::hash::{BuildHasher, Hasher};
-    std::collections::hash_map::RandomState::new()
-        .build_hasher()
-        .finish() as u16
+struct Bridge {
+    provider: Arc<dyn Provider>,
+    /// Inference backend label (`openrouter` | `deepseek` | `openai` | …).
+    backend: String,
+    catalog: Mutex<Vec<CatalogModel>>,
+    current_model: Mutex<String>,
+    /// Default mode for new sessions (`--mode` / `LIBERADO_ACP_MODE`).
+    default_mode: AgentMode,
+    /// Coder-role max_turns for the full coding pack (not face Budget::default()=8).
+    max_turns: u32,
+    coder_tuning: liberado_coder_core::CoderTuning,
+    /// Declared authority for coding mode (`policy.toml` `coding-local`), empty when standalone.
+    ///
+    /// Surfaced in `session/new` so the editor can show what this agent may do. Deeper enforcement
+    /// — mapping capabilities onto the pack's `PathPolicy`/`CommandPolicy` — is deliberately not
+    /// here yet; what this buys today is that the authority is *declared and visible* rather than
+    /// implied by code, and that a configured deployment missing the grant fails at startup.
+    local_grant: liberado_common::CapabilitySet,
+    /// Chat-mode system prompt from `[acp] system_prompt`. `None` = built-in.
+    system_prompt: Option<String>,
+    /// ACP session id → mode + engine state.
+    acp_sessions: Mutex<HashMap<String, AcpSession>>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum AcpInput {
-    Request {
-        id: Value,
-        method: String,
-        #[serde(default)]
-        params: Value,
-    },
-    Notification {
-        method: String,
-        #[serde(default)]
-        params: Value,
-    },
+/// One `session/prompt` running while the stdin loop stays free for `session/cancel`.
+struct InFlightPrompt {
+    session_id: String,
+    request_id: Value,
+    handle: tokio::task::JoinHandle<Result<Value, String>>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-enum AcpOutput {
-    Response {
-        id: Value,
-        result: Value,
-    },
-    ErrorResponse {
-        id: Value,
-        error: AcpError,
-    },
-    Notification {
-        method: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        params: Option<Value>,
-    },
+struct SessionHandle {
+    id: String,
+    conversation: Mutex<Conversation>,
+    executor: Executor,
+    tools: Arc<dyn ToolRuntime>,
+    cancel_tx: watch::Sender<bool>,
+    cancel_rx: watch::Receiver<bool>,
 }
 
-#[derive(Debug, Serialize)]
-struct AcpError {
-    code: i32,
-    message: String,
+struct NoTools;
+
+#[async_trait::async_trait]
+impl ToolRuntime for NoTools {
+    fn catalog(&self) -> Vec<liberado_provider::ToolDef> {
+        Vec::new()
+    }
+    async fn invoke(&self, _call: &liberado_provider::ToolInvocation) -> Result<String, String> {
+        Err("no coding tools available for this session".into())
+    }
 }
 
 #[tokio::main]
 async fn main() {
+    // Paseo Generic ACP diagnostics probe `liberado-acp --version` without ACP traffic.
+    // Handle argv before touching stdin so the probe never hangs waiting for NDJSON.
+    if let Some(code) = handle_cli_args(std::env::args().skip(1)) {
+        std::process::exit(code);
+    }
+
+    // Logs MUST go to stderr — stdout is the ACP wire.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
@@ -87,135 +168,1322 @@ async fn main() {
     }
 }
 
-async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let stdin = std::io::stdin().lock();
-    let mut session_id: Option<String> = None;
-
-    for line in stdin.lines() {
-        let line = line?;
-        let line = line.trim().to_string();
-        if line.is_empty() {
-            continue;
-        }
-
-        let input: AcpInput = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(%line, %e, "unparseable ACP message");
+/// Process non-ACP CLI flags. Returns `Some(exit_code)` when the process should exit
+/// without entering the stdio agent loop; `None` means continue as an ACP agent.
+/// Process CLI flags. Sets `LIBERADO_ACP_MODE` when `--mode` is passed so
+/// [`AgentMode::from_env_or_default`] sees it. Returns `Some(exit)` only for
+/// version/help/error — mode alone continues into the ACP loop.
+fn handle_cli_args<I, S>(args: I) -> Option<i32>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let args: Vec<String> = args.into_iter().map(|s| s.as_ref().to_string()).collect();
+    if args.is_empty() {
+        return None;
+    }
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--version" | "-V" | "version" => {
+                println!("liberado-acp {}", env!("CARGO_PKG_VERSION"));
+                return Some(0);
+            }
+            "--help" | "-h" | "help" => {
+                print_help();
+                return Some(0);
+            }
+            "--mode" | "-m" => {
+                let val = args.get(i + 1).map(|s| s.as_str()).unwrap_or("");
+                if AgentMode::parse(val).is_none() {
+                    eprintln!("liberado-acp: unknown mode '{val}' (expected coding|chat|face)");
+                    return Some(2);
+                }
+                // SAFETY: `#[tokio::main]` has already started the multi-threaded runtime by
+                // the time this runs, so "single-threaded" is not the argument. It is sound
+                // because nothing else in this process reads env vars before `run()` does, a few
+                // lines later on this same task. Any future crate init that reads env from a
+                // background thread would make this a data race.
+                unsafe {
+                    std::env::set_var("LIBERADO_ACP_MODE", val);
+                }
+                i += 2;
                 continue;
             }
-        };
-
-        match input {
-            AcpInput::Request { id, method, params } => {
-                let result = handle_request(&method, &params, &mut session_id).await;
-                let output = match result {
-                    Ok(value) => AcpOutput::Response { id, result: value },
-                    Err(msg) => AcpOutput::ErrorResponse {
-                        id,
-                        error: AcpError {
-                            code: -32603,
-                            message: msg,
-                        },
-                    },
-                };
-                let json = serde_json::to_string(&output)?;
-                writeln!(std::io::stdout(), "{json}")?;
-                std::io::stdout().flush()?;
+            other if other.starts_with("--mode=") => {
+                let val = other.trim_start_matches("--mode=");
+                if AgentMode::parse(val).is_none() {
+                    eprintln!("liberado-acp: unknown mode '{val}' (expected coding|chat|face)");
+                    return Some(2);
+                }
+                unsafe {
+                    std::env::set_var("LIBERADO_ACP_MODE", val);
+                }
+                i += 1;
+                continue;
             }
-            AcpInput::Notification { method, params } => {
-                tracing::debug!(%method, ?params, "acp notification (ignored)");
+            other if other.starts_with('-') => {
+                eprintln!("liberado-acp: unknown option '{other}'. Try --help.");
+                return Some(2);
+            }
+            _ => {
+                i += 1;
             }
         }
     }
+    None
+}
+
+fn print_help() {
+    println!(
+        "liberado-acp {} — Liberado multi-mode ACP agent for Paseo\n\n\
+         Usage:\n\
+           liberado-acp [--mode coding|chat|face]   ACP on stdin/stdout\n\
+           liberado-acp --version\n\
+           liberado-acp --help\n\n\
+         Modes (Liberado-owned; also switchable via ACP session/set_mode):\n\
+           coding  Full coding pack + worktrees (default)\n\
+           chat    In-process conversation (no daemon)\n\
+           face    Daemon face agent — needs liberado serve (LIBERADO_SERVER)\n\n\
+         Environment:\n\
+           OPENROUTER_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY\n\
+           LIBERADO_ACP_MODE           default mode (coding|chat|face)\n\
+           LIBERADO_ACP_MODEL          initial model id\n\
+           LIBERADO_ACP_MAX_TURNS      coder turns per prompt (default 50)\n\
+           LIBERADO_CONFIG_DIR         Liberado config ([coder] tuning)\n\
+           LIBERADO_SERVER             face mode daemon URL (default http://127.0.0.1:4201)",
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let resolved = build_provider()?;
+    let catalog = load_model_catalog(
+        resolved.provider.as_ref(),
+        &resolved.backend,
+        &resolved.model_id,
+    )
+    .await;
+    let default_mode = AgentMode::from_env_or_default();
+    let config_dir = std::env::var_os("LIBERADO_CONFIG_DIR").map(PathBuf::from);
+    let coder_tuning = coding_run::load_coder_tuning(config_dir.as_deref());
+    // `[acp]` from the same config the coding pack reads, so the prompt and the turn budget are
+    // versioned prose in a file rather than JSON strings pasted into another tool's config.
+    let acp_config = coding_run::load_acp_config(config_dir.as_deref());
+    // Resolve the declared authority before serving anything. A configured deployment missing the
+    // grant is refused by name here rather than discovered mid-session.
+    let local_grant = coding_run::resolve_local_grant(config_dir.as_deref())?;
+    let max_turns = coding_run::resolve_max_turns(acp_config.max_turns);
+    let system_prompt = acp_config.system_prompt.clone();
+    tracing::info!(
+        backend = %resolved.backend,
+        current = %resolved.model_id,
+        catalog_len = catalog.len(),
+        max_turns,
+        mode = %default_mode.id(),
+        "acp multi-mode agent ready"
+    );
+    let bridge = Arc::new(Bridge {
+        provider: resolved.provider,
+        backend: resolved.backend,
+        catalog: Mutex::new(catalog),
+        current_model: Mutex::new(resolved.model_id),
+        default_mode,
+        max_turns,
+        coder_tuning,
+        local_grant,
+        system_prompt,
+        acp_sessions: Mutex::new(HashMap::new()),
+    });
+    // Single writer for JSON-RPC responses *and* session/update notifications.
+    // Required once prompts run concurrent with stdin (cancel mid-turn).
+    let wire = Arc::new(StdoutWire);
+
+    let stdin = BufReader::new(tokio::io::stdin());
+    let mut lines = stdin.lines();
+    let mut in_flight: Option<InFlightPrompt> = None;
+
+    loop {
+        tokio::select! {
+            // Complete in-flight prompt responses without blocking cancel on stdin.
+            join = async {
+                match in_flight.as_mut() {
+                    Some(inf) => {
+                        let r = (&mut inf.handle).await;
+                        Some((inf.session_id.clone(), inf.request_id.clone(), r))
+                    }
+                    None => std::future::pending().await,
+                }
+            } => {
+                if let Some((_sid, id, join_result)) = join {
+                    in_flight = None;
+                    let outcome = match join_result {
+                        Ok(Ok(v)) => Ok(v),
+                        Ok(Err(message)) => Err(JsonRpcErrorBody {
+                            code: -32603,
+                            message,
+                        }),
+                        // Task abort (hard cancel backup) → cancelled turn.
+                        Err(je) if je.is_cancelled() => {
+                            Ok(json!({ "stopReason": "cancelled" }))
+                        }
+                        Err(je) => Err(JsonRpcErrorBody {
+                            code: -32603,
+                            message: format!("prompt task failed: {je}"),
+                        }),
+                    };
+                    wire.write_rpc_response(id, outcome)?;
+                }
+            }
+            line = lines.next_line() => {
+                let Some(line) = line? else {
+                    break;
+                };
+                let line = line.trim().to_string();
+                if line.is_empty() {
+                    continue;
+                }
+
+                let msg: JsonRpcIncoming = match serde_json::from_str(&line) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tracing::warn!(%line, %e, "unparseable ACP message");
+                        continue;
+                    }
+                };
+
+                let method = msg.method.unwrap_or_default();
+                // Notifications have no id (or null id) and expect no response.
+                let is_notification =
+                    msg.id.is_none() || msg.id.as_ref().is_some_and(|id| id.is_null());
+
+                if is_notification {
+                    if method == "session/cancel" {
+                        let sid = msg
+                            .params
+                            .get("sessionId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if !sid.is_empty() {
+                            request_session_cancel(&bridge, &sid).await;
+                            // Hard-stop backup if the turn is stuck outside cooperative points.
+                            if let Some(inf) = &in_flight
+                                && inf.session_id == sid
+                            {
+                                inf.handle.abort();
+                            }
+                        }
+                    } else {
+                        handle_notification(&method, msg.params).await;
+                    }
+                    continue;
+                }
+
+                let id = msg.id.unwrap_or(Value::Null);
+
+                // session/prompt runs in a task so session/cancel can be read mid-turn.
+                if method == "session/prompt" {
+                    if in_flight.is_some() {
+                        wire.write_rpc_response(
+                            id,
+                            Err(JsonRpcErrorBody {
+                                code: -32603,
+                                message: "another session/prompt is already in flight".into(),
+                            }),
+                        )?;
+                        continue;
+                    }
+                    let sid = match msg
+                        .params
+                        .get("sessionId")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                    {
+                        Some(s) if !s.is_empty() => s,
+                        _ => {
+                            wire.write_rpc_response(
+                                id,
+                                Err(JsonRpcErrorBody {
+                                    // -32602 Invalid params: the request is well-formed and the
+                                    // method exists, the arguments are wrong.
+                                    code: JSONRPC_INVALID_PARAMS,
+                                    message: "missing sessionId".into(),
+                                }),
+                            )?;
+                            continue;
+                        }
+                    };
+                    let bridge_p = Arc::clone(&bridge);
+                    let sink: Arc<dyn WireSink> = Arc::clone(&wire) as Arc<dyn WireSink>;
+                    let params = msg.params;
+                    let handle = tokio::spawn(async move {
+                        run_session_prompt(bridge_p, sink, params).await
+                    });
+                    in_flight = Some(InFlightPrompt {
+                        session_id: sid,
+                        request_id: id,
+                        handle,
+                    });
+                    continue;
+                }
+
+                match handle_request(Arc::clone(&bridge), &method, msg.params).await {
+                    Ok(result) => wire.write_rpc_response(id, Ok(result))?,
+                    Err(message) => wire.write_rpc_response(
+                        id,
+                        Err(JsonRpcErrorBody {
+                            code: if message.starts_with(METHOD_NOT_FOUND_PREFIX) {
+                                JSONRPC_METHOD_NOT_FOUND
+                            } else {
+                                JSONRPC_INTERNAL_ERROR
+                            },
+                            message,
+                        }),
+                    )?,
+                }
+            }
+        }
+    }
+
+    if let Some(inf) = in_flight.take() {
+        inf.handle.abort();
+        let _ = inf.handle.await;
+    }
+
+    tracing::info!("stdin closed; acp bridge exiting");
     Ok(())
 }
 
-async fn handle_request(
-    method: &str,
-    params: &Value,
-    session_id: &mut Option<String>,
-) -> Result<Value, String> {
+/// Sink for ACP notifications (`session/update`, …). Production writes NDJSON to stdout;
+/// tests capture into a buffer so MockProvider turns can assert wire shape.
+async fn wait_until_cancelled(rx: &mut watch::Receiver<bool>) {
+    loop {
+        if *rx.borrow() {
+            return;
+        }
+        if rx.changed().await.is_err() {
+            // Sender dropped — treat as cancelled so the turn does not hang forever.
+            return;
+        }
+    }
+}
+
+/// Signal cooperative cancel on the ACP session (and chat handle if present).
+async fn request_session_cancel(bridge: &Bridge, sid: &str) {
+    let sessions = bridge.acp_sessions.lock().await;
+    if let Some(sess) = sessions.get(sid) {
+        let _ = sess.cancel_tx.send(true);
+        if let Some(chat) = &sess.chat {
+            let _ = chat.cancel_tx.send(true);
+        }
+        tracing::info!(
+            session_id = %sid,
+            mode = %sess.mode.id(),
+            "session/cancel requested"
+        );
+    }
+}
+
+async fn handle_notification(method: &str, _params: Value) {
+    tracing::debug!(method = %method, "acp notification ignored");
+}
+
+async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Result<Value, String> {
     match method {
         "initialize" => {
-            tracing::info!("acp initialize");
-            Ok(serde_json::json!({
-                "protocolVersion": 1,
-                "serverInfo": {
+            let client_version = params
+                .get("protocolVersion")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(PROTOCOL_VERSION as u64);
+            tracing::info!(client_version, "acp initialize");
+            Ok(json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "agentInfo": {
                     "name": "Liberado",
                     "version": env!("CARGO_PKG_VERSION"),
+                    "title": "Liberado (coding · chat · face)",
                 },
-                "capabilities": {
-                    "prompt": {},
-                }
+                // loadSession stays false until durable history + replay ship (P3).
+                // Advertising true made Paseo take the resume path and get an empty transcript.
+                "agentCapabilities": {
+                    "loadSession": LOAD_SESSION_CAPABILITY,
+                    "promptCapabilities": {
+                        "image": false,
+                        "audio": false,
+                        "embeddedContext": true,
+                    },
+                    "mcpCapabilities": {
+                        "http": false,
+                        "sse": false,
+                    },
+                    "sessionCapabilities": {}
+                },
+                "authMethods": []
             }))
         }
 
-        "newSession" => {
-            let sid = new_id();
-            tracing::info!(session_id = %sid, "acp newSession");
-            *session_id = Some(sid.clone());
-            Ok(serde_json::json!({ "sessionId": sid, "modes": [] }))
+        "session/new" => {
+            let cwd = params
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from)
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+            let sid = new_session_id();
+            let mode = bridge.default_mode;
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let chat = if mode == AgentMode::Chat {
+                open_chat_session(
+                    &sid,
+                    cwd.clone(),
+                    Arc::clone(&bridge.provider),
+                    bridge.max_turns,
+                    bridge.system_prompt.clone(),
+                )
+                .ok()
+                .map(Arc::new)
+            } else {
+                None
+            };
+            bridge.acp_sessions.lock().await.insert(
+                sid.clone(),
+                AcpSession {
+                    mode,
+                    cwd: cwd.clone(),
+                    coding: coding_run::CodingSessionState {
+                        cwd: cwd.clone(),
+                        coding_session_id: sid.clone(),
+                        prior_feedback: Vec::new(),
+                        last_summary: None,
+                        rounds: 0,
+                    },
+                    chat,
+                    face_daemon_session: None,
+                    cancel_tx,
+                    cancel_rx,
+                },
+            );
+
+            tracing::info!(
+                session_id = %sid,
+                cwd = %cwd.display(),
+                mode = %mode.id(),
+                max_turns = bridge.max_turns,
+                "session/new"
+            );
+            let (catalog, current) = bridge_model_snapshot(&bridge).await;
+            Ok(session_state_payload(
+                &sid,
+                &catalog,
+                &current,
+                mode,
+                &bridge.local_grant,
+            ))
         }
 
-        "loadSession" => {
+        "session/load" => {
+            // Capability loadSession is false; reject rather than silently wipe history.
+            Err(
+                "session/load is not supported yet (no durable session history). \
+                 Start a new session with session/new."
+                    .into(),
+            )
+        }
+
+        // session/prompt is handled by the main loop (spawned so cancel can interleave).
+        "session/set_mode" => {
             let sid = params
                 .get("sessionId")
                 .and_then(|v| v.as_str())
-                .ok_or("missing sessionId")?
-                .to_string();
-            tracing::info!(%sid, "acp loadSession");
-            *session_id = Some(sid.clone());
-            Ok(serde_json::json!({ "sessionId": sid }))
-        }
-
-        "prompt" => {
-            let sid = session_id.as_ref().ok_or("no active session")?.clone();
-            let text = params
-                .get("text")
-                .or_else(|| params.get("message"))
+                .ok_or("missing sessionId")?;
+            let mode_id = params
+                .get("modeId")
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
+                .ok_or("missing modeId")?;
+            let mode = AgentMode::parse(mode_id)
+                .ok_or_else(|| format!("unknown modeId '{mode_id}' (coding|chat|face)"))?;
+            let mut map = bridge.acp_sessions.lock().await;
+            let sess = map
+                .get_mut(sid)
+                .ok_or_else(|| format!("unknown sessionId '{sid}'"))?;
+            if sess.mode != mode {
+                tracing::info!(session_id = %sid, from = %sess.mode.id(), to = %mode.id(), "session/set_mode");
+                sess.mode = mode;
+                // Lazy-init chat handle when switching into chat.
+                if mode == AgentMode::Chat && sess.chat.is_none() {
+                    sess.chat = open_chat_session(
+                        sid,
+                        sess.cwd.clone(),
+                        Arc::clone(&bridge.provider),
+                        bridge.max_turns,
+                        bridge.system_prompt.clone(),
+                    )
+                    .ok()
+                    .map(Arc::new);
+                }
+            }
+            Ok(json!({}))
+        }
+
+        "session/set_model" => {
+            let model_id = params
+                .get("modelId")
+                .and_then(|v| v.as_str())
+                .ok_or("missing modelId")?
+                .trim()
                 .to_string();
-            tracing::info!(session_id = %sid, %text, "acp prompt");
+            if model_id.is_empty() {
+                return Err("modelId must be non-empty".into());
+            }
 
-            let msg_id = new_id();
-            emit_notification(
-                "agentMessage",
-                Some(serde_json::json!({
-                    "sessionId": sid,
-                    "message": {
-                        "id": msg_id,
-                        "role": "assistant",
-                        "parts": [{
-                            "type": "text",
-                            "text": "Liberado ACP bridge ready. Full chat engine wiring pending."
-                        }]
-                    }
-                })),
-            )?;
+            {
+                let current = bridge.current_model.lock().await.clone();
+                let fresh =
+                    load_model_catalog(bridge.provider.as_ref(), &bridge.backend, &current).await;
+                if !fresh.is_empty() {
+                    *bridge.catalog.lock().await = fresh;
+                }
+            }
 
-            Ok(serde_json::json!({ "stopReason": "end_turn" }))
+            let allowed = {
+                let catalog = bridge.catalog.lock().await;
+                catalog.iter().any(|m| m.model_id == model_id)
+            };
+            if !allowed {
+                tracing::info!(%model_id, "set_model for id not in prior catalog; accepting");
+                let mut catalog = bridge.catalog.lock().await;
+                catalog.push(CatalogModel {
+                    name: display_name_for(&model_id),
+                    description: description_for(&bridge.backend, &model_id),
+                    model_id: model_id.clone(),
+                });
+                catalog.sort_by(|a, b| a.name.cmp(&b.name));
+            }
+
+            // Catalog ids may be raw OpenRouter slugs; set on the live provider.
+            bridge.provider.set_model(model_id.clone());
+            *bridge.current_model.lock().await = model_id.clone();
+            tracing::info!(%model_id, backend = %bridge.backend, "session/set_model");
+            Ok(json!({}))
         }
 
-        "cancel" => {
-            tracing::info!("acp cancel");
-            Ok(serde_json::json!({}))
-        }
+        "session/set_config_option" => Ok(json!({})),
 
-        "setSessionMode" | "setSessionModel" => Ok(serde_json::json!({})),
+        "authenticate" | "logout" => Ok(json!({})),
 
-        _ => Err(format!("unknown method: {method}")),
+        // Prefixed so the stdin loop can map it to JSON-RPC -32601 without a second
+        // error type. Everything used to answer -32603 (Internal error), which told a client
+        // routing on the code that the agent had failed rather than that it does not implement
+        // the method.
+        _ => Err(format!("{METHOD_NOT_FOUND_PREFIX}{method}")),
     }
 }
 
-fn emit_notification(method: &str, params: Option<Value>) -> Result<(), String> {
-    let json = serde_json::to_string(&AcpOutput::Notification {
-        method: method.to_string(),
-        params,
+async fn bridge_model_snapshot(bridge: &Bridge) -> (Vec<CatalogModel>, String) {
+    let catalog = bridge.catalog.lock().await.clone();
+    let current = bridge.current_model.lock().await.clone();
+    (catalog, current)
+}
+
+/// Dispatch one `session/prompt` (runs on a spawned task; cancel stays live on stdin).
+async fn run_session_prompt(
+    bridge: Arc<Bridge>,
+    sink: Arc<dyn WireSink>,
+    params: Value,
+) -> Result<Value, String> {
+    let sid = params
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or("missing sessionId")?
+        .to_string();
+    let text = extract_prompt_text(&params)?;
+
+    // Clear cancel from a prior turn; then route by mode.
+    let mode = {
+        let map = bridge.acp_sessions.lock().await;
+        let sess = map
+            .get(&sid)
+            .ok_or_else(|| format!("unknown sessionId '{sid}'"))?;
+        let _ = sess.cancel_tx.send(false);
+        if let Some(chat) = &sess.chat {
+            let _ = chat.cancel_tx.send(false);
+        }
+        sess.mode
+    };
+
+    match mode {
+        AgentMode::Coding => {
+            run_coding_prompt(Arc::clone(&bridge), sink.as_ref(), &sid, &text).await
+        }
+        AgentMode::Chat => run_chat_prompt(Arc::clone(&bridge), sink.as_ref(), &sid, &text).await,
+        AgentMode::Face => run_face_prompt(Arc::clone(&bridge), sink.as_ref(), &sid, &text).await,
+    }
+}
+
+/// Full coding pack path: LiberadoLoopBackend + durable worktree (same engine as goals).
+async fn run_coding_prompt(
+    bridge: Arc<Bridge>,
+    sink: &dyn WireSink,
+    sid: &str,
+    text: &str,
+) -> Result<Value, String> {
+    let (mut state, mut cancel_rx) = {
+        let map = bridge.acp_sessions.lock().await;
+        let sess = map
+            .get(sid)
+            .ok_or_else(|| format!("unknown sessionId '{sid}' (call session/new first)"))?;
+        (sess.coding.clone(), sess.cancel_rx.clone())
+    };
+
+    let model = bridge.current_model.lock().await.clone();
+    let factory = coding_run::single_factory(Arc::clone(&bridge.provider));
+
+    emit_agent_text_chunk(
+        sink,
+        sid,
+        &format!(
+            "Starting Liberado coding pack (max_turns={}, model={model})…\n\n",
+            bridge.max_turns
+        ),
+    )?;
+
+    // Drop the coding future on cancel so pack work stops at the next await point.
+    let outcome = tokio::select! {
+        biased;
+        _ = wait_until_cancelled(&mut cancel_rx) => None,
+        outcome = coding_run::run_coding_round(
+            Arc::clone(&bridge.provider),
+            factory,
+            &bridge.coder_tuning,
+            &mut state,
+            text,
+            Some(&model),
+            bridge.max_turns,
+        ) => Some(outcome),
+    };
+
+    let Some(outcome) = outcome else {
+        let _ = emit_agent_text_chunk(sink, sid, "\n*(cancelled)*\n");
+        return Ok(json!({ "stopReason": "cancelled" }));
+    };
+
+    // Persist coding state only when the pack finished (not mid-cancel).
+    if let Some(sess) = bridge.acp_sessions.lock().await.get_mut(sid) {
+        sess.coding = state;
+    }
+
+    match outcome {
+        Ok(result) => {
+            let report = result.render();
+            emit_agent_text_chunk(sink, sid, &report)?;
+            Ok(json!({ "stopReason": "end_turn" }))
+        }
+        Err(e) => {
+            emit_agent_text_chunk(sink, sid, &format!("\n**Coding pack error:** {e}\n"))?;
+            Ok(json!({ "stopReason": "end_turn" }))
+        }
+    }
+}
+
+/// In-process chat: Conversation + Executor, no coding tools.
+async fn run_chat_prompt(
+    bridge: Arc<Bridge>,
+    sink: &dyn WireSink,
+    sid: &str,
+    text: &str,
+) -> Result<Value, String> {
+    let session = {
+        let mut map = bridge.acp_sessions.lock().await;
+        let sess = map
+            .get_mut(sid)
+            .ok_or_else(|| format!("unknown sessionId '{sid}'"))?;
+        if sess.chat.is_none() {
+            sess.chat = open_chat_session(
+                sid,
+                sess.cwd.clone(),
+                Arc::clone(&bridge.provider),
+                bridge.max_turns,
+                bridge.system_prompt.clone(),
+            )
+            .ok()
+            .map(Arc::new);
+        }
+        sess.chat
+            .clone()
+            .ok_or_else(|| "failed to open chat session".to_string())?
+    };
+
+    let stop = run_prompt_turn(session, text.to_string(), sink).await?;
+    Ok(json!({ "stopReason": stop }))
+}
+
+/// Face agent via running `liberado serve` (HTTP SSE stream).
+async fn run_face_prompt(
+    bridge: Arc<Bridge>,
+    sink: &dyn WireSink,
+    sid: &str,
+    text: &str,
+) -> Result<Value, String> {
+    let (mut daemon_session, mut cancel_rx) = {
+        let map = bridge.acp_sessions.lock().await;
+        let sess = map
+            .get(sid)
+            .ok_or_else(|| format!("unknown sessionId '{sid}'"))?;
+        (sess.face_daemon_session.clone(), sess.cancel_rx.clone())
+    };
+
+    let sid_owned = sid.to_string();
+    let emit = |method: &str, params: Value| -> Result<(), String> { sink.emit(method, params) };
+    let result = tokio::select! {
+        biased;
+        _ = wait_until_cancelled(&mut cancel_rx) => None,
+        result = face_client::run_face_turn(
+            &mut daemon_session,
+            text,
+            &sid_owned,
+            &emit,
+        ) => Some(result),
+    };
+
+    if let Some(sess) = bridge.acp_sessions.lock().await.get_mut(sid) {
+        sess.face_daemon_session = daemon_session;
+    }
+
+    match result {
+        None => {
+            let _ = emit_agent_text_chunk(sink, sid, "\n*(cancelled)*\n");
+            Ok(json!({ "stopReason": "cancelled" }))
+        }
+        Some(Ok(())) => Ok(json!({ "stopReason": "end_turn" })),
+        Some(Err(e)) => {
+            emit_agent_text_chunk(sink, sid, &format!("\n**Face mode error:** {e}\n"))?;
+            Ok(json!({ "stopReason": "end_turn" }))
+        }
+    }
+}
+
+/// Pure chat session: conversation + executor, no coding tools.
+fn open_chat_session(
+    session_id: &str,
+    cwd: PathBuf,
+    provider: Arc<dyn Provider>,
+    max_turns: u32,
+    system_prompt: Option<String>,
+) -> Result<SessionHandle, String> {
+    let system = system_prompt.unwrap_or_else(|| {
+        format!(
+            "{DEFAULT_SYSTEM_PROMPT}\n\n\
+             You are Liberado chat (ACP). Workspace context path: {}.\n\
+             This mode is conversational only — no file tools. For coding work, switch mode to \
+             **coding**. For vault/delegate face agent, switch to **face** (daemon required).",
+            cwd.display()
+        )
+    });
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    Ok(SessionHandle {
+        id: session_id.to_string(),
+        conversation: Mutex::new(Conversation::new(system)),
+        // Chat uses executor budget = max_turns (not the hardcoded default of 8).
+        executor: Executor::new(provider, Budget::new(max_turns)),
+        tools: Arc::new(NoTools),
+        cancel_tx,
+        cancel_rx,
     })
-    .map_err(|e| e.to_string())?;
-    writeln!(std::io::stdout(), "{json}").map_err(|e| e.to_string())?;
-    std::io::stdout().flush().map_err(|e| e.to_string())?;
-    Ok(())
+}
+
+fn session_state_payload(
+    session_id: &str,
+    catalog: &[CatalogModel],
+    current_model_id: &str,
+    mode: AgentMode,
+    local_grant: &liberado_common::CapabilitySet,
+) -> Value {
+    json!({
+        "sessionId": session_id,
+        "models": model_state(catalog, current_model_id),
+        "modes": mode::mode_state_json(mode),
+        "configOptions": [],
+        // Not part of the ACP schema — extra keys are ignored by clients that do not want them.
+        // Carried anyway because "what is this agent allowed to do" should be answerable from the
+        // session it is answered *about*, not by reading the binary's source.
+        "liberadoAuthority": authority_summary(local_grant),
+    })
+}
+
+/// Compact, human-readable summary of the declared grant for the session payload.
+fn authority_summary(grant: &liberado_common::CapabilitySet) -> Value {
+    if grant.capabilities.is_empty() {
+        return json!({
+            "component": "coding-local",
+            "declared": false,
+            "note": "standalone — no LIBERADO_CONFIG_DIR, so no policy to enforce against"
+        });
+    }
+    json!({
+        "component": "coding-local",
+        "declared": true,
+        "askHuman": grant.contains(&liberado_common::Capability::AskHuman),
+        "capabilities": grant.capabilities.len(),
+    })
+}
+
+fn model_state(catalog: &[CatalogModel], current_model_id: &str) -> Value {
+    let available: Vec<Value> = catalog
+        .iter()
+        .map(|m| {
+            json!({
+                "modelId": m.model_id,
+                "name": m.name,
+                "description": m.description,
+            })
+        })
+        .collect();
+    let current = if catalog.iter().any(|m| m.model_id == current_model_id) {
+        current_model_id
+    } else {
+        catalog
+            .first()
+            .map(|m| m.model_id.as_str())
+            .unwrap_or(current_model_id)
+    };
+    json!({
+        "availableModels": available,
+        "currentModelId": current
+    })
+}
+
+fn extract_prompt_text(params: &Value) -> Result<String, String> {
+    if let Some(arr) = params.get("prompt").and_then(|v| v.as_array()) {
+        let mut parts = Vec::new();
+        for block in arr {
+            let ty = block.get("type").and_then(|t| t.as_str()).unwrap_or("text");
+            if ty == "text" {
+                if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+                    parts.push(t.to_string());
+                }
+            } else if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+                parts.push(t.to_string());
+            } else if let Some(uri) = block.get("uri").and_then(|u| u.as_str()) {
+                parts.push(format!("[resource: {uri}]"));
+            }
+        }
+        let text = parts.join("\n");
+        if text.trim().is_empty() {
+            return Err("prompt contained no text content".into());
+        }
+        return Ok(text);
+    }
+    if let Some(t) = params.get("text").and_then(|v| v.as_str()) {
+        return Ok(t.to_string());
+    }
+    if let Some(t) = params.get("message").and_then(|v| v.as_str()) {
+        return Ok(t.to_string());
+    }
+    Err("missing prompt".into())
+}
+
+async fn run_prompt_turn(
+    session: Arc<SessionHandle>,
+    text: String,
+    sink: &dyn WireSink,
+) -> Result<String, String> {
+    let (event_tx, mut event_rx) = mpsc::channel::<AgentEvent>(64);
+    let sid = session.id.clone();
+    let turn_session = Arc::clone(&session);
+
+    let turn = tokio::spawn(async move {
+        let mut convo = turn_session.conversation.lock().await;
+        let result = convo
+            .turn_stream(
+                &turn_session.executor,
+                turn_session.tools.as_ref(),
+                &text,
+                &event_tx,
+            )
+            .await;
+        match &result {
+            Ok(()) => {
+                let _ = event_tx.send(AgentEvent::Done).await;
+            }
+            Err(e) => {
+                let _ = event_tx.send(AgentEvent::Error(e.to_string())).await;
+            }
+        }
+        result
+    });
+
+    let mut stop_reason = "end_turn".to_string();
+    let mut cancel_rx = session.cancel_rx.clone();
+    // Paseo UI pairs tool_call → tool_call_update by toolCallId. Keep a LIFO stack of
+    // in-flight ids (executor runs tools sequentially, but nested/same-name tools may stack).
+    let mut pending_tool_ids: Vec<(String, String)> = Vec::new();
+
+    loop {
+        tokio::select! {
+            biased;
+            // `wait_until_cancelled`, not a bare `changed()`: `changed()` only fires on a
+            // transition *after* this receiver was cloned, so a cancel that lands between
+            // session/prompt arriving and this loop starting was silently dropped and the turn ran
+            // to completion. The helper checks the current value first, and treats a dropped sender
+            // as cancelled rather than hanging.
+            _ = wait_until_cancelled(&mut cancel_rx) => {
+                turn.abort();
+                stop_reason = "cancelled".into();
+                break;
+            }
+            ev = event_rx.recv() => {
+                match ev {
+                    Some(AgentEvent::Token(t)) => {
+                        emit_agent_text_chunk(sink, &sid, &t)?;
+                    }
+                    Some(AgentEvent::ToolStarted { name, args }) => {
+                        let tool_call_id = push_tool_call_id(&mut pending_tool_ids, &name);
+                        emit_tool_call(sink, &sid, &tool_call_id, &name, &args, "pending")?;
+                    }
+                    Some(AgentEvent::ToolFinished { name, ok, preview }) => {
+                        let tool_call_id = pop_tool_call_id(&mut pending_tool_ids, &name);
+                        let status = if ok { "completed" } else { "failed" };
+                        emit_tool_call_update(sink, &sid, &tool_call_id, &name, status, &preview)?;
+                    }
+                    Some(AgentEvent::Done) => {
+                        stop_reason = "end_turn".into();
+                        break;
+                    }
+                    Some(AgentEvent::Error(msg)) => {
+                        emit_agent_text_chunk(sink, &sid, &format!("\nError: {msg}"))?;
+                        // Client-facing failure still ends the turn; refuse rather than crash.
+                        stop_reason = "end_turn".into();
+                        break;
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+
+    let _ = turn.await;
+    Ok(stop_reason)
+}
+
+/// Allocate a stable `toolCallId` for a started tool and record it for the matching finish.
+fn new_session_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    // Stable, unique, path-safe. Not a UUID, and ACP does not require UUID format for sessionId.
+    format!("lib-{:x}-{}", nanos, std::process::id())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::catalog_model_ids;
+
+    #[test]
+    fn extract_prompt_joins_text_blocks() {
+        let params = json!({
+            "sessionId": "s1",
+            "prompt": [
+                { "type": "text", "text": "hello " },
+                { "type": "text", "text": "world" }
+            ]
+        });
+        assert_eq!(extract_prompt_text(&params).unwrap(), "hello \nworld");
+    }
+
+    #[test]
+    fn session_new_payload_has_models_and_modes() {
+        let catalog = vec![
+            CatalogModel {
+                model_id: "deepseek/deepseek-v4-pro".into(),
+                name: "deepseek/deepseek-v4-pro".into(),
+                description: "OpenRouter · deepseek/deepseek-v4-pro".into(),
+            },
+            CatalogModel {
+                model_id: "deepseek/deepseek-v4-flash".into(),
+                name: "deepseek/deepseek-v4-flash".into(),
+                description: "OpenRouter · deepseek/deepseek-v4-flash".into(),
+            },
+        ];
+        let v = session_state_payload(
+            "sid",
+            &catalog,
+            "deepseek/deepseek-v4-pro",
+            AgentMode::Coding,
+            &liberado_common::CapabilitySet::empty(),
+        );
+        assert_eq!(v["sessionId"], "sid");
+        assert_eq!(v["models"]["currentModelId"], "deepseek/deepseek-v4-pro");
+        assert_eq!(v["models"]["availableModels"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            v["models"]["availableModels"][1]["modelId"],
+            "deepseek/deepseek-v4-flash"
+        );
+        assert_eq!(v["modes"]["currentModeId"], "coding");
+        assert_eq!(v["modes"]["availableModes"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn catalog_is_full_and_alphabetical() {
+        let live = vec![
+            "openai/gpt-4o".into(),
+            "anthropic/claude-3.5-sonnet".into(),
+            "deepseek/deepseek-v4-pro".into(),
+            "deepseek/deepseek-chat".into(),
+        ];
+        let ordered = catalog_model_ids(&live, "deepseek/deepseek-v4-pro");
+        assert_eq!(
+            ordered,
+            vec![
+                "anthropic/claude-3.5-sonnet",
+                "deepseek/deepseek-chat",
+                "deepseek/deepseek-v4-pro",
+                "openai/gpt-4o",
+            ]
+        );
+    }
+
+    #[test]
+    fn catalog_inserts_current_when_missing_from_live_then_sorts() {
+        let live = vec!["openai/gpt-4o".into(), "anthropic/claude-3.5-sonnet".into()];
+        let ordered = catalog_model_ids(&live, "deepseek/deepseek-v4-pro");
+        assert_eq!(
+            ordered,
+            vec![
+                "anthropic/claude-3.5-sonnet",
+                "deepseek/deepseek-v4-pro",
+                "openai/gpt-4o",
+            ]
+        );
+    }
+
+    /// A Bridge with a scripted provider — enough to drive `handle_request` in tests.
+    fn test_bridge() -> Arc<Bridge> {
+        use liberado_provider::MockProvider;
+        Arc::new(Bridge {
+            provider: Arc::new(MockProvider::with_script("mock", [])),
+            backend: "mock".into(),
+            catalog: Mutex::new(Vec::new()),
+            current_model: Mutex::new("mock-model".into()),
+            default_mode: AgentMode::Coding,
+            max_turns: 8,
+            coder_tuning: liberado_coder_core::CoderTuning::default(),
+            local_grant: liberado_common::CapabilitySet::empty(),
+            system_prompt: None,
+            acp_sessions: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// A method the agent does not implement must answer -32601, not -32603.
+    ///
+    /// A cold review pointed out every error used the same "Internal error" code, so a client
+    /// routing on it could not tell "you asked for something I do not implement" from "I broke".
+    #[tokio::test]
+    async fn an_unknown_method_is_method_not_found() {
+        let bridge = test_bridge();
+        let err = handle_request(bridge, "session/does_not_exist", json!({}))
+            .await
+            .expect_err("an unimplemented method must be an error");
+        assert!(
+            err.starts_with(METHOD_NOT_FOUND_PREFIX),
+            "must be taggable as -32601 by the wire layer, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn initialize_shape_is_acp_compatible() {
+        // Drives the real handler. The previous version built its own JSON literal and asserted on
+        // that — it "mirrored the handle_request arm" by its own comment, so deleting the arm, or
+        // dropping any field from the real response, left it green.
+        let bridge = test_bridge();
+        let result = handle_request(bridge, "initialize", json!({}))
+            .await
+            .expect("initialize must succeed");
+
+        assert_eq!(result["protocolVersion"], PROTOCOL_VERSION);
+        assert_eq!(result["agentInfo"]["name"], "Liberado");
+        // Must stay false until durable load+replay (P3); true lied to Paseo's resume path.
+        assert_eq!(result["agentCapabilities"]["loadSession"], false);
+        assert_eq!(
+            result["agentCapabilities"]["promptCapabilities"]["embeddedContext"],
+            true
+        );
+    }
+
+    #[test]
+    fn load_session_capability_is_honest() {
+        // Mutation guard: initialize must not advertise loadSession until history is durable.
+        // const block: clippy::assertions_on_constants rejects a runtime assert! on a const.
+        const {
+            assert!(
+                !LOAD_SESSION_CAPABILITY,
+                "advertising loadSession:true without durable history wipes Paseo resume"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_call_ids_pair_start_and_finish() {
+        let mut pending = Vec::new();
+        let start_a = push_tool_call_id(&mut pending, "read_file");
+        let start_b = push_tool_call_id(&mut pending, "run_command");
+        assert_ne!(start_a, start_b);
+        assert_eq!(pop_tool_call_id(&mut pending, "run_command"), start_b);
+        assert_eq!(pop_tool_call_id(&mut pending, "read_file"), start_a);
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn tool_call_ids_pair_same_name_lifo() {
+        let mut pending = Vec::new();
+        let first = push_tool_call_id(&mut pending, "read_file");
+        let second = push_tool_call_id(&mut pending, "read_file");
+        // Finish order matches LIFO (inner tool completes first).
+        assert_eq!(pop_tool_call_id(&mut pending, "read_file"), second);
+        assert_eq!(pop_tool_call_id(&mut pending, "read_file"), first);
+    }
+
+    #[test]
+    fn tool_call_id_pairing_is_required_for_paseo_ui() {
+        // Mutation guard: if start and finish minted independent ids (old bug), this fails.
+        let mut pending = Vec::new();
+        let started = push_tool_call_id(&mut pending, "list_files");
+        let finished = pop_tool_call_id(&mut pending, "list_files");
+        assert_eq!(
+            started, finished,
+            "Paseo indexes tool UI by toolCallId; start and finish must share one id"
+        );
+    }
+
+    #[test]
+    fn version_flag_exits_without_stdio_loop() {
+        assert_eq!(handle_cli_args(["--version"]), Some(0));
+        assert_eq!(handle_cli_args(["-V"]), Some(0));
+        assert_eq!(handle_cli_args(["version"]), Some(0));
+    }
+
+    #[test]
+    fn help_flag_exits_without_stdio_loop() {
+        assert_eq!(handle_cli_args(["--help"]), Some(0));
+        assert_eq!(handle_cli_args(["-h"]), Some(0));
+    }
+
+    #[test]
+    fn no_args_enters_acp_mode() {
+        assert_eq!(handle_cli_args(Vec::<String>::new()), None);
+    }
+
+    #[test]
+    fn unknown_flag_is_an_error_exit() {
+        assert_eq!(handle_cli_args(["--nope"]), Some(2));
+    }
+
+    #[test]
+    fn mode_flag_continues_into_acp_loop() {
+        // `--mode` sets default and continues (does not exit).
+        assert_eq!(handle_cli_args(["--mode", "chat"]), None);
+        assert_eq!(handle_cli_args(["--mode=face"]), None);
+        assert_eq!(handle_cli_args(["-m", "coding"]), None);
+    }
+
+    #[test]
+    fn unknown_mode_is_an_error_exit() {
+        assert_eq!(handle_cli_args(["--mode", "banana"]), Some(2));
+        assert_eq!(handle_cli_args(["--mode=nope"]), Some(2));
+    }
+
+    #[tokio::test]
+    async fn wait_until_cancelled_resolves_when_flag_set() {
+        let (tx, mut rx) = watch::channel(false);
+        let waiter = tokio::spawn(async move {
+            wait_until_cancelled(&mut rx).await;
+        });
+        // Give the waiter a chance to park on changed().
+        tokio::task::yield_now().await;
+        tx.send(true).expect("send cancel");
+        tokio::time::timeout(std::time::Duration::from_secs(2), waiter)
+            .await
+            .expect("cancel wait timed out")
+            .expect("join");
+    }
+
+    #[tokio::test]
+    async fn wait_until_cancelled_sees_already_true() {
+        let (_tx, mut rx) = watch::channel(true);
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            wait_until_cancelled(&mut rx),
+        )
+        .await
+        .expect("must return immediately when already cancelled");
+    }
+
+    #[tokio::test]
+    async fn chat_turn_stops_with_cancelled_on_cancel_flag() {
+        use liberado_provider::{CompletionResponse, MockProvider};
+        use std::time::Duration;
+
+        // Slow first completion so cancel can win mid-turn.
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [CompletionResponse::text("should not finish")],
+        ));
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let session = Arc::new(SessionHandle {
+            id: "sess-cancel".into(),
+            conversation: Mutex::new(Conversation::new("test system")),
+            executor: Executor::new(provider, Budget::new(8)),
+            tools: Arc::new(NoTools),
+            cancel_tx: cancel_tx.clone(),
+            cancel_rx,
+        });
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+
+        // Cancel BEFORE the turn starts. The previous version slept 5ms and then cancelled, so
+        // the fast mock almost always finished first and the assertion accepted `end_turn` —
+        // which meant the test passed with the cancel path deleted entirely.
+        cancel_tx.send(true).expect("cancel send");
+
+        let turn = tokio::spawn({
+            let session = Arc::clone(&session);
+            async move { run_prompt_turn(session, "hello".into(), &sink).await }
+        });
+
+        let stop = tokio::time::timeout(Duration::from_secs(5), turn)
+            .await
+            .expect("turn join timeout")
+            .expect("join")
+            .expect("turn result");
+        assert_eq!(
+            stop, "cancelled",
+            "a turn whose session was already cancelled must report `cancelled`"
+        );
+    }
+
+    /// Captures ACP notifications instead of writing stdout (for MockProvider turns).
+    struct CaptureSink {
+        lines: std::sync::Mutex<Vec<(String, Value)>>,
+    }
+
+    impl WireSink for CaptureSink {
+        fn emit(&self, method: &str, params: Value) -> Result<(), String> {
+            self.lines
+                .lock()
+                .map_err(|e| e.to_string())?
+                .push((method.to_string(), params));
+            Ok(())
+        }
+    }
+
+    struct EchoTool;
+
+    #[async_trait::async_trait]
+    impl ToolRuntime for EchoTool {
+        fn catalog(&self) -> Vec<liberado_provider::ToolDef> {
+            vec![liberado_provider::ToolDef::new(
+                "echo",
+                "Echo a message",
+                json!({
+                    "type": "object",
+                    "properties": { "msg": { "type": "string" } },
+                    "required": ["msg"]
+                }),
+            )]
+        }
+        async fn invoke(&self, call: &liberado_provider::ToolInvocation) -> Result<String, String> {
+            let msg = call
+                .arguments
+                .get("msg")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            Ok(format!("echo:{msg}"))
+        }
+    }
+
+    #[tokio::test]
+    async fn mock_provider_turn_streams_paired_tool_and_text() {
+        use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
+
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "tc1",
+                    "echo",
+                    json!({ "msg": "hi" }),
+                )]),
+                CompletionResponse::text("all done"),
+            ],
+        ));
+        // Chat-path wire test: same SessionHandle / run_prompt_turn stack as mode=chat,
+        // with a mock tool so we can assert tool_call id pairing on the ACP wire.
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let session = Arc::new(SessionHandle {
+            id: "sess-mock".into(),
+            conversation: Mutex::new(Conversation::new("test system")),
+            executor: Executor::new(provider, Budget::new(8)),
+            tools: Arc::new(EchoTool),
+            cancel_tx,
+            cancel_rx,
+        });
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let stop = run_prompt_turn(session, "please echo".into(), &sink)
+            .await
+            .expect("turn");
+        assert_eq!(stop, "end_turn");
+
+        let lines = sink.lines.lock().unwrap().clone();
+        assert!(
+            !lines.is_empty(),
+            "expected session/update notifications on the wire"
+        );
+
+        let tool_starts: Vec<&Value> = lines
+            .iter()
+            .filter(|(m, p)| m == "session/update" && p["update"]["sessionUpdate"] == "tool_call")
+            .map(|(_, p)| p)
+            .collect();
+        let tool_updates: Vec<&Value> = lines
+            .iter()
+            .filter(|(m, p)| {
+                m == "session/update" && p["update"]["sessionUpdate"] == "tool_call_update"
+            })
+            .map(|(_, p)| p)
+            .collect();
+        assert_eq!(tool_starts.len(), 1, "one tool_call: {lines:?}");
+        assert_eq!(tool_updates.len(), 1, "one tool_call_update: {lines:?}");
+        let start_id = tool_starts[0]["update"]["toolCallId"]
+            .as_str()
+            .expect("start id");
+        let finish_id = tool_updates[0]["update"]["toolCallId"]
+            .as_str()
+            .expect("finish id");
+        assert_eq!(
+            start_id, finish_id,
+            "MockProvider path must pair toolCallId (mutation target for P0.1)"
+        );
+        assert_eq!(tool_starts[0]["update"]["title"], "echo");
+        assert_eq!(tool_updates[0]["update"]["status"], "completed");
+
+        let text: String = lines
+            .iter()
+            .filter(|(m, p)| {
+                m == "session/update" && p["update"]["sessionUpdate"] == "agent_message_chunk"
+            })
+            .filter_map(|(_, p)| p["update"]["content"]["text"].as_str())
+            .collect();
+        assert!(
+            text.contains("all done"),
+            "expected assistant text chunks, got {text:?} from {lines:?}"
+        );
+    }
 }

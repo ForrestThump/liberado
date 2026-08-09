@@ -1,0 +1,18 @@
+{
+  "agents": {
+    "providers": {
+      "liberado": {
+        "extends": "acp",
+        "label": "Liberado",
+        "description": "Liberado multi-mode agent (coding · chat · face) over ACP",
+        "command": ["liberado-acp"],
+        "env": {
+          "LIBERADO_ACP_MODEL": "deepseek/deepseek-v4-pro"
+        },
+        "params": {
+          "supportsMcpServers": false
+        }
+      }
+    }
+  }
+}
