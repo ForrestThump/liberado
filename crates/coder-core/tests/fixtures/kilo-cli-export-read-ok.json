@@ -1,0 +1,249 @@
+{
+  "info": {
+    "id": "ses_01951ac31ffentWcRONNUuo2tw",
+    "slug": "swift-star",
+    "projectID": "global",
+    "directory": "C:\\tmp\\kilo-throwaway",
+    "path": "tmp/kilo-throwaway",
+    "title": "Read hello.txt content",
+    "agent": "code",
+    "model": {
+      "id": "deepseek-v4-flash",
+      "providerID": "deepseek",
+      "variant": "default"
+    },
+    "version": "7.4.11",
+    "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+    },
+    "cost": 0.001600704,
+    "tokens": {
+      "input": 11100,
+      "output": 58,
+      "reasoning": 0,
+      "cache": {
+        "read": 10880,
+        "write": 0
+      }
+    },
+    "permission": [
+      {
+        "permission": "question",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "interactive_terminal",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_enter",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_exit",
+        "pattern": "*",
+        "action": "deny"
+      }
+    ],
+    "time": {
+      "created": 1786281612238,
+      "updated": 1786281616551
+    }
+  },
+  "messages": [
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1786281612348
+        },
+        "tools": {},
+        "agent": "code",
+        "model": {
+          "providerID": "deepseek",
+          "modelID": "deepseek-v4-flash"
+        },
+        "summary": {
+          "diffs": []
+        },
+        "id": "msg_fe6ae543c001g0TeTIvv4iODQC",
+        "sessionID": "ses_01951ac31ffentWcRONNUuo2tw"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "\"Read hello.txt and tell me the single word inside it.\"",
+          "id": "prt_fe6ae544f001U2OYF819jWGFfQ",
+          "sessionID": "ses_01951ac31ffentWcRONNUuo2tw",
+          "messageID": "msg_fe6ae543c001g0TeTIvv4iODQC"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_fe6ae543c001g0TeTIvv4iODQC",
+        "role": "assistant",
+        "mode": "code",
+        "agent": "code",
+        "path": {
+          "cwd": "C:\\tmp\\kilo-throwaway",
+          "root": "/"
+        },
+        "cost": 0.0015463,
+        "tokens": {
+          "total": 10990,
+          "input": 10935,
+          "output": 55,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "modelID": "deepseek-v4-flash",
+        "providerID": "deepseek",
+        "time": {
+          "created": 1786281612866,
+          "completed": 1786281615517
+        },
+        "finish": "tool-calls",
+        "id": "msg_fe6ae5642001i3QNFiE4PihWne",
+        "sessionID": "ses_01951ac31ffentWcRONNUuo2tw"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "id": "prt_fe6ae5cfe001TxYonaGJ0k7XtT",
+          "sessionID": "ses_01951ac31ffentWcRONNUuo2tw",
+          "messageID": "msg_fe6ae5642001i3QNFiE4PihWne"
+        },
+        {
+          "type": "tool",
+          "tool": "read",
+          "callID": "call_00_ET_8S0lzpuMcpKVo6nqM3ix9191",
+          "state": {
+            "status": "completed",
+            "input": {
+              "filePath": "C:\\tmp\\kilo-throwaway\\hello.txt"
+            },
+            "output": "<path>C:\\tmp\\kilo-throwaway\\hello.txt</path>\n<type>file</type>\n<content>\n1: liberado\n\n(End of file - total 1 lines)\n</content>",
+            "metadata": {
+              "preview": "liberado",
+              "truncated": false,
+              "loaded": [],
+              "display": {
+                "type": "file",
+                "path": "C:\\tmp\\kilo-throwaway\\hello.txt",
+                "text": "liberado",
+                "lineStart": 1,
+                "lineEnd": 1,
+                "totalLines": 1,
+                "truncated": false
+              }
+            },
+            "title": "tmp\\kilo-throwaway\\hello.txt",
+            "time": {
+              "start": 1786281615464,
+              "end": 1786281615486
+            }
+          },
+          "id": "prt_fe6ae5fef001L7qe0no4B7VJ7t",
+          "sessionID": "ses_01951ac31ffentWcRONNUuo2tw",
+          "messageID": "msg_fe6ae5642001i3QNFiE4PihWne"
+        },
+        {
+          "reason": "tool-calls",
+          "type": "step-finish",
+          "tokens": {
+            "total": 10990,
+            "input": 10935,
+            "output": 55,
+            "reasoning": 0,
+            "cache": {
+              "write": 0,
+              "read": 0
+            }
+          },
+          "cost": 0.0015463,
+          "id": "prt_fe6ae60980018qs2UokoapgQT7",
+          "sessionID": "ses_01951ac31ffentWcRONNUuo2tw",
+          "messageID": "msg_fe6ae5642001i3QNFiE4PihWne"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_fe6ae543c001g0TeTIvv4iODQC",
+        "role": "assistant",
+        "mode": "code",
+        "agent": "code",
+        "path": {
+          "cwd": "C:\\tmp\\kilo-throwaway",
+          "root": "/"
+        },
+        "cost": 0.000054404,
+        "tokens": {
+          "total": 11048,
+          "input": 165,
+          "output": 3,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 10880
+          }
+        },
+        "modelID": "deepseek-v4-flash",
+        "providerID": "deepseek",
+        "time": {
+          "created": 1786281615521,
+          "completed": 1786281616486
+        },
+        "finish": "stop",
+        "id": "msg_fe6ae60a1001B6YTVXJU4bRizU",
+        "sessionID": "ses_01951ac31ffentWcRONNUuo2tw"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "id": "prt_fe6ae6317001fLx5qyrY4zSnY6",
+          "sessionID": "ses_01951ac31ffentWcRONNUuo2tw",
+          "messageID": "msg_fe6ae60a1001B6YTVXJU4bRizU"
+        },
+        {
+          "type": "text",
+          "text": "liberado",
+          "time": {
+            "start": 1786281616434,
+            "end": 1786281616464
+          },
+          "id": "prt_fe6ae6432001orwXoW6ZzD2myz",
+          "sessionID": "ses_01951ac31ffentWcRONNUuo2tw",
+          "messageID": "msg_fe6ae60a1001B6YTVXJU4bRizU"
+        },
+        {
+          "reason": "stop",
+          "type": "step-finish",
+          "tokens": {
+            "total": 11048,
+            "input": 165,
+            "output": 3,
+            "reasoning": 0,
+            "cache": {
+              "write": 0,
+              "read": 10880
+            }
+          },
+          "cost": 0.000054404,
+          "id": "prt_fe6ae6463001ftvjS1jk24Ew5C",
+          "sessionID": "ses_01951ac31ffentWcRONNUuo2tw",
+          "messageID": "msg_fe6ae60a1001B6YTVXJU4bRizU"
+        }
+      ]
+    }
+  ]
+}

@@ -286,12 +286,58 @@ impl GoalSessionHub {
     }
 
     pub async fn cancel(&self, id: &str) -> Result<(), String> {
-        let map = self.cancels.lock().await;
-        let tx = map
+        // Live host first: cooperative cancel via the watch channel (running packs).
+        {
+            let map = self.cancels.lock().await;
+            if let Some(tx) = map.get(id) {
+                let _ = tx.send(true);
+                return Ok(());
+            }
+        }
+        // No live cancel token. Parked sessions survive a daemon restart without a host, so
+        // hub-only cancel used to answer "not found or already finished" while the store row
+        // kept holding a concurrency slot forever. Finish the durable record as Cancelled.
+        let record = self
+            .store
             .get(id)
+            .await
             .ok_or_else(|| format!("session '{id}' not found or already finished"))?;
-        let _ = tx.send(true);
-        Ok(())
+        if record.status == SessionStatus::Parked {
+            let summary = "cancelled while parked (no live host)".to_string();
+            // Durable terminal state **before** the event, for the same reason `run_session` does
+            // it in that order: anything woken by `SessionFinished` must find `result` already set.
+            self.store
+                .finish(
+                    id,
+                    SessionStatus::Cancelled,
+                    GoalResult {
+                        terminal: TerminalKind::Cancelled,
+                        summary: summary.clone(),
+                        artifacts: Vec::new(),
+                        diagnostics: serde_json::json!({ "source": "cancel_parked" }),
+                    },
+                )
+                .await;
+            // `store.finish` mutates the row but publishes nothing. Without this event the cancel
+            // is invisible to every event consumer: an SSE client watching the session sees it
+            // stay parked forever, and `await_terminal` — which blocks on `recv()` between its
+            // status checks — never wakes, so a `delegate` parented to this session hangs.
+            self.store
+                .push_event(SessionEvent::new(
+                    id,
+                    SessionEventKind::SessionFinished {
+                        status: "cancelled".into(),
+                        summary,
+                    },
+                ))
+                .await;
+            return Ok(());
+        }
+        if record.status.is_terminal() {
+            return Err(format!("session '{id}' not found or already finished"));
+        }
+        // Pending/Running without a cancel handle is a torn state; refuse rather than invent a host.
+        Err(format!("session '{id}' not found or already finished"))
     }
 
     /// Ask a running session to **park**: wind down gracefully and land in

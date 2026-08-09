@@ -10,9 +10,17 @@
 
 mod coherence;
 mod intake;
+mod trace_view;
 mod tuning;
 mod verify;
 
+pub use trace_view::{
+    CallView, Divergence, FailedCall, ForeignTraceFormat, MessagesExport, RunView, SideBySide,
+    TerminalSummary, TraceComparison, TurnView, compare_traces, diverge, format_comparison,
+    format_divergence, import_foreign_auto, import_foreign_file, import_foreign_messages,
+    load_run_view, load_trace, render_transcript, resolve_trace_path, run_view_from_messages,
+    run_view_from_trace, write_messages_export,
+};
 pub use tuning::{CoderTuning, TraceFormat};
 
 pub use coherence::{

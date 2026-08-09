@@ -769,6 +769,132 @@ mod tests {
         );
     }
 
+    /// F4: a parked store record has no live cancel token. Cancel must still finish it as
+    /// Cancelled so the stuck-session panel (and shepherd-side cleanup) can clear orphans.
+    #[tokio::test]
+    async fn cancel_parked_session_without_live_host_reaches_cancelled() {
+        let store = GoalSessionStore::new();
+        let created = chrono::Utc::now() - chrono::Duration::hours(26);
+        let mut rec = crate::goal::GoalSessionRecord::new(GoalSpec {
+            id: Some("parked-orphan".into()),
+            description: "orphaned intake question".into(),
+            success_criteria: vec![],
+            domain: DomainHint::Life,
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: None,
+            profile: None,
+            payload: serde_json::Value::Null,
+        });
+        rec.status = crate::goal::SessionStatus::Parked;
+        rec.awaiting_input = true;
+        rec.created_at = created;
+        crate::record_store::SessionRecordStore::insert(&store, rec).await;
+
+        let hub = Arc::new(GoalSessionHub::new(store.clone()));
+
+        // list surfaces parked sessions (panel source of truth).
+        let listed = hub.list().await;
+        let parked: Vec<_> = listed
+            .iter()
+            .filter(|r| r.status == crate::goal::SessionStatus::Parked)
+            .collect();
+        assert_eq!(parked.len(), 1, "list must identify parked sessions");
+        assert_eq!(parked[0].id, "parked-orphan");
+        assert_eq!(
+            parked[0].created_at, created,
+            "age is derived from durable created_at"
+        );
+
+        hub.cancel("parked-orphan")
+            .await
+            .expect("cancel of parked (no live token) must be accepted");
+
+        let after = store.get("parked-orphan").await.expect("record remains");
+        assert_eq!(
+            after.status,
+            crate::goal::SessionStatus::Cancelled,
+            "parked cancel must leave a terminal Cancelled record"
+        );
+        assert!(
+            after.finished_at.is_some(),
+            "cancelled parked session must stamp finished_at"
+        );
+        assert!(
+            !after.awaiting_input,
+            "cancel clears awaiting_input so it no longer looks stuck"
+        );
+        // No longer listed as parked.
+        let still_parked = hub
+            .list()
+            .await
+            .into_iter()
+            .filter(|r| r.status == crate::goal::SessionStatus::Parked)
+            .count();
+        assert_eq!(still_parked, 0, "cancelled session must not list as parked");
+    }
+
+    /// Cancelling a parked orphan must be *observable*, not just durable. `store.finish` mutates
+    /// the row and publishes nothing, so without an explicit event the cancel is invisible to
+    /// every event consumer: an SSE client watching the session sees it stay parked, and
+    /// `await_terminal` — which blocks on `recv()` between its status checks — never wakes, so a
+    /// `delegate` parented to the session hangs instead of returning.
+    #[tokio::test]
+    async fn cancel_of_a_parked_orphan_wakes_event_consumers() {
+        let store = GoalSessionStore::new();
+        let mut rec = crate::goal::GoalSessionRecord::new(GoalSpec {
+            id: Some("parked-observed".into()),
+            description: "orphaned intake question".into(),
+            success_criteria: vec![],
+            domain: DomainHint::Life,
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: None,
+            profile: None,
+            payload: serde_json::Value::Null,
+        });
+        rec.status = crate::goal::SessionStatus::Parked;
+        rec.awaiting_input = true;
+        crate::record_store::SessionRecordStore::insert(&store, rec).await;
+
+        let hub = Arc::new(GoalSessionHub::new(store.clone()));
+
+        // The SSE path: a subscriber attached while the session is parked.
+        let (_history, mut rx) = store.subscribe("parked-observed").await.expect("subscribe");
+
+        // The `delegate` path: a waiter already blocked on the session's terminal state. Started
+        // before the cancel, so it can only return by being woken by an event.
+        let waiter = {
+            let hub = Arc::clone(&hub);
+            tokio::spawn(async move { hub.await_terminal("parked-observed").await })
+        };
+        tokio::task::yield_now().await;
+
+        hub.cancel("parked-observed").await.expect("cancel parked");
+
+        let finished = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("a parked cancel must publish an event, not only mutate the row")
+            .expect("event bus stayed open");
+        match finished.kind {
+            SessionEventKind::SessionFinished { ref status, .. } => {
+                assert_eq!(status, "cancelled", "event must report the cancel");
+            }
+            other => panic!("expected SessionFinished, got {other:?}"),
+        }
+
+        let snap = tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+            .await
+            .expect("await_terminal must be woken by the cancel, not hang forever")
+            .expect("waiter task")
+            .expect("terminal snapshot");
+        assert_eq!(snap.session.status, crate::goal::SessionStatus::Cancelled);
+        assert!(
+            snap.session.result.is_some(),
+            "result must be durable before the event that announces it"
+        );
+    }
+
     /// E6-c end to end: a parked session, answered, comes back with its memory intact.
     #[tokio::test]
     async fn answering_a_parked_session_resumes_the_pack_with_its_transcript() {

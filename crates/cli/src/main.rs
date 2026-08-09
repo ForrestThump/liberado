@@ -9,6 +9,9 @@
 //!   liberado chat [session-id]       the streaming terminal client of a running daemon
 //!   liberado config check            load + validate config, print a summary (or an error)
 //!   liberado prompt [profile]        print the system prompt a chat under <profile> would get
+//!   liberado coder trace <id>        render a durable coding trace as a human transcript
+//!   liberado coder compare <a> <b>   side-by-side harness metrics for two native traces
+//!   liberado coder import <file>     foreign (Kilo / OpenHands) → `.messages.json`
 //!
 //! `serve` runs in the foreground, hosting the vault watch loop and the chat/HTTP/SSE API until
 //! killed. `chat` is a thin HTTP/SSE client of a separately-running daemon (see [`chat_client`]).
@@ -18,6 +21,7 @@
 //! daemon. Reactions are logged to stderr by the server; stdout is left for data.
 
 mod chat_client;
+mod coder_cmd;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -34,6 +38,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("chat") => chat_client::run(args.next()).await,
+        // Harness observability over durable coding traces (F1–F3). Synchronous — no daemon.
+        Some("coder") => coder_cmd::run(args),
         Some("config") => match args.next().as_deref() {
             // `config check` is synchronous (no daemon): resolve the default dir via bootstrap
             // (passing None) and run the loader. Routed through the server so the cli keeps a single

@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 use crate::components::profiles_panel::ProfilesPanel;
 use crate::components::reactions::ReactionsPanel;
+use crate::components::stuck_sessions::StuckSessionsPanel;
 use crate::components::vault::VaultPanel;
 use chat_client_contract::DaemonStatus;
 
@@ -31,6 +32,7 @@ pub fn Dashboard(api_base: String) -> Element {
             match &*status.read() {
                 Some(Ok(s)) => rsx! {
                     StatusBanner { status: s.clone() }
+                    StuckSessionsPanel { api_base: api_base.clone() }
                     div {
                         class: "dashboard-grid",
                         VaultPanel { api_base: api_base.clone() }
