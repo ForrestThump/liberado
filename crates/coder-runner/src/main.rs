@@ -839,7 +839,6 @@ fn resolve_trace_dir(workspace: &Path, configured: Option<&str>) -> String {
     }
 }
 
-
 /// Commit whatever the run produced to a branch, and optionally push it.
 ///
 /// Committing is unconditional and local. A worktree's commits and its branch ref are written to
@@ -885,9 +884,11 @@ async fn preserve_work(workspace: &Path, task_id: &str, push: bool) -> Result<()
             "user.email=coder@liberado.local",
             "commit",
             "-m",
-            &format!("wip({slug}): agent run output
+            &format!(
+                "wip({slug}): agent run output
 
-Uncommitted output of an unattended coding run, committed so it survives the workspace."),
+Uncommitted output of an unattended coding run, committed so it survives the workspace."
+            ),
         ],
     )
     .await?;
@@ -896,7 +897,9 @@ Uncommitted output of an unattended coding run, committed so it survives the wor
     if push {
         match git_output(workspace, &["push", "-u", "origin", &branch]).await {
             Ok(_) => tracing::info!(%branch, "pushed"),
-            Err(error) => tracing::warn!(%branch, %error, "push failed; the commit is safe locally"),
+            Err(error) => {
+                tracing::warn!(%branch, %error, "push failed; the commit is safe locally")
+            }
         }
     }
     Ok(())
@@ -1093,4 +1096,3 @@ mod tests {
         assert!(err.contains("--prompt"));
     }
 }
-
