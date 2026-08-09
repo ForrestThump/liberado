@@ -81,6 +81,20 @@ machine and on no CI runner, so `git commit` in a temp repo passes locally and f
 `cmd` vs `sh`. Reproduce the runner's condition rather than trusting a green local run —
 `GIT_CONFIG_GLOBAL=<file with autocrlf=true>` is often enough.
 
+**Never point a git worktree at the sibling checkouts with a junction.** `turbovault/` and
+`turbomcp/` are gitignored path dependencies inside this repo. Creating a scratch worktree and
+linking them in with `mklink /J` works — until `git worktree remove --force` follows the junction
+and deletes the **contents of the originals**, leaving two empty directories and a workspace that
+cannot resolve its own manifest. Re-clone from `ForrestThump/{turbovault,turbomcp}` at `develop`
+(the same refs `.github/workflows/ci.yml` uses) and confirm with `cargo metadata --locked`. Copying
+them, or putting the worktree somewhere you will delete by path rather than by `git worktree`, both
+avoid it.
+
+**A green suite does not prove the lockfile was committed.** CI resolves without `--locked` and
+regenerates `Cargo.lock` in place, so adding a dependency and forgetting the lock passes every check
+and lands a `main` that fails `--locked` builds. `cargo metadata --locked` is the check that catches
+it, and it takes a second.
+
 **Process-global state in tests needs a lock.** `LIBERADO_DATA_DIR` and friends are set by several
 tests; `cargo test` runs a crate's tests concurrently in one binary, so unguarded `set_var` /
 `remove_var` produces flakes that always pass when re-run alone.
