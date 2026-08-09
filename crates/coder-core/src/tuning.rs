@@ -388,6 +388,79 @@ mod tests {
         assert_eq!(config.hashline, tuning.hashline);
     }
 
+    /// Every field shared by `CoderTuning` and `CoderRunConfig` must actually carry across.
+    ///
+    /// This enumerates fields via serde instead of naming them, which is the whole point: the test
+    /// above is called `run_config_clones_all_fields` and checks three of nineteen, so a field
+    /// added to both types and forgotten in `run_config` passes it. That is failure-mode class 7 —
+    /// a setting that parses, validates, and is never read — and it has happened **eight** times
+    /// here. `trace_dir` shipped with a default of `Some("coder-traces")`, a passing loader test,
+    /// and `None` hardcoded at every consumer, so the trace facility never once wrote a file.
+    ///
+    /// Comparing the *default* tuning is deliberately not enough: a field whose default happens to
+    /// equal the hardcoded literal (`gate.enabled = false`) would agree by accident. So the tuning
+    /// is twisted away from its defaults first — booleans flipped, numbers bumped, absent options
+    /// filled — through JSON, so no field has to be named to be covered.
+    #[test]
+    fn every_shared_field_survives_the_conversion_to_run_config() {
+        fn twist(v: &mut serde_json::Value) {
+            match v {
+                serde_json::Value::Bool(b) => *b = !*b,
+                serde_json::Value::Number(n) => {
+                    if let Some(u) = n.as_u64() {
+                        *v = serde_json::json!(u + 7);
+                    }
+                }
+                serde_json::Value::Object(map) => map.values_mut().for_each(twist),
+                // Strings and arrays are left alone: many are enum tags or validated shapes
+                // (`sandbox.backend`, verifier specs) where an arbitrary edit fails to
+                // deserialize. The fields that have actually been shadowed are booleans, numbers
+                // and options, which is what this covers.
+                _ => {}
+            }
+        }
+
+        let mut as_json = serde_json::to_value(CoderTuning::default()).expect("tuning serializes");
+        twist(&mut as_json);
+        // A twisted value out of its validated range is fine — fall back to defaults rather than
+        // skipping the check entirely, so the test still compares every shared field.
+        let tuning: CoderTuning = serde_json::from_value(as_json).unwrap_or_default();
+
+        let tuning_json = serde_json::to_value(&tuning).expect("tuning serializes");
+        let config_json = serde_json::to_value(tuning.run_config()).expect("config serializes");
+        let (tuning_map, config_map) = match (&tuning_json, &config_json) {
+            (serde_json::Value::Object(t), serde_json::Value::Object(c)) => (t, c),
+            _ => panic!("both types must serialize as objects"),
+        };
+
+        // Fields that legitimately differ. Each needs a reason, not just a name.
+        const EXEMPT: &[(&str, &str)] = &[
+            // Resolved per run from the workspace, not copied from config.
+            ("repo_map", "generated per run, not a passthrough setting"),
+        ];
+
+        let mut checked = 0;
+        for (key, tuning_value) in tuning_map {
+            let Some(config_value) = config_map.get(key) else {
+                continue; // Not a shared field — `run_config` is allowed to be narrower.
+            };
+            if let Some((_, why)) = EXEMPT.iter().find(|(k, _)| k == key) {
+                let _ = why;
+                continue;
+            }
+            assert_eq!(
+                config_value, tuning_value,
+                "`{key}` is set in [coder] and does not reach CoderRunConfig — it parses,                  validates, and is read by nobody (failure-mode class 7). Either copy it in                  `run_config`, or add it to EXEMPT with the reason it differs."
+            );
+            checked += 1;
+        }
+
+        assert!(
+            checked >= 10,
+            "expected to check most of the shared surface, only compared {checked} field(s) —              the comparison is probably not seeing the fields it thinks it is"
+        );
+    }
+
     #[test]
     fn parses_hashline_section() {
         let value: toml::Value = toml::from_str(
