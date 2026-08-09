@@ -122,6 +122,12 @@ impl ToolRuntime for NoTools {
 
 #[tokio::main]
 async fn main() {
+    // Paseo Generic ACP diagnostics probe `liberado-acp --version` without ACP traffic.
+    // Handle argv before touching stdin so the probe never hangs waiting for NDJSON.
+    if let Some(code) = handle_cli_args(std::env::args().skip(1)) {
+        std::process::exit(code);
+    }
+
     // Logs MUST go to stderr — stdout is the ACP wire.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -135,6 +141,50 @@ async fn main() {
         tracing::error!(%e, "acp bridge fatal");
         std::process::exit(1);
     }
+}
+
+/// Process non-ACP CLI flags. Returns `Some(exit_code)` when the process should exit
+/// without entering the stdio agent loop; `None` means continue as an ACP agent.
+fn handle_cli_args<I, S>(args: I) -> Option<i32>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let args: Vec<String> = args.into_iter().map(|s| s.as_ref().to_string()).collect();
+    if args.is_empty() {
+        return None;
+    }
+    match args[0].as_str() {
+        "--version" | "-V" | "version" => {
+            // Version probe writes to stdout (what `exec … --version` captures).
+            println!("liberado-acp {}", env!("CARGO_PKG_VERSION"));
+            Some(0)
+        }
+        "--help" | "-h" | "help" => {
+            print_help();
+            Some(0)
+        }
+        other if other.starts_with('-') => {
+            eprintln!("liberado-acp: unknown option '{other}'. Try --help.");
+            Some(2)
+        }
+        // Positional args are not used; ignore and enter ACP mode for forward-compat.
+        _ => None,
+    }
+}
+
+fn print_help() {
+    println!(
+        "liberado-acp {} — Liberado ACP coding agent (stdio JSON-RPC for Paseo)\n\n\
+         Usage:\n\
+           liberado-acp              Speak ACP on stdin/stdout (spawned by Paseo)\n\
+           liberado-acp --version    Print version and exit\n\
+           liberado-acp --help       Show this help\n\n\
+         Environment:\n\
+           DEEPSEEK_API_KEY / OPENROUTER_API_KEY / OPENAI_API_KEY\n\
+           LIBERADO_ACP_MODEL, LIBERADO_CONFIG_DIR, LIBERADO_ACP_SYSTEM_PROMPT",
+        env!("CARGO_PKG_VERSION")
+    );
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -810,5 +860,28 @@ mod tests {
             started, finished,
             "Paseo indexes tool UI by toolCallId; start and finish must share one id"
         );
+    }
+
+    #[test]
+    fn version_flag_exits_without_stdio_loop() {
+        assert_eq!(handle_cli_args(["--version"]), Some(0));
+        assert_eq!(handle_cli_args(["-V"]), Some(0));
+        assert_eq!(handle_cli_args(["version"]), Some(0));
+    }
+
+    #[test]
+    fn help_flag_exits_without_stdio_loop() {
+        assert_eq!(handle_cli_args(["--help"]), Some(0));
+        assert_eq!(handle_cli_args(["-h"]), Some(0));
+    }
+
+    #[test]
+    fn no_args_enters_acp_mode() {
+        assert_eq!(handle_cli_args(Vec::<String>::new()), None);
+    }
+
+    #[test]
+    fn unknown_flag_is_an_error_exit() {
+        assert_eq!(handle_cli_args(["--nope"]), Some(2));
     }
 }
