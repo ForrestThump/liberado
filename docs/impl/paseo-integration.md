@@ -135,6 +135,10 @@ you want green rows for launcher binary, ACP `initialize`, and ACP `session/new`
 - Full face-agent dispatch / vault MCP grants are not mounted in this bridge; the session is the
   coding-tool surface (`CodingToolRuntime`) plus the configured chat model.
 
+**Ordered residual work** (tool-call ids, resume honesty, diagnostics, modes, durable load, fork
+polish, remote track):
+[`future-work/paseo-liberado-integration-roadmap.md`](../future-work/paseo-liberado-integration-roadmap.md).
+
 ## Troubleshooting
 
 | Symptom | Check |
