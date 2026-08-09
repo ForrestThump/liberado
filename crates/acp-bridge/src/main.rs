@@ -576,6 +576,9 @@ async fn run_prompt_turn(session: Arc<SessionHandle>, text: String) -> Result<St
 
     let mut stop_reason = "end_turn".to_string();
     let mut cancel_rx = session.cancel_rx.clone();
+    // Paseo UI pairs tool_call → tool_call_update by toolCallId. Keep a LIFO stack of
+    // in-flight ids (executor runs tools sequentially, but nested/same-name tools may stack).
+    let mut pending_tool_ids: Vec<(String, String)> = Vec::new();
 
     loop {
         tokio::select! {
@@ -593,11 +596,13 @@ async fn run_prompt_turn(session: Arc<SessionHandle>, text: String) -> Result<St
                         emit_agent_text_chunk(&sid, &t)?;
                     }
                     Some(AgentEvent::ToolStarted { name, args }) => {
-                        emit_tool_call(&sid, &name, &args, "pending")?;
+                        let tool_call_id = push_tool_call_id(&mut pending_tool_ids, &name);
+                        emit_tool_call(&sid, &tool_call_id, &name, &args, "pending")?;
                     }
                     Some(AgentEvent::ToolFinished { name, ok, preview }) => {
+                        let tool_call_id = pop_tool_call_id(&mut pending_tool_ids, &name);
                         let status = if ok { "completed" } else { "failed" };
-                        emit_tool_call_update(&sid, &name, status, &preview)?;
+                        emit_tool_call_update(&sid, &tool_call_id, &name, status, &preview)?;
                     }
                     Some(AgentEvent::Done) => {
                         stop_reason = "end_turn".into();
@@ -619,6 +624,22 @@ async fn run_prompt_turn(session: Arc<SessionHandle>, text: String) -> Result<St
     Ok(stop_reason)
 }
 
+/// Allocate a stable `toolCallId` for a started tool and record it for the matching finish.
+fn push_tool_call_id(pending: &mut Vec<(String, String)>, name: &str) -> String {
+    let tool_call_id = format!("call-{}", short_id());
+    pending.push((name.to_string(), tool_call_id.clone()));
+    tool_call_id
+}
+
+/// Pop the most recent in-flight id for `name` (LIFO). Fallback id only if start was missed.
+fn pop_tool_call_id(pending: &mut Vec<(String, String)>, name: &str) -> String {
+    if let Some(idx) = pending.iter().rposition(|(n, _)| n == name) {
+        return pending.remove(idx).1;
+    }
+    // Should not happen in a well-formed stream; still emit a unique id so the wire is valid.
+    format!("call-orphan-{}", short_id())
+}
+
 fn emit_agent_text_chunk(session_id: &str, text: &str) -> Result<(), String> {
     if text.is_empty() {
         return Ok(());
@@ -638,8 +659,13 @@ fn emit_agent_text_chunk(session_id: &str, text: &str) -> Result<(), String> {
     )
 }
 
-fn emit_tool_call(session_id: &str, name: &str, args: &str, status: &str) -> Result<(), String> {
-    let tool_call_id = format!("call-{}", short_id());
+fn emit_tool_call(
+    session_id: &str,
+    tool_call_id: &str,
+    name: &str,
+    args: &str,
+    status: &str,
+) -> Result<(), String> {
     let raw_input: Value = serde_json::from_str(args).unwrap_or_else(|_| json!({ "raw": args }));
     emit_notification(
         "session/update",
@@ -659,11 +685,11 @@ fn emit_tool_call(session_id: &str, name: &str, args: &str, status: &str) -> Res
 
 fn emit_tool_call_update(
     session_id: &str,
+    tool_call_id: &str,
     name: &str,
     status: &str,
     preview: &str,
 ) -> Result<(), String> {
-    let tool_call_id = format!("done-{}", short_id());
     emit_notification(
         "session/update",
         json!({
@@ -750,5 +776,38 @@ mod tests {
         });
         assert_eq!(result["protocolVersion"], 1);
         assert_eq!(result["agentCapabilities"]["loadSession"], true);
+    }
+
+    #[test]
+    fn tool_call_ids_pair_start_and_finish() {
+        let mut pending = Vec::new();
+        let start_a = push_tool_call_id(&mut pending, "read_file");
+        let start_b = push_tool_call_id(&mut pending, "run_command");
+        assert_ne!(start_a, start_b);
+        assert_eq!(pop_tool_call_id(&mut pending, "run_command"), start_b);
+        assert_eq!(pop_tool_call_id(&mut pending, "read_file"), start_a);
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn tool_call_ids_pair_same_name_lifo() {
+        let mut pending = Vec::new();
+        let first = push_tool_call_id(&mut pending, "read_file");
+        let second = push_tool_call_id(&mut pending, "read_file");
+        // Finish order matches LIFO (inner tool completes first).
+        assert_eq!(pop_tool_call_id(&mut pending, "read_file"), second);
+        assert_eq!(pop_tool_call_id(&mut pending, "read_file"), first);
+    }
+
+    #[test]
+    fn tool_call_id_pairing_is_required_for_paseo_ui() {
+        // Mutation guard: if start and finish minted independent ids (old bug), this fails.
+        let mut pending = Vec::new();
+        let started = push_tool_call_id(&mut pending, "list_files");
+        let finished = pop_tool_call_id(&mut pending, "list_files");
+        assert_eq!(
+            started, finished,
+            "Paseo indexes tool UI by toolCallId; start and finish must share one id"
+        );
     }
 }

@@ -19,11 +19,31 @@ reliably usable through the [ForrestThump/paseo](https://github.com/ForrestThump
 
 ---
 
+## Deliverable (definition of done)
+
+End state the integration is aiming at:
+
+1. **Deploy the Liberado daemon** (`liberado serve`) on a host.
+2. **Install and deploy the Paseo fork** (ForrestThump/paseo) on the same or a client host.
+3. **Paseo’s server detects Liberado** as an available coding agent (provider diagnostics green:
+   launcher binary, ACP `initialize`, ACP `session/new` — and later, any daemon presence probe
+   we add for Track B).
+4. **Point a Liberado coding instance at a specific folder** — Paseo starts a Liberado session
+   whose workspace/`cwd` is that folder (coding tools rooted there; agent works in that tree).
+
+Track A (ACP `liberado-acp` spawned by Generic ACP) is the **supported local path** to (3)–(4)
+today: detect via provider config + diagnostics; folder = session `cwd` from Paseo’s workspace
+picker. Track B (daemon tunnel / remote) must still land for “daemon already running, Paseo
+attaches remotely” without spawning a one-shot ACP process — see Phase 6. Both tracks share the
+same product bar above.
+
+---
+
 ## Goal and non-goals
 
-**Goal:** Paseo (fork or upstream Generic ACP) can start Liberado as a coding agent, stream
-tools and text correctly, resume without lying, and pass provider diagnostics — with a clear
-path to fuller Liberado parity and optional remote daemon access.
+**Goal:** Meet the deliverable above: deploy daemon + Paseo fork, detect Liberado, run coding
+against a chosen folder — with correct tool streaming, honest resume, green diagnostics, and a
+clear path to remote attach and fuller Liberado parity.
 
 **Non-goals for early slices:**
 
@@ -38,8 +58,8 @@ path to fuller Liberado parity and optional remote daemon access.
 
 | Track | What it is | State |
 |-------|------------|--------|
-| **A — ACP coding agent** | Paseo spawns `liberado-acp` over stdio (`extends: "acp"`). Same pattern as Gemini/Hermes. | Core path landed; gaps below |
-| **B — Remote daemon** | Paseo tunnel / host access into `liberado serve` HTTP/SSE (daemon + TUI/API). | Not started; keep separate from Track A |
+| **A — ACP coding agent** | Paseo spawns `liberado-acp` over stdio (`extends: "acp"`). Same pattern as Gemini/Hermes. Session `cwd` = coding folder. | Core path landed; gaps below |
+| **B — Remote daemon** | Paseo detects/attaches to a deployed `liberado serve` (tunnel / host access, HTTP/SSE). | Not started; required for full “daemon already up” deliverable |
 
 Stale `paseo/packages/server/dist/.../liberado-*.js` artifacts are from an earlier experiment
 (daemon spawn + first-class ACP client). **Not source of truth** — ignore or delete on next
