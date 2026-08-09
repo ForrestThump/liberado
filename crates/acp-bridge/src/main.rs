@@ -268,18 +268,28 @@ async fn write_response(
     Ok(())
 }
 
-fn emit_notification(method: &str, params: Value) -> Result<(), String> {
-    let body = JsonRpcNotification {
-        jsonrpc: "2.0",
-        method: method.to_string(),
-        params,
-    };
-    let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
-    use std::io::Write as _;
-    let mut out = std::io::stdout().lock();
-    writeln!(out, "{json}").map_err(|e| e.to_string())?;
-    out.flush().map_err(|e| e.to_string())?;
-    Ok(())
+/// Sink for ACP notifications (`session/update`, …). Production writes NDJSON to stdout;
+/// tests capture into a buffer so MockProvider turns can assert wire shape.
+trait WireSink: Send + Sync {
+    fn emit(&self, method: &str, params: Value) -> Result<(), String>;
+}
+
+struct StdoutSink;
+
+impl WireSink for StdoutSink {
+    fn emit(&self, method: &str, params: Value) -> Result<(), String> {
+        let body = JsonRpcNotification {
+            jsonrpc: "2.0",
+            method: method.to_string(),
+            params,
+        };
+        let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
+        use std::io::Write as _;
+        let mut out = std::io::stdout().lock();
+        writeln!(out, "{json}").map_err(|e| e.to_string())?;
+        out.flush().map_err(|e| e.to_string())?;
+        Ok(())
+    }
 }
 
 fn build_provider() -> Result<(Arc<dyn Provider>, String, String), String> {
@@ -471,7 +481,7 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
             };
 
             let _ = session.cancel_tx.send(false);
-            let stop = run_prompt_turn(session, text).await?;
+            let stop = run_prompt_turn(session, text, &StdoutSink).await?;
             Ok(json!({ "stopReason": stop }))
         }
 
@@ -503,7 +513,15 @@ fn open_session(
                 Arc::new(NoTools)
             }
         };
+    open_session_with_tools(session_id, cwd, provider, tools)
+}
 
+fn open_session_with_tools(
+    session_id: &str,
+    cwd: PathBuf,
+    provider: Arc<dyn Provider>,
+    tools: Arc<dyn ToolRuntime>,
+) -> Result<SessionHandle, String> {
     let system = std::env::var("LIBERADO_ACP_SYSTEM_PROMPT").unwrap_or_else(|_| {
         format!(
             "{DEFAULT_SYSTEM_PROMPT}\n\n\
@@ -586,7 +604,11 @@ fn extract_prompt_text(params: &Value) -> Result<String, String> {
     Err("missing prompt".into())
 }
 
-async fn run_prompt_turn(session: Arc<SessionHandle>, text: String) -> Result<String, String> {
+async fn run_prompt_turn(
+    session: Arc<SessionHandle>,
+    text: String,
+    sink: &dyn WireSink,
+) -> Result<String, String> {
     let (event_tx, mut event_rx) = mpsc::channel::<AgentEvent>(64);
     let sid = session.id.clone();
     let turn_session = Arc::clone(&session);
@@ -631,23 +653,23 @@ async fn run_prompt_turn(session: Arc<SessionHandle>, text: String) -> Result<St
             ev = event_rx.recv() => {
                 match ev {
                     Some(AgentEvent::Token(t)) => {
-                        emit_agent_text_chunk(&sid, &t)?;
+                        emit_agent_text_chunk(sink, &sid, &t)?;
                     }
                     Some(AgentEvent::ToolStarted { name, args }) => {
                         let tool_call_id = push_tool_call_id(&mut pending_tool_ids, &name);
-                        emit_tool_call(&sid, &tool_call_id, &name, &args, "pending")?;
+                        emit_tool_call(sink, &sid, &tool_call_id, &name, &args, "pending")?;
                     }
                     Some(AgentEvent::ToolFinished { name, ok, preview }) => {
                         let tool_call_id = pop_tool_call_id(&mut pending_tool_ids, &name);
                         let status = if ok { "completed" } else { "failed" };
-                        emit_tool_call_update(&sid, &tool_call_id, &name, status, &preview)?;
+                        emit_tool_call_update(sink, &sid, &tool_call_id, &name, status, &preview)?;
                     }
                     Some(AgentEvent::Done) => {
                         stop_reason = "end_turn".into();
                         break;
                     }
                     Some(AgentEvent::Error(msg)) => {
-                        emit_agent_text_chunk(&sid, &format!("\nError: {msg}"))?;
+                        emit_agent_text_chunk(sink, &sid, &format!("\nError: {msg}"))?;
                         // Client-facing failure still ends the turn; refuse rather than crash.
                         stop_reason = "end_turn".into();
                         break;
@@ -678,11 +700,11 @@ fn pop_tool_call_id(pending: &mut Vec<(String, String)>, name: &str) -> String {
     format!("call-orphan-{}", short_id())
 }
 
-fn emit_agent_text_chunk(session_id: &str, text: &str) -> Result<(), String> {
+fn emit_agent_text_chunk(sink: &dyn WireSink, session_id: &str, text: &str) -> Result<(), String> {
     if text.is_empty() {
         return Ok(());
     }
-    emit_notification(
+    sink.emit(
         "session/update",
         json!({
             "sessionId": session_id,
@@ -698,6 +720,7 @@ fn emit_agent_text_chunk(session_id: &str, text: &str) -> Result<(), String> {
 }
 
 fn emit_tool_call(
+    sink: &dyn WireSink,
     session_id: &str,
     tool_call_id: &str,
     name: &str,
@@ -705,7 +728,7 @@ fn emit_tool_call(
     status: &str,
 ) -> Result<(), String> {
     let raw_input: Value = serde_json::from_str(args).unwrap_or_else(|_| json!({ "raw": args }));
-    emit_notification(
+    sink.emit(
         "session/update",
         json!({
             "sessionId": session_id,
@@ -722,13 +745,14 @@ fn emit_tool_call(
 }
 
 fn emit_tool_call_update(
+    sink: &dyn WireSink,
     session_id: &str,
     tool_call_id: &str,
     name: &str,
     status: &str,
     preview: &str,
 ) -> Result<(), String> {
-    emit_notification(
+    sink.emit(
         "session/update",
         json!({
             "sessionId": session_id,
@@ -883,5 +907,123 @@ mod tests {
     #[test]
     fn unknown_flag_is_an_error_exit() {
         assert_eq!(handle_cli_args(["--nope"]), Some(2));
+    }
+
+    /// Captures ACP notifications instead of writing stdout (for MockProvider turns).
+    struct CaptureSink {
+        lines: std::sync::Mutex<Vec<(String, Value)>>,
+    }
+
+    impl WireSink for CaptureSink {
+        fn emit(&self, method: &str, params: Value) -> Result<(), String> {
+            self.lines
+                .lock()
+                .map_err(|e| e.to_string())?
+                .push((method.to_string(), params));
+            Ok(())
+        }
+    }
+
+    struct EchoTool;
+
+    #[async_trait::async_trait]
+    impl ToolRuntime for EchoTool {
+        fn catalog(&self) -> Vec<liberado_provider::ToolDef> {
+            vec![liberado_provider::ToolDef::new(
+                "echo",
+                "Echo a message",
+                json!({
+                    "type": "object",
+                    "properties": { "msg": { "type": "string" } },
+                    "required": ["msg"]
+                }),
+            )]
+        }
+        async fn invoke(&self, call: &liberado_provider::ToolInvocation) -> Result<String, String> {
+            let msg = call
+                .arguments
+                .get("msg")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            Ok(format!("echo:{msg}"))
+        }
+    }
+
+    #[tokio::test]
+    async fn mock_provider_turn_streams_paired_tool_and_text() {
+        use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
+
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "tc1",
+                    "echo",
+                    json!({ "msg": "hi" }),
+                )]),
+                CompletionResponse::text("all done"),
+            ],
+        ));
+        let handle = open_session_with_tools(
+            "sess-mock",
+            PathBuf::from("."),
+            provider,
+            Arc::new(EchoTool),
+        )
+        .expect("session");
+        let session = Arc::new(handle);
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let stop = run_prompt_turn(session, "please echo".into(), &sink)
+            .await
+            .expect("turn");
+        assert_eq!(stop, "end_turn");
+
+        let lines = sink.lines.lock().unwrap().clone();
+        assert!(
+            !lines.is_empty(),
+            "expected session/update notifications on the wire"
+        );
+
+        let tool_starts: Vec<&Value> = lines
+            .iter()
+            .filter(|(m, p)| m == "session/update" && p["update"]["sessionUpdate"] == "tool_call")
+            .map(|(_, p)| p)
+            .collect();
+        let tool_updates: Vec<&Value> = lines
+            .iter()
+            .filter(|(m, p)| {
+                m == "session/update" && p["update"]["sessionUpdate"] == "tool_call_update"
+            })
+            .map(|(_, p)| p)
+            .collect();
+        assert_eq!(tool_starts.len(), 1, "one tool_call: {lines:?}");
+        assert_eq!(tool_updates.len(), 1, "one tool_call_update: {lines:?}");
+        let start_id = tool_starts[0]["update"]["toolCallId"]
+            .as_str()
+            .expect("start id");
+        let finish_id = tool_updates[0]["update"]["toolCallId"]
+            .as_str()
+            .expect("finish id");
+        assert_eq!(
+            start_id, finish_id,
+            "MockProvider path must pair toolCallId (mutation target for P0.1)"
+        );
+        assert_eq!(tool_starts[0]["update"]["title"], "echo");
+        assert_eq!(tool_updates[0]["update"]["status"], "completed");
+
+        let text: String = lines
+            .iter()
+            .filter(|(m, p)| {
+                m == "session/update" && p["update"]["sessionUpdate"] == "agent_message_chunk"
+            })
+            .filter_map(|(_, p)| p["update"]["content"]["text"].as_str())
+            .collect();
+        assert!(
+            text.contains("all done"),
+            "expected assistant text chunks, got {text:?} from {lines:?}"
+        );
     }
 }
