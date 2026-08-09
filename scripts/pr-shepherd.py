@@ -170,10 +170,49 @@ def latest_run_for(branch: str, sha: str | None = None) -> dict | None:
     return rows[0] if rows else None
 
 
+def failed_steps_from_api(run_id: int) -> set[str]:
+    """Failed `<job>|step:<step>` keys, taken from GitHub's own job conclusions.
+
+    The log parser infers failure by grepping for `error:`, which silently misses any tool that
+    fails without printing that word. `cargo fmt --check` is exactly such a tool — it prints
+    `Diff in <path>:<line>:` and exits non-zero — so a PR failing *only* formatting parsed to an
+    empty failure set, produced `new=0`, and was promoted toward `ready_for_human` while red.
+    Observed on PR #92, where both platforms failed and the shepherd reported no new failures.
+
+    Job conclusions are authoritative and do not depend on a tool's choice of words, so this is the
+    floor: whatever the log says, a failed step is a failure.
+    """
+    if not run_id:
+        return set()
+    rows = gh_json("run", "view", str(run_id), "--json", "jobs") or {}
+    failures: set[str] = set()
+    for job in rows.get("jobs", []):
+        if job.get("conclusion") != "failure":
+            continue
+        name = job.get("name", "?")
+        steps = [
+            st.get("name", "?")
+            for st in job.get("steps", [])
+            if st.get("conclusion") == "failure"
+        ]
+        # A job that failed with no failing step still has to register, or it drops to green.
+        for step in steps or ["<unknown step>"]:
+            failures.add(f"{name}|step:{step}")
+    return failures
+
+
 def run_failure_set(run_id: int) -> set[str]:
     if not run_id:
         return set()
-    return parse_failure_set(gh("run", "view", str(run_id), "--log-failed", check=False))
+    parsed = parse_failure_set(gh("run", "view", str(run_id), "--log-failed", check=False))
+    # Union, not fallback. Named tests keep the differential fine-grained (a *different* test
+    # failing at the same count is still a regression); the API floor guarantees a red job can
+    # never read as green. Where the parser already named tests for a step, the step key is
+    # dropped so one failure is not counted twice.
+    steps = failed_steps_from_api(run_id)
+    jobs_with_named_tests = {key.split("|", 1)[0] for key in parsed}
+    steps = {k for k in steps if k.split("|", 1)[0] not in jobs_with_named_tests}
+    return parsed | steps
 
 
 def baseline_failures(base_sha: str) -> tuple[set[str], str]:
@@ -451,6 +490,15 @@ def seed_backlog(path: Path, *, dry_run: bool) -> None:
 
 # ── self-test ─────────────────────────────────────────────────────────────────
 
+_FMT_FIXTURE = (
+    # Real shape from run 31290446697: a failed job whose output contains no test name and no
+    # "error:" token anywhere.
+    "test (ubuntu-latest)\tFormat check\t2026-08-09T02:30:29Z Diff in "
+    "/home/runner/work/liberado/liberado/crates/coder-core/src/tuning.rs:12:\n"
+    "test (ubuntu-latest)\tFormat check\t2026-08-09T02:30:30Z Diff in "
+    "/home/runner/work/liberado/liberado/crates/coder-tools/src/lib.rs:203:\n"
+)
+
 _FIXTURE = (
     "test (ubuntu-latest)\tTests (includes layer-rules gate)\t2026-08-08T07:59:39Z "
     "test tests::background_job_roundtrip_running_then_completed ... FAILED\n"
@@ -483,6 +531,18 @@ def self_test() -> int:
     head = {"job|a", "job|c"}
     regression = bool(head - base)
     print(f"parser: {'ok' if ok else 'FAILED'}")
+
+    # A formatting failure names no test and never prints the word "error", so the log parser
+    # cannot see it. This is not hypothetical: PR #92 failed on both platforms and the shepherd
+    # reported new=0, because `cargo fmt --check` says `Diff in <path>:<line>:` and exits 1.
+    # The parser is *allowed* to return nothing here — the API floor is what must not.
+    fmt_only = parse_failure_set(_FMT_FIXTURE)
+    fmt_ok = fmt_only == set()
+    print(
+        f"fmt-invisible-to-parser: {'ok' if fmt_ok else 'FAILED'} "
+        f"(parser sees {sorted(fmt_only) or 'nothing'}; the API floor must cover it)"
+    )
+    ok = ok and fmt_ok
     print(f"identity-not-count: {'ok' if regression else 'FAILED'} "
           f"(equal counts, new={sorted(head - base)})")
 
