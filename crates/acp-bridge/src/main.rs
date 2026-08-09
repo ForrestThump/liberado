@@ -9,7 +9,7 @@
 //! | `session/new` | Start a session rooted at `cwd` (coding tools enabled) |
 //! | `session/prompt` | User turn; streams `session/update` chunks |
 //! | `session/cancel` | Abort the in-flight turn (notification) |
-//! | `session/load` | Re-open a session id in this process |
+//! | `session/load` | Not advertised (`loadSession: false`) until history is durable |
 //! | `session/set_mode` / `session/set_model` | Accepted no-ops |
 //!
 //! Usage (spawned by Paseo):
@@ -44,6 +44,10 @@ use tokio::sync::{Mutex, mpsc, watch};
 
 /// ACP protocol version negotiated with current `@agentclientprotocol/sdk`.
 const PROTOCOL_VERSION: u32 = 1;
+
+/// Whether `initialize` advertises `loadSession`. Must stay false until durable history +
+/// replay exist (integration roadmap P3); true made Paseo resume into an empty transcript.
+const LOAD_SESSION_CAPABILITY: bool = false;
 
 const DEFAULT_API_KEY_ENV: &str = "DEEPSEEK_API_KEY";
 const DEFAULT_BASE_URL: &str = "https://api.deepseek.com/v1";
@@ -350,8 +354,10 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                     "version": env!("CARGO_PKG_VERSION"),
                     "title": "Liberado Coding Agent",
                 },
+                // loadSession stays false until durable history + replay ship (P3).
+                // Advertising true made Paseo take the resume path and get an empty transcript.
                 "agentCapabilities": {
-                    "loadSession": true,
+                    "loadSession": LOAD_SESSION_CAPABILITY,
                     "promptCapabilities": {
                         "image": false,
                         "audio": false,
@@ -392,30 +398,12 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
         }
 
         "session/load" => {
-            let sid = params
-                .get("sessionId")
-                .and_then(|v| v.as_str())
-                .ok_or("missing sessionId")?
-                .to_string();
-            let cwd = params
-                .get("cwd")
-                .and_then(|v| v.as_str())
-                .map(PathBuf::from)
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-
-            // Process-local resume: re-open a handle with the same id (history not yet durable).
-            let handle = open_session(&sid, cwd, Arc::clone(&bridge.provider))?;
-            bridge
-                .sessions
-                .lock()
-                .await
-                .insert(sid.clone(), Arc::new(handle));
-            tracing::info!(session_id = %sid, "session/load");
-            Ok(json!({
-                "models": model_state(&bridge.model_id, &bridge.model_name),
-                "modes": mode_state(),
-                "configOptions": []
-            }))
+            // Capability loadSession is false; reject rather than silently wipe history.
+            Err(
+                "session/load is not supported yet (no durable session history). \
+                 Start a new session with session/new."
+                    .into(),
+            )
         }
 
         "session/prompt" => {
@@ -770,12 +758,25 @@ mod tests {
             "protocolVersion": PROTOCOL_VERSION,
             "agentInfo": { "name": "Liberado", "version": "0.1.0" },
             "agentCapabilities": {
-                "loadSession": true,
+                "loadSession": false,
                 "promptCapabilities": { "image": false, "audio": false, "embeddedContext": true },
             }
         });
         assert_eq!(result["protocolVersion"], 1);
-        assert_eq!(result["agentCapabilities"]["loadSession"], true);
+        // Must stay false until durable load+replay (P3); true lied to Paseo's resume path.
+        assert_eq!(result["agentCapabilities"]["loadSession"], false);
+    }
+
+    #[test]
+    fn load_session_capability_is_honest() {
+        // Mutation guard: initialize must not advertise loadSession until history is durable.
+        // const block: clippy::assertions_on_constants rejects a runtime assert! on a const.
+        const {
+            assert!(
+                !LOAD_SESSION_CAPABILITY,
+                "advertising loadSession:true without durable history wipes Paseo resume"
+            );
+        }
     }
 
     #[test]
