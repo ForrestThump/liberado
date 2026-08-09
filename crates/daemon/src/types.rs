@@ -212,4 +212,10 @@ pub struct Daemon {
     /// An unknown / disabled profile name is **fail-closed**: the reaction is observed and no
     /// session is started (never silently falls back to full pool caps).
     pub(crate) session_profile_caps: HashMap<String, CapabilitySet>,
+    /// Vault-relative glob patterns that the watcher must never react to (Syncthing conflict
+    /// files, editor temp files, `Inbox/` when a dedicated schedule already processes it, etc.).
+    /// Matched *before* attribution, so a matching path produces no event at all — the same
+    /// `Ok(None)` as an agent-authored write. An empty list is a no-op (every path is checked).
+    /// Populated from `[tuning.capture].inbox_ignore_globs`.
+    pub(crate) inbox_ignore_globs: Vec<String>,
 }

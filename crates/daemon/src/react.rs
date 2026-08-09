@@ -21,7 +21,14 @@ impl Daemon {
     /// loop also calls — kept as its own public method so this stays directly testable without a
     /// filesystem, as before this crate had an `EventSource` seam.
     pub async fn process_change(&self, rel_path: &Path) -> Result<Option<Event>, DaemonError> {
-        Ok(vault_source::attribute_and_build_event(&self.vault, rel_path).await?)
+        Ok(
+            vault_source::attribute_and_build_event(
+                &self.vault,
+                rel_path,
+                &self.inbox_ignore_globs,
+            )
+            .await?,
+        )
     }
 
     /// Take a reactable change as far as the attached components allow: observe → decide → act.

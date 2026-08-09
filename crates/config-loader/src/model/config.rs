@@ -360,17 +360,18 @@ impl Config {
                 "tuning.concurrency.max_reaction_depth must be >= 1".into(),
             ));
         }
-        // `[tuning.capture]` parses and validates but nothing reads it — see `CaptureTuning`.
-        // Warn rather than reject: rejecting would break configs that already carry the section
-        // (including `config.example/tuning.toml`), and the section is not wrong, just inert. An
-        // operator who tuned a settle window deserves to hear that it does nothing *now*, rather
-        // than concluding their capture pipeline is broken.
+        // `[tuning.capture]` parses and validates. `inbox_ignore_globs` is live — the vault
+        // watcher skips matching paths. Every other field (settle windows, flags, ambient sweep)
+        // has no code reading it yet — see `CaptureTuning` doc. Warn rather than reject: rejecting
+        // would break configs that already carry the section (including `config.example/tuning.toml`),
+        // and the section is not wrong, just partially inert. An operator who tuned a settle window
+        // deserves to hear that it does nothing *now*, rather than concluding their capture pipeline
+        // is broken.
         if self.tuning.capture != super::tuning::CaptureTuning::default() {
             tracing::warn!(
-                "[tuning.capture] is set but NOT IMPLEMENTED — no code reads it. \
-                 Settle windows, #ready-now/#hold-off flags, the ambient sweep and \
-                 inbox_ignore_globs all do nothing. The vault watcher runs; the inbox \
-                 layer above it is not built."
+                "[tuning.capture] contains unimplemented settings — inbox_ignore_globs is live, \
+                 but settle windows, #ready-now/#hold-off flags, and the ambient sweep all do \
+                 nothing. The vault watcher runs; the inbox layer above it is not built."
             );
         }
         // These three are free text, not yet parsed by anything (see their own doc comments) — but

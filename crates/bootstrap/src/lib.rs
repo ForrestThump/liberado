@@ -461,7 +461,8 @@ pub fn configure_daemon(
     // `reap_interval_secs = 0` actually disables the reaper when no API key is set.
     let daemon = daemon
         .with_proposal_reap_interval(config.tuning.proposals.reap_interval_secs)
-        .with_session_profile_caps(session_profile_caps(config));
+        .with_session_profile_caps(session_profile_caps(config))
+        .with_inbox_ignore_globs(config.tuning.capture.inbox_ignore_globs.clone());
 
     let (Some(dispatcher_provider), Some(subagent_providers)) =
         (providers.dispatcher.as_ref(), providers.subagent.as_ref())
