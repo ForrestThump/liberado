@@ -44,3 +44,8 @@ mutants.out*/
 # Working notes that are deliberately not history: they snapshot in-progress state (including which
 # fixes the deployed box is still missing), so committing one publishes a to-do list of live gaps.
 docs/future-work/session-profiles-next-actions.md
+
+# Coding-run traces. Written per run next to the workspace (`[coder] trace_dir`), so an unattended
+# run's evidence lands with the run — which also means an auto-commit would sweep them into the
+# diff. One run's trace is 3k+ lines of JSON; it is diagnostic output, not source.
+coder-traces/

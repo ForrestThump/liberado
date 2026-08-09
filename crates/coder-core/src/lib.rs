@@ -540,6 +540,44 @@ impl HashlineConfig {
     }
 }
 
+/// Background command concurrency limits for the coding tool runtime.
+///
+/// Prevents unattended coding runs from spawning so many concurrent build commands (each of which
+/// writes gigabytes into build-artefact directories like `target/`) that the disk fills and the
+/// run dies on an unrelated command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CoderCommandsConfig {
+    /// Programs considered "build-like". At most [`max_build_like`] of these may run
+    /// concurrently in the background. Case-insensitive; matched against the executable
+    /// stem of the program path (so `cargo`, `/usr/bin/cargo`, and `cargo.exe` all match).
+    pub build_like_programs: Vec<String>,
+    /// Maximum total background jobs in flight at once.
+    pub max_background: usize,
+    /// Maximum build-like background jobs in flight at once.
+    pub max_build_like: usize,
+}
+
+impl Default for CoderCommandsConfig {
+    fn default() -> Self {
+        Self {
+            build_like_programs: vec![
+                "cargo".into(),
+                "npm".into(),
+                "pnpm".into(),
+                "yarn".into(),
+                "make".into(),
+                "go".into(),
+                "gradle".into(),
+                "mvn".into(),
+                "tsc".into(),
+            ],
+            max_background: 2,
+            max_build_like: 1,
+        }
+    }
+}
+
 /// Fully resolved settings for one backend run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CoderRunConfig {
@@ -570,6 +608,8 @@ pub struct CoderRunConfig {
     pub path_policy: PathPolicy,
     #[serde(default)]
     pub progress: ProgressPolicy,
+    #[serde(default)]
+    pub commands: CoderCommandsConfig,
     /// Hashline edit mode (`[coder.hashline]`). Default off.
     #[serde(default)]
     pub hashline: HashlineConfig,
@@ -820,6 +860,7 @@ mod tests {
                 }),
                 path_policy: PathPolicy::default(),
                 progress: ProgressPolicy::default(),
+                commands: CoderCommandsConfig::default(),
                 hashline: HashlineConfig::default(),
             },
             attempt: 0,

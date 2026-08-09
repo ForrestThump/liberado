@@ -192,6 +192,7 @@ mod tests {
                 verify_policy: Default::default(),
                 path_policy: PathPolicy::default(),
                 progress: ProgressPolicy::default(),
+                commands: liberado_coder_core::CoderCommandsConfig::default(),
                 hashline: liberado_coder_core::HashlineConfig::default(),
             },
             attempt: 0,

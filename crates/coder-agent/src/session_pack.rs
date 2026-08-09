@@ -84,6 +84,8 @@ pub struct CodingSessionPack {
     /// entirely on how many files the change spans — and they were the one thing you had to
     /// recompile to adjust.
     progress: liberado_coder_core::ProgressPolicy,
+    /// Background command concurrency limits from `[coder.commands]` in tuning.toml.
+    commands: liberado_coder_core::CoderCommandsConfig,
 }
 
 impl CodingSessionPack {
@@ -99,6 +101,7 @@ impl CodingSessionPack {
             coder_role: liberado_coder_core::CoderTuning::default().coder,
             gate: liberado_coder_core::CoderGateConfig::default(),
             progress: liberado_coder_core::ProgressPolicy::default(),
+            commands: liberado_coder_core::CoderCommandsConfig::default(),
         }
     }
 
@@ -118,6 +121,7 @@ impl CodingSessionPack {
             coder_role: liberado_coder_core::CoderTuning::default().coder,
             gate: liberado_coder_core::CoderGateConfig::default(),
             progress: liberado_coder_core::ProgressPolicy::default(),
+            commands: liberado_coder_core::CoderCommandsConfig::default(),
         }
     }
 
@@ -161,6 +165,12 @@ impl CodingSessionPack {
     /// Progress-guard thresholds for sessions this pack runs (`[coder.progress]`).
     pub fn with_progress(mut self, policy: liberado_coder_core::ProgressPolicy) -> Self {
         self.progress = policy;
+        self
+    }
+
+    /// Background command concurrency limits for sessions this pack runs (`[coder.commands]`).
+    pub fn with_commands(mut self, config: liberado_coder_core::CoderCommandsConfig) -> Self {
+        self.commands = config;
         self
     }
 

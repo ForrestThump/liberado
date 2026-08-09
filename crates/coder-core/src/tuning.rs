@@ -11,9 +11,9 @@
 use liberado_common::{Error, Result};
 
 use crate::{
-    CoderCommandConfig, CoderGateConfig, CoderRoleConfig, CoderRunConfig, CommandPolicy,
-    HashlineConfig, LIBERADO_LOOP_BACKEND, PathPolicy, PipelinePolicy, ProgressPolicy, SandboxSpec,
-    VerifierSpec,
+    CoderCommandConfig, CoderCommandsConfig, CoderGateConfig, CoderRoleConfig, CoderRunConfig,
+    CommandPolicy, HashlineConfig, LIBERADO_LOOP_BACKEND, PathPolicy, PipelinePolicy, ProgressPolicy,
+    SandboxSpec, VerifierSpec,
 };
 use serde::{Deserialize, Serialize};
 
@@ -56,6 +56,9 @@ pub struct CoderTuning {
     /// `[tuning.coder.hashline]` — line-anchored hashline edit mode (default off).
     #[serde(default)]
     pub hashline: HashlineConfig,
+    /// `[tuning.coder.commands]` — background command concurrency limits.
+    #[serde(default)]
+    pub commands: CoderCommandsConfig,
     /// `[tuning.coder.repo_map]` — Aider-style repository map for cold-start context.
     #[serde(default)]
     pub repo_map: RepoMapConfig,
@@ -115,6 +118,7 @@ impl CoderTuning {
             verify_policy: self.verify_policy.clone(),
             path_policy: self.path_policy.clone(),
             progress: self.progress.clone(),
+            commands: self.commands.clone(),
             hashline: self.hashline.clone(),
         }
     }
@@ -213,6 +217,7 @@ impl Default for CoderTuning {
             path_policy: PathPolicy::default(),
             progress: ProgressPolicy::default(),
             hashline: HashlineConfig::default(),
+            commands: CoderCommandsConfig::default(),
             repo_map: RepoMapConfig::default(),
         }
     }
@@ -353,6 +358,7 @@ mod tests {
         assert_eq!(config.backend, tuning.backend);
         assert_eq!(config.planner.model, tuning.planner.model);
         assert_eq!(config.hashline, tuning.hashline);
+        assert_eq!(config.commands, tuning.commands);
     }
 
     #[test]

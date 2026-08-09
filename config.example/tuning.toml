@@ -115,6 +115,17 @@
 # max_attempts = 3
 # event_preview_max_chars = 500
 
+# --- Background command concurrency limits ---------------------------------------------------
+# Caps how many background jobs (`run_command_background`) may run at once, with a separate
+# tighter cap on "build-like" programs (cargo, npm, yarn, etc.) that each write gigabytes into
+# target/ or similar build-artifact directories.  A refused call returns an error naming the
+# already-running job and telling the model to call check_background on it first — it does NOT
+# panic, block, queue, or kill the running job.
+# [coder.commands]
+# build_like_programs = ["cargo", "npm", "pnpm", "yarn", "make", "go", "gradle", "mvn", "tsc"]
+# max_background = 2     # total background jobs allowed at once
+# max_build_like = 1     # of those, at most 1 may be build-like
+
 # --- Hashline edit mode --------------------------------------------------------------------
 # Line-anchored patches (oh-my-pi style): read_file emits [path#TAG] + LINE:content; the
 # hashline_edit tool applies PUT/CUT/REM patches bound to the content-hash tag so stale
