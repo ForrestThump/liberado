@@ -282,12 +282,25 @@ def start_goal(description: str, *, mode: str | None = None) -> str | None:
 
 
 def active_goal_count() -> int:
+    """How many sessions are *consuming* capacity right now.
+
+    `parked` is deliberately excluded. A parked session is blocked on a human answer and is
+    running nothing, so counting it against a compute cap reserves capacity nobody is using.
+    Worse, parked survives a daemon restart while the live hub does not: the session is then
+    unresumable AND uncancellable (`/cancel` answers "not found or already finished"), so it
+    occupies a slot permanently. Four such orphans against MAX_CONCURRENT=2 had blocked this
+    shepherd from starting any work at all — two of them for days — and the symptom was a
+    silent `deferred: at concurrency cap` on every pass.
+
+    The orphans themselves are a daemon-side bug (startup should reconcile a parked session
+    with no hub entry); this only stops them from taking the whole pipeline down with them.
+    """
     try:
         with urllib.request.urlopen(f"{DAEMON}/api/goals", timeout=15) as resp:
             rows = json.loads(resp.read().decode() or "[]")
     except Exception:
         return 0
-    live = {"running", "pending", "starting", "active", "parked"}
+    live = {"running", "pending", "starting", "active"}
     return sum(1 for r in rows if str(r.get("status", "")).lower() in live)
 
 

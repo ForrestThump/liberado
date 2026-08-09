@@ -224,7 +224,11 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
             path_policy: Default::default(),
             progress: ProgressPolicy {
                 max_attempts: 2,
-                read_only_turn_limit: 6,
+                // `read_only_turn_limit` was pinned to 6 here (fatal at 12), which silently
+                // overrode the shared default and starved exploration on anything spanning more
+                // than a couple of files — the headless runner is the path used for harness-bench
+                // and unattended runs, so it was the one place the tighter number hurt most.
+                // Take the shared default instead; it is tuned in one place, `ProgressPolicy`.
                 ..Default::default()
             },
             hashline: HashlineConfig {
