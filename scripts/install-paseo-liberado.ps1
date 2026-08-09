@@ -43,7 +43,7 @@ $provider = [ordered]@{
     description  = "Liberado coding agent over ACP (liberado-acp)"
     command      = $command
     env          = [ordered]@{
-        LIBERADO_ACP_MODEL = if ($env:LIBERADO_ACP_MODEL) { $env:LIBERADO_ACP_MODEL } else { "deepseek-chat" }
+        LIBERADO_ACP_MODEL = if ($env:LIBERADO_ACP_MODEL) { $env:LIBERADO_ACP_MODEL } else { "deepseek/deepseek-v4-pro" }
     }
     params       = [ordered]@{
         supportsMcpServers = $false

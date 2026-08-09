@@ -10,7 +10,8 @@
 //! | `session/prompt` | User turn; streams `session/update` chunks |
 //! | `session/cancel` | Abort the in-flight turn (notification) |
 //! | `session/load` | Not advertised (`loadSession: false`) until history is durable |
-//! | `session/set_mode` / `session/set_model` | Accepted no-ops |
+//! | `session/set_mode` | Accepted no-op |
+//! | `session/set_model` | Hot-swap the active model (must be in the live catalog) |
 //!
 //! Usage (spawned by Paseo):
 //! ```text
@@ -18,10 +19,13 @@
 //! ```
 //!
 //! Environment:
-//! - `DEEPSEEK_API_KEY` / `OPENROUTER_API_KEY` / `OPENAI_API_KEY`
-//! - `LIBERADO_ACP_MODEL` — model slug (default `deepseek-chat`)
+//! - `OPENROUTER_API_KEY` (preferred) / `DEEPSEEK_API_KEY` / `OPENAI_API_KEY`
+//! - `LIBERADO_ACP_MODEL` — initial model id (OpenRouter default: `deepseek/deepseek-v4-pro`)
 //! - `LIBERADO_CONFIG_DIR` — optional Liberado config (topology provider)
 //! - `LIBERADO_ACP_SYSTEM_PROMPT` — optional system prompt override
+//!
+//! Model catalog: built from the backend's `GET /models` (OpenRouter when that key is set),
+//! curated for Paseo's picker. Prefer `author/model` slugs like `deepseek/deepseek-v4-pro`.
 
 use std::{
     collections::HashMap,
@@ -49,9 +53,21 @@ const PROTOCOL_VERSION: u32 = 1;
 /// replay exist (integration roadmap P3); true made Paseo resume into an empty transcript.
 const LOAD_SESSION_CAPABILITY: bool = false;
 
-const DEFAULT_API_KEY_ENV: &str = "DEEPSEEK_API_KEY";
-const DEFAULT_BASE_URL: &str = "https://api.deepseek.com/v1";
-const DEFAULT_MODEL: &str = "deepseek-chat";
+/// Preferred when `OPENROUTER_API_KEY` is set — OpenRouter uses `author/model` ids.
+const OPENROUTER_DEFAULT_MODEL: &str = "deepseek/deepseek-v4-pro";
+/// Preferred when talking to DeepSeek direct (no author prefix on their `/models` ids).
+const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-chat";
+
+/// Models we always surface first when the live catalog includes them (OpenRouter form).
+const OPENROUTER_PREFERRED: &[&str] = &[
+    "deepseek/deepseek-v4-pro",
+    "deepseek/deepseek-v4-flash",
+    "deepseek/deepseek-chat",
+    "deepseek/deepseek-reasoner",
+];
+
+/// Fallback when OpenRouter `/models` is unreachable but the key is present.
+const OPENROUTER_FALLBACK: &[&str] = &["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"];
 
 // ── JSON-RPC framing ────────────────────────────────────────────────────────
 
@@ -91,10 +107,24 @@ struct JsonRpcNotification {
 
 // ── Bridge state ────────────────────────────────────────────────────────────
 
+/// One row in the ACP session model picker (`availableModels`).
+#[derive(Debug, Clone)]
+struct CatalogModel {
+    /// Wire id passed to `session/set_model` and the provider (e.g. `deepseek/deepseek-v4-pro`).
+    model_id: String,
+    /// Human label in Paseo (usually same as `model_id`).
+    name: String,
+    description: String,
+}
+
 struct Bridge {
     provider: Arc<dyn Provider>,
-    model_id: String,
-    model_name: String,
+    /// Which inference backend we bound (`openrouter` | `deepseek` | `openai` | …).
+    backend: String,
+    /// Live picker rows — from `GET /models`, curated.
+    catalog: Mutex<Vec<CatalogModel>>,
+    /// Active model id (mirrors `provider.model()`; kept for fast session payloads).
+    current_model: Mutex<String>,
     sessions: Mutex<HashMap<String, Arc<SessionHandle>>>,
 }
 
@@ -181,18 +211,31 @@ fn print_help() {
            liberado-acp --version    Print version and exit\n\
            liberado-acp --help       Show this help\n\n\
          Environment:\n\
-           DEEPSEEK_API_KEY / OPENROUTER_API_KEY / OPENAI_API_KEY\n\
+           OPENROUTER_API_KEY (preferred) / DEEPSEEK_API_KEY / OPENAI_API_KEY\n\
            LIBERADO_ACP_MODEL, LIBERADO_CONFIG_DIR, LIBERADO_ACP_SYSTEM_PROMPT",
         env!("CARGO_PKG_VERSION")
     );
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let (provider, model_id, model_name) = build_provider()?;
+    let resolved = build_provider()?;
+    let catalog = load_model_catalog(
+        resolved.provider.as_ref(),
+        &resolved.backend,
+        &resolved.model_id,
+    )
+    .await;
+    tracing::info!(
+        backend = %resolved.backend,
+        current = %resolved.model_id,
+        catalog_len = catalog.len(),
+        "acp model catalog ready"
+    );
     let bridge = Arc::new(Bridge {
-        provider,
-        model_id,
-        model_name,
+        provider: resolved.provider,
+        backend: resolved.backend,
+        catalog: Mutex::new(catalog),
+        current_model: Mutex::new(resolved.model_id),
         sessions: Mutex::new(HashMap::new()),
     });
 
@@ -292,7 +335,14 @@ impl WireSink for StdoutSink {
     }
 }
 
-fn build_provider() -> Result<(Arc<dyn Provider>, String, String), String> {
+struct ResolvedProvider {
+    provider: Arc<dyn Provider>,
+    /// Backend key: `openrouter` | `deepseek` | `openai` | topology name.
+    backend: String,
+    model_id: String,
+}
+
+fn build_provider() -> Result<ResolvedProvider, String> {
     let model_override = std::env::var("LIBERADO_ACP_MODEL")
         .ok()
         .filter(|s| !s.is_empty());
@@ -301,6 +351,7 @@ fn build_provider() -> Result<(Arc<dyn Provider>, String, String), String> {
         match liberado_config::load_config(Some(Path::new(&config_dir))) {
             Ok((config, _)) => {
                 if let Some(provider) = liberado_bootstrap::provider_from_config(&config) {
+                    let backend = config.topology.provider.clone();
                     let model = model_override.clone().unwrap_or_else(|| provider.model());
                     if let Some(profile) = config
                         .topology
@@ -320,10 +371,18 @@ fn build_provider() -> Result<(Arc<dyn Provider>, String, String), String> {
                             %model,
                             "acp provider from LIBERADO_CONFIG_DIR"
                         );
-                        return Ok((Arc::new(p), model.clone(), model));
+                        return Ok(ResolvedProvider {
+                            provider: Arc::new(p),
+                            backend,
+                            model_id: model,
+                        });
                     }
                     let m = provider.model();
-                    return Ok((provider, m.clone(), m));
+                    return Ok(ResolvedProvider {
+                        provider,
+                        backend,
+                        model_id: m,
+                    });
                 }
             }
             Err(e) => {
@@ -332,48 +391,211 @@ fn build_provider() -> Result<(Arc<dyn Provider>, String, String), String> {
         }
     }
 
-    let model = model_override.unwrap_or_else(|| DEFAULT_MODEL.to_string());
+    // Prefer OpenRouter so the picker gets `author/model` ids (deepseek/deepseek-v4-pro, …).
+    // Then DeepSeek direct, then OpenAI.
+    let candidates: [(&str, &str, &str, &str); 3] = [
+        (
+            "OPENROUTER_API_KEY",
+            "https://openrouter.ai/api/v1",
+            "openrouter",
+            OPENROUTER_DEFAULT_MODEL,
+        ),
+        (
+            "DEEPSEEK_API_KEY",
+            "https://api.deepseek.com/v1",
+            "deepseek",
+            DEEPSEEK_DEFAULT_MODEL,
+        ),
+        (
+            "OPENAI_API_KEY",
+            "https://api.openai.com/v1",
+            "openai",
+            "gpt-4o-mini",
+        ),
+    ];
 
-    for (key_env, base) in [
-        (DEFAULT_API_KEY_ENV, DEFAULT_BASE_URL),
-        ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
-        ("OPENAI_API_KEY", "https://api.openai.com/v1"),
-    ] {
-        if std::env::var_os(key_env).is_some() {
-            let p = OpenAiCompatibleProvider::from_env(key_env, None, &model, base, Vec::new())
-                .map_err(|e| format!("provider init ({key_env}): {e}"))?;
-            tracing::info!(%key_env, %model, %base, "acp provider ready");
-            return Ok((Arc::new(p), model.clone(), model));
+    for (key_env, base, backend, default_model) in candidates {
+        if std::env::var_os(key_env).is_none() {
+            continue;
+        }
+        let model = model_override
+            .clone()
+            .unwrap_or_else(|| default_model.to_string());
+        let extra = if backend == "openrouter" {
+            vec![402]
+        } else {
+            Vec::new()
+        };
+        let p = OpenAiCompatibleProvider::from_env(key_env, None, &model, base, extra)
+            .map_err(|e| format!("provider init ({key_env}): {e}"))?;
+        tracing::info!(%key_env, %model, %base, %backend, "acp provider ready");
+        return Ok(ResolvedProvider {
+            provider: Arc::new(p),
+            backend: backend.to_string(),
+            model_id: model,
+        });
+    }
+
+    let model = model_override.unwrap_or_else(|| OPENROUTER_DEFAULT_MODEL.to_string());
+    tracing::warn!(
+        "no API key found (set OPENROUTER_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY); \
+         Paseo can still detect liberado-acp, but prompts need a key"
+    );
+    Ok(ResolvedProvider {
+        provider: Arc::new(MissingKeyProvider {
+            model: std::sync::RwLock::new(model.clone()),
+        }),
+        backend: "none".into(),
+        model_id: model,
+    })
+}
+
+/// Build the ACP model picker from the live provider catalog.
+async fn load_model_catalog(
+    provider: &dyn Provider,
+    backend: &str,
+    current: &str,
+) -> Vec<CatalogModel> {
+    let live = match provider.list_models().await {
+        Ok(ids) if !ids.is_empty() => {
+            tracing::info!(count = ids.len(), %backend, "fetched live /models catalog");
+            ids
+        }
+        Ok(_) => {
+            tracing::warn!(%backend, "provider /models returned empty; using fallbacks");
+            Vec::new()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, %backend, "provider list_models failed; using fallbacks");
+            Vec::new()
+        }
+    };
+
+    let ordered = if live.is_empty() {
+        fallback_model_ids(backend, current)
+    } else {
+        curate_model_ids(backend, &live, current)
+    };
+
+    ordered
+        .into_iter()
+        .map(|id| CatalogModel {
+            name: display_name_for(&id),
+            description: description_for(backend, &id),
+            model_id: id,
+        })
+        .collect()
+}
+
+/// Prefer known Liberado/coding models, then the rest of the live list (filtered for OpenRouter).
+fn curate_model_ids(backend: &str, live: &[String], current: &str) -> Vec<String> {
+    let live_set: std::collections::HashSet<&str> = live.iter().map(String::as_str).collect();
+    let mut out: Vec<String> = Vec::new();
+
+    let push = |out: &mut Vec<String>, id: &str| {
+        if !out.iter().any(|x| x == id) {
+            out.push(id.to_string());
+        }
+    };
+
+    // Preferred ids that actually exist upstream.
+    for pref in preferred_for_backend(backend) {
+        if live_set.contains(pref) {
+            push(&mut out, pref);
         }
     }
 
-    tracing::warn!(
-        "no API key found (set DEEPSEEK_API_KEY, OPENROUTER_API_KEY, or OPENAI_API_KEY); \
-         Paseo can still detect liberado-acp, but prompts need a key"
-    );
-    Ok((
-        Arc::new(MissingKeyProvider {
-            model: model.clone(),
-        }),
-        model.clone(),
-        model,
-    ))
+    // Always include the configured current model first if missing from preferred hits.
+    if !current.is_empty() && !out.iter().any(|x| x == current) {
+        out.insert(0, current.to_string());
+    }
+
+    // OpenRouter: include every live deepseek/* model (author/model form).
+    // Direct backends: include the full list (usually small).
+    let rest: Vec<&String> = if backend == "openrouter" {
+        live.iter()
+            .filter(|id| id.starts_with("deepseek/"))
+            .collect()
+    } else {
+        live.iter().collect()
+    };
+    for id in rest {
+        push(&mut out, id);
+    }
+
+    if out.is_empty() {
+        return fallback_model_ids(backend, current);
+    }
+    out
+}
+
+fn preferred_for_backend(backend: &str) -> &'static [&'static str] {
+    match backend {
+        "openrouter" => OPENROUTER_PREFERRED,
+        _ => &[],
+    }
+}
+
+fn fallback_model_ids(backend: &str, current: &str) -> Vec<String> {
+    let mut out: Vec<String> = match backend {
+        "openrouter" => OPENROUTER_FALLBACK
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+        "deepseek" => vec![DEEPSEEK_DEFAULT_MODEL.into(), "deepseek-reasoner".into()],
+        "openai" => vec!["gpt-4o-mini".into(), "gpt-4o".into()],
+        _ => OPENROUTER_FALLBACK
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+    };
+    if !current.is_empty() && !out.iter().any(|x| x == current) {
+        out.insert(0, current.to_string());
+    }
+    out
+}
+
+fn display_name_for(model_id: &str) -> String {
+    // Keep the full author/model slug visible — that is the identity Paseo should show.
+    model_id.to_string()
+}
+
+fn description_for(backend: &str, model_id: &str) -> String {
+    match backend {
+        "openrouter" => format!("OpenRouter · {model_id}"),
+        "deepseek" => format!("DeepSeek API · {model_id}"),
+        "openai" => format!("OpenAI · {model_id}"),
+        other => format!("{other} · {model_id}"),
+    }
 }
 
 struct MissingKeyProvider {
-    model: String,
+    model: std::sync::RwLock<String>,
 }
 
 #[async_trait::async_trait]
 impl Provider for MissingKeyProvider {
     fn model(&self) -> String {
-        self.model.clone()
+        self.model.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+    fn set_model(&self, model: String) {
+        let model = model.trim();
+        if model.is_empty() {
+            return;
+        }
+        *self.model.write().unwrap_or_else(|e| e.into_inner()) = model.to_string();
+    }
+    async fn list_models(&self) -> ProviderResult<Vec<String>> {
+        Ok(OPENROUTER_FALLBACK
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect())
     }
     async fn complete(&self, _request: CompletionRequest) -> ProviderResult<CompletionResponse> {
         Err(ProviderError::InvalidRequest(
-            "liberado-acp: no API key configured. Set DEEPSEEK_API_KEY (or OPENROUTER_API_KEY / \
-             OPENAI_API_KEY), or point LIBERADO_CONFIG_DIR at a Liberado config with a topology \
-             provider."
+            "liberado-acp: no API key configured. Set OPENROUTER_API_KEY (preferred), \
+             DEEPSEEK_API_KEY, or OPENAI_API_KEY — or point LIBERADO_CONFIG_DIR at a Liberado \
+             config with a topology provider."
                 .into(),
         ))
     }
@@ -450,11 +672,8 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                 .insert(sid.clone(), Arc::new(handle));
 
             tracing::info!(session_id = %sid, cwd = %cwd.display(), "session/new");
-            Ok(session_state_payload(
-                &sid,
-                &bridge.model_id,
-                &bridge.model_name,
-            ))
+            let (catalog, current) = bridge_model_snapshot(&bridge).await;
+            Ok(session_state_payload(&sid, &catalog, &current))
         }
 
         "session/load" => {
@@ -485,12 +704,63 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
             Ok(json!({ "stopReason": stop }))
         }
 
-        "session/set_mode" | "session/set_model" | "session/set_config_option" => Ok(json!({})),
+        "session/set_model" => {
+            let model_id = params
+                .get("modelId")
+                .and_then(|v| v.as_str())
+                .ok_or("missing modelId")?
+                .trim()
+                .to_string();
+            if model_id.is_empty() {
+                return Err("modelId must be non-empty".into());
+            }
+
+            // Refresh catalog opportunistically so a newly-listed OpenRouter model can be selected.
+            {
+                let current = bridge.current_model.lock().await.clone();
+                let fresh =
+                    load_model_catalog(bridge.provider.as_ref(), &bridge.backend, &current).await;
+                if !fresh.is_empty() {
+                    *bridge.catalog.lock().await = fresh;
+                }
+            }
+
+            let allowed = {
+                let catalog = bridge.catalog.lock().await;
+                catalog.iter().any(|m| m.model_id == model_id)
+            };
+            if !allowed {
+                // Still allow the switch if the operator knows a valid id; add it to the picker.
+                tracing::info!(%model_id, "set_model for id not in prior catalog; accepting");
+                let mut catalog = bridge.catalog.lock().await;
+                catalog.insert(
+                    0,
+                    CatalogModel {
+                        name: display_name_for(&model_id),
+                        description: description_for(&bridge.backend, &model_id),
+                        model_id: model_id.clone(),
+                    },
+                );
+            }
+
+            bridge.provider.set_model(model_id.clone());
+            *bridge.current_model.lock().await = model_id.clone();
+            tracing::info!(%model_id, backend = %bridge.backend, "session/set_model");
+            Ok(json!({}))
+        }
+
+        "session/set_mode" | "session/set_config_option" => Ok(json!({})),
 
         "authenticate" | "logout" => Ok(json!({})),
 
         _ => Err(format!("Method not found: {method}")),
     }
+}
+
+async fn bridge_model_snapshot(bridge: &Bridge) -> (Vec<CatalogModel>, String) {
+    let catalog = bridge.catalog.lock().await.clone();
+    let current = bridge.current_model.lock().await.clone();
+    (catalog, current)
 }
 
 fn open_session(
@@ -543,23 +813,41 @@ fn open_session_with_tools(
     })
 }
 
-fn session_state_payload(session_id: &str, model_id: &str, model_name: &str) -> Value {
+fn session_state_payload(
+    session_id: &str,
+    catalog: &[CatalogModel],
+    current_model_id: &str,
+) -> Value {
     json!({
         "sessionId": session_id,
-        "models": model_state(model_id, model_name),
+        "models": model_state(catalog, current_model_id),
         "modes": mode_state(),
         "configOptions": []
     })
 }
 
-fn model_state(model_id: &str, model_name: &str) -> Value {
+fn model_state(catalog: &[CatalogModel], current_model_id: &str) -> Value {
+    let available: Vec<Value> = catalog
+        .iter()
+        .map(|m| {
+            json!({
+                "modelId": m.model_id,
+                "name": m.name,
+                "description": m.description,
+            })
+        })
+        .collect();
+    let current = if catalog.iter().any(|m| m.model_id == current_model_id) {
+        current_model_id
+    } else {
+        catalog
+            .first()
+            .map(|m| m.model_id.as_str())
+            .unwrap_or(current_model_id)
+    };
     json!({
-        "availableModels": [{
-            "modelId": model_id,
-            "name": model_name,
-            "description": "Liberado configured model"
-        }],
-        "currentModelId": model_id
+        "availableModels": available,
+        "currentModelId": current
     })
 }
 
@@ -819,10 +1107,52 @@ mod tests {
 
     #[test]
     fn session_new_payload_has_models_and_modes() {
-        let v = session_state_payload("sid", "deepseek-chat", "deepseek-chat");
+        let catalog = vec![
+            CatalogModel {
+                model_id: "deepseek/deepseek-v4-pro".into(),
+                name: "deepseek/deepseek-v4-pro".into(),
+                description: "OpenRouter · deepseek/deepseek-v4-pro".into(),
+            },
+            CatalogModel {
+                model_id: "deepseek/deepseek-v4-flash".into(),
+                name: "deepseek/deepseek-v4-flash".into(),
+                description: "OpenRouter · deepseek/deepseek-v4-flash".into(),
+            },
+        ];
+        let v = session_state_payload("sid", &catalog, "deepseek/deepseek-v4-pro");
         assert_eq!(v["sessionId"], "sid");
-        assert_eq!(v["models"]["currentModelId"], "deepseek-chat");
+        assert_eq!(v["models"]["currentModelId"], "deepseek/deepseek-v4-pro");
+        assert_eq!(v["models"]["availableModels"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            v["models"]["availableModels"][1]["modelId"],
+            "deepseek/deepseek-v4-flash"
+        );
         assert_eq!(v["modes"]["currentModeId"], "code");
+    }
+
+    #[test]
+    fn curate_openrouter_prefers_v4_and_keeps_deepseek_family() {
+        let live = vec![
+            "anthropic/claude-3.5-sonnet".into(),
+            "deepseek/deepseek-chat".into(),
+            "deepseek/deepseek-v4-flash".into(),
+            "deepseek/deepseek-v4-pro".into(),
+            "openai/gpt-4o".into(),
+        ];
+        let ordered = curate_model_ids("openrouter", &live, "deepseek/deepseek-v4-pro");
+        assert_eq!(ordered[0], "deepseek/deepseek-v4-pro");
+        assert!(ordered.contains(&"deepseek/deepseek-v4-flash".to_string()));
+        assert!(ordered.contains(&"deepseek/deepseek-chat".to_string()));
+        assert!(!ordered.iter().any(|id| id.starts_with("anthropic/")));
+        assert!(!ordered.iter().any(|id| id.starts_with("openai/")));
+    }
+
+    #[test]
+    fn curate_inserts_current_when_missing_from_live() {
+        let live = vec!["deepseek/deepseek-v4-flash".into()];
+        let ordered = curate_model_ids("openrouter", &live, "deepseek/deepseek-v4-pro");
+        assert_eq!(ordered[0], "deepseek/deepseek-v4-pro");
+        assert!(ordered.contains(&"deepseek/deepseek-v4-flash".to_string()));
     }
 
     #[test]

@@ -7,7 +7,7 @@
         "description": "Liberado coding agent over ACP (liberado-acp)",
         "command": ["liberado-acp"],
         "env": {
-          "LIBERADO_ACP_MODEL": "deepseek-chat"
+          "LIBERADO_ACP_MODEL": "deepseek/deepseek-v4-pro"
         },
         "params": {
           "supportsMcpServers": false

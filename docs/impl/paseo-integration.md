@@ -26,18 +26,21 @@ use with Paseo.
    git clone <fork>/turbomcp turbomcp;   git -C turbomcp  checkout develop
    ```
 
-3. An LLM API key in the environment (any one):
+3. An LLM API key in the environment (any one). **Prefer OpenRouter** so the model
+   picker gets `author/model` ids (`deepseek/deepseek-v4-pro`, …) from live `GET /models`:
 
-   | Env var | Base URL used |
-   |---|---|
-   | `DEEPSEEK_API_KEY` | `https://api.deepseek.com/v1` |
-   | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1` |
-   | `OPENAI_API_KEY` | `https://api.openai.com/v1` |
+   | Env var | Base URL | Default model | Picker catalog |
+   |---|---|---|---|
+   | `OPENROUTER_API_KEY` (**preferred**) | `https://openrouter.ai/api/v1` | `deepseek/deepseek-v4-pro` | Live OpenRouter list, curated to `deepseek/*` |
+   | `DEEPSEEK_API_KEY` | `https://api.deepseek.com/v1` | `deepseek-chat` | Live DeepSeek `/models` |
+   | `OPENAI_API_KEY` | `https://api.openai.com/v1` | `gpt-4o-mini` | Live OpenAI `/models` |
 
    Or set `LIBERADO_CONFIG_DIR` to a Liberado config directory with a working
    `[[topology.providers]]` entry (same resolution as the daemon).
 
-4. Optional: `LIBERADO_ACP_MODEL` to override the model slug (default `deepseek-chat`).
+4. Optional: `LIBERADO_ACP_MODEL` to override the initial model id (e.g.
+   `deepseek/deepseek-v4-flash`). Paseo's model picker calls ACP `session/set_model`
+   to hot-swap; the catalog is built from the backend's live `/models` endpoint.
 
 ## Install `liberado-acp` on PATH
 
