@@ -31,7 +31,7 @@ use with Paseo.
 
    | Env var | Base URL | Default model | Picker catalog |
    |---|---|---|---|
-   | `OPENROUTER_API_KEY` (**preferred**) | `https://openrouter.ai/api/v1` | `deepseek/deepseek-v4-pro` | Live OpenRouter list, curated to `deepseek/*` |
+   | `OPENROUTER_API_KEY` (**preferred**) | `https://openrouter.ai/api/v1` | `deepseek/deepseek-v4-pro` | Full live OpenRouter catalog (`author/model`), A–Z |
    | `DEEPSEEK_API_KEY` | `https://api.deepseek.com/v1` | `deepseek-chat` | Live DeepSeek `/models` |
    | `OPENAI_API_KEY` | `https://api.openai.com/v1` | `gpt-4o-mini` | Live OpenAI `/models` |
 

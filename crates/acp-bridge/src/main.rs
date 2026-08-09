@@ -24,8 +24,7 @@
 //! - `LIBERADO_CONFIG_DIR` — optional Liberado config (topology provider)
 //! - `LIBERADO_ACP_SYSTEM_PROMPT` — optional system prompt override
 //!
-//! Model catalog: built from the backend's `GET /models` (OpenRouter when that key is set),
-//! curated for Paseo's picker. Prefer `author/model` slugs like `deepseek/deepseek-v4-pro`.
+//! Model catalog: full live `GET /models` list (OpenRouter when that key is set), sorted A–Z.
 
 use std::{
     collections::HashMap,
@@ -53,18 +52,10 @@ const PROTOCOL_VERSION: u32 = 1;
 /// replay exist (integration roadmap P3); true made Paseo resume into an empty transcript.
 const LOAD_SESSION_CAPABILITY: bool = false;
 
-/// Preferred when `OPENROUTER_API_KEY` is set — OpenRouter uses `author/model` ids.
+/// Initial model when `OPENROUTER_API_KEY` is set (OpenRouter `author/model` ids).
 const OPENROUTER_DEFAULT_MODEL: &str = "deepseek/deepseek-v4-pro";
-/// Preferred when talking to DeepSeek direct (no author prefix on their `/models` ids).
+/// Initial model when talking to DeepSeek direct (no author prefix on their `/models` ids).
 const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-chat";
-
-/// Models we always surface first when the live catalog includes them (OpenRouter form).
-const OPENROUTER_PREFERRED: &[&str] = &[
-    "deepseek/deepseek-v4-pro",
-    "deepseek/deepseek-v4-flash",
-    "deepseek/deepseek-chat",
-    "deepseek/deepseek-reasoner",
-];
 
 /// Fallback when OpenRouter `/models` is unreachable but the key is present.
 const OPENROUTER_FALLBACK: &[&str] = &["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"];
@@ -474,7 +465,7 @@ async fn load_model_catalog(
     let ordered = if live.is_empty() {
         fallback_model_ids(backend, current)
     } else {
-        curate_model_ids(backend, &live, current)
+        catalog_model_ids(&live, current)
     };
 
     ordered
@@ -487,53 +478,19 @@ async fn load_model_catalog(
         .collect()
 }
 
-/// Prefer known Liberado/coding models, then the rest of the live list (filtered for OpenRouter).
-fn curate_model_ids(backend: &str, live: &[String], current: &str) -> Vec<String> {
-    let live_set: std::collections::HashSet<&str> = live.iter().map(String::as_str).collect();
+/// Full live catalog, A–Z. Includes `current` if the live list omitted it (e.g. custom slug).
+fn catalog_model_ids(live: &[String], current: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-
-    let push = |out: &mut Vec<String>, id: &str| {
+    for id in live {
         if !out.iter().any(|x| x == id) {
-            out.push(id.to_string());
-        }
-    };
-
-    // Preferred ids that actually exist upstream.
-    for pref in preferred_for_backend(backend) {
-        if live_set.contains(pref) {
-            push(&mut out, pref);
+            out.push(id.clone());
         }
     }
-
-    // Always include the configured current model first if missing from preferred hits.
     if !current.is_empty() && !out.iter().any(|x| x == current) {
-        out.insert(0, current.to_string());
+        out.push(current.to_string());
     }
-
-    // OpenRouter: include every live deepseek/* model (author/model form).
-    // Direct backends: include the full list (usually small).
-    let rest: Vec<&String> = if backend == "openrouter" {
-        live.iter()
-            .filter(|id| id.starts_with("deepseek/"))
-            .collect()
-    } else {
-        live.iter().collect()
-    };
-    for id in rest {
-        push(&mut out, id);
-    }
-
-    if out.is_empty() {
-        return fallback_model_ids(backend, current);
-    }
+    out.sort();
     out
-}
-
-fn preferred_for_backend(backend: &str) -> &'static [&'static str] {
-    match backend {
-        "openrouter" => OPENROUTER_PREFERRED,
-        _ => &[],
-    }
 }
 
 fn fallback_model_ids(backend: &str, current: &str) -> Vec<String> {
@@ -550,8 +507,9 @@ fn fallback_model_ids(backend: &str, current: &str) -> Vec<String> {
             .collect(),
     };
     if !current.is_empty() && !out.iter().any(|x| x == current) {
-        out.insert(0, current.to_string());
+        out.push(current.to_string());
     }
+    out.sort();
     out
 }
 
@@ -1131,28 +1089,37 @@ mod tests {
     }
 
     #[test]
-    fn curate_openrouter_prefers_v4_and_keeps_deepseek_family() {
+    fn catalog_is_full_and_alphabetical() {
         let live = vec![
-            "anthropic/claude-3.5-sonnet".into(),
-            "deepseek/deepseek-chat".into(),
-            "deepseek/deepseek-v4-flash".into(),
-            "deepseek/deepseek-v4-pro".into(),
             "openai/gpt-4o".into(),
+            "anthropic/claude-3.5-sonnet".into(),
+            "deepseek/deepseek-v4-pro".into(),
+            "deepseek/deepseek-chat".into(),
         ];
-        let ordered = curate_model_ids("openrouter", &live, "deepseek/deepseek-v4-pro");
-        assert_eq!(ordered[0], "deepseek/deepseek-v4-pro");
-        assert!(ordered.contains(&"deepseek/deepseek-v4-flash".to_string()));
-        assert!(ordered.contains(&"deepseek/deepseek-chat".to_string()));
-        assert!(!ordered.iter().any(|id| id.starts_with("anthropic/")));
-        assert!(!ordered.iter().any(|id| id.starts_with("openai/")));
+        let ordered = catalog_model_ids(&live, "deepseek/deepseek-v4-pro");
+        assert_eq!(
+            ordered,
+            vec![
+                "anthropic/claude-3.5-sonnet",
+                "deepseek/deepseek-chat",
+                "deepseek/deepseek-v4-pro",
+                "openai/gpt-4o",
+            ]
+        );
     }
 
     #[test]
-    fn curate_inserts_current_when_missing_from_live() {
-        let live = vec!["deepseek/deepseek-v4-flash".into()];
-        let ordered = curate_model_ids("openrouter", &live, "deepseek/deepseek-v4-pro");
-        assert_eq!(ordered[0], "deepseek/deepseek-v4-pro");
-        assert!(ordered.contains(&"deepseek/deepseek-v4-flash".to_string()));
+    fn catalog_inserts_current_when_missing_from_live_then_sorts() {
+        let live = vec!["openai/gpt-4o".into(), "anthropic/claude-3.5-sonnet".into()];
+        let ordered = catalog_model_ids(&live, "deepseek/deepseek-v4-pro");
+        assert_eq!(
+            ordered,
+            vec![
+                "anthropic/claude-3.5-sonnet",
+                "deepseek/deepseek-v4-pro",
+                "openai/gpt-4o",
+            ]
+        );
     }
 
     #[test]
