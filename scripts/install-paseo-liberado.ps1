@@ -4,10 +4,15 @@
 #   powershell -ExecutionPolicy Bypass -File scripts/install-paseo-liberado.ps1
 #
 # What it does:
-#   1. cargo install --path crates/acp-bridge --force  → liberado-acp on PATH
+#   1. cargo install --path crates/acp-bridge --force  -> liberado-acp on PATH
 #   2. Merge Liberado into %USERPROFILE%\.paseo\config.json (or $env:PASEO_HOME)
 #   3. Smoke-test initialize over stdio
 
+# ASCII only, deliberately. Windows PowerShell 5.1 reads a BOM-less .ps1 as the system ANSI
+# codepage, so a UTF-8 em dash (E2 80 94) decodes as three cp1252 characters ending in a curly
+# right double-quote -- which PowerShell accepts as a string terminator. This script shipped with
+# one and would not parse at all: "The string is missing the terminator". A BOM would also fix it,
+# but a future edit can silently drop a BOM; it cannot silently reintroduce a character nobody typed.
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
@@ -35,12 +40,12 @@ $paseoHome = if ($env:PASEO_HOME) { $env:PASEO_HOME } else { Join-Path $env:USER
 New-Item -ItemType Directory -Force -Path $paseoHome | Out-Null
 $configPath = Join-Path $paseoHome "config.json"
 
-# Do NOT embed API keys in config.json — Paseo inherits the launching process env for
+# Do NOT embed API keys in config.json -- Paseo inherits the launching process env for
 # spawned agents. Keep only non-secret model selection here.
 $provider = [ordered]@{
     extends      = "acp"
     label        = "Liberado"
-    description  = "Liberado multi-mode agent (coding · chat · face) over ACP"
+    description  = "Liberado multi-mode agent (coding | chat | face) over ACP"
     command      = $command
     env          = [ordered]@{
         LIBERADO_ACP_MODEL = if ($env:LIBERADO_ACP_MODEL) { $env:LIBERADO_ACP_MODEL } else { "deepseek/deepseek-v4-pro" }
@@ -100,7 +105,7 @@ if ($out -notmatch 'Liberado') {
 
 Write-Host ""
 Write-Host "Done. Restart Paseo and pick provider 'Liberado'."
-Write-Host "Modes (one provider): coding (default) · chat · face — switch via Paseo mode picker or --mode / LIBERADO_ACP_MODE"
+Write-Host "Modes (one provider): coding (default) | chat | face -- switch via Paseo mode picker or --mode / LIBERADO_ACP_MODE"
 Write-Host "Docs: docs/impl/paseo-integration.md"
 if (-not $env:DEEPSEEK_API_KEY -and -not $env:OPENROUTER_API_KEY -and -not $env:OPENAI_API_KEY) {
     Write-Warning "No LLM API key in this shell. Set DEEPSEEK_API_KEY (or peer) before prompting."
