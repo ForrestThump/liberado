@@ -222,22 +222,36 @@ each was invisible until someone ran the thing and asked why a setting had no ef
 
 ### Routing: which model gets which item
 
-Delegation is not one queue. Two models, two shapes of work, based on what each has actually done
-here rather than on benchmarks:
+**Read [`delegation-failure-modes.md`](delegation-failure-modes.md) first.** It is the authority
+here, written from 15 delegated PRs (#33–#45) across three rounds, and its conclusion outranks any
+routing table:
 
-**Grok Build → build-out where the functional result is self-evident.** It is strong at probing a
-space and producing something that runs. It is weak at delivering *exactly* the thing asked for, so
-give it work where "did it do the right thing" is answerable by running it and looking, not by
-diffing against a spec. Review cost is the selection criterion.
+> **Spec accuracy is a bigger lever than model choice.**
 
-**DeepSeek → focused items with exact pointers.** It landed E3 correctly — right file, right
-function, right drop mechanism, Windows path normalization unprompted — when the task named files
-and functions. Given a vaguer prompt on the same day it wrote
-`fn job_is_build_like(..) -> bool { true }` and a comment justifying why the constant was fine. The
-difference was the pointers, not the model. **Name the file and the function, or expect a stub.**
+Today's runs are an independent confirmation. DeepSeek landed E3 correctly — right file, right
+function, right drop mechanism, Windows path normalization unprompted — from a prompt naming files
+and functions. The same model, the same day, given a vaguer prompt, wrote
+`fn job_is_build_like(..) -> bool { true }` with a comment justifying the constant. **Name the file
+and the function, or expect a stub.**
 
-Neither is a reason to skip review: the harness now writes a trace per run
-(`[coder] trace_formats`), so start a review by reading it rather than by re-deriving what happened.
+With that said, the two failure modes differ enough to change how you *review*, which is what the
+routing below is actually for:
+
+- **Grok over-claims.** Ambitious code, usually correct, described as doing more than it does.
+  Review budget goes on **checking claims**, and its tests are the least trustworthy artifact in the
+  PR — #35 shipped an acceptance item with no test, #37 shipped one that could not fail. So give it
+  work whose result you can *run*: if correctness is visible by executing the thing, an over-claim
+  is caught in seconds instead of by auditing fixtures.
+- **DeepSeek omits.** Narrower code, described accurately. Review budget goes on **finding gaps** —
+  count the paths changed against the paths tested (#40 was three vs two). So give it work with
+  exact pointers, where "what's missing" is enumerable from the spec.
+
+**This round is not recorded.** The doc covers #33–#45. The later round (~#60–#73, written by
+DeepSeek and Grok while Claude usage was exhausted, then reviewed and fixed) left almost nothing on
+GitHub — those reviews happened in-session, and the PRs carry 0–1 comments each. Two consequences
+worth fixing: the findings are lost, and **which model wrote which PR is not recorded anywhere**, so
+none of the routing above can be checked against the largest sample we have. Going forward, name the
+model in the PR body and append each round to the failure-modes doc.
 
 > **Grok Build capacity expires 2026-08-10.** F1–F4 are sized to be spent before then. If it lapses,
 > they are still worth doing — they just lose their reason to jump the queue.
