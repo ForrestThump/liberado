@@ -222,9 +222,19 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
             sandbox: SandboxSpec::HostLocal,
             command_policy: CommandPolicy::default(),
             validation_command: None,
-            verifiers: vec![VerifierSpec::GitNonemptyDiff {
-                id: "nonempty-diff".into(),
-            }],
+            // "The diff is non-empty" was the *only* acceptance test on this path, so an
+            // unattended run could report `outcome: succeeded` while shipping code that does not
+            // compile — and one did (PR #92: `cargo fmt --check` red on both platforms, plus a
+            // test module that failed to build). `validation_command` is None and the completion
+            // gate is off here, so nothing else was checking either.
+            //
+            // `cargo check` rather than `cargo build`: it catches the type and syntax errors these
+            // runs actually produce, at a fraction of the time and disk — and disk is finite, as a
+            // run that filled 476 GB with nine concurrent `cargo build`s demonstrated.
+            //
+            // Both are advisory in the sense that a run still *files*; they change what
+            // "succeeded" is allowed to mean.
+            verifiers: verifiers_for(&workspace),
             verify_policy: Default::default(),
             path_policy: Default::default(),
             progress: ProgressPolicy {
@@ -933,6 +943,51 @@ async fn git_output(workspace: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// The acceptance gates for a headless run.
+///
+/// A non-empty diff proves the agent did *something*; it says nothing about whether the something
+/// compiles. Both matter, and only the first was ever checked here.
+///
+/// The build check is skipped when the workspace has no `Cargo.toml`, because a verifier that
+/// always fails is indistinguishable from one that is broken, and this runner is not Rust-only by
+/// contract. `LIBERADO_CODER_VERIFY_CMD` overrides the whole thing for another stack.
+fn verifiers_for(workspace: &Path) -> Vec<VerifierSpec> {
+    let mut specs = vec![VerifierSpec::GitNonemptyDiff {
+        id: "nonempty-diff".into(),
+    }];
+
+    if let Ok(custom) = env::var("LIBERADO_CODER_VERIFY_CMD") {
+        let mut parts = custom.split_whitespace().map(str::to_string);
+        if let Some(program) = parts.next() {
+            specs.push(VerifierSpec::Command {
+                id: "verify-cmd".into(),
+                program,
+                args: parts.collect(),
+                env: Default::default(),
+                timeout_secs: Some(900),
+                output_max_bytes: None,
+                network: false,
+            });
+            return specs;
+        }
+    }
+
+    if workspace.join("Cargo.toml").exists() {
+        specs.push(VerifierSpec::Command {
+            id: "cargo-check".into(),
+            program: "cargo".into(),
+            args: vec!["check".into(), "--workspace".into(), "--all-targets".into()],
+            env: Default::default(),
+            // A cold workspace check on this repo takes minutes; the default would time it out and
+            // report a failure that is really a stopwatch.
+            timeout_secs: Some(900),
+            output_max_bytes: None,
+            network: false,
+        });
+    }
+    specs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1094,5 +1149,67 @@ mod tests {
         let err =
             Args::parse(["task", "run", "--help"].into_iter().map(str::to_string)).unwrap_err();
         assert!(err.contains("--prompt"));
+    }
+}
+
+#[cfg(test)]
+mod verifier_tests {
+    use super::*;
+
+    fn ids(specs: &[VerifierSpec]) -> Vec<String> {
+        specs
+            .iter()
+            .map(|s| match s {
+                VerifierSpec::GitNonemptyDiff { id } => id.clone(),
+                VerifierSpec::Command { id, .. } => id.clone(),
+                other => format!("{other:?}"),
+            })
+            .collect()
+    }
+
+    /// A run that produces code which does not compile must not be able to report success.
+    ///
+    /// Before this, the only acceptance test on the headless path was "the diff is non-empty", so
+    /// `outcome: succeeded` meant the model said so and touched a file. PR #92 was filed that way:
+    /// `cargo fmt --check` red on both platforms and a test module that would not build.
+    #[test]
+    fn a_rust_workspace_gets_a_build_check_not_just_a_diff_check() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[workspace]\n").unwrap();
+
+        let specs = verifiers_for(dir.path());
+        assert!(
+            ids(&specs).iter().any(|id| id == "cargo-check"),
+            "a Rust workspace must be compile-checked, got {:?}",
+            ids(&specs)
+        );
+        // The diff check still has to be there — "it compiles" is satisfied by changing nothing.
+        assert!(ids(&specs).iter().any(|id| id == "nonempty-diff"));
+
+        let uses_check = specs.iter().any(|s| {
+            matches!(s, VerifierSpec::Command { program, args, .. }
+                if program == "cargo" && args.first().map(String::as_str) == Some("check"))
+        });
+        assert!(
+            uses_check,
+            "prefer `cargo check` over a full build — it catches these errors far cheaper, and \
+             disk is finite"
+        );
+    }
+
+    /// A verifier that always fails is indistinguishable from a broken one, so a non-Rust
+    /// workspace must not be handed a cargo command it can never satisfy.
+    #[test]
+    fn a_workspace_without_cargo_gets_no_cargo_check() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), "{}").unwrap();
+
+        let specs = verifiers_for(dir.path());
+        assert!(
+            !ids(&specs).iter().any(|id| id == "cargo-check"),
+            "must not require cargo where there is no Cargo.toml: {:?}",
+            ids(&specs)
+        );
+        assert!(ids(&specs).iter().any(|id| id == "nonempty-diff"));
     }
 }
