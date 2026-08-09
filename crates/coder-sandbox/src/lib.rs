@@ -29,6 +29,7 @@ pub use preflight_baseline::{
 use std::{
     collections::BTreeMap,
     path::{Component, Path, PathBuf},
+    process::Stdio,
     time::Duration,
 };
 
@@ -517,15 +518,24 @@ async fn create_linked_worktree(parent_root: &Path, dest: &Path) -> Result<(), S
     let dest_cli = path_for_cli(dest);
 
     // Prune stale registration from a prior crashed run before `worktree add`.
+    //
+    // `.stdin(null)` is load-bearing, not tidiness. `.output()` pipes stdout and stderr but
+    // leaves stdin **inherited**, and when the parent is the ACP bridge its stdin is the
+    // JSON-RPC pipe from the editor. git then blocks reading a pipe that only ever carries
+    // protocol traffic, forever, before writing so much as its first GIT_TRACE line — a Paseo
+    // prompt sat on this for 19 minutes having never called a model. Measured at the hang:
+    // `.output()` hung past 10s while the identical spawn with a null stdin returned in 8ms.
     let _ = tokio::process::Command::new("git")
         .args(["-C", &parent_cli])
         .args(["worktree", "prune"])
+        .stdin(Stdio::null())
         .output()
         .await;
 
     let output = tokio::process::Command::new("git")
         .args(["-C", &parent_cli])
         .args(["worktree", "add", "--no-checkout", &dest_cli])
+        .stdin(Stdio::null())
         .output()
         .await
         .map_err(|e| SandboxError::Spawn(format!("git worktree add: {e}")))?;

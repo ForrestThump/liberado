@@ -39,6 +39,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 mod coding_run;
 mod provider;
+mod spawn_probe;
 mod wire;
 
 use wire::{
@@ -299,6 +300,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Required once prompts run concurrent with stdin (cancel mid-turn).
     let wire = Arc::new(StdoutWire);
 
+    // Probe A: before the stdin loop, before any prompt work. If this hangs too, the process is
+    // broken from birth; if only the prompt-time probe hangs, the cause is something we do in
+    // between. Off unless LIBERADO_ACP_SPAWN_PROBE=1.
+    spawn_probe::probe(
+        "startup (before stdin loop)",
+        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    )
+    .await;
+
+    // NOTE: an experiment here moved this read onto a dedicated OS thread, on the theory that
+    // tokio's stdin and a child's pipes contend for the blocking pool. It did **not** fix the
+    // hang (see the commit message) — the real cause was children inheriting this stdin — so
+    // the original shape is restored rather than left as a knob nobody should turn.
     let stdin = BufReader::new(tokio::io::stdin());
     let mut lines = stdin.lines();
     let mut in_flight: Option<InFlightPrompt> = None;
@@ -531,6 +545,10 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                 .filter(|p| !p.as_os_str().is_empty())
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
+            // Bisect probes: startup spawns fine and prompt-time does not, so the breakage
+            // happens somewhere in here. Narrow it before theorising about mechanism.
+            spawn_probe::probe("session/new (entry)", &cwd).await;
+
             let sid = new_session_id();
             let mode = bridge.default_mode;
             let (cancel_tx, cancel_rx) = watch::channel(false);
@@ -573,7 +591,21 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                 max_turns = bridge.max_turns,
                 "session/new"
             );
+            spawn_probe::probe("session/new (before model catalog)", &cwd).await;
             let (catalog, current) = bridge_model_snapshot(&bridge).await;
+            spawn_probe::probe("session/new (after model catalog)", &cwd).await;
+
+            // Two variables separate prompt-time from session/new-time: the prompt runs on a
+            // spawned task, *and* the main loop is concurrently parked in `lines.next_line()`.
+            // This isolates the first — same spawned-task shape, but inline here, where the
+            // select! loop is suspended awaiting this handler rather than polling stdin.
+            if spawn_probe::enabled() {
+                let cwd_task = cwd.clone();
+                let _ = tokio::spawn(async move {
+                    spawn_probe::probe("session/new (inside a spawned task)", &cwd_task).await;
+                })
+                .await;
+            }
             Ok(session_state_payload(
                 &sid,
                 &catalog,
@@ -736,6 +768,10 @@ async fn run_coding_prompt(
             .ok_or_else(|| format!("unknown sessionId '{sid}' (call session/new first)"))?;
         (sess.coding.clone(), sess.cancel_rx.clone())
     };
+
+    // Probe B: the moment of interest. `ensure_session_worktree` spawns git a few lines below,
+    // and that is the spawn that never returns.
+    spawn_probe::probe("session/prompt (before coding run)", &state.cwd).await;
 
     let model = bridge.current_model.lock().await.clone();
     let factory = coding_run::single_factory(Arc::clone(&bridge.provider));
