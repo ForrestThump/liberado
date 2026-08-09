@@ -300,12 +300,23 @@ def ci_status(pr: Pr) -> str:
 # ── goals ─────────────────────────────────────────────────────────────────────
 
 
+# The hat shepherd goals run under: the coding pack with `AskHuman` withheld (policy.toml
+# `[[grants]] component = "coding-unattended"`). Authority is decided by the grant, never by the
+# caller asserting it, so this names a profile rather than passing a flag.
+#
+# The `"interactive": False` in the payload below is *not* what does it — that key was sent on every
+# goal since this script was written and nothing ever read it. Every shepherd goal therefore held
+# AskHuman, parked on an intake question seconds in, and waited for a human who was asleep.
+PROFILE = os.environ.get("SHEPHERD_PROFILE", "coding-unattended")
+
+
 def start_goal(description: str, *, mode: str | None = None) -> str | None:
     payload = {"project": PROJECT, "interactive": False}
     if mode:
         payload["mode"] = mode
     body = json.dumps({
-        "description": description, "domain": "coding", "max_turns": 0, "payload": payload,
+        "description": description, "domain": "coding", "max_turns": 0,
+        "profile": PROFILE, "payload": payload,
     }).encode()
     req = urllib.request.Request(f"{DAEMON}/api/goals", data=body,
                                  headers={"Content-Type": "application/json"}, method="POST")
