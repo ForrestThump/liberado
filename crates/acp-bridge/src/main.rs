@@ -19,18 +19,23 @@
 //! ```
 //!
 //! Environment:
-//! - `OPENROUTER_API_KEY` (preferred) / `DEEPSEEK_API_KEY` / `OPENAI_API_KEY`
-//! - `LIBERADO_ACP_MODEL` — initial model id (OpenRouter default: `deepseek/deepseek-v4-pro`)
+//! - `OPENROUTER_API_KEY` / `DEEPSEEK_API_KEY` / `OPENAI_API_KEY` (any combination —
+//!   models from every configured backend appear in the picker)
+//! - `LIBERADO_ACP_MODEL` — initial catalog id (`openrouter::deepseek/deepseek-v4-pro` or a raw id)
+//! - `LIBERADO_ACP_MAX_TURNS` — model turns **per user message** (default 50; executor default is 8)
 //! - `LIBERADO_CONFIG_DIR` — optional Liberado config (topology provider)
 //! - `LIBERADO_ACP_SYSTEM_PROMPT` — optional system prompt override
 //!
-//! Model catalog: full live `GET /models` list (OpenRouter when that key is set), sorted A–Z.
+//! Model catalog: live `GET /models` from **every** backend with a key, A–Z by display name.
+//! Catalog ids are `backend::raw` (e.g. `openrouter::deepseek/deepseek-v4-pro`) so backends never collide.
 
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
+
+mod coding_run;
 
 use liberado_coder_core::{CommandPolicy, PathPolicy};
 use liberado_coder_tools::CodingToolRuntime;
@@ -52,13 +57,22 @@ const PROTOCOL_VERSION: u32 = 1;
 /// replay exist (integration roadmap P3); true made Paseo resume into an empty transcript.
 const LOAD_SESSION_CAPABILITY: bool = false;
 
-/// Initial model when `OPENROUTER_API_KEY` is set (OpenRouter `author/model` ids).
-const OPENROUTER_DEFAULT_MODEL: &str = "deepseek/deepseek-v4-pro";
-/// Initial model when talking to DeepSeek direct (no author prefix on their `/models` ids).
-const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-chat";
+/// Separator between backend name and raw model id in catalog `modelId` values.
+const MODEL_ID_SEP: &str = "::";
 
-/// Fallback when OpenRouter `/models` is unreachable but the key is present.
-const OPENROUTER_FALLBACK: &[&str] = &["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"];
+/// Default raw model when OpenRouter is among configured backends.
+const OPENROUTER_DEFAULT_RAW: &str = "deepseek/deepseek-v4-pro";
+const DEEPSEEK_DEFAULT_RAW: &str = "deepseek-chat";
+const OPENAI_DEFAULT_RAW: &str = "gpt-4o-mini";
+
+/// Fallback raw ids when a backend's `/models` is unreachable.
+const OPENROUTER_FALLBACK_RAW: &[&str] =
+    &["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"];
+const DEEPSEEK_FALLBACK_RAW: &[&str] = &["deepseek-chat", "deepseek-reasoner"];
+const OPENAI_FALLBACK_RAW: &[&str] = &["gpt-4o-mini", "gpt-4o"];
+
+/// Per-user-message executor turn budget (not lifetime conversation). Executor default is 8.
+const DEFAULT_ACP_MAX_TURNS: u32 = 50;
 
 // ── JSON-RPC framing ────────────────────────────────────────────────────────
 
@@ -101,21 +115,23 @@ struct JsonRpcNotification {
 /// One row in the ACP session model picker (`availableModels`).
 #[derive(Debug, Clone)]
 struct CatalogModel {
-    /// Wire id passed to `session/set_model` and the provider (e.g. `deepseek/deepseek-v4-pro`).
     model_id: String,
-    /// Human label in Paseo (usually same as `model_id`).
     name: String,
     description: String,
 }
 
 struct Bridge {
     provider: Arc<dyn Provider>,
-    /// Which inference backend we bound (`openrouter` | `deepseek` | `openai` | …).
+    /// Inference backend label (`openrouter` | `deepseek` | `openai` | …).
     backend: String,
-    /// Live picker rows — from `GET /models`, curated.
     catalog: Mutex<Vec<CatalogModel>>,
-    /// Active model id (mirrors `provider.model()`; kept for fast session payloads).
     current_model: Mutex<String>,
+    /// Coder-role max_turns for the full coding pack (not face Budget::default()=8).
+    max_turns: u32,
+    coder_tuning: liberado_coder_core::CoderTuning,
+    /// ACP session id → coding pack state (worktree id, prior feedback).
+    coding_sessions: Mutex<HashMap<String, coding_run::CodingSessionState>>,
+    /// Legacy hybrid chat sessions (unused when coding pack path is active).
     sessions: Mutex<HashMap<String, Arc<SessionHandle>>>,
 }
 
@@ -124,7 +140,6 @@ struct SessionHandle {
     conversation: Mutex<Conversation>,
     executor: Executor,
     tools: Arc<dyn ToolRuntime>,
-    /// `true` = cancel requested for the in-flight turn.
     cancel_tx: watch::Sender<bool>,
     cancel_rx: watch::Receiver<bool>,
 }
@@ -202,8 +217,11 @@ fn print_help() {
            liberado-acp --version    Print version and exit\n\
            liberado-acp --help       Show this help\n\n\
          Environment:\n\
-           OPENROUTER_API_KEY (preferred) / DEEPSEEK_API_KEY / OPENAI_API_KEY\n\
-           LIBERADO_ACP_MODEL, LIBERADO_CONFIG_DIR, LIBERADO_ACP_SYSTEM_PROMPT",
+           OPENROUTER_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY\n\
+           LIBERADO_ACP_MODEL          initial model id\n\
+           LIBERADO_ACP_MAX_TURNS      coder role turns per prompt (default 50)\n\
+           LIBERADO_CONFIG_DIR         Liberado config (loads [coder] tuning)\n\
+           LIBERADO_ACP_SYSTEM_PROMPT  unused for coding pack path (kept for hybrid fallback)",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -216,17 +234,24 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         &resolved.model_id,
     )
     .await;
+    let max_turns = coding_run::max_turns_from_env();
+    let config_dir = std::env::var_os("LIBERADO_CONFIG_DIR").map(PathBuf::from);
+    let coder_tuning = coding_run::load_coder_tuning(config_dir.as_deref());
     tracing::info!(
         backend = %resolved.backend,
         current = %resolved.model_id,
         catalog_len = catalog.len(),
-        "acp model catalog ready"
+        max_turns,
+        "acp coding pack ready"
     );
     let bridge = Arc::new(Bridge {
         provider: resolved.provider,
         backend: resolved.backend,
         catalog: Mutex::new(catalog),
         current_model: Mutex::new(resolved.model_id),
+        max_turns,
+        coder_tuning,
+        coding_sessions: Mutex::new(HashMap::new()),
         sessions: Mutex::new(HashMap::new()),
     });
 
@@ -389,19 +414,19 @@ fn build_provider() -> Result<ResolvedProvider, String> {
             "OPENROUTER_API_KEY",
             "https://openrouter.ai/api/v1",
             "openrouter",
-            OPENROUTER_DEFAULT_MODEL,
+            OPENROUTER_DEFAULT_RAW,
         ),
         (
             "DEEPSEEK_API_KEY",
             "https://api.deepseek.com/v1",
             "deepseek",
-            DEEPSEEK_DEFAULT_MODEL,
+            DEEPSEEK_DEFAULT_RAW,
         ),
         (
             "OPENAI_API_KEY",
             "https://api.openai.com/v1",
             "openai",
-            "gpt-4o-mini",
+            OPENAI_DEFAULT_RAW,
         ),
     ];
 
@@ -427,7 +452,7 @@ fn build_provider() -> Result<ResolvedProvider, String> {
         });
     }
 
-    let model = model_override.unwrap_or_else(|| OPENROUTER_DEFAULT_MODEL.to_string());
+    let model = model_override.unwrap_or_else(|| OPENROUTER_DEFAULT_RAW.to_string());
     tracing::warn!(
         "no API key found (set OPENROUTER_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY); \
          Paseo can still detect liberado-acp, but prompts need a key"
@@ -473,7 +498,7 @@ async fn load_model_catalog(
         .map(|id| CatalogModel {
             name: display_name_for(&id),
             description: description_for(backend, &id),
-            model_id: id,
+            model_id: id.clone(),
         })
         .collect()
 }
@@ -495,13 +520,19 @@ fn catalog_model_ids(live: &[String], current: &str) -> Vec<String> {
 
 fn fallback_model_ids(backend: &str, current: &str) -> Vec<String> {
     let mut out: Vec<String> = match backend {
-        "openrouter" => OPENROUTER_FALLBACK
+        "openrouter" => OPENROUTER_FALLBACK_RAW
             .iter()
             .map(|s| (*s).to_string())
             .collect(),
-        "deepseek" => vec![DEEPSEEK_DEFAULT_MODEL.into(), "deepseek-reasoner".into()],
-        "openai" => vec!["gpt-4o-mini".into(), "gpt-4o".into()],
-        _ => OPENROUTER_FALLBACK
+        "deepseek" => DEEPSEEK_FALLBACK_RAW
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+        "openai" => OPENAI_FALLBACK_RAW
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+        _ => OPENROUTER_FALLBACK_RAW
             .iter()
             .map(|s| (*s).to_string())
             .collect(),
@@ -544,7 +575,7 @@ impl Provider for MissingKeyProvider {
         *self.model.write().unwrap_or_else(|e| e.into_inner()) = model.to_string();
     }
     async fn list_models(&self) -> ProviderResult<Vec<String>> {
-        Ok(OPENROUTER_FALLBACK
+        Ok(OPENROUTER_FALLBACK_RAW
             .iter()
             .map(|s| (*s).to_string())
             .collect())
@@ -622,14 +653,32 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
             let sid = new_session_id();
-            let handle = open_session(&sid, cwd.clone(), Arc::clone(&bridge.provider))?;
-            bridge
-                .sessions
-                .lock()
-                .await
-                .insert(sid.clone(), Arc::new(handle));
+            // Coding pack session state (worktree id reused across prompts in this ACP session).
+            bridge.coding_sessions.lock().await.insert(
+                sid.clone(),
+                coding_run::CodingSessionState {
+                    cwd: cwd.clone(),
+                    coding_session_id: sid.clone(),
+                    prior_feedback: Vec::new(),
+                    last_summary: None,
+                    rounds: 0,
+                },
+            );
+            // Keep hybrid chat handle for optional fallback tools path.
+            if let Ok(handle) = open_session(&sid, cwd.clone(), Arc::clone(&bridge.provider)) {
+                bridge
+                    .sessions
+                    .lock()
+                    .await
+                    .insert(sid.clone(), Arc::new(handle));
+            }
 
-            tracing::info!(session_id = %sid, cwd = %cwd.display(), "session/new");
+            tracing::info!(
+                session_id = %sid,
+                cwd = %cwd.display(),
+                max_turns = bridge.max_turns,
+                "session/new (coding pack)"
+            );
             let (catalog, current) = bridge_model_snapshot(&bridge).await;
             Ok(session_state_payload(&sid, &catalog, &current))
         }
@@ -650,16 +699,7 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                 .ok_or("missing sessionId")?
                 .to_string();
             let text = extract_prompt_text(&params)?;
-            let session = {
-                let map = bridge.sessions.lock().await;
-                map.get(&sid)
-                    .cloned()
-                    .ok_or_else(|| format!("unknown sessionId '{sid}'"))?
-            };
-
-            let _ = session.cancel_tx.send(false);
-            let stop = run_prompt_turn(session, text, &StdoutSink).await?;
-            Ok(json!({ "stopReason": stop }))
+            run_coding_prompt(Arc::clone(&bridge), &sid, &text).await
         }
 
         "session/set_model" => {
@@ -673,7 +713,6 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                 return Err("modelId must be non-empty".into());
             }
 
-            // Refresh catalog opportunistically so a newly-listed OpenRouter model can be selected.
             {
                 let current = bridge.current_model.lock().await.clone();
                 let fresh =
@@ -688,19 +727,17 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                 catalog.iter().any(|m| m.model_id == model_id)
             };
             if !allowed {
-                // Still allow the switch if the operator knows a valid id; add it to the picker.
                 tracing::info!(%model_id, "set_model for id not in prior catalog; accepting");
                 let mut catalog = bridge.catalog.lock().await;
-                catalog.insert(
-                    0,
-                    CatalogModel {
-                        name: display_name_for(&model_id),
-                        description: description_for(&bridge.backend, &model_id),
-                        model_id: model_id.clone(),
-                    },
-                );
+                catalog.push(CatalogModel {
+                    name: display_name_for(&model_id),
+                    description: description_for(&bridge.backend, &model_id),
+                    model_id: model_id.clone(),
+                });
+                catalog.sort_by(|a, b| a.name.cmp(&b.name));
             }
 
+            // Catalog ids may be raw OpenRouter slugs; set on the live provider.
             bridge.provider.set_model(model_id.clone());
             *bridge.current_model.lock().await = model_id.clone();
             tracing::info!(%model_id, backend = %bridge.backend, "session/set_model");
@@ -719,6 +756,58 @@ async fn bridge_model_snapshot(bridge: &Bridge) -> (Vec<CatalogModel>, String) {
     let catalog = bridge.catalog.lock().await.clone();
     let current = bridge.current_model.lock().await.clone();
     (catalog, current)
+}
+
+/// Full coding pack path: LiberadoLoopBackend + durable worktree (same engine as goals).
+async fn run_coding_prompt(bridge: Arc<Bridge>, sid: &str, text: &str) -> Result<Value, String> {
+    let mut state = {
+        let map = bridge.coding_sessions.lock().await;
+        map.get(sid)
+            .cloned()
+            .ok_or_else(|| format!("unknown sessionId '{sid}' (call session/new first)"))?
+    };
+
+    let model = bridge.current_model.lock().await.clone();
+    let factory = coding_run::single_factory(Arc::clone(&bridge.provider));
+
+    emit_agent_text_chunk(
+        &StdoutSink,
+        sid,
+        &format!(
+            "Starting Liberado coding pack (max_turns={}, model={model})…\n\n",
+            bridge.max_turns
+        ),
+    )?;
+
+    let outcome = coding_run::run_coding_round(
+        Arc::clone(&bridge.provider),
+        factory,
+        &bridge.coder_tuning,
+        &mut state,
+        text,
+        Some(&model),
+        bridge.max_turns,
+    )
+    .await;
+
+    // Persist session state regardless of outcome so later rounds keep feedback.
+    bridge
+        .coding_sessions
+        .lock()
+        .await
+        .insert(sid.to_string(), state);
+
+    match outcome {
+        Ok(result) => {
+            let report = result.render();
+            emit_agent_text_chunk(&StdoutSink, sid, &report)?;
+            Ok(json!({ "stopReason": "end_turn" }))
+        }
+        Err(e) => {
+            emit_agent_text_chunk(&StdoutSink, sid, &format!("\n**Coding pack error:** {e}\n"))?;
+            Ok(json!({ "stopReason": "end_turn" }))
+        }
+    }
 }
 
 fn open_session(

@@ -28,8 +28,11 @@ path = "src/main.rs"
 [dependencies]
 async-trait.workspace = true
 liberado-bootstrap.workspace = true
+liberado-coder-agent.workspace = true
 liberado-coder-core.workspace = true
+liberado-coder-sandbox.workspace = true
 liberado-coder-tools.workspace = true
+liberado-common.workspace = true
 liberado-config.workspace = true
 liberado-executor.workspace = true
 liberado-main-agent.workspace = true

@@ -8,12 +8,26 @@
 - Paseo detects **Liberado** as a coding agent (provider list / diagnostics).
 - Starting a session in Paseo runs `liberado-acp`, which:
   - Speaks real ACP JSON-RPC 2.0 (`initialize`, `session/new`, `session/prompt`, …).
-  - Roots coding tools at the session `cwd` (`read_file`, `write_file`, `run_command`, …).
-  - Streams assistant text and tool activity as `session/update` notifications.
+  - Runs the **full coding pack engine** ([`LiberadoLoopBackend`](../../crates/coder-agent/)) —
+    the same backend as `liberado-coder-run` and daemon coding goals (not the face-agent chat path).
+  - Creates a **durable worktree** under `coding-worktrees/<session>` when `cwd` is a git repo
+    (same as `CodingSessionPack` build phase).
+  - Respects `[coder]` tuning from `LIBERADO_CONFIG_DIR` (gate, progress, path policy, traces).
+  - Streams a final report as `session/update` / `agent_message_chunk` (live tool streaming from
+    the pack is a follow-up; the run still executes the full pack loop server-side).
 
 This is **not** a tunnel into a running `liberado serve` daemon. It is the Liberado
-coding stack packaged as an ACP agent process — the same pattern Gemini CLI / Hermes
-use with Paseo.
+coding pack packaged as an ACP agent process — the same pattern Claude Code / Gemini /
+Grok use with Paseo (self-contained agent binary), not a terminal profile that shells a CLI.
+
+### What this is *not* (yet)
+
+| Feature | Status |
+|---|---|
+| Face agent + `delegate` + vault MCP | Separate (daemon chat) |
+| Live hub `/goal` list in Paseo UI | Separate (would need daemon HTTP bridge) |
+| Token-by-token tool events mid-run | Follow-up (pack currently reports at end) |
+| Intake clarify questions via ACP | Follow-up (`AskHuman` grant + `session/prompt` answers) |
 
 ## Prerequisites (Windows)
 
@@ -41,6 +55,10 @@ use with Paseo.
 4. Optional: `LIBERADO_ACP_MODEL` to override the initial model id (e.g.
    `deepseek/deepseek-v4-flash`). Paseo's model picker calls ACP `session/set_model`
    to hot-swap; the catalog is built from the backend's live `/models` endpoint.
+
+5. Optional: `LIBERADO_ACP_MAX_TURNS` — **coder-role turns per user message** (default **50**).
+   This is *not* the face executor default of 8; it maps to `CoderRoleConfig::max_turns` on the
+   coding pack. Raise it for large refactors; lower it for cheap probes.
 
 ## Install `liberado-acp` on PATH
 
