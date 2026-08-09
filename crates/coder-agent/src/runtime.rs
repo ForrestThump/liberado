@@ -71,23 +71,25 @@ impl ToolRuntime for GuardedTracingRuntime {
             }
         }
 
-        let args_preview = trace::preview_value(&call.arguments, self.preview_max_chars);
+        // Two audiences, two sizes. The live stream feeds a chat pane a human is reading, so it
+        // stays at `event_preview_max_chars`; the trace is the diagnostic record and keeps as much
+        // as `TRACE_MAX_CHARS` allows — see that constant for why they were wrong to share a number.
         trace::push_event(
             &self.events,
             CoderEvent::ToolStarted {
                 name: call.name.clone(),
-                args_preview: args_preview.clone(),
+                args_preview: trace::preview_value(&call.arguments, trace::TRACE_MAX_CHARS),
                 at: Utc::now(),
             },
         );
         emit_live(SessionEventKind::ToolStarted {
             name: call.name.clone(),
-            args_preview,
+            args_preview: trace::preview_value(&call.arguments, self.preview_max_chars),
         });
         let result = self.inner.invoke(call).await;
-        let result_preview = match &result {
-            Ok(value) => trace::preview_str(value, self.preview_max_chars),
-            Err(value) => trace::preview_str(value, self.preview_max_chars),
+        let full_output = match &result {
+            Ok(value) => value.clone(),
+            Err(value) => value.clone(),
         };
         let ok = result.is_ok();
         trace::push_event(
@@ -95,20 +97,17 @@ impl ToolRuntime for GuardedTracingRuntime {
             CoderEvent::ToolFinished {
                 name: call.name.clone(),
                 ok,
-                result_preview: result_preview.clone(),
+                result_preview: trace::preview_str(&full_output, trace::TRACE_MAX_CHARS),
                 at: Utc::now(),
             },
         );
         emit_live(SessionEventKind::ToolFinished {
             name: call.name.clone(),
             ok,
-            result_preview: result_preview.clone(),
+            result_preview: trace::preview_str(&full_output, self.preview_max_chars),
         });
 
-        let full_preview = match &result {
-            Ok(value) => value.clone(),
-            Err(value) => value.clone(),
-        };
+        let full_preview = full_output;
         let action = self
             .progress
             .lock()

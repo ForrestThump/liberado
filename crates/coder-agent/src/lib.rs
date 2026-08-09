@@ -949,7 +949,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tool_trace_preview_uses_progress_policy_cap() {
+    async fn trace_keeps_full_tool_args_regardless_of_the_live_stream_cap() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path());
         let provider = Arc::new(MockProvider::with_script(
@@ -990,7 +990,20 @@ mod tests {
             })
             .expect("tool args preview");
 
-        assert!(args_preview.chars().count() <= 12);
+        // `event_preview_max_chars` is 12 here. It sizes the excerpt shown on the live session
+        // stream, and used to size the trace as well — which meant the diagnostic record of a run
+        // was clipped to whatever felt readable in a chat pane. The model is handed the tool's full
+        // arguments and full output, so a trace clipped below that cannot explain what it did.
+        assert!(
+            args_preview.contains("abcdefghijklmnopqrstuvwxyz"),
+            "the trace must keep the whole argument the tool was actually called with, not the \
+             first {} characters of it: {args_preview}",
+            12
+        );
+        assert!(
+            args_preview.chars().count() <= trace::TRACE_MAX_CHARS,
+            "still bounded — by the trace's own ceiling, not the live stream's"
+        );
     }
 
     #[tokio::test]

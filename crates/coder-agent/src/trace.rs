@@ -26,6 +26,22 @@ pub fn snapshot_events(events: &EventLog) -> Vec<CoderEvent> {
     events.lock().expect("coder event mutex poisoned").clone()
 }
 
+/// How much of a tool's arguments and output the **trace** keeps.
+///
+/// Distinct from `[coder.progress] event_preview_max_chars` (default 500), which sizes the excerpt
+/// mirrored onto the live session stream for a human watching a chat pane. That number was doing
+/// both jobs, and 500 characters is right for one and useless for the other: the model is fed the
+/// tool's *full* output, so a trace that stores the first 500 characters of a compiler error has
+/// dropped the part that explains the run. Two of thirty results in the one real trace on disk hit
+/// that ceiling — including the `run_command` calls, which is where failures live.
+///
+/// A constant rather than a setting, deliberately. `docs/future-work/backlog.md` records seven
+/// settings that parsed, validated and reached nothing because a consumer hardcoded a literal;
+/// `CoderRunConfig` is built by thirteen separate initializers, so an eighth knob here buys
+/// tunability nobody asked for at the cost of the exact failure that band F exists to stop. Raise
+/// this number if a real trace is truncating something you needed.
+pub const TRACE_MAX_CHARS: usize = 20_000;
+
 pub fn preview_value(value: &Value, max_chars: usize) -> String {
     preview_str(&value.to_string(), max_chars)
 }
@@ -195,9 +211,15 @@ pub fn to_openai_messages(trace: &CoderTrace) -> Value {
                         tool_calls
                             .iter()
                             .map(|name| {
+                                // `arguments` is required by the shape, and every other harness
+                                // fills it: Kilo carries the real object, so omitting it entirely
+                                // made a cross-harness diff read as "they pass arguments, we don't".
+                                // The turn record keeps only the called *names*; the arguments are
+                                // on the paired `ToolStarted`, which this projection cannot see
+                                // from here. Empty and explicit beats absent and mysterious.
                                 serde_json::json!({
                                     "type": "function",
-                                    "function": { "name": name },
+                                    "function": { "name": name, "arguments": "" },
                                 })
                             })
                             .collect(),
@@ -306,6 +328,14 @@ mod tests {
         assert_eq!(msgs[1]["role"], "assistant");
         assert_eq!(msgs[1]["content"], "I'll start by reading the config.");
         assert_eq!(msgs[1]["tool_calls"][0]["function"]["name"], "read_file");
+        // `arguments` is part of the shape every other harness fills — Kilo carries the real
+        // object. Omitting the key entirely made a cross-harness diff read as a difference in
+        // behaviour ("they pass arguments, we don't") rather than one in our projection.
+        assert_eq!(
+            msgs[1]["tool_calls"][0]["function"]["arguments"], "",
+            "arguments must be present and explicitly empty, not absent: {}",
+            msgs[1]
+        );
 
         assert_eq!(msgs[2]["role"], "tool");
         assert_eq!(msgs[2]["name"], "read_file");
