@@ -453,7 +453,7 @@ async fn ensure_git_repo(workspace: &Path) -> Result<(), String> {
     );
 
     let run_git = |args: &[&str]| -> Result<(), String> {
-        let output = std::process::Command::new("git")
+        let output = liberado_common::process::std_command("git")
             .args(args)
             .current_dir(workspace)
             .stdout(std::process::Stdio::null())
@@ -490,7 +490,7 @@ fn configure_git_safe_directory(workspace: &Path) -> Result<(), String> {
         .to_string_lossy()
         .to_string();
 
-    let existing = std::process::Command::new("git")
+    let existing = liberado_common::process::std_command("git")
         .args(["config", "--global", "--get-all", "safe.directory"])
         .stderr(std::process::Stdio::null())
         .output()
@@ -503,7 +503,7 @@ fn configure_git_safe_directory(workspace: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    let output = std::process::Command::new("git")
+    let output = liberado_common::process::std_command("git")
         .args(["config", "--global", "--add", "safe.directory", &path])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -927,7 +927,7 @@ fn push_enabled() -> bool {
 }
 
 async fn git_output(workspace: &Path, args: &[&str]) -> Result<String, String> {
-    let out = tokio::process::Command::new("git")
+    let out = liberado_common::process::command("git")
         .current_dir(workspace)
         .args(args)
         .output()

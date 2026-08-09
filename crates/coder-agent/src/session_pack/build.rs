@@ -38,7 +38,7 @@ use super::policies::WorkspacePolicies;
 /// repository plus a placeholder commit inside someone's project. `rev-parse` answers the question
 /// actually being asked.
 fn is_git_repo(dir: &std::path::Path) -> bool {
-    std::process::Command::new("git")
+    liberado_common::process::std_command("git")
         .args(["-C", &dir.to_string_lossy()])
         .args(["rev-parse", "--is-inside-work-tree"])
         .output()
@@ -60,7 +60,7 @@ fn init_git_repo(dir: &std::path::Path) {
     if is_git_repo(dir) {
         return;
     }
-    let ok = std::process::Command::new("git")
+    let ok = liberado_common::process::std_command("git")
         .args(["init", "--quiet"])
         .current_dir(dir)
         .status()
@@ -77,11 +77,11 @@ fn init_git_repo(dir: &std::path::Path) {
     // Seed a placeholder commit so Worktree isolation can proceed.
     let placeholder = dir.join(".liberado-placeholder");
     let _ = std::fs::write(&placeholder, "");
-    let _ = std::process::Command::new("git")
+    let _ = liberado_common::process::std_command("git")
         .args(["-C", &dir.to_string_lossy()])
         .args(["add", ".liberado-placeholder"])
         .status();
-    let _ = std::process::Command::new("git")
+    let _ = liberado_common::process::std_command("git")
         .args(["-C", &dir.to_string_lossy()])
         .args([
             "commit",

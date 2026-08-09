@@ -314,7 +314,7 @@ async fn git_nonempty_diff(root: &Path, id: &str) -> Verdict {
 }
 
 async fn changed_files_in_last_commit(workspace_root: &str) -> Result<Vec<String>, CoderError> {
-    let output = tokio::process::Command::new("git")
+    let output = liberado_common::process::command("git")
         .args(["log", "-1", "--name-only", "--format="])
         .current_dir(workspace_root)
         .output()

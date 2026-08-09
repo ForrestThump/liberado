@@ -39,7 +39,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 mod coding_run;
 mod provider;
-mod spawn_probe;
+mod stdin_guard;
 mod wire;
 
 use wire::{
@@ -300,21 +300,51 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Required once prompts run concurrent with stdin (cancel mid-turn).
     let wire = Arc::new(StdoutWire);
 
-    // Probe A: before the stdin loop, before any prompt work. If this hangs too, the process is
-    // broken from birth; if only the prompt-time probe hangs, the cause is something we do in
-    // between. Off unless LIBERADO_ACP_SPAWN_PROBE=1.
-    spawn_probe::probe(
-        "startup (before stdin loop)",
-        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-    )
-    .await;
-
-    // NOTE: an experiment here moved this read onto a dedicated OS thread, on the theory that
-    // tokio's stdin and a child's pipes contend for the blocking pool. It did **not** fix the
-    // hang (see the commit message) — the real cause was children inheriting this stdin — so
-    // the original shape is restored rather than left as a knob nobody should turn.
-    let stdin = BufReader::new(tokio::io::stdin());
-    let mut lines = stdin.lines();
+    // Take a private handle on the JSON-RPC wire and point the process-level stdin at the null
+    // device, so no child can inherit the wire even if some future spawn site forgets to null
+    // its stdin. See `stdin_guard` for why the order matters.
+    //
+    // Lines then arrive over a channel regardless of source, so the select! below does not care
+    // which of the two readers is running.
+    let (stdin_tx, mut stdin_rx) = mpsc::channel::<std::io::Result<Option<String>>>(64);
+    match stdin_guard::take_wire_stdin() {
+        Some(wire_stdin) => {
+            tracing::info!("stdin detached from children; reading the wire on a private handle");
+            // A dedicated OS thread, because the handle is a plain `File` over a pipe and
+            // Windows cannot register that with tokio's reactor for async reads.
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                let mut reader = std::io::BufReader::new(wire_stdin);
+                loop {
+                    let mut buf = String::new();
+                    let msg = match reader.read_line(&mut buf) {
+                        Ok(0) => Ok(None),
+                        Ok(_) => Ok(Some(buf.trim_end_matches(['\r', '\n']).to_string())),
+                        Err(e) => Err(e),
+                    };
+                    let done = matches!(msg, Ok(None) | Err(_));
+                    if stdin_tx.blocking_send(msg).is_err() || done {
+                        break;
+                    }
+                }
+            });
+        }
+        None => {
+            // Non-Windows, or the swap failed. Children are still protected per-spawn by
+            // `liberado_common::process::command`; this is the belt, not the braces.
+            tracing::info!("stdin not detached; per-spawn nulling is the only guard");
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(tokio::io::stdin()).lines();
+                loop {
+                    let msg = lines.next_line().await;
+                    let done = matches!(msg, Ok(None) | Err(_));
+                    if stdin_tx.send(msg).await.is_err() || done {
+                        break;
+                    }
+                }
+            });
+        }
+    }
     let mut in_flight: Option<InFlightPrompt> = None;
 
     loop {
@@ -349,7 +379,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     wire.write_rpc_response(id, outcome)?;
                 }
             }
-            line = lines.next_line() => {
+            line = stdin_rx.recv() => {
+                // A closed channel means the reader ended — same as EOF on stdin.
+                let Some(line) = line else { break };
                 let Some(line) = line? else {
                     break;
                 };
@@ -545,10 +577,6 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                 .filter(|p| !p.as_os_str().is_empty())
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-            // Bisect probes: startup spawns fine and prompt-time does not, so the breakage
-            // happens somewhere in here. Narrow it before theorising about mechanism.
-            spawn_probe::probe("session/new (entry)", &cwd).await;
-
             let sid = new_session_id();
             let mode = bridge.default_mode;
             let (cancel_tx, cancel_rx) = watch::channel(false);
@@ -591,21 +619,8 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                 max_turns = bridge.max_turns,
                 "session/new"
             );
-            spawn_probe::probe("session/new (before model catalog)", &cwd).await;
             let (catalog, current) = bridge_model_snapshot(&bridge).await;
-            spawn_probe::probe("session/new (after model catalog)", &cwd).await;
 
-            // Two variables separate prompt-time from session/new-time: the prompt runs on a
-            // spawned task, *and* the main loop is concurrently parked in `lines.next_line()`.
-            // This isolates the first — same spawned-task shape, but inline here, where the
-            // select! loop is suspended awaiting this handler rather than polling stdin.
-            if spawn_probe::enabled() {
-                let cwd_task = cwd.clone();
-                let _ = tokio::spawn(async move {
-                    spawn_probe::probe("session/new (inside a spawned task)", &cwd_task).await;
-                })
-                .await;
-            }
             Ok(session_state_payload(
                 &sid,
                 &catalog,
@@ -768,10 +783,6 @@ async fn run_coding_prompt(
             .ok_or_else(|| format!("unknown sessionId '{sid}' (call session/new first)"))?;
         (sess.coding.clone(), sess.cancel_rx.clone())
     };
-
-    // Probe B: the moment of interest. `ensure_session_worktree` spawns git a few lines below,
-    // and that is the spawn that never returns.
-    spawn_probe::probe("session/prompt (before coding run)", &state.cwd).await;
 
     let model = bridge.current_model.lock().await.clone();
     let factory = coding_run::single_factory(Arc::clone(&bridge.provider));

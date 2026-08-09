@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use thiserror::Error;
-use tokio::process::Command;
 
 use crate::{path_for_cli, strip_extended_path_prefix};
 
@@ -53,7 +52,7 @@ pub async fn add_worktree_on_branch(
     let parent_cli = path_for_cli(&parent_root);
     let dest_cli = path_for_cli(&dest);
 
-    let _ = Command::new("git")
+    let _ = liberado_common::process::command("git")
         .args(["-C", &parent_cli, "worktree", "prune"])
         .output()
         .await;
@@ -63,12 +62,12 @@ pub async fn add_worktree_on_branch(
     }
 
     // Remove stale branch if it exists from a prior crashed run (only if not checked out).
-    let _ = Command::new("git")
+    let _ = liberado_common::process::command("git")
         .args(["-C", &parent_cli, "branch", "-D", branch])
         .output()
         .await;
 
-    let output = Command::new("git")
+    let output = liberado_common::process::command("git")
         .args([
             "-C",
             &parent_cli,
@@ -95,7 +94,7 @@ pub async fn add_worktree_on_branch(
 pub async fn remove_worktree(parent_root: &Path, worktree_path: &Path) -> Result<(), MergeError> {
     let parent_cli = path_for_cli(&strip_extended_path_prefix(parent_root));
     let dest_cli = path_for_cli(&strip_extended_path_prefix(worktree_path));
-    let output = Command::new("git")
+    let output = liberado_common::process::command("git")
         .args([
             "-C",
             &parent_cli,
@@ -110,7 +109,7 @@ pub async fn remove_worktree(parent_root: &Path, worktree_path: &Path) -> Result
     if !output.status.success() {
         // Fall back to directory delete + prune.
         let _ = std::fs::remove_dir_all(worktree_path);
-        let _ = Command::new("git")
+        let _ = liberado_common::process::command("git")
             .args(["-C", &parent_cli, "worktree", "prune"])
             .output()
             .await;
@@ -124,12 +123,12 @@ pub async fn merge_branch(repo_root: &Path, branch: &str) -> Result<MergeAttempt
     let repo_cli = path_for_cli(&strip_extended_path_prefix(repo_root));
 
     // Abort any leftover merge state.
-    let _ = Command::new("git")
+    let _ = liberado_common::process::command("git")
         .args(["-C", &repo_cli, "merge", "--abort"])
         .output()
         .await;
 
-    let output = Command::new("git")
+    let output = liberado_common::process::command("git")
         .args([
             "-C",
             &repo_cli,
@@ -162,7 +161,7 @@ pub async fn merge_branch(repo_root: &Path, branch: &str) -> Result<MergeAttempt
 /// Paths with unmerged index entries (conflicted files).
 pub async fn list_unmerged_paths(repo_root: &Path) -> Result<Vec<String>, MergeError> {
     let repo_cli = path_for_cli(&strip_extended_path_prefix(repo_root));
-    let output = Command::new("git")
+    let output = liberado_common::process::command("git")
         .args(["-C", &repo_cli, "diff", "--name-only", "--diff-filter=U"])
         .output()
         .await
@@ -224,7 +223,7 @@ pub async fn stage_resolution(
     }
     std::fs::write(&full, content).map_err(|e| MergeError::Io(e.to_string()))?;
     let repo_cli = path_for_cli(&root);
-    let output = Command::new("git")
+    let output = liberado_common::process::command("git")
         .args(["-C", &repo_cli, "add", "--", rel_path])
         .output()
         .await
@@ -241,7 +240,7 @@ pub async fn stage_resolution(
 /// Complete a merge after all conflicts are staged (`git commit` with no-edit message).
 pub async fn commit_merge(repo_root: &Path, message: &str) -> Result<String, MergeError> {
     let repo_cli = path_for_cli(&strip_extended_path_prefix(repo_root));
-    let output = Command::new("git")
+    let output = liberado_common::process::command("git")
         .args(["-C", &repo_cli, "commit", "--no-edit", "-m", message])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -260,7 +259,7 @@ pub async fn commit_merge(repo_root: &Path, message: &str) -> Result<String, Mer
 
 pub async fn rev_parse(repo_root: &Path, rev: &str) -> Result<String, MergeError> {
     let repo_cli = path_for_cli(&strip_extended_path_prefix(repo_root));
-    let output = Command::new("git")
+    let output = liberado_common::process::command("git")
         .args(["-C", &repo_cli, "rev-parse", rev])
         .output()
         .await
@@ -280,7 +279,7 @@ pub async fn branch_tip(repo_root: &Path, branch: &str) -> Result<String, MergeE
 
 async fn git_show(repo_cli: &str, stage: &str, path: &str) -> Result<String, MergeError> {
     let spec = format!("{stage}:{path}");
-    let output = Command::new("git")
+    let output = liberado_common::process::command("git")
         .args(["-C", repo_cli, "show", &spec])
         .output()
         .await

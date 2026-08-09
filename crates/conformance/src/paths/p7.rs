@@ -254,7 +254,7 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
 /// compose log cannot fill a pipe buffer and deadlock the child while we only `wait`.
 fn spawn_restart_command(cmd: &str) -> Result<tokio::process::Child, String> {
     #[cfg(windows)]
-    let child = tokio::process::Command::new("cmd")
+    let child = liberado_common::process::command("cmd")
         .args(["/C", cmd])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -263,7 +263,7 @@ fn spawn_restart_command(cmd: &str) -> Result<tokio::process::Child, String> {
         .map_err(|e| format!("spawn restart_command: {e}"))?;
 
     #[cfg(not(windows))]
-    let child = tokio::process::Command::new("sh")
+    let child = liberado_common::process::command("sh")
         .args(["-c", cmd])
         .stdin(Stdio::null())
         .stdout(Stdio::null())

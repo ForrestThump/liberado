@@ -227,7 +227,7 @@ pub(crate) use is_retryable as is_stuck_error;
 /// `"(empty diff)"` when the workspace is clean. Used by both the legacy single-critic
 /// path and the quorum-based completion gate.
 pub(crate) async fn workspace_diff(workspace_root: &str) -> Result<String, CoderError> {
-    let tracked = tokio::process::Command::new("git")
+    let tracked = liberado_common::process::command("git")
         .args(["diff", "HEAD"])
         .current_dir(workspace_root)
         .output()
@@ -242,7 +242,7 @@ pub(crate) async fn workspace_diff(workspace_root: &str) -> Result<String, Coder
     }
     let mut diff = String::from_utf8_lossy(&tracked.stdout).into_owned();
 
-    let untracked = tokio::process::Command::new("git")
+    let untracked = liberado_common::process::command("git")
         .args(["ls-files", "--others", "--exclude-standard"])
         .current_dir(workspace_root)
         .output()

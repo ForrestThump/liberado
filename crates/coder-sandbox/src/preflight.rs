@@ -374,13 +374,13 @@ async fn run_step_shell(
 fn shell_command(command_line: &str) -> Command {
     #[cfg(windows)]
     {
-        let mut c = Command::new("cmd");
+        let mut c = liberado_common::process::command("cmd");
         c.args(["/C", command_line]);
         c
     }
     #[cfg(not(windows))]
     {
-        let mut c = Command::new("sh");
+        let mut c = liberado_common::process::command("sh");
         c.args(["-c", command_line]);
         c
     }

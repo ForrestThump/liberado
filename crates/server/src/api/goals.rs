@@ -774,7 +774,7 @@ pub async fn goals_diff(
     }
     match tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        tokio::process::Command::new("git")
+        liberado_common::process::command("git")
             .args(["diff", "HEAD", "--", "."])
             .current_dir(ws)
             .output(),

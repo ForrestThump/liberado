@@ -31,9 +31,7 @@ const PER_CASE_TIMEOUT: Duration = Duration::from_secs(12);
 
 #[tokio::main]
 async fn main() {
-    let repo = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| ".".to_string());
+    let repo = std::env::args().nth(1).unwrap_or_else(|| ".".to_string());
 
     eprintln!("probe pid {}", std::process::id());
     eprintln!("repo     {repo}");
