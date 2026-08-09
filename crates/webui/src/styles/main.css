@@ -1196,6 +1196,92 @@ html {
     to { transform: rotate(360deg); }
 }
 
+/* ── Stuck / parked sessions panel (F4) ──────────────────────────────────── */
+
+.stuck-sessions-panel {
+    margin-bottom: 0;
+}
+
+.stuck-sessions-hint {
+    font-size: 0.8125rem;
+    color: var(--lib-status-bar-text);
+    margin-bottom: 1rem;
+    line-height: 1.4;
+}
+
+.stuck-sessions-error {
+    font-size: 0.8125rem;
+    color: var(--lib-tool-err);
+    margin-bottom: 0.75rem;
+}
+
+.stuck-sessions-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.stuck-session-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--lib-border);
+    background: color-mix(in srgb, var(--lib-tool-err) 6%, transparent);
+}
+
+.stuck-session-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+    align-items: center;
+    font-size: 0.75rem;
+}
+
+.stuck-session-id {
+    font-family: ui-monospace, 'Cascadia Code', monospace;
+    font-weight: 600;
+    color: var(--lib-chat-assistant-text);
+}
+
+.stuck-session-age {
+    color: var(--lib-tool-err);
+    font-weight: 600;
+}
+
+.stuck-session-status,
+.stuck-session-domain {
+    color: var(--lib-status-bar-text);
+}
+
+.stuck-session-desc {
+    font-size: 0.8125rem;
+    color: var(--lib-sidebar-text);
+    line-height: 1.35;
+}
+
+.stuck-session-cancel {
+    align-self: flex-start;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border-radius: 0.375rem;
+    border: 1px solid var(--lib-tool-err);
+    background: transparent;
+    color: var(--lib-tool-err);
+    cursor: pointer;
+}
+
+.stuck-session-cancel:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--lib-tool-err) 15%, transparent);
+}
+
+.stuck-session-cancel:disabled {
+    opacity: 0.5;
+    cursor: wait;
+}
+
 /* ── Vault panel ─────────────────────────────────────────────────────────── */
 
 .vault-row {

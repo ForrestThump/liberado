@@ -769,6 +769,71 @@ mod tests {
         );
     }
 
+    /// F4: a parked store record has no live cancel token. Cancel must still finish it as
+    /// Cancelled so the stuck-session panel (and shepherd-side cleanup) can clear orphans.
+    #[tokio::test]
+    async fn cancel_parked_session_without_live_host_reaches_cancelled() {
+        let store = GoalSessionStore::new();
+        let created = chrono::Utc::now() - chrono::Duration::hours(26);
+        let mut rec = crate::goal::GoalSessionRecord::new(GoalSpec {
+            id: Some("parked-orphan".into()),
+            description: "orphaned intake question".into(),
+            success_criteria: vec![],
+            domain: DomainHint::Life,
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: None,
+            profile: None,
+            payload: serde_json::Value::Null,
+        });
+        rec.status = crate::goal::SessionStatus::Parked;
+        rec.awaiting_input = true;
+        rec.created_at = created;
+        crate::record_store::SessionRecordStore::insert(&store, rec).await;
+
+        let hub = Arc::new(GoalSessionHub::new(store.clone()));
+
+        // list surfaces parked sessions (panel source of truth).
+        let listed = hub.list().await;
+        let parked: Vec<_> = listed
+            .iter()
+            .filter(|r| r.status == crate::goal::SessionStatus::Parked)
+            .collect();
+        assert_eq!(parked.len(), 1, "list must identify parked sessions");
+        assert_eq!(parked[0].id, "parked-orphan");
+        assert_eq!(
+            parked[0].created_at, created,
+            "age is derived from durable created_at"
+        );
+
+        hub.cancel("parked-orphan")
+            .await
+            .expect("cancel of parked (no live token) must be accepted");
+
+        let after = store.get("parked-orphan").await.expect("record remains");
+        assert_eq!(
+            after.status,
+            crate::goal::SessionStatus::Cancelled,
+            "parked cancel must leave a terminal Cancelled record"
+        );
+        assert!(
+            after.finished_at.is_some(),
+            "cancelled parked session must stamp finished_at"
+        );
+        assert!(
+            !after.awaiting_input,
+            "cancel clears awaiting_input so it no longer looks stuck"
+        );
+        // No longer listed as parked.
+        let still_parked = hub
+            .list()
+            .await
+            .into_iter()
+            .filter(|r| r.status == crate::goal::SessionStatus::Parked)
+            .count();
+        assert_eq!(still_parked, 0, "cancelled session must not list as parked");
+    }
+
     /// E6-c end to end: a parked session, answered, comes back with its memory intact.
     #[tokio::test]
     async fn answering_a_parked_session_resumes_the_pack_with_its_transcript() {

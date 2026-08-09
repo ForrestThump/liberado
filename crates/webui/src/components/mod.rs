@@ -11,4 +11,5 @@ pub mod reactions;
 pub mod sidebar;
 pub mod slash_commands;
 pub mod slash_palette;
+pub mod stuck_sessions;
 pub mod vault;

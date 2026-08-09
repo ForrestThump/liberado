@@ -10,9 +10,16 @@
 
 mod coherence;
 mod intake;
+mod trace_view;
 mod tuning;
 mod verify;
 
+pub use trace_view::{
+    FailedCall, ForeignTraceFormat, MessagesExport, SideBySide, TerminalSummary, TraceComparison,
+    compare_traces, format_comparison, import_foreign_auto, import_foreign_file,
+    import_foreign_messages, load_trace, render_transcript, resolve_trace_path,
+    write_messages_export,
+};
 pub use tuning::{CoderTuning, TraceFormat};
 
 pub use coherence::{
