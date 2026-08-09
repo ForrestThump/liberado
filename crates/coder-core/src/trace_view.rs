@@ -658,9 +658,134 @@ fn import_kilo_messages(raw: &Value) -> Result<Vec<Value>, String> {
     let list = extract_message_list(raw)?;
     let mut out = Vec::with_capacity(list.len());
     for (i, msg) in list.iter().enumerate() {
-        out.push(normalize_message(msg, i)?);
+        push_kilo_message(msg, i, list, &mut out)?;
     }
     Ok(out)
+}
+
+/// Map one Kilo entry — **Anthropic Messages** shape — into our OpenAI-shaped message list.
+///
+/// Read off Kilo Code 7.4.20's own reader (`dist/extension.js`), which is the only spec there is:
+/// it rejects anything but a top-level JSON array ("Legacy conversation history must be a JSON
+/// array"), keeps `role` of `user` or `assistant` **only**, and finds tool activity in `content`
+/// blocks — `{type:"tool_use", id, name, input}` inside an assistant entry, answered by
+/// `{type:"tool_result", tool_use_id, content, is_error}` inside the *next user* entry.
+///
+/// There is no `role: "tool"` and no `tool_calls` field anywhere in that file. Reading it as
+/// OpenAI-shaped parses cleanly and yields prose with **every tool call and result silently
+/// dropped** — an import that looks successful and has removed the only thing worth comparing.
+///
+/// Deliberately dropped, in the spirit of the native `openai-messages` export: `reasoning` blocks
+/// and `reasoning_content`/`reasoning_details`, because folding a model's private reasoning into
+/// `content` would make our side and theirs differ for a reason that is not the harness.
+/// `<task>` / `<environment_details>` wrappers are **kept** — Kilo strips them for display, but
+/// they were part of what the model actually saw, which is the question this export exists to
+/// answer.
+fn push_kilo_message(
+    msg: &Value,
+    index: usize,
+    all: &[Value],
+    out: &mut Vec<Value>,
+) -> Result<(), String> {
+    let role = msg
+        .get("role")
+        .and_then(|r| r.as_str())
+        .ok_or_else(|| format!("message[{index}] missing role"))?
+        .to_string();
+
+    // String content, or an already-OpenAI-shaped entry: the original normalizer handles both, and
+    // some exports genuinely are that shape.
+    let Some(blocks) = msg.get("content").and_then(|c| c.as_array()) else {
+        out.push(normalize_message(msg, index)?);
+        return Ok(());
+    };
+
+    let mut text: Vec<String> = Vec::new();
+    let mut tool_calls: Vec<Value> = Vec::new();
+    let mut tool_results: Vec<Value> = Vec::new();
+
+    for block in blocks {
+        match block.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+            "text" => {
+                if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+                    text.push(t.to_string());
+                }
+            }
+            "tool_use" => {
+                let name = block
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("unknown");
+                // Anthropic carries the arguments as an object under `input`; OpenAI carries a
+                // JSON *string* under `arguments`. Serialize so the two are diffable.
+                let args = block.get("input").cloned().unwrap_or_else(|| json!({}));
+                let mut call = json!({
+                    "type": "function",
+                    "function": { "name": name, "arguments": args.to_string() },
+                });
+                if let Some(id) = block.get("id") {
+                    call["id"] = id.clone();
+                }
+                tool_calls.push(call);
+            }
+            "tool_result" => {
+                let use_id = block
+                    .get("tool_use_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let mut result = json!({
+                    // The result block names no tool; only the `tool_use` it answers does.
+                    "role": "tool",
+                    "name": kilo_tool_name_for_use_id(all, use_id).unwrap_or("unknown"),
+                    "content": block.get("content").map(value_as_text).unwrap_or_default(),
+                    "is_error": block
+                        .get("is_error")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                });
+                if !use_id.is_empty() {
+                    result["tool_call_id"] = json!(use_id);
+                }
+                tool_results.push(result);
+            }
+            _ => {}
+        }
+    }
+
+    // Results answer the *previous* assistant turn, so they precede this entry's own text — which
+    // is what OpenAI ordering expects and what makes the two harnesses line up turn for turn.
+    out.append(&mut tool_results);
+
+    let joined = text.join("\n");
+    // An assistant entry is always a turn, even when it is pure tool calls: turn counts are half
+    // the comparison. A user entry that carried nothing but tool results is not a second turn.
+    if role == "assistant" || !joined.is_empty() {
+        let mut message = json!({ "role": role });
+        if !joined.is_empty() {
+            message["content"] = Value::String(joined);
+        }
+        if !tool_calls.is_empty() {
+            message["tool_calls"] = Value::Array(tool_calls);
+        }
+        out.push(message);
+    }
+    Ok(())
+}
+
+/// Resolve a `tool_result`'s tool name by finding the `tool_use` it answers, anywhere in the
+/// conversation — the same lookup Kilo's own `getToolUseFromConversation` does.
+fn kilo_tool_name_for_use_id<'a>(all: &'a [Value], use_id: &str) -> Option<&'a str> {
+    if use_id.is_empty() {
+        return None;
+    }
+    all.iter()
+        .filter_map(|entry| entry.get("content").and_then(|c| c.as_array()))
+        .flatten()
+        .find(|block| {
+            block.get("type").and_then(|t| t.as_str()) == Some("tool_use")
+                && block.get("id").and_then(|i| i.as_str()) == Some(use_id)
+        })
+        .and_then(|block| block.get("name").and_then(|n| n.as_str()))
 }
 
 fn extract_message_list(raw: &Value) -> Result<&Vec<Value>, String> {
@@ -1392,6 +1517,111 @@ mod tests {
         assert_eq!(export.messages[2]["role"], "tool");
         assert_eq!(export.messages[2]["is_error"], false);
         assert_eq!(export.messages[3]["content"], "done");
+    }
+
+    /// A fixture in Kilo's **real** on-disk shape, taken from the reader shipped in Kilo Code
+    /// 7.4.20 (`dist/extension.js`): a bare JSON array of Anthropic messages, `user`/`assistant`
+    /// roles only, tool activity carried as `tool_use` / `tool_result` content blocks.
+    ///
+    /// The wrong implementation this excludes is the one that was here: reading the file as
+    /// OpenAI-shaped (`tool_calls` fields, `role: "tool"` entries). That version parses this input
+    /// without error and returns prose with every tool call and result missing — so the assertions
+    /// below are on the tool activity, which is the only part that can tell the two apart.
+    #[test]
+    fn import_kilo_anthropic_blocks_keeps_tool_calls_and_results() {
+        let kilo = json!([
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "<task>fix the watcher</task>"}],
+                "ts": 1_754_700_000_000i64
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "I'll read the file first."},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01A",
+                        "name": "read_file",
+                        "input": {"path": "crates/daemon/src/vault_source.rs"}
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01A",
+                        "content": [{"type": "text", "text": "pub fn react() {}"}]
+                    },
+                    {"type": "text", "text": "<environment_details># VSCode Visible Files</environment_details>"}
+                ]
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01B",
+                        "name": "apply_diff",
+                        "input": {"path": "a.rs", "diff": "-x\n+y"}
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01B",
+                    "content": "ERROR: no match found",
+                    "is_error": true
+                }]
+            }
+        ]);
+
+        let export =
+            import_foreign_messages(&kilo, ForeignTraceFormat::Kilo, "kilo-real").expect("import");
+        let m = &export.messages;
+
+        // The assistant's tool call survives, with its arguments.
+        let call = &m[1]["tool_calls"][0];
+        assert_eq!(call["function"]["name"], "read_file", "messages: {m:#?}");
+        assert_eq!(call["id"], "toolu_01A");
+        let args: Value = serde_json::from_str(call["function"]["arguments"].as_str().unwrap())
+            .expect("arguments must be a JSON string, as OpenAI carries them");
+        assert_eq!(args["path"], "crates/daemon/src/vault_source.rs");
+
+        // The result comes back as a tool message, named from the `tool_use` it answers.
+        assert_eq!(m[2]["role"], "tool");
+        assert_eq!(m[2]["name"], "read_file");
+        assert_eq!(m[2]["tool_call_id"], "toolu_01A");
+        assert_eq!(m[2]["content"], "pub fn react() {}");
+        assert_eq!(m[2]["is_error"], false);
+
+        // Text alongside a tool result stays a user turn, and is not merged into the result.
+        assert_eq!(m[3]["role"], "user");
+        assert!(
+            m[3]["content"]
+                .as_str()
+                .unwrap()
+                .contains("environment_details"),
+            "what the model saw is kept verbatim: {m:#?}"
+        );
+
+        // A tool-call-only assistant entry is still a turn; a failed result keeps its error flag.
+        assert_eq!(m[4]["role"], "assistant");
+        assert_eq!(m[4]["tool_calls"][0]["function"]["name"], "apply_diff");
+        assert_eq!(m[5]["role"], "tool");
+        assert_eq!(m[5]["name"], "apply_diff");
+        assert_eq!(m[5]["is_error"], true);
+
+        let roles: Vec<&str> = m.iter().filter_map(|x| x["role"].as_str()).collect();
+        assert_eq!(
+            roles,
+            vec!["user", "assistant", "tool", "user", "assistant", "tool"],
+            "every turn accounted for, none invented"
+        );
     }
 
     #[test]
