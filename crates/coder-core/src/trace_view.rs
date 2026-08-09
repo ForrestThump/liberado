@@ -36,11 +36,28 @@ pub fn resolve_trace_path(id_or_path: &str, search_dirs: &[&Path]) -> Result<Pat
         return Ok(as_path.to_path_buf());
     }
 
-    let mut candidates: Vec<PathBuf> = Vec::new();
+    // The same directory routinely arrives twice: the CLI's defaults are `coder-traces` *and*
+    // `<cwd>/coder-traces`, which name one directory whenever the id is resolvable at all. Scanning
+    // it twice made a single file look like two matches, so every real session id — real traces are
+    // written as `<id>-attempt-N-<stamp>.json`, which only the prefix branch below can match —
+    // resolved as "ambiguous". Dedupe by canonical path, falling back to the literal path when a
+    // directory cannot be canonicalized.
+    let mut seen_dirs: Vec<PathBuf> = Vec::new();
+    let mut dirs: Vec<&Path> = Vec::new();
     for dir in search_dirs {
         if !dir.is_dir() {
             continue;
         }
+        let key = fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        if seen_dirs.contains(&key) {
+            continue;
+        }
+        seen_dirs.push(key);
+        dirs.push(dir);
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for dir in dirs {
         let exact = dir.join(format!("{id_or_path}.json"));
         if exact.is_file() {
             return Ok(exact);
@@ -256,8 +273,18 @@ pub struct TraceComparison {
     /// Per-turn tool-offer lists (empty string if that run has no such turn).
     pub tools_offered_per_turn: Vec<SideBySide<Vec<String>>>,
     pub refused_or_failed_calls: SideBySide<Vec<FailedCall>>,
-    /// 1-based model turn index of first successful mutation; `None` if never.
+    /// 1-based model turn index of the first successful **mutation-tool** call; `None` if none ran.
+    ///
+    /// Deliberately *not* derived from `FileChanged`: the coding pack emits those in one batch
+    /// after the loop ends (`coder-agent/src/lib.rs`), so they carry no turn timing. Attributing
+    /// them to the open turn reported the *last* turn of every `run_command`-driven run as the
+    /// first mutation — "explored for 29 turns, then wrote" for a run that had been editing all
+    /// along. Files changed with no attributable call are reported by
+    /// [`files_changed`](Self::files_changed) instead.
     pub first_successful_mutation_turn: SideBySide<Option<u32>>,
+    /// Distinct files the run changed, from `FileChanged` (or the run result). Says *whether* the
+    /// run mutated anything when `first_successful_mutation_turn` cannot say *when*.
+    pub files_changed: SideBySide<usize>,
     pub terminal: SideBySide<TerminalSummary>,
 }
 
@@ -321,6 +348,10 @@ pub fn compare_traces(a: &CoderTrace, b: &CoderTrace) -> TraceComparison {
             a: a_m.first_successful_mutation_turn,
             b: b_m.first_successful_mutation_turn,
         },
+        files_changed: SideBySide {
+            a: a_m.files_changed,
+            b: b_m.files_changed,
+        },
         terminal: SideBySide {
             a: a_m.terminal,
             b: b_m.terminal,
@@ -333,6 +364,7 @@ struct TraceMetrics {
     tools_offered_per_turn: Vec<Vec<String>>,
     refused_or_failed_calls: Vec<FailedCall>,
     first_successful_mutation_turn: Option<u32>,
+    files_changed: usize,
     terminal: TerminalSummary,
 }
 
@@ -341,6 +373,7 @@ fn metrics(trace: &CoderTrace) -> TraceMetrics {
     let mut tools_offered_per_turn = Vec::new();
     let mut refused_or_failed_calls = Vec::new();
     let mut first_successful_mutation_turn = None;
+    let mut changed_paths: Vec<&str> = Vec::new();
     let mut current_turn: Option<u32> = None;
     let mut terminal_outcome: Option<String> = None;
     let mut terminal_summary: Option<String> = None;
@@ -381,9 +414,10 @@ fn metrics(trace: &CoderTrace) -> TraceMetrics {
                     first_successful_mutation_turn = current_turn.or(Some(1));
                 }
             }
-            CoderEvent::FileChanged { .. } => {
-                if first_successful_mutation_turn.is_none() {
-                    first_successful_mutation_turn = current_turn.or(Some(1));
+            CoderEvent::FileChanged { path, .. } => {
+                // Counted, never used to date a turn — see `first_successful_mutation_turn`.
+                if !changed_paths.contains(&path.as_str()) {
+                    changed_paths.push(path.as_str());
                 }
             }
             CoderEvent::ReportFiled {
@@ -415,11 +449,19 @@ fn metrics(trace: &CoderTrace) -> TraceMetrics {
         terminal_cause = format!("result.outcome: {:?}", result.outcome);
     }
 
+    // A run whose only record of its edits is the result's file list still changed those files.
+    let files_changed = if changed_paths.is_empty() {
+        trace.result.as_ref().map_or(0, |r| r.files_changed.len())
+    } else {
+        changed_paths.len()
+    };
+
     TraceMetrics {
         turns_used,
         tools_offered_per_turn,
         refused_or_failed_calls,
         first_successful_mutation_turn,
+        files_changed,
         terminal: TerminalSummary {
             outcome: terminal_outcome,
             summary: terminal_summary,
@@ -475,8 +517,8 @@ pub fn format_comparison(c: &TraceComparison) -> String {
     out.push_str("## First successful mutation (turn)\n");
     out.push_str(&format!(
         "  A: {}\n  B: {}\n\n",
-        fmt_opt_turn(c.first_successful_mutation_turn.a),
-        fmt_opt_turn(c.first_successful_mutation_turn.b)
+        fmt_mutation(c.first_successful_mutation_turn.a, c.files_changed.a),
+        fmt_mutation(c.first_successful_mutation_turn.b, c.files_changed.b)
     ));
 
     out.push_str("## Terminal cause / outcome\n");
@@ -522,8 +564,17 @@ fn fmt_failures(fails: &[FailedCall]) -> String {
     }
 }
 
-fn fmt_opt_turn(t: Option<u32>) -> String {
-    t.map(|n| n.to_string()).unwrap_or_else(|| "never".into())
+/// "when did it first mutate", kept honest about the case where the trace cannot say.
+///
+/// A run that edits through `run_command` produces no mutation-tool call, so the turn is unknown
+/// while the file count is not. Reporting a turn there — or reporting "never" while 38 files
+/// changed — are both wrong in ways a reader would act on.
+fn fmt_mutation(turn: Option<u32>, files_changed: usize) -> String {
+    match (turn, files_changed) {
+        (Some(n), _) => n.to_string(),
+        (None, 0) => "never".into(),
+        (None, n) => format!("no mutation-tool call ({n} file(s) changed, turn unattributable)"),
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -1019,6 +1070,54 @@ mod tests {
         );
     }
 
+    /// The two things that break `liberado coder trace <session-id>` together, and only together:
+    /// real traces are written as `<id>-attempt-N-<stamp>.json` (so only the prefix branch can
+    /// match them), and the CLI searches one directory under two spellings. Scanning it twice
+    /// collected the same file twice and reported the only trace on disk as "ambiguous".
+    #[test]
+    fn resolves_attempt_suffixed_trace_when_a_dir_is_searched_under_two_spellings() {
+        let dir = tmp_dir();
+        let real_name = "01KZJ8YSMEEZ5DSQEV4Y16GGFZ-attempt-0-20260809T032711.668Z.json";
+        let path = dir.join(real_name);
+        let t = trace_with(
+            "01KZJ8YSMEEZ5DSQEV4Y16GGFZ-attempt-0-20260809T032711.668Z",
+            "cold review",
+            vec![turn(1, Some("hi"), &["read_file"], &["read_file"])],
+        );
+        fs::write(&path, serde_json::to_vec_pretty(&t).unwrap()).unwrap();
+
+        // Same directory, two spellings — what `default_trace_dirs()` hands us for any cwd that
+        // actually contains `coder-traces`.
+        let canonical = fs::canonicalize(&dir).unwrap();
+        let resolved = resolve_trace_path(
+            "01KZJ8YSMEEZ5DSQEV4Y16GGFZ",
+            &[dir.as_path(), canonical.as_path()],
+        )
+        .expect("a session id with one trace on disk must resolve, not report ambiguity");
+        assert_eq!(
+            fs::canonicalize(&resolved).unwrap(),
+            fs::canonicalize(&path).unwrap()
+        );
+
+        // Two genuinely different sessions sharing a prefix are still ambiguous — the dedupe must
+        // not paper over a real collision.
+        let other = dir.join("01KZJ8YSMEEZ5DSQEV4Y16GGFZ-attempt-1-20260809T041500.000Z.json");
+        fs::write(&other, serde_json::to_vec_pretty(&t).unwrap()).unwrap();
+        let err = resolve_trace_path(
+            "01KZJ8YSMEEZ5DSQEV4Y16GGFZ",
+            &[dir.as_path(), canonical.as_path()],
+        )
+        .expect_err("two distinct traces sharing the prefix are genuinely ambiguous");
+        assert!(err.contains("ambiguous"), "{err}");
+        assert_eq!(
+            err.matches("attempt-").count(),
+            2,
+            "each real match listed once, not once per search-dir spelling: {err}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn load_and_render_round_trip_from_disk() {
         let dir = tmp_dir();
@@ -1168,6 +1267,92 @@ mod tests {
             );
         }
         assert!(report.contains("run-a") && report.contains("run-b"));
+    }
+
+    /// The shape of every real run in `coder-traces/`: the model edits through `run_command`, so
+    /// no mutation *tool* ever fires, and the pack emits all `FileChanged` events in one batch
+    /// after the loop ends (`coder-agent/src/lib.rs`). Dating the first mutation from those events
+    /// named the run's **last** turn — a 30-turn run read as "explored 29 turns, then wrote".
+    #[test]
+    fn teardown_file_changed_batch_does_not_date_the_first_mutation() {
+        let mut t = trace_with(
+            "run-shell-edits",
+            "edit via shell",
+            vec![
+                turn(
+                    1,
+                    Some("look"),
+                    &["read_file", "run_command"],
+                    &["read_file"],
+                ),
+                tool("read_file", true, "src"),
+                turn(
+                    2,
+                    Some("patch"),
+                    &["read_file", "run_command"],
+                    &["run_command"],
+                ),
+                tool("run_command", true, "applied"),
+                turn(
+                    3,
+                    Some("check"),
+                    &["read_file", "run_command"],
+                    &["run_command"],
+                ),
+                tool("run_command", true, "cargo check ok"),
+                // Emitted only at teardown — after the last turn, for every file the run touched.
+                CoderEvent::FileChanged {
+                    path: "crates/daemon/src/lib.rs".into(),
+                    at: Utc::now(),
+                },
+                CoderEvent::FileChanged {
+                    path: "crates/daemon/src/react.rs".into(),
+                    at: Utc::now(),
+                },
+                CoderEvent::SessionFinished {
+                    outcome: Outcome::Succeeded,
+                    at: Utc::now(),
+                },
+            ],
+        );
+        t.result = Some(CoderRunResult {
+            backend: "liberado-loop".into(),
+            outcome: Outcome::Succeeded,
+            summary: "done".into(),
+            files_changed: vec!["crates/daemon/src/lib.rs".into()],
+            file_changes: Vec::new(),
+            validation_notes: None,
+            critic_verdict: None,
+            gate_votes: Vec::new(),
+            trace_path: None,
+            diagnostics: json!({}),
+        });
+
+        let c = compare_traces(&t, &t);
+
+        assert_eq!(
+            c.first_successful_mutation_turn.a, None,
+            "a teardown FileChanged batch carries no turn timing and must not invent one"
+        );
+        assert_ne!(
+            c.first_successful_mutation_turn.a,
+            Some(c.turns_used.a),
+            "reporting the last turn as the first mutation is the defect, not the fix"
+        );
+        assert_eq!(
+            c.files_changed.a, 2,
+            "the run did mutate; the count is what the trace can honestly say"
+        );
+
+        let report = format_comparison(&c);
+        assert!(
+            report.contains("no mutation-tool call") && report.contains("2 file(s) changed"),
+            "report must say it cannot date the mutation, and that files changed anyway:\n{report}"
+        );
+        assert!(
+            !report.contains("First successful mutation (turn)\n  A: 3"),
+            "report must not name a turn it cannot know:\n{report}"
+        );
     }
 
     // ── F3 ──────────────────────────────────────────────────────────────────

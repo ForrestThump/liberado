@@ -84,15 +84,17 @@ fn age_label(created_at: Option<&str>) -> String {
     }
 }
 
-fn short_id(id: &str) -> &str {
-    if id.len() > 12 { &id[..12] } else { id }
+/// Truncate on char boundaries: ids are ULIDs today, but `GoalSpec.id` is caller-supplied, and
+/// byte-slicing a multi-byte id would panic the whole panel rather than shorten one label.
+fn short_id(id: &str) -> String {
+    id.chars().take(12).collect()
 }
 
 #[component]
 pub fn StuckSessionsPanel(api_base: String) -> Element {
-    let mut refresh = use_signal(|| 0u32);
-    let mut cancel_error = use_signal(|| None::<String>);
-    let mut cancelling = use_signal(|| None::<String>);
+    let refresh = use_signal(|| 0u32);
+    let cancel_error = use_signal(|| None::<String>);
+    let cancelling = use_signal(|| None::<String>);
 
     let goals = use_resource({
         let base = api_base.clone();
@@ -196,7 +198,7 @@ fn StuckSessionRow(
         "parked"
     };
     let is_cancelling = cancelling.read().as_deref() == Some(id.as_str());
-    let short = short_id(&id).to_string();
+    let short = short_id(&id);
 
     rsx! {
         div {

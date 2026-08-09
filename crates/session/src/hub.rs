@@ -303,17 +303,33 @@ impl GoalSessionHub {
             .await
             .ok_or_else(|| format!("session '{id}' not found or already finished"))?;
         if record.status == SessionStatus::Parked {
+            let summary = "cancelled while parked (no live host)".to_string();
+            // Durable terminal state **before** the event, for the same reason `run_session` does
+            // it in that order: anything woken by `SessionFinished` must find `result` already set.
             self.store
                 .finish(
                     id,
                     SessionStatus::Cancelled,
                     GoalResult {
                         terminal: TerminalKind::Cancelled,
-                        summary: "cancelled while parked (no live host)".into(),
+                        summary: summary.clone(),
                         artifacts: Vec::new(),
                         diagnostics: serde_json::json!({ "source": "cancel_parked" }),
                     },
                 )
+                .await;
+            // `store.finish` mutates the row but publishes nothing. Without this event the cancel
+            // is invisible to every event consumer: an SSE client watching the session sees it
+            // stay parked forever, and `await_terminal` — which blocks on `recv()` between its
+            // status checks — never wakes, so a `delegate` parented to this session hangs.
+            self.store
+                .push_event(SessionEvent::new(
+                    id,
+                    SessionEventKind::SessionFinished {
+                        status: "cancelled".into(),
+                        summary,
+                    },
+                ))
                 .await;
             return Ok(());
         }
