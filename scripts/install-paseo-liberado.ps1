@@ -55,8 +55,10 @@ if (Test-Path $configPath) {
     # Back up before rewriting a file we do not own. The merge below round-trips the whole
     # config through ConvertFrom-Json/ConvertTo-Json, which reformats it and silently truncates
     # anything nested deeper than -Depth. A copy costs nothing and makes that recoverable.
-    $backupPath = "$configPath.bak"
-    Copy-Item -Path $configPath -Destination $backupPath -Force
+    # Timestamped, not a fixed `.bak`: a second install would otherwise overwrite the backup with
+    # the output of the first, leaving no copy of the user's original config.
+    $backupPath = "$configPath.$(Get-Date -Format 'yyyyMMdd-HHmmss').bak"
+    Copy-Item -Path $configPath -Destination $backupPath
     Write-Host "==> Backed up existing config to $backupPath"
     $raw = Get-Content $configPath -Raw -Encoding utf8
     $cfg = if ($raw.Trim()) { $raw | ConvertFrom-Json } else { [pscustomobject]@{} }

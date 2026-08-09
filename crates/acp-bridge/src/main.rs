@@ -67,6 +67,15 @@ const PROTOCOL_VERSION: u32 = 1;
 /// replay exist (integration roadmap P3); true made Paseo resume into an empty transcript.
 const LOAD_SESSION_CAPABILITY: bool = false;
 
+/// JSON-RPC 2.0 error codes. Named because "-32602" at a call site says nothing about which of the
+/// spec's four failure kinds it is, and every one of these used to be -32603.
+const JSONRPC_METHOD_NOT_FOUND: i32 = -32601;
+const JSONRPC_INVALID_PARAMS: i32 = -32602;
+const JSONRPC_INTERNAL_ERROR: i32 = -32603;
+
+/// Marks a `handle_request` error as "no such method" so the wire layer can pick -32601.
+const METHOD_NOT_FOUND_PREFIX: &str = "Method not found: ";
+
 // ── Bridge state ────────────────────────────────────────────────────────────
 
 /// One row in the ACP session model picker (`availableModels`).
@@ -190,7 +199,11 @@ where
                     eprintln!("liberado-acp: unknown mode '{val}' (expected coding|chat|face)");
                     return Some(2);
                 }
-                // SAFETY: single-threaded startup before the async runtime; process default only.
+                // SAFETY: `#[tokio::main]` has already started the multi-threaded runtime by
+                // the time this runs, so "single-threaded" is not the argument. It is sound
+                // because nothing else in this process reads env vars before `run()` does, a few
+                // lines later on this same task. Any future crate init that reads env from a
+                // background thread would make this a data race.
                 unsafe {
                     std::env::set_var("LIBERADO_ACP_MODE", val);
                 }
@@ -392,7 +405,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             wire.write_rpc_response(
                                 id,
                                 Err(JsonRpcErrorBody {
-                                    code: -32603,
+                                    // -32602 Invalid params: the request is well-formed and the
+                                    // method exists, the arguments are wrong.
+                                    code: JSONRPC_INVALID_PARAMS,
                                     message: "missing sessionId".into(),
                                 }),
                             )?;
@@ -418,7 +433,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     Err(message) => wire.write_rpc_response(
                         id,
                         Err(JsonRpcErrorBody {
-                            code: -32603,
+                            code: if message.starts_with(METHOD_NOT_FOUND_PREFIX) {
+                                JSONRPC_METHOD_NOT_FOUND
+                            } else {
+                                JSONRPC_INTERNAL_ERROR
+                            },
                             message,
                         }),
                     )?,
@@ -654,7 +673,11 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
 
         "authenticate" | "logout" => Ok(json!({})),
 
-        _ => Err(format!("Method not found: {method}")),
+        // Prefixed so the stdin loop can map it to JSON-RPC -32601 without a second
+        // error type. Everything used to answer -32603 (Internal error), which told a client
+        // routing on the code that the agent had failed rather than that it does not implement
+        // the method.
+        _ => Err(format!("{METHOD_NOT_FOUND_PREFIX}{method}")),
     }
 }
 
@@ -1138,20 +1161,57 @@ mod tests {
         );
     }
 
-    #[test]
-    fn initialize_shape_is_acp_compatible() {
-        // Document the contract our handler returns (mirrors handle_request arm).
-        let result = json!({
-            "protocolVersion": PROTOCOL_VERSION,
-            "agentInfo": { "name": "Liberado", "version": "0.1.0" },
-            "agentCapabilities": {
-                "loadSession": false,
-                "promptCapabilities": { "image": false, "audio": false, "embeddedContext": true },
-            }
-        });
-        assert_eq!(result["protocolVersion"], 1);
+    /// A Bridge with a scripted provider — enough to drive `handle_request` in tests.
+    fn test_bridge() -> Arc<Bridge> {
+        use liberado_provider::MockProvider;
+        Arc::new(Bridge {
+            provider: Arc::new(MockProvider::with_script("mock", [])),
+            backend: "mock".into(),
+            catalog: Mutex::new(Vec::new()),
+            current_model: Mutex::new("mock-model".into()),
+            default_mode: AgentMode::Coding,
+            max_turns: 8,
+            coder_tuning: liberado_coder_core::CoderTuning::default(),
+            local_grant: liberado_common::CapabilitySet::empty(),
+            system_prompt: None,
+            acp_sessions: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// A method the agent does not implement must answer -32601, not -32603.
+    ///
+    /// A cold review pointed out every error used the same "Internal error" code, so a client
+    /// routing on it could not tell "you asked for something I do not implement" from "I broke".
+    #[tokio::test]
+    async fn an_unknown_method_is_method_not_found() {
+        let bridge = test_bridge();
+        let err = handle_request(bridge, "session/does_not_exist", json!({}))
+            .await
+            .expect_err("an unimplemented method must be an error");
+        assert!(
+            err.starts_with(METHOD_NOT_FOUND_PREFIX),
+            "must be taggable as -32601 by the wire layer, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn initialize_shape_is_acp_compatible() {
+        // Drives the real handler. The previous version built its own JSON literal and asserted on
+        // that — it "mirrored the handle_request arm" by its own comment, so deleting the arm, or
+        // dropping any field from the real response, left it green.
+        let bridge = test_bridge();
+        let result = handle_request(bridge, "initialize", json!({}))
+            .await
+            .expect("initialize must succeed");
+
+        assert_eq!(result["protocolVersion"], PROTOCOL_VERSION);
+        assert_eq!(result["agentInfo"]["name"], "Liberado");
         // Must stay false until durable load+replay (P3); true lied to Paseo's resume path.
         assert_eq!(result["agentCapabilities"]["loadSession"], false);
+        assert_eq!(
+            result["agentCapabilities"]["promptCapabilities"]["embeddedContext"],
+            true
+        );
     }
 
     #[test]
