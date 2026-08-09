@@ -68,9 +68,29 @@ pub fn clear() {
 mod tests {
     use super::*;
     use crate::capability::Zone;
+    use std::sync::Mutex;
+
+    /// Serializes every test that touches the process-global store.
+    ///
+    /// A unique pool name per test is not sufficient, and that gap is what made
+    /// `grant_is_readable_and_idempotent` flaky: [`clear`] takes no pool, so
+    /// `clear_empties_all_grants` wipes *every* pool, including the one a sibling test wrote a
+    /// moment ago and is about to assert on. The failure is a bare `assertion failed:
+    /// session_grant(&pool).contains(&cap)` one line after the grant provably succeeded, which
+    /// reads like a broken `contains` rather than a neighbour.
+    ///
+    /// Filtered to this module (`cargo test -p liberado-common --lib session_grants`) the three
+    /// tests get a thread each and it failed 9 runs in 12; in the full crate binary they scatter
+    /// across 120-odd tests and it passed 15 in 15. So it hit whoever was iterating on this file
+    /// and stayed invisible to CI — the worst of both.
+    ///
+    /// Same shape as `coder-sandbox/src/checkpoint.rs`'s `ENV_LOCK`, and poisoning is recovered
+    /// the same way the non-test code does: a panicking test leaves a structurally sound map.
+    static STORE_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn grant_is_readable_and_idempotent() {
+        let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Unique pool name: process-global store races under `cargo test` parallelism.
         let pool = format!("test-pool-grant-readable-{:?}", std::thread::current().id());
         let cap = Capability::Write(Zone::vault("sandbox"));
@@ -85,6 +105,7 @@ mod tests {
 
     #[test]
     fn grants_are_scoped_per_pool() {
+        let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let id = format!("{:?}", std::thread::current().id());
         let pool_a = format!("pool-a-scoped-{id}");
         let pool_b = format!("pool-b-scoped-{id}");
@@ -97,6 +118,8 @@ mod tests {
 
     #[test]
     fn clear_empties_all_grants() {
+        // This is the test that made the others flaky — `clear()` is global, not per-pool.
+        let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let id = format!("{:?}", std::thread::current().id());
         let pool = format!("pool-clear-{id}");
         let cap = Capability::Write(Zone::vault("sandbox"));
