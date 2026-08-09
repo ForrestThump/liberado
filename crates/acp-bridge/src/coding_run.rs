@@ -279,17 +279,18 @@ pub fn workspace_payload(cwd: &Path) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
     /// Process-global env mutations in this crate must not race other tests.
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner())
-    }
+    ///
+    /// `tokio::sync::Mutex`, not `std::sync::Mutex`: these tests hold the guard across an `.await`,
+    /// which `clippy::await_holding_lock` rejects for a blocking lock — it parks the whole runtime
+    /// thread rather than yielding. `coder-agent`'s `DATA_DIR_ENV_LOCK` is the same pattern for the
+    /// same reason. (Test binaries are per-crate, so this cannot be the *same* lock, only the same
+    /// shape.)
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[tokio::test]
     async fn prepare_workspace_fails_hard_when_worktree_setup_fails() {
-        let _guard = env_lock();
+        let _guard = ENV_LOCK.lock().await;
         let dir = tempfile::tempdir().expect("tempdir");
         // Looks like a git repo to is_git_repo, but is not a real repo → worktree create fails.
         std::fs::create_dir(dir.path().join(".git")).expect(".git");

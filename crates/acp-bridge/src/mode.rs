@@ -61,10 +61,10 @@ impl AgentMode {
 
     /// Process default: `--mode` / `LIBERADO_ACP_MODE`, else coding.
     pub fn from_env_or_default() -> Self {
-        if let Ok(s) = std::env::var("LIBERADO_ACP_MODE") {
-            if let Some(m) = Self::parse(&s) {
-                return m;
-            }
+        if let Ok(s) = std::env::var("LIBERADO_ACP_MODE")
+            && let Some(m) = Self::parse(&s)
+        {
+            return m;
         }
         Self::Coding
     }

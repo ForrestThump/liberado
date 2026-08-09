@@ -46,13 +46,13 @@ mod coding_run;
 mod face_client;
 mod mode;
 
-use mode::AgentMode;
 use liberado_executor::{AgentEvent, Budget, Executor, ToolRuntime};
 use liberado_main_agent::{Conversation, DEFAULT_SYSTEM_PROMPT};
 use liberado_provider::{
     CompletionRequest, CompletionResponse, Provider, ProviderError, ProviderResult,
 };
 use liberado_provider_openai_compat::OpenAiCompatibleProvider;
+use mode::AgentMode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -65,10 +65,12 @@ const PROTOCOL_VERSION: u32 = 1;
 /// replay exist (integration roadmap P3); true made Paseo resume into an empty transcript.
 const LOAD_SESSION_CAPABILITY: bool = false;
 
-/// Default raw model when OpenRouter is among configured backends.
+/// Initial model shown in the picker when no API key is present.
+///
+/// Not a duplicate of the config default: `[[providers]]` gives openrouter `openai/gpt-4o-mini`,
+/// while this is the model this bridge actually wants selected on first launch. It is a display
+/// placeholder only — with a key present, the model comes from the provider profile.
 const OPENROUTER_DEFAULT_RAW: &str = "deepseek/deepseek-v4-pro";
-const DEEPSEEK_DEFAULT_RAW: &str = "deepseek-chat";
-const OPENAI_DEFAULT_RAW: &str = "gpt-4o-mini";
 
 /// Fallback raw ids when a backend's `/models` is unreachable.
 const OPENROUTER_FALLBACK_RAW: &[&str] =
@@ -230,9 +232,7 @@ where
             "--mode" | "-m" => {
                 let val = args.get(i + 1).map(|s| s.as_str()).unwrap_or("");
                 if AgentMode::parse(val).is_none() {
-                    eprintln!(
-                        "liberado-acp: unknown mode '{val}' (expected coding|chat|face)"
-                    );
+                    eprintln!("liberado-acp: unknown mode '{val}' (expected coding|chat|face)");
                     return Some(2);
                 }
                 // SAFETY: single-threaded startup before the async runtime; process default only.
@@ -245,9 +245,7 @@ where
             other if other.starts_with("--mode=") => {
                 let val = other.trim_start_matches("--mode=");
                 if AgentMode::parse(val).is_none() {
-                    eprintln!(
-                        "liberado-acp: unknown mode '{val}' (expected coding|chat|face)"
-                    );
+                    eprintln!("liberado-acp: unknown mode '{val}' (expected coding|chat|face)");
                     return Some(2);
                 }
                 unsafe {
@@ -393,10 +391,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         if !sid.is_empty() {
                             request_session_cancel(&bridge, &sid).await;
                             // Hard-stop backup if the turn is stuck outside cooperative points.
-                            if let Some(inf) = &in_flight {
-                                if inf.session_id == sid {
-                                    inf.handle.abort();
-                                }
+                            if let Some(inf) = &in_flight
+                                && inf.session_id == sid
+                            {
+                                inf.handle.abort();
                             }
                         }
                     } else {
@@ -597,55 +595,58 @@ fn build_provider() -> Result<ResolvedProvider, String> {
         }
     }
 
-    // Prefer OpenRouter so the picker gets `author/model` ids (deepseek/deepseek-v4-pro, …).
-    // Then DeepSeek direct, then OpenAI.
-    let candidates: [(&str, &str, &str, &str); 3] = [
-        (
-            "OPENROUTER_API_KEY",
-            "https://openrouter.ai/api/v1",
-            "openrouter",
-            OPENROUTER_DEFAULT_RAW,
-        ),
-        (
-            "DEEPSEEK_API_KEY",
-            "https://api.deepseek.com/v1",
-            "deepseek",
-            DEEPSEEK_DEFAULT_RAW,
-        ),
-        (
-            "OPENAI_API_KEY",
-            "https://api.openai.com/v1",
-            "openai",
-            OPENAI_DEFAULT_RAW,
-        ),
-    ];
+    // Prefer OpenRouter so the picker gets `author/model` ids (deepseek/deepseek-v4-pro, …),
+    // then whatever else is declared.
+    //
+    // The profiles come from `Topology::default()`, not a list written out here. This block used to
+    // restate the base URLs, key envs, default models and OpenRouter's `402` "insufficient credits"
+    // status — all of which `config-loader`'s `default_providers()` already declares. Two
+    // declarations of one fact is failure-mode class 6: nothing compares them, so they drift and the
+    // drift is silent. Adding a backend is now an entry in `[[providers]]`, which is where the
+    // config model already says it belongs.
+    let profiles = liberado_config::Topology::default().providers;
+    let preferred = ["openrouter", "deepseek"];
+    let ordered = preferred
+        .iter()
+        .filter_map(|want| profiles.iter().find(|p| p.name == *want))
+        .chain(
+            profiles
+                .iter()
+                .filter(|p| !preferred.contains(&p.name.as_str())),
+        );
 
-    for (key_env, base, backend, default_model) in candidates {
-        if std::env::var_os(key_env).is_none() {
+    for profile in ordered {
+        if std::env::var_os(&profile.api_key_env).is_none() {
             continue;
         }
         let model = model_override
             .clone()
-            .unwrap_or_else(|| default_model.to_string());
-        let extra = if backend == "openrouter" {
-            vec![402]
-        } else {
-            Vec::new()
-        };
-        let p = OpenAiCompatibleProvider::from_env(key_env, None, &model, base, extra)
-            .map_err(|e| format!("provider init ({key_env}): {e}"))?;
-        tracing::info!(%key_env, %model, %base, %backend, "acp provider ready");
+            .unwrap_or_else(|| profile.default_model.clone());
+        let p = OpenAiCompatibleProvider::from_env(
+            &profile.api_key_env,
+            profile.model_env.as_deref(),
+            &model,
+            &profile.base_url,
+            profile.extra_client_error_status.clone(),
+        )
+        .map_err(|e| format!("provider init ({}): {e}", profile.api_key_env))?;
+        tracing::info!(
+            key_env = %profile.api_key_env,
+            %model,
+            base = %profile.base_url,
+            backend = %profile.name,
+            "acp provider ready"
+        );
         return Ok(ResolvedProvider {
             provider: Arc::new(p),
-            backend: backend.to_string(),
+            backend: profile.name.clone(),
             model_id: model,
         });
     }
 
     let model = model_override.unwrap_or_else(|| OPENROUTER_DEFAULT_RAW.to_string());
     tracing::warn!(
-        "no API key found (set OPENROUTER_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY); \
-         Paseo can still detect liberado-acp, but prompts need a key"
+        "no API key found for any declared provider (see `[[providers]]` in topology.toml);          Paseo can still detect liberado-acp, but prompts need a key"
     );
     Ok(ResolvedProvider {
         provider: Arc::new(MissingKeyProvider {
@@ -846,9 +847,14 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
             let mode = bridge.default_mode;
             let (cancel_tx, cancel_rx) = watch::channel(false);
             let chat = if mode == AgentMode::Chat {
-                open_chat_session(&sid, cwd.clone(), Arc::clone(&bridge.provider), bridge.max_turns)
-                    .ok()
-                    .map(Arc::new)
+                open_chat_session(
+                    &sid,
+                    cwd.clone(),
+                    Arc::clone(&bridge.provider),
+                    bridge.max_turns,
+                )
+                .ok()
+                .map(Arc::new)
             } else {
                 None
             };
@@ -892,7 +898,6 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
         }
 
         // session/prompt is handled by the main loop (spawned so cancel can interleave).
-
         "session/set_mode" => {
             let sid = params
                 .get("sessionId")
@@ -1225,8 +1230,6 @@ fn model_state(catalog: &[CatalogModel], current_model_id: &str) -> Value {
     })
 }
 
-
-
 fn extract_prompt_text(params: &Value) -> Result<String, String> {
     if let Some(arr) = params.get("prompt").and_then(|v| v.as_array()) {
         let mut parts = Vec::new();
@@ -1296,12 +1299,15 @@ async fn run_prompt_turn(
     loop {
         tokio::select! {
             biased;
-            changed = cancel_rx.changed() => {
-                if changed.is_ok() && *cancel_rx.borrow() {
-                    turn.abort();
-                    stop_reason = "cancelled".into();
-                    break;
-                }
+            // `wait_until_cancelled`, not a bare `changed()`: `changed()` only fires on a
+            // transition *after* this receiver was cloned, so a cancel that lands between
+            // session/prompt arriving and this loop starting was silently dropped and the turn ran
+            // to completion. The helper checks the current value first, and treats a dropped sender
+            // as cancelled rather than hanging.
+            _ = wait_until_cancelled(&mut cancel_rx) => {
+                turn.abort();
+                stop_reason = "cancelled".into();
+                break;
             }
             ev = event_rx.recv() => {
                 match ev {
@@ -1682,25 +1688,24 @@ mod tests {
             lines: std::sync::Mutex::new(Vec::new()),
         };
 
+        // Cancel BEFORE the turn starts. The previous version slept 5ms and then cancelled, so
+        // the fast mock almost always finished first and the assertion accepted `end_turn` —
+        // which meant the test passed with the cancel path deleted entirely.
+        cancel_tx.send(true).expect("cancel send");
+
         let turn = tokio::spawn({
             let session = Arc::clone(&session);
             async move { run_prompt_turn(session, "hello".into(), &sink).await }
         });
-
-        // Cancel promptly; even if the mock is fast, cancel path must be valid.
-        tokio::time::sleep(Duration::from_millis(5)).await;
-        let _ = cancel_tx.send(true);
 
         let stop = tokio::time::timeout(Duration::from_secs(5), turn)
             .await
             .expect("turn join timeout")
             .expect("join")
             .expect("turn result");
-        // Either cancelled (if flag won) or end_turn (if mock finished first) — both ok;
-        // the important property is we do not hang. Prefer cancelled when we win the race.
-        assert!(
-            stop == "cancelled" || stop == "end_turn",
-            "unexpected stopReason {stop}"
+        assert_eq!(
+            stop, "cancelled",
+            "a turn whose session was already cancelled must report `cancelled`"
         );
     }
 

@@ -120,10 +120,7 @@ fn initialize_and_session_new_over_stdio() {
         .as_array()
         .expect("availableModes");
     assert_eq!(modes.len(), 3, "coding · chat · face: {modes:?}");
-    let mode_ids: Vec<&str> = modes
-        .iter()
-        .filter_map(|m| m["id"].as_str())
-        .collect();
+    let mode_ids: Vec<&str> = modes.iter().filter_map(|m| m["id"].as_str()).collect();
     assert!(mode_ids.contains(&"coding"));
     assert!(mode_ids.contains(&"chat"));
     assert!(mode_ids.contains(&"face"));

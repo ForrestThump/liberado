@@ -102,10 +102,7 @@ fn dispatch_sse(
             emit_text(
                 emit,
                 acp_session_id,
-                &format!(
-                    "[tool] {name} {mark} {}\n",
-                    truncate(&result_preview, 200)
-                ),
+                &format!("[tool] {name} {mark} {}\n", truncate(&result_preview, 200)),
             )?;
             Ok(false)
         }
@@ -162,5 +159,3 @@ fn truncate(s: &str, max: usize) -> String {
         head
     }
 }
-
-
