@@ -587,6 +587,463 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+// ── Neutral run view + divergence ───────────────────────────────────────────
+
+/// How much of a tool's output the divergence report prints per call.
+const DIVERGENCE_OUTPUT_CHARS: usize = 1_200;
+
+/// One run, in terms every harness shares: model turns, and what each turn called.
+///
+/// The comparison seam. `compare_traces` can only take two native [`CoderTrace`]s, which is why
+/// the importer's output had nowhere to go — the two halves of the A/B never met. Both a native
+/// trace and an imported foreign run project into this, and the comparison happens here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunView {
+    /// Which harness produced it, for the report header.
+    pub source: String,
+    pub run_id: String,
+    /// The task, when the record states it — so a reader can confirm the two runs are comparable
+    /// before believing anything below.
+    pub task: Option<String>,
+    pub turns: Vec<TurnView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TurnView {
+    /// 1-based, within this run.
+    pub index: u32,
+    pub text: Option<String>,
+    pub calls: Vec<CallView>,
+    pub finish_reason: Option<String>,
+    /// Facts with no counterpart in the other harness — guard trips, tool withdrawals.
+    ///
+    /// Kept rather than normalized away: "our harness withdrew a tool at this turn and theirs has
+    /// no such mechanism" is not noise, it is the answer to why one run failed and the other did
+    /// not. Normalizing to the intersection of two harnesses deletes exactly the asymmetry the
+    /// comparison exists to find.
+    pub annotations: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CallView {
+    pub name: String,
+    /// JSON, as a string — the shape OpenAI uses and the one both importers normalize to.
+    pub arguments: String,
+    /// `None` when the record never says whether the call succeeded.
+    pub ok: Option<bool>,
+    pub output: String,
+}
+
+/// Project a native trace into the neutral view.
+pub fn run_view_from_trace(trace: &CoderTrace) -> RunView {
+    let mut turns: Vec<TurnView> = Vec::new();
+    // Events between one `ModelTurnFinished` and the next belong to the turn that opened them.
+    let mut pending_args: Vec<(String, String)> = Vec::new();
+
+    for event in &trace.events {
+        match event {
+            CoderEvent::ModelTurnFinished {
+                turn,
+                content,
+                finish_reason,
+                tool_calls,
+                ..
+            } => {
+                // Seeded from what the model *asked for*, not from what the runtime traced. Not
+                // every tool emits `ToolStarted`/`ToolFinished` — `scratchpad_write` emits neither,
+                // so five of the thirty-five calls in the one real trace on disk left no event at
+                // all. Building the sequence from tool events alone silently dropped them, and
+                // since alignment is by call sequence that shifted every subsequent comparison by
+                // one. A call with no result recorded keeps `ok: None`, which says exactly that.
+                turns.push(TurnView {
+                    index: *turn,
+                    text: content.clone(),
+                    calls: tool_calls
+                        .iter()
+                        .map(|name| CallView {
+                            name: name.clone(),
+                            arguments: String::new(),
+                            ok: None,
+                            output: String::new(),
+                        })
+                        .collect(),
+                    finish_reason: Some(finish_reason.clone()),
+                    annotations: Vec::new(),
+                });
+                pending_args.clear();
+            }
+            CoderEvent::ToolStarted {
+                name, args_preview, ..
+            } => {
+                pending_args.push((name.clone(), args_preview.clone()));
+            }
+            CoderEvent::ToolFinished {
+                name,
+                ok,
+                result_preview,
+                ..
+            } => {
+                // Arguments and results are separate events; pair them by name, oldest first,
+                // which is the order a turn's calls are issued and completed in.
+                let arguments = pending_args
+                    .iter()
+                    .position(|(n, _)| n == name)
+                    .map(|i| pending_args.remove(i).1)
+                    .unwrap_or_default();
+                let call = CallView {
+                    name: name.clone(),
+                    arguments,
+                    ok: Some(*ok),
+                    output: result_preview.clone(),
+                };
+                match turns.last_mut() {
+                    // Fill in the seeded entry this result belongs to rather than appending a
+                    // second copy of the same call.
+                    Some(turn) => {
+                        match turn
+                            .calls
+                            .iter()
+                            .position(|c| c.name == *name && c.ok.is_none())
+                        {
+                            Some(i) => turn.calls[i] = call,
+                            None => turn.calls.push(call),
+                        }
+                    }
+                    None => turns.push(TurnView {
+                        index: 1,
+                        text: None,
+                        calls: vec![call],
+                        finish_reason: None,
+                        annotations: Vec::new(),
+                    }),
+                }
+            }
+            CoderEvent::LoopGuardTriggered { guard, action, .. } => {
+                let note = format!("guard {guard} → {action}");
+                match turns.last_mut() {
+                    Some(turn) => turn.annotations.push(note),
+                    None => turns.push(TurnView {
+                        index: 1,
+                        text: None,
+                        calls: Vec::new(),
+                        finish_reason: None,
+                        annotations: vec![note],
+                    }),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    RunView {
+        source: "liberado".into(),
+        run_id: trace.session_id.clone(),
+        task: Some(trace.request.task.description.clone()),
+        turns,
+    }
+}
+
+/// Project an imported foreign run (our `.messages.json` shape) into the neutral view.
+///
+/// An **assistant** message is a turn; the `role:"tool"` messages that follow it carry that turn's
+/// results. The first user message is taken as the task. Later user messages are recorded as
+/// annotations rather than turns — in the Kilo shape they are environment blocks and tool-result
+/// carriers, not model activity, and counting them as turns would misalign every comparison.
+pub fn run_view_from_messages(export: &MessagesExport, source: impl Into<String>) -> RunView {
+    let mut turns: Vec<TurnView> = Vec::new();
+    let mut task: Option<String> = None;
+
+    for message in &export.messages {
+        let role = message.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        let content = message
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or_default();
+        match role {
+            "user" => {
+                if task.is_none() && !content.is_empty() {
+                    task = Some(content.to_string());
+                } else if !content.is_empty()
+                    && let Some(turn) = turns.last_mut()
+                {
+                    turn.annotations
+                        .push(format!("user/env: {}", truncate(content, 120)));
+                }
+            }
+            "assistant" => {
+                let calls = message
+                    .get("tool_calls")
+                    .and_then(|c| c.as_array())
+                    .map(|list| {
+                        list.iter()
+                            .map(|call| CallView {
+                                name: call["function"]["name"]
+                                    .as_str()
+                                    .unwrap_or("unknown")
+                                    .to_string(),
+                                arguments: call["function"]["arguments"]
+                                    .as_str()
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                // Filled in by the tool messages that follow.
+                                ok: None,
+                                output: String::new(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                turns.push(TurnView {
+                    index: turns.len() as u32 + 1,
+                    text: (!content.is_empty()).then(|| content.to_string()),
+                    calls,
+                    finish_reason: None,
+                    annotations: Vec::new(),
+                });
+            }
+            "tool" => {
+                let name = message.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let is_error = message
+                    .get("is_error")
+                    .and_then(|e| e.as_bool())
+                    .unwrap_or(false);
+                if let Some(turn) = turns.last_mut() {
+                    // Match the call this answers: by id when the harness records one, else by
+                    // name against the first call still awaiting a result.
+                    let id = message.get("tool_call_id").and_then(|i| i.as_str());
+                    let index = turn
+                        .calls
+                        .iter()
+                        .position(|c| c.ok.is_none() && (id.is_none() || c.name == name))
+                        .or_else(|| turn.calls.iter().position(|c| c.ok.is_none()));
+                    if let Some(call) = index.map(|i| &mut turn.calls[i]) {
+                        call.ok = Some(!is_error);
+                        call.output = content.to_string();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    RunView {
+        source: source.into(),
+        run_id: export.session_id.clone(),
+        task,
+        turns,
+    }
+}
+
+/// Load any supported run — native trace or foreign export — into the neutral view.
+///
+/// Native is tried first because it is the richer record; anything that is not a `CoderTrace`
+/// falls through to foreign auto-detection.
+pub fn load_run_view(path: impl AsRef<Path>) -> Result<RunView, String> {
+    let path = path.as_ref();
+    let bytes = fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let raw: Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("parse {}: {e}", path.display()))?;
+
+    if let Ok(trace) = serde_json::from_value::<CoderTrace>(raw.clone()) {
+        return Ok(run_view_from_trace(&trace));
+    }
+    // Our own `.messages.json` export is already in the imported shape.
+    if let Ok(export) = serde_json::from_value::<MessagesExport>(raw.clone())
+        && !export.messages.is_empty()
+        && raw.get("info").is_none()
+    {
+        return Ok(run_view_from_messages(&export, "liberado-messages"));
+    }
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("imported")
+        .to_string();
+    let (format, export) = import_foreign_auto(&raw, stem)?;
+    Ok(run_view_from_messages(&export, format!("{format:?}")))
+}
+
+/// Where two runs stopped doing the same thing.
+///
+/// Alignment is over the **flattened tool-call sequence**, not the turn index. Turn boundaries are
+/// a harness's own bookkeeping — the Kilo CLI closes a separate assistant message for the final
+/// `stop`, so its turn 4 and our turn 4 are not the same moment — and aligning by ordinal would
+/// confidently compare unrelated steps. Call sequences are the thing both harnesses agree on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Divergence {
+    /// Number of leading tool calls that match by name.
+    pub common_calls: usize,
+    /// The turn each run was on when they parted, if either still had calls left.
+    pub a_turn: Option<u32>,
+    pub b_turn: Option<u32>,
+    /// What each did at that point — `None` when that run had simply stopped calling tools.
+    pub a_call: Option<String>,
+    pub b_call: Option<String>,
+}
+
+/// Flatten to `(turn index, call)` in issue order.
+fn call_sequence(run: &RunView) -> Vec<(u32, &CallView)> {
+    run.turns
+        .iter()
+        .flat_map(|t| t.calls.iter().map(move |c| (t.index, c)))
+        .collect()
+}
+
+pub fn diverge(a: &RunView, b: &RunView) -> Divergence {
+    let a_seq = call_sequence(a);
+    let b_seq = call_sequence(b);
+    let common = a_seq
+        .iter()
+        .zip(b_seq.iter())
+        .take_while(|((_, x), (_, y))| x.name == y.name)
+        .count();
+    Divergence {
+        common_calls: common,
+        a_turn: a_seq.get(common).map(|(t, _)| *t),
+        b_turn: b_seq.get(common).map(|(t, _)| *t),
+        a_call: a_seq.get(common).map(|(_, c)| c.name.clone()),
+        b_call: b_seq.get(common).map(|(_, c)| c.name.clone()),
+    }
+}
+
+/// The report: what both runs did in common, exactly where they parted, and what each did next.
+///
+/// Written to be read top-to-bottom by a person or a model answering one question — *why did this
+/// harness fail where that one did not* — so the shared prefix is compressed to one line per call
+/// and the divergence is printed in full, with arguments and output. The metric table in
+/// [`format_comparison`] answers a different question (how do two of **our** runs compare) and
+/// stays as it is.
+pub fn format_divergence(a: &RunView, b: &RunView) -> String {
+    let d = diverge(a, b);
+    let mut out = String::new();
+
+    out.push_str("# Run divergence\n\n");
+    for (label, run) in [("A", a), ("B", b)] {
+        out.push_str(&format!(
+            "{label}: {} [{}] — {} model turns, {} tool calls\n",
+            run.run_id,
+            run.source,
+            run.turns.len(),
+            call_sequence(run).len()
+        ));
+        out.push_str(&format!(
+            "   task: {}\n",
+            run.task
+                .as_deref()
+                .map(|t| truncate(t, 160))
+                .unwrap_or_else(|| "(not recorded)".into())
+        ));
+    }
+    out.push_str(
+        "\n(aligned on the tool-call sequence, not turn numbers — harnesses count turns differently)\n\n",
+    );
+
+    let a_seq = call_sequence(a);
+    let b_seq = call_sequence(b);
+
+    out.push_str(&format!("## Agreed for {} call(s)\n", d.common_calls));
+    if d.common_calls == 0 {
+        out.push_str("  (nothing in common — check these are the same task)\n");
+    }
+    for (i, (turn, call)) in a_seq.iter().take(d.common_calls).enumerate() {
+        let b_ok = b_seq.get(i).and_then(|(_, c)| c.ok);
+        out.push_str(&format!(
+            "  {:>3}. {} (A turn {}{}, B{})\n",
+            i + 1,
+            call.name,
+            turn,
+            fmt_ok(call.ok),
+            fmt_ok(b_ok),
+        ));
+    }
+    out.push('\n');
+
+    out.push_str("## Diverged\n");
+    match (&d.a_call, &d.b_call) {
+        (None, None) => out.push_str("  Both runs stopped calling tools at the same point.\n\n"),
+        _ => {
+            out.push_str(&format!(
+                "  after call {}: A did `{}`, B did `{}`\n\n",
+                d.common_calls,
+                d.a_call.as_deref().unwrap_or("(stopped)"),
+                d.b_call.as_deref().unwrap_or("(stopped)"),
+            ));
+        }
+    }
+
+    for (label, run, turn_no) in [("A", a, d.a_turn), ("B", b, d.b_turn)] {
+        out.push_str(&format!("### {label} from the divergence\n"));
+        let from = turn_no.unwrap_or_else(|| run.turns.last().map(|t| t.index).unwrap_or(0));
+        let tail: Vec<&TurnView> = run.turns.iter().filter(|t| t.index >= from).collect();
+        if tail.is_empty() {
+            out.push_str("  (no further turns)\n\n");
+            continue;
+        }
+        for turn in tail.iter().take(3) {
+            out.push_str(&format!("  turn {}", turn.index));
+            if let Some(reason) = &turn.finish_reason {
+                out.push_str(&format!(" [{reason}]"));
+            }
+            out.push('\n');
+            if let Some(text) = &turn.text {
+                for line in truncate(text, 600).lines() {
+                    out.push_str(&format!("    | {line}\n"));
+                }
+            }
+            for call in &turn.calls {
+                out.push_str(&format!(
+                    "    → {}{} {}\n",
+                    call.name,
+                    fmt_ok(call.ok),
+                    truncate(&call.arguments, 200)
+                ));
+                if !call.output.is_empty() {
+                    for line in truncate(&call.output, DIVERGENCE_OUTPUT_CHARS).lines() {
+                        out.push_str(&format!("      {line}\n"));
+                    }
+                }
+            }
+            for note in &turn.annotations {
+                out.push_str(&format!("    !! {note}\n"));
+            }
+        }
+        let shown = tail.len().min(3);
+        if tail.len() > shown {
+            out.push_str(&format!("  … {} more turn(s)\n", tail.len() - shown));
+        }
+        out.push('\n');
+    }
+
+    // Asymmetric by nature, and the most likely answer to "why did ours stop": the other harness
+    // has no equivalent mechanism, so there is nothing to line these up against.
+    for (label, run) in [("A", a), ("B", b)] {
+        let notes: Vec<String> = run
+            .turns
+            .iter()
+            .flat_map(|t| {
+                t.annotations
+                    .iter()
+                    .filter(|n| n.starts_with("guard "))
+                    .map(move |n| format!("  turn {}: {n}\n", t.index))
+            })
+            .collect();
+        if !notes.is_empty() {
+            out.push_str(&format!("## {label} harness interventions\n"));
+            out.push_str(&notes.concat());
+            out.push('\n');
+        }
+    }
+
+    out
+}
+
+fn fmt_ok(ok: Option<bool>) -> String {
+    match ok {
+        Some(true) => " ok".into(),
+        Some(false) => " FAILED".into(),
+        None => "".into(),
+    }
+}
+
 // ── Foreign import ──────────────────────────────────────────────────────────
 
 /// Known foreign harness formats the importer understands.
@@ -1619,6 +2076,168 @@ mod tests {
         assert!(
             !report.contains("First successful mutation (turn)\n  A: 3"),
             "report must not name a turn it cannot know:\n{report}"
+        );
+    }
+
+    // ── Cross-harness run view + divergence ─────────────────────────────────
+
+    /// A trace's call sequence must be what the *model asked for*, not what the runtime happened to
+    /// trace. `scratchpad_write` emits no `ToolStarted`/`ToolFinished` at all — five of thirty-five
+    /// calls in the real trace on disk — so a sequence built from tool events alone drops them and
+    /// shifts every later alignment by one.
+    #[test]
+    fn run_view_keeps_calls_that_emitted_no_tool_events() {
+        let t = trace_with(
+            "untraced",
+            "do the thing",
+            vec![
+                // Requested, and it produces no tool events (as scratchpad_write does not).
+                turn(
+                    1,
+                    Some("note it"),
+                    &["scratchpad_write"],
+                    &["scratchpad_write"],
+                ),
+                turn(2, Some("now read"), &["read_file"], &["read_file"]),
+                tool("read_file", true, "fn main() {}"),
+            ],
+        );
+
+        let view = run_view_from_trace(&t);
+        let names: Vec<&str> = view
+            .turns
+            .iter()
+            .flat_map(|turn| turn.calls.iter().map(|c| c.name.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            vec!["scratchpad_write", "read_file"],
+            "an untraced call is still a call the model made: {view:#?}"
+        );
+        assert_eq!(
+            view.turns[0].calls[0].ok, None,
+            "and it is honestly marked as having no recorded result"
+        );
+        assert_eq!(view.turns[1].calls[0].ok, Some(true));
+        assert_eq!(view.turns[1].calls[0].output, "fn main() {}");
+        assert_eq!(
+            view.turns[1].calls.len(),
+            1,
+            "the result fills the seeded call rather than duplicating it"
+        );
+    }
+
+    /// The alignment rule itself, on the case that distinguishes it: two runs that make the *same
+    /// two calls* but package them into different numbers of turns.
+    ///
+    /// This is not hypothetical — the Kilo CLI closes a separate assistant message for its final
+    /// `stop`, and our runs batch parallel calls into one turn, so turn *N* on one side is
+    /// routinely not turn *N* on the other. Aligning by turn index reports these two runs as
+    /// diverging after one call when they in fact agreed on both, which is a wrong answer
+    /// delivered confidently. The two runs are constructed rather than loaded because the point is
+    /// to isolate the rule; the end-to-end path is covered against a real export separately.
+    #[test]
+    fn alignment_is_by_call_sequence_not_turn_index() {
+        let call = |name: &str| CallView {
+            name: name.into(),
+            arguments: String::new(),
+            ok: Some(true),
+            output: String::new(),
+        };
+        let turn_with = |index: u32, calls: Vec<CallView>| TurnView {
+            index,
+            text: None,
+            calls,
+            finish_reason: None,
+            annotations: Vec::new(),
+        };
+
+        // Both did `read` then `search` — one in a single batched turn, the other one per turn.
+        let batched = RunView {
+            source: "liberado".into(),
+            run_id: "batched".into(),
+            task: Some("same task".into()),
+            turns: vec![
+                turn_with(1, vec![call("read"), call("search")]),
+                turn_with(2, vec![call("run_command")]),
+            ],
+        };
+        let sequential = RunView {
+            source: "KiloCli".into(),
+            run_id: "sequential".into(),
+            task: Some("same task".into()),
+            turns: vec![
+                turn_with(1, vec![call("read")]),
+                turn_with(2, vec![call("search")]),
+                turn_with(3, vec![call("edit")]),
+            ],
+        };
+
+        let d = diverge(&batched, &sequential);
+        assert_eq!(
+            d.common_calls, 2,
+            "both agreed on `read` then `search`; only the turn packaging differs: {d:?}"
+        );
+        assert_eq!(d.a_call.as_deref(), Some("run_command"));
+        assert_eq!(d.b_call.as_deref(), Some("edit"));
+        // And the turns reported are each run's own numbering at that point, which differ.
+        assert_eq!(d.a_turn, Some(2));
+        assert_eq!(d.b_turn, Some(3));
+    }
+
+    /// The cross-harness path end to end, with a real `kilo export` on one side: alignment is by
+    /// call sequence, and the report names where the two parted and what each did next.
+    #[test]
+    fn divergence_aligns_by_call_sequence_across_harnesses() {
+        let ours = run_view_from_trace(&trace_with(
+            "ours",
+            "read hello.txt",
+            vec![
+                turn(1, Some("read it"), &["read"], &["read"]),
+                tool("read", true, "liberado"),
+                // Where we go wrong: a second call the other harness never makes.
+                turn(2, Some("check again"), &["run_command"], &["run_command"]),
+                tool("run_command", false, "error: could not compile"),
+                CoderEvent::LoopGuardTriggered {
+                    guard: "read_only_stall".into(),
+                    action: "withdraw write_file".into(),
+                    at: Utc::now(),
+                },
+            ],
+        ));
+
+        let kilo: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/kilo-cli-export-read-ok.json"
+        ))
+        .expect("fixture parses");
+        let (_, export) = import_foreign_auto(&kilo, "kilo").expect("import");
+        let theirs = run_view_from_messages(&export, "KiloCli");
+
+        let d = diverge(&ours, &theirs);
+        assert_eq!(
+            d.common_calls, 1,
+            "both ran `read` first, so the shared prefix is one call: {d:?}"
+        );
+        assert_eq!(d.a_call.as_deref(), Some("run_command"));
+        assert_eq!(
+            d.b_call, None,
+            "the other harness simply stopped calling tools"
+        );
+
+        let report = format_divergence(&ours, &theirs);
+        assert!(report.contains("Agreed for 1 call(s)"), "{report}");
+        assert!(
+            report.contains("error: could not compile"),
+            "the failing output is the answer to 'why did ours fail' and must be in the report: \
+             {report}"
+        );
+        assert!(
+            report.contains("guard read_only_stall"),
+            "a harness intervention with no counterpart is the likeliest cause, not noise: {report}"
+        );
+        assert!(
+            report.contains("liberado") && report.contains("KiloCli"),
+            "both sources named so a reader can tell which side is which: {report}"
         );
     }
 

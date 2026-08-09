@@ -6,8 +6,9 @@
 use std::path::{Path, PathBuf};
 
 use liberado_coder_core::{
-    ForeignTraceFormat, compare_traces, format_comparison, import_foreign_file, load_trace,
-    render_transcript, resolve_trace_path, write_messages_export,
+    ForeignTraceFormat, compare_traces, diverge, format_comparison, format_divergence,
+    import_foreign_file, load_run_view, load_trace, render_transcript, resolve_trace_path,
+    write_messages_export,
 };
 
 /// Default directories searched when resolving a session id (cwd-relative + common local path).
@@ -23,6 +24,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::er
     match args.next().as_deref() {
         Some("trace") => cmd_trace(&mut args),
         Some("compare") => cmd_compare(&mut args),
+        Some("diff") => cmd_diff(&mut args),
         Some("import") => cmd_import(&mut args),
         Some(other) => Err(format!("unknown coder subcommand '{other}'\n{}", usage()).into()),
         None => Err(usage().into()),
@@ -33,6 +35,7 @@ fn usage() -> &'static str {
     "usage:\n  \
      liberado coder trace <session-id|path> [--dir <trace-dir>] [--path <file>]\n  \
      liberado coder compare <trace-a> <trace-b> [--dir <trace-dir>] [--json]\n  \
+     liberado coder diff <run-a> <run-b> [--json]   cross-harness: where two runs parted\n  \
      liberado coder import <foreign.json> [-o <out.messages.json>] [--format kilo|kilo-cli|openhands|auto] [--session-id <id>]"
 }
 
@@ -118,6 +121,53 @@ fn cmd_compare(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std
         println!("{}", serde_json::to_string_pretty(&comparison)?);
     } else {
         print!("{}", format_comparison(&comparison));
+    }
+    Ok(())
+}
+
+/// `liberado coder diff <a> <b>` — the cross-harness question: same task, two harnesses, where did
+/// they stop doing the same thing and what did each do next.
+///
+/// Takes anything either side writes: a native `coder-traces/*.json`, our `.messages.json`, a
+/// `kilo export`, a Kilo extension `api_conversation_history.json`, an OpenHands trajectory. Paths
+/// are used as given — unlike `compare`, there is no session-id resolution, because the foreign
+/// side does not live in `coder-traces/`.
+fn cmd_diff(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut as_json = false;
+
+    for arg in &mut *args {
+        match arg.as_str() {
+            "--json" => as_json = true,
+            "-h" | "--help" => {
+                println!("{}", usage());
+                return Ok(());
+            }
+            other if other.starts_with('-') => {
+                return Err(format!("unknown flag for coder diff: {other}").into());
+            }
+            other => paths.push(PathBuf::from(other)),
+        }
+    }
+
+    if paths.len() != 2 {
+        return Err("usage: liberado coder diff <run-a> <run-b>".into());
+    }
+
+    let a = load_run_view(&paths[0])?;
+    let b = load_run_view(&paths[1])?;
+
+    if as_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "a": a,
+                "b": b,
+                "divergence": diverge(&a, &b),
+            }))?
+        );
+    } else {
+        print!("{}", format_divergence(&a, &b));
     }
     Ok(())
 }
