@@ -1,6 +1,6 @@
 # Backlog — pick from here, scope it yourself
 
-Maintained 2026-08-03. **This is the direction; you choose the shape.** Take the highest item you
+Maintained 2026-08-09. **This is the direction; you choose the shape.** Take the highest item you
 can do well, scope it, open a PR. One item per PR.
 
 Items are ordered within each band. Bands matter more than positions inside them.
@@ -135,8 +135,8 @@ report was **not** reproducible and is recorded at the bottom so nobody re-opens
 | # | What | Size | Pointer |
 |---|---|---|---|
 | **E1** | **Per-schedule turn budget.** `DIRECT_MAX_TURNS` (4) and the subagent default (8) are compile-time; a schedule can neither raise them nor choose which path it lands on — the dispatcher picks `ExecuteDirect` vs `DispatchSubagent` from goal phrasing. Observed live: an inbox goal spent all 4 turns on vault reads and filed nothing. Wants `max_turns: Option<u32>` on `Schedule`, plumbed through `budget_for(depth)`. | medium | `crates/orchestrator/src/lib.rs` (`budget_for`) |
-| **E2** | **Implement the inbox layer.** Design settled 2026-08-08 (`inbox-spec.md` §14): two capture surfaces (pinned widget file + folder), compare-and-swap clearing, and a hybrid trigger where the flag routes ownership — unflagged notes belong to the schedule, `#now` notes to the watcher. Human-vs-agent attribution and content-hash idempotency already exist and the design leans on both. **Blocked on E3** (see below). | large | [`../spec/inbox-spec.md`](../spec/inbox-spec.md) §14 |
-| **E3** | **Watcher ignore list.** `inbox_ignore_globs` has no wired equivalent, so the generic vault-watch reaction fires on `Inbox/` writes *alongside* any ingestion schedule — the same capture is processed twice. **Prerequisite for E2**: without it you debug double-processing and the new pipeline simultaneously. Small and independent — do it first. | small | `crates/daemon/src/vault_source.rs` |
+| **E2** | **Implement the inbox layer.** Design settled 2026-08-08 (`inbox-spec.md` §14): two capture surfaces (pinned widget file + folder), compare-and-swap clearing, and a hybrid trigger where the flag routes ownership — unflagged notes belong to the schedule, `#now` notes to the watcher. Human-vs-agent attribution and content-hash idempotency already exist and the design leans on both. **Was blocked on E3**, which is implemented in PR #90 — unblocked once that merges. | large | [`../spec/inbox-spec.md`](../spec/inbox-spec.md) §14 |
+| **E3** | ~~**Watcher ignore list.**~~ **PR #90 — agent-authored, CI green, awaiting review.** `inbox_ignore_globs` has no wired equivalent, so the generic vault-watch reaction fires on `Inbox/` writes *alongside* any ingestion schedule — the same capture is processed twice. **Prerequisite for E2**: without it you debug double-processing and the new pipeline simultaneously. Small and independent — do it first. | small | `crates/daemon/src/vault_source.rs` |
 | **E4** | **turbovault cannot enumerate a directory** (turbovault repo, not this one). `query_frontmatter_sql` needs the `sql` feature compiled in; `advanced_search` takes `exclude_paths` but no positive path scope; `get_notes_info` needs paths you already have. So "process everything in this folder" is not expressible. Any one of: enable `sql` in the homelab image, add `path_prefix` to `advanced_search`, or add `list_notes(path)`. | medium | turbovault `crates/turbovault-tools/src/search_engine.rs` |
 | **E5** | **SSE reconnect storm.** `turbomcp_http::transport` logs read-error → stream-ended → reconnect in a tight loop: ~93.5k occurrences in 24h, ~50/min while idle. Survivable, but it evicts real diagnostics under log rotation. Likely a turbomcp keepalive/EOF issue. | medium | turbomcp |
 
@@ -197,6 +197,62 @@ Crates in there that map onto items below, so nobody reads the whole 94 MB:
 | **C5** | **Turn on the completion gate and measure it.** S1 is default-off pending S7 because it costs `1 + fresh_reviewers` model calls per attempt. With `liberado-cost --json` that price is now measurable — run a handful of tasks with it on and off. | `[coder.gate] enabled` |
 | **C6** | **Repo map / context selection** — the biggest context lever, and we have nothing equivalent. **Split the seam on the way in**: "rank and select the relevant context for a goal" is general and belongs in the kernel — a research or vault pack wants exactly that — while "walk a source tree and build a symbol graph" is coding and belongs in `coder-*`. Build it whole inside the pack and the next pack rebuilds the ranking half. Read `xai-codebase-graph` first. **This item is both the highest-leverage coding work and the most likely duplication source**; get the seam right rather than fixing it later. | kernel + `crates/coder-*` |
 | **C7** | **Use the isolation #58 unblocked.** `dispatch_parallel` is built and unreachable; `delegate` is synchronous. Scope one of them onto `WorktreeWorkspace` rather than both. **Placement check while you are there:** `WorktreeWorkspace` lives in `coder-sandbox` (pack), but "give a parallel worker an isolated workspace" is general and `dispatch_parallel` is kernel-side. If the orchestrator needs it, it is on the wrong side of the line — say so rather than reaching across. | `crates/orchestrator/`, `crates/coder-agent/` |
+
+## Band F — harness observability and the delegation split (2026-08-09)
+
+Six coding runs of one task (E3) produced zero files for four of them, then a complete, compiling,
+tested implementation on the sixth: PR #90, the first agent-authored PR here. The model was never
+the limit. Five harness defects were, and the fixes are on `main` (#91).
+
+**The pattern behind almost all of them.** A config value parses, validates, and reaches nothing,
+because a consumer hardcodes a literal instead of reading it. Seven instances are now known, and
+each was invisible until someone ran the thing and asked why a setting had no effect:
+
+| shadowed | consumer that hardcoded it |
+|---|---|
+| coder role model | PR #89 |
+| `[coder.gate]` | PR #87 |
+| `[coder.coder]` | PR #88 |
+| `[coder.progress]` | `session_pack/build.rs` |
+| `read_only_turn_limit` | `coder-runner` pinned 6 over the shared default |
+| gate `enabled` | `coder-runner/src/main.rs:212` — still hardcoded `false`, not yet fixed |
+| `trace_dir` | every production call site, so the trace facility had never written a file |
+
+**F5 exists to make the eighth impossible**, and is the highest-value item in this band.
+
+### Routing: which model gets which item
+
+Delegation is not one queue. Two models, two shapes of work, based on what each has actually done
+here rather than on benchmarks:
+
+**Grok Build → build-out where the functional result is self-evident.** It is strong at probing a
+space and producing something that runs. It is weak at delivering *exactly* the thing asked for, so
+give it work where "did it do the right thing" is answerable by running it and looking, not by
+diffing against a spec. Review cost is the selection criterion.
+
+**DeepSeek → focused items with exact pointers.** It landed E3 correctly — right file, right
+function, right drop mechanism, Windows path normalization unprompted — when the task named files
+and functions. Given a vaguer prompt on the same day it wrote
+`fn job_is_build_like(..) -> bool { true }` and a comment justifying why the constant was fine. The
+difference was the pointers, not the model. **Name the file and the function, or expect a stub.**
+
+Neither is a reason to skip review: the harness now writes a trace per run
+(`[coder] trace_formats`), so start a review by reading it rather than by re-deriving what happened.
+
+> **Grok Build capacity expires 2026-08-10.** F1–F4 are sized to be spent before then. If it lapses,
+> they are still worth doing — they just lose their reason to jump the queue.
+
+| # | What | Size | → |
+|---|---|---|---|
+| **F1** | **`liberado coder trace <session-id>`** — render a trace as a turn-by-turn transcript: prompt → tools offered → model text → calls → results → guard events. The data is already written; nothing exists to read it but `python -c`. **Self-evidently correct or not:** run it against `coder-traces/*.json` and look at the output. | small | Grok |
+| **F2** | **Run-comparison report.** Two traces in, one table out: turns used, tools offered per turn, refused calls, turn of first successful mutation, terminal cause. This is the metric set that would have caught every bug in #91 — "did it finish" would have caught none of them. | medium | Grok |
+| **F3** | **Foreign-trace importer.** Read Kilo Code's `api_conversation_history.json` (`~/.config/kilo/…/tasks/<id>/`) and an OpenHands trajectory, emit our `.messages.json` shape. Makes F2 work across harnesses, which is the whole point of the A/B: same task, same model, different harness. | medium | Grok |
+| **F4** | **Stuck-session panel in the WebUI.** List `parked` sessions with age and a cancel control. Four orphaned parked sessions — two of them days old — silently blocked the PR shepherd against `MAX_CONCURRENT=2`, and every pass logged `deferred: at concurrency cap` where nobody was looking. Visible list, obvious fix. | medium | Grok |
+| **F5** | **Make a shadowed config value fail the build.** A test that walks `CoderTuning`'s fields and asserts each reaches `CoderRunConfig` — or an equivalent that makes the table above impossible to extend. Seven instances is a pattern, not a run of bad luck, and every one shipped green. State the mechanism you chose and what it cannot catch. | medium | DeepSeek |
+| **F6** | **Preserve work on signal.** `preserve_work` (coder-runner) commits the run's output to `agent/<slug>-<stamp>` after a normal return, so a SIGTERM'd run preserves nothing — exactly the case it was written for. A run killed at a 10-minute cap left seven modified files uncommitted. Wants a signal handler, or a periodic checkpoint. | small | DeepSeek |
+| **F7** | **Reconcile orphaned parked sessions at daemon startup.** `parked` persists in the store; the live hub does not survive a restart. The session is then unresumable *and* uncancellable — `/cancel` answers `"not found or already finished"` — and holds a concurrency slot forever. Shepherd-side mitigation landed (`57bfc1a`); the daemon-side bug is untouched. | medium | DeepSeek |
+| **F8** | **`ModelRequestSent` event.** `TurnRecord` records the tool catalog at *response* time. Recording it at request time, with a hash of the system prompt actually sent, closes the last "what did the model see" gap — prompt-vs-`prompt_path` resolution is still invisible. | small | DeepSeek |
+| **F9** | **Cap concurrent background commands.** One build-like program at a time, two background jobs total, refused in band. A run launched nine concurrent `cargo` builds and filled a 476 GB disk. **In flight** — do not take. | medium | DeepSeek |
 
 ## Band D — breadth, low risk
 

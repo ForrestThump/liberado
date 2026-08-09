@@ -264,6 +264,14 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
         .map_err(|error| format!("serialize coder result: {error}"))?;
     println!("{json}");
 
+    // Preserve the work before anything else can lose it. A run's output lived only as dirty
+    // files in a scratch directory, so deleting that directory destroyed it — which is exactly what
+    // happened to one completed run. A commit is durable even when the workspace is a git worktree
+    // that later disappears, because the commit and the branch ref go to the *shared* object store.
+    if let Err(error) = preserve_work(&workspace, "task-1", push_enabled()).await {
+        tracing::warn!(%error, "preserving the run's work failed; the workspace is still on disk");
+    }
+
     if let Some(ref sid) = session_id
         && result.outcome == Outcome::Succeeded
     {
@@ -829,6 +837,97 @@ fn resolve_trace_dir(workspace: &Path, configured: Option<&str>) -> String {
     } else {
         workspace.join(path).to_string_lossy().to_string()
     }
+}
+
+
+/// Commit whatever the run produced to a branch, and optionally push it.
+///
+/// Committing is unconditional and local. A worktree's commits and its branch ref are written to
+/// the shared `.git`, not to the worktree directory, so the work survives that directory being
+/// deleted — which is how a finished run was lost, its output existing only as uncommitted files
+/// in a scratch dir that got swept.
+///
+/// Pushing is opt-in (`--push`) because it is outward-facing: it publishes to a shared remote,
+/// where a half-finished agent branch is visible to everyone and cannot be quietly un-published.
+/// Local commit alone already removes the data-loss risk, so the default does the safe thing and
+/// the network action stays a deliberate choice.
+///
+/// Never fatal. The run's result is what the caller came for, and failing it over a git problem
+/// would discard a successful run to report a bookkeeping error.
+async fn preserve_work(workspace: &Path, task_id: &str, push: bool) -> Result<(), String> {
+    let dirty = git_output(workspace, &["status", "--porcelain"]).await?;
+    if dirty.trim().is_empty() {
+        tracing::info!("no changes to preserve");
+        return Ok(());
+    }
+
+    let slug: String = task_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    let branch = format!("agent/{}-{stamp}", slug.trim_matches('-'));
+
+    git_output(workspace, &["checkout", "-b", &branch]).await?;
+    git_output(workspace, &["add", "-A"]).await?;
+    // Identity is set explicitly: `user.email`/`user.name` exist on every dev machine and on no
+    // CI runner, so relying on ambient config passes locally and fails in the unattended case
+    // this whole function exists to protect.
+    git_output(
+        workspace,
+        &[
+            "-c",
+            "user.name=liberado-coder",
+            "-c",
+            "user.email=coder@liberado.local",
+            "commit",
+            "-m",
+            &format!("wip({slug}): agent run output
+
+Uncommitted output of an unattended coding run, committed so it survives the workspace."),
+        ],
+    )
+    .await?;
+    tracing::info!(%branch, "committed the run's work");
+
+    if push {
+        match git_output(workspace, &["push", "-u", "origin", &branch]).await {
+            Ok(_) => tracing::info!(%branch, "pushed"),
+            Err(error) => tracing::warn!(%branch, %error, "push failed; the commit is safe locally"),
+        }
+    }
+    Ok(())
+}
+
+/// Whether to push the preservation branch. Opt-in via `LIBERADO_CODER_PUSH=1`.
+///
+/// An env var rather than a flag so the unattended callers (shepherd, cron, CI) can turn it on for
+/// a whole environment without every call site growing an argument, and so the default stays local.
+fn push_enabled() -> bool {
+    matches!(
+        env::var("LIBERADO_CODER_PUSH").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
+async fn git_output(workspace: &Path, args: &[&str]) -> Result<String, String> {
+    let out = tokio::process::Command::new("git")
+        .current_dir(workspace)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| format!("git {}: {e}", args.join(" ")))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
 #[cfg(test)]
