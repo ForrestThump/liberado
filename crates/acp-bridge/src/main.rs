@@ -10,24 +10,31 @@
 //! | `session/prompt` | User turn; streams `session/update` chunks |
 //! | `session/cancel` | Abort the in-flight turn (notification) |
 //! | `session/load` | Not advertised (`loadSession: false`) until history is durable |
-//! | `session/set_mode` | Accepted no-op |
+//! | `session/set_mode` | Switch coding / chat / face (Liberado-owned; one Paseo provider) |
 //! | `session/set_model` | Hot-swap the active model (must be in the live catalog) |
 //!
-//! Usage (spawned by Paseo):
+//! Modes (same process; switch via ACP or `--mode` / `LIBERADO_ACP_MODE`):
+//! - **coding** — full coding pack + durable worktrees (default)
+//! - **chat** — in-process conversation (no tools, no daemon)
+//! - **face** — daemon face agent (`liberado serve`; vault + delegate)
+//!
+//! Usage (spawned by Paseo — one provider is enough):
 //! ```text
 //! liberado-acp
+//! liberado-acp --mode chat
+//! liberado-acp --mode face
 //! ```
 //!
 //! Environment:
-//! - `OPENROUTER_API_KEY` / `DEEPSEEK_API_KEY` / `OPENAI_API_KEY` (any combination —
-//!   models from every configured backend appear in the picker)
-//! - `LIBERADO_ACP_MODEL` — initial catalog id (`openrouter::deepseek/deepseek-v4-pro` or a raw id)
-//! - `LIBERADO_ACP_MAX_TURNS` — model turns **per user message** (default 50; executor default is 8)
-//! - `LIBERADO_CONFIG_DIR` — optional Liberado config (topology provider)
-//! - `LIBERADO_ACP_SYSTEM_PROMPT` — optional system prompt override
+//! - `OPENROUTER_API_KEY` / `DEEPSEEK_API_KEY` / `OPENAI_API_KEY`
+//! - `LIBERADO_ACP_MODE` — default mode (`coding` \| `chat` \| `face`)
+//! - `LIBERADO_ACP_MODEL` — initial model id
+//! - `LIBERADO_ACP_MAX_TURNS` — turns **per user message** (default 50)
+//! - `LIBERADO_CONFIG_DIR` — optional Liberado config (topology + `[coder]` tuning)
+//! - `LIBERADO_ACP_SYSTEM_PROMPT` — optional chat system prompt override
+//! - `LIBERADO_SERVER` — face-mode daemon base URL (default `http://127.0.0.1:4201`)
 //!
-//! Model catalog: live `GET /models` from **every** backend with a key, A–Z by display name.
-//! Catalog ids are `backend::raw` (e.g. `openrouter::deepseek/deepseek-v4-pro`) so backends never collide.
+//! Model catalog: live `GET /models` from the configured backend, A–Z by id.
 
 use std::{
     collections::HashMap,
@@ -36,9 +43,10 @@ use std::{
 };
 
 mod coding_run;
+mod face_client;
+mod mode;
 
-use liberado_coder_core::{CommandPolicy, PathPolicy};
-use liberado_coder_tools::CodingToolRuntime;
+use mode::AgentMode;
 use liberado_executor::{AgentEvent, Budget, Executor, ToolRuntime};
 use liberado_main_agent::{Conversation, DEFAULT_SYSTEM_PROMPT};
 use liberado_provider::{
@@ -57,9 +65,6 @@ const PROTOCOL_VERSION: u32 = 1;
 /// replay exist (integration roadmap P3); true made Paseo resume into an empty transcript.
 const LOAD_SESSION_CAPABILITY: bool = false;
 
-/// Separator between backend name and raw model id in catalog `modelId` values.
-const MODEL_ID_SEP: &str = "::";
-
 /// Default raw model when OpenRouter is among configured backends.
 const OPENROUTER_DEFAULT_RAW: &str = "deepseek/deepseek-v4-pro";
 const DEEPSEEK_DEFAULT_RAW: &str = "deepseek-chat";
@@ -70,9 +75,6 @@ const OPENROUTER_FALLBACK_RAW: &[&str] =
     &["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"];
 const DEEPSEEK_FALLBACK_RAW: &[&str] = &["deepseek-chat", "deepseek-reasoner"];
 const OPENAI_FALLBACK_RAW: &[&str] = &["gpt-4o-mini", "gpt-4o"];
-
-/// Per-user-message executor turn budget (not lifetime conversation). Executor default is 8.
-const DEFAULT_ACP_MAX_TURNS: u32 = 50;
 
 // ── JSON-RPC framing ────────────────────────────────────────────────────────
 
@@ -120,19 +122,30 @@ struct CatalogModel {
     description: String,
 }
 
+/// Per-ACP-session state (mode + engine-specific handles).
+struct AcpSession {
+    mode: AgentMode,
+    cwd: PathBuf,
+    coding: coding_run::CodingSessionState,
+    /// In-process chat (mode=chat).
+    chat: Option<Arc<SessionHandle>>,
+    /// Daemon conversation id (mode=face).
+    face_daemon_session: Option<String>,
+}
+
 struct Bridge {
     provider: Arc<dyn Provider>,
     /// Inference backend label (`openrouter` | `deepseek` | `openai` | …).
     backend: String,
     catalog: Mutex<Vec<CatalogModel>>,
     current_model: Mutex<String>,
+    /// Default mode for new sessions (`--mode` / `LIBERADO_ACP_MODE`).
+    default_mode: AgentMode,
     /// Coder-role max_turns for the full coding pack (not face Budget::default()=8).
     max_turns: u32,
     coder_tuning: liberado_coder_core::CoderTuning,
-    /// ACP session id → coding pack state (worktree id, prior feedback).
-    coding_sessions: Mutex<HashMap<String, coding_run::CodingSessionState>>,
-    /// Legacy hybrid chat sessions (unused when coding pack path is active).
-    sessions: Mutex<HashMap<String, Arc<SessionHandle>>>,
+    /// ACP session id → mode + engine state.
+    acp_sessions: Mutex<HashMap<String, AcpSession>>,
 }
 
 struct SessionHandle {
@@ -181,6 +194,9 @@ async fn main() {
 
 /// Process non-ACP CLI flags. Returns `Some(exit_code)` when the process should exit
 /// without entering the stdio agent loop; `None` means continue as an ACP agent.
+/// Process CLI flags. Sets `LIBERADO_ACP_MODE` when `--mode` is passed so
+/// [`AgentMode::from_env_or_default`] sees it. Returns `Some(exit)` only for
+/// version/help/error — mode alone continues into the ACP loop.
 fn handle_cli_args<I, S>(args: I) -> Option<i32>
 where
     I: IntoIterator<Item = S>,
@@ -190,38 +206,76 @@ where
     if args.is_empty() {
         return None;
     }
-    match args[0].as_str() {
-        "--version" | "-V" | "version" => {
-            // Version probe writes to stdout (what `exec … --version` captures).
-            println!("liberado-acp {}", env!("CARGO_PKG_VERSION"));
-            Some(0)
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--version" | "-V" | "version" => {
+                println!("liberado-acp {}", env!("CARGO_PKG_VERSION"));
+                return Some(0);
+            }
+            "--help" | "-h" | "help" => {
+                print_help();
+                return Some(0);
+            }
+            "--mode" | "-m" => {
+                let val = args.get(i + 1).map(|s| s.as_str()).unwrap_or("");
+                if AgentMode::parse(val).is_none() {
+                    eprintln!(
+                        "liberado-acp: unknown mode '{val}' (expected coding|chat|face)"
+                    );
+                    return Some(2);
+                }
+                // SAFETY: single-threaded startup before the async runtime; process default only.
+                unsafe {
+                    std::env::set_var("LIBERADO_ACP_MODE", val);
+                }
+                i += 2;
+                continue;
+            }
+            other if other.starts_with("--mode=") => {
+                let val = other.trim_start_matches("--mode=");
+                if AgentMode::parse(val).is_none() {
+                    eprintln!(
+                        "liberado-acp: unknown mode '{val}' (expected coding|chat|face)"
+                    );
+                    return Some(2);
+                }
+                unsafe {
+                    std::env::set_var("LIBERADO_ACP_MODE", val);
+                }
+                i += 1;
+                continue;
+            }
+            other if other.starts_with('-') => {
+                eprintln!("liberado-acp: unknown option '{other}'. Try --help.");
+                return Some(2);
+            }
+            _ => {
+                i += 1;
+            }
         }
-        "--help" | "-h" | "help" => {
-            print_help();
-            Some(0)
-        }
-        other if other.starts_with('-') => {
-            eprintln!("liberado-acp: unknown option '{other}'. Try --help.");
-            Some(2)
-        }
-        // Positional args are not used; ignore and enter ACP mode for forward-compat.
-        _ => None,
     }
+    None
 }
 
 fn print_help() {
     println!(
-        "liberado-acp {} — Liberado ACP coding agent (stdio JSON-RPC for Paseo)\n\n\
+        "liberado-acp {} — Liberado multi-mode ACP agent for Paseo\n\n\
          Usage:\n\
-           liberado-acp              Speak ACP on stdin/stdout (spawned by Paseo)\n\
-           liberado-acp --version    Print version and exit\n\
-           liberado-acp --help       Show this help\n\n\
+           liberado-acp [--mode coding|chat|face]   ACP on stdin/stdout\n\
+           liberado-acp --version\n\
+           liberado-acp --help\n\n\
+         Modes (Liberado-owned; also switchable via ACP session/set_mode):\n\
+           coding  Full coding pack + worktrees (default)\n\
+           chat    In-process conversation (no daemon)\n\
+           face    Daemon face agent — needs liberado serve (LIBERADO_SERVER)\n\n\
          Environment:\n\
            OPENROUTER_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY\n\
+           LIBERADO_ACP_MODE           default mode (coding|chat|face)\n\
            LIBERADO_ACP_MODEL          initial model id\n\
-           LIBERADO_ACP_MAX_TURNS      coder role turns per prompt (default 50)\n\
-           LIBERADO_CONFIG_DIR         Liberado config (loads [coder] tuning)\n\
-           LIBERADO_ACP_SYSTEM_PROMPT  unused for coding pack path (kept for hybrid fallback)",
+           LIBERADO_ACP_MAX_TURNS      coder turns per prompt (default 50)\n\
+           LIBERADO_CONFIG_DIR         Liberado config ([coder] tuning)\n\
+           LIBERADO_SERVER             face mode daemon URL (default http://127.0.0.1:4201)",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -235,6 +289,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await;
     let max_turns = coding_run::max_turns_from_env();
+    let default_mode = AgentMode::from_env_or_default();
     let config_dir = std::env::var_os("LIBERADO_CONFIG_DIR").map(PathBuf::from);
     let coder_tuning = coding_run::load_coder_tuning(config_dir.as_deref());
     tracing::info!(
@@ -242,17 +297,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         current = %resolved.model_id,
         catalog_len = catalog.len(),
         max_turns,
-        "acp coding pack ready"
+        mode = %default_mode.id(),
+        "acp multi-mode agent ready"
     );
     let bridge = Arc::new(Bridge {
         provider: resolved.provider,
         backend: resolved.backend,
         catalog: Mutex::new(catalog),
         current_model: Mutex::new(resolved.model_id),
+        default_mode,
         max_turns,
         coder_tuning,
-        coding_sessions: Mutex::new(HashMap::new()),
-        sessions: Mutex::new(HashMap::new()),
+        acp_sessions: Mutex::new(HashMap::new()),
     });
 
     let stdin = BufReader::new(tokio::io::stdin());
@@ -600,10 +656,17 @@ async fn handle_notification(bridge: Arc<Bridge>, method: &str, params: Value) {
             if sid.is_empty() {
                 return;
             }
-            let sessions = bridge.sessions.lock().await;
-            if let Some(session) = sessions.get(sid) {
-                let _ = session.cancel_tx.send(true);
-                tracing::info!(session_id = %sid, "session/cancel requested");
+            let sessions = bridge.acp_sessions.lock().await;
+            if let Some(sess) = sessions.get(sid) {
+                // Chat turns honour cancel via watch; coding/face finish their current work.
+                if let Some(chat) = &sess.chat {
+                    let _ = chat.cancel_tx.send(true);
+                }
+                tracing::info!(
+                    session_id = %sid,
+                    mode = %sess.mode.id(),
+                    "session/cancel requested"
+                );
             }
         }
         other => tracing::debug!(method = %other, "acp notification ignored"),
@@ -623,7 +686,7 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                 "agentInfo": {
                     "name": "Liberado",
                     "version": env!("CARGO_PKG_VERSION"),
-                    "title": "Liberado Coding Agent",
+                    "title": "Liberado (coding · chat · face)",
                 },
                 // loadSession stays false until durable history + replay ship (P3).
                 // Advertising true made Paseo take the resume path and get an empty transcript.
@@ -653,34 +716,40 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
             let sid = new_session_id();
-            // Coding pack session state (worktree id reused across prompts in this ACP session).
-            bridge.coding_sessions.lock().await.insert(
+            let mode = bridge.default_mode;
+            let chat = if mode == AgentMode::Chat {
+                open_chat_session(&sid, cwd.clone(), Arc::clone(&bridge.provider), bridge.max_turns)
+                    .ok()
+                    .map(Arc::new)
+            } else {
+                None
+            };
+            bridge.acp_sessions.lock().await.insert(
                 sid.clone(),
-                coding_run::CodingSessionState {
+                AcpSession {
+                    mode,
                     cwd: cwd.clone(),
-                    coding_session_id: sid.clone(),
-                    prior_feedback: Vec::new(),
-                    last_summary: None,
-                    rounds: 0,
+                    coding: coding_run::CodingSessionState {
+                        cwd: cwd.clone(),
+                        coding_session_id: sid.clone(),
+                        prior_feedback: Vec::new(),
+                        last_summary: None,
+                        rounds: 0,
+                    },
+                    chat,
+                    face_daemon_session: None,
                 },
             );
-            // Keep hybrid chat handle for optional fallback tools path.
-            if let Ok(handle) = open_session(&sid, cwd.clone(), Arc::clone(&bridge.provider)) {
-                bridge
-                    .sessions
-                    .lock()
-                    .await
-                    .insert(sid.clone(), Arc::new(handle));
-            }
 
             tracing::info!(
                 session_id = %sid,
                 cwd = %cwd.display(),
+                mode = %mode.id(),
                 max_turns = bridge.max_turns,
-                "session/new (coding pack)"
+                "session/new"
             );
             let (catalog, current) = bridge_model_snapshot(&bridge).await;
-            Ok(session_state_payload(&sid, &catalog, &current))
+            Ok(session_state_payload(&sid, &catalog, &current, mode))
         }
 
         "session/load" => {
@@ -699,7 +768,50 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                 .ok_or("missing sessionId")?
                 .to_string();
             let text = extract_prompt_text(&params)?;
-            run_coding_prompt(Arc::clone(&bridge), &sid, &text).await
+            let mode = {
+                let map = bridge.acp_sessions.lock().await;
+                map.get(&sid)
+                    .map(|s| s.mode)
+                    .ok_or_else(|| format!("unknown sessionId '{sid}'"))?
+            };
+            match mode {
+                AgentMode::Coding => run_coding_prompt(Arc::clone(&bridge), &sid, &text).await,
+                AgentMode::Chat => run_chat_prompt(Arc::clone(&bridge), &sid, &text).await,
+                AgentMode::Face => run_face_prompt(Arc::clone(&bridge), &sid, &text).await,
+            }
+        }
+
+        "session/set_mode" => {
+            let sid = params
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .ok_or("missing sessionId")?;
+            let mode_id = params
+                .get("modeId")
+                .and_then(|v| v.as_str())
+                .ok_or("missing modeId")?;
+            let mode = AgentMode::parse(mode_id)
+                .ok_or_else(|| format!("unknown modeId '{mode_id}' (coding|chat|face)"))?;
+            let mut map = bridge.acp_sessions.lock().await;
+            let sess = map
+                .get_mut(sid)
+                .ok_or_else(|| format!("unknown sessionId '{sid}'"))?;
+            if sess.mode != mode {
+                tracing::info!(session_id = %sid, from = %sess.mode.id(), to = %mode.id(), "session/set_mode");
+                sess.mode = mode;
+                // Lazy-init chat handle when switching into chat.
+                if mode == AgentMode::Chat && sess.chat.is_none() {
+                    sess.chat = open_chat_session(
+                        sid,
+                        sess.cwd.clone(),
+                        Arc::clone(&bridge.provider),
+                        bridge.max_turns,
+                    )
+                    .ok()
+                    .map(Arc::new);
+                }
+            }
+            Ok(json!({}))
         }
 
         "session/set_model" => {
@@ -744,7 +856,7 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
             Ok(json!({}))
         }
 
-        "session/set_mode" | "session/set_config_option" => Ok(json!({})),
+        "session/set_config_option" => Ok(json!({})),
 
         "authenticate" | "logout" => Ok(json!({})),
 
@@ -761,9 +873,9 @@ async fn bridge_model_snapshot(bridge: &Bridge) -> (Vec<CatalogModel>, String) {
 /// Full coding pack path: LiberadoLoopBackend + durable worktree (same engine as goals).
 async fn run_coding_prompt(bridge: Arc<Bridge>, sid: &str, text: &str) -> Result<Value, String> {
     let mut state = {
-        let map = bridge.coding_sessions.lock().await;
+        let map = bridge.acp_sessions.lock().await;
         map.get(sid)
-            .cloned()
+            .map(|s| s.coding.clone())
             .ok_or_else(|| format!("unknown sessionId '{sid}' (call session/new first)"))?
     };
 
@@ -790,12 +902,10 @@ async fn run_coding_prompt(bridge: Arc<Bridge>, sid: &str, text: &str) -> Result
     )
     .await;
 
-    // Persist session state regardless of outcome so later rounds keep feedback.
-    bridge
-        .coding_sessions
-        .lock()
-        .await
-        .insert(sid.to_string(), state);
+    // Persist coding state regardless of outcome so later rounds keep feedback.
+    if let Some(sess) = bridge.acp_sessions.lock().await.get_mut(sid) {
+        sess.coding = state;
+    }
 
     match outcome {
         Ok(result) => {
@@ -810,51 +920,88 @@ async fn run_coding_prompt(bridge: Arc<Bridge>, sid: &str, text: &str) -> Result
     }
 }
 
-fn open_session(
-    session_id: &str,
-    cwd: PathBuf,
-    provider: Arc<dyn Provider>,
-) -> Result<SessionHandle, String> {
-    let tools: Arc<dyn ToolRuntime> =
-        match CodingToolRuntime::new(&cwd, CommandPolicy::default(), PathPolicy::default()) {
-            Ok(rt) => {
-                tracing::info!(cwd = %cwd.display(), "coding tools enabled for session");
-                Arc::new(rt)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    cwd = %cwd.display(),
-                    error = %e,
-                    "coding tools unavailable; session is chat-only"
-                );
-                Arc::new(NoTools)
-            }
-        };
-    open_session_with_tools(session_id, cwd, provider, tools)
+/// In-process chat: Conversation + Executor, no coding tools.
+async fn run_chat_prompt(bridge: Arc<Bridge>, sid: &str, text: &str) -> Result<Value, String> {
+    let session = {
+        let mut map = bridge.acp_sessions.lock().await;
+        let sess = map
+            .get_mut(sid)
+            .ok_or_else(|| format!("unknown sessionId '{sid}'"))?;
+        if sess.chat.is_none() {
+            sess.chat = open_chat_session(
+                sid,
+                sess.cwd.clone(),
+                Arc::clone(&bridge.provider),
+                bridge.max_turns,
+            )
+            .ok()
+            .map(Arc::new);
+        }
+        // Reset cancel flag for a fresh turn.
+        if let Some(chat) = &sess.chat {
+            let _ = chat.cancel_tx.send(false);
+        }
+        sess.chat
+            .clone()
+            .ok_or_else(|| "failed to open chat session".to_string())?
+    };
+
+    let stop = run_prompt_turn(session, text.to_string(), &StdoutSink).await?;
+    Ok(json!({ "stopReason": stop }))
 }
 
-fn open_session_with_tools(
+/// Face agent via running `liberado serve` (HTTP SSE stream).
+async fn run_face_prompt(bridge: Arc<Bridge>, sid: &str, text: &str) -> Result<Value, String> {
+    let mut daemon_session = {
+        let map = bridge.acp_sessions.lock().await;
+        map.get(sid)
+            .map(|s| s.face_daemon_session.clone())
+            .ok_or_else(|| format!("unknown sessionId '{sid}'"))?
+    };
+
+    let sid_owned = sid.to_string();
+    let emit = |method: &str, params: Value| -> Result<(), String> {
+        StdoutSink.emit(method, params)
+    };
+
+    let result = face_client::run_face_turn(&mut daemon_session, text, &sid_owned, &emit).await;
+
+    if let Some(sess) = bridge.acp_sessions.lock().await.get_mut(sid) {
+        sess.face_daemon_session = daemon_session;
+    }
+
+    match result {
+        Ok(()) => Ok(json!({ "stopReason": "end_turn" })),
+        Err(e) => {
+            emit_agent_text_chunk(&StdoutSink, sid, &format!("\n**Face mode error:** {e}\n"))?;
+            Ok(json!({ "stopReason": "end_turn" }))
+        }
+    }
+}
+
+/// Pure chat session: conversation + executor, no coding tools.
+fn open_chat_session(
     session_id: &str,
     cwd: PathBuf,
     provider: Arc<dyn Provider>,
-    tools: Arc<dyn ToolRuntime>,
+    max_turns: u32,
 ) -> Result<SessionHandle, String> {
     let system = std::env::var("LIBERADO_ACP_SYSTEM_PROMPT").unwrap_or_else(|_| {
         format!(
             "{DEFAULT_SYSTEM_PROMPT}\n\n\
-             You are running as Liberado's ACP coding agent (via Paseo). Workspace root: {}.\n\
-             Prefer tools (read_file, search_text, list_files, write_file, edit_file, run_command, \
-             git_status, git_diff) over guessing. Be concise.",
+             You are Liberado chat (ACP). Workspace context path: {}.\n\
+             This mode is conversational only — no file tools. For coding work, switch mode to \
+             **coding**. For vault/delegate face agent, switch to **face** (daemon required).",
             cwd.display()
         )
     });
-
     let (cancel_tx, cancel_rx) = watch::channel(false);
     Ok(SessionHandle {
         id: session_id.to_string(),
         conversation: Mutex::new(Conversation::new(system)),
-        executor: Executor::new(provider, Budget::default()),
-        tools,
+        // Chat uses executor budget = max_turns (not the hardcoded default of 8).
+        executor: Executor::new(provider, Budget::new(max_turns)),
+        tools: Arc::new(NoTools),
         cancel_tx,
         cancel_rx,
     })
@@ -864,11 +1011,12 @@ fn session_state_payload(
     session_id: &str,
     catalog: &[CatalogModel],
     current_model_id: &str,
+    mode: AgentMode,
 ) -> Value {
     json!({
         "sessionId": session_id,
         "models": model_state(catalog, current_model_id),
-        "modes": mode_state(),
+        "modes": mode::mode_state_json(mode),
         "configOptions": []
     })
 }
@@ -898,16 +1046,7 @@ fn model_state(catalog: &[CatalogModel], current_model_id: &str) -> Value {
     })
 }
 
-fn mode_state() -> Value {
-    json!({
-        "availableModes": [{
-            "id": "code",
-            "name": "Code",
-            "description": "Full coding tools against the session workspace"
-        }],
-        "currentModeId": "code"
-    })
-}
+
 
 fn extract_prompt_text(params: &Value) -> Result<String, String> {
     if let Some(arr) = params.get("prompt").and_then(|v| v.as_array()) {
@@ -1166,7 +1305,12 @@ mod tests {
                 description: "OpenRouter · deepseek/deepseek-v4-flash".into(),
             },
         ];
-        let v = session_state_payload("sid", &catalog, "deepseek/deepseek-v4-pro");
+        let v = session_state_payload(
+            "sid",
+            &catalog,
+            "deepseek/deepseek-v4-pro",
+            AgentMode::Coding,
+        );
         assert_eq!(v["sessionId"], "sid");
         assert_eq!(v["models"]["currentModelId"], "deepseek/deepseek-v4-pro");
         assert_eq!(v["models"]["availableModels"].as_array().unwrap().len(), 2);
@@ -1174,7 +1318,8 @@ mod tests {
             v["models"]["availableModels"][1]["modelId"],
             "deepseek/deepseek-v4-flash"
         );
-        assert_eq!(v["modes"]["currentModeId"], "code");
+        assert_eq!(v["modes"]["currentModeId"], "coding");
+        assert_eq!(v["modes"]["availableModes"].as_array().unwrap().len(), 3);
     }
 
     #[test]
@@ -1295,6 +1440,20 @@ mod tests {
         assert_eq!(handle_cli_args(["--nope"]), Some(2));
     }
 
+    #[test]
+    fn mode_flag_continues_into_acp_loop() {
+        // `--mode` sets default and continues (does not exit).
+        assert_eq!(handle_cli_args(["--mode", "chat"]), None);
+        assert_eq!(handle_cli_args(["--mode=face"]), None);
+        assert_eq!(handle_cli_args(["-m", "coding"]), None);
+    }
+
+    #[test]
+    fn unknown_mode_is_an_error_exit() {
+        assert_eq!(handle_cli_args(["--mode", "banana"]), Some(2));
+        assert_eq!(handle_cli_args(["--mode=nope"]), Some(2));
+    }
+
     /// Captures ACP notifications instead of writing stdout (for MockProvider turns).
     struct CaptureSink {
         lines: std::sync::Mutex<Vec<(String, Value)>>,
@@ -1350,14 +1509,17 @@ mod tests {
                 CompletionResponse::text("all done"),
             ],
         ));
-        let handle = open_session_with_tools(
-            "sess-mock",
-            PathBuf::from("."),
-            provider,
-            Arc::new(EchoTool),
-        )
-        .expect("session");
-        let session = Arc::new(handle);
+        // Chat-path wire test: same SessionHandle / run_prompt_turn stack as mode=chat,
+        // with a mock tool so we can assert tool_call id pairing on the ACP wire.
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let session = Arc::new(SessionHandle {
+            id: "sess-mock".into(),
+            conversation: Mutex::new(Conversation::new("test system")),
+            executor: Executor::new(provider, Budget::new(8)),
+            tools: Arc::new(EchoTool),
+            cancel_tx,
+            cancel_rx,
+        });
         let sink = CaptureSink {
             lines: std::sync::Mutex::new(Vec::new()),
         };

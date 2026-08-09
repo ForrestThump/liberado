@@ -1,33 +1,38 @@
 # Paseo ↔ Liberado integration
 
-**Status:** ACP bridge is live (`liberado-acp`). Paseo registers it as a generic
-`extends: "acp"` provider and spawns it over stdio.
+**Status:** Multi-mode ACP bridge is live (`liberado-acp`). Paseo registers **one**
+`extends: "acp"` provider; Liberado owns coding / chat / face splitting via ACP
+`session/set_mode` (and process default `--mode` / `LIBERADO_ACP_MODE`).
 
 ## What you get
 
-- Paseo detects **Liberado** as a coding agent (provider list / diagnostics).
-- Starting a session in Paseo runs `liberado-acp`, which:
-  - Speaks real ACP JSON-RPC 2.0 (`initialize`, `session/new`, `session/prompt`, …).
-  - Runs the **full coding pack engine** ([`LiberadoLoopBackend`](../../crates/coder-agent/)) —
-    the same backend as `liberado-coder-run` and daemon coding goals (not the face-agent chat path).
-  - Creates a **durable worktree** under `coding-worktrees/<session>` when `cwd` is a git repo
-    (same as `CodingSessionPack` build phase).
-  - Respects `[coder]` tuning from `LIBERADO_CONFIG_DIR` (gate, progress, path policy, traces).
-  - Streams a final report as `session/update` / `agent_message_chunk` (live tool streaming from
-    the pack is a follow-up; the run still executes the full pack loop server-side).
+- Paseo detects **Liberado** as an agent (provider list / diagnostics).
+- Starting a session in Paseo runs `liberado-acp`, which speaks ACP JSON-RPC 2.0 and
+  exposes three **modes** on the same process:
 
-This is **not** a tunnel into a running `liberado serve` daemon. It is the Liberado
-coding pack packaged as an ACP agent process — the same pattern Claude Code / Gemini /
-Grok use with Paseo (self-contained agent binary), not a terminal profile that shells a CLI.
+| Mode | Engine | Needs daemon? |
+|---|---|---|
+| **coding** (default) | Full coding pack ([`LiberadoLoopBackend`](../../crates/coder-agent/)) + durable worktrees | No |
+| **chat** | In-process `Conversation` + executor (no file tools) | No |
+| **face** | HTTP SSE to `liberado serve` (`POST /api/chat/stream`) — vault tools + `delegate` | Yes (`liberado serve`) |
 
-### What this is *not* (yet)
+- Switch modes mid-session with ACP `session/set_mode` (Paseo mode picker when present),
+  or set the process default:
+  - `liberado-acp --mode chat`
+  - `LIBERADO_ACP_MODE=face`
+- Coding mode: durable worktree under `coding-worktrees/<session>` when `cwd` is a git repo;
+  respects `[coder]` tuning from `LIBERADO_CONFIG_DIR`.
+- Face mode is the **only** path that tunnels into a running daemon. Coding and chat are
+  self-contained agent processes (same pattern as Claude Code / Gemini / Grok on Paseo).
+
+### Residual
 
 | Feature | Status |
 |---|---|
-| Face agent + `delegate` + vault MCP | Separate (daemon chat) |
-| Live hub `/goal` list in Paseo UI | Separate (would need daemon HTTP bridge) |
-| Token-by-token tool events mid-run | Follow-up (pack currently reports at end) |
+| Live hub `/goal` list in Paseo UI | Separate (daemon HTTP bridge) |
+| Token-by-token tool events mid-coding-run | Follow-up (pack currently reports at end) |
 | Intake clarify questions via ACP | Follow-up (`AskHuman` grant + `session/prompt` answers) |
+| Face-mode cancel mid-stream | Follow-up |
 
 ## Prerequisites (Windows)
 
@@ -56,9 +61,15 @@ Grok use with Paseo (self-contained agent binary), not a terminal profile that s
    `deepseek/deepseek-v4-flash`). Paseo's model picker calls ACP `session/set_model`
    to hot-swap; the catalog is built from the backend's live `/models` endpoint.
 
-5. Optional: `LIBERADO_ACP_MAX_TURNS` — **coder-role turns per user message** (default **50**).
-   This is *not* the face executor default of 8; it maps to `CoderRoleConfig::max_turns` on the
-   coding pack. Raise it for large refactors; lower it for cheap probes.
+5. Optional: `LIBERADO_ACP_MAX_TURNS` — turns **per user message** (default **50**).
+   Coding maps this to `CoderRoleConfig::max_turns`; chat uses it as the executor budget.
+   Raise it for large refactors; lower it for cheap probes.
+
+6. Optional: `LIBERADO_ACP_MODE` / `liberado-acp --mode coding|chat|face` — process default mode
+   for new sessions (ACP `session/set_mode` can still switch later).
+
+7. Face mode only: `liberado serve <vault>` running, and optional `LIBERADO_SERVER`
+   (default `http://127.0.0.1:4201`).
 
 ## Install `liberado-acp` on PATH
 
@@ -99,10 +110,10 @@ Edit (or create) `%USERPROFILE%\.paseo\config.json`:
       "liberado": {
         "extends": "acp",
         "label": "Liberado",
-        "description": "Liberado coding agent (ACP)",
+        "description": "Liberado multi-mode agent (coding · chat · face)",
         "command": ["liberado-acp"],
         "env": {
-          "LIBERADO_ACP_MODEL": "deepseek-chat"
+          "LIBERADO_ACP_MODEL": "deepseek/deepseek-v4-pro"
         },
         "params": {
           "supportsMcpServers": false
@@ -113,14 +124,18 @@ Edit (or create) `%USERPROFILE%\.paseo\config.json`:
 }
 ```
 
+**One provider is enough.** Do not register three Paseo providers with different launch args —
+modes are Liberado-owned (`session/set_mode` / `--mode` / `LIBERADO_ACP_MODE`).
+
 Notes:
 
-- `supportsMcpServers: false` — Liberado already owns tools; skip Paseo’s injected MCP catalog
-  (some ACP adapters refuse non-empty `mcpServers` on `session/new`).
+- `supportsMcpServers: false` — Liberado already owns tools in coding/face; skip Paseo’s injected
+  MCP catalog (some ACP adapters refuse non-empty `mcpServers` on `session/new`).
 - Prefer the bare command `liberado-acp` once it is on `PATH`. Absolute path also works:
   `["C:\\Users\\You\\.cargo\\bin\\liberado-acp.exe"]`.
-- **API keys live in the environment that starts Paseo** (`DEEPSEEK_API_KEY`, etc.), not in
+- **API keys live in the environment that starts Paseo** (`OPENROUTER_API_KEY`, etc.), not in
   `config.json`. Do not paste secrets into the provider `env` block.
+- Optional default mode via env: `"LIBERADO_ACP_MODE": "chat"` (still switchable in-session).
 
 Example file in-repo: [`config.example/paseo-liberado.json`](../../config.example/paseo-liberado.json).
 
@@ -143,18 +158,18 @@ you want green rows for launcher binary, ACP `initialize`, and ACP `session/new`
 | Client → agent | `initialize` | Negotiate `protocolVersion: 1` |
 | Client → agent | `session/new` | `{ cwd, mcpServers }` → `{ sessionId, models, modes }` |
 | Client → agent | `session/prompt` | `{ sessionId, prompt: ContentBlock[] }` → `{ stopReason }` |
+| Client → agent | `session/set_mode` | `{ sessionId, modeId: coding\|chat\|face }` |
+| Client → agent | `session/set_model` | Hot-swap model id from catalog |
 | Agent → client | `session/update` | `agent_message_chunk`, `tool_call`, `tool_call_update` |
-| Client → agent | `session/cancel` | Notification; turn returns `stopReason: "cancelled"` |
-| Client → agent | `session/load` | Re-open session id in this process |
+| Client → agent | `session/cancel` | Notification; chat turns return `stopReason: "cancelled"` |
+| Client → agent | `session/load` | Not advertised (`loadSession: false`) until durable history |
 
 ## Limits (honest)
 
-- Session history is **process-local** today (`session/load` reopens a fresh conversation with the
-  same id). Durable resume across restarts is future work.
-- Not a remote tunnel into `liberado serve`. For remote Liberado, see the roadmap “Remote access
-  via Paseo” item separately.
-- Full face-agent dispatch / vault MCP grants are not mounted in this bridge; the session is the
-  coding-tool surface (`CodingToolRuntime`) plus the configured chat model.
+- Session history is **process-local** today. Durable resume across restarts is future work.
+- **Coding / chat** are self-contained. **Face** requires a running `liberado serve` and
+  streams its events into ACP; cancel mid-face-stream is not wired yet.
+- Coding pack live tool streaming mid-run is a follow-up (report streams at end today).
 
 **Ordered residual work** (tool-call ids, resume honesty, diagnostics, modes, durable load, fork
 polish, remote track):
@@ -169,3 +184,5 @@ polish, remote track):
 | Diagnostics: initialize timeout | Binary hung — ensure nothing else is reading stdin; run the smoke pipe above |
 | Prompt errors about API key | Export `DEEPSEEK_API_KEY` (or peer) in the env that starts Paseo / the agent |
 | Tools write to wrong tree | Session `cwd` comes from Paseo’s workspace; open the project you intend |
+| Face mode: cannot reach daemon | Start `liberado serve <vault>`; check `LIBERADO_SERVER` |
+| Want pure chat without pack | Paseo mode picker → **chat**, or `LIBERADO_ACP_MODE=chat` / `--mode chat` |

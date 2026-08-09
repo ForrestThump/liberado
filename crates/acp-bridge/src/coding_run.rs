@@ -272,7 +272,8 @@ pub fn single_factory(provider: Arc<dyn Provider>) -> Arc<dyn CoderProviderFacto
     Arc::new(SingleProviderFactory::new(provider))
 }
 
-/// Payload fragment used when logging / diagnostics (not a GoalSpec — ACP owns the wire session).
+/// Payload fragment for logging / diagnostics (not a GoalSpec — ACP owns the wire session).
+#[allow(dead_code)] // reserved for multi-mode diagnostics / session metadata
 pub fn workspace_payload(cwd: &Path) -> serde_json::Value {
     json!({ "workspace_root": cwd.to_string_lossy() })
 }

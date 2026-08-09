@@ -4,7 +4,7 @@
       "liberado": {
         "extends": "acp",
         "label": "Liberado",
-        "description": "Liberado coding agent over ACP (liberado-acp)",
+        "description": "Liberado multi-mode agent (coding · chat · face) over ACP",
         "command": ["liberado-acp"],
         "env": {
           "LIBERADO_ACP_MODEL": "deepseek/deepseek-v4-pro"

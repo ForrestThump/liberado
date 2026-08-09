@@ -40,7 +40,7 @@ $configPath = Join-Path $paseoHome "config.json"
 $provider = [ordered]@{
     extends      = "acp"
     label        = "Liberado"
-    description  = "Liberado coding agent over ACP (liberado-acp)"
+    description  = "Liberado multi-mode agent (coding · chat · face) over ACP"
     command      = $command
     env          = [ordered]@{
         LIBERADO_ACP_MODEL = if ($env:LIBERADO_ACP_MODEL) { $env:LIBERADO_ACP_MODEL } else { "deepseek/deepseek-v4-pro" }
@@ -92,6 +92,7 @@ if ($out -notmatch 'Liberado') {
 
 Write-Host ""
 Write-Host "Done. Restart Paseo and pick provider 'Liberado'."
+Write-Host "Modes (one provider): coding (default) · chat · face — switch via Paseo mode picker or --mode / LIBERADO_ACP_MODE"
 Write-Host "Docs: docs/impl/paseo-integration.md"
 if (-not $env:DEEPSEEK_API_KEY -and -not $env:OPENROUTER_API_KEY -and -not $env:OPENAI_API_KEY) {
     Write-Warning "No LLM API key in this shell. Set DEEPSEEK_API_KEY (or peer) before prompting."

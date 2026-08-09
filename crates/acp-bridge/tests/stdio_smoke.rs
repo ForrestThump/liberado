@@ -112,7 +112,41 @@ fn initialize_and_session_new_over_stdio() {
         session["models"]["currentModelId"].is_string(),
         "models.currentModelId required: {session}"
     );
-    assert_eq!(session["modes"]["currentModeId"], "code");
+    assert_eq!(
+        session["modes"]["currentModeId"], "coding",
+        "default mode is Liberado coding pack"
+    );
+    let modes = session["modes"]["availableModes"]
+        .as_array()
+        .expect("availableModes");
+    assert_eq!(modes.len(), 3, "coding · chat · face: {modes:?}");
+    let mode_ids: Vec<&str> = modes
+        .iter()
+        .filter_map(|m| m["id"].as_str())
+        .collect();
+    assert!(mode_ids.contains(&"coding"));
+    assert!(mode_ids.contains(&"chat"));
+    assert!(mode_ids.contains(&"face"));
+
+    // ── session/set_mode → chat ─────────────────────────────────────
+    let set_mode = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "session/set_mode",
+        "params": {
+            "sessionId": sid,
+            "modeId": "chat"
+        }
+    });
+    writeln!(stdin, "{set_mode}").expect("write session/set_mode");
+    stdin.flush().expect("flush session/set_mode");
+
+    let mode_resp = read_json_line(&mut reader);
+    assert_eq!(mode_resp["id"], 3);
+    assert!(
+        mode_resp.get("error").is_none() || mode_resp["error"].is_null(),
+        "session/set_mode error: {mode_resp}"
+    );
 
     // Close stdin so the agent exits cleanly.
     drop(stdin);
