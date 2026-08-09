@@ -57,3 +57,47 @@ fn the_attended_coding_hat_can_still_interrupt_a_human() {
         "the attended coding hat must keep AskHuman — intake clarifies before it builds (S7)"
     );
 }
+
+/// The attended local coding hat — the ACP bridge Paseo spawns on your own machine.
+///
+/// It *keeps* `AskHuman`: there is a human in the editor, and a question they can answer is the
+/// point of an interactive session. That is the opposite of `coding-unattended` above, and the
+/// pair is why this is a grant rather than a flag — same pack, two hats, different authority.
+#[test]
+fn the_local_coding_hat_keeps_ask_human() {
+    let caps = shipped_policy().capabilities_for("coding-local");
+    assert!(
+        !caps.capabilities.is_empty(),
+        "coding-local must be declared — the ACP bridge refuses to start coding mode without it"
+    );
+    assert!(
+        caps.contains(&Capability::AskHuman),
+        "coding-local is attended; withholding AskHuman here would be coding-unattended's rule"
+    );
+}
+
+/// The shipped example config must actually deserialize.
+///
+/// It shipped broken: a `[[session_profiles]]` header was inserted into a *commented* block, so the
+/// table existed with every field commented out. That is valid TOML — an empty table in an array of
+/// tables — and fails serde with `missing field 'name'`, which is why a TOML-level check missed it.
+/// `liberado config check` reads the live config dir, not this one, so nothing looked at the file
+/// we hand to new users.
+#[test]
+fn the_shipped_example_topology_deserializes() {
+    let path: PathBuf = [
+        env!("CARGO_MANIFEST_DIR"),
+        "..",
+        "..",
+        "config.example",
+        "topology.toml",
+    ]
+    .iter()
+    .collect();
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let topology: Result<liberado_config_loader::Topology, _> = toml::from_str(&text);
+    if let Err(e) = topology {
+        panic!("config.example/topology.toml does not deserialize — new users copy this file: {e}");
+    }
+}

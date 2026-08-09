@@ -38,6 +38,9 @@ pub struct Topology {
     /// Seeded with `deepseek`/`openrouter` by default so an empty/absent config still boots exactly
     /// as before this field existed.
     pub providers: Vec<ProviderProfile>,
+    /// `[acp]` — the ACP bridge Paseo spawns. Absent = built-in defaults.
+    #[serde(default)]
+    pub acp: AcpConfig,
     /// Declared model profiles available to the system.
     pub models: Vec<ModelProfile>,
     /// Which model (by name) fills each role. Validated against the capability floors.
@@ -394,6 +397,7 @@ impl Default for Topology {
             daemon_socket: PathBuf::from("/run/liberado/daemon.sock"),
             provider: "deepseek".to_string(),
             providers: default_providers(),
+            acp: AcpConfig::default(),
             models: Vec::new(),
             model_roles: HashMap::new(),
             mcps: Vec::new(),
@@ -445,6 +449,29 @@ fn default_providers() -> Vec<ProviderProfile> {
             extra_client_error_status: vec![402],
         },
     ]
+}
+
+/// `[acp]` — the ACP bridge (`liberado-acp`), the agent Paseo and other ACP editors spawn.
+///
+/// A typed section rather than an opaque pack blob: the bridge is a composition root, not a domain
+/// pack, so it does not own a config *vocabulary* the way `[tuning.coder]` does — it needs the same
+/// couple of knobs `[main_agent]` needs, and is modelled on it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AcpConfig {
+    /// Full override of the ACP chat-mode system prompt. Unset uses the built-in prompt.
+    ///
+    /// Config rather than an environment variable on purpose. An editor launches this binary with
+    /// a fixed argv and a small env block written into `~/.paseo/config.json`; a prompt is prose
+    /// that wants editing, version control and diffing, none of which survive being pasted into a
+    /// JSON string in another tool's config file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    /// Executor turn budget for ACP sessions. Unset uses the bridge default (50).
+    ///
+    /// Here for the same reason as the prompt: it is a tuning decision about this deployment, not
+    /// a per-launch argument, and it was previously reachable only through `LIBERADO_ACP_MAX_TURNS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<u32>,
 }
 
 /// One declared inference backend — everything `liberado-provider-openai-compat`'s generic

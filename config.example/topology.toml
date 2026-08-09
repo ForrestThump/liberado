@@ -60,15 +60,29 @@ vault_path = "/home/shiloh/vault"
 # When both a profile and a payload name a mode, the stricter one wins — restriction never relaxes.
 # Optional profiles that always start in a given mode:
 #
-# # The hat the PR shepherd starts goals under: coding pack, no AskHuman (see `coding-unattended` in
+# The hat the PR shepherd starts goals under: coding pack, no AskHuman (see `coding-unattended` in
 # policy.toml). A goal that cannot ask is a goal that cannot park waiting for someone who is asleep.
+# ── ACP bridge ────────────────────────────────────────────────────────────────────────────────────
+# `liberado-acp` — the agent Paseo (and other ACP editors) spawn. Install it with
+# `scripts/install-paseo-liberado.ps1`; see docs/impl/paseo-integration.md.
+#
+# Both knobs live here rather than in the editor's env block on purpose: a prompt is prose that
+# wants editing, version control and diffing, none of which survive being pasted into a JSON string
+# in another tool's config file.
+#
+# [acp]
+# system_prompt = """
+# You are Liberado chat. Be concise.
+# """
+# max_turns = 50          # executor turns per prompt; LIBERADO_ACP_MAX_TURNS overrides per launch
+
 [[session_profiles]]
 name = "coding-unattended"
 domain = "coding"
 component = "coding-unattended"
 enabled = true
 
-[[session_profiles]]
+# [[session_profiles]]
 # name = "coding-plan"
 # domain = "coding"
 # [session_profiles.overrides]

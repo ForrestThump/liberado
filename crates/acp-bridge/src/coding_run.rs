@@ -35,12 +35,33 @@ pub struct CodingSessionState {
 ///
 /// This is *not* the face-agent `Budget::default()` (8). It is the coding pack's `max_turns`
 /// on [`CoderRoleConfig`] — the same knob as `[coder.coder] max_turns` / headless runner.
-pub fn max_turns_from_env() -> u32 {
+pub fn resolve_max_turns(configured: Option<u32>) -> u32 {
     std::env::var("LIBERADO_ACP_MAX_TURNS")
         .ok()
         .and_then(|s| s.parse().ok())
         .filter(|&n| n > 0)
-        .unwrap_or(50)
+        .or(configured.filter(|&n| n > 0))
+        .unwrap_or(DEFAULT_ACP_MAX_TURNS)
+}
+
+/// Turns per prompt when neither `[acp] max_turns` nor the env override says otherwise.
+pub const DEFAULT_ACP_MAX_TURNS: u32 = 50;
+
+/// The `[acp]` section from Liberado config, or defaults when there is no config dir.
+///
+/// Same source as [`load_coder_tuning`]: one config dir, read once, so the prompt and the turn
+/// budget cannot disagree with the coding pack's own settings about which deployment this is.
+pub fn load_acp_config(config_dir: Option<&Path>) -> liberado_config::AcpConfig {
+    let Some(dir) = config_dir else {
+        return liberado_config::AcpConfig::default();
+    };
+    match liberado_config::load_config(Some(dir)) {
+        Ok((config, _)) => config.topology.acp,
+        Err(e) => {
+            tracing::warn!(error = %e, "loading [acp] config failed; using defaults");
+            liberado_config::AcpConfig::default()
+        }
+    }
 }
 
 /// Build coding pack tunables from Liberado config when available.
@@ -325,5 +346,101 @@ mod tests {
             .await
             .expect("non-git host cwd is ok");
         assert_eq!(path, dir.path());
+    }
+}
+
+/// The capability grant this bridge runs coding mode under (`policy.toml` `coding-local`).
+///
+/// The bridge runs the coding pack **in-process**, so it never passes through `goals_start`'s
+/// profile resolution and never acquires a `SessionGrant` the way a daemon goal does. That is a
+/// deliberate choice — a local editor session should not pay for a boundary designed to contain
+/// unattended overnight runs — but "no boundary" and "an unstated boundary" are different things.
+/// Resolving the grant here makes the authority a row in `policy.toml` that an operator can read
+/// and tighten, instead of a property of whatever this binary's code happens to do.
+///
+/// Fail-closed on an empty resolution, matching `goals_start`: "a session that may do nothing is
+/// safe, and never useful. Refuse it here rather than start it." An empty grant almost always means
+/// the component is missing from `policy.toml`, and the useful thing is to say so by name.
+pub fn resolve_local_grant(
+    config_dir: Option<&Path>,
+) -> Result<liberado_common::CapabilitySet, String> {
+    const COMPONENT: &str = "coding-local";
+    let Some(dir) = config_dir else {
+        // No config dir at all: the bridge is running standalone (no Liberado deployment on this
+        // machine). Nothing to enforce against, and refusing here would make the common
+        // `liberado-acp` install useless. Report it rather than inventing authority.
+        tracing::info!(
+            "no LIBERADO_CONFIG_DIR; coding mode runs without a declared grant (standalone)"
+        );
+        return Ok(liberado_common::CapabilitySet::empty());
+    };
+    let (config, _) = liberado_config::load_config(Some(dir))
+        .map_err(|e| format!("loading policy for `{COMPONENT}`: {e}"))?;
+    let caps = config.policy.capabilities_for(COMPONENT);
+    if caps.capabilities.is_empty() {
+        return Err(format!(
+            "capability grant `{COMPONENT}` resolves to nothing — add a `[[grants]] component = \
+             \"{COMPONENT}\"` entry to policy.toml (see config.example/policy.toml), or unset \
+             LIBERADO_CONFIG_DIR to run standalone"
+        ));
+    }
+    tracing::info!(
+        component = COMPONENT,
+        capabilities = caps.capabilities.len(),
+        ask_human = caps.contains(&liberado_common::Capability::AskHuman),
+        "coding mode authority resolved"
+    );
+    Ok(caps)
+}
+
+#[cfg(test)]
+mod grant_tests {
+    use super::*;
+
+    /// A configured deployment missing the grant must be refused by name, not run with implied
+    /// authority. This is the fail-closed half; without it the grant is a row nothing reads.
+    /// A *loadable* config dir with policy.toml but no `coding-local` grant.
+    ///
+    /// Writing only policy.toml made `load_config` fail on the missing topology, and that load
+    /// error string happens to contain "coding-local" too — so the first version of this test
+    /// passed with the emptiness check deleted. It asserted the error message, not the rule.
+    fn config_dir_without_the_grant() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("topology.toml"),
+            "vault_path = \"/tmp/vault\"\n",
+        )
+        .expect("write topology");
+        std::fs::write(
+            dir.path().join("policy.toml"),
+            "[[grants]]\ncomponent = \"something-else\"\ncapabilities = [\"AskHuman\"]\n",
+        )
+        .expect("write policy");
+        dir
+    }
+
+    #[tokio::test]
+    async fn a_configured_deployment_without_the_grant_is_refused() {
+        let dir = config_dir_without_the_grant();
+        // Precondition: the config must actually LOAD, or this proves nothing about the grant.
+        liberado_config::load_config(Some(dir.path()))
+            .expect("fixture config must load - otherwise the refusal below is a load error");
+
+        let err = resolve_local_grant(Some(dir.path()))
+            .expect_err("a missing grant must refuse, not default to permissive");
+        assert!(
+            err.contains("resolves to nothing"),
+            "must refuse for the empty grant specifically, not some upstream failure: {err}"
+        );
+    }
+
+    /// Standalone (no config dir) is the common install and must keep working — the refusal above
+    /// must not fire when there is no deployment to have a policy at all.
+    #[tokio::test]
+    async fn standalone_without_a_config_dir_is_allowed() {
+        assert!(
+            resolve_local_grant(None).is_ok(),
+            "no config dir means no deployment, not a refusal"
+        );
     }
 }

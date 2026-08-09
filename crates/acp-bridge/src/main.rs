@@ -29,31 +29,33 @@
 //! - `OPENROUTER_API_KEY` / `DEEPSEEK_API_KEY` / `OPENAI_API_KEY`
 //! - `LIBERADO_ACP_MODE` — default mode (`coding` \| `chat` \| `face`)
 //! - `LIBERADO_ACP_MODEL` — initial model id
-//! - `LIBERADO_ACP_MAX_TURNS` — turns **per user message** (default 50)
+//! - `LIBERADO_ACP_MAX_TURNS` — per-launch override of `[acp] max_turns`
 //! - `LIBERADO_CONFIG_DIR` — optional Liberado config (topology + `[coder]` tuning)
-//! - `LIBERADO_ACP_SYSTEM_PROMPT` — optional chat system prompt override
 //! - `LIBERADO_SERVER` — face-mode daemon base URL (default `http://127.0.0.1:4201`)
 //!
 //! Model catalog: live `GET /models` from the configured backend, A–Z by id.
 
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 mod coding_run;
+mod provider;
+mod wire;
+
+use wire::{
+    JsonRpcErrorBody, JsonRpcIncoming, StdoutWire, WireSink, emit_agent_text_chunk, emit_tool_call,
+    emit_tool_call_update, pop_tool_call_id, push_tool_call_id,
+};
+
+use provider::{
+    CatalogModel, build_provider, description_for, display_name_for, load_model_catalog,
+};
 mod face_client;
 mod mode;
 
 use liberado_executor::{AgentEvent, Budget, Executor, ToolRuntime};
 use liberado_main_agent::{Conversation, DEFAULT_SYSTEM_PROMPT};
-use liberado_provider::{
-    CompletionRequest, CompletionResponse, Provider, ProviderError, ProviderResult,
-};
-use liberado_provider_openai_compat::OpenAiCompatibleProvider;
+use liberado_provider::Provider;
 use mode::AgentMode;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::{Mutex, mpsc, watch};
@@ -65,65 +67,9 @@ const PROTOCOL_VERSION: u32 = 1;
 /// replay exist (integration roadmap P3); true made Paseo resume into an empty transcript.
 const LOAD_SESSION_CAPABILITY: bool = false;
 
-/// Initial model shown in the picker when no API key is present.
-///
-/// Not a duplicate of the config default: `[[providers]]` gives openrouter `openai/gpt-4o-mini`,
-/// while this is the model this bridge actually wants selected on first launch. It is a display
-/// placeholder only — with a key present, the model comes from the provider profile.
-const OPENROUTER_DEFAULT_RAW: &str = "deepseek/deepseek-v4-pro";
-
-/// Fallback raw ids when a backend's `/models` is unreachable.
-const OPENROUTER_FALLBACK_RAW: &[&str] =
-    &["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"];
-const DEEPSEEK_FALLBACK_RAW: &[&str] = &["deepseek-chat", "deepseek-reasoner"];
-const OPENAI_FALLBACK_RAW: &[&str] = &["gpt-4o-mini", "gpt-4o"];
-
-// ── JSON-RPC framing ────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-struct JsonRpcIncoming {
-    #[serde(default)]
-    #[allow(dead_code)]
-    jsonrpc: Option<String>,
-    id: Option<Value>,
-    method: Option<String>,
-    #[serde(default)]
-    params: Value,
-}
-
-#[derive(Debug, Serialize)]
-struct JsonRpcResponse {
-    jsonrpc: &'static str,
-    id: Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<JsonRpcErrorBody>,
-}
-
-#[derive(Debug, Serialize)]
-struct JsonRpcErrorBody {
-    code: i32,
-    message: String,
-}
-
-#[derive(Debug, Serialize)]
-struct JsonRpcNotification {
-    jsonrpc: &'static str,
-    method: String,
-    params: Value,
-}
-
 // ── Bridge state ────────────────────────────────────────────────────────────
 
 /// One row in the ACP session model picker (`availableModels`).
-#[derive(Debug, Clone)]
-struct CatalogModel {
-    model_id: String,
-    name: String,
-    description: String,
-}
-
 /// Per-ACP-session state (mode + engine-specific handles).
 struct AcpSession {
     mode: AgentMode,
@@ -149,6 +95,15 @@ struct Bridge {
     /// Coder-role max_turns for the full coding pack (not face Budget::default()=8).
     max_turns: u32,
     coder_tuning: liberado_coder_core::CoderTuning,
+    /// Declared authority for coding mode (`policy.toml` `coding-local`), empty when standalone.
+    ///
+    /// Surfaced in `session/new` so the editor can show what this agent may do. Deeper enforcement
+    /// — mapping capabilities onto the pack's `PathPolicy`/`CommandPolicy` — is deliberately not
+    /// here yet; what this buys today is that the authority is *declared and visible* rather than
+    /// implied by code, and that a configured deployment missing the grant fails at startup.
+    local_grant: liberado_common::CapabilitySet,
+    /// Chat-mode system prompt from `[acp] system_prompt`. `None` = built-in.
+    system_prompt: Option<String>,
     /// ACP session id → mode + engine state.
     acp_sessions: Mutex<HashMap<String, AcpSession>>,
 }
@@ -296,10 +251,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         &resolved.model_id,
     )
     .await;
-    let max_turns = coding_run::max_turns_from_env();
     let default_mode = AgentMode::from_env_or_default();
     let config_dir = std::env::var_os("LIBERADO_CONFIG_DIR").map(PathBuf::from);
     let coder_tuning = coding_run::load_coder_tuning(config_dir.as_deref());
+    // `[acp]` from the same config the coding pack reads, so the prompt and the turn budget are
+    // versioned prose in a file rather than JSON strings pasted into another tool's config.
+    let acp_config = coding_run::load_acp_config(config_dir.as_deref());
+    // Resolve the declared authority before serving anything. A configured deployment missing the
+    // grant is refused by name here rather than discovered mid-session.
+    let local_grant = coding_run::resolve_local_grant(config_dir.as_deref())?;
+    let max_turns = coding_run::resolve_max_turns(acp_config.max_turns);
+    let system_prompt = acp_config.system_prompt.clone();
     tracing::info!(
         backend = %resolved.backend,
         current = %resolved.model_id,
@@ -316,6 +278,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         default_mode,
         max_turns,
         coder_tuning,
+        local_grant,
+        system_prompt,
         acp_sessions: Mutex::new(HashMap::new()),
     });
     // Single writer for JSON-RPC responses *and* session/update notifications.
@@ -474,59 +438,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Sink for ACP notifications (`session/update`, …). Production writes NDJSON to stdout;
 /// tests capture into a buffer so MockProvider turns can assert wire shape.
-trait WireSink: Send + Sync {
-    fn emit(&self, method: &str, params: Value) -> Result<(), String>;
-}
-
-/// Unified stdout writer for responses and notifications (one lock, NDJSON-safe).
-struct StdoutWire;
-
-impl StdoutWire {
-    fn write_line(&self, json: &str) -> Result<(), String> {
-        use std::io::Write as _;
-        let mut out = std::io::stdout().lock();
-        writeln!(out, "{json}").map_err(|e| e.to_string())?;
-        out.flush().map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    fn write_rpc_response(
-        &self,
-        id: Value,
-        outcome: Result<Value, JsonRpcErrorBody>,
-    ) -> Result<(), String> {
-        let body = match outcome {
-            Ok(result) => JsonRpcResponse {
-                jsonrpc: "2.0",
-                id,
-                result: Some(result),
-                error: None,
-            },
-            Err(error) => JsonRpcResponse {
-                jsonrpc: "2.0",
-                id,
-                result: None,
-                error: Some(error),
-            },
-        };
-        let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
-        self.write_line(&json)
-    }
-}
-
-impl WireSink for StdoutWire {
-    fn emit(&self, method: &str, params: Value) -> Result<(), String> {
-        let body = JsonRpcNotification {
-            jsonrpc: "2.0",
-            method: method.to_string(),
-            params,
-        };
-        let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
-        self.write_line(&json)
-    }
-}
-
-/// Resolve when the session cancel flag becomes true (cooperative cancel).
 async fn wait_until_cancelled(rx: &mut watch::Receiver<bool>) {
     loop {
         if *rx.borrow() {
@@ -536,248 +447,6 @@ async fn wait_until_cancelled(rx: &mut watch::Receiver<bool>) {
             // Sender dropped — treat as cancelled so the turn does not hang forever.
             return;
         }
-    }
-}
-
-struct ResolvedProvider {
-    provider: Arc<dyn Provider>,
-    /// Backend key: `openrouter` | `deepseek` | `openai` | topology name.
-    backend: String,
-    model_id: String,
-}
-
-fn build_provider() -> Result<ResolvedProvider, String> {
-    let model_override = std::env::var("LIBERADO_ACP_MODEL")
-        .ok()
-        .filter(|s| !s.is_empty());
-
-    if let Some(config_dir) = std::env::var_os("LIBERADO_CONFIG_DIR") {
-        match liberado_config::load_config(Some(Path::new(&config_dir))) {
-            Ok((config, _)) => {
-                if let Some(provider) = liberado_bootstrap::provider_from_config(&config) {
-                    let backend = config.topology.provider.clone();
-                    let model = model_override.clone().unwrap_or_else(|| provider.model());
-                    if let Some(profile) = config
-                        .topology
-                        .providers
-                        .iter()
-                        .find(|p| p.name == config.topology.provider)
-                        && let Ok(p) = OpenAiCompatibleProvider::from_env(
-                            &profile.api_key_env,
-                            profile.model_env.as_deref(),
-                            &model,
-                            &profile.base_url,
-                            profile.extra_client_error_status.clone(),
-                        )
-                    {
-                        tracing::info!(
-                            provider = %profile.name,
-                            %model,
-                            "acp provider from LIBERADO_CONFIG_DIR"
-                        );
-                        return Ok(ResolvedProvider {
-                            provider: Arc::new(p),
-                            backend,
-                            model_id: model,
-                        });
-                    }
-                    let m = provider.model();
-                    return Ok(ResolvedProvider {
-                        provider,
-                        backend,
-                        model_id: m,
-                    });
-                }
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "LIBERADO_CONFIG_DIR load failed; falling back to env")
-            }
-        }
-    }
-
-    // Prefer OpenRouter so the picker gets `author/model` ids (deepseek/deepseek-v4-pro, …),
-    // then whatever else is declared.
-    //
-    // The profiles come from `Topology::default()`, not a list written out here. This block used to
-    // restate the base URLs, key envs, default models and OpenRouter's `402` "insufficient credits"
-    // status — all of which `config-loader`'s `default_providers()` already declares. Two
-    // declarations of one fact is failure-mode class 6: nothing compares them, so they drift and the
-    // drift is silent. Adding a backend is now an entry in `[[providers]]`, which is where the
-    // config model already says it belongs.
-    let profiles = liberado_config::Topology::default().providers;
-    let preferred = ["openrouter", "deepseek"];
-    let ordered = preferred
-        .iter()
-        .filter_map(|want| profiles.iter().find(|p| p.name == *want))
-        .chain(
-            profiles
-                .iter()
-                .filter(|p| !preferred.contains(&p.name.as_str())),
-        );
-
-    for profile in ordered {
-        if std::env::var_os(&profile.api_key_env).is_none() {
-            continue;
-        }
-        let model = model_override
-            .clone()
-            .unwrap_or_else(|| profile.default_model.clone());
-        let p = OpenAiCompatibleProvider::from_env(
-            &profile.api_key_env,
-            profile.model_env.as_deref(),
-            &model,
-            &profile.base_url,
-            profile.extra_client_error_status.clone(),
-        )
-        .map_err(|e| format!("provider init ({}): {e}", profile.api_key_env))?;
-        tracing::info!(
-            key_env = %profile.api_key_env,
-            %model,
-            base = %profile.base_url,
-            backend = %profile.name,
-            "acp provider ready"
-        );
-        return Ok(ResolvedProvider {
-            provider: Arc::new(p),
-            backend: profile.name.clone(),
-            model_id: model,
-        });
-    }
-
-    let model = model_override.unwrap_or_else(|| OPENROUTER_DEFAULT_RAW.to_string());
-    tracing::warn!(
-        "no API key found for any declared provider (see `[[providers]]` in topology.toml);          Paseo can still detect liberado-acp, but prompts need a key"
-    );
-    Ok(ResolvedProvider {
-        provider: Arc::new(MissingKeyProvider {
-            model: std::sync::RwLock::new(model.clone()),
-        }),
-        backend: "none".into(),
-        model_id: model,
-    })
-}
-
-/// Build the ACP model picker from the live provider catalog.
-async fn load_model_catalog(
-    provider: &dyn Provider,
-    backend: &str,
-    current: &str,
-) -> Vec<CatalogModel> {
-    let live = match provider.list_models().await {
-        Ok(ids) if !ids.is_empty() => {
-            tracing::info!(count = ids.len(), %backend, "fetched live /models catalog");
-            ids
-        }
-        Ok(_) => {
-            tracing::warn!(%backend, "provider /models returned empty; using fallbacks");
-            Vec::new()
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, %backend, "provider list_models failed; using fallbacks");
-            Vec::new()
-        }
-    };
-
-    let ordered = if live.is_empty() {
-        fallback_model_ids(backend, current)
-    } else {
-        catalog_model_ids(&live, current)
-    };
-
-    ordered
-        .into_iter()
-        .map(|id| CatalogModel {
-            name: display_name_for(&id),
-            description: description_for(backend, &id),
-            model_id: id.clone(),
-        })
-        .collect()
-}
-
-/// Full live catalog, A–Z. Includes `current` if the live list omitted it (e.g. custom slug).
-fn catalog_model_ids(live: &[String], current: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for id in live {
-        if !out.iter().any(|x| x == id) {
-            out.push(id.clone());
-        }
-    }
-    if !current.is_empty() && !out.iter().any(|x| x == current) {
-        out.push(current.to_string());
-    }
-    out.sort();
-    out
-}
-
-fn fallback_model_ids(backend: &str, current: &str) -> Vec<String> {
-    let mut out: Vec<String> = match backend {
-        "openrouter" => OPENROUTER_FALLBACK_RAW
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect(),
-        "deepseek" => DEEPSEEK_FALLBACK_RAW
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect(),
-        "openai" => OPENAI_FALLBACK_RAW
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect(),
-        _ => OPENROUTER_FALLBACK_RAW
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect(),
-    };
-    if !current.is_empty() && !out.iter().any(|x| x == current) {
-        out.push(current.to_string());
-    }
-    out.sort();
-    out
-}
-
-fn display_name_for(model_id: &str) -> String {
-    // Keep the full author/model slug visible — that is the identity Paseo should show.
-    model_id.to_string()
-}
-
-fn description_for(backend: &str, model_id: &str) -> String {
-    match backend {
-        "openrouter" => format!("OpenRouter · {model_id}"),
-        "deepseek" => format!("DeepSeek API · {model_id}"),
-        "openai" => format!("OpenAI · {model_id}"),
-        other => format!("{other} · {model_id}"),
-    }
-}
-
-struct MissingKeyProvider {
-    model: std::sync::RwLock<String>,
-}
-
-#[async_trait::async_trait]
-impl Provider for MissingKeyProvider {
-    fn model(&self) -> String {
-        self.model.read().unwrap_or_else(|e| e.into_inner()).clone()
-    }
-    fn set_model(&self, model: String) {
-        let model = model.trim();
-        if model.is_empty() {
-            return;
-        }
-        *self.model.write().unwrap_or_else(|e| e.into_inner()) = model.to_string();
-    }
-    async fn list_models(&self) -> ProviderResult<Vec<String>> {
-        Ok(OPENROUTER_FALLBACK_RAW
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect())
-    }
-    async fn complete(&self, _request: CompletionRequest) -> ProviderResult<CompletionResponse> {
-        Err(ProviderError::InvalidRequest(
-            "liberado-acp: no API key configured. Set OPENROUTER_API_KEY (preferred), \
-             DEEPSEEK_API_KEY, or OPENAI_API_KEY — or point LIBERADO_CONFIG_DIR at a Liberado \
-             config with a topology provider."
-                .into(),
-        ))
     }
 }
 
@@ -852,6 +521,7 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                     cwd.clone(),
                     Arc::clone(&bridge.provider),
                     bridge.max_turns,
+                    bridge.system_prompt.clone(),
                 )
                 .ok()
                 .map(Arc::new)
@@ -885,7 +555,13 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                 "session/new"
             );
             let (catalog, current) = bridge_model_snapshot(&bridge).await;
-            Ok(session_state_payload(&sid, &catalog, &current, mode))
+            Ok(session_state_payload(
+                &sid,
+                &catalog,
+                &current,
+                mode,
+                &bridge.local_grant,
+            ))
         }
 
         "session/load" => {
@@ -923,6 +599,7 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                         sess.cwd.clone(),
                         Arc::clone(&bridge.provider),
                         bridge.max_turns,
+                        bridge.system_prompt.clone(),
                     )
                     .ok()
                     .map(Arc::new);
@@ -1105,6 +782,7 @@ async fn run_chat_prompt(
                 sess.cwd.clone(),
                 Arc::clone(&bridge.provider),
                 bridge.max_turns,
+                bridge.system_prompt.clone(),
             )
             .ok()
             .map(Arc::new);
@@ -1169,8 +847,9 @@ fn open_chat_session(
     cwd: PathBuf,
     provider: Arc<dyn Provider>,
     max_turns: u32,
+    system_prompt: Option<String>,
 ) -> Result<SessionHandle, String> {
-    let system = std::env::var("LIBERADO_ACP_SYSTEM_PROMPT").unwrap_or_else(|_| {
+    let system = system_prompt.unwrap_or_else(|| {
         format!(
             "{DEFAULT_SYSTEM_PROMPT}\n\n\
              You are Liberado chat (ACP). Workspace context path: {}.\n\
@@ -1196,12 +875,34 @@ fn session_state_payload(
     catalog: &[CatalogModel],
     current_model_id: &str,
     mode: AgentMode,
+    local_grant: &liberado_common::CapabilitySet,
 ) -> Value {
     json!({
         "sessionId": session_id,
         "models": model_state(catalog, current_model_id),
         "modes": mode::mode_state_json(mode),
-        "configOptions": []
+        "configOptions": [],
+        // Not part of the ACP schema — extra keys are ignored by clients that do not want them.
+        // Carried anyway because "what is this agent allowed to do" should be answerable from the
+        // session it is answered *about*, not by reading the binary's source.
+        "liberadoAuthority": authority_summary(local_grant),
+    })
+}
+
+/// Compact, human-readable summary of the declared grant for the session payload.
+fn authority_summary(grant: &liberado_common::CapabilitySet) -> Value {
+    if grant.capabilities.is_empty() {
+        return json!({
+            "component": "coding-local",
+            "declared": false,
+            "note": "standalone — no LIBERADO_CONFIG_DIR, so no policy to enforce against"
+        });
+    }
+    json!({
+        "component": "coding-local",
+        "declared": true,
+        "askHuman": grant.contains(&liberado_common::Capability::AskHuman),
+        "capabilities": grant.capabilities.len(),
     })
 }
 
@@ -1344,103 +1045,6 @@ async fn run_prompt_turn(
 }
 
 /// Allocate a stable `toolCallId` for a started tool and record it for the matching finish.
-fn push_tool_call_id(pending: &mut Vec<(String, String)>, name: &str) -> String {
-    let tool_call_id = format!("call-{}", short_id());
-    pending.push((name.to_string(), tool_call_id.clone()));
-    tool_call_id
-}
-
-/// Pop the most recent in-flight id for `name` (LIFO). Fallback id only if start was missed.
-fn pop_tool_call_id(pending: &mut Vec<(String, String)>, name: &str) -> String {
-    if let Some(idx) = pending.iter().rposition(|(n, _)| n == name) {
-        return pending.remove(idx).1;
-    }
-    // Should not happen in a well-formed stream; still emit a unique id so the wire is valid.
-    format!("call-orphan-{}", short_id())
-}
-
-fn emit_agent_text_chunk(sink: &dyn WireSink, session_id: &str, text: &str) -> Result<(), String> {
-    if text.is_empty() {
-        return Ok(());
-    }
-    sink.emit(
-        "session/update",
-        json!({
-            "sessionId": session_id,
-            "update": {
-                "sessionUpdate": "agent_message_chunk",
-                "content": {
-                    "type": "text",
-                    "text": text
-                }
-            }
-        }),
-    )
-}
-
-fn emit_tool_call(
-    sink: &dyn WireSink,
-    session_id: &str,
-    tool_call_id: &str,
-    name: &str,
-    args: &str,
-    status: &str,
-) -> Result<(), String> {
-    let raw_input: Value = serde_json::from_str(args).unwrap_or_else(|_| json!({ "raw": args }));
-    sink.emit(
-        "session/update",
-        json!({
-            "sessionId": session_id,
-            "update": {
-                "sessionUpdate": "tool_call",
-                "toolCallId": tool_call_id,
-                "title": name,
-                "kind": tool_kind(name),
-                "status": status,
-                "rawInput": raw_input
-            }
-        }),
-    )
-}
-
-fn emit_tool_call_update(
-    sink: &dyn WireSink,
-    session_id: &str,
-    tool_call_id: &str,
-    name: &str,
-    status: &str,
-    preview: &str,
-) -> Result<(), String> {
-    sink.emit(
-        "session/update",
-        json!({
-            "sessionId": session_id,
-            "update": {
-                "sessionUpdate": "tool_call_update",
-                "toolCallId": tool_call_id,
-                "status": status,
-                "title": name,
-                "content": [{
-                    "type": "content",
-                    "content": { "type": "text", "text": preview }
-                }]
-            }
-        }),
-    )
-}
-
-fn tool_kind(name: &str) -> &'static str {
-    match name {
-        "read_file" | "list_files" | "search_text" => "read",
-        "write_file" | "edit_file" | "apply_patch" => "edit",
-        "run_command" | "validate" => "execute",
-        "git_status" | "git_diff" | "git_branch" | "git_commit" | "git_push" | "git_fetch" => {
-            "execute"
-        }
-        _ => "other",
-    }
-}
-
 fn new_session_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
@@ -1451,18 +1055,10 @@ fn new_session_id() -> String {
     format!("lib-{:x}-{}", nanos, std::process::id())
 }
 
-fn short_id() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{nanos:x}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::catalog_model_ids;
 
     #[test]
     fn extract_prompt_joins_text_blocks() {
@@ -1495,6 +1091,7 @@ mod tests {
             &catalog,
             "deepseek/deepseek-v4-pro",
             AgentMode::Coding,
+            &liberado_common::CapabilitySet::empty(),
         );
         assert_eq!(v["sessionId"], "sid");
         assert_eq!(v["models"]["currentModelId"], "deepseek/deepseek-v4-pro");
