@@ -3381,9 +3381,12 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 name = "liberado-acp-bridge"
 version = "0.1.0"
 dependencies = [
- "liberado-common",
- "liberado-config-loader",
- "liberado-conversation-store",
+ "async-trait",
+ "liberado-bootstrap",
+ "liberado-coder-core",
+ "liberado-coder-tools",
+ "liberado-config",
+ "liberado-executor",
  "liberado-main-agent",
  "liberado-provider",
  "liberado-provider-openai-compat",
