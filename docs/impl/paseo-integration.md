@@ -32,7 +32,7 @@
 | Live hub `/goal` list in Paseo UI | Separate (daemon HTTP bridge) |
 | Token-by-token tool events mid-coding-run | Follow-up (pack currently reports at end) |
 | Intake clarify questions via ACP | Follow-up (`AskHuman` grant + `session/prompt` answers) |
-| Face-mode cancel mid-stream | Follow-up |
+| Face-mode cancel mid-stream | Cooperative cancel wired (drops SSE future); daemon may still finish its turn |
 
 ## Prerequisites (Windows)
 

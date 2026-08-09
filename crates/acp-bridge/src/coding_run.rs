@@ -225,7 +225,9 @@ async fn prepare_workspace(cwd: &Path, session_id: &str) -> Result<PathBuf, Stri
     if !cwd.is_dir() {
         return Err(format!("workspace is not a directory: {}", cwd.display()));
     }
-    // Durable coding-worktrees/<id> when git; else host cwd (same as CodingSessionPack).
+    // Durable coding-worktrees/<id> when git; else host cwd.
+    // Fail hard on worktree setup — never silently demote to the live tree
+    // (matches CodingSessionPack::build; silent HostLocal would edit the user's branch).
     if is_git_repo(cwd) {
         let base = coding_worktrees_base();
         match ensure_session_worktree(cwd, session_id, &base).await {
@@ -237,13 +239,9 @@ async fn prepare_workspace(cwd: &Path, session_id: &str) -> Result<PathBuf, Stri
                 );
                 Ok(path)
             }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "worktree setup failed; using host cwd"
-                );
-                Ok(cwd.to_path_buf())
-            }
+            Err(e) => Err(format!(
+                "durable session worktree setup failed (no live-tree fallback): {e}"
+            )),
         }
     } else {
         Ok(cwd.to_path_buf())
@@ -276,4 +274,55 @@ pub fn single_factory(provider: Arc<dyn Provider>) -> Arc<dyn CoderProviderFacto
 #[allow(dead_code)] // reserved for multi-mode diagnostics / session metadata
 pub fn workspace_payload(cwd: &Path) -> serde_json::Value {
     json!({ "workspace_root": cwd.to_string_lossy() })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    /// Process-global env mutations in this crate must not race other tests.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[tokio::test]
+    async fn prepare_workspace_fails_hard_when_worktree_setup_fails() {
+        let _guard = env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Looks like a git repo to is_git_repo, but is not a real repo → worktree create fails.
+        std::fs::create_dir(dir.path().join(".git")).expect(".git");
+
+        let data = tempfile::tempdir().expect("data dir");
+        // SAFETY: single-threaded under env_lock; restored below.
+        unsafe {
+            std::env::set_var("LIBERADO_DATA_DIR", data.path());
+        }
+
+        let err = prepare_workspace(dir.path(), "sess-hard-fail")
+            .await
+            .expect_err("must not fall back to host cwd");
+        assert!(
+            err.contains("durable session worktree"),
+            "error should name worktree setup, got: {err}"
+        );
+        assert!(
+            err.contains("no live-tree fallback"),
+            "error should refuse live-tree demotion, got: {err}"
+        );
+
+        unsafe {
+            std::env::remove_var("LIBERADO_DATA_DIR");
+        }
+    }
+
+    #[tokio::test]
+    async fn prepare_workspace_non_git_uses_cwd() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = prepare_workspace(dir.path(), "sess-nongit")
+            .await
+            .expect("non-git host cwd is ok");
+        assert_eq!(path, dir.path());
+    }
 }

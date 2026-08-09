@@ -22,7 +22,8 @@ pub async fn run_face_turn(
     daemon_session: &mut Option<String>,
     message: &str,
     acp_session_id: &str,
-    emit: &dyn Fn(&str, Value) -> Result<(), String>,
+    // Send + Sync so the turn future can run on a spawned task (cancel interleaves on stdin).
+    emit: &(dyn Fn(&str, Value) -> Result<(), String> + Send + Sync),
 ) -> Result<(), String> {
     let base = server_base();
     let endpoint = format!("{base}/api/chat/stream");
@@ -66,7 +67,7 @@ fn dispatch_sse(
     event: &SseEvent,
     daemon_session: &mut Option<String>,
     acp_session_id: &str,
-    emit: &dyn Fn(&str, Value) -> Result<(), String>,
+    emit: &(dyn Fn(&str, Value) -> Result<(), String> + Send + Sync),
 ) -> Result<bool, String> {
     let decoded = match SessionEvent::from_sse_data(&event.event, &event.data) {
         Ok(d) => d,
@@ -133,7 +134,7 @@ fn dispatch_sse(
 }
 
 fn emit_text(
-    emit: &dyn Fn(&str, Value) -> Result<(), String>,
+    emit: &(dyn Fn(&str, Value) -> Result<(), String> + Send + Sync),
     session_id: &str,
     text: &str,
 ) -> Result<(), String> {

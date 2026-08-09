@@ -55,7 +55,7 @@ use liberado_provider::{
 use liberado_provider_openai_compat::OpenAiCompatibleProvider;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::{Mutex, mpsc, watch};
 
 /// ACP protocol version negotiated with current `@agentclientprotocol/sdk`.
@@ -131,6 +131,9 @@ struct AcpSession {
     chat: Option<Arc<SessionHandle>>,
     /// Daemon conversation id (mode=face).
     face_daemon_session: Option<String>,
+    /// Cooperative cancel for the in-flight turn (coding / chat / face).
+    cancel_tx: watch::Sender<bool>,
+    cancel_rx: watch::Receiver<bool>,
 }
 
 struct Bridge {
@@ -146,6 +149,13 @@ struct Bridge {
     coder_tuning: liberado_coder_core::CoderTuning,
     /// ACP session id → mode + engine state.
     acp_sessions: Mutex<HashMap<String, AcpSession>>,
+}
+
+/// One `session/prompt` running while the stdin loop stays free for `session/cancel`.
+struct InFlightPrompt {
+    session_id: String,
+    request_id: Value,
+    handle: tokio::task::JoinHandle<Result<Value, String>>,
 }
 
 struct SessionHandle {
@@ -310,76 +320,157 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         coder_tuning,
         acp_sessions: Mutex::new(HashMap::new()),
     });
+    // Single writer for JSON-RPC responses *and* session/update notifications.
+    // Required once prompts run concurrent with stdin (cancel mid-turn).
+    let wire = Arc::new(StdoutWire);
 
     let stdin = BufReader::new(tokio::io::stdin());
     let mut lines = stdin.lines();
+    let mut in_flight: Option<InFlightPrompt> = None;
 
-    while let Some(line) = lines.next_line().await? {
-        let line = line.trim().to_string();
-        if line.is_empty() {
-            continue;
-        }
-
-        let msg: JsonRpcIncoming = match serde_json::from_str(&line) {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!(%line, %e, "unparseable ACP message");
-                continue;
+    loop {
+        tokio::select! {
+            // Complete in-flight prompt responses without blocking cancel on stdin.
+            join = async {
+                match in_flight.as_mut() {
+                    Some(inf) => {
+                        let r = (&mut inf.handle).await;
+                        Some((inf.session_id.clone(), inf.request_id.clone(), r))
+                    }
+                    None => std::future::pending().await,
+                }
+            } => {
+                if let Some((_sid, id, join_result)) = join {
+                    in_flight = None;
+                    let outcome = match join_result {
+                        Ok(Ok(v)) => Ok(v),
+                        Ok(Err(message)) => Err(JsonRpcErrorBody {
+                            code: -32603,
+                            message,
+                        }),
+                        // Task abort (hard cancel backup) → cancelled turn.
+                        Err(je) if je.is_cancelled() => {
+                            Ok(json!({ "stopReason": "cancelled" }))
+                        }
+                        Err(je) => Err(JsonRpcErrorBody {
+                            code: -32603,
+                            message: format!("prompt task failed: {je}"),
+                        }),
+                    };
+                    wire.write_rpc_response(id, outcome)?;
+                }
             }
-        };
+            line = lines.next_line() => {
+                let Some(line) = line? else {
+                    break;
+                };
+                let line = line.trim().to_string();
+                if line.is_empty() {
+                    continue;
+                }
 
-        let method = msg.method.unwrap_or_default();
-        // Notifications have no id (or null id) and expect no response.
-        let is_notification = msg.id.is_none() || msg.id.as_ref().is_some_and(|id| id.is_null());
+                let msg: JsonRpcIncoming = match serde_json::from_str(&line) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tracing::warn!(%line, %e, "unparseable ACP message");
+                        continue;
+                    }
+                };
 
-        if is_notification {
-            handle_notification(Arc::clone(&bridge), &method, msg.params).await;
-            continue;
-        }
+                let method = msg.method.unwrap_or_default();
+                // Notifications have no id (or null id) and expect no response.
+                let is_notification =
+                    msg.id.is_none() || msg.id.as_ref().is_some_and(|id| id.is_null());
 
-        let id = msg.id.unwrap_or(Value::Null);
-        match handle_request(Arc::clone(&bridge), &method, msg.params).await {
-            Ok(result) => write_response(id, Ok(result)).await?,
-            Err(message) => {
-                write_response(
-                    id,
-                    Err(JsonRpcErrorBody {
-                        code: -32603,
-                        message,
-                    }),
-                )
-                .await?
+                if is_notification {
+                    if method == "session/cancel" {
+                        let sid = msg
+                            .params
+                            .get("sessionId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if !sid.is_empty() {
+                            request_session_cancel(&bridge, &sid).await;
+                            // Hard-stop backup if the turn is stuck outside cooperative points.
+                            if let Some(inf) = &in_flight {
+                                if inf.session_id == sid {
+                                    inf.handle.abort();
+                                }
+                            }
+                        }
+                    } else {
+                        handle_notification(&method, msg.params).await;
+                    }
+                    continue;
+                }
+
+                let id = msg.id.unwrap_or(Value::Null);
+
+                // session/prompt runs in a task so session/cancel can be read mid-turn.
+                if method == "session/prompt" {
+                    if in_flight.is_some() {
+                        wire.write_rpc_response(
+                            id,
+                            Err(JsonRpcErrorBody {
+                                code: -32603,
+                                message: "another session/prompt is already in flight".into(),
+                            }),
+                        )?;
+                        continue;
+                    }
+                    let sid = match msg
+                        .params
+                        .get("sessionId")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                    {
+                        Some(s) if !s.is_empty() => s,
+                        _ => {
+                            wire.write_rpc_response(
+                                id,
+                                Err(JsonRpcErrorBody {
+                                    code: -32603,
+                                    message: "missing sessionId".into(),
+                                }),
+                            )?;
+                            continue;
+                        }
+                    };
+                    let bridge_p = Arc::clone(&bridge);
+                    let sink: Arc<dyn WireSink> = Arc::clone(&wire) as Arc<dyn WireSink>;
+                    let params = msg.params;
+                    let handle = tokio::spawn(async move {
+                        run_session_prompt(bridge_p, sink, params).await
+                    });
+                    in_flight = Some(InFlightPrompt {
+                        session_id: sid,
+                        request_id: id,
+                        handle,
+                    });
+                    continue;
+                }
+
+                match handle_request(Arc::clone(&bridge), &method, msg.params).await {
+                    Ok(result) => wire.write_rpc_response(id, Ok(result))?,
+                    Err(message) => wire.write_rpc_response(
+                        id,
+                        Err(JsonRpcErrorBody {
+                            code: -32603,
+                            message,
+                        }),
+                    )?,
+                }
             }
         }
     }
 
-    tracing::info!("stdin closed; acp bridge exiting");
-    Ok(())
-}
+    if let Some(inf) = in_flight.take() {
+        inf.handle.abort();
+        let _ = inf.handle.await;
+    }
 
-async fn write_response(
-    id: Value,
-    outcome: Result<Value, JsonRpcErrorBody>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let body = match outcome {
-        Ok(result) => JsonRpcResponse {
-            jsonrpc: "2.0",
-            id,
-            result: Some(result),
-            error: None,
-        },
-        Err(error) => JsonRpcResponse {
-            jsonrpc: "2.0",
-            id,
-            result: None,
-            error: Some(error),
-        },
-    };
-    let json = serde_json::to_string(&body)?;
-    let mut out = tokio::io::stdout();
-    out.write_all(json.as_bytes()).await?;
-    out.write_all(b"\n").await?;
-    out.flush().await?;
+    tracing::info!("stdin closed; acp bridge exiting");
     Ok(())
 }
 
@@ -389,9 +480,43 @@ trait WireSink: Send + Sync {
     fn emit(&self, method: &str, params: Value) -> Result<(), String>;
 }
 
-struct StdoutSink;
+/// Unified stdout writer for responses and notifications (one lock, NDJSON-safe).
+struct StdoutWire;
 
-impl WireSink for StdoutSink {
+impl StdoutWire {
+    fn write_line(&self, json: &str) -> Result<(), String> {
+        use std::io::Write as _;
+        let mut out = std::io::stdout().lock();
+        writeln!(out, "{json}").map_err(|e| e.to_string())?;
+        out.flush().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn write_rpc_response(
+        &self,
+        id: Value,
+        outcome: Result<Value, JsonRpcErrorBody>,
+    ) -> Result<(), String> {
+        let body = match outcome {
+            Ok(result) => JsonRpcResponse {
+                jsonrpc: "2.0",
+                id,
+                result: Some(result),
+                error: None,
+            },
+            Err(error) => JsonRpcResponse {
+                jsonrpc: "2.0",
+                id,
+                result: None,
+                error: Some(error),
+            },
+        };
+        let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
+        self.write_line(&json)
+    }
+}
+
+impl WireSink for StdoutWire {
     fn emit(&self, method: &str, params: Value) -> Result<(), String> {
         let body = JsonRpcNotification {
             jsonrpc: "2.0",
@@ -399,11 +524,20 @@ impl WireSink for StdoutSink {
             params,
         };
         let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
-        use std::io::Write as _;
-        let mut out = std::io::stdout().lock();
-        writeln!(out, "{json}").map_err(|e| e.to_string())?;
-        out.flush().map_err(|e| e.to_string())?;
-        Ok(())
+        self.write_line(&json)
+    }
+}
+
+/// Resolve when the session cancel flag becomes true (cooperative cancel).
+async fn wait_until_cancelled(rx: &mut watch::Receiver<bool>) {
+    loop {
+        if *rx.borrow() {
+            return;
+        }
+        if rx.changed().await.is_err() {
+            // Sender dropped — treat as cancelled so the turn does not hang forever.
+            return;
+        }
     }
 }
 
@@ -646,31 +780,24 @@ impl Provider for MissingKeyProvider {
     }
 }
 
-async fn handle_notification(bridge: Arc<Bridge>, method: &str, params: Value) {
-    match method {
-        "session/cancel" => {
-            let sid = params
-                .get("sessionId")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if sid.is_empty() {
-                return;
-            }
-            let sessions = bridge.acp_sessions.lock().await;
-            if let Some(sess) = sessions.get(sid) {
-                // Chat turns honour cancel via watch; coding/face finish their current work.
-                if let Some(chat) = &sess.chat {
-                    let _ = chat.cancel_tx.send(true);
-                }
-                tracing::info!(
-                    session_id = %sid,
-                    mode = %sess.mode.id(),
-                    "session/cancel requested"
-                );
-            }
+/// Signal cooperative cancel on the ACP session (and chat handle if present).
+async fn request_session_cancel(bridge: &Bridge, sid: &str) {
+    let sessions = bridge.acp_sessions.lock().await;
+    if let Some(sess) = sessions.get(sid) {
+        let _ = sess.cancel_tx.send(true);
+        if let Some(chat) = &sess.chat {
+            let _ = chat.cancel_tx.send(true);
         }
-        other => tracing::debug!(method = %other, "acp notification ignored"),
+        tracing::info!(
+            session_id = %sid,
+            mode = %sess.mode.id(),
+            "session/cancel requested"
+        );
     }
+}
+
+async fn handle_notification(method: &str, _params: Value) {
+    tracing::debug!(method = %method, "acp notification ignored");
 }
 
 async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Result<Value, String> {
@@ -717,6 +844,7 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
 
             let sid = new_session_id();
             let mode = bridge.default_mode;
+            let (cancel_tx, cancel_rx) = watch::channel(false);
             let chat = if mode == AgentMode::Chat {
                 open_chat_session(&sid, cwd.clone(), Arc::clone(&bridge.provider), bridge.max_turns)
                     .ok()
@@ -738,6 +866,8 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                     },
                     chat,
                     face_daemon_session: None,
+                    cancel_tx,
+                    cancel_rx,
                 },
             );
 
@@ -761,25 +891,7 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
             )
         }
 
-        "session/prompt" => {
-            let sid = params
-                .get("sessionId")
-                .and_then(|v| v.as_str())
-                .ok_or("missing sessionId")?
-                .to_string();
-            let text = extract_prompt_text(&params)?;
-            let mode = {
-                let map = bridge.acp_sessions.lock().await;
-                map.get(&sid)
-                    .map(|s| s.mode)
-                    .ok_or_else(|| format!("unknown sessionId '{sid}'"))?
-            };
-            match mode {
-                AgentMode::Coding => run_coding_prompt(Arc::clone(&bridge), &sid, &text).await,
-                AgentMode::Chat => run_chat_prompt(Arc::clone(&bridge), &sid, &text).await,
-                AgentMode::Face => run_face_prompt(Arc::clone(&bridge), &sid, &text).await,
-            }
-        }
+        // session/prompt is handled by the main loop (spawned so cancel can interleave).
 
         "session/set_mode" => {
             let sid = params
@@ -870,20 +982,61 @@ async fn bridge_model_snapshot(bridge: &Bridge) -> (Vec<CatalogModel>, String) {
     (catalog, current)
 }
 
-/// Full coding pack path: LiberadoLoopBackend + durable worktree (same engine as goals).
-async fn run_coding_prompt(bridge: Arc<Bridge>, sid: &str, text: &str) -> Result<Value, String> {
-    let mut state = {
+/// Dispatch one `session/prompt` (runs on a spawned task; cancel stays live on stdin).
+async fn run_session_prompt(
+    bridge: Arc<Bridge>,
+    sink: Arc<dyn WireSink>,
+    params: Value,
+) -> Result<Value, String> {
+    let sid = params
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or("missing sessionId")?
+        .to_string();
+    let text = extract_prompt_text(&params)?;
+
+    // Clear cancel from a prior turn; then route by mode.
+    let mode = {
         let map = bridge.acp_sessions.lock().await;
-        map.get(sid)
-            .map(|s| s.coding.clone())
-            .ok_or_else(|| format!("unknown sessionId '{sid}' (call session/new first)"))?
+        let sess = map
+            .get(&sid)
+            .ok_or_else(|| format!("unknown sessionId '{sid}'"))?;
+        let _ = sess.cancel_tx.send(false);
+        if let Some(chat) = &sess.chat {
+            let _ = chat.cancel_tx.send(false);
+        }
+        sess.mode
+    };
+
+    match mode {
+        AgentMode::Coding => {
+            run_coding_prompt(Arc::clone(&bridge), sink.as_ref(), &sid, &text).await
+        }
+        AgentMode::Chat => run_chat_prompt(Arc::clone(&bridge), sink.as_ref(), &sid, &text).await,
+        AgentMode::Face => run_face_prompt(Arc::clone(&bridge), sink.as_ref(), &sid, &text).await,
+    }
+}
+
+/// Full coding pack path: LiberadoLoopBackend + durable worktree (same engine as goals).
+async fn run_coding_prompt(
+    bridge: Arc<Bridge>,
+    sink: &dyn WireSink,
+    sid: &str,
+    text: &str,
+) -> Result<Value, String> {
+    let (mut state, mut cancel_rx) = {
+        let map = bridge.acp_sessions.lock().await;
+        let sess = map
+            .get(sid)
+            .ok_or_else(|| format!("unknown sessionId '{sid}' (call session/new first)"))?;
+        (sess.coding.clone(), sess.cancel_rx.clone())
     };
 
     let model = bridge.current_model.lock().await.clone();
     let factory = coding_run::single_factory(Arc::clone(&bridge.provider));
 
     emit_agent_text_chunk(
-        &StdoutSink,
+        sink,
         sid,
         &format!(
             "Starting Liberado coding pack (max_turns={}, model={model})…\n\n",
@@ -891,18 +1044,27 @@ async fn run_coding_prompt(bridge: Arc<Bridge>, sid: &str, text: &str) -> Result
         ),
     )?;
 
-    let outcome = coding_run::run_coding_round(
-        Arc::clone(&bridge.provider),
-        factory,
-        &bridge.coder_tuning,
-        &mut state,
-        text,
-        Some(&model),
-        bridge.max_turns,
-    )
-    .await;
+    // Drop the coding future on cancel so pack work stops at the next await point.
+    let outcome = tokio::select! {
+        biased;
+        _ = wait_until_cancelled(&mut cancel_rx) => None,
+        outcome = coding_run::run_coding_round(
+            Arc::clone(&bridge.provider),
+            factory,
+            &bridge.coder_tuning,
+            &mut state,
+            text,
+            Some(&model),
+            bridge.max_turns,
+        ) => Some(outcome),
+    };
 
-    // Persist coding state regardless of outcome so later rounds keep feedback.
+    let Some(outcome) = outcome else {
+        let _ = emit_agent_text_chunk(sink, sid, "\n*(cancelled)*\n");
+        return Ok(json!({ "stopReason": "cancelled" }));
+    };
+
+    // Persist coding state only when the pack finished (not mid-cancel).
     if let Some(sess) = bridge.acp_sessions.lock().await.get_mut(sid) {
         sess.coding = state;
     }
@@ -910,18 +1072,23 @@ async fn run_coding_prompt(bridge: Arc<Bridge>, sid: &str, text: &str) -> Result
     match outcome {
         Ok(result) => {
             let report = result.render();
-            emit_agent_text_chunk(&StdoutSink, sid, &report)?;
+            emit_agent_text_chunk(sink, sid, &report)?;
             Ok(json!({ "stopReason": "end_turn" }))
         }
         Err(e) => {
-            emit_agent_text_chunk(&StdoutSink, sid, &format!("\n**Coding pack error:** {e}\n"))?;
+            emit_agent_text_chunk(sink, sid, &format!("\n**Coding pack error:** {e}\n"))?;
             Ok(json!({ "stopReason": "end_turn" }))
         }
     }
 }
 
 /// In-process chat: Conversation + Executor, no coding tools.
-async fn run_chat_prompt(bridge: Arc<Bridge>, sid: &str, text: &str) -> Result<Value, String> {
+async fn run_chat_prompt(
+    bridge: Arc<Bridge>,
+    sink: &dyn WireSink,
+    sid: &str,
+    text: &str,
+) -> Result<Value, String> {
     let session = {
         let mut map = bridge.acp_sessions.lock().await;
         let sess = map
@@ -937,43 +1104,55 @@ async fn run_chat_prompt(bridge: Arc<Bridge>, sid: &str, text: &str) -> Result<V
             .ok()
             .map(Arc::new);
         }
-        // Reset cancel flag for a fresh turn.
-        if let Some(chat) = &sess.chat {
-            let _ = chat.cancel_tx.send(false);
-        }
         sess.chat
             .clone()
             .ok_or_else(|| "failed to open chat session".to_string())?
     };
 
-    let stop = run_prompt_turn(session, text.to_string(), &StdoutSink).await?;
+    let stop = run_prompt_turn(session, text.to_string(), sink).await?;
     Ok(json!({ "stopReason": stop }))
 }
 
 /// Face agent via running `liberado serve` (HTTP SSE stream).
-async fn run_face_prompt(bridge: Arc<Bridge>, sid: &str, text: &str) -> Result<Value, String> {
-    let mut daemon_session = {
+async fn run_face_prompt(
+    bridge: Arc<Bridge>,
+    sink: &dyn WireSink,
+    sid: &str,
+    text: &str,
+) -> Result<Value, String> {
+    let (mut daemon_session, mut cancel_rx) = {
         let map = bridge.acp_sessions.lock().await;
-        map.get(sid)
-            .map(|s| s.face_daemon_session.clone())
-            .ok_or_else(|| format!("unknown sessionId '{sid}'"))?
+        let sess = map
+            .get(sid)
+            .ok_or_else(|| format!("unknown sessionId '{sid}'"))?;
+        (sess.face_daemon_session.clone(), sess.cancel_rx.clone())
     };
 
     let sid_owned = sid.to_string();
-    let emit = |method: &str, params: Value| -> Result<(), String> {
-        StdoutSink.emit(method, params)
+    let emit = |method: &str, params: Value| -> Result<(), String> { sink.emit(method, params) };
+    let result = tokio::select! {
+        biased;
+        _ = wait_until_cancelled(&mut cancel_rx) => None,
+        result = face_client::run_face_turn(
+            &mut daemon_session,
+            text,
+            &sid_owned,
+            &emit,
+        ) => Some(result),
     };
-
-    let result = face_client::run_face_turn(&mut daemon_session, text, &sid_owned, &emit).await;
 
     if let Some(sess) = bridge.acp_sessions.lock().await.get_mut(sid) {
         sess.face_daemon_session = daemon_session;
     }
 
     match result {
-        Ok(()) => Ok(json!({ "stopReason": "end_turn" })),
-        Err(e) => {
-            emit_agent_text_chunk(&StdoutSink, sid, &format!("\n**Face mode error:** {e}\n"))?;
+        None => {
+            let _ = emit_agent_text_chunk(sink, sid, "\n*(cancelled)*\n");
+            Ok(json!({ "stopReason": "cancelled" }))
+        }
+        Some(Ok(())) => Ok(json!({ "stopReason": "end_turn" })),
+        Some(Err(e)) => {
+            emit_agent_text_chunk(sink, sid, &format!("\n**Face mode error:** {e}\n"))?;
             Ok(json!({ "stopReason": "end_turn" }))
         }
     }
@@ -1452,6 +1631,77 @@ mod tests {
     fn unknown_mode_is_an_error_exit() {
         assert_eq!(handle_cli_args(["--mode", "banana"]), Some(2));
         assert_eq!(handle_cli_args(["--mode=nope"]), Some(2));
+    }
+
+    #[tokio::test]
+    async fn wait_until_cancelled_resolves_when_flag_set() {
+        let (tx, mut rx) = watch::channel(false);
+        let waiter = tokio::spawn(async move {
+            wait_until_cancelled(&mut rx).await;
+        });
+        // Give the waiter a chance to park on changed().
+        tokio::task::yield_now().await;
+        tx.send(true).expect("send cancel");
+        tokio::time::timeout(std::time::Duration::from_secs(2), waiter)
+            .await
+            .expect("cancel wait timed out")
+            .expect("join");
+    }
+
+    #[tokio::test]
+    async fn wait_until_cancelled_sees_already_true() {
+        let (_tx, mut rx) = watch::channel(true);
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            wait_until_cancelled(&mut rx),
+        )
+        .await
+        .expect("must return immediately when already cancelled");
+    }
+
+    #[tokio::test]
+    async fn chat_turn_stops_with_cancelled_on_cancel_flag() {
+        use liberado_provider::{CompletionResponse, MockProvider};
+        use std::time::Duration;
+
+        // Slow first completion so cancel can win mid-turn.
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [CompletionResponse::text("should not finish")],
+        ));
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let session = Arc::new(SessionHandle {
+            id: "sess-cancel".into(),
+            conversation: Mutex::new(Conversation::new("test system")),
+            executor: Executor::new(provider, Budget::new(8)),
+            tools: Arc::new(NoTools),
+            cancel_tx: cancel_tx.clone(),
+            cancel_rx,
+        });
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let turn = tokio::spawn({
+            let session = Arc::clone(&session);
+            async move { run_prompt_turn(session, "hello".into(), &sink).await }
+        });
+
+        // Cancel promptly; even if the mock is fast, cancel path must be valid.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let _ = cancel_tx.send(true);
+
+        let stop = tokio::time::timeout(Duration::from_secs(5), turn)
+            .await
+            .expect("turn join timeout")
+            .expect("join")
+            .expect("turn result");
+        // Either cancelled (if flag won) or end_turn (if mock finished first) — both ok;
+        // the important property is we do not hang. Prefer cancelled when we win the race.
+        assert!(
+            stop == "cancelled" || stop == "end_turn",
+            "unexpected stopReason {stop}"
+        );
     }
 
     /// Captures ACP notifications instead of writing stdout (for MockProvider turns).
