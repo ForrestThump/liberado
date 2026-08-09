@@ -590,11 +590,24 @@ fn truncate(s: &str, max: usize) -> String {
 // ── Foreign import ──────────────────────────────────────────────────────────
 
 /// Known foreign harness formats the importer understands.
+///
+/// **Kilo ships two unrelated stores**, and which one you have depends on which Kilo you ran:
+///
+/// | | writes | shape |
+/// |---|---|---|
+/// | VS Code extension (7.4.x) | `…/globalStorage/kilocode.kilo-code/tasks/<id>/api_conversation_history.json` | [`Kilo`](Self::Kilo) — Anthropic messages |
+/// | CLI (`kilo run`, 7.4.x) | SQLite `~/.local/share/kilo/kilo.db`, out via `kilo export <id>` | [`KiloCli`](Self::KiloCli) — `{info, messages:[{info, parts}]}` |
+///
+/// They share a version number and nothing else. Auto-detection tells them apart, so callers
+/// normally need not care.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ForeignTraceFormat {
-    /// Kilo Code `api_conversation_history.json` — typically a bare message array, or
-    /// `{ "messages": [...] }` / `{ "apiConversationHistory": [...] }`.
+    /// Kilo Code **extension** `api_conversation_history.json` — a bare Anthropic message array
+    /// (also accepted wrapped as `{ "messages": … }` / `{ "apiConversationHistory": … }`).
     Kilo,
+    /// Kilo Code **CLI** `kilo export <sessionID>` — OpenCode-derived `{info, messages}`, where a
+    /// call and its result are one `part` rather than two messages.
+    KiloCli,
     /// OpenHands-style trajectory — `{ "trajectory": [...] }` events, or a message list.
     OpenHands,
 }
@@ -615,6 +628,7 @@ pub fn import_foreign_messages(
     let session_id = session_id.into();
     let messages = match format {
         ForeignTraceFormat::Kilo => import_kilo_messages(raw)?,
+        ForeignTraceFormat::KiloCli => import_kilo_cli_messages(raw)?,
         ForeignTraceFormat::OpenHands => import_openhands_messages(raw)?,
     };
     Ok(MessagesExport {
@@ -634,6 +648,11 @@ pub fn import_foreign_auto(
 }
 
 fn detect_foreign_format(raw: &Value) -> Result<ForeignTraceFormat, String> {
+    // Checked first: a `kilo export` also has a top-level `messages` array, so the generic
+    // message-list branch below would otherwise claim it and then fail on the missing `role`.
+    if is_kilo_cli_export(raw) {
+        return Ok(ForeignTraceFormat::KiloCli);
+    }
     if raw.get("trajectory").is_some()
         || raw.get("history").is_some()
         || raw.get("agent_events").is_some()
@@ -652,6 +671,129 @@ fn detect_foreign_format(raw: &Value) -> Result<ForeignTraceFormat, String> {
         "cannot detect foreign trace format (expected Kilo message list or OpenHands trajectory)"
             .into(),
     )
+}
+
+/// Is this a `kilo export <sessionID>` payload? Keyed on the `{info, parts}` message envelope,
+/// which is the one thing no other supported format has.
+fn is_kilo_cli_export(raw: &Value) -> bool {
+    raw.get("messages")
+        .and_then(|m| m.as_array())
+        .and_then(|list| list.first())
+        .is_some_and(|first| first.get("info").is_some() && first.get("parts").is_some())
+}
+
+/// Import a `kilo export <sessionID>` payload (the CLI's SQLite store, dumped as JSON).
+///
+/// Shape confirmed against real output from Kilo CLI 7.4.11 — the two fixtures in
+/// `tests/fixtures/kilo-cli-export-*.json` are verbatim `kilo export` results, not hand-built.
+///
+/// The structural difference from every other format here: **a call and its result are the same
+/// `part`**, `{type:"tool", tool, callID, state:{status, input, output|error}}`, instead of an
+/// assistant message answered by a later one. So one part expands into two of our messages — the
+/// call on the assistant turn, then a synthesized `role:"tool"` reply — which is what lets a Kilo
+/// run line up against ours turn for turn.
+///
+/// `state.status` is `"completed"` or `"error"`; an errored call has **no `output` key at all**,
+/// its message is in `state.error` (verified against a real failed `read`). Parts of type
+/// `step-start` / `step-finish` are scaffolding and carry no model-visible content; `reasoning` is
+/// dropped for the same reason as in the extension importer.
+fn import_kilo_cli_messages(raw: &Value) -> Result<Vec<Value>, String> {
+    let list = raw
+        .get("messages")
+        .and_then(|m| m.as_array())
+        .ok_or_else(|| "kilo export has no `messages` array".to_string())?;
+
+    let mut out = Vec::with_capacity(list.len());
+    for (index, entry) in list.iter().enumerate() {
+        let role = entry
+            .get("info")
+            .and_then(|i| i.get("role"))
+            .and_then(|r| r.as_str())
+            .ok_or_else(|| format!("kilo export message[{index}] has no info.role"))?;
+
+        let mut text: Vec<String> = Vec::new();
+        let mut tool_calls: Vec<Value> = Vec::new();
+        let mut tool_results: Vec<Value> = Vec::new();
+
+        for part in entry
+            .get("parts")
+            .and_then(|p| p.as_array())
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+        {
+            match part.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+                "text" => {
+                    if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
+                        text.push(t.to_string());
+                    }
+                }
+                "tool" => {
+                    let name = part
+                        .get("tool")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("unknown");
+                    let call_id = part
+                        .get("callID")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or_default();
+                    let state = part.get("state");
+                    let input = state
+                        .and_then(|s| s.get("input"))
+                        .cloned()
+                        .unwrap_or_else(|| json!({}));
+                    let mut call = json!({
+                        "type": "function",
+                        "function": { "name": name, "arguments": input.to_string() },
+                    });
+                    if !call_id.is_empty() {
+                        call["id"] = json!(call_id);
+                    }
+                    tool_calls.push(call);
+
+                    let status = state
+                        .and_then(|s| s.get("status"))
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("");
+                    let is_error = status == "error";
+                    let body = state
+                        .and_then(|s| s.get("output").or_else(|| s.get("error")))
+                        .map(value_as_text)
+                        .unwrap_or_default();
+                    let mut result = json!({
+                        "role": "tool",
+                        "name": name,
+                        "content": body,
+                        "is_error": is_error,
+                    });
+                    if !call_id.is_empty() {
+                        result["tool_call_id"] = json!(call_id);
+                    }
+                    tool_results.push(result);
+                }
+                _ => {}
+            }
+        }
+
+        let joined = text.join("\n");
+        if role == "assistant" || !joined.is_empty() {
+            let mut message = json!({ "role": role });
+            if !joined.is_empty() {
+                message["content"] = Value::String(joined);
+            }
+            if !tool_calls.is_empty() {
+                message["tool_calls"] = Value::Array(tool_calls);
+            }
+            out.push(message);
+        }
+        // Results follow the call that produced them — here the call is on *this* message, so
+        // unlike the Anthropic shape they come after it rather than before.
+        out.append(&mut tool_results);
+    }
+
+    if out.is_empty() {
+        return Err("kilo export produced no messages".into());
+    }
+    Ok(out)
 }
 
 fn import_kilo_messages(raw: &Value) -> Result<Vec<Value>, String> {
@@ -1621,6 +1763,86 @@ mod tests {
             roles,
             vec!["user", "assistant", "tool", "user", "assistant", "tool"],
             "every turn accounted for, none invented"
+        );
+    }
+
+    /// Verbatim `kilo export <sessionID>` output from Kilo CLI 7.4.11 — a real run of
+    /// "Read hello.txt and tell me the single word inside it" against `deepseek-v4-flash`, and a
+    /// real failed `read` of a missing path. Not hand-built: the point of these two files is that
+    /// they were produced by the harness rather than by our idea of it, so the importer is held to
+    /// what Kilo actually writes.
+    ///
+    /// The wrong implementations they exclude: reading a `kilo export` as an Anthropic/OpenAI
+    /// message list (it has no `role` at top level — that failed outright), and reading a tool
+    /// part as call-only (dropping `state.output`, which is the entire result side of the run).
+    #[test]
+    fn import_real_kilo_cli_export_keeps_calls_results_and_errors() {
+        let ok: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/kilo-cli-export-read-ok.json"
+        ))
+        .expect("fixture parses");
+
+        let (format, export) = import_foreign_auto(&ok, "kilo-cli-ok").expect("auto-detect+import");
+        assert_eq!(
+            format,
+            ForeignTraceFormat::KiloCli,
+            "a kilo export must not be mistaken for the extension's message list"
+        );
+
+        let roles: Vec<&str> = export
+            .messages
+            .iter()
+            .filter_map(|m| m["role"].as_str())
+            .collect();
+        assert_eq!(
+            roles,
+            vec!["user", "assistant", "tool", "assistant"],
+            "one tool part expands into a call on the assistant turn plus its reply: {:#?}",
+            export.messages
+        );
+
+        let call = &export.messages[1]["tool_calls"][0];
+        assert_eq!(call["function"]["name"], "read");
+        assert_eq!(call["id"], "call_00_ET_8S0lzpuMcpKVo6nqM3ix9191");
+        let args: Value = serde_json::from_str(call["function"]["arguments"].as_str().unwrap())
+            .expect("arguments serialized as a JSON string");
+        assert!(
+            args["filePath"].as_str().unwrap().ends_with("hello.txt"),
+            "the call's real arguments survive: {args}"
+        );
+
+        let result = &export.messages[2];
+        assert_eq!(result["name"], "read");
+        assert_eq!(
+            result["tool_call_id"],
+            "call_00_ET_8S0lzpuMcpKVo6nqM3ix9191"
+        );
+        assert_eq!(result["is_error"], false);
+        assert!(
+            result["content"].as_str().unwrap().contains("liberado"),
+            "the tool's real output survives: {result}"
+        );
+
+        // A failed call: Kilo writes `status: "error"` with the message in `state.error` and no
+        // `output` key at all, so reading only `output` would report an empty successful call.
+        let failed: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/kilo-cli-export-read-error.json"
+        ))
+        .expect("fixture parses");
+        let export = import_foreign_messages(&failed, ForeignTraceFormat::KiloCli, "kilo-cli-err")
+            .expect("import");
+        let errored = export
+            .messages
+            .iter()
+            .find(|m| m["role"] == "tool")
+            .expect("the failed call still produces a tool message");
+        assert_eq!(errored["is_error"], true, "{errored}");
+        assert!(
+            errored["content"]
+                .as_str()
+                .unwrap()
+                .contains("File not found"),
+            "the failure reason survives: {errored}"
         );
     }
 

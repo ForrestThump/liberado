@@ -33,7 +33,7 @@ fn usage() -> &'static str {
     "usage:\n  \
      liberado coder trace <session-id|path> [--dir <trace-dir>] [--path <file>]\n  \
      liberado coder compare <trace-a> <trace-b> [--dir <trace-dir>] [--json]\n  \
-     liberado coder import <foreign.json> [-o <out.messages.json>] [--format kilo|openhands|auto] [--session-id <id>]"
+     liberado coder import <foreign.json> [-o <out.messages.json>] [--format kilo|kilo-cli|openhands|auto] [--session-id <id>]"
 }
 
 fn cmd_trace(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -137,12 +137,15 @@ fn cmd_import(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std:
             "--format" => {
                 let f = args.next().ok_or("--format requires kilo|openhands|auto")?;
                 format = match f.as_str() {
+                    // `kilo` is the VS Code extension's api_conversation_history.json;
+                    // `kilo-cli` is `kilo export` from the CLI. Different products, same name.
                     "kilo" => Some(ForeignTraceFormat::Kilo),
+                    "kilo-cli" | "kilocli" => Some(ForeignTraceFormat::KiloCli),
                     "openhands" | "oh" => Some(ForeignTraceFormat::OpenHands),
                     "auto" => None,
                     other => {
                         return Err(format!(
-                            "unknown --format '{other}' (expected kilo|openhands|auto)"
+                            "unknown --format '{other}' (expected kilo|kilo-cli|openhands|auto)"
                         )
                         .into());
                     }
