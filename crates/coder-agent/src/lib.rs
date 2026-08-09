@@ -365,7 +365,9 @@ impl LiberadoLoopBackend {
             ));
         }
         let task = Task::new(instructions, roles::coder_goal(&request));
-        let executor = Executor::new(provider, Budget::new(max_turns));
+        let executor = Executor::new(provider, Budget::new(max_turns)).with_observer(Arc::new(
+            trace::TurnTracer::new(events.clone(), worker_role_name),
+        ));
         let report = executor
             .execute(&runtime, task)
             .await
@@ -701,6 +703,7 @@ mod tests {
             config: CoderRunConfig {
                 backend: LIBERADO_LOOP_BACKEND.to_string(),
                 trace_dir: None,
+                trace_formats: Vec::new(),
                 planner: disabled_role(),
                 coder: role(),
                 critic: disabled_role(),

@@ -79,6 +79,30 @@
 # Raising these is cheap. Genuine repetition — the same call over and over — is caught separately
 # and more precisely by the executor's argument-aware doom-loop and cycle guards, which fire on
 # calls that actually repeat rather than on inspection generally.
+# --- Run traces -------------------------------------------------------------------------------
+#
+# Every coding run can write a durable record of what the model was sent, what it said, which tools
+# it was offered on each turn, and why the run ended. This is the difference between diagnosing a
+# stuck run by reading a transcript and diagnosing it by re-deriving state from source.
+#
+# `trace_dir` is relative to the workspace unless absolute, so a run's evidence lands with the run.
+# Set it to `false`-ish by removing it entirely to disable tracing.
+#
+# trace_dir = "coder-traces"
+#
+# `trace_formats` picks the serializations written. `native` is canonical and lossless: it is the
+# only format with a slot for the harness's own decisions (tools offered per turn, guard strikes,
+# finish reason). `openai-messages` is a flat message list — the shape Kilo Code stores as
+# api_conversation_history.json and OpenHands stores as trajectories — which makes a same-task,
+# same-model comparison against another harness a near-direct diff.
+#
+# The exporters are deliberately lossy *views* of the native record, never a replacement for it:
+# a message list has nowhere to put "which tools were offered", so that data would simply vanish if
+# an export were treated as storage. Because exports are derived, they can be regenerated at any
+# time and nothing is locked into another project's schema.
+#
+# trace_formats = ["native", "openai-messages"]
+
 # [coder.progress]
 # read_only_turn_limit = 20   # inspect calls with no successful edit; nudge at 20, stop at 40
 # same_tool_limit = 10        # same tool consecutively; nudge at 10, stop at 20

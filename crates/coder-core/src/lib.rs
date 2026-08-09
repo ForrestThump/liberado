@@ -13,7 +13,7 @@ mod intake;
 mod tuning;
 mod verify;
 
-pub use tuning::CoderTuning;
+pub use tuning::{CoderTuning, TraceFormat};
 
 pub use coherence::{
     ContractFinding, Severity, contract_conflicts, contradictions, profile_injected_ids,
@@ -546,6 +546,9 @@ pub struct CoderRunConfig {
     pub backend: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_dir: Option<String>,
+    /// Which trace formats to write. Empty means native only — see [`TraceFormat`].
+    #[serde(default)]
+    pub trace_formats: Vec<TraceFormat>,
     pub planner: CoderRoleConfig,
     pub coder: CoderRoleConfig,
     pub critic: CoderRoleConfig,
@@ -700,6 +703,34 @@ pub enum CoderEvent {
     ModelTurnFinished {
         role: String,
         turn: u32,
+        /// The tools **offered** on this turn, in catalog order.
+        ///
+        /// Guards withdraw tools as a run proceeds, so this changes turn to turn. Without it,
+        /// answering "did the model even have `write_file`?" meant reading `catalog()` and
+        /// `PathPolicy` and working out which mode was active — which is how four failed runs got
+        /// misdiagnosed before anyone thought to check.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tools_offered: Vec<String>,
+        /// How many messages the model was sent this turn.
+        #[serde(default)]
+        message_count: usize,
+        /// The model's own text, verbatim and untruncated. `None` when it emitted only tool calls.
+        ///
+        /// Deliberately not run through `preview_str`: the 500-char cap exists to protect the event
+        /// bus and the UI, and a trace file has no such constraint. Truncating the one field that
+        /// explains the model's reasoning would defeat the point of recording it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<String>,
+        /// `"tool_calls"` or `"prose"` — why the turn ended.
+        #[serde(default)]
+        finish_reason: String,
+        /// Tool names the model asked for, in call order.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tool_calls: Vec<String>,
+        #[serde(default)]
+        prompt_tokens: u32,
+        #[serde(default)]
+        completion_tokens: u32,
         at: DateTime<Utc>,
     },
     ToolStarted {
@@ -802,6 +833,7 @@ mod tests {
             config: CoderRunConfig {
                 backend: LIBERADO_LOOP_BACKEND.to_string(),
                 trace_dir: Some("coder-traces".to_string()),
+                trace_formats: Vec::new(),
                 planner: role("deepseek/deepseek-v4-pro"),
                 coder: role("deepseek/deepseek-v4-pro"),
                 critic: role("deepseek/deepseek-v4-flash"),

@@ -30,6 +30,16 @@ pub struct CoderTuning {
         skip_serializing_if = "Option::is_none"
     )]
     pub trace_dir: Option<String>,
+    /// Which trace formats to write, from `[coder] trace_formats`.
+    ///
+    /// `native` is the canonical record and is always written when tracing is on — it is the only
+    /// format with a slot for the harness's own decisions (which tools were *offered* on a turn,
+    /// which a guard withdrew, why a run ended). The exporters exist so a run can be compared
+    /// against another harness on the same task, and are deliberately lossy views of the native
+    /// record rather than a replacement for it: an export can always be regenerated, so nothing is
+    /// locked into a third party's schema.
+    #[serde(default = "default_trace_formats")]
+    pub trace_formats: Vec<TraceFormat>,
     #[serde(default = "default_coder_planner")]
     pub planner: CoderRoleConfig,
     #[serde(default = "default_coder_role")]
@@ -103,6 +113,7 @@ impl CoderTuning {
         CoderRunConfig {
             backend: self.backend.clone(),
             trace_dir: self.trace_dir.clone(),
+            trace_formats: self.trace_formats.clone(),
             planner: self.planner.clone(),
             coder: self.coder.clone(),
             critic: self.critic.clone(),
@@ -200,6 +211,7 @@ impl Default for CoderTuning {
         Self {
             backend: default_coder_backend(),
             trace_dir: default_coder_trace_dir(),
+            trace_formats: default_trace_formats(),
             planner: default_coder_planner(),
             coder: default_coder_role(),
             critic: default_coder_critic(),
@@ -220,6 +232,27 @@ impl Default for CoderTuning {
 
 fn default_coder_backend() -> String {
     LIBERADO_LOOP_BACKEND.to_string()
+}
+
+/// A trace serialization. See [`CoderTuning::trace_formats`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TraceFormat {
+    /// This system's own record: every `CoderEvent`, including guard decisions and the tool
+    /// catalog per turn. Lossless.
+    Native,
+    /// A flat OpenAI-style message list (`system`/`user`/`assistant`/`tool`), the shape most other
+    /// harnesses persist — Kilo Code writes essentially this as `api_conversation_history.json`,
+    /// and OpenHands trajectories are the same shape. Chosen as the first exporter because it
+    /// makes a same-task, same-model comparison a near-direct diff.
+    ///
+    /// Lossy by construction: the message list has nowhere to put `tools_offered` or a guard
+    /// strike, which is exactly why it is an export and not the storage format.
+    OpenaiMessages,
+}
+
+fn default_trace_formats() -> Vec<TraceFormat> {
+    vec![TraceFormat::Native]
 }
 
 fn default_coder_trace_dir() -> Option<String> {

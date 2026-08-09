@@ -400,7 +400,8 @@ impl CodingSessionPack {
             workspace: WorkspaceRef::new(attempt_workspace.to_string_lossy(), "HEAD"),
             config: CoderRunConfig {
                 backend: LIBERADO_LOOP_BACKEND.into(),
-                trace_dir: None,
+                trace_dir: self.trace_dir.clone(),
+                trace_formats: self.trace_formats.clone(),
                 planner: disabled.clone(),
                 coder: role.clone(),
                 critic: disabled,

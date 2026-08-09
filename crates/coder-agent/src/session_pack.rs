@@ -84,6 +84,14 @@ pub struct CodingSessionPack {
     /// entirely on how many files the change spans — and they were the one thing you had to
     /// recompile to adjust.
     progress: liberado_coder_core::ProgressPolicy,
+    /// Where durable run traces are written (`[coder] trace_dir`), or `None` to write none.
+    ///
+    /// Seventh instance of the same defect: `CoderTuning::trace_dir` has a default of
+    /// `Some("coder-traces")` and every consumer hardcoded `None`, so the trace facility — which
+    /// has a passing test — had never produced a file in production.
+    trace_dir: Option<String>,
+    /// Trace formats to write (`[coder] trace_formats`). Empty = native only.
+    trace_formats: Vec<liberado_coder_core::TraceFormat>,
 }
 
 impl CodingSessionPack {
@@ -99,6 +107,8 @@ impl CodingSessionPack {
             coder_role: liberado_coder_core::CoderTuning::default().coder,
             gate: liberado_coder_core::CoderGateConfig::default(),
             progress: liberado_coder_core::ProgressPolicy::default(),
+            trace_dir: None,
+            trace_formats: Vec::new(),
         }
     }
 
@@ -118,6 +128,8 @@ impl CodingSessionPack {
             coder_role: liberado_coder_core::CoderTuning::default().coder,
             gate: liberado_coder_core::CoderGateConfig::default(),
             progress: liberado_coder_core::ProgressPolicy::default(),
+            trace_dir: None,
+            trace_formats: Vec::new(),
         }
     }
 
@@ -159,6 +171,18 @@ impl CodingSessionPack {
     }
 
     /// Progress-guard thresholds for sessions this pack runs (`[coder.progress]`).
+    /// Where run traces are written for sessions this pack runs (`[coder] trace_dir`).
+    pub fn with_trace_dir(mut self, dir: Option<String>) -> Self {
+        self.trace_dir = dir;
+        self
+    }
+
+    /// Which trace formats sessions this pack runs should write (`[coder] trace_formats`).
+    pub fn with_trace_formats(mut self, formats: Vec<liberado_coder_core::TraceFormat>) -> Self {
+        self.trace_formats = formats;
+        self
+    }
+
     pub fn with_progress(mut self, policy: liberado_coder_core::ProgressPolicy) -> Self {
         self.progress = policy;
         self

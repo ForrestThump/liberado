@@ -183,7 +183,12 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
         workspace: WorkspaceRef::new(workspace.to_string_lossy().to_string(), "HEAD"),
         config: CoderRunConfig {
             backend: "liberado-loop".to_string(),
-            trace_dir: None,
+            // Was `None`, which silently disabled the only durable record of a run. The headless
+            // runner is the unattended path, so it is the one that most needs a trace. Resolved
+            // relative to the workspace so a run's trace lands with the run, not in the cwd of
+            // whatever launched it.
+            trace_dir: Some(resolve_trace_dir(&workspace, tuning.trace_dir.as_deref())),
+            trace_formats: tuning.trace_formats.clone(),
             planner: disabled_role(),
             coder: CoderRoleConfig {
                 model,
@@ -809,6 +814,23 @@ fn task_usage() -> String {
 
 // --- tests -----------------------------------------------------------------
 
+/// Where this run's trace file goes.
+///
+/// A bare `coder-traces` (the `[coder] trace_dir` default) is relative, and the headless runner is
+/// launched from arbitrary working directories — CI, a shepherd kickback, a shell in some other
+/// checkout — so honouring it literally scatters traces wherever the process happened to start.
+/// Anchoring a relative setting to the workspace keeps a run's evidence next to the run. An
+/// absolute setting is respected as given, which is what someone collecting traces centrally wants.
+fn resolve_trace_dir(workspace: &Path, configured: Option<&str>) -> String {
+    let configured = configured.unwrap_or("coder-traces");
+    let path = Path::new(configured);
+    if path.is_absolute() {
+        configured.to_string()
+    } else {
+        workspace.join(path).to_string_lossy().to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -972,3 +994,4 @@ mod tests {
         assert!(err.contains("--prompt"));
     }
 }
+

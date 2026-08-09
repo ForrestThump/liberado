@@ -560,6 +560,7 @@ fn child_request(worktree_root: &Path, task: &CodingSubtask, model: &str) -> Cod
         config: CoderRunConfig {
             backend: LIBERADO_LOOP_BACKEND.into(),
             trace_dir: None,
+            trace_formats: Vec::new(),
             planner: disabled.clone(),
             coder: role.clone(),
             critic: disabled,

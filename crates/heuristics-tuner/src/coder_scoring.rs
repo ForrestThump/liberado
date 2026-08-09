@@ -394,6 +394,7 @@ fn build_request(
         config: CoderRunConfig {
             backend: LIBERADO_LOOP_BACKEND.to_string(),
             trace_dir: None,
+            trace_formats: Vec::new(),
             planner: disabled.clone(),
             coder: role.clone(),
             critic: disabled,

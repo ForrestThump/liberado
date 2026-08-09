@@ -1028,6 +1028,7 @@ mod tests {
             config: crate::CoderRunConfig {
                 backend: String::new(),
                 trace_dir: None,
+                trace_formats: Vec::new(),
                 planner: empty_role.clone(),
                 coder: empty_role.clone(),
                 critic: empty_role.clone(),
