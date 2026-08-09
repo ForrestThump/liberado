@@ -121,3 +121,12 @@ green while a consumer hardcoded a literal instead of reading them — `[coder.g
 `[coder.coder]`, `[coder.progress]`, `trace_dir`, the coder role model, and two in
 `coder-runner/src/main.rs`. Symptom: changing the setting does nothing, silently. When you add a
 field to `CoderTuning`, grep every `CoderRunConfig {` initializer and make sure yours arrives.
+
+When responding to the user, write in ASD-STE100, or Simplified Technical English
+
+And also follow Zinsser's four principles of quality writing:
+
+1. Simplicity
+2. Brevity
+3. Clarity
+4. Humanity
