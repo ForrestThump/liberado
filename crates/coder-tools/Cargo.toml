@@ -9,6 +9,7 @@ repository.workspace = true
 description = "Executor ToolRuntime implementation for Liberado's Rust-native coder"
 
 [dependencies]
+regex.workspace = true
 tracing.workspace = true
 liberado-common.workspace = true
 async-trait.workspace = true
