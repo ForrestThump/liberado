@@ -586,6 +586,154 @@ pub struct CoderRunConfig {
     /// Hashline edit mode (`[coder.hashline]`). Default off.
     #[serde(default)]
     pub hashline: HashlineConfig,
+    /// Post-run honesty review (`[coder.session_critic]`). Default off.
+    #[serde(default)]
+    pub session_critic: SessionCriticConfig,
+}
+
+// ── review findings ───────────────────────────────────────────────────────────────────────────
+
+/// What would actually resolve a session-critic finding.
+///
+/// Not every honesty finding is a code defect, and treating them alike sends a coding agent to
+/// rewrite a paragraph. The three real shapes, from the runs we have:
+///
+/// - a test that does not bind to the change it accompanies -> [`Remedy::Repair`]
+/// - a mutation table for mutations that were never run -> [`Remedy::Verify`]. The code may be
+///   perfectly good; what is missing is the evidence, so the remedy is to go and get it.
+/// - a report that overclaims what was proven -> [`Remedy::Retract`], a text edit, no coding run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Remedy {
+    /// Change the code or the tests.
+    Repair,
+    /// Run the check that was claimed, then act on what it says.
+    Verify,
+    /// Correct the report. No code change.
+    Retract,
+    /// Nothing to do; recorded for the reader.
+    #[default]
+    None,
+}
+
+impl Remedy {
+    /// Whether a coding run could act on this. `Retract` and `None` cannot be coded away.
+    pub fn is_actionable(self) -> bool {
+        matches!(self, Remedy::Repair | Remedy::Verify)
+    }
+}
+
+/// One thing a run said that does not survive contact with the rest of the run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionFinding {
+    /// `abandoned_finding` | `unsupported_claim` | `silent_reversal`. A string rather than an
+    /// enum: an unexpected value from the reviewer is information, and folding it into `Other`
+    /// throws that information away.
+    pub kind: String,
+    /// The run's own words, verbatim. A finding without a quote cannot be checked by the person
+    /// reading it, and an unfalsifiable review is worse than none.
+    pub quote: String,
+    /// Why those words conflict with the rest of the run.
+    pub why: String,
+    #[serde(default)]
+    pub remedy: Remedy,
+}
+
+/// Verdict of the session critic. Empty `findings` is the ordinary result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SessionReview {
+    #[serde(default)]
+    pub findings: Vec<SessionFinding>,
+}
+
+impl SessionReview {
+    pub fn is_clean(&self) -> bool {
+        self.findings.is_empty()
+    }
+    /// Findings a coding run could act on, in report order.
+    pub fn actionable(&self) -> Vec<&SessionFinding> {
+        self.findings
+            .iter()
+            .filter(|f| f.remedy.is_actionable())
+            .collect()
+    }
+}
+
+/// What became of a diff-critic issue across the run's attempts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Disposition {
+    /// Raised on one attempt, absent from the next. The implementer acted on it.
+    Fixed,
+    /// Still standing when the run ended. This is the one that must not be buried.
+    Outstanding,
+    /// The implementer argued the finding was wrong.
+    ///
+    /// Never produced yet: saying so requires a channel from the model back to the reviewer, and
+    /// that channel does not exist. The variant is here so the *renderer* is written for the
+    /// world we want rather than retrofitted into it — but nothing sets it, and a reader seeing
+    /// only `fixed` and `outstanding` today is seeing the truth.
+    Disputed,
+}
+
+/// A diff-critic issue plus what happened to it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiffFinding {
+    pub issue: String,
+    pub disposition: Disposition,
+    /// Attempt index (0-based) the issue was first raised on.
+    #[serde(default)]
+    pub first_seen_attempt: u32,
+}
+
+/// What a remediation run did, if one was allowed to happen.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RemediationRecord {
+    /// Branch the fix was written on. Never the implementer's branch.
+    pub branch: String,
+    pub outcome: Outcome,
+    pub summary: String,
+    /// The findings it was asked to address, in the order they were given.
+    #[serde(default)]
+    pub addressed: Vec<String>,
+}
+
+/// `[coder.session_critic]`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionCriticConfig {
+    /// Off by default. On, it reads the run's narration after every attempt has finished.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Reviewer role. Falls back to `[critic]` — the same fallback the gate's reviewers use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<CoderRoleConfig>,
+    /// Include the names of tools the run called. Measured: dropping them cost two of four
+    /// labelled traces and produced a false accusation built out of the missing information.
+    #[serde(default = "default_true")]
+    pub include_tool_names: bool,
+    /// Spawn a cold coding run to fix actionable findings, on its own branch.
+    ///
+    /// **Off by default and it should stay off until precision is measured.** A ready-made fix is
+    /// an argument for the finding that produced it: a reviewer looking at a working diff is far
+    /// likelier to take it than to go back and check whether the allegation was ever true. When
+    /// the reviewer is wrong, this converts a cheap false positive into a plausible wrong change.
+    #[serde(default)]
+    pub remediation: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for SessionCriticConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            role: None,
+            include_tool_names: true,
+            remediation: false,
+        }
+    }
 }
 
 /// Input to a coding backend. PR-factory details such as pushing branches and opening PRs stay
@@ -635,8 +783,81 @@ pub struct CoderRunResult {
     pub gate_votes: Vec<GateVoteRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_path: Option<String>,
+    /// Diff-critic issues with what became of each. Empty when the gate is off.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diff_findings: Vec<DiffFinding>,
+    /// Session-critic findings. Empty when the critic is off or found nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_findings: Vec<SessionFinding>,
+    /// The remediation run, when one was allowed and had something to do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<RemediationRecord>,
     #[serde(default)]
     pub diagnostics: serde_json::Value,
+}
+
+/// Render every finding for a human, findings first.
+///
+/// Ordering is the whole mechanism. A run that fixed four issues and deferred one must not read
+/// as a clean run with a footnote — the outstanding item is the reason anybody is reading. So
+/// outstanding diff issues lead, session findings follow, and anything already resolved goes last
+/// where it belongs.
+///
+/// Returns an empty string when there is nothing to say, so a caller can append it unconditionally
+/// without producing an empty heading.
+pub fn render_findings_markdown(result: &CoderRunResult) -> String {
+    let outstanding: Vec<&DiffFinding> = result
+        .diff_findings
+        .iter()
+        .filter(|f| f.disposition != Disposition::Fixed)
+        .collect();
+    let fixed = result.diff_findings.len() - outstanding.len();
+
+    if outstanding.is_empty() && result.session_findings.is_empty() && fixed == 0 {
+        return String::new();
+    }
+
+    let mut out = String::from("## Review findings\n");
+
+    if !outstanding.is_empty() {
+        out.push_str("\n### Open — from the diff review\n\n");
+        for f in &outstanding {
+            let label = match f.disposition {
+                Disposition::Disputed => "disputed by the implementer",
+                _ => "not addressed",
+            };
+            out.push_str(&format!("- **{label}** — {}\n", f.issue));
+        }
+    }
+
+    if !result.session_findings.is_empty() {
+        out.push_str("\n### Open — from the session review\n\n");
+        out.push_str(
+            "The reviewer read the run's own narration. Each finding quotes the run verbatim; \
+             check the quote before acting on it.\n\n",
+        );
+        for f in &result.session_findings {
+            out.push_str(&format!("- **{}** ({:?}) — {}\n", f.kind, f.remedy, f.why));
+            out.push_str(&format!("  > {}\n", f.quote.replace('\n', " ")));
+        }
+    }
+
+    if let Some(remediation) = &result.remediation {
+        out.push_str(&format!(
+            "\n### A speculative fix exists\n\n\
+             Branch `{}` ({:?}) was written by a cold agent from the findings above. \
+             **The findings are unverified** — read them first and judge them on their own; the \
+             existence of a fix is not evidence that the fix was needed.\n\n{}\n",
+            remediation.branch, remediation.outcome, remediation.summary
+        ));
+    }
+
+    if fixed > 0 {
+        out.push_str(&format!(
+            "\n### Closed\n\n{fixed} diff-review issue(s) were raised and addressed during the run.\n"
+        ));
+    }
+    out
 }
 
 impl CoderRunResult {
@@ -863,6 +1084,7 @@ mod tests {
                 path_policy: PathPolicy::default(),
                 progress: ProgressPolicy::default(),
                 hashline: HashlineConfig::default(),
+                session_critic: SessionCriticConfig::default(),
             },
             attempt: 0,
             prior_feedback: Vec::new(),
@@ -895,6 +1117,9 @@ mod tests {
             critic_verdict: Some(CriticVerdict::Acceptable),
             gate_votes: Vec::new(),
             trace_path: Some("traces/task-1.jsonl".to_string()),
+            diff_findings: Vec::new(),
+            session_findings: Vec::new(),
+            remediation: None,
             diagnostics: serde_json::json!({"turns": 5}),
         };
 
@@ -1048,5 +1273,186 @@ mod tests {
     fn path_policy_writes_not_disabled_when_globs_present() {
         let p = PathPolicy::default();
         assert!(!p.writes_disabled());
+    }
+}
+
+#[cfg(test)]
+mod findings_tests {
+    use super::*;
+
+    fn result_with(diff: Vec<DiffFinding>, session: Vec<SessionFinding>) -> CoderRunResult {
+        CoderRunResult {
+            backend: "t".into(),
+            outcome: Outcome::Succeeded,
+            summary: "done".into(),
+            files_changed: Vec::new(),
+            file_changes: Vec::new(),
+            validation_notes: None,
+            critic_verdict: None,
+            gate_votes: Vec::new(),
+            trace_path: None,
+            diff_findings: diff,
+            session_findings: session,
+            remediation: None,
+            diagnostics: serde_json::Value::Null,
+        }
+    }
+
+    fn diff(issue: &str, disposition: Disposition) -> DiffFinding {
+        DiffFinding {
+            issue: issue.into(),
+            disposition,
+            first_seen_attempt: 0,
+        }
+    }
+
+    fn session(kind: &str, remedy: Remedy) -> SessionFinding {
+        SessionFinding {
+            kind: kind.into(),
+            quote: "the mutation test passes even when I break run_headless".into(),
+            why: "shipped it anyway".into(),
+            remedy,
+        }
+    }
+
+    /// Only `Repair` and `Verify` can be handed to a coding agent. Sending one to fix a paragraph
+    /// spends a whole run on a text edit.
+    #[test]
+    fn only_code_shaped_remedies_are_actionable() {
+        assert!(Remedy::Repair.is_actionable());
+        assert!(Remedy::Verify.is_actionable());
+        assert!(!Remedy::Retract.is_actionable());
+        assert!(!Remedy::None.is_actionable());
+    }
+
+    #[test]
+    fn actionable_filters_the_review() {
+        let review = SessionReview {
+            findings: vec![
+                session("abandoned_finding", Remedy::Repair),
+                session("unsupported_claim", Remedy::Retract),
+                session("silent_reversal", Remedy::Verify),
+            ],
+        };
+        let kinds: Vec<&str> = review
+            .actionable()
+            .iter()
+            .map(|f| f.kind.as_str())
+            .collect();
+        assert_eq!(kinds, vec!["abandoned_finding", "silent_reversal"]);
+    }
+
+    /// Nothing to report must render as nothing, not as an empty heading a reader has to scan.
+    #[test]
+    fn a_clean_run_renders_empty() {
+        assert!(render_findings_markdown(&result_with(Vec::new(), Vec::new())).is_empty());
+    }
+
+    /// The ordering *is* the mechanism. A run that fixed four issues and left one open must not
+    /// read as a clean run with a footnote — the open item is why anyone is reading.
+    #[test]
+    fn open_findings_come_before_closed_ones() {
+        let rendered = render_findings_markdown(&result_with(
+            vec![
+                diff("cosmetic thing", Disposition::Fixed),
+                diff("the test does not bind", Disposition::Outstanding),
+            ],
+            Vec::new(),
+        ));
+        let open = rendered
+            .find("the test does not bind")
+            .expect("open issue shown");
+        let closed = rendered.find("### Closed").expect("closed section shown");
+        assert!(
+            open < closed,
+            "an outstanding finding must not sit below the resolved ones:\n{rendered}"
+        );
+    }
+
+    /// A resolved issue must not be presented as open. Crying wolf on fixed work is how a reader
+    /// learns to skip the section.
+    #[test]
+    fn a_fixed_issue_is_not_reported_as_open() {
+        let rendered = render_findings_markdown(&result_with(
+            vec![diff("gone now", Disposition::Fixed)],
+            Vec::new(),
+        ));
+        let open_section = rendered.split("### Closed").next().unwrap_or("");
+        assert!(
+            !open_section.contains("gone now"),
+            "a fixed issue appeared above the Closed heading:\n{rendered}"
+        );
+    }
+
+    /// Every session finding must carry its quote into the report. A finding a reader cannot
+    /// check against the transcript is an accusation, not a review.
+    #[test]
+    fn session_findings_carry_their_quote() {
+        let rendered = render_findings_markdown(&result_with(
+            Vec::new(),
+            vec![session("abandoned_finding", Remedy::Repair)],
+        ));
+        assert!(
+            rendered.contains("passes even when I break run_headless"),
+            "the verbatim quote is what makes the finding checkable:\n{rendered}"
+        );
+    }
+
+    /// A speculative fix must be introduced as speculative. A reviewer shown a working diff is
+    /// far likelier to take it than to go back and test whether the finding behind it was true.
+    #[test]
+    fn a_remediation_branch_is_labelled_unverified() {
+        let mut result = result_with(
+            Vec::new(),
+            vec![session("abandoned_finding", Remedy::Repair)],
+        );
+        result.remediation = Some(RemediationRecord {
+            branch: "agent/remediation-x".into(),
+            outcome: Outcome::Succeeded,
+            summary: "rewrote the test".into(),
+            addressed: vec!["abandoned_finding".into()],
+        });
+        let rendered = render_findings_markdown(&result);
+        let findings_at = rendered.find("passes even when").expect("finding shown");
+        let fix_at = rendered.find("agent/remediation-x").expect("branch shown");
+        assert!(
+            findings_at < fix_at,
+            "the finding must be read before the fix that assumes it:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("unverified"),
+            "a fix for an unproven finding must say so:\n{rendered}"
+        );
+    }
+
+    /// `CoderTuning::run_config` has silently dropped seven settings before now — the value
+    /// parses, reaches nobody, and changing it does nothing. This is the check that costs a
+    /// second and catches it.
+    #[test]
+    fn tuning_carries_session_critic_into_the_run_config() {
+        let mut tuning = CoderTuning::default();
+        tuning.session_critic.enabled = true;
+        tuning.session_critic.remediation = true;
+        tuning.session_critic.include_tool_names = false;
+        let config = tuning.run_config();
+        assert_eq!(
+            config.session_critic, tuning.session_critic,
+            "the setting parsed and then reached nobody"
+        );
+    }
+
+    /// The dangerous toggle must be off unless someone asks for it.
+    #[test]
+    fn remediation_is_off_by_default() {
+        let config = SessionCriticConfig::default();
+        assert!(!config.enabled, "the reviewer itself is opt-in");
+        assert!(
+            !config.remediation,
+            "auto-fixing an unverified finding must never be the default"
+        );
+        assert!(
+            config.include_tool_names,
+            "dropping tool names cost two of four labelled traces; it must not be the default"
+        );
     }
 }

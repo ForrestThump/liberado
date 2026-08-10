@@ -13,7 +13,7 @@ use liberado_common::{Error, Result};
 use crate::{
     CoderCommandConfig, CoderGateConfig, CoderRoleConfig, CoderRunConfig, CommandPolicy,
     HashlineConfig, LIBERADO_LOOP_BACKEND, PathPolicy, PipelinePolicy, ProgressPolicy, SandboxSpec,
-    VerifierSpec,
+    SessionCriticConfig, VerifierSpec,
 };
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +66,9 @@ pub struct CoderTuning {
     /// `[tuning.coder.hashline]` — line-anchored hashline edit mode (default off).
     #[serde(default)]
     pub hashline: HashlineConfig,
+    /// `[coder.session_critic]` — post-run honesty review. Off by default.
+    #[serde(default)]
+    pub session_critic: SessionCriticConfig,
     /// `[tuning.coder.repo_map]` — Aider-style repository map for cold-start context.
     #[serde(default)]
     pub repo_map: RepoMapConfig,
@@ -127,6 +130,7 @@ impl CoderTuning {
             path_policy: self.path_policy.clone(),
             progress: self.progress.clone(),
             hashline: self.hashline.clone(),
+            session_critic: self.session_critic.clone(),
         }
     }
 
@@ -225,6 +229,7 @@ impl Default for CoderTuning {
             path_policy: PathPolicy::default(),
             progress: ProgressPolicy::default(),
             hashline: HashlineConfig::default(),
+            session_critic: SessionCriticConfig::default(),
             repo_map: RepoMapConfig::default(),
         }
     }

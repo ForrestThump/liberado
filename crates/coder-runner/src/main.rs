@@ -254,6 +254,7 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
                 enabled: true,
                 hash_length: 7,
             },
+            session_critic: tuning.session_critic.clone(),
         },
         attempt: 0,
         prior_feedback: Vec::new(),

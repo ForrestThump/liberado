@@ -48,9 +48,10 @@
 //! re-derive it"). A gate here would teach the agent to stop thinking out loud in the one place
 //! that makes its failures diagnosable. The finding belongs in the report, in front of a human.
 
-use liberado_coder_core::{CoderError, CoderEvent, CoderRoleConfig, CoderRunRequest};
+use liberado_coder_core::{
+    CoderError, CoderEvent, CoderRoleConfig, CoderRunRequest, SessionReview,
+};
 use liberado_provider::{CompletionRequest, Message};
-use serde::{Deserialize, Serialize};
 
 use crate::CoderProviderFactory;
 use crate::roles::truncate_chars;
@@ -73,31 +74,9 @@ pub enum ToolVisibility {
     NamesOnly,
 }
 
-/// One thing the run said that does not survive contact with the rest of the run.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SessionFinding {
-    /// One of `abandoned_finding`, `unsupported_claim`, `silent_reversal`. Free-form rather than
-    /// an enum: an unexpected value from the model is information, and coercing it to `Other`
-    /// throws that away.
-    pub kind: String,
-    /// The run's own words. A finding without a quote cannot be checked by the person reading it,
-    /// and an unfalsifiable review is worse than none.
-    pub quote: String,
-    /// Why those words conflict with the rest of the run.
-    pub why: String,
-}
-
-/// The verdict. An empty `findings` is the ordinary, expected result.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SessionReview {
-    pub findings: Vec<SessionFinding>,
-}
-
-impl SessionReview {
-    pub fn is_clean(&self) -> bool {
-        self.findings.is_empty()
-    }
-}
+// The finding and review shapes live in `coder-core` (`SessionFinding`, `SessionReview`): they
+// travel on `CoderRunResult` to every surface, and a type owned by the pack that produces them
+// would drag the pack under every crate that only wants to display one.
 
 /// Render the run's narration for review.
 ///
@@ -203,8 +182,13 @@ as future work; anything about the code itself.
 Quote the agent verbatim in every finding. A finding a human cannot check against the transcript
 is worse than no finding.
 
+Give every finding a remedy - what would actually resolve it:
+  repair  - the code or the tests must change.
+  verify  - run the check that was claimed. The code may be fine; the evidence is missing.
+  retract - the report overstates what was proven. A text correction, no code change.
+
 Respond with JSON only:
-{"findings":[{"kind":"...","quote":"...","why":"..."}]}
+{"findings":[{"kind":"...","quote":"...","why":"...","remedy":"repair|verify|retract"}]}
 An empty list is the normal answer. Do not invent findings to appear thorough."#
         .to_string()
 }

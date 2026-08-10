@@ -207,6 +207,7 @@ pub async fn run_coding_round(
                 ..tuning.progress.clone()
             },
             hashline: tuning.hashline.clone(),
+            session_critic: Default::default(),
         },
         attempt: state.rounds,
         prior_feedback: state.prior_feedback.clone(),
@@ -226,6 +227,9 @@ pub async fn run_coding_round(
     // Scope the live tap around the *whole* run. The pack's emitters are task-locals several
     // layers down; anything left outside this scope emits into nothing and says so nowhere,
     // which is precisely how this path shipped completely silent.
+    // Cloned before the run consumes it: the remediation path below needs the same workspace,
+    // verifiers and policies, and rebuilding them by hand is how the two drift apart.
+    let base_request = request.clone();
     let run = backend.run(request);
     let result = match events {
         Some(tx) => {
@@ -234,6 +238,34 @@ pub async fn run_coding_round(
         None => run.await,
     }
     .map_err(|e| format!("coding pack failed: {e}"))?;
+
+    // Remediation, if it is switched on and there is something a coding run could do.
+    //
+    // After the main run and its commit, never before: the fix belongs on a branch of its own, and
+    // running it first would mix a speculative change into the implementer's work with no way to
+    // tell them apart. Failures here are logged and dropped — an optional extra that can fail the
+    // run it was meant to help is a bad trade.
+    let mut remediation = None;
+    if tuning.session_critic.remediation && !result.session_findings.is_empty() {
+        let branch =
+            liberado_coder_agent::remediation::remediation_branch(&state.coding_session_id);
+        match commit_and_branch(&workspace, &branch).await {
+            Ok(()) => {
+                match liberado_coder_agent::remediation::run_remediation(
+                    &backend,
+                    &base_request,
+                    &result.session_findings,
+                    branch.clone(),
+                )
+                .await
+                {
+                    Ok(record) => remediation = record,
+                    Err(e) => tracing::warn!(error = %e, "remediation run failed"),
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, %branch, "cannot isolate a remediation branch"),
+        }
+    }
 
     state.rounds = state.rounds.saturating_add(1);
     state.last_summary = Some(result.summary.clone());
@@ -253,7 +285,37 @@ pub async fn run_coding_round(
         workspace: workspace.display().to_string(),
         trace_path: result.trace_path,
         validation_notes: result.validation_notes,
+        // Rendered once, here, so every surface that shows a round shows its findings. Building
+        // the markdown at each display site is how one of them ends up not doing it.
+        findings: liberado_coder_core::render_findings_markdown(
+            &liberado_coder_core::CoderRunResult {
+                diff_findings: result.diff_findings,
+                session_findings: result.session_findings,
+                remediation,
+                ..empty_result_shell()
+            },
+        ),
     })
+}
+
+/// A `CoderRunResult` with nothing in it, for reusing `render_findings_markdown` on the three
+/// fields that matter. Cheaper and less brittle than a second renderer that would drift.
+fn empty_result_shell() -> liberado_coder_core::CoderRunResult {
+    liberado_coder_core::CoderRunResult {
+        backend: String::new(),
+        outcome: liberado_common::Outcome::Succeeded,
+        summary: String::new(),
+        files_changed: Vec::new(),
+        file_changes: Vec::new(),
+        validation_notes: None,
+        critic_verdict: None,
+        gate_votes: Vec::new(),
+        trace_path: None,
+        diff_findings: Vec::new(),
+        session_findings: Vec::new(),
+        remediation: None,
+        diagnostics: serde_json::Value::Null,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -264,6 +326,8 @@ pub struct CodingRoundOutcome {
     pub workspace: String,
     pub trace_path: Option<String>,
     pub validation_notes: Option<String>,
+    /// Review findings, already rendered. Empty when there are none.
+    pub findings: String,
 }
 
 impl CodingRoundOutcome {
@@ -273,6 +337,12 @@ impl CodingRoundOutcome {
         out.push_str(&format!("## Coding pack result: {}\n\n", self.outcome));
         out.push_str(&self.summary);
         out.push_str("\n\n");
+        // Above the workspace path and the file list, deliberately. An open finding is the reason
+        // someone is reading this; below a file list is where things go to be skimmed past.
+        if !self.findings.is_empty() {
+            out.push_str(&self.findings);
+            out.push('\n');
+        }
         out.push_str(&format!("**Workspace:** `{}`\n", self.workspace));
         if !self.files_changed.is_empty() {
             out.push_str("\n**Files changed:**\n");
@@ -288,6 +358,29 @@ impl CodingRoundOutcome {
         }
         out
     }
+}
+
+/// Commit the implementer's work, then move onto a fresh branch for a speculative fix.
+///
+/// Both halves matter. Without the commit, the remediation agent edits on top of uncommitted work
+/// and the two become one indistinguishable diff. Without the branch, a fix for an *unverified*
+/// finding lands on the branch a human is about to review as the implementer's own.
+async fn commit_and_branch(workspace: &Path, branch: &str) -> Result<(), String> {
+    preserve_worktree(workspace, "pre-remediation").await?;
+    let out = liberado_common::process::command("git")
+        .arg("-C")
+        .arg(workspace)
+        .args(["checkout", "-b", branch])
+        .output()
+        .await
+        .map_err(|e| format!("git checkout -b {branch}: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git checkout -b {branch} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 
 /// Commit whatever the run left in `workspace`, if anything.
@@ -449,6 +542,52 @@ pub fn workspace_payload(cwd: &Path) -> serde_json::Value {
 #[cfg(test)]
 mod reviewer_role_tests {
     use super::*;
+
+    /// An open finding must sit above the workspace path and the file list.
+    ///
+    /// This is the entire "do not bury the finding" mechanism, and it is one `push_str` away from
+    /// silently reverting to a footnote under a trace path nobody scrolls to.
+    #[test]
+    fn findings_are_rendered_above_the_housekeeping() {
+        let outcome = CodingRoundOutcome {
+            summary: "did the thing".into(),
+            outcome: "Succeeded".into(),
+            files_changed: vec!["src/main.rs".into()],
+            workspace: "/tmp/ws".into(),
+            trace_path: Some("/tmp/trace.json".into()),
+            validation_notes: None,
+            findings: "## Review findings
+
+- the test does not bind
+"
+            .into(),
+        };
+        let rendered = outcome.render();
+        let finding_at = rendered
+            .find("the test does not bind")
+            .expect("finding shown");
+        let workspace_at = rendered.find("**Workspace:**").expect("workspace shown");
+        assert!(
+            finding_at < workspace_at,
+            "an open finding must not sit below the housekeeping:
+{rendered}"
+        );
+    }
+
+    /// No findings must render exactly as before — no stray heading, no blank section.
+    #[test]
+    fn a_clean_round_renders_no_findings_section() {
+        let outcome = CodingRoundOutcome {
+            summary: "did the thing".into(),
+            outcome: "Succeeded".into(),
+            files_changed: Vec::new(),
+            workspace: "/tmp/ws".into(),
+            trace_path: None,
+            validation_notes: None,
+            findings: String::new(),
+        };
+        assert!(!outcome.render().contains("Review findings"));
+    }
 
     /// The completion gate must be *usable* when it is switched on, not merely reachable.
     ///

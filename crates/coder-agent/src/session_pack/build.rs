@@ -442,6 +442,7 @@ impl CodingSessionPack {
                     ..self.progress.clone()
                 },
                 hashline: policies.hashline.clone(),
+                session_critic: Default::default(),
             },
             attempt: 0,
             prior_feedback: Vec::new(),

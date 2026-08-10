@@ -128,6 +128,7 @@ pub fn base_request(root: &Path) -> CoderRunRequest {
                 ..ProgressPolicy::default()
             },
             hashline: liberado_coder_core::HashlineConfig::default(),
+            session_critic: Default::default(),
         },
         attempt: 0,
         prior_feedback: Vec::new(),

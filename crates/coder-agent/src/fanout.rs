@@ -578,6 +578,7 @@ fn child_request(worktree_root: &Path, task: &CodingSubtask, model: &str) -> Cod
                 ..ProgressPolicy::default()
             },
             hashline: liberado_coder_core::HashlineConfig::default(),
+            session_critic: Default::default(),
         },
         attempt: 0,
         prior_feedback: Vec::new(),
@@ -755,6 +756,9 @@ mod tests {
                 critic_verdict: None,
                 gate_votes: vec![],
                 trace_path: None,
+                diff_findings: Vec::new(),
+                session_findings: Vec::new(),
+                remediation: None,
                 diagnostics: json!({}),
             })
         }

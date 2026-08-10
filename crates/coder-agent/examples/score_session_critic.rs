@@ -108,7 +108,7 @@ async fn main() {
         let found: Vec<&str> = review.findings.iter().map(|f| f.kind.as_str()).collect();
         println!("   found:      {:?}", found);
         for f in &review.findings {
-            println!("     [{}] {}", f.kind, f.why);
+            println!("     [{}] remedy={:?} — {}", f.kind, f.remedy, f.why);
             println!("       > {}", f.quote.replace('\n', " "));
         }
         match (expected, review.is_clean()) {
