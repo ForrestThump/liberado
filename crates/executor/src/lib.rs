@@ -484,6 +484,38 @@ pub struct TurnRecord {
     pub completion_tokens: u32,
 }
 
+/// What the model was **sent**, captured before the call rather than after it.
+///
+/// [`TurnRecord`] is emitted once a turn completes, so everything it holds is a fact about the
+/// response. Which system prompt actually reached the model — whether a role's inline `prompt` or
+/// its `prompt_path` won, and what text that produced — appeared in no trace at all.
+///
+/// That gap is not theoretical. Comparing this harness against another on the same task, the
+/// remaining unexplained difference was what each one told the model, and neither side's trace
+/// recorded it. The measurement that would have answered it was the task being measured.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestRecord {
+    pub turn: u32,
+    /// Tools offered on this request, in catalog order.
+    pub tools_offered: Vec<String>,
+    /// How many messages the request carried.
+    pub message_count: usize,
+    /// Lowercase hex SHA-256 of the system message as sent.
+    ///
+    /// A hash answers "did the prompt change mid-run", which is the question a long run raises.
+    /// It cannot answer "what did it say" — see `system_prompt`.
+    pub system_prompt_sha256: String,
+    /// The system message verbatim.
+    ///
+    /// Carried on every request and left to the observer to store sparingly. The spec for this
+    /// work asked only for the hash; a hash tells you the prompt changed and not what it says,
+    /// and reading what it says is the entire reason the gap was noticed. The pack records the
+    /// text once per distinct hash and the hash every turn, which is the same information at a
+    /// fraction of the size — but that is a policy decision, so it lives with the pack rather
+    /// than here.
+    pub system_prompt: Option<String>,
+}
+
 /// Receives a [`TurnRecord`] per completed turn.
 ///
 /// Deliberately domain-neutral: the executor knows nothing about coding sessions, and the coding
@@ -491,6 +523,12 @@ pub struct TurnRecord {
 /// inline in the turn loop.
 pub trait TurnObserver: Send + Sync {
     fn on_turn(&self, record: TurnRecord);
+
+    /// Receives a [`RequestRecord`] **before** each model call.
+    ///
+    /// Defaulted to a no-op so every existing implementor keeps compiling — an observer that only
+    /// cares about responses should not have to say so.
+    fn on_request(&self, _record: RequestRecord) {}
 }
 
 /// The bounded, adaptive tool-loop engine. Cheap to clone-share via the inner `Arc`.
@@ -516,6 +554,35 @@ impl Executor {
             model: None,
             observer: None,
         }
+    }
+
+    /// Hand the observer what is about to be sent. No-op when unobserved.
+    ///
+    /// Called before the provider, so a run that dies mid-call still records what it asked for —
+    /// which is exactly the case where knowing matters most.
+    fn observe_request(
+        &self,
+        turn: u32,
+        tools_offered: &[String],
+        message_count: usize,
+        messages: &[Message],
+    ) {
+        let Some(observer) = self.observer.as_ref() else {
+            return;
+        };
+        let system: String = messages
+            .iter()
+            .find(|m| m.role == Role::System)
+            .map(|m| m.content.clone())
+            .unwrap_or_default();
+        let digest = <sha2::Sha256 as sha2::Digest>::digest(system.as_bytes());
+        observer.on_request(RequestRecord {
+            turn,
+            tools_offered: tools_offered.to_vec(),
+            message_count,
+            system_prompt_sha256: format!("{digest:x}"),
+            system_prompt: (!system.is_empty()).then_some(system),
+        });
     }
 
     /// Hand one completed turn to the observer, if any. No-op when unobserved.
@@ -922,6 +989,7 @@ impl Executor {
                 .map(|_| tools.iter().map(|t| t.name.clone()).collect())
                 .unwrap_or_default();
             let sent_messages = messages.len();
+            self.observe_request(turn, &offered, sent_messages, &messages[..]);
             let response = async {
                 let request = CompletionRequest::new(messages.clone())
                     .with_tools(tools.clone())
@@ -3745,12 +3813,65 @@ mod tests {
     #[derive(Default)]
     struct Recorder {
         turns: Mutex<Vec<TurnRecord>>,
+        requests: Mutex<Vec<RequestRecord>>,
     }
 
     impl TurnObserver for Recorder {
         fn on_turn(&self, record: TurnRecord) {
             self.turns.lock().expect("recorder poisoned").push(record);
         }
+
+        fn on_request(&self, record: RequestRecord) {
+            self.requests
+                .lock()
+                .expect("recorder poisoned")
+                .push(record);
+        }
+    }
+
+    /// The loop must actually call `on_request`, not merely be able to.
+    ///
+    /// The unit tests around the tracer prove the record is turned into an event correctly; they
+    /// cannot see whether anything ever produces one. Deleting the call site left every one of
+    /// them green and was caught only by a dead-code warning, which is a thin thread to hang the
+    /// one feature that tells us what the model was told.
+    #[tokio::test]
+    async fn the_loop_reports_every_request_before_making_it() {
+        let rec = Arc::new(Recorder::default());
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            vec![
+                CompletionResponse::text("thinking"),
+                submit(valid_report_args()),
+            ],
+        ));
+        let exec = Executor::new(provider, Budget::default()).with_observer(rec.clone());
+        let runtime = MockToolRuntime::new(&["search", "write_file"], Ok("data".into()));
+
+        let _ = exec.execute(&runtime, Task::new("worker", "do it")).await;
+
+        let requests = rec.requests.lock().unwrap().clone();
+        let turns = rec.turns.lock().unwrap().clone();
+        assert!(
+            !requests.is_empty(),
+            "no request was ever reported; the trace cannot say what the model was sent"
+        );
+        assert_eq!(
+            requests.len(),
+            turns.len(),
+            "one request per turn: {} requests, {} turns",
+            requests.len(),
+            turns.len()
+        );
+        assert!(
+            requests[0].tools_offered.contains(&"search".to_string()),
+            "the request must record what the model could reach: {:?}",
+            requests[0].tools_offered
+        );
+        assert!(
+            !requests[0].system_prompt_sha256.is_empty(),
+            "every request must be hashed so a mid-run prompt change is visible"
+        );
     }
 
     /// The observer must answer, without reading any source, the three questions that cost the

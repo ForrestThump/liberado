@@ -140,6 +140,29 @@ pub fn render_transcript(trace: &CoderTrace) -> String {
 
     for event in &trace.events {
         match event {
+            // The system prompt, rendered once — the first turn that carries the text. Later
+            // turns repeat only the hash, and a transcript that reprinted a 5 KB prompt forty
+            // times would bury everything else.
+            CoderEvent::ModelRequestSent {
+                turn,
+                system_prompt_sha256,
+                system_prompt: Some(prompt),
+                tools_offered,
+                ..
+            } => {
+                out.push_str(&format!(
+                    "== system prompt (turn {turn}, sha256 {}) ==
+{prompt}
+
+  tools offered: {}
+
+",
+                    &system_prompt_sha256[..system_prompt_sha256.len().min(12)],
+                    tools_offered.join(", ")
+                ));
+            }
+            // Subsequent requests: the hash alone, so a prompt that changes mid-run is visible.
+            CoderEvent::ModelRequestSent { .. } => {}
             CoderEvent::SessionStarted {
                 session_id,
                 backend,
