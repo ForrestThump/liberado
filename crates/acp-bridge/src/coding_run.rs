@@ -170,7 +170,17 @@ pub async fn run_coding_round(
             },
             planner: disabled_role(&model),
             coder: coder_role,
-            critic: disabled_role(&model),
+            // A real reviewer, not `disabled_role`. `[coder.gate]` is honoured below, and the
+            // gate's reviewers fall back to this role — but `role_instructions` *errors* when a
+            // role carries no prompt, and `disabled_role` carries none. So `enabled = true`
+            // parsed, reached the gate, and failed the entire run at the first reviewer. The
+            // setting was reachable and unusable, which is worse than unreachable: it looks like
+            // the feature is broken rather than unconfigured.
+            //
+            // The role is built whether or not the gate is on. Building it costs nothing and no
+            // model is called while `gate.enabled` is false; making it conditional would put the
+            // trap back one `if` away.
+            critic: reviewer_role(&model),
             gate: tuning.gate.clone(),
             repair,
             // Durable worktree already materialised; HostLocal on that tree (same as pack build).
@@ -394,6 +404,24 @@ fn is_git_repo(path: &Path) -> bool {
     path.join(".git").exists()
 }
 
+/// The cold diff reviewer the completion gate consults.
+///
+/// Its prompt is [`liberado_coder_agent::COLD_DIFF_REVIEWER_PROMPT`], shared rather than written
+/// here so the reviewer that is measured offline and the reviewer that runs in a session are the
+/// same text.
+fn reviewer_role(model: &str) -> CoderRoleConfig {
+    CoderRoleConfig {
+        model: model.to_string(),
+        prompt_path: None,
+        prompt: Some(liberado_coder_agent::COLD_DIFF_REVIEWER_PROMPT.to_string()),
+        // Deterministic on purpose: a reviewer that returns a different verdict on a re-run
+        // cannot be argued with, and a gate you cannot argue with gets switched off.
+        temperature: Some(0.0),
+        max_tokens: Some(4000),
+        max_turns: Some(1),
+    }
+}
+
 fn disabled_role(model: &str) -> CoderRoleConfig {
     CoderRoleConfig {
         model: model.to_string(),
@@ -416,6 +444,46 @@ pub fn single_factory(provider: Arc<dyn Provider>) -> Arc<dyn CoderProviderFacto
 #[allow(dead_code)] // reserved for multi-mode diagnostics / session metadata
 pub fn workspace_payload(cwd: &Path) -> serde_json::Value {
     json!({ "workspace_root": cwd.to_string_lossy() })
+}
+
+#[cfg(test)]
+mod reviewer_role_tests {
+    use super::*;
+
+    /// The completion gate must be *usable* when it is switched on, not merely reachable.
+    ///
+    /// `[coder.gate] enabled = true` parses, reaches `run_gate`, and asks `role_instructions` for
+    /// the reviewer's prompt. That call returns `Err` for a role with neither `prompt` nor
+    /// `prompt_path`, and `run_attempt` propagates it — so with `disabled_role` here, turning the
+    /// gate on failed the whole run at the first reviewer. Reverting `critic` to a promptless role
+    /// must fail this test rather than wait to be discovered by a user who enabled a setting.
+    #[test]
+    fn the_gate_reviewer_role_can_actually_be_instructed() {
+        let role = reviewer_role("some/model");
+        let prompt = role
+            .prompt
+            .as_deref()
+            .or(role.prompt_path.as_deref())
+            .unwrap_or("");
+        assert!(
+            !prompt.trim().is_empty(),
+            "a reviewer role with no prompt makes `[coder.gate] enabled = true` fail the run"
+        );
+        assert!(
+            !role.model.trim().is_empty(),
+            "a reviewer with no model cannot be dispatched to a provider"
+        );
+    }
+
+    /// The prompt must be the shared one, not a copy. A copy drifts from whatever gets measured
+    /// offline, and then the score describes a reviewer that never runs.
+    #[test]
+    fn the_reviewer_uses_the_shared_prompt() {
+        assert_eq!(
+            reviewer_role("m").prompt.as_deref(),
+            Some(liberado_coder_agent::COLD_DIFF_REVIEWER_PROMPT),
+        );
+    }
 }
 
 #[cfg(test)]

@@ -16,6 +16,7 @@ mod progress;
 mod repair_feedback;
 mod roles;
 mod runtime;
+pub mod session_critic;
 mod session_pack;
 mod trace;
 mod verify_pipeline;
@@ -32,6 +33,7 @@ pub use liberado_coder_sandbox::{Checkpoint, CheckpointError, ShadowGit};
 /// Durable coding session workspace path (`coding-worktrees/<session_id>`).
 pub use liberado_coder_tools::durable_session_workspace;
 pub use live::with_live_events;
+pub use roles::COLD_DIFF_REVIEWER_PROMPT;
 pub use session_pack::CodingSessionPack;
 
 use std::path::Path;
