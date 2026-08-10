@@ -941,13 +941,115 @@ impl CodingToolRuntime {
             }
         };
         let output = self.workspace.run_command(request).await?;
+        let untracked = self.untracked_section(&args.mode).await?;
+        let stdout = match untracked {
+            Some(extra) if output.stdout.trim().is_empty() => extra,
+            Some(extra) => format!("{}\n{extra}", output.stdout.trim_end()),
+            None => output.stdout,
+        };
         Ok(json!({
             "mode": args.mode,
             "exit_code": output.exit_code,
-            "stdout": output.stdout,
+            "stdout": stdout,
             "stderr": output.stderr,
             "timed_out": output.timed_out,
         }))
+    }
+
+    /// The untracked half of "what have I changed".
+    ///
+    /// `git diff` reports tracked files only, so a file the model has just *created* is absent
+    /// from every diff mode. That is not a cosmetic gap. In one run the model wrote a 334-line
+    /// module, saw four consecutive empty diffs, concluded "the file doesn't exist yet — that's
+    /// the root cause of the build failure", and wrote the whole module a second time. It spent
+    /// an attempt chasing a file that was on disk the entire time.
+    ///
+    /// Writing a file is the most common first act of a coding task, so the tool that answers
+    /// "what have I changed" has to count it. `--exclude-standard` keeps `.gitignore` honoured,
+    /// so `target/` does not drown the answer.
+    async fn untracked_section(&self, mode: &str) -> Result<Option<String>, ToolError> {
+        let mut request = CommandRequest::new("git");
+        request.args = vec![
+            "ls-files".to_string(),
+            "--others".to_string(),
+            "--exclude-standard".to_string(),
+        ];
+        let listed = self.workspace.run_command(request).await?;
+        let paths: Vec<&str> = listed
+            .stdout
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        if paths.is_empty() {
+            return Ok(None);
+        }
+
+        let mut out = String::from("# untracked (new files, not yet added)\n");
+        match mode {
+            "name_only" => {
+                for path in &paths {
+                    out.push_str(path);
+                    out.push('\n');
+                }
+            }
+            "stat" => {
+                for path in &paths {
+                    match self.untracked_body(path) {
+                        Some(body) => {
+                            let n = body.lines().count();
+                            out.push_str(&format!(" {path} | {n} +++\n"));
+                        }
+                        None => out.push_str(&format!(" {path} | (unreadable)\n")),
+                    }
+                }
+            }
+            // patch: the content, because a new file's content *is* its diff. Bounded, so one
+            // generated file cannot crowd out the rest of the answer.
+            _ => {
+                let mut budget = UNTRACKED_PATCH_BUDGET;
+                for path in &paths {
+                    let Some(body) = self.untracked_body(path) else {
+                        out.push_str(&format!("--- new file {path} (unreadable)\n"));
+                        continue;
+                    };
+                    out.push_str(&format!("--- new file {path}\n"));
+                    if budget == 0 {
+                        out.push_str(
+                            "(omitted: earlier files used the patch budget; read it \
+                                      directly)\n",
+                        );
+                        continue;
+                    }
+                    let shown = truncate_on_char(&body, budget);
+                    budget = budget.saturating_sub(shown.len());
+                    for line in shown.lines() {
+                        out.push('+');
+                        out.push_str(line);
+                        out.push('\n');
+                    }
+                    if shown.len() < body.len() {
+                        out.push_str(&format!("… truncated; read {path} for the rest\n"));
+                    }
+                }
+            }
+        }
+        Ok(Some(out))
+    }
+
+    /// Read an untracked file for the diff, or `None` if it cannot be shown.
+    ///
+    /// Goes through the same `rel_path` guard as every other read: `git ls-files` reports what is
+    /// in the working tree, and a path policy that hides a directory from `read_file` must not be
+    /// circumvented by asking for a diff instead.
+    fn untracked_body(&self, rel: &str) -> Option<String> {
+        let path = self.rel_path(rel, false).ok()?;
+        let bytes = std::fs::read(&path).ok()?;
+        // Binary files have no useful "+" rendering, and a stray NUL would corrupt the transcript.
+        if bytes.contains(&0) {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&bytes).into_owned())
     }
 
     async fn git_branch(&self, args: Value) -> Result<Value, ToolError> {
@@ -1746,6 +1848,27 @@ fn cap_bytes(mut bytes: Vec<u8>, max: usize) -> Vec<u8> {
         bytes.truncate(max);
     }
     bytes
+}
+
+/// How much untracked file content one `git_diff --mode patch` may inline, across all files.
+///
+/// Generous enough that a new module arrives whole — the case this exists for — and bounded so a
+/// checked-in fixture or a generated file cannot swallow the turn.
+const UNTRACKED_PATCH_BUDGET: usize = 24_000;
+
+/// Truncate to at most `max` bytes without splitting a UTF-8 character.
+///
+/// Public because the critic's diff builder in `coder-agent` bounds untracked file content the
+/// same way, and two copies of a byte-slicing helper is one copy too many.
+pub fn truncate_on_char(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 fn slice_lines(content: &str, start_line: Option<usize>, line_count: Option<usize>) -> String {
@@ -3741,6 +3864,153 @@ beta
             result["mode"] == "name_only",
             "git_diff should return the requested mode"
         );
+    }
+
+    /// A git repo with one committed file, for the untracked-diff tests.
+    ///
+    /// `user.email` / `user.name` are set explicitly: they exist on every dev machine and on no
+    /// CI runner, so a `git commit` that relies on ambient identity passes locally and fails in
+    /// CI. `commit.gpgsign=false` for the same reason in reverse — a developer who signs by
+    /// default would otherwise block on a key the runner does not have.
+    fn git_repo_with_one_committed_file() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .output()
+                .expect("git available");
+            assert!(
+                status.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&status.stderr)
+            );
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "test@liberado.local"]);
+        run(&["config", "user.name", "Test"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(dir.path().join("tracked.txt"), "one\n").unwrap();
+        run(&["add", "tracked.txt"]);
+        run(&["commit", "--quiet", "-m", "base"]);
+        dir
+    }
+
+    /// The bug this closes, in the form it actually took.
+    ///
+    /// A run wrote a new module, then called `git_diff` four times and was shown nothing each
+    /// time, because `git diff` reports tracked files only. The model concluded the file had
+    /// never been written and wrote all 334 lines again.
+    #[tokio::test]
+    async fn a_new_file_appears_in_the_diff() {
+        let dir = git_repo_with_one_committed_file();
+        std::fs::write(dir.path().join("brand_new.rs"), "fn hello() {}\n").unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        for mode in ["name_only", "stat", "patch"] {
+            let result = runtime
+                .invoke_json("git_diff", json!({ "mode": mode }))
+                .await
+                .unwrap();
+            let stdout = result["stdout"].as_str().unwrap_or_default();
+            assert!(
+                stdout.contains("brand_new.rs"),
+                "mode {mode} must show a newly created file, got: {stdout:?}"
+            );
+        }
+    }
+
+    /// Names were what the critic already had, and they were not enough to review a change.
+    #[tokio::test]
+    async fn patch_mode_carries_the_new_file_content() {
+        let dir = git_repo_with_one_committed_file();
+        std::fs::write(dir.path().join("brand_new.rs"), "fn hello() {}\n").unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json("git_diff", json!({"mode": "patch"}))
+            .await
+            .unwrap();
+        let stdout = result["stdout"].as_str().unwrap_or_default();
+        assert!(
+            stdout.contains("+fn hello() {}"),
+            "patch mode must carry the content, not only the name: {stdout:?}"
+        );
+    }
+
+    /// Tracked edits must survive the addition. Appending the untracked section is worthless if
+    /// it displaces the answer the tool already gave.
+    #[tokio::test]
+    async fn tracked_changes_still_appear_alongside_untracked_ones() {
+        let dir = git_repo_with_one_committed_file();
+        std::fs::write(dir.path().join("tracked.txt"), "one\ntwo\n").unwrap();
+        std::fs::write(dir.path().join("brand_new.rs"), "fn hello() {}\n").unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json("git_diff", json!({"mode": "name_only"}))
+            .await
+            .unwrap();
+        let stdout = result["stdout"].as_str().unwrap_or_default();
+        assert!(stdout.contains("tracked.txt"), "{stdout:?}");
+        assert!(stdout.contains("brand_new.rs"), "{stdout:?}");
+    }
+
+    /// `.gitignore` must be honoured, or `target/` alone makes the diff useless.
+    #[tokio::test]
+    async fn ignored_files_stay_out_of_the_diff() {
+        let dir = git_repo_with_one_committed_file();
+        std::fs::write(dir.path().join(".gitignore"), "noise/\n").unwrap();
+        std::fs::create_dir(dir.path().join("noise")).unwrap();
+        std::fs::write(dir.path().join("noise/huge.txt"), "x\n").unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json("git_diff", json!({"mode": "name_only"}))
+            .await
+            .unwrap();
+        let stdout = result["stdout"].as_str().unwrap_or_default();
+        assert!(
+            !stdout.contains("huge.txt"),
+            "ignored files must not be reported: {stdout:?}"
+        );
+    }
+
+    /// A clean tree must still read as clean. Reporting the untracked header with nothing under
+    /// it would tell a model it has unsaved work when it has none.
+    #[tokio::test]
+    async fn a_clean_tree_gains_no_untracked_section() {
+        let dir = git_repo_with_one_committed_file();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json("git_diff", json!({"mode": "name_only"}))
+            .await
+            .unwrap();
+        let stdout = result["stdout"].as_str().unwrap_or_default();
+        assert!(
+            !stdout.contains("untracked"),
+            "a clean tree must not grow an untracked section: {stdout:?}"
+        );
+    }
+
+    #[test]
+    fn truncation_never_splits_a_character() {
+        // "é" is two bytes; a cut at 1 would produce invalid UTF-8 if done by byte slicing.
+        let s = "aé";
+        assert_eq!(truncate_on_char(s, 2), "a");
+        assert_eq!(truncate_on_char(s, 3), "aé");
+        assert_eq!(truncate_on_char(s, 99), "aé");
     }
 
     #[tokio::test]
