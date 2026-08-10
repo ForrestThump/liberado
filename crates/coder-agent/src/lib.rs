@@ -855,6 +855,7 @@ mod tests {
                 hashline: liberado_coder_core::HashlineConfig::default(),
                 session_critic: Default::default(),
                 prompt_dir: None,
+                edit: Default::default(),
             },
             attempt: 0,
             prior_feedback: Vec::new(),

@@ -1,5 +1,6 @@
 //! Coding tool runtime for Liberado's Rust-native agent loop.
 
+mod fuzzy_match;
 mod hashline;
 pub mod repo_map;
 mod text_view;
@@ -48,6 +49,7 @@ pub struct CodingToolRuntime {
     path_policy: PathPolicy,
     validation_command: Option<CommandRequest>,
     hashline: HashlineConfig,
+    edit: liberado_coder_core::EditConfig,
     background_jobs: Arc<Mutex<HashMap<String, BackgroundJob>>>,
 }
 
@@ -193,6 +195,7 @@ impl CodingToolRuntime {
             path_policy,
             validation_command: None,
             hashline: HashlineConfig::default(),
+            edit: liberado_coder_core::EditConfig::default(),
             background_jobs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -205,6 +208,12 @@ impl CodingToolRuntime {
     /// Enable or configure hashline (line-anchored) edit mode.
     pub fn with_hashline(mut self, config: HashlineConfig) -> Self {
         self.hashline = config;
+        self
+    }
+
+    /// Anchor-matching behaviour for `edit_file`.
+    pub fn with_edit(mut self, config: liberado_coder_core::EditConfig) -> Self {
+        self.edit = config;
         self
     }
 
@@ -611,24 +620,64 @@ impl CodingToolRuntime {
         let old = text_view::normalize_anchor(&args.old, view.ending);
         let new = text_view::normalize_anchor(&args.new, view.ending);
 
-        let count = view.text.matches(&old).count();
-        if count == 0 {
-            return Err(ToolError::BadRequest(format!(
-                "old text was not found in {}. It must match the file exactly, including                  whitespace and indentation. The file may have changed since you last read it —                  read it again and take the anchor from that output.",
-                args.path
-            )));
-        }
-        if count > 1 && !args.replace_all {
-            return Err(ToolError::BadRequest(format!(
-                "old text matched {count} times in {}. Include more surrounding lines to make it                  unique, or pass \"replace_all\": true to change every occurrence.",
-                args.path
-            )));
-        }
+        let outcome = fuzzy_match::find_match(
+            &view.text,
+            &old,
+            self.edit.fuzzy_match && !args.replace_all,
+            self.edit.fuzzy_threshold,
+        );
 
-        let updated = if args.replace_all {
-            view.text.replace(&old, &new)
-        } else {
-            view.text.replacen(&old, &new, 1)
+        let (updated, count) = match outcome {
+            fuzzy_match::MatchOutcome::Exact { count, .. } => {
+                if count > 1 && !args.replace_all {
+                    return Err(ToolError::BadRequest(format!(
+                        "old text matched {count} times in {}. Include more surrounding lines to make it unique, or pass \"replace_all\": true to change every occurrence.",
+                        args.path
+                    )));
+                }
+                let updated = if args.replace_all {
+                    view.text.replace(&old, &new)
+                } else {
+                    view.text.replacen(&old, &new, 1)
+                };
+                (updated, count)
+            }
+            fuzzy_match::MatchOutcome::Fuzzy(m) => {
+                // Re-indent the replacement to where the match was actually found. Without this,
+                // fixing the anchor only moves the error: the edit lands and the inserted block
+                // sits at the indentation the model imagined rather than the file's.
+                let adjusted = fuzzy_match::adjust_indentation(&old, &m.actual_text, &new);
+                tracing::info!(
+                    path = %args.path,
+                    line = m.start_line,
+                    confidence = m.confidence,
+                    "edit_file matched an approximate anchor"
+                );
+                (view.text.replacen(&m.actual_text, &adjusted, 1), 1)
+            }
+            fuzzy_match::MatchOutcome::Ambiguous { count, best } => {
+                return Err(ToolError::BadRequest(format!(
+                    "old text is not exact, and {count} places in {} are close enough that choosing one would be a guess (nearest is line {}). Include more surrounding lines so the anchor is unique.",
+                    args.path, best.start_line
+                )));
+            }
+            fuzzy_match::MatchOutcome::NotFound { closest } => {
+                // Quote the near miss. "Not found" alone leaves the model to guess again, which
+                // is how one run spent 21 of 50 edits on variants of the same wrong anchor.
+                let near = match closest {
+                    Some(c) if c.confidence > 0.6 => format!(
+                        " The closest text is at line {} and is {:.0}% similar:\n{}",
+                        c.start_line,
+                        c.confidence * 100.0,
+                        c.actual_text.lines().take(4).collect::<Vec<_>>().join("\n")
+                    ),
+                    _ => String::new(),
+                };
+                return Err(ToolError::BadRequest(format!(
+                    "old text was not found in {}. It must match the file, including whitespace and indentation. The file may have changed since you last read it — read it again and take the anchor from that output.{near}",
+                    args.path
+                )));
+            }
         };
         let restored = text_view::materialize(&updated, view.ending, view.bom);
         std::fs::write(&path, restored.as_bytes()).map_err(fs_err)?;
@@ -1350,8 +1399,15 @@ impl ToolRuntime for CodingToolRuntime {
                 json!({ "type": "object" }),
             ),
         ];
+        // Exactly one edit tool family is offered, never two. This used to *add* hashline_edit
+        // while leaving edit_file and apply_patch in place, so the model had a line-numbered read
+        // view and two tools that match raw text — it pasted the numbered view into the text
+        // tools in 14 of 41 calls in one run. oh-my-pi avoids this by construction: its
+        // `edit.mode` is an enum. `hashline.enabled` is that enum, spelled as a boolean.
         let full: Vec<ToolDef> = if self.hashline.enabled {
-            full
+            full.into_iter()
+                .filter(|t| t.name != "edit_file" && t.name != "apply_patch")
+                .collect()
         } else {
             full.into_iter()
                 .filter(|t| t.name != "hashline_edit")
@@ -2113,6 +2169,192 @@ mod tests {
             message.contains("edit_file"),
             "must offer edit_file: {message}"
         );
+    }
+
+    // ── one edit tool family at a time ───────────────────────────────────────────────────
+
+    /// With hashline on, the raw-text edit tools must be gone.
+    ///
+    /// Offering both gave the model a line-numbered read view alongside tools that match raw
+    /// text, and it pasted the numbered view into the text tools in 14 of 41 calls — the worst
+    /// anchor failure rate of four dispatched runs. `oh-my-pi` makes `edit.mode` an enum for
+    /// exactly this reason.
+    #[test]
+    fn hashline_mode_offers_no_raw_text_edit_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap()
+                .with_hashline(HashlineConfig {
+                    enabled: true,
+                    hash_length: 7,
+                });
+        let names: Vec<String> = runtime.catalog().into_iter().map(|t| t.name).collect();
+        assert!(names.contains(&"hashline_edit".to_string()), "{names:?}");
+        assert!(
+            !names.contains(&"edit_file".to_string()),
+            "edit_file must not be offered beside hashline_edit: {names:?}"
+        );
+        assert!(
+            !names.contains(&"apply_patch".to_string()),
+            "apply_patch matches raw text and must not be offered beside hashline_edit: {names:?}"
+        );
+    }
+
+    /// And with hashline off, the text tools are present and hashline_edit is not.
+    #[test]
+    fn text_mode_offers_no_hashline_tool() {
+        let (_dir, runtime) = runtime();
+        let names: Vec<String> = runtime.catalog().into_iter().map(|t| t.name).collect();
+        assert!(names.contains(&"edit_file".to_string()), "{names:?}");
+        assert!(names.contains(&"apply_patch".to_string()), "{names:?}");
+        assert!(!names.contains(&"hashline_edit".to_string()), "{names:?}");
+    }
+
+    // ── fuzzy anchors ────────────────────────────────────────────────────────────────────
+
+    /// The exact failure from a dispatched run: the anchor was right in every character except
+    /// four leading spaces the file does not have.
+    #[tokio::test]
+    async fn an_anchor_with_the_wrong_indentation_still_edits() {
+        let (dir, runtime) = runtime();
+        std::fs::write(
+            dir.path().join("t.rs"),
+            "mod a {}\n/// Receives a TurnRecord per completed turn.\npub trait T {}\n",
+        )
+        .unwrap();
+
+        runtime
+            .invoke_json(
+                "edit_file",
+                json!({
+                    "path": "t.rs",
+                    "old": "    /// Receives a TurnRecord per completed turn.",
+                    "new": "    /// Receives a TurnRecord and a RequestRecord."
+                }),
+            )
+            .await
+            .expect("a near-exact anchor must not cost the run a turn");
+
+        let after = std::fs::read_to_string(dir.path().join("t.rs")).unwrap();
+        assert!(after.contains("and a RequestRecord"), "{after}");
+        assert!(
+            after.starts_with("mod a {}\n/// Receives"),
+            "the replacement must be re-indented to the file, not the model's guess:\n{after}"
+        );
+    }
+
+    /// Fuzzy must never override an exact match. An edit that worked before must behave
+    /// identically, or this is a regression wearing a feature's clothes.
+    #[tokio::test]
+    async fn an_exact_anchor_is_unaffected_by_fuzzy_matching() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("u.rs"), "let a = 1;\nlet b = 2;\n").unwrap();
+        runtime
+            .invoke_json(
+                "edit_file",
+                json!({"path": "u.rs", "old": "let b = 2;", "new": "let b = 3;"}),
+            )
+            .await
+            .expect("exact");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("u.rs")).unwrap(),
+            "let a = 1;\nlet b = 3;\n"
+        );
+    }
+
+    /// Two plausible sites must be refused, not chosen between. An edit in the wrong place is
+    /// reported as success and ships; a refused edit costs one turn.
+    #[tokio::test]
+    async fn an_ambiguous_near_match_is_refused() {
+        let (dir, runtime) = runtime();
+        std::fs::write(
+            dir.path().join("v.rs"),
+            "fn a() {\n\tdo_work();\n}\nfn b() {\n\tdo_work();\n}\n",
+        )
+        .unwrap();
+        let err = runtime
+            .invoke_json(
+                "edit_file",
+                json!({"path": "v.rs", "old": "  do_work();", "new": "  do_more();"}),
+            )
+            .await
+            .expect_err("two candidates must not be silently resolved");
+        let m = err.to_string();
+        assert!(
+            m.contains("close enough") || m.contains("matched 2 times"),
+            "the error must say why it refused: {m}"
+        );
+    }
+
+    /// A miss should quote the near miss. "Not found" alone left one run spending 21 of 50 edits
+    /// on variants of the same wrong anchor.
+    #[tokio::test]
+    async fn a_miss_quotes_the_closest_text() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("w.rs"), "pub fn handle_request(&self) {}\n").unwrap();
+        let err = runtime
+            .invoke_json(
+                "edit_file",
+                json!({"path": "w.rs", "old": "pub fn handle_response(&self) {}", "new": "x"}),
+            )
+            .await
+            .expect_err("text this different is a miss");
+        let m = err.to_string();
+        assert!(
+            m.contains("closest text is at line"),
+            "the model needs to see what was nearly it: {m}"
+        );
+    }
+
+    /// The cost of matching at 0.95, recorded rather than discovered later.
+    ///
+    /// A one-character difference in a short line clears the threshold, so `handle_requests`
+    /// edits `handle_request`. That is the trade `oh-my-pi` ships and it is the right one here:
+    /// the alternative is rejecting the indentation near-misses that made up a large share of
+    /// our anchor failures. It is tolerable only because ambiguity is still refused — a second
+    /// plausible site turns this into an error rather than a coin flip.
+    #[tokio::test]
+    async fn a_single_character_difference_is_accepted_when_unambiguous() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("y.rs"), "pub fn handle_request() {}\n").unwrap();
+        runtime
+            .invoke_json(
+                "edit_file",
+                json!({"path": "y.rs", "old": "pub fn handle_requests() {}", "new": "pub fn go() {}"}),
+            )
+            .await
+            .expect("a 96%-similar unique anchor is accepted");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("y.rs")).unwrap(),
+            "pub fn go() {}\n"
+        );
+    }
+
+    /// Turning fuzzy off must restore exact-only behaviour, so a deployment that wants strictness
+    /// can have it.
+    #[tokio::test]
+    async fn fuzzy_can_be_switched_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap()
+                .with_hashline(HashlineConfig {
+                    enabled: false,
+                    hash_length: 7,
+                })
+                .with_edit(liberado_coder_core::EditConfig {
+                    fuzzy_match: false,
+                    fuzzy_threshold: 0.95,
+                });
+        std::fs::write(dir.path().join("x.rs"), "let a = 1;\n").unwrap();
+        runtime
+            .invoke_json(
+                "edit_file",
+                json!({"path": "x.rs", "old": "    let a = 1;", "new": "let a = 2;"}),
+            )
+            .await
+            .expect_err("with fuzzy off, a near-exact anchor must still be rejected");
     }
 
     /// The failure this guard exists for.

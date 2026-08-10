@@ -59,6 +59,30 @@
 # Files: coder.md, diff-reviewer.md, session-critic.md, session-pack-coder.md, intake.md
 # prompt_dir = "/etc/liberado/prompts"
 
+# A config dir may hold only the files you want to override. `tuning.toml` on its own is enough
+# to change anything under [coder] — it is read without the deployment-wide validation, so no
+# topology.toml or policy.toml is required just to retune a coding run.
+
+# How edit_file decides an anchor matches.
+#
+# Ported from oh-my-pi, which ships fuzzy matching on at 0.95. Exact matches always win; fuzzy
+# only runs when there is no exact hit, and an ambiguous result is still refused rather than
+# guessed at. Four dispatched runs here never got the anchor failure rate below 42%, and one
+# failure was an anchor correct in every character except four leading spaces.
+# [coder.edit]
+# fuzzy_match = true
+# fuzzy_threshold = 0.95
+
+# Line-anchored edit mode. When on, `hashline_edit` is the ONLY edit tool offered — edit_file and
+# apply_patch are withdrawn. Offering both gave the model a line-numbered read view and tools that
+# match raw text, and it pasted one into the other in 14 of 41 calls.
+#
+# Off by default: measured over four runs of the same task, off had the best anchor failure rate
+# (42%) and on had the worst (72%).
+# [coder.hashline]
+# enabled = false
+# hash_length = 7
+
 # Post-run honesty review. Reads the run's own narration — not the diff — and reports where it
 # contradicted itself, claimed a check it never ran, or found a defect in its own work and filed
 # anyway. Off by default; findings are advisory and appear in the run report.
