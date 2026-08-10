@@ -522,10 +522,23 @@ pub struct HashlineConfig {
 }
 
 impl Default for HashlineConfig {
+    /// On, at length 7 — the values `coder-runner` had already hardcoded for itself.
+    ///
+    /// It was off here, and the ACP path took the default while `coder-runner` opted in, so the
+    /// tool built to make line-anchored edits unambiguous was missing from the path we dogfood
+    /// through. A dispatched run then failed on exactly that: of 25 `edit_file` calls, 15 came
+    /// back `old text was not found` or `old text matched 2 times; provide more context`, and the
+    /// run was abandoned without landing a line. `hashline_edit` answers both errors by
+    /// construction — `read_file` hands back `[path#TAG]` plus `LINE:content`, so the anchor is a
+    /// line number rather than a string that may appear twice in a 3,800-line file.
+    ///
+    /// The default is changed rather than a second `enabled: true` added at the ACP call site,
+    /// because the divergence *is* the bug. Three fixes this month landed on one of these two
+    /// paths and not the other; adding a third literal would have set up the fourth.
     fn default() -> Self {
         Self {
-            enabled: false,
-            hash_length: 4,
+            enabled: true,
+            hash_length: 7,
         }
     }
 }
@@ -1140,12 +1153,13 @@ mod tests {
         assert!(gate.strategist.is_none());
     }
 
+    /// The default was `enabled: false, hash_length: 4`. It is now on at 7 — see
+    /// `HashlineConfig::default` for the run that changed it. The values live in
+    /// `hashline_default_tests`, which says *why* each one is what it is; this test keeps only
+    /// the part that belongs here: whatever the default is, it must pass its own validator.
     #[test]
-    fn hashline_config_default_is_disabled_with_length_4() {
-        let h = HashlineConfig::default();
-        assert!(!h.enabled);
-        assert_eq!(h.hash_length, 4);
-        assert!(h.validate().is_ok());
+    fn the_default_hashline_config_validates() {
+        assert!(HashlineConfig::default().validate().is_ok());
     }
 
     #[test]
@@ -1212,8 +1226,11 @@ mod tests {
             "critic": {"model": "m", "prompt": "p", "max_turns": 1}
         }"#;
         let cfg: CoderRunConfig = serde_json::from_str(json).unwrap();
-        assert!(!cfg.hashline.enabled);
-        assert_eq!(cfg.hashline.hash_length, 4);
+        // An absent `[coder.hashline]` must land on the *same* default a caller gets from
+        // `HashlineConfig::default()`. Comparing against the type, not against literals, is what
+        // stops this test from having to be edited every time the default is retuned — and it is
+        // the property the test is actually about: deserialization must not invent its own.
+        assert_eq!(cfg.hashline, HashlineConfig::default());
     }
 
     #[test]
@@ -1453,6 +1470,58 @@ mod findings_tests {
         assert!(
             config.include_tool_names,
             "dropping tool names cost two of four labelled traces; it must not be the default"
+        );
+    }
+}
+
+#[cfg(test)]
+mod hashline_default_tests {
+    use super::*;
+
+    /// `hashline_edit` must be offered by default.
+    ///
+    /// It was not, and only `coder-runner` opted in — so the ACP path, which is the one a Paseo
+    /// user and a dispatched run both take, never had it. A run then died on exactly the failure
+    /// the tool prevents: 15 of 25 `edit_file` calls came back "old text was not found" or "old
+    /// text matched 2 times", and it filed `failed` without landing a line.
+    ///
+    /// Flipping this back to `false` must fail here rather than be discovered by a wasted run.
+    #[test]
+    fn line_anchored_editing_is_available_out_of_the_box() {
+        let config = HashlineConfig::default();
+        assert!(
+            config.enabled,
+            "without hashline_edit the model must anchor edits on strings that may not be unique"
+        );
+        assert!(
+            config.validate().is_ok(),
+            "the default must satisfy its own validator: {:?}",
+            config.validate()
+        );
+    }
+
+    /// A default that a run cannot use is not a default. `hash_length` outside
+    /// `HASH_LENGTH_MIN..=HASH_LENGTH_MAX` fails `validate`, which would reject the config at
+    /// load and leave the run with no edit tooling at all.
+    #[test]
+    fn the_default_hash_length_is_inside_its_own_bounds() {
+        let length = HashlineConfig::default().hash_length;
+        assert!(
+            (HashlineConfig::HASH_LENGTH_MIN..=HashlineConfig::HASH_LENGTH_MAX).contains(&length),
+            "default hash_length {length} is outside {}..={}",
+            HashlineConfig::HASH_LENGTH_MIN,
+            HashlineConfig::HASH_LENGTH_MAX
+        );
+    }
+
+    /// Both coding paths must agree. The divergence is what caused this, not the value.
+    #[test]
+    fn tuning_is_the_single_source_for_hashline() {
+        let tuning = CoderTuning::default();
+        assert_eq!(
+            tuning.run_config().hashline,
+            tuning.hashline,
+            "a path that hardcodes its own HashlineConfig can silently disagree with the other"
         );
     }
 }

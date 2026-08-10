@@ -17,8 +17,7 @@ use std::{
 use liberado_coder_agent::{CoderProviderFactory, LiberadoLoopBackend};
 use liberado_coder_core::{
     CoderBackend, CoderError, CoderGateConfig, CoderRoleConfig, CoderRunConfig, CoderRunRequest,
-    CoderTask, CoderTuning, CommandPolicy, HashlineConfig, ProgressPolicy, SandboxSpec,
-    VerifierSpec, WorkspaceRef,
+    CoderTask, CoderTuning, CommandPolicy, ProgressPolicy, SandboxSpec, VerifierSpec, WorkspaceRef,
 };
 use liberado_coder_tools::repo_map::{self, RepoMapOptions};
 use liberado_common::Outcome;
@@ -250,10 +249,11 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
                 // Take the shared default instead; it is tuned in one place, `ProgressPolicy`.
                 ..Default::default()
             },
-            hashline: HashlineConfig {
-                enabled: true,
-                hash_length: 7,
-            },
+            // Was a literal `HashlineConfig { enabled: true, hash_length: 7 }` while the ACP
+            // path passed `tuning.hashline` — so the two coding paths disagreed about whether the
+            // model had `hashline_edit` at all, and only one of them was configurable. Both read
+            // the same tuning now, and those values are the default.
+            hashline: tuning.hashline.clone(),
             session_critic: tuning.session_critic.clone(),
         },
         attempt: 0,
