@@ -1255,16 +1255,60 @@ mod proptest_tests {
 
     // ── Properties ──────────────────────────────────────────────────────────────────────────────
 
+    /// Compare two results as the *bags* they represent — same elements, any order.
+    ///
+    /// The derived `PartialEq` on `CapabilitySet` compares `capabilities` as an ordered `Vec`, and
+    /// `narrow` emits in pair-iteration order — so evaluating the same intersection from either
+    /// side can produce the same authority in a different sequence. That is not a difference in
+    /// what the set permits, and a property that treats it as one reports a defect that is not
+    /// there.
+    ///
+    /// The hazard was already written down on [`narrow_associative`] below; it was simply never
+    /// applied to the two properties above it, which are more exposed to it.
+    /// Compared with `Capability`'s own `==`, and never with a `Debug` rendering.
+    ///
+    /// `Zone` defines equality by **name**, so `Zone::Named("x")` and `Zone::Vault("x")` are the
+    /// same zone (PR #38). A `Debug` string distinguishes them, so sorting by `format!("{c:?}")`
+    /// is a *stricter* comparison than the type's own — it invents a difference the domain says
+    /// does not exist. The first draft of this helper did exactly that and manufactured a
+    /// counterexample that looked alarmingly like a real authority bug.
+    ///
+    /// Quadratic, deliberately: sets are under ten elements, and the alternative is an `Ord` on
+    /// `Capability` that would have to agree with a name-based `PartialEq` — a second definition
+    /// of identity, which is how the first one drifts.
+    fn same_authority(left: &CapabilitySet, right: &CapabilitySet) -> bool {
+        if left.capabilities.len() != right.capabilities.len() {
+            return false;
+        }
+        let mut claimed = vec![false; right.capabilities.len()];
+        'next: for l in &left.capabilities {
+            for (i, r) in right.capabilities.iter().enumerate() {
+                if !claimed[i] && l == r {
+                    claimed[i] = true;
+                    continue 'next;
+                }
+            }
+            return false;
+        }
+        true
+    }
+
     /// `narrow` is commutative: the result must not depend on which set is the narrowing.
+    ///
+    /// Compared as sets. This failed on CI against an ordering difference alone —
+    /// `a = [AskHuman, ExecuteMcp("w")]`, `b = [ExecuteTool("w:"), AskHuman]` intersect to the same
+    /// two capabilities in opposite order — which is a flake in the property, not a bug in
+    /// `narrow`. `narrow_never_widens` is the property that would catch a real one, and it passed
+    /// throughout.
     fn narrow_commutative(a: CapabilitySet, b: CapabilitySet) -> bool {
-        a.narrow(&b) == b.narrow(&a)
+        same_authority(&a.narrow(&b), &b.narrow(&a))
     }
 
     /// `narrow` is idempotent for a fixed second operand: narrowing an already-narrowed set by the
     /// same narrowing changes nothing.
     fn narrow_idempotent(a: CapabilitySet, b: CapabilitySet) -> bool {
         let n = a.narrow(&b);
-        n.narrow(&b) == n
+        same_authority(&n.narrow(&b), &n)
     }
 
     /// The Decision 4 invariant, per element: whatever survives a narrowing is subsumed by something
@@ -1277,13 +1321,57 @@ mod proptest_tests {
         })
     }
 
-    /// `narrow` is associative. Note: the derived `PartialEq` compares `capabilities` as an ordered
-    /// `Vec`, and `narrow` emits in pair-iteration order, so an ordering mismatch between the two
-    /// evaluation orders can read as a failure even when the result *sets* agree. With the
-    /// uncorrelated name strategy above this is only reachable via the equality arms of `subsumes`,
-    /// under which associativity holds.
+    /// `narrow` is associative, compared as sets — see [`same_authority`] for why ordered equality
+    /// is the wrong comparison here.
+    ///
+    /// This note previously reasoned that an ordering mismatch was "only reachable via the equality
+    /// arms of `subsumes`" and left the ordered comparison in place. The reasoning was too
+    /// optimistic: a seed on CI reached it for commutativity. Comparing as sets removes the
+    /// argument rather than resting on it.
     fn narrow_associative(a: CapabilitySet, b: CapabilitySet, c: CapabilitySet) -> bool {
-        a.narrow(&b).narrow(&c) == a.narrow(&b.narrow(&c))
+        same_authority(&a.narrow(&b).narrow(&c), &a.narrow(&b.narrow(&c)))
+    }
+
+    /// `same_authority` must be loose about order and strict about everything else.
+    ///
+    /// Without this, a helper that returned `true` unconditionally would make all four properties
+    /// above pass while testing nothing — the comparison is the only thing standing between them
+    /// and vacuity.
+    #[test]
+    fn same_authority_ignores_order_and_nothing_else() {
+        let set = |caps: Vec<Capability>| CapabilitySet { capabilities: caps };
+        let read_a = Capability::Read(Zone::vault("a"));
+        let read_b = Capability::Read(Zone::vault("b"));
+
+        assert!(same_authority(
+            &set(vec![read_a.clone(), read_b.clone()]),
+            &set(vec![read_b.clone(), read_a.clone()])
+        ));
+        // A zone is its name, so the variant that spelled it must not matter (PR #38).
+        assert!(same_authority(
+            &set(vec![Capability::Read(Zone::named("x"))]),
+            &set(vec![Capability::Read(Zone::vault("x"))])
+        ));
+
+        assert!(
+            !same_authority(&set(vec![read_a.clone()]), &set(vec![read_b.clone()])),
+            "different authority must not compare equal"
+        );
+        assert!(
+            !same_authority(
+                &set(vec![read_a.clone()]),
+                &set(vec![read_a.clone(), read_b.clone()])
+            ),
+            "an extra capability is extra authority"
+        );
+        assert!(
+            !same_authority(
+                &set(vec![read_a.clone(), read_a.clone()]),
+                &set(vec![read_a.clone(), read_b])
+            ),
+            "matching each element once must not let a duplicate stand in for a difference"
+        );
+        assert!(same_authority(&set(vec![]), &set(vec![])));
     }
 
     proptest! {
