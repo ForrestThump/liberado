@@ -354,7 +354,18 @@ pub(crate) fn derive_dispositions(
 }
 
 fn is_retryable(err: &CoderError) -> bool {
-    matches!(err, CoderError::NoChanges | CoderError::Validation(_))
+    match err {
+        CoderError::NoChanges => true,
+        // A validation failure normally means the change is wrong, and another attempt is the
+        // right answer. It does not mean that when the machine is what failed: a full disk
+        // reproduces on every attempt, so retrying spends the budget to reach the same place.
+        // The class is carried in the message by `format_pipeline_repair`.
+        CoderError::Validation(msg) => !msg.contains(&format!(
+            "FAILURE_CLASS: {}",
+            repair_feedback::FailureClass::Infrastructure.as_str()
+        )),
+        _ => false,
+    }
 }
 
 /// A single source of truth for retryable/stuck errors. `session_pack::build` calls this
@@ -848,6 +859,24 @@ mod tests {
     };
     use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
     use serde_json::json;
+
+    /// Retrying a full disk reproduces the full disk. The budget is better spent saying so.
+    #[test]
+    fn an_infrastructure_failure_is_not_retried() {
+        let msg = "FAILURE_CLASS: infrastructure\nFAILURE_SIGNATURE: sig\n\
+                   REPAIR_HINT: The build environment failed, not your change.";
+        assert!(!is_retryable(&CoderError::Validation(msg.to_string())));
+    }
+
+    /// The guard must be narrow. An ordinary validation failure is still worth another attempt,
+    /// or this change quietly turns every recoverable run into a single-shot one.
+    #[test]
+    fn ordinary_validation_failures_are_still_retried() {
+        assert!(is_retryable(&CoderError::Validation(
+            "FAILURE_CLASS: command_failed\nFINDINGS:\n- cargo exited 101".to_string()
+        )));
+        assert!(is_retryable(&CoderError::NoChanges));
+    }
 
     /// A git repo with one committed file. Identity is set explicitly because `user.email` /
     /// `user.name` exist on every dev machine and on no CI runner.
